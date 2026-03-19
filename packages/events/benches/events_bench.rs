@@ -32,10 +32,9 @@ use events::{
     EmbeddedLocalManualResetEvent, EmbeddedManualResetEvent, LocalAutoResetEvent,
     LocalManualResetEvent, ManualResetEvent,
 };
-use rsevents::AutoResetEvent as RsAutoReset;
-use rsevents::Awaitable as _;
-use rsevents::EventState;
-use rsevents::ManualResetEvent as RsManualReset;
+use rsevents::{
+    AutoResetEvent as RsAutoReset, Awaitable as _, EventState, ManualResetEvent as RsManualReset,
+};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();

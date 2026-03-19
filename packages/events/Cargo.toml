@@ -23,6 +23,7 @@ alloc_tracker = { path = "../alloc_tracker" }
 criterion = { workspace = true }
 event-listener = { workspace = true }
 futures = { workspace = true }
+mutants = { workspace = true }
 rsevents = { workspace = true }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }

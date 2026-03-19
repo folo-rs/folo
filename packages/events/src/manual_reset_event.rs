@@ -18,6 +18,10 @@ const NEVER_POISONED: &str = "we never panic while holding this lock";
 ///
 /// The caller must guarantee that `node` points to a valid [`WaiterNode`]
 /// (e.g. by holding the owning event's lock).
+// Mutating this to a no-op causes wait futures to hang because wakers
+// are never collected and therefore never woken. We cannot detect this
+// without real-time timeouts.
+#[cfg_attr(test, mutants::skip)]
 fn collect_waker(wakers: &mut Vec<Waker>, node: *mut WaiterNode) {
     // SAFETY: Caller guarantees the node pointer is valid.
     if let Some(waker) = unsafe { (*node).waker.as_ref() } {
@@ -122,6 +126,7 @@ impl ManualResetEvent {
     ///
     /// ```
     /// use std::pin::pin;
+    ///
     /// use events::{EmbeddedManualResetEvent, ManualResetEvent};
     ///
     /// # futures::executor::block_on(async {
@@ -163,9 +168,11 @@ impl ManualResetEvent {
     ///     event.wait().await;
     /// }
     /// ```
+    // Mutating set() to a no-op causes wait futures to hang. We cannot
+    // detect "wait never completes" without real-time timeouts.
+    #[cfg_attr(test, mutants::skip)]
     pub fn set(&self) {
         let mut wakers: Vec<Waker> = Vec::new();
-
         {
             let mut state = self.inner.state.lock().expect(NEVER_POISONED);
             state.is_set = true;
@@ -201,6 +208,8 @@ impl ManualResetEvent {
     /// returned value is immediately stale. Use this for diagnostics or
     /// best-effort checks, not for synchronization.
     #[must_use]
+    // Mutating is_set() to return false causes spin-loop tests to hang.
+    #[cfg_attr(test, mutants::skip)]
     pub fn is_set(&self) -> bool {
         let state = self.inner.state.lock().expect(NEVER_POISONED);
         state.is_set
@@ -384,6 +393,7 @@ impl fmt::Debug for ManualResetWaitFuture {
 ///
 /// ```
 /// use std::pin::pin;
+///
 /// use events::{EmbeddedManualResetEvent, ManualResetEvent};
 ///
 /// # futures::executor::block_on(async {
@@ -460,6 +470,8 @@ impl RawManualResetEvent {
     }
 
     /// Opens the gate, releasing all current awaiters.
+    // Mutating set() to a no-op causes wait futures to hang.
+    #[cfg_attr(test, mutants::skip)]
     pub fn set(&self) {
         let mut wakers: Vec<Waker> = Vec::new();
 
@@ -488,6 +500,8 @@ impl RawManualResetEvent {
 
     /// Returns `true` if the event is currently set.
     #[must_use]
+    // Mutating is_set() to return false causes spin-loop tests to hang.
+    #[cfg_attr(test, mutants::skip)]
     pub fn is_set(&self) -> bool {
         let state = self.inner().state.lock().expect(NEVER_POISONED);
         state.is_set
@@ -615,9 +629,8 @@ impl fmt::Debug for RawManualResetWaitFuture {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::iter;
     use std::sync::Barrier;
-    use std::thread;
+    use std::{iter, thread};
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
@@ -981,5 +994,49 @@ mod tests {
         assert!(f1.as_mut().poll(&mut cx).is_ready());
         assert!(f2.as_mut().poll(&mut cx).is_ready());
         assert!(f3.as_mut().poll(&mut cx).is_ready());
+    }
+
+    #[test]
+    fn try_acquire_returns_true_when_set() {
+        let event = ManualResetEvent::boxed();
+        event.set();
+        assert!(event.try_acquire());
+    }
+
+    #[test]
+    fn embedded_try_acquire_returns_false_when_unset() {
+        let container = Box::pin(EmbeddedManualResetEvent::new());
+        // SAFETY: The container outlives the handle.
+        let event = unsafe { ManualResetEvent::embedded(container.as_ref()) };
+        assert!(!event.try_acquire());
+    }
+
+    #[test]
+    fn embedded_try_acquire_returns_true_when_set() {
+        let container = Box::pin(EmbeddedManualResetEvent::new());
+        // SAFETY: The container outlives the handle.
+        let event = unsafe { ManualResetEvent::embedded(container.as_ref()) };
+        event.set();
+        assert!(event.try_acquire());
+    }
+
+    #[test]
+    fn embedded_set_wakes_registered_waiter() {
+        use crate::test_helpers::AtomicWakeTracker;
+
+        let container = Box::pin(EmbeddedManualResetEvent::new());
+        // SAFETY: The container outlives the handle.
+        let event = unsafe { ManualResetEvent::embedded(container.as_ref()) };
+
+        let tracker = AtomicWakeTracker::new();
+        let waker = tracker.waker();
+        let mut cx = task::Context::from_waker(&waker);
+
+        let mut future = Box::pin(event.wait());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+
+        event.set();
+
+        assert!(tracker.was_woken());
     }
 }

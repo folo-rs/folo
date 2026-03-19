@@ -638,6 +638,7 @@ dependencies = [
  "criterion",
  "event-listener 5.4.1",
  "futures",
+ "mutants",
  "rsevents",
  "static_assertions",
  "testing",

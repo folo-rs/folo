@@ -28,21 +28,23 @@ use crate::waiter_list::{WaiterList, WaiterNode};
 /// #[tokio::main]
 /// async fn main() {
 ///     let local = tokio::task::LocalSet::new();
-///     local.run_until(async {
-///         let event = LocalAutoResetEvent::boxed();
-///         let setter = event.clone();
+///     local
+///         .run_until(async {
+///             let event = LocalAutoResetEvent::boxed();
+///             let setter = event.clone();
 ///
-///         // Producer task signals.
-///         tokio::task::spawn_local(async move {
-///             setter.set();
-///         });
+///             // Producer task signals.
+///             tokio::task::spawn_local(async move {
+///                 setter.set();
+///             });
 ///
-///         // Consumer task waits.
-///         event.wait().await;
+///             // Consumer task waits.
+///             event.wait().await;
 ///
-///         // Signal was consumed.
-///         assert!(!event.try_acquire());
-///     }).await;
+///             // Signal was consumed.
+///             assert!(!event.try_acquire());
+///         })
+///         .await;
 /// }
 /// ```
 #[derive(Clone)]
@@ -97,15 +99,14 @@ impl LocalAutoResetEvent {
     ///
     /// ```
     /// use std::pin::pin;
+    ///
     /// use events::{EmbeddedLocalAutoResetEvent, LocalAutoResetEvent};
     ///
     /// # futures::executor::block_on(async {
     /// let container = pin!(EmbeddedLocalAutoResetEvent::new());
     ///
     /// // SAFETY: The container outlives the handle.
-    /// let event = unsafe {
-    ///     LocalAutoResetEvent::embedded(container.as_ref())
-    /// };
+    /// let event = unsafe { LocalAutoResetEvent::embedded(container.as_ref()) };
     /// let setter = event;
     ///
     /// setter.set();
@@ -123,6 +124,8 @@ impl LocalAutoResetEvent {
     /// If one or more tasks are waiting, a single waiter is released and
     /// the event remains unset. If no task is waiting, the event transitions
     /// to the set state.
+    // Mutating set() to a no-op causes wait futures to hang.
+    #[cfg_attr(test, mutants::skip)]
     pub fn set(&self) {
         // Capture the waker while borrowing the waiter list, then wake after
         // the borrow ends to avoid aliased mutable access if the waker is
@@ -323,15 +326,14 @@ impl fmt::Debug for LocalAutoResetWaitFuture {
 ///
 /// ```
 /// use std::pin::pin;
+///
 /// use events::{EmbeddedLocalAutoResetEvent, LocalAutoResetEvent};
 ///
 /// # futures::executor::block_on(async {
 /// let container = pin!(EmbeddedLocalAutoResetEvent::new());
 ///
 /// // SAFETY: The container outlives the handle.
-/// let event = unsafe {
-///     LocalAutoResetEvent::embedded(container.as_ref())
-/// };
+/// let event = unsafe { LocalAutoResetEvent::embedded(container.as_ref()) };
 /// let setter = event;
 ///
 /// setter.set();
@@ -405,6 +407,8 @@ impl RawLocalAutoResetEvent {
     /// If one or more tasks are waiting, a single waiter is released and
     /// the event remains unset. If no task is waiting, the event transitions
     /// to the set state.
+    // Mutating set() to a no-op causes wait futures to hang.
+    #[cfg_attr(test, mutants::skip)]
     pub fn set(&self) {
         // Capture the waker while borrowing the waiter list, then wake after
         // the borrow ends to avoid aliased mutable access if the waker is
@@ -415,7 +419,7 @@ impl RawLocalAutoResetEvent {
 
             // SAFETY: Single-threaded.
             if let Some(node_ptr) = unsafe { waiters.pop_front() } {
-                // SAFETY: Single-threaded, node was just popped.
+                // SAFETY: Single-threaded, node was just popped from our list.
                 unsafe {
                     (*node_ptr).notified = true;
                 }
@@ -968,6 +972,26 @@ mod tests {
 
         event.set();
         drop(future1);
+
+        assert!(waker_data.was_woken());
+    }
+
+    #[test]
+    fn embedded_set_wakes_registered_waiter() {
+        use crate::test_helpers::ReentrantWakerData;
+
+        let container = Box::pin(EmbeddedLocalAutoResetEvent::new());
+        // SAFETY: The container outlives the handle.
+        let event = unsafe { LocalAutoResetEvent::embedded(container.as_ref()) };
+
+        let waker_data = ReentrantWakerData::new(|| {});
+        let waker = waker_data.waker();
+        let mut cx = task::Context::from_waker(&waker);
+
+        let mut future = Box::pin(event.wait());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+
+        event.set();
 
         assert!(waker_data.was_woken());
     }

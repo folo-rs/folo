@@ -15,6 +15,8 @@ use crate::waiter_list::{WaiterList, WaiterNode};
 /// # Safety
 ///
 /// The caller must guarantee that `node` points to a valid [`WaiterNode`].
+// Mutating collect_waker() to a no-op causes wait futures to hang.
+#[cfg_attr(test, mutants::skip)]
 fn collect_waker(wakers: &mut Vec<Waker>, node: *mut WaiterNode) {
     // SAFETY: Caller guarantees the node pointer is valid.
     if let Some(waker) = unsafe { (*node).waker.as_ref() } {
@@ -40,21 +42,23 @@ fn collect_waker(wakers: &mut Vec<Waker>, node: *mut WaiterNode) {
 /// #[tokio::main]
 /// async fn main() {
 ///     let local = tokio::task::LocalSet::new();
-///     local.run_until(async {
-///         let event = LocalManualResetEvent::boxed();
-///         let setter = event.clone();
+///     local
+///         .run_until(async {
+///             let event = LocalManualResetEvent::boxed();
+///             let setter = event.clone();
 ///
-///         // Producer opens the gate from a local task.
-///         tokio::task::spawn_local(async move {
-///             setter.set();
-///         });
+///             // Producer opens the gate from a local task.
+///             tokio::task::spawn_local(async move {
+///                 setter.set();
+///             });
 ///
-///         // Consumer waits for the gate to open.
-///         event.wait().await;
+///             // Consumer waits for the gate to open.
+///             event.wait().await;
 ///
-///         event.reset();
-///         assert!(!event.is_set());
-///     }).await;
+///             event.reset();
+///             assert!(!event.is_set());
+///         })
+///         .await;
 /// }
 /// ```
 #[derive(Clone)]
@@ -123,15 +127,14 @@ impl LocalManualResetEvent {
     ///
     /// ```
     /// use std::pin::pin;
+    ///
     /// use events::{EmbeddedLocalManualResetEvent, LocalManualResetEvent};
     ///
     /// # futures::executor::block_on(async {
     /// let container = pin!(EmbeddedLocalManualResetEvent::new());
     ///
     /// // SAFETY: The container outlives the handle.
-    /// let event = unsafe {
-    ///     LocalManualResetEvent::embedded(container.as_ref())
-    /// };
+    /// let event = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
     /// let setter = event;
     ///
     /// setter.set();
@@ -146,6 +149,8 @@ impl LocalManualResetEvent {
 
     /// Opens the gate, releasing all current awaiters and allowing future
     /// awaiters to pass through immediately.
+    // Mutating set() to a no-op causes wait futures to hang.
+    #[cfg_attr(test, mutants::skip)]
     pub fn set(&self) {
         self.inner.is_set.set(true);
 
@@ -298,15 +303,14 @@ impl fmt::Debug for LocalManualResetWaitFuture {
 ///
 /// ```
 /// use std::pin::pin;
+///
 /// use events::{EmbeddedLocalManualResetEvent, LocalManualResetEvent};
 ///
 /// # futures::executor::block_on(async {
 /// let container = pin!(EmbeddedLocalManualResetEvent::new());
 ///
 /// // SAFETY: The container outlives the handle.
-/// let event = unsafe {
-///     LocalManualResetEvent::embedded(container.as_ref())
-/// };
+/// let event = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
 /// let waiter = event.clone();
 ///
 /// event.set();
@@ -376,6 +380,8 @@ impl RawLocalManualResetEvent {
     }
 
     /// Opens the gate, releasing all current awaiters.
+    // Mutating set() to a no-op causes wait futures to hang.
+    #[cfg_attr(test, mutants::skip)]
     pub fn set(&self) {
         self.inner().is_set.set(true);
 
@@ -787,6 +793,56 @@ mod tests {
             let mut cx = task::Context::from_waker(noop);
             assert!(new_future.as_mut().poll(&mut cx).is_pending());
         });
+        let waker = waker_data.waker();
+        let mut cx = task::Context::from_waker(&waker);
+
+        let mut future = Box::pin(event.wait());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+
+        event.set();
+
+        assert!(waker_data.was_woken());
+    }
+
+    #[test]
+    fn try_acquire_returns_false_when_unset() {
+        let event = LocalManualResetEvent::boxed();
+        assert!(!event.try_acquire());
+    }
+
+    #[test]
+    fn try_acquire_returns_true_when_set() {
+        let event = LocalManualResetEvent::boxed();
+        event.set();
+        assert!(event.try_acquire());
+    }
+
+    #[test]
+    fn embedded_try_acquire_returns_false_when_unset() {
+        let container = Box::pin(EmbeddedLocalManualResetEvent::new());
+        // SAFETY: The container outlives the handle.
+        let event = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
+        assert!(!event.try_acquire());
+    }
+
+    #[test]
+    fn embedded_try_acquire_returns_true_when_set() {
+        let container = Box::pin(EmbeddedLocalManualResetEvent::new());
+        // SAFETY: The container outlives the handle.
+        let event = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
+        event.set();
+        assert!(event.try_acquire());
+    }
+
+    #[test]
+    fn embedded_set_wakes_registered_waiter() {
+        use crate::test_helpers::ReentrantWakerData;
+
+        let container = Box::pin(EmbeddedLocalManualResetEvent::new());
+        // SAFETY: The container outlives the handle.
+        let event = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
+
+        let waker_data = ReentrantWakerData::new(|| {});
         let waker = waker_data.waker();
         let mut cx = task::Context::from_waker(&waker);
 

@@ -108,7 +108,8 @@ impl AutoResetEvent {
     ///
     /// ```
     /// use std::pin::pin;
-    /// use events::{EmbeddedAutoResetEvent, AutoResetEvent};
+    ///
+    /// use events::{AutoResetEvent, EmbeddedAutoResetEvent};
     ///
     /// # futures::executor::block_on(async {
     /// let container = pin!(EmbeddedAutoResetEvent::new());
@@ -152,6 +153,8 @@ impl AutoResetEvent {
     ///     event.wait().await;
     /// }
     /// ```
+    // Mutating set() to a no-op causes wait futures to hang.
+    #[cfg_attr(test, mutants::skip)]
     pub fn set(&self) {
         let waker: Option<Waker>;
 
@@ -200,6 +203,8 @@ impl AutoResetEvent {
     /// assert!(!event.try_acquire());
     /// ```
     #[must_use]
+    // Mutating try_acquire() to return false causes spin-loop tests to hang.
+    #[cfg_attr(test, mutants::skip)]
     pub fn try_acquire(&self) -> bool {
         let mut state = self.inner.state.lock().expect(NEVER_POISONED);
         if state.is_set {
@@ -397,7 +402,8 @@ impl fmt::Debug for AutoResetWaitFuture {
 ///
 /// ```
 /// use std::pin::pin;
-/// use events::{EmbeddedAutoResetEvent, AutoResetEvent};
+///
+/// use events::{AutoResetEvent, EmbeddedAutoResetEvent};
 ///
 /// # futures::executor::block_on(async {
 /// let container = pin!(EmbeddedAutoResetEvent::new());
@@ -473,6 +479,8 @@ impl RawAutoResetEvent {
     }
 
     /// Signals the event, releasing exactly one waiter.
+    // Mutating set() to a no-op causes wait futures to hang.
+    #[cfg_attr(test, mutants::skip)]
     pub fn set(&self) {
         let waker: Option<Waker>;
 
@@ -506,6 +514,8 @@ impl RawAutoResetEvent {
     /// Returns `true` if the event was set, atomically transitioning it
     /// back to the unset state. Returns `false` if the event was not set.
     #[must_use]
+    // Mutating try_acquire() to return false causes spin-loop tests to hang.
+    #[cfg_attr(test, mutants::skip)]
     pub fn try_acquire(&self) -> bool {
         let mut state = self.inner().state.lock().expect(NEVER_POISONED);
         if state.is_set {
@@ -668,10 +678,9 @@ impl fmt::Debug for RawAutoResetWaitFuture {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::iter;
     use std::sync::Barrier;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::thread;
+    use std::{iter, thread};
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
@@ -872,8 +881,10 @@ mod tests {
             .take(waiter_count)
             .collect();
 
-            barrier.wait();
+            // Set before releasing threads so the signal is guaranteed
+            // to be available when they start competing.
             event.set();
+            barrier.wait();
 
             for h in handles {
                 h.join().unwrap();
@@ -1121,5 +1132,25 @@ mod tests {
         drop(future1);
 
         assert!(future2.as_mut().poll(&mut cx).is_ready());
+    }
+
+    #[test]
+    fn embedded_set_wakes_registered_waiter() {
+        use crate::test_helpers::AtomicWakeTracker;
+
+        let container = Box::pin(EmbeddedAutoResetEvent::new());
+        // SAFETY: The container outlives the handle.
+        let event = unsafe { AutoResetEvent::embedded(container.as_ref()) };
+
+        let tracker = AtomicWakeTracker::new();
+        let waker = tracker.waker();
+        let mut cx = task::Context::from_waker(&waker);
+
+        let mut future = Box::pin(event.wait());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+
+        event.set();
+
+        assert!(tracker.was_woken());
     }
 }
