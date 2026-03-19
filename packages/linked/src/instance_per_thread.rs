@@ -486,8 +486,9 @@ mod tests {
 
     assert_impl_all!(InstancePerThread<TokenCache>: UnwindSafe, RefUnwindSafe);
 
-    // Ref<T> wraps Rc<T>, so T must itself be UnwindSafe. TokenCache uses
-    // Cell<usize> which is !UnwindSafe, so we use a separate linked type here.
+    // Ref<T> wraps Rc<T>, so T must be RefUnwindSafe for Rc<T> to be UnwindSafe.
+    // TokenCache contains Cell<usize> which is !RefUnwindSafe (Cell wraps
+    // UnsafeCell), so we use a separate linked type here.
     #[linked::object]
     struct SimpleValue {
         #[expect(
