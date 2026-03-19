@@ -403,6 +403,7 @@ impl EmbeddedManualResetEvent {
 }
 
 impl Default for EmbeddedManualResetEvent {
+    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder to new().
     fn default() -> Self {
         Self::new()
     }
@@ -890,5 +891,72 @@ mod tests {
         }
         event.set();
         event.wait().await;
+    }
+
+    #[test]
+    fn embedded_wait_registers_then_completes() {
+        let container = Box::pin(EmbeddedManualResetEvent::new());
+        // SAFETY: The container outlives the handle within this test.
+        let event = unsafe { ManualResetEvent::embedded(container.as_ref()) };
+
+        let mut future = Box::pin(event.wait());
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        // First poll — not set, registers in waiter list.
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+
+        // Set the event — wakes the registered waiter.
+        event.set();
+
+        // Second poll — event is set, returns Ready and unregisters.
+        assert!(future.as_mut().poll(&mut cx).is_ready());
+    }
+
+    #[test]
+    fn embedded_drop_registered_future() {
+        let container = Box::pin(EmbeddedManualResetEvent::new());
+        // SAFETY: The container outlives the handle within this test.
+        let event = unsafe { ManualResetEvent::embedded(container.as_ref()) };
+
+        let mut future = Box::pin(event.wait());
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        // Poll to register.
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+
+        // Drop the registered future — should unlink cleanly.
+        drop(future);
+
+        // Event should still work.
+        event.set();
+        let mut future2 = Box::pin(event.wait());
+        assert!(future2.as_mut().poll(&mut cx).is_ready());
+    }
+
+    #[test]
+    fn embedded_multiple_waiters_released() {
+        let container = Box::pin(EmbeddedManualResetEvent::new());
+        // SAFETY: The container outlives the handle within this test.
+        let event = unsafe { ManualResetEvent::embedded(container.as_ref()) };
+
+        let mut f1 = Box::pin(event.wait());
+        let mut f2 = Box::pin(event.wait());
+        let mut f3 = Box::pin(event.wait());
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        // All register as waiters.
+        assert!(f1.as_mut().poll(&mut cx).is_pending());
+        assert!(f2.as_mut().poll(&mut cx).is_pending());
+        assert!(f3.as_mut().poll(&mut cx).is_pending());
+
+        // Set releases all.
+        event.set();
+
+        assert!(f1.as_mut().poll(&mut cx).is_ready());
+        assert!(f2.as_mut().poll(&mut cx).is_ready());
+        assert!(f3.as_mut().poll(&mut cx).is_ready());
     }
 }
