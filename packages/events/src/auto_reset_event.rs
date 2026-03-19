@@ -27,23 +27,23 @@ const NEVER_POISONED: &str = "we never panic while holding this lock";
 ///
 /// ```
 /// use events::AutoResetEvent;
-/// use std::thread;
 ///
-/// # futures::executor::block_on(async {
-/// let event = AutoResetEvent::boxed();
-/// let setter = event.clone();
+/// #[tokio::main]
+/// async fn main() {
+///     let event = AutoResetEvent::boxed();
+///     let setter = event.clone();
 ///
-/// // A producer signals from another thread.
-/// thread::spawn(move || {
-///     setter.set();
-/// });
+///     // Producer signals from a background task.
+///     tokio::spawn(async move {
+///         setter.set();
+///     });
 ///
-/// // The consumer waits for the signal.
-/// event.wait().await;
+///     // Consumer waits for the signal.
+///     event.wait().await;
 ///
-/// // Signal was consumed — no more signals pending.
-/// assert!(!event.try_acquire());
-/// # });
+///     // Signal was consumed.
+///     assert!(!event.try_acquire());
+/// }
 /// ```
 #[derive(Clone)]
 pub struct AutoResetEvent {
@@ -59,6 +59,7 @@ struct GuardedState {
     waiters: WaiterList,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // Marker trait impl.
 // SAFETY: The raw pointers inside WaiterList are only dereferenced while the
 // Mutex is held, ensuring exclusive access.
 unsafe impl Send for GuardedState {}
@@ -114,8 +115,9 @@ impl AutoResetEvent {
     ///
     /// // SAFETY: The container outlives the handle.
     /// let event = unsafe { AutoResetEvent::embedded(container.as_ref()) };
+    /// let setter = event;
     ///
-    /// event.set();
+    /// setter.set();
     /// event.wait().await;
     /// # });
     /// ```
@@ -138,11 +140,17 @@ impl AutoResetEvent {
     /// ```
     /// use events::AutoResetEvent;
     ///
-    /// # futures::executor::block_on(async {
-    /// let event = AutoResetEvent::boxed();
-    /// event.set();
-    /// event.wait().await; // consumes the signal
-    /// # });
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let event = AutoResetEvent::boxed();
+    ///     let setter = event.clone();
+    ///
+    ///     tokio::spawn(async move {
+    ///         setter.set();
+    ///     });
+    ///
+    ///     event.wait().await;
+    /// }
     /// ```
     pub fn set(&self) {
         let waker: Option<Waker>;
@@ -220,11 +228,17 @@ impl AutoResetEvent {
     /// ```
     /// use events::AutoResetEvent;
     ///
-    /// # futures::executor::block_on(async {
-    /// let event = AutoResetEvent::boxed();
-    /// event.set();
-    /// event.wait().await;
-    /// # });
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let event = AutoResetEvent::boxed();
+    ///     let setter = event.clone();
+    ///
+    ///     tokio::spawn(async move {
+    ///         setter.set();
+    ///     });
+    ///
+    ///     event.wait().await;
+    /// }
     /// ```
     #[must_use]
     pub fn wait(&self) -> AutoResetWaitFuture {
@@ -247,6 +261,7 @@ pub struct AutoResetWaitFuture {
     _pinned: PhantomPinned,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // Marker trait impl.
 // SAFETY: All UnsafeCell<WaiterNode> fields are accessed exclusively under the
 // event's Mutex. The Arc<Inner> is Send + Sync. The raw pointers inside
 // WaiterNode are only dereferenced under the Mutex.
@@ -255,7 +270,9 @@ unsafe impl Send for AutoResetWaitFuture {}
 // The UnsafeCell<WaiterNode> field causes auto-trait inference to mark the
 // future as !UnwindSafe and !RefUnwindSafe. However, all mutable access to
 // the node goes through the Mutex, preventing inconsistent state observation.
+#[cfg_attr(coverage_nightly, coverage(off))] // Marker trait impl.
 impl UnwindSafe for AutoResetWaitFuture {}
+#[cfg_attr(coverage_nightly, coverage(off))] // Marker trait impl.
 impl RefUnwindSafe for AutoResetWaitFuture {}
 
 impl Future for AutoResetWaitFuture {
@@ -387,8 +404,9 @@ impl fmt::Debug for AutoResetWaitFuture {
 ///
 /// // SAFETY: The container outlives the handle.
 /// let event = unsafe { AutoResetEvent::embedded(container.as_ref()) };
+/// let setter = event;
 ///
-/// event.set();
+/// setter.set();
 /// event.wait().await;
 /// # });
 /// ```
@@ -433,14 +451,18 @@ pub struct RawAutoResetEvent {
     inner: NonNull<Inner>,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // Marker trait impl.
 // SAFETY: Inner is Send + Sync (protected by Mutex). The raw pointer is only
 // dereferenced to obtain &Inner, which is safe to share across threads.
 unsafe impl Send for RawAutoResetEvent {}
 
+#[cfg_attr(coverage_nightly, coverage(off))] // Marker trait impl.
 // SAFETY: Same as Send — all mutable access is mediated by the Mutex.
 unsafe impl Sync for RawAutoResetEvent {}
 
+#[cfg_attr(coverage_nightly, coverage(off))] // Marker trait impl.
 impl UnwindSafe for RawAutoResetEvent {}
+#[cfg_attr(coverage_nightly, coverage(off))] // Marker trait impl.
 impl RefUnwindSafe for RawAutoResetEvent {}
 
 impl RawAutoResetEvent {
@@ -514,11 +536,14 @@ pub struct RawAutoResetWaitFuture {
     _pinned: PhantomPinned,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))] // Marker trait impl.
 // SAFETY: Same reasoning as AutoResetWaitFuture — all node access is
 // protected by the Mutex.
 unsafe impl Send for RawAutoResetWaitFuture {}
 
+#[cfg_attr(coverage_nightly, coverage(off))] // Marker trait impl.
 impl UnwindSafe for RawAutoResetWaitFuture {}
+#[cfg_attr(coverage_nightly, coverage(off))] // Marker trait impl.
 impl RefUnwindSafe for RawAutoResetWaitFuture {}
 
 impl Future for RawAutoResetWaitFuture {

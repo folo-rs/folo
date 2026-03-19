@@ -26,7 +26,7 @@ futures = { workspace = true }
 rsevents = { workspace = true }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 
 [[bench]]
 name = "events_bench"

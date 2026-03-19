@@ -24,13 +24,19 @@
 //! ```
 //! use events::ManualResetEvent;
 //!
-//! # futures::executor::block_on(async {
-//! let event = ManualResetEvent::boxed();
-//! let waiter = event.clone();
+//! #[tokio::main]
+//! async fn main() {
+//!     let event = ManualResetEvent::boxed();
+//!     let setter = event.clone();
 //!
-//! event.set();
-//! waiter.wait().await;
-//! # });
+//!     // Producer opens the gate from a background task.
+//!     tokio::spawn(async move {
+//!         setter.set();
+//!     });
+//!
+//!     // Consumer waits for the gate to open.
+//!     event.wait().await;
+//! }
 //! ```
 //!
 //! # Auto-reset example
@@ -38,19 +44,22 @@
 //! ```
 //! use events::AutoResetEvent;
 //!
-//! # futures::executor::block_on(async {
-//! let event = AutoResetEvent::boxed();
-//! let consumer = event.clone();
+//! #[tokio::main]
+//! async fn main() {
+//!     let event = AutoResetEvent::boxed();
+//!     let setter = event.clone();
 //!
-//! // Producer signals.
-//! event.set();
+//!     // Producer signals from a background task.
+//!     tokio::spawn(async move {
+//!         setter.set();
+//!     });
 //!
-//! // Consumer receives.
-//! consumer.wait().await;
+//!     // Consumer waits for the signal.
+//!     event.wait().await;
 //!
-//! // Signal was consumed.
-//! assert!(!consumer.try_acquire());
-//! # });
+//!     // Signal was consumed.
+//!     assert!(!event.try_acquire());
+//! }
 //! ```
 
 mod auto_reset_event;

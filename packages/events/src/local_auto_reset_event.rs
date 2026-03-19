@@ -25,19 +25,25 @@ use crate::waiter_list::{WaiterList, WaiterNode};
 /// ```
 /// use events::LocalAutoResetEvent;
 ///
-/// # futures::executor::block_on(async {
-/// let event = LocalAutoResetEvent::boxed();
-/// let consumer = event.clone();
+/// #[tokio::main]
+/// async fn main() {
+///     let local = tokio::task::LocalSet::new();
+///     local.run_until(async {
+///         let event = LocalAutoResetEvent::boxed();
+///         let setter = event.clone();
 ///
-/// // Producer signals.
-/// event.set();
+///         // Producer task signals.
+///         tokio::task::spawn_local(async move {
+///             setter.set();
+///         });
 ///
-/// // Consumer receives.
-/// consumer.wait().await;
+///         // Consumer task waits.
+///         event.wait().await;
 ///
-/// // Signal was consumed.
-/// assert!(!consumer.try_acquire());
-/// # });
+///         // Signal was consumed.
+///         assert!(!event.try_acquire());
+///     }).await;
+/// }
 /// ```
 #[derive(Clone)]
 pub struct LocalAutoResetEvent {
@@ -50,7 +56,10 @@ struct Inner {
     _not_send: PhantomData<*const ()>,
 }
 
+// Marker trait impls have no executable code.
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl UnwindSafe for Inner {}
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl RefUnwindSafe for Inner {}
 
 impl LocalAutoResetEvent {
@@ -97,8 +106,9 @@ impl LocalAutoResetEvent {
     /// let event = unsafe {
     ///     LocalAutoResetEvent::embedded(container.as_ref())
     /// };
+    /// let setter = event;
     ///
-    /// event.set();
+    /// setter.set();
     /// event.wait().await;
     /// # });
     /// ```
@@ -180,7 +190,10 @@ pub struct LocalAutoResetWaitFuture {
     _pinned: PhantomPinned,
 }
 
+// Marker trait impls have no executable code.
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl UnwindSafe for LocalAutoResetWaitFuture {}
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl RefUnwindSafe for LocalAutoResetWaitFuture {}
 
 impl Future for LocalAutoResetWaitFuture {
@@ -319,8 +332,9 @@ impl fmt::Debug for LocalAutoResetWaitFuture {
 /// let event = unsafe {
 ///     LocalAutoResetEvent::embedded(container.as_ref())
 /// };
+/// let setter = event;
 ///
-/// event.set();
+/// setter.set();
 /// event.wait().await;
 /// # });
 /// ```
@@ -352,7 +366,10 @@ impl Default for EmbeddedLocalAutoResetEvent {
 }
 
 // Inner already implements UnwindSafe and RefUnwindSafe.
+// Marker trait impls have no executable code.
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl UnwindSafe for EmbeddedLocalAutoResetEvent {}
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl RefUnwindSafe for EmbeddedLocalAutoResetEvent {}
 
 /// Handle to an embedded [`LocalAutoResetEvent`] created via
@@ -370,7 +387,10 @@ pub struct RawLocalAutoResetEvent {
 
 // NonNull is !Send and !Sync by default, which is correct for local types.
 
+// Marker trait impls have no executable code.
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl UnwindSafe for RawLocalAutoResetEvent {}
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl RefUnwindSafe for RawLocalAutoResetEvent {}
 
 impl RawLocalAutoResetEvent {
@@ -455,7 +475,10 @@ pub struct RawLocalAutoResetWaitFuture {
 // NonNull and UnsafeCell make this !Send and !Sync by default, which is
 // correct for local types.
 
+// Marker trait impls have no executable code.
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl UnwindSafe for RawLocalAutoResetWaitFuture {}
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl RefUnwindSafe for RawLocalAutoResetWaitFuture {}
 
 impl Future for RawLocalAutoResetWaitFuture {

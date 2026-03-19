@@ -37,16 +37,25 @@ fn collect_waker(wakers: &mut Vec<Waker>, node: *mut WaiterNode) {
 /// ```
 /// use events::LocalManualResetEvent;
 ///
-/// # futures::executor::block_on(async {
-/// let event = LocalManualResetEvent::boxed();
-/// let waiter = event.clone();
+/// #[tokio::main]
+/// async fn main() {
+///     let local = tokio::task::LocalSet::new();
+///     local.run_until(async {
+///         let event = LocalManualResetEvent::boxed();
+///         let setter = event.clone();
 ///
-/// event.set();
-/// waiter.wait().await;
+///         // Producer opens the gate from a local task.
+///         tokio::task::spawn_local(async move {
+///             setter.set();
+///         });
 ///
-/// event.reset();
-/// assert!(!event.is_set());
-/// # });
+///         // Consumer waits for the gate to open.
+///         event.wait().await;
+///
+///         event.reset();
+///         assert!(!event.is_set());
+///     }).await;
+/// }
 /// ```
 #[derive(Clone)]
 pub struct LocalManualResetEvent {
@@ -67,7 +76,10 @@ struct Inner {
 // The Cell and UnsafeCell fields make Inner !RefUnwindSafe by auto-trait
 // inference. However, all access is single-threaded and the state machine
 // prevents observing inconsistent state during unwind.
+// Marker trait impls have no executable code.
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl UnwindSafe for Inner {}
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl RefUnwindSafe for Inner {}
 
 impl LocalManualResetEvent {
@@ -120,8 +132,9 @@ impl LocalManualResetEvent {
     /// let event = unsafe {
     ///     LocalManualResetEvent::embedded(container.as_ref())
     /// };
+    /// let setter = event;
     ///
-    /// event.set();
+    /// setter.set();
     /// event.wait().await;
     /// # });
     /// ```
@@ -192,7 +205,10 @@ pub struct LocalManualResetWaitFuture {
     _pinned: PhantomPinned,
 }
 
+// Marker trait impls have no executable code.
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl UnwindSafe for LocalManualResetWaitFuture {}
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl RefUnwindSafe for LocalManualResetWaitFuture {}
 
 impl Future for LocalManualResetWaitFuture {
@@ -325,7 +341,10 @@ impl Default for EmbeddedLocalManualResetEvent {
 }
 
 // Inner already implements UnwindSafe and RefUnwindSafe.
+// Marker trait impls have no executable code.
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl UnwindSafe for EmbeddedLocalManualResetEvent {}
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl RefUnwindSafe for EmbeddedLocalManualResetEvent {}
 
 /// Handle to an embedded [`LocalManualResetEvent`] created via
@@ -343,7 +362,10 @@ pub struct RawLocalManualResetEvent {
 
 // NonNull is !Send and !Sync by default, which is correct for local types.
 
+// Marker trait impls have no executable code.
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl UnwindSafe for RawLocalManualResetEvent {}
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl RefUnwindSafe for RawLocalManualResetEvent {}
 
 impl RawLocalManualResetEvent {
@@ -414,7 +436,10 @@ pub struct RawLocalManualResetWaitFuture {
 // NonNull and UnsafeCell make this !Send and !Sync by default, which is
 // correct for local types.
 
+// Marker trait impls have no executable code.
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl UnwindSafe for RawLocalManualResetWaitFuture {}
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl RefUnwindSafe for RawLocalManualResetWaitFuture {}
 
 impl Future for RawLocalManualResetWaitFuture {
