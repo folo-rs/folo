@@ -328,6 +328,9 @@ impl fmt::Display for Report {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::RefUnwindSafe;
+    use std::panic::UnwindSafe;
+
     use super::*;
     use crate::Session;
 
@@ -496,9 +499,15 @@ mod tests {
         assert_eq!(op.total_iterations(), 6);
     }
 
-    // Static assertions for thread safety
+    // Static assertions for thread safety.
     static_assertions::assert_impl_all!(Report: Send, Sync);
     static_assertions::assert_impl_all!(ReportOperation: Send, Sync);
+
+    // Static assertions for unwind safety.
+    static_assertions::assert_impl_all!(Report: UnwindSafe, RefUnwindSafe);
+    static_assertions::assert_impl_all!(
+        ReportOperation: UnwindSafe, RefUnwindSafe
+    );
 
     #[test]
     fn report_operation_display_shows_mean() {

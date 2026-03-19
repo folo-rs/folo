@@ -4,6 +4,7 @@ use std::backtrace::Backtrace;
 use std::cell::{RefCell, UnsafeCell};
 use std::fmt;
 use std::marker::PhantomData;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
 
@@ -225,11 +226,19 @@ unsafe impl<T: 'static> Send for RawLocalEventPool<T> {}
 // SAFETY: See above.
 unsafe impl<T: 'static> Sync for RawLocalEventPool<T> {}
 
+// The NonNull<UnsafeCell<RawLocalEventPoolCore<T>>> field disables
+// auto-trait inference for UnwindSafe/RefUnwindSafe. The pointed-to data
+// is owned by this type and protected by a RefCell, so shared references
+// cannot observe inconsistent state during unwind.
+impl<T: 'static> UnwindSafe for RawLocalEventPool<T> {}
+impl<T: 'static> RefUnwindSafe for RawLocalEventPool<T> {}
+
 #[cfg(test)]
 #[allow(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::iter;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::task::{self, Poll, Waker};
 
     use static_assertions::assert_impl_all;
@@ -238,6 +247,10 @@ mod tests {
     use crate::Disconnected;
 
     assert_impl_all!(RawLocalEventPool<u32>: Send, Sync);
+
+    assert_impl_all!(
+        RawLocalEventPool<u32>: UnwindSafe, RefUnwindSafe
+    );
 
     #[test]
     fn len() {

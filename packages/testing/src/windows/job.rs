@@ -234,9 +234,15 @@ impl JobBuilder {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use new_zealand::nz;
+    use static_assertions::assert_impl_all;
 
     use super::*;
+
+    assert_impl_all!(Job<'static>: UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(JobBuilder: UnwindSafe, RefUnwindSafe);
 
     #[test]
     #[cfg_attr(miri, ignore)] // Miri cannot use the real operating system APIs.

@@ -422,15 +422,19 @@ impl<'a> IntoIterator for &'a ProcessorSet {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use new_zealand::nz;
+    use static_assertions::assert_impl_all;
     use testing::with_watchdog;
 
     use super::*;
     use crate::EfficiencyClass;
     use crate::fake::{HardwareBuilder, ProcessorBuilder};
+
+    assert_impl_all!(ProcessorSet: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn smoke_test() {

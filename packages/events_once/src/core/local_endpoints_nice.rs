@@ -253,3 +253,31 @@ impl<T: 'static> fmt::Debug for RawLocalReceiver<T> {
             .finish()
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
+
+    use super::*;
+
+    assert_not_impl_any!(BoxedLocalSender<u32>: Send, Sync);
+    assert_not_impl_any!(BoxedLocalReceiver<u32>: Send, Sync);
+    assert_not_impl_any!(RawLocalSender<u32>: Send, Sync);
+    assert_not_impl_any!(RawLocalReceiver<u32>: Send, Sync);
+
+    assert_impl_all!(
+        BoxedLocalSender<u32>: UnwindSafe, RefUnwindSafe
+    );
+    assert_impl_all!(
+        BoxedLocalReceiver<u32>: UnwindSafe, RefUnwindSafe
+    );
+    assert_impl_all!(
+        RawLocalSender<u32>: UnwindSafe, RefUnwindSafe
+    );
+    assert_impl_all!(
+        RawLocalReceiver<u32>: UnwindSafe, RefUnwindSafe
+    );
+}

@@ -6,6 +6,7 @@ use std::fmt;
 use std::hint::spin_loop;
 use std::marker::PhantomPinned;
 use std::mem::{MaybeUninit, offset_of};
+use std::panic::RefUnwindSafe;
 #[cfg(debug_assertions)]
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::pin::Pin;
@@ -94,6 +95,12 @@ where
     // the sender and receiver connect via raw pointers to the event.
     _requires_pinning: PhantomPinned,
 }
+
+// The UnsafeCell fields (awaiter, value) cause auto-trait inference to
+// mark Event as !RefUnwindSafe. However, a shared reference to an Event
+// cannot observe inconsistent state during unwind because the atomic
+// state machine prevents concurrent access to those cells.
+impl<T: Send + 'static> RefUnwindSafe for Event<T> {}
 
 impl<T> Event<T>
 where
@@ -947,7 +954,7 @@ impl<T: Send + 'static> fmt::Debug for Event<T> {
 )]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+    use std::panic::{AssertUnwindSafe, RefUnwindSafe, UnwindSafe, catch_unwind, resume_unwind};
     use std::sync::Barrier;
     use std::task::Poll;
     use std::{task, thread};
@@ -959,7 +966,7 @@ mod tests {
     use super::*;
     use crate::IntoValueError;
 
-    assert_impl_all!(Event<u32>: Send, Sync);
+    assert_impl_all!(Event<u32>: Send, Sync, UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn boxed_send_receive() {

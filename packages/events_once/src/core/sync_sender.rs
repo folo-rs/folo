@@ -1,5 +1,4 @@
 use std::any::type_name;
-use std::cell::Cell;
 use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::{fmt, ptr};
@@ -19,7 +18,17 @@ where
     // We are not compatible with concurrent sender use from multiple threads.
     // This is just to leave us design flexibility - the API consumes the sender
     // so there is not really anything you can do with it concurrently anyway.
-    _not_sync: PhantomData<Cell<()>>,
+    _not_sync: PhantomData<*mut ()>,
+}
+
+// SAFETY: SenderCore contains no fields that prevent Send. The PhantomData<*mut ()>
+// marker is only used to prevent Sync, not Send. The actual Send bound is enforced
+// by the generic constraint T: Send.
+unsafe impl<E, T> Send for SenderCore<E, T>
+where
+    E: EventRef<T> + Send,
+    T: Send + 'static,
+{
 }
 
 impl<E, T> SenderCore<E, T>

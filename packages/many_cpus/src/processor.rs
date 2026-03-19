@@ -135,9 +135,14 @@ impl Debug for Processor {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::hash::DefaultHasher;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::assert_impl_all;
 
     use super::*;
     use crate::fake::platform::FakeProcessor;
+
+    assert_impl_all!(Processor: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn smoke_test() {

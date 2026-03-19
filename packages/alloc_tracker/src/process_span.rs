@@ -1,6 +1,5 @@
 //! Process-wide allocation tracking span.
 
-use std::cell::Cell;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
@@ -34,8 +33,12 @@ pub struct ProcessSpan {
     start_bytes: u64,
     start_count: u64,
     iterations: u64,
-    _not_sync: PhantomData<Cell<()>>,
+    _not_sync: PhantomData<*mut ()>,
 }
+
+// SAFETY: ProcessSpan contains no fields that prevent Send. The PhantomData<*mut ()> marker
+// is only used to prevent Sync, not Send.
+unsafe impl Send for ProcessSpan {}
 
 impl ProcessSpan {
     pub(crate) fn new(operation: &Operation, iterations: u64) -> Self {
@@ -131,10 +134,12 @@ impl Drop for ProcessSpan {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use super::*;
 
-    // Static assertions for thread safety
-    static_assertions::assert_impl_all!(ProcessSpan: Send);
+    // Static assertions for thread safety.
+    static_assertions::assert_impl_all!(ProcessSpan: Send, UnwindSafe, RefUnwindSafe);
     static_assertions::assert_not_impl_any!(ProcessSpan: Sync);
-    // ProcessSpan is Send but !Sync due to PhantomData<Cell<()>>
+    // ProcessSpan is Send but !Sync due to PhantomData<*mut ()>.
 }

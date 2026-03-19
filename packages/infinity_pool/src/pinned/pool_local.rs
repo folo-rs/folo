@@ -4,6 +4,7 @@ use std::fmt;
 use std::iter::FusedIterator;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::ptr::NonNull;
 use std::rc::Rc;
 
@@ -101,6 +102,11 @@ pub struct LocalPinnedPool<T: 'static> {
 
     _phantom: PhantomData<T>,
 }
+
+// All RefCell borrows are scoped, short-lived and never cross API boundaries,
+// so internal state cannot be observed in an inconsistent state during unwind.
+impl<T> UnwindSafe for LocalPinnedPool<T> {}
+impl<T> RefUnwindSafe for LocalPinnedPool<T> {}
 
 impl<T> LocalPinnedPool<T>
 where
@@ -348,15 +354,19 @@ impl<T> FusedIterator for LocalPinnedPoolIterator<'_, T> {}
 mod tests {
     use std::mem::MaybeUninit;
 
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
     use crate::SendAndSync;
 
     assert_not_impl_any!(LocalPinnedPool<SendAndSync>: Send, Sync);
+    assert_impl_all!(LocalPinnedPool<SendAndSync>: UnwindSafe, RefUnwindSafe);
 
     assert_impl_all!(LocalPinnedPoolIterator<'_, i32>: Iterator, DoubleEndedIterator, ExactSizeIterator, FusedIterator);
     assert_not_impl_any!(LocalPinnedPoolIterator<'_, SendAndSync>: Send, Sync);
+    assert_impl_all!(LocalPinnedPoolIterator<'_, SendAndSync>: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn new_pool_is_empty() {

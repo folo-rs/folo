@@ -309,8 +309,18 @@ macro_rules! thread_local_arc {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::sync::atomic::{self, AtomicUsize};
     use std::thread;
+
+    use static_assertions::assert_impl_all;
+
+    use crate::StaticInstancePerThreadSync;
+
+    assert_impl_all!(
+        StaticInstancePerThreadSync<TokenCache>: UnwindSafe,
+        RefUnwindSafe
+    );
 
     #[linked::object]
     struct TokenCache {

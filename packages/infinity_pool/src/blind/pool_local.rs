@@ -1,6 +1,7 @@
 use std::alloc::Layout;
 use std::cell::RefMut;
 use std::mem::MaybeUninit;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::rc::Rc;
 
 use crate::{
@@ -100,6 +101,11 @@ pub struct LocalBlindPool {
     // them from the pool, while keeping the pool alive until then).
     core: LocalBlindPoolCore,
 }
+
+// All RefCell borrows are scoped, short-lived and never cross API boundaries,
+// so internal state cannot be observed in an inconsistent state during unwind.
+impl UnwindSafe for LocalBlindPool {}
+impl RefUnwindSafe for LocalBlindPool {}
 
 impl LocalBlindPool {
     /// Creates a new pool with the default configuration.
@@ -273,11 +279,14 @@ mod tests {
     use std::mem::MaybeUninit;
     use std::rc::Rc;
 
-    use static_assertions::assert_not_impl_any;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
 
     assert_not_impl_any!(LocalBlindPool: Send, Sync);
+    assert_impl_all!(LocalBlindPool: UnwindSafe, RefUnwindSafe);
 
     struct LocalDropTracker {
         counter: Rc<RefCell<i32>>,

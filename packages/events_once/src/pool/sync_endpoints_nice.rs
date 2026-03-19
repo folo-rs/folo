@@ -2,6 +2,7 @@
 //! the outer generic type parameter, leaving only the inner T of the payload.
 
 use std::any::type_name;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::task::Poll;
 use std::{fmt, task};
@@ -13,6 +14,12 @@ use crate::{Disconnected, IntoValueError, PooledRef, ReceiverCore, SenderCore};
 pub struct PooledSender<T: Send + 'static> {
     inner: SenderCore<PooledRef<T>, T>,
 }
+
+// Senders are one-shot and consumed on use. The UnsafeCell fields in the
+// underlying event and pool are guarded by an atomic state machine and a
+// Mutex that prevent observing inconsistent state during unwind.
+impl<T: Send + 'static> UnwindSafe for PooledSender<T> {}
+impl<T: Send + 'static> RefUnwindSafe for PooledSender<T> {}
 
 impl<T: Send + 'static> PooledSender<T> {
     pub(crate) fn new(inner: SenderCore<PooledRef<T>, T>) -> Self {
@@ -45,6 +52,10 @@ impl<T: Send + 'static> fmt::Debug for PooledSender<T> {
 pub struct PooledReceiver<T: Send + 'static> {
     inner: ReceiverCore<PooledRef<T>, T>,
 }
+
+// See PooledSender for justification.
+impl<T: Send + 'static> UnwindSafe for PooledReceiver<T> {}
+impl<T: Send + 'static> RefUnwindSafe for PooledReceiver<T> {}
 
 impl<T: Send + 'static> PooledReceiver<T> {
     pub(crate) fn new(inner: ReceiverCore<PooledRef<T>, T>) -> Self {
@@ -129,6 +140,8 @@ impl<T: Send + 'static> fmt::Debug for PooledReceiver<T> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
@@ -139,6 +152,13 @@ mod tests {
 
     assert_impl_all!(PooledReceiver<u32>: Send);
     assert_not_impl_any!(PooledReceiver<u32>: Sync);
+
+    assert_impl_all!(
+        PooledSender<u32>: UnwindSafe, RefUnwindSafe
+    );
+    assert_impl_all!(
+        PooledReceiver<u32>: UnwindSafe, RefUnwindSafe
+    );
 
     #[test]
     fn into_value_disconnected() {

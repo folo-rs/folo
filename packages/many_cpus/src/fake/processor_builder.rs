@@ -85,7 +85,13 @@ impl ProcessorBuilder {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::assert_impl_all;
+
     use super::*;
+
+    assert_impl_all!(ProcessorBuilder: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn default_equals_new() {

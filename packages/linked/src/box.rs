@@ -196,9 +196,14 @@ macro_rules! new_box {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::thread;
 
+    use static_assertions::assert_impl_all;
+
     use crate::Object;
+
+    assert_impl_all!(crate::Box<String>: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn linked_box() {

@@ -34,6 +34,7 @@ all_the_time = { path = "../all_the_time" }
 alloc_tracker = { path = "../alloc_tracker" }
 criterion = { workspace = true }
 mutants = { workspace = true }
+static_assertions = { workspace = true }
 
 [[bench]]
 name = "par_bench_overhead"

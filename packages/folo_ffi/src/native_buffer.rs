@@ -245,7 +245,13 @@ impl<T: Sized> Drop for NativeBuffer<T> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::assert_impl_all;
+
     use super::*;
+
+    assert_impl_all!(NativeBuffer<u64>: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn smoke_test() {

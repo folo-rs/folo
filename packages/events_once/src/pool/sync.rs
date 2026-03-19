@@ -206,6 +206,7 @@ impl<T: Send + 'static> fmt::Debug for EventPoolCore<T> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::sync::Barrier;
     use std::task::{self, Poll, Waker};
     use std::{iter, thread};
@@ -218,6 +219,10 @@ mod tests {
     use crate::Disconnected;
 
     assert_impl_all!(EventPool<u32>: Send, Sync);
+
+    assert_impl_all!(
+        EventPool<u32>: UnwindSafe, RefUnwindSafe
+    );
 
     #[test]
     fn len() {

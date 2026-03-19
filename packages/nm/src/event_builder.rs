@@ -1,4 +1,5 @@
 use std::marker::PhantomData;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::thread::LocalKey;
@@ -37,6 +38,11 @@ where
     _p: PhantomData<P>,
     _single_threaded: PhantomData<*const ()>,
 }
+
+// EventBuilder is single-threaded (!Send, !Sync) and uses interior mutability only for
+// metrics registration. Inconsistent state after a caught panic cannot affect safety.
+impl<P: PublishModel> UnwindSafe for EventBuilder<P> {}
+impl<P: PublishModel> RefUnwindSafe for EventBuilder<P> {}
 
 impl<P> EventBuilder<P>
 where
@@ -256,10 +262,15 @@ impl EventBuilder<Push> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use static_assertions::assert_not_impl_any;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
     use crate::LocalEventRegistry;
+
+    assert_impl_all!(EventBuilder<Pull>: UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(EventBuilder<Push>: UnwindSafe, RefUnwindSafe);
 
     #[test]
     #[should_panic]

@@ -653,15 +653,19 @@ mod tests {
     use std::alloc::Layout;
     use std::mem::MaybeUninit;
 
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
 
     // We are nominally single-threaded.
     assert_not_impl_any!(RawOpaquePool: Send, Sync);
+    assert_impl_all!(RawOpaquePool: UnwindSafe, RefUnwindSafe);
 
     assert_impl_all!(RawOpaquePoolIterator<'_>: Iterator, DoubleEndedIterator, ExactSizeIterator, FusedIterator);
     assert_not_impl_any!(RawOpaquePoolIterator<'_>: Send, Sync);
+    assert_impl_all!(RawOpaquePoolIterator<'_>: UnwindSafe, RefUnwindSafe);
 
     assert_impl_all!(&RawOpaquePool: IntoIterator);
 

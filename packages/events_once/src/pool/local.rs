@@ -4,6 +4,7 @@ use std::backtrace::Backtrace;
 use std::cell::RefCell;
 use std::fmt;
 use std::marker::PhantomData;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::rc::Rc;
 
 use infinity_pool::RawPinnedPool;
@@ -39,6 +40,13 @@ pub struct LocalEventPool<T: 'static> {
 
     _owns_some: PhantomData<T>,
 }
+
+// The RefCell inside LocalPoolCore causes !RefUnwindSafe via auto-trait
+// inference through Rc. The pool is only borrowed momentarily for
+// rent/return operations and cannot be observed in an inconsistent state
+// during unwind.
+impl<T: 'static> UnwindSafe for LocalEventPool<T> {}
+impl<T: 'static> RefUnwindSafe for LocalEventPool<T> {}
 
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: 'static> fmt::Debug for LocalEventPool<T> {
@@ -166,14 +174,19 @@ impl<T: 'static> fmt::Debug for LocalPoolCore<T> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::iter;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::task::{self, Poll, Waker};
 
-    use static_assertions::assert_not_impl_any;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
     use crate::Disconnected;
 
     assert_not_impl_any!(LocalEventPool<u32>: Send, Sync);
+
+    assert_impl_all!(
+        LocalEventPool<u32>: UnwindSafe, RefUnwindSafe
+    );
 
     #[test]
     fn len() {

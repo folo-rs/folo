@@ -326,12 +326,15 @@ impl Default for RawBlindPool {
 mod tests {
     use std::mem::MaybeUninit;
 
-    use static_assertions::assert_not_impl_any;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
 
     // We are nominally single-threaded.
     assert_not_impl_any!(RawBlindPool: Send, Sync);
+    assert_impl_all!(RawBlindPool: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn new_pool_is_empty() {

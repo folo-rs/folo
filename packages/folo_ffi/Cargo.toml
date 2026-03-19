@@ -23,6 +23,7 @@ default = []
 
 [dev-dependencies]
 mutants = { workspace = true }
+static_assertions = { workspace = true }
 
 [lints]
 workspace = true

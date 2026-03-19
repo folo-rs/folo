@@ -305,9 +305,17 @@ mod tests {
 
     use super::*;
 
+    use std::panic::RefUnwindSafe;
+    use std::panic::UnwindSafe;
+
     // Static assertions for thread safety.
     static_assertions::assert_impl_all!(Allocator<std::alloc::System>: Send, Sync);
     static_assertions::assert_impl_all!(PerThreadCounters: Send, Sync);
+
+    // Static assertions for unwind safety.
+    static_assertions::assert_impl_all!(
+        Allocator<std::alloc::System>: UnwindSafe, RefUnwindSafe
+    );
 
     #[test]
     #[cfg(feature = "panic_on_next_alloc")]

@@ -455,14 +455,18 @@ impl FusedIterator for OpaquePoolIterator<'_> {}
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
 
     assert_impl_all!(OpaquePool: Send, Sync);
+    assert_impl_all!(OpaquePool: UnwindSafe, RefUnwindSafe);
 
     assert_impl_all!(OpaquePoolIterator<'_>: Iterator, DoubleEndedIterator, ExactSizeIterator, FusedIterator);
     assert_not_impl_any!(OpaquePoolIterator<'_>: Send, Sync);
+    assert_impl_all!(OpaquePoolIterator<'_>: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn new_pool_with_layout_of_is_empty() {

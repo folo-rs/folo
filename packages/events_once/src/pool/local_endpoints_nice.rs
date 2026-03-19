@@ -2,6 +2,7 @@
 //! the outer generic type parameter, leaving only the inner T of the payload.
 
 use std::any::type_name;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::task::Poll;
 use std::{fmt, task};
@@ -14,6 +15,13 @@ use crate::{Disconnected, IntoValueError, LocalReceiverCore, LocalSenderCore, Po
 pub struct PooledLocalSender<T: 'static> {
     inner: LocalSenderCore<PooledLocalRef<T>, T>,
 }
+
+// The RefCell in LocalPoolCore causes !RefUnwindSafe via auto-trait
+// inference through Rc. The pool state is only borrowed momentarily
+// for event lifecycle operations and cannot be observed in an
+// inconsistent state during unwind.
+impl<T: 'static> UnwindSafe for PooledLocalSender<T> {}
+impl<T: 'static> RefUnwindSafe for PooledLocalSender<T> {}
 
 impl<T: 'static> PooledLocalSender<T> {
     pub(crate) fn new(inner: LocalSenderCore<PooledLocalRef<T>, T>) -> Self {
@@ -46,6 +54,10 @@ impl<T: 'static> fmt::Debug for PooledLocalSender<T> {
 pub struct PooledLocalReceiver<T: 'static> {
     inner: LocalReceiverCore<PooledLocalRef<T>, T>,
 }
+
+// See PooledLocalSender for justification.
+impl<T: 'static> UnwindSafe for PooledLocalReceiver<T> {}
+impl<T: 'static> RefUnwindSafe for PooledLocalReceiver<T> {}
 
 impl<T: 'static> PooledLocalReceiver<T> {
     pub(crate) fn new(inner: LocalReceiverCore<PooledLocalRef<T>, T>) -> Self {
@@ -130,13 +142,22 @@ impl<T: 'static> fmt::Debug for PooledLocalReceiver<T> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use static_assertions::assert_not_impl_any;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
     use crate::{IntoValueError, LocalEventPool};
 
     assert_not_impl_any!(PooledLocalSender<u32>: Send, Sync);
     assert_not_impl_any!(PooledLocalReceiver<u32>: Send, Sync);
+
+    assert_impl_all!(
+        PooledLocalSender<u32>: UnwindSafe, RefUnwindSafe
+    );
+    assert_impl_all!(
+        PooledLocalReceiver<u32>: UnwindSafe, RefUnwindSafe
+    );
 
     #[test]
     fn into_value_disconnected() {

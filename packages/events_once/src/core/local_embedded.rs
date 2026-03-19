@@ -1,6 +1,7 @@
 use std::any::type_name;
 use std::fmt;
 use std::mem::MaybeUninit;
+use std::panic::RefUnwindSafe;
 
 use crate::LocalEvent;
 
@@ -45,6 +46,11 @@ pub struct EmbeddedLocalEvent<T: 'static> {
     pub(crate) inner: MaybeUninit<LocalEvent<T>>,
 }
 
+// MaybeUninit<LocalEvent<T>> inherits LocalEvent's !RefUnwindSafe
+// (from Cell and UnsafeCell). The same state-machine reasoning that
+// applies to LocalEvent applies here.
+impl<T: 'static> RefUnwindSafe for EmbeddedLocalEvent<T> {}
+
 impl<T: 'static> EmbeddedLocalEvent<T> {
     /// Creates a new event container that an event can be placed into.
     #[must_use]
@@ -74,12 +80,18 @@ impl<T: 'static> fmt::Debug for EmbeddedLocalEvent<T> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[expect(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]
 mod tests {
-    use static_assertions::assert_not_impl_any;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
     use crate::LocalEvent;
 
     assert_not_impl_any!(EmbeddedLocalEvent<u32>: Send, Sync);
+
+    assert_impl_all!(
+        EmbeddedLocalEvent<u32>: UnwindSafe, RefUnwindSafe
+    );
 
     #[test]
     fn default_creates_usable_container() {

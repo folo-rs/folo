@@ -7,6 +7,7 @@ use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 #[cfg(debug_assertions)]
 use std::panic::{self, AssertUnwindSafe};
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::sync::Mutex;
@@ -268,10 +269,18 @@ unsafe impl<T: Send + 'static> Send for RawEventPool<T> {}
 // SAFETY: See above.
 unsafe impl<T: Send + 'static> Sync for RawEventPool<T> {}
 
+// The NonNull<UnsafeCell<RawEventPoolCore<T>>> field disables auto-trait
+// inference for UnwindSafe/RefUnwindSafe. The pointed-to data is owned by
+// this type and protected by a Mutex, so shared references cannot observe
+// inconsistent state during unwind.
+impl<T: Send + 'static> UnwindSafe for RawEventPool<T> {}
+impl<T: Send + 'static> RefUnwindSafe for RawEventPool<T> {}
+
 #[cfg(test)]
 #[allow(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::sync::{Arc, Barrier};
     use std::task::{self, Poll, Waker};
     use std::{iter, thread};
@@ -284,6 +293,10 @@ mod tests {
     use crate::Disconnected;
 
     assert_impl_all!(RawEventPool<u32>: Send, Sync);
+
+    assert_impl_all!(
+        RawEventPool<u32>: UnwindSafe, RefUnwindSafe
+    );
 
     #[test]
     fn len() {

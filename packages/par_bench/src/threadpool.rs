@@ -1,4 +1,5 @@
 use std::num::NonZero;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::{iter, mem};
@@ -42,6 +43,12 @@ pub struct ThreadPool {
     join_handles: Vec<JoinHandle<()>>,
     thread_count: NonZero<usize>,
 }
+
+// ThreadPool is logically unwind-safe: the JoinHandles are never exposed and are only used in
+// drop() to join threads. The UnsafeCell inside each JoinHandle's Packet is never accessed
+// through a shared &ThreadPool reference, so no inconsistent state can be observed during unwind.
+impl UnwindSafe for ThreadPool {}
+impl RefUnwindSafe for ThreadPool {}
 
 impl ThreadPool {
     /// Creates a thread pool with one thread per processor in the provided processor set.
@@ -229,12 +236,15 @@ fn worker_entrypoint(rx: &mpsc::Receiver<Command>) {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::sync::atomic::{self, AtomicUsize};
 
     use many_cpus::SystemHardware;
     use new_zealand::nz;
 
     use super::*;
+
+    static_assertions::assert_impl_all!(ThreadPool: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn smoke_test_all() {

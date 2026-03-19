@@ -1,5 +1,6 @@
 //! Publisher for exporting nm metrics to OpenTelemetry.
 
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::time::Duration;
 
 use futures::StreamExt;
@@ -43,6 +44,12 @@ pub struct PublisherBuilder {
     interval: Duration,
     meter_name: &'static str,
 }
+
+// PublisherBuilder wraps OpenTelemetry SDK types that use trait objects internally.
+// The trait objects are not auto-RefUnwindSafe but are used only for metrics export
+// configuration. Inconsistent state after a caught panic cannot affect safety.
+impl UnwindSafe for PublisherBuilder {}
+impl RefUnwindSafe for PublisherBuilder {}
 
 impl PublisherBuilder {
     fn new() -> Self {
@@ -149,6 +156,12 @@ pub struct Publisher {
     instruments: Option<InstrumentRegistry>,
 }
 
+// Publisher wraps OpenTelemetry SDK types that use trait objects internally.
+// The trait objects are not auto-RefUnwindSafe but are used only for metrics export.
+// Inconsistent state after a caught panic cannot affect safety.
+impl UnwindSafe for Publisher {}
+impl RefUnwindSafe for Publisher {}
+
 impl Publisher {
     /// Creates a new publisher builder.
     ///
@@ -212,9 +225,15 @@ impl Publisher {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader};
+    use static_assertions::assert_impl_all;
 
     use super::*;
+
+    assert_impl_all!(Publisher: UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(PublisherBuilder: UnwindSafe, RefUnwindSafe);
 
     fn create_test_provider() -> (SdkMeterProvider, InMemoryMetricExporter) {
         let exporter = InMemoryMetricExporter::default();

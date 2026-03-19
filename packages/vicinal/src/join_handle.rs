@@ -66,12 +66,15 @@ where
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::panic::AssertUnwindSafe;
+    use std::panic::{AssertUnwindSafe, RefUnwindSafe, UnwindSafe};
 
+    use super::*;
     use events_once::EventLake;
     use futures::executor::block_on;
 
-    use super::*;
+    static_assertions::assert_impl_all!(
+        JoinHandle<String>: UnwindSafe, RefUnwindSafe
+    );
 
     #[test]
     fn await_returns_value() {
