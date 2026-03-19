@@ -352,7 +352,7 @@ impl PoolBuilder {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::num::NonZero;
-    use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+    use std::panic::{AssertUnwindSafe, RefUnwindSafe, UnwindSafe, catch_unwind, resume_unwind};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Barrier};
     use std::thread;
@@ -360,8 +360,12 @@ mod tests {
     use many_cpus::SystemHardware;
     use many_cpus::fake::HardwareBuilder;
     use new_zealand::nz;
+    use static_assertions::assert_impl_all;
 
-    use crate::Pool;
+    use crate::{Pool, PoolBuilder};
+
+    assert_impl_all!(Pool: UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(PoolBuilder: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn pool_new_creates_pool() {

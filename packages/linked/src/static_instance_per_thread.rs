@@ -294,7 +294,16 @@ macro_rules! thread_local_rc {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::cell::Cell;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::thread;
+
+    use static_assertions::assert_impl_all;
+
+    use crate::StaticInstancePerThread;
+
+    assert_impl_all!(
+        StaticInstancePerThread<TokenCache>: UnwindSafe, RefUnwindSafe
+    );
 
     #[linked::object]
     struct TokenCache {

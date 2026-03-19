@@ -173,6 +173,12 @@ impl fmt::Display for Session {
 mod tests {
     use super::*;
 
+    use std::panic::RefUnwindSafe;
+    use std::panic::UnwindSafe;
+
     // The type is thread-safe.
     static_assertions::assert_impl_all!(Session: Send, Sync);
+
+    // Static assertions for unwind safety.
+    static_assertions::assert_impl_all!(Session: UnwindSafe, RefUnwindSafe);
 }

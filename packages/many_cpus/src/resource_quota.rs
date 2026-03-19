@@ -38,3 +38,15 @@ impl ResourceQuota {
         self.max_processor_time
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::assert_impl_all;
+
+    use super::*;
+
+    assert_impl_all!(ResourceQuota: UnwindSafe, RefUnwindSafe);
+}

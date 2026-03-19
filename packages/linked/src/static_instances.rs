@@ -330,11 +330,18 @@ pub fn __private_clear_linked_variables_local() {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::any::TypeId;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::rc::Rc;
     use std::sync::{Arc, Mutex};
     use std::thread;
 
+    use static_assertions::assert_impl_all;
+
     use crate::StaticInstances;
+
+    assert_impl_all!(
+        StaticInstances<TokenCache>: UnwindSafe, RefUnwindSafe
+    );
 
     #[linked::object]
     struct TokenCache {

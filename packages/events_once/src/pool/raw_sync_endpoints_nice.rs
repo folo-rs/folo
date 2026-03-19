@@ -2,6 +2,7 @@
 //! the outer generic type parameter, leaving only the inner T of the payload.
 
 use std::any::type_name;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::task::Poll;
 use std::{fmt, task};
@@ -13,6 +14,10 @@ use crate::{Disconnected, IntoValueError, RawPooledRef, ReceiverCore, SenderCore
 pub struct RawPooledSender<T: Send + 'static> {
     inner: SenderCore<RawPooledRef<T>, T>,
 }
+
+// See PooledSender in sync_endpoints_nice.rs for justification.
+impl<T: Send + 'static> UnwindSafe for RawPooledSender<T> {}
+impl<T: Send + 'static> RefUnwindSafe for RawPooledSender<T> {}
 
 impl<T: Send + 'static> RawPooledSender<T> {
     pub(crate) fn new(inner: SenderCore<RawPooledRef<T>, T>) -> Self {
@@ -45,6 +50,10 @@ impl<T: Send + 'static> fmt::Debug for RawPooledSender<T> {
 pub struct RawPooledReceiver<T: Send + 'static> {
     inner: ReceiverCore<RawPooledRef<T>, T>,
 }
+
+// See PooledSender in sync_endpoints_nice.rs for justification.
+impl<T: Send + 'static> UnwindSafe for RawPooledReceiver<T> {}
+impl<T: Send + 'static> RefUnwindSafe for RawPooledReceiver<T> {}
 
 impl<T: Send + 'static> RawPooledReceiver<T> {
     pub(crate) fn new(inner: ReceiverCore<RawPooledRef<T>, T>) -> Self {
@@ -129,6 +138,7 @@ impl<T: Send + 'static> fmt::Debug for RawPooledReceiver<T> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
@@ -140,6 +150,13 @@ mod tests {
 
     assert_impl_all!(RawPooledReceiver<u32>: Send);
     assert_not_impl_any!(RawPooledReceiver<u32>: Sync);
+
+    assert_impl_all!(
+        RawPooledSender<u32>: UnwindSafe, RefUnwindSafe
+    );
+    assert_impl_all!(
+        RawPooledReceiver<u32>: UnwindSafe, RefUnwindSafe
+    );
 
     #[test]
     fn into_value_disconnected() {

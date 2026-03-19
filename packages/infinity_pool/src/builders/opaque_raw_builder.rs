@@ -61,11 +61,14 @@ impl RawOpaquePoolBuilder {
 )]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use static_assertions::assert_not_impl_any;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
 
     assert_not_impl_any!(RawOpaquePoolBuilder: Send, Sync);
+    assert_impl_all!(RawOpaquePoolBuilder: UnwindSafe, RefUnwindSafe);
 
     #[test]
     #[should_panic]

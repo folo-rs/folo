@@ -1,5 +1,6 @@
 use std::fmt;
 use std::future::Future;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -236,16 +237,26 @@ impl<T> futures_core::Stream for FutureDeque<T> {
 // behind `Arc<Mutex<…>>`) are `Send + Sync`.
 unsafe impl<T: Send> Send for FutureDeque<T> {}
 
+// The internal `dyn ErasedFuture<T>` trait objects and the `UnsafeCell` inside the waker metadata
+// prevent auto-derivation. However, all mutable state is either behind `Arc<Mutex<…>>` (which is
+// unconditionally unwind-safe due to poisoning) or confined to owned pool handles that are not
+// shared through references. A `FutureDeque` that survives a panic is safe to drop or continue
+// using because each slot independently tracks its own lifecycle.
+impl<T> UnwindSafe for FutureDeque<T> {}
+impl<T> RefUnwindSafe for FutureDeque<T> {}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::task::{Context, Poll, Waker};
 
     use static_assertions::assert_impl_all;
 
     use super::*;
 
-    assert_impl_all!(FutureDeque<u32>: Send, Sync, Unpin, Future);
+    assert_impl_all!(FutureDeque<u32>: Send, Sync, Unpin, Future,
+        UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn push_back_and_poll_front() {

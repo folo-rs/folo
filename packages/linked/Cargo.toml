@@ -29,6 +29,7 @@ mutants = { workspace = true }
 new_zealand = { path = "../new_zealand" }
 par_bench = { path = "../par_bench", features = ["criterion"] }
 seq-macro = { workspace = true }
+static_assertions = { workspace = true }
 
 [[bench]]
 name = "instances"

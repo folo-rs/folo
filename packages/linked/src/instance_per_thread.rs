@@ -475,11 +475,30 @@ unsafe impl<T> Send for ThreadSpecificState<T> where T: linked::Object {}
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::cell::Cell;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::sync::atomic::{self, AtomicBool};
     use std::sync::{Arc, Mutex};
     use std::thread;
 
+    use static_assertions::assert_impl_all;
+
     use super::*;
+
+    assert_impl_all!(InstancePerThread<TokenCache>: UnwindSafe, RefUnwindSafe);
+
+    // Ref<T> wraps Rc<T>, so T must itself be UnwindSafe. TokenCache uses
+    // Cell<usize> which is !UnwindSafe, so we use a separate linked type here.
+    #[linked::object]
+    struct SimpleValue {
+        #[expect(
+            dead_code,
+            reason = "field exists to give the type a String \
+                      component for static assertions"
+        )]
+        data: String,
+    }
+
+    assert_impl_all!(Ref<SimpleValue>: UnwindSafe, RefUnwindSafe);
 
     #[linked::object]
     struct TokenCache {

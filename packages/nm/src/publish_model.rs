@@ -1,3 +1,4 @@
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -36,6 +37,11 @@ pub struct Push {
     pub(crate) observations: Rc<ObservationBag>,
 }
 
+// Push is single-threaded (!Send, !Sync) and uses interior mutability only for
+// metrics tracking. Inconsistent state after a caught panic cannot affect safety.
+impl UnwindSafe for Push {}
+impl RefUnwindSafe for Push {}
+
 impl Sealed for Push {}
 impl PublishModel for Push {}
 impl PublishModelPrivate for Push {
@@ -70,4 +76,17 @@ impl PublishModelPrivate for Pull {
     fn insert(&self, magnitude: Magnitude, count: usize) {
         self.observations.insert(magnitude, count);
     }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::assert_impl_all;
+
+    use super::*;
+
+    assert_impl_all!(Push: UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(Pull: UnwindSafe, RefUnwindSafe);
 }

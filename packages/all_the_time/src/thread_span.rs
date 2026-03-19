@@ -409,8 +409,16 @@ mod tests {
         drop(span);
     }
 
-    // Static assertions for thread safety
-    // ThreadSpan should NOT be Send or Sync due to PhantomData<*const ()>
+    use std::panic::RefUnwindSafe;
+    use std::panic::UnwindSafe;
+
+    // Static assertions for thread safety.
+    // ThreadSpan should NOT be Send or Sync due to PhantomData<*const ()>.
     static_assertions::assert_not_impl_all!(super::ThreadSpan: Send);
     static_assertions::assert_not_impl_all!(super::ThreadSpan: Sync);
+
+    // Static assertions for unwind safety.
+    static_assertions::assert_impl_all!(
+        super::ThreadSpan: UnwindSafe, RefUnwindSafe
+    );
 }

@@ -229,6 +229,8 @@ mod tests {
     use std::borrow::Borrow;
     use std::marker::PhantomPinned;
 
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
@@ -241,6 +243,8 @@ mod tests {
 
     assert_not_impl_any!(Pooled<NotSendNotSync>: Send);
     assert_not_impl_any!(Pooled<NotSendSync>: Send);
+
+    assert_impl_all!(Pooled<SendAndSync>: UnwindSafe, RefUnwindSafe);
 
     // This is a shared handle, must be cloneable.
     assert_impl_all!(Pooled<SendAndSync>: Clone);

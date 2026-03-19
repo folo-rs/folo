@@ -1,5 +1,6 @@
 use std::fmt;
 use std::future::Future;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -225,6 +226,14 @@ impl<T> futures_core::Stream for LocalFutureDeque<T> {
     }
 }
 
+// The internal `dyn ErasedFuture<T>` trait objects and the `UnsafeCell` inside the waker metadata
+// prevent auto-derivation. However, all mutable state is either behind `Mutex` (unconditionally
+// unwind-safe due to poisoning) or confined to owned pool handles that are not shared through
+// references. A `LocalFutureDeque` that survives a panic is safe to drop or continue using
+// because each slot independently tracks its own lifecycle.
+impl<T> UnwindSafe for LocalFutureDeque<T> {}
+impl<T> RefUnwindSafe for LocalFutureDeque<T> {}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -235,7 +244,8 @@ mod tests {
     use super::*;
 
     assert_not_impl_any!(LocalFutureDeque<u32>: Send, Sync);
-    assert_impl_all!(LocalFutureDeque<u32>: Unpin, Future);
+    assert_impl_all!(LocalFutureDeque<u32>: Unpin, Future,
+        UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn poll_then_pop_both_ends() {

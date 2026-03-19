@@ -2,6 +2,7 @@ use std::any::type_name;
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::mem::MaybeUninit;
+use std::panic::RefUnwindSafe;
 
 use crate::Event;
 
@@ -46,6 +47,11 @@ pub struct EmbeddedEvent<T: Send + 'static> {
     pub(crate) inner: UnsafeCell<MaybeUninit<Event<T>>>,
 }
 
+// The UnsafeCell causes auto-trait inference to mark EmbeddedEvent as
+// !RefUnwindSafe. The inner Event is itself RefUnwindSafe and the
+// UnsafeCell merely provides interior mutability for the placement API.
+impl<T: Send + 'static> RefUnwindSafe for EmbeddedEvent<T> {}
+
 impl<T: Send + 'static> EmbeddedEvent<T> {
     /// Creates a new event container that an event can be placed into.
     #[must_use]
@@ -75,6 +81,8 @@ impl<T: Send + 'static> fmt::Debug for EmbeddedEvent<T> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[expect(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
@@ -82,6 +90,10 @@ mod tests {
 
     assert_impl_all!(EmbeddedEvent<u32>: Send);
     assert_not_impl_any!(EmbeddedEvent<u32>: Sync);
+
+    assert_impl_all!(
+        EmbeddedEvent<u32>: UnwindSafe, RefUnwindSafe
+    );
 
     #[test]
     fn default_creates_usable_container() {

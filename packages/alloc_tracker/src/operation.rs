@@ -189,6 +189,9 @@ impl fmt::Display for Operation {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::RefUnwindSafe;
+    use std::panic::UnwindSafe;
+
     use super::*;
     use crate::Session;
     use crate::allocator::register_fake_allocation;
@@ -405,6 +408,9 @@ mod tests {
     }
 
     static_assertions::assert_impl_all!(Operation: Send, Sync);
+    static_assertions::assert_impl_all!(
+        Operation: UnwindSafe, RefUnwindSafe
+    );
 
     #[test]
     fn operation_display_shows_mean_bytes() {

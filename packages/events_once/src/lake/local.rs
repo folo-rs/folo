@@ -3,6 +3,7 @@ use std::any::{Any, TypeId, type_name};
 use std::backtrace::Backtrace;
 use std::cell::RefCell;
 use std::fmt;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::rc::Rc;
 
 use hash_hasher::HashedMap;
@@ -45,6 +46,12 @@ use crate::{LocalEventPool, PooledLocalReceiver, PooledLocalSender};
 pub struct LocalEventLake {
     core: Rc<Core>,
 }
+
+// The RefCell inside Core causes !RefUnwindSafe via auto-trait inference
+// through Rc. The pool map is only borrowed momentarily for rent/return
+// operations and cannot be observed in an inconsistent state during unwind.
+impl UnwindSafe for LocalEventLake {}
+impl RefUnwindSafe for LocalEventLake {}
 
 struct Core {
     // This is a transparent HashMap, meaning it does not do any hashing.
@@ -193,6 +200,7 @@ impl<T: 'static> ErasedPool for PoolWrapper<T> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use core::task;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::task::Waker;
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
@@ -201,6 +209,10 @@ mod tests {
 
     assert_impl_all!(LocalEventLake: Clone);
     assert_not_impl_any!(LocalEventLake: Send, Sync);
+
+    assert_impl_all!(
+        LocalEventLake: UnwindSafe, RefUnwindSafe
+    );
 
     #[test]
     fn len() {

@@ -1,3 +1,5 @@
+use std::panic::{RefUnwindSafe, UnwindSafe};
+
 /// Errors that can occur when processing cpulist strings.
 ///
 /// The caller provided a supposed cpulist string but it did not match the expected format.
@@ -7,6 +9,13 @@ pub struct Error {
     invalid_value: String,
     problem: String,
 }
+
+// The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
+// which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
+// However, ohno error types are immutable after construction — no &self method mutates internal
+// state — so observing them through a shared reference during unwind is harmless.
+impl UnwindSafe for Error {}
+impl RefUnwindSafe for Error {}
 
 impl Error {
     /// The specific value that was invalid.
@@ -34,12 +43,13 @@ pub(crate) type Result<T> = std::result::Result<T, Error>;
 mod tests {
     use std::error;
     use std::fmt::Debug;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
 
     use static_assertions::assert_impl_all;
 
     use super::*;
 
-    assert_impl_all!(Error: Send, Sync, Debug, error::Error);
+    assert_impl_all!(Error: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn invalid_syntax_is_error() {

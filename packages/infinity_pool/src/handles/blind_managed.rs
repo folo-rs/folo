@@ -217,6 +217,8 @@ impl Drop for Remover {
 mod tests {
     use std::borrow::Borrow;
 
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
@@ -229,6 +231,8 @@ mod tests {
 
     assert_not_impl_any!(BlindPooled<NotSendNotSync>: Send);
     assert_not_impl_any!(BlindPooled<NotSendSync>: Send);
+
+    assert_impl_all!(BlindPooled<SendAndSync>: UnwindSafe, RefUnwindSafe);
 
     // This is a shared handle, must be cloneable.
     assert_impl_all!(BlindPooled<SendAndSync>: Clone);

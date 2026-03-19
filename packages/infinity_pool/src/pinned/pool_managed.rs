@@ -392,6 +392,8 @@ impl<T> FusedIterator for PinnedPoolIterator<'_, T> {}
 mod tests {
     use std::mem::MaybeUninit;
 
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
@@ -399,9 +401,11 @@ mod tests {
 
     assert_impl_all!(PinnedPool<SendAndSync>: Send, Sync);
     assert_impl_all!(PinnedPool<SendNotSync>: Send, Sync);
+    assert_impl_all!(PinnedPool<SendAndSync>: UnwindSafe, RefUnwindSafe);
 
     assert_impl_all!(PinnedPoolIterator<'_, SendAndSync>: Iterator, DoubleEndedIterator, ExactSizeIterator, FusedIterator);
     assert_not_impl_any!(PinnedPoolIterator<'_, SendAndSync>: Send, Sync);
+    assert_impl_all!(PinnedPoolIterator<'_, SendAndSync>: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn new_pool_is_empty() {

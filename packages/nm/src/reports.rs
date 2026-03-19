@@ -654,7 +654,15 @@ impl HistogramScale {
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::assert_impl_all;
+
     use super::*;
+
+    assert_impl_all!(Report: UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(EventMetrics: UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(Histogram: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn histogram_properties_reflect_reality() {

@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::marker::PhantomData;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::time::Duration;
 
 use fast_time::Clock;
@@ -106,6 +107,11 @@ where
 
     _single_threaded: PhantomData<*const ()>,
 }
+
+// Event is single-threaded (!Send, !Sync) and uses interior mutability only for metrics
+// tracking. Inconsistent state after a caught panic cannot affect safety.
+impl<P: PublishModel> UnwindSafe for Event<P> {}
+impl<P: PublishModel> RefUnwindSafe for Event<P> {}
 
 impl Event<Pull> {
     /// Creates a new event builder with the default builder configuration.
@@ -341,13 +347,17 @@ where
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::rc::Rc;
     use std::sync::Arc;
 
-    use static_assertions::assert_not_impl_any;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
     use crate::{ObservationBag, ObservationBagSync, Push};
+
+    assert_impl_all!(Event<Pull>: UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(Event<Push>: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn pull_event_observations_are_recorded() {

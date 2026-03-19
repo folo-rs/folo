@@ -294,6 +294,8 @@ mod tests {
     use std::cell::Cell;
     use std::thread;
 
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
@@ -306,6 +308,8 @@ mod tests {
 
     assert_not_impl_any!(PooledMut<NotSendNotSync>: Send);
     assert_not_impl_any!(PooledMut<NotSendSync>: Send);
+
+    assert_impl_all!(PooledMut<SendAndSync>: UnwindSafe, RefUnwindSafe);
 
     // This is a unique handle, it cannot be cloneable/copyable.
     assert_not_impl_any!(PooledMut<SendAndSync>: Clone, Copy);

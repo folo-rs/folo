@@ -3,6 +3,7 @@ use std::any::{Any, TypeId, type_name};
 use std::backtrace::Backtrace;
 use std::cell::{RefCell, UnsafeCell};
 use std::fmt;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
 
@@ -201,6 +202,13 @@ impl Drop for RawLocalEventLake {
     }
 }
 
+// The NonNull<UnsafeCell<Core>> field disables auto-trait inference for
+// UnwindSafe/RefUnwindSafe. The pointed-to data is owned by this type and
+// protected by a RefCell, so shared references cannot observe inconsistent
+// state during unwind.
+impl UnwindSafe for RawLocalEventLake {}
+impl RefUnwindSafe for RawLocalEventLake {}
+
 struct PoolWrapper<T: 'static> {
     inner: RawLocalEventPool<T>,
 }
@@ -268,13 +276,18 @@ impl<T: 'static> ErasedPool for PoolWrapper<T> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use core::task;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::task::Waker;
 
-    use static_assertions::assert_not_impl_any;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
 
     assert_not_impl_any!(RawLocalEventLake: Send, Sync);
+
+    assert_impl_all!(
+        RawLocalEventLake: UnwindSafe, RefUnwindSafe
+    );
 
     #[test]
     fn len() {

@@ -2,6 +2,7 @@ use std::any::type_name;
 use std::borrow::{Borrow, BorrowMut};
 use std::cell::RefCell;
 use std::ops::{Deref, DerefMut};
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::{fmt, mem, ptr};
@@ -34,6 +35,11 @@ pub struct LocalBlindPooledMut<T: ?Sized> {
     // slab storage allows for more flexibility.
     core: LocalBlindPoolCore,
 }
+
+// All RefCell borrows are scoped, short-lived and never cross API boundaries,
+// so internal state cannot be observed in an inconsistent state during unwind.
+impl<T: ?Sized> UnwindSafe for LocalBlindPooledMut<T> {}
+impl<T: ?Sized> RefUnwindSafe for LocalBlindPooledMut<T> {}
 
 impl<T: ?Sized> LocalBlindPooledMut<T> {
     #[must_use]
@@ -304,7 +310,9 @@ impl<T: ?Sized> Drop for LocalBlindPooledMut<T> {
 mod tests {
     use std::borrow::{Borrow, BorrowMut};
 
-    use static_assertions::assert_not_impl_any;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
     use crate::{LocalBlindPool, NotSendNotSync, NotSendSync, SendAndSync, SendNotSync};
@@ -313,6 +321,8 @@ mod tests {
     assert_not_impl_any!(LocalBlindPooledMut<SendNotSync>: Send, Sync);
     assert_not_impl_any!(LocalBlindPooledMut<NotSendNotSync>: Send, Sync);
     assert_not_impl_any!(LocalBlindPooledMut<NotSendSync>: Send, Sync);
+
+    assert_impl_all!(LocalBlindPooledMut<SendAndSync>: UnwindSafe, RefUnwindSafe);
 
     // This is a unique handle, must not be cloneable/copyable.
     assert_not_impl_any!(LocalBlindPooledMut<SendAndSync>: Clone, Copy);

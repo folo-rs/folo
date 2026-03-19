@@ -7,6 +7,7 @@ use std::cell::{Cell, UnsafeCell};
 use std::fmt;
 use std::marker::{PhantomData, PhantomPinned};
 use std::mem::{MaybeUninit, offset_of};
+use std::panic::RefUnwindSafe;
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::task::Waker;
@@ -59,6 +60,12 @@ pub struct LocalEvent<T: 'static> {
     // the sender and receiver connect via raw pointers to the event.
     _requires_pinning: PhantomPinned,
 }
+
+// The Cell and UnsafeCell fields (state, awaiter, value) cause auto-trait
+// inference to mark LocalEvent as !RefUnwindSafe. However, the state
+// machine prevents any shared reference from observing inconsistent state
+// during unwind, making this safe.
+impl<T: 'static> RefUnwindSafe for LocalEvent<T> {}
 
 impl<T: 'static> LocalEvent<T> {
     /// In-place initializes a new instance in the `BOUND` state.
@@ -521,12 +528,16 @@ impl<T: 'static> fmt::Debug for LocalEvent<T> {
 mod tests {
     use std::task::{self, Poll};
 
-    use static_assertions::assert_not_impl_any;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
     use crate::IntoValueError;
 
     assert_not_impl_any!(LocalEvent<i32>: Send, Sync);
+
+    assert_impl_all!(LocalEvent<u32>: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn boxed_send_receive() {

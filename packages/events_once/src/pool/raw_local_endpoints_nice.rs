@@ -2,6 +2,7 @@
 //! the outer generic type parameter, leaving only the inner T of the payload.
 
 use std::any::type_name;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::task::Poll;
 use std::{fmt, task};
@@ -14,6 +15,13 @@ use crate::{Disconnected, IntoValueError, LocalReceiverCore, LocalSenderCore, Ra
 pub struct RawLocalPooledSender<T: 'static> {
     inner: LocalSenderCore<RawLocalPooledRef<T>, T>,
 }
+
+// The NonNull<UnsafeCell<...>> in RawLocalPooledRef causes
+// !RefUnwindSafe via auto-trait inference. The pointed-to pool core
+// is protected by a RefCell and cannot be observed in an inconsistent
+// state during unwind.
+impl<T: 'static> UnwindSafe for RawLocalPooledSender<T> {}
+impl<T: 'static> RefUnwindSafe for RawLocalPooledSender<T> {}
 
 impl<T: 'static> RawLocalPooledSender<T> {
     pub(crate) fn new(inner: LocalSenderCore<RawLocalPooledRef<T>, T>) -> Self {
@@ -46,6 +54,10 @@ impl<T: 'static> fmt::Debug for RawLocalPooledSender<T> {
 pub struct RawLocalPooledReceiver<T: 'static> {
     inner: LocalReceiverCore<RawLocalPooledRef<T>, T>,
 }
+
+// See RawLocalPooledSender for justification.
+impl<T: 'static> UnwindSafe for RawLocalPooledReceiver<T> {}
+impl<T: 'static> RefUnwindSafe for RawLocalPooledReceiver<T> {}
 
 impl<T: 'static> RawLocalPooledReceiver<T> {
     pub(crate) fn new(inner: LocalReceiverCore<RawLocalPooledRef<T>, T>) -> Self {
@@ -130,14 +142,22 @@ impl<T: 'static> fmt::Debug for RawLocalPooledReceiver<T> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
 
-    use static_assertions::assert_not_impl_any;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
     use crate::{IntoValueError, RawLocalEventPool};
 
     assert_not_impl_any!(RawLocalPooledSender<u32>: Send, Sync);
     assert_not_impl_any!(RawLocalPooledReceiver<u32>: Send, Sync);
+
+    assert_impl_all!(
+        RawLocalPooledSender<u32>: UnwindSafe, RefUnwindSafe
+    );
+    assert_impl_all!(
+        RawLocalPooledReceiver<u32>: UnwindSafe, RefUnwindSafe
+    );
 
     #[test]
     fn into_value_disconnected() {

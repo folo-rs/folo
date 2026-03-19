@@ -51,11 +51,14 @@ impl<T> Default for RawPinnedPoolBuilder<T> {
 )]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use static_assertions::assert_not_impl_any;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
 
     assert_not_impl_any!(RawPinnedPoolBuilder<i32>: Send, Sync);
+    assert_impl_all!(RawPinnedPoolBuilder<i32>: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn builder_with_drop_policy() {

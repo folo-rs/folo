@@ -256,10 +256,15 @@ impl Scheduler {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use events_once::EventPool;
     use futures::executor::block_on;
+    use static_assertions::assert_impl_all;
 
-    use crate::Pool;
+    use crate::{Pool, Scheduler};
+
+    assert_impl_all!(Scheduler: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn spawn_returns_join_handle() {

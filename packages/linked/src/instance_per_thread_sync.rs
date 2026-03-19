@@ -401,11 +401,17 @@ where
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::sync::atomic::{self, AtomicUsize};
     use std::sync::{Arc, Mutex};
     use std::thread;
 
+    use static_assertions::assert_impl_all;
+
     use super::*;
+
+    assert_impl_all!(InstancePerThreadSync<TokenCache>: UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(RefSync<TokenCache>: UnwindSafe, RefUnwindSafe);
 
     #[linked::object]
     struct TokenCache {

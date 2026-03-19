@@ -693,6 +693,7 @@ name = "folo_ffi"
 version = "0.1.12"
 dependencies = [
  "mutants",
+ "static_assertions",
 ]
 
 [[package]]
@@ -1114,6 +1115,7 @@ dependencies = [
  "pastey",
  "seq-macro",
  "simple-mermaid",
+ "static_assertions",
 ]
 
 [[package]]
@@ -1194,6 +1196,7 @@ dependencies = [
  "new_zealand",
  "nonempty",
  "rand 0.9.2",
+ "static_assertions",
 ]
 
 [[package]]
@@ -1427,6 +1430,7 @@ dependencies = [
  "new_zealand",
  "num-integer",
  "oneshot",
+ "static_assertions",
 ]
 
 [[package]]
@@ -2008,6 +2012,7 @@ dependencies = [
  "deranged",
  "mutants",
  "new_zealand",
+ "static_assertions",
  "windows",
 ]
 

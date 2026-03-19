@@ -664,9 +664,14 @@ impl fmt::Debug for SystemHardware {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use itertools::Itertools;
+    use static_assertions::assert_impl_all;
 
     use super::*;
+
+    assert_impl_all!(SystemHardware: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn current_hardware_is_singleton() {

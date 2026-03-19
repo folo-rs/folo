@@ -6,6 +6,7 @@
 
 use std::any::type_name;
 use std::fmt::{self, Debug, Formatter};
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::Arc;
 
 /// Re-export so we can use it via macros in projects that do not have a reference to `pastey`.
@@ -47,6 +48,14 @@ pub(crate) type InstanceFactory<T> = Arc<dyn Fn(Link<T>) -> T + Send + Sync + 's
 pub struct Link<T> {
     pub(crate) instance_factory: InstanceFactory<T>,
 }
+
+// The instance factory is a shared immutable closure (`Fn`, not `FnMut`) behind an `Arc`, so it
+// cannot be in an inconsistent state after a panic. The `dyn Fn(...)` trait object is not
+// auto-`RefUnwindSafe` because the compiler cannot rule out interior mutability in the general
+// case, but our factory closures capture only `Send + Sync` state and are invoked through a
+// shared reference, making them safe to hold across unwind boundaries.
+impl<T> UnwindSafe for Link<T> {}
+impl<T> RefUnwindSafe for Link<T> {}
 
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T> Debug for Link<T> {

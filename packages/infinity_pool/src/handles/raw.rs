@@ -224,6 +224,8 @@ impl<T: ?Sized> From<RawPooledMut<T>> for RawPooled<T> {
 #[allow(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
@@ -236,6 +238,8 @@ mod tests {
 
     assert_not_impl_any!(RawPooled<NotSendNotSync>: Send);
     assert_not_impl_any!(RawPooled<NotSendSync>: Send);
+
+    assert_impl_all!(RawPooled<SendAndSync>: UnwindSafe, RefUnwindSafe);
 
     // Shared raw handles are just fancy pointers, value objects.
     assert_impl_all!(RawPooled<SendAndSync>: Copy);

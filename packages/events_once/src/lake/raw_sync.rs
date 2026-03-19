@@ -5,6 +5,7 @@ use std::cell::UnsafeCell;
 use std::fmt;
 #[cfg(debug_assertions)]
 use std::panic::{self, AssertUnwindSafe};
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::sync::Mutex;
@@ -228,6 +229,13 @@ unsafe impl Send for RawEventLake {}
 // SAFETY: See above.
 unsafe impl Sync for RawEventLake {}
 
+// The NonNull<UnsafeCell<Core>> field disables auto-trait inference for
+// UnwindSafe/RefUnwindSafe. The pointed-to data is owned by this type and
+// protected by a Mutex, so shared references cannot observe inconsistent
+// state during unwind.
+impl UnwindSafe for RawEventLake {}
+impl RefUnwindSafe for RawEventLake {}
+
 struct PoolWrapper<T: Send + 'static> {
     inner: RawEventPool<T>,
 }
@@ -295,6 +303,7 @@ impl<T: Send + 'static> ErasedPool for PoolWrapper<T> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use core::task;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::task::Waker;
 
     use static_assertions::assert_impl_all;
@@ -302,6 +311,10 @@ mod tests {
     use super::*;
 
     assert_impl_all!(RawEventLake: Send, Sync);
+
+    assert_impl_all!(
+        RawEventLake: UnwindSafe, RefUnwindSafe
+    );
 
     #[test]
     fn len() {

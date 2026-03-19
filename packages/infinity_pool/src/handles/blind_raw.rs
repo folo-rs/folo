@@ -190,6 +190,8 @@ impl<T: ?Sized> From<RawBlindPooledMut<T>> for RawBlindPooled<T> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
@@ -202,6 +204,8 @@ mod tests {
 
     assert_not_impl_any!(RawBlindPooled<NotSendNotSync>: Send);
     assert_not_impl_any!(RawBlindPooled<NotSendSync>: Send);
+
+    assert_impl_all!(RawBlindPooled<SendAndSync>: UnwindSafe, RefUnwindSafe);
 
     // Shared raw handles are just fancy pointers, value objects.
     assert_impl_all!(RawBlindPooled<SendAndSync>: Copy);

@@ -292,11 +292,14 @@ mod tests {
     use std::sync::atomic::{AtomicI32, Ordering};
     use std::thread;
 
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use static_assertions::assert_impl_all;
 
     use super::*;
 
     assert_impl_all!(BlindPool: Send, Sync);
+    assert_impl_all!(BlindPool: UnwindSafe, RefUnwindSafe);
 
     struct DropTracker {
         counter: Arc<AtomicI32>,

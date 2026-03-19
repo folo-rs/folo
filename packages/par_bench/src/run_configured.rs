@@ -343,11 +343,15 @@ impl<MeasureOutput> RunSummary<MeasureOutput> {
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "test code with known array bounds")]
 
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::sync::LazyLock;
     use std::sync::atomic::{self, AtomicU64};
 
     use many_cpus::{ProcessorSet, SystemHardware};
     use new_zealand::nz;
+    use static_assertions::assert_impl_all;
+
+    assert_impl_all!(RunSummary<String>: UnwindSafe, RefUnwindSafe);
 
     static TWO_PROCESSORS: LazyLock<Option<ProcessorSet>> = LazyLock::new(|| {
         SystemHardware::current()

@@ -204,6 +204,8 @@ impl fmt::Display for Operation {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::hint::black_box;
+    use std::panic::RefUnwindSafe;
+    use std::panic::UnwindSafe;
 
     use super::*;
     use crate::Session;
@@ -315,6 +317,9 @@ mod tests {
     }
 
     static_assertions::assert_impl_all!(Operation: Send, Sync);
+    static_assertions::assert_impl_all!(
+        Operation: UnwindSafe, RefUnwindSafe
+    );
 
     #[test]
     fn display_shows_mean() {

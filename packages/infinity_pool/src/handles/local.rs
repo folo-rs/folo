@@ -3,6 +3,7 @@ use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::fmt;
 use std::ops::Deref;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::rc::Rc;
@@ -33,6 +34,11 @@ pub struct LocalPooled<T: ?Sized> {
     // slab storage allows for more flexibility.
     remover: Rc<Remover>,
 }
+
+// All RefCell borrows are scoped, short-lived and never cross API boundaries,
+// so internal state cannot be observed in an inconsistent state during unwind.
+impl<T: ?Sized> UnwindSafe for LocalPooled<T> {}
+impl<T: ?Sized> RefUnwindSafe for LocalPooled<T> {}
 
 impl<T: ?Sized> LocalPooled<T> {
     #[must_use]
@@ -202,6 +208,8 @@ impl Drop for Remover {
 mod tests {
     use std::borrow::Borrow;
 
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
@@ -211,6 +219,8 @@ mod tests {
     assert_not_impl_any!(LocalPooled<SendNotSync>: Send, Sync);
     assert_not_impl_any!(LocalPooled<NotSendNotSync>: Send, Sync);
     assert_not_impl_any!(LocalPooled<NotSendSync>: Send, Sync);
+
+    assert_impl_all!(LocalPooled<SendAndSync>: UnwindSafe, RefUnwindSafe);
 
     // This is a shared handle, must be cloneable.
     assert_impl_all!(LocalPooled<SendAndSync>: Clone);

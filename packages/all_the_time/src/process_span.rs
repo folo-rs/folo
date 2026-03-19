@@ -1,6 +1,5 @@
 //! Process-wide processor time tracking span.
 
-use std::cell::Cell;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -54,8 +53,12 @@ pub struct ProcessSpan {
     platform: PlatformFacade,
     start_time: Duration,
     iterations: u64,
-    _not_sync: PhantomData<Cell<()>>,
+    _not_sync: PhantomData<*mut ()>,
 }
+
+// SAFETY: ProcessSpan contains no fields that prevent Send. The PhantomData<*mut ()> marker
+// is only used to prevent Sync, not Send.
+unsafe impl Send for ProcessSpan {}
 
 impl ProcessSpan {
     /// Creates a new process span for the given operation and iteration count.
@@ -160,6 +163,7 @@ impl Drop for ProcessSpan {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::time::Duration;
 
     use crate::Session;
@@ -272,8 +276,8 @@ mod tests {
         assert_eq!(operation.total_iterations(), 6);
     }
 
-    // Static assertions for thread safety
-    static_assertions::assert_impl_all!(super::ProcessSpan: Send);
+    // Static assertions for thread safety.
+    static_assertions::assert_impl_all!(super::ProcessSpan: Send, UnwindSafe, RefUnwindSafe);
     static_assertions::assert_not_impl_any!(super::ProcessSpan: Sync);
-    // ProcessSpan is Send but !Sync due to PhantomData<Cell<()>>
+    // ProcessSpan is Send but !Sync due to PhantomData<*mut ()>.
 }

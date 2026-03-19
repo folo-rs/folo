@@ -2,6 +2,7 @@ use std::alloc::Layout;
 use std::cell::RefCell;
 use std::iter::FusedIterator;
 use std::mem::MaybeUninit;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::ptr::NonNull;
 use std::rc::Rc;
 
@@ -100,6 +101,11 @@ pub struct LocalOpaquePool {
     // them from the pool, while keeping the pool alive until then).
     inner: Rc<RefCell<RawOpaquePool>>,
 }
+
+// All RefCell borrows are scoped, short-lived and never cross API boundaries,
+// so internal state cannot be observed in an inconsistent state during unwind.
+impl UnwindSafe for LocalOpaquePool {}
+impl RefUnwindSafe for LocalOpaquePool {}
 
 impl LocalOpaquePool {
     /// Creates a new instance of the pool with the specified layout.
@@ -398,12 +404,16 @@ impl FusedIterator for LocalOpaquePoolIterator<'_> {}
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
 
     assert_not_impl_any!(LocalOpaquePool: Send, Sync);
+    assert_impl_all!(LocalOpaquePool: UnwindSafe, RefUnwindSafe);
     assert_not_impl_any!(LocalOpaquePoolIterator<'_>: Send, Sync);
+    assert_impl_all!(LocalOpaquePoolIterator<'_>: UnwindSafe, RefUnwindSafe);
 
     assert_impl_all!(LocalOpaquePoolIterator<'_>: Iterator, DoubleEndedIterator, ExactSizeIterator, FusedIterator);
 

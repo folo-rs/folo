@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::marker::PhantomData;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -19,6 +20,11 @@ pub struct MetricsPusher {
 
     _single_threaded: PhantomData<*const ()>,
 }
+
+// MetricsPusher is single-threaded (!Send, !Sync) and uses interior mutability only for
+// metrics registration. Inconsistent state after a caught panic cannot affect safety.
+impl UnwindSafe for MetricsPusher {}
+impl RefUnwindSafe for MetricsPusher {}
 
 impl MetricsPusher {
     /// Creates a new `MetricsPusher` instance.
@@ -132,7 +138,13 @@ impl PusherPreRegistration {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::assert_impl_all;
+
     use super::*;
+
+    assert_impl_all!(MetricsPusher: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn default_creates_valid_pusher() {

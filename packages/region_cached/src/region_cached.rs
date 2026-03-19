@@ -529,16 +529,19 @@ enum RegionalValue<T> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::panic::{self, AssertUnwindSafe};
+    use std::panic::{self, AssertUnwindSafe, RefUnwindSafe, UnwindSafe};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Barrier, mpsc};
     use std::{ptr, thread};
 
     use many_cpus::fake::{HardwareBuilder, ProcessorBuilder};
+    use static_assertions::assert_impl_all;
     use testing::with_watchdog;
 
     use super::*;
     use crate::{RegionCachedCopyExt, RegionCachedExt, region_cached};
+
+    assert_impl_all!(RegionCached<String>: UnwindSafe, RefUnwindSafe);
 
     /// Creates a fake `SystemHardware` with 3 processors in 3 different memory regions
     /// (regions 0, 1, and 9) plus filler processors to ensure 10 total regions exist.

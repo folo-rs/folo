@@ -1105,11 +1105,16 @@ mod tests_real {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use new_zealand::nz;
     use nonempty::nonempty;
+    use static_assertions::assert_impl_all;
 
     use super::*;
     use crate::fake::{HardwareBuilder, ProcessorBuilder};
+
+    assert_impl_all!(ProcessorSetBuilder: UnwindSafe, RefUnwindSafe);
 
     /// Helper to build a `ProcessorBuilder` with the given properties.
     fn proc(id: u32, memory_region: u32, efficiency_class: EfficiencyClass) -> ProcessorBuilder {

@@ -114,3 +114,15 @@ impl Run {
         RunInitial::new()
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::assert_impl_all;
+
+    use super::*;
+
+    assert_impl_all!(Run: UnwindSafe, RefUnwindSafe);
+}

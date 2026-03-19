@@ -3,6 +3,7 @@
 
 use std::any::type_name;
 use std::fmt::{self, Debug, Formatter};
+use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use crate::__private::{InstanceFactory, Link};
 
@@ -78,6 +79,11 @@ pub struct Family<T> {
     instance_factory: InstanceFactory<T>,
 }
 
+// The instance factory is a shared immutable closure (`Fn`, not `FnMut`) behind an `Arc`, so it
+// cannot be in an inconsistent state after a panic. See the equivalent comment on `Link<T>`.
+impl<T> UnwindSafe for Family<T> {}
+impl<T> RefUnwindSafe for Family<T> {}
+
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T> Debug for Family<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -105,4 +111,16 @@ impl<T> Family<T> {
     pub fn __private_into(self) -> T {
         Link::new(self.instance_factory).into_instance()
     }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::assert_impl_all;
+
+    use super::*;
+
+    assert_impl_all!(Family<String>: UnwindSafe, RefUnwindSafe);
 }

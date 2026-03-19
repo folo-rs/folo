@@ -2,6 +2,7 @@
 //! the outer generic type parameter, leaving only the inner T of the payload.
 
 use std::any::type_name;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::task::Poll;
 use std::{fmt, task};
@@ -15,6 +16,12 @@ use crate::{BoxedRef, Disconnected, IntoValueError, PtrRef, ReceiverCore, Sender
 pub struct BoxedSender<T: Send + 'static> {
     inner: SenderCore<BoxedRef<T>, T>,
 }
+
+// Senders are one-shot and consumed on use. The UnsafeCell fields in the
+// underlying event are guarded by an atomic state machine that prevents
+// observing inconsistent state during unwind.
+impl<T: Send + 'static> UnwindSafe for BoxedSender<T> {}
+impl<T: Send + 'static> RefUnwindSafe for BoxedSender<T> {}
 
 impl<T: Send + 'static> BoxedSender<T> {
     pub(crate) fn new(inner: SenderCore<BoxedRef<T>, T>) -> Self {
@@ -48,6 +55,12 @@ impl<T: Send + 'static> fmt::Debug for BoxedSender<T> {
 pub struct BoxedReceiver<T: Send + 'static> {
     inner: ReceiverCore<BoxedRef<T>, T>,
 }
+
+// Receivers are one-shot. The UnsafeCell fields in the underlying event
+// are guarded by an atomic state machine that prevents observing
+// inconsistent state during unwind.
+impl<T: Send + 'static> UnwindSafe for BoxedReceiver<T> {}
+impl<T: Send + 'static> RefUnwindSafe for BoxedReceiver<T> {}
 
 impl<T: Send + 'static> BoxedReceiver<T> {
     pub(crate) fn new(inner: ReceiverCore<BoxedRef<T>, T>) -> Self {
@@ -138,6 +151,10 @@ pub struct RawSender<T: Send + 'static> {
     inner: SenderCore<PtrRef<T>, T>,
 }
 
+// See BoxedSender for justification.
+impl<T: Send + 'static> UnwindSafe for RawSender<T> {}
+impl<T: Send + 'static> RefUnwindSafe for RawSender<T> {}
+
 impl<T: Send + 'static> RawSender<T> {
     pub(crate) fn new(inner: SenderCore<PtrRef<T>, T>) -> Self {
         Self { inner }
@@ -171,6 +188,10 @@ impl<T: Send + 'static> fmt::Debug for RawSender<T> {
 pub struct RawReceiver<T: Send + 'static> {
     inner: ReceiverCore<PtrRef<T>, T>,
 }
+
+// See BoxedReceiver for justification.
+impl<T: Send + 'static> UnwindSafe for RawReceiver<T> {}
+impl<T: Send + 'static> RefUnwindSafe for RawReceiver<T> {}
 
 impl<T: Send + 'static> RawReceiver<T> {
     pub(crate) fn new(inner: ReceiverCore<PtrRef<T>, T>) -> Self {
@@ -250,4 +271,36 @@ impl<T: Send + 'static> fmt::Debug for RawReceiver<T> {
             .field("inner", &self.inner)
             .finish()
     }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
+
+    use super::*;
+
+    assert_impl_all!(BoxedSender<u32>: Send);
+    assert_not_impl_any!(BoxedSender<u32>: Sync);
+    assert_impl_all!(BoxedReceiver<u32>: Send);
+    assert_not_impl_any!(BoxedReceiver<u32>: Sync);
+    assert_impl_all!(RawSender<u32>: Send);
+    assert_not_impl_any!(RawSender<u32>: Sync);
+    assert_impl_all!(RawReceiver<u32>: Send);
+    assert_not_impl_any!(RawReceiver<u32>: Sync);
+
+    assert_impl_all!(
+        BoxedSender<u32>: UnwindSafe, RefUnwindSafe
+    );
+    assert_impl_all!(
+        BoxedReceiver<u32>: UnwindSafe, RefUnwindSafe
+    );
+    assert_impl_all!(
+        RawSender<u32>: UnwindSafe, RefUnwindSafe
+    );
+    assert_impl_all!(
+        RawReceiver<u32>: UnwindSafe, RefUnwindSafe
+    );
 }

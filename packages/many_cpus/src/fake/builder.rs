@@ -260,9 +260,14 @@ impl HardwareBuilder {
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[allow(clippy::indexing_slicing, reason = "test code, panics are acceptable")]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use new_zealand::nz;
+    use static_assertions::assert_impl_all;
 
     use super::*;
+
+    assert_impl_all!(HardwareBuilder: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn default_equals_new() {

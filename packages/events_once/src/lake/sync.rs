@@ -210,6 +210,7 @@ impl<T: Send + 'static> ErasedPool for PoolWrapper<T> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use core::task;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::task::Waker;
 
     use static_assertions::assert_impl_all;
@@ -217,6 +218,10 @@ mod tests {
     use super::*;
 
     assert_impl_all!(EventLake: Clone, Send, Sync);
+
+    assert_impl_all!(
+        EventLake: UnwindSafe, RefUnwindSafe
+    );
 
     #[test]
     fn len() {

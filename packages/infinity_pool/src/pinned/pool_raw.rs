@@ -361,6 +361,8 @@ impl<'p, T> IntoIterator for &'p RawPinnedPool<T> {
 mod tests {
     use std::mem::MaybeUninit;
 
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
@@ -376,9 +378,12 @@ mod tests {
     assert_not_impl_any!(RawPinnedPool<NotSendSync>: Send);
     assert_not_impl_any!(RawPinnedPool<NotSendNotSync>: Send);
 
+    assert_impl_all!(RawPinnedPool<SendAndSync>: UnwindSafe, RefUnwindSafe);
+
     // Iterator trait assertions
     assert_impl_all!(RawPinnedPoolIterator<'_, i32>: Iterator, DoubleEndedIterator, ExactSizeIterator, FusedIterator);
     assert_not_impl_any!(RawPinnedPoolIterator<'_, SendAndSync>: Send, Sync);
+    assert_impl_all!(RawPinnedPoolIterator<'_, SendAndSync>: UnwindSafe, RefUnwindSafe);
 
     assert_impl_all!(&RawPinnedPool<i32>: IntoIterator);
 

@@ -28,6 +28,7 @@ windows = { workspace = true, features = [
 
 [dev-dependencies]
 mutants = { workspace = true }
+static_assertions = { workspace = true }
 
 [target.'cfg(windows)'.dev-dependencies]
 new_zealand = { workspace = true }

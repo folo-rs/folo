@@ -17,7 +17,13 @@ impl Display for Disconnected {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::assert_impl_all;
+
     use super::*;
+
+    assert_impl_all!(Disconnected: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn disconnected_display_writes_message() {
