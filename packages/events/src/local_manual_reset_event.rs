@@ -937,4 +937,29 @@ mod tests {
         assert!(!tracker1.was_woken());
         assert!(tracker2.was_woken());
     }
+
+    #[test]
+    fn set_when_already_set_is_noop() {
+        let event = LocalManualResetEvent::boxed();
+        event.set();
+        assert!(event.is_set());
+
+        // Second set() should be a no-op (early return).
+        event.set();
+        assert!(event.is_set());
+    }
+
+    #[test]
+    fn embedded_set_when_already_set_is_noop() {
+        let container = Box::pin(EmbeddedLocalManualResetEvent::new());
+
+        // SAFETY: The container is pinned and outlives the handle.
+        let event = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
+
+        event.set();
+        assert!(event.is_set());
+
+        event.set();
+        assert!(event.is_set());
+    }
 }
