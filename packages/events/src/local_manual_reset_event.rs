@@ -575,6 +575,7 @@ mod tests {
         assert!(b.is_set());
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn wait_completes_when_already_set() {
         let event = LocalManualResetEvent::boxed();
@@ -582,6 +583,7 @@ mod tests {
         event.wait().await;
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn wait_completes_after_set() {
         let event = LocalManualResetEvent::boxed();
@@ -592,6 +594,7 @@ mod tests {
         future.await;
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn drop_future_while_waiting() {
         let event = LocalManualResetEvent::boxed();
@@ -604,6 +607,7 @@ mod tests {
 
     // --- embedded variant tests ---
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn embedded_set_and_wait() {
         let container = Box::pin(EmbeddedLocalManualResetEvent::new());
@@ -614,6 +618,7 @@ mod tests {
         event.wait().await;
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn embedded_clone_shares_state() {
         let container = Box::pin(EmbeddedLocalManualResetEvent::new());
@@ -626,6 +631,7 @@ mod tests {
         b.wait().await;
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn embedded_reset_after_set() {
         let container = Box::pin(EmbeddedLocalManualResetEvent::new());
@@ -637,6 +643,7 @@ mod tests {
         assert!(!event.is_set());
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn embedded_drop_future_while_waiting() {
         let container = Box::pin(EmbeddedLocalManualResetEvent::new());
@@ -852,5 +859,65 @@ mod tests {
         event.set();
 
         assert!(waker_data.was_woken());
+    }
+
+    #[test]
+    fn drop_unlinks_registered_waiter_from_list() {
+        use crate::test_helpers::ReentrantWakerData;
+
+        let event = LocalManualResetEvent::boxed();
+
+        let tracker1 = ReentrantWakerData::new(|| {});
+        let waker1 = tracker1.waker();
+        let mut cx1 = task::Context::from_waker(&waker1);
+
+        let tracker2 = ReentrantWakerData::new(|| {});
+        let waker2 = tracker2.waker();
+        let mut cx2 = task::Context::from_waker(&waker2);
+
+        let mut future1 = Box::pin(event.wait());
+        assert!(future1.as_mut().poll(&mut cx1).is_pending());
+
+        let mut future2 = Box::pin(event.wait());
+        assert!(future2.as_mut().poll(&mut cx2).is_pending());
+
+        // Drop future1 — its node must be removed from the list.
+        drop(future1);
+
+        event.set();
+
+        // Only future2 should have been woken.
+        assert!(!tracker1.was_woken());
+        assert!(tracker2.was_woken());
+    }
+
+    #[test]
+    fn embedded_drop_unlinks_registered_waiter_from_list() {
+        use crate::test_helpers::ReentrantWakerData;
+
+        let container = Box::pin(EmbeddedLocalManualResetEvent::new());
+        // SAFETY: The container outlives the handle.
+        let event = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
+
+        let tracker1 = ReentrantWakerData::new(|| {});
+        let waker1 = tracker1.waker();
+        let mut cx1 = task::Context::from_waker(&waker1);
+
+        let tracker2 = ReentrantWakerData::new(|| {});
+        let waker2 = tracker2.waker();
+        let mut cx2 = task::Context::from_waker(&waker2);
+
+        let mut future1 = Box::pin(event.wait());
+        assert!(future1.as_mut().poll(&mut cx1).is_pending());
+
+        let mut future2 = Box::pin(event.wait());
+        assert!(future2.as_mut().poll(&mut cx2).is_pending());
+
+        drop(future1);
+
+        event.set();
+
+        assert!(!tracker1.was_woken());
+        assert!(tracker2.was_woken());
     }
 }

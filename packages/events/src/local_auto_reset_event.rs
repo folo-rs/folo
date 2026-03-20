@@ -652,6 +652,7 @@ mod tests {
         assert!(b.try_acquire());
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn wait_completes_when_already_set() {
         let event = LocalAutoResetEvent::boxed();
@@ -660,6 +661,7 @@ mod tests {
         assert!(!event.try_acquire());
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn wait_completes_after_set() {
         let event = LocalAutoResetEvent::boxed();
@@ -670,6 +672,7 @@ mod tests {
         future.await;
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn drop_future_while_waiting() {
         let event = LocalAutoResetEvent::boxed();
@@ -682,6 +685,7 @@ mod tests {
 
     // --- embedded variant tests ---
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn embedded_set_and_wait() {
         let container = Box::pin(EmbeddedLocalAutoResetEvent::new());
@@ -692,6 +696,7 @@ mod tests {
         event.wait().await;
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn embedded_clone_shares_state() {
         let container = Box::pin(EmbeddedLocalAutoResetEvent::new());
@@ -703,6 +708,7 @@ mod tests {
         assert!(b.try_acquire());
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn embedded_signal_consumed() {
         let container = Box::pin(EmbeddedLocalAutoResetEvent::new());
@@ -714,6 +720,7 @@ mod tests {
         assert!(!event.try_acquire());
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn embedded_drop_future_while_waiting() {
         let container = Box::pin(EmbeddedLocalAutoResetEvent::new());

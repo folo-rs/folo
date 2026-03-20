@@ -735,6 +735,7 @@ mod tests {
 
     // --- async tests ---
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn wait_completes_when_already_set() {
         let event = AutoResetEvent::boxed();
@@ -744,6 +745,7 @@ mod tests {
         assert!(!event.try_acquire());
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn wait_completes_after_set() {
         let event = AutoResetEvent::boxed();
@@ -758,6 +760,7 @@ mod tests {
         handle.await.unwrap();
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn only_one_waiter_released_per_set() {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -797,6 +800,7 @@ mod tests {
         assert_eq!(count.load(Ordering::Relaxed), 3);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn cancelled_waiter_forwards_notification() {
         let event = AutoResetEvent::boxed();
@@ -818,6 +822,7 @@ mod tests {
         event.wait().await;
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn drop_unpolled_future_is_safe() {
         let event = AutoResetEvent::boxed();
@@ -965,6 +970,7 @@ mod tests {
 
     // --- embedded variant tests ---
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn embedded_set_and_wait() {
         let container = Box::pin(EmbeddedAutoResetEvent::new());
@@ -975,6 +981,7 @@ mod tests {
         event.wait().await;
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn embedded_clone_shares_state() {
         let container = Box::pin(EmbeddedAutoResetEvent::new());
@@ -986,6 +993,7 @@ mod tests {
         assert!(b.try_acquire());
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn embedded_signal_consumed() {
         let container = Box::pin(EmbeddedAutoResetEvent::new());
@@ -998,6 +1006,7 @@ mod tests {
         assert!(!event.try_acquire());
     }
 
+    #[cfg_attr(miri, ignore)]
     #[tokio::test]
     async fn embedded_drop_future_while_waiting() {
         let container = Box::pin(EmbeddedAutoResetEvent::new());
@@ -1054,6 +1063,24 @@ mod tests {
 
         // future2 should now be notified.
         assert!(future2.as_mut().poll(&mut cx).is_ready());
+    }
+
+    #[test]
+    fn set_wakes_registered_waiter() {
+        use crate::test_helpers::AtomicWakeTracker;
+
+        let event = AutoResetEvent::boxed();
+
+        let tracker = AtomicWakeTracker::new();
+        let waker = tracker.waker();
+        let mut cx = task::Context::from_waker(&waker);
+
+        let mut future = Box::pin(event.wait());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+
+        event.set();
+
+        assert!(tracker.was_woken());
     }
 
     #[test]
