@@ -301,6 +301,10 @@ impl Future for ManualResetWaitFuture {
         let this = unsafe { self.get_unchecked_mut() };
         let node_ptr = this.node.get();
 
+        // Clone the waker before acquiring the lock so a panicking clone
+        // implementation cannot poison the mutex.
+        let waker = cx.waker().clone();
+
         let mut state = this.inner.state.lock().expect(NEVER_POISONED);
 
         if state.is_set {
@@ -318,7 +322,7 @@ impl Future for ManualResetWaitFuture {
         // SAFETY: We hold the lock, so exclusive access to the node is
         // guaranteed.
         unsafe {
-            (*node_ptr).waker = Some(cx.waker().clone());
+            (*node_ptr).waker = Some(waker);
         }
 
         if !this.registered {
@@ -553,6 +557,10 @@ impl Future for RawManualResetWaitFuture {
         let inner = unsafe { this.inner.as_ref() };
         let node_ptr = this.node.get();
 
+        // Clone the waker before acquiring the lock so a panicking clone
+        // implementation cannot poison the mutex.
+        let waker = cx.waker().clone();
+
         let mut state = inner.state.lock().expect(NEVER_POISONED);
 
         if state.is_set {
@@ -568,7 +576,7 @@ impl Future for RawManualResetWaitFuture {
 
         // SAFETY: We hold the lock.
         unsafe {
-            (*node_ptr).waker = Some(cx.waker().clone());
+            (*node_ptr).waker = Some(waker);
         }
 
         if !this.registered {

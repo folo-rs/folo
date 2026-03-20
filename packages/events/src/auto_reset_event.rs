@@ -288,6 +288,10 @@ impl Future for AutoResetWaitFuture {
         let this = unsafe { self.get_unchecked_mut() };
         let node_ptr = this.node.get();
 
+        // Clone the waker before acquiring the lock so a panicking clone
+        // implementation cannot poison the mutex.
+        let waker = cx.waker().clone();
+
         let mut state = this.inner.state.lock().expect(NEVER_POISONED);
 
         // Check if we were directly notified by set() (it popped us from the
@@ -314,7 +318,7 @@ impl Future for AutoResetWaitFuture {
         // Not ready — register or update waker.
         // SAFETY: We hold the lock.
         unsafe {
-            (*node_ptr).waker = Some(cx.waker().clone());
+            (*node_ptr).waker = Some(waker);
         }
 
         if !this.registered {
@@ -567,6 +571,10 @@ impl Future for RawAutoResetWaitFuture {
         let inner = unsafe { this.inner.as_ref() };
         let node_ptr = this.node.get();
 
+        // Clone the waker before acquiring the lock so a panicking clone
+        // implementation cannot poison the mutex.
+        let waker = cx.waker().clone();
+
         let mut state = inner.state.lock().expect(NEVER_POISONED);
 
         // Check if we were directly notified by set() (it popped us from the
@@ -593,7 +601,7 @@ impl Future for RawAutoResetWaitFuture {
         // Not ready — register or update waker.
         // SAFETY: We hold the lock.
         unsafe {
-            (*node_ptr).waker = Some(cx.waker().clone());
+            (*node_ptr).waker = Some(waker);
         }
 
         if !this.registered {
