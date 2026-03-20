@@ -1,12 +1,13 @@
 //! Benchmarks comparing `events` with `rsevents` and `event_listener`.
 //!
-//! Three benchmark groups measure different aspects of event overhead:
+//! Four benchmark groups measure different aspects of event overhead:
 //!
 //! * **creation** — how expensive is constructing an event object, comparing
 //!   boxed (heap-allocated) and embedded (zero-alloc) variants.
 //! * **`signal_round_trip`** — non-blocking set + acquire (sync fast path).
 //! * **`async_poll_ready`** — create a wait future, pin it, and poll it to
 //!   completion on a pre-set event (async fast path).
+//! * **`many_waiters`** — register 100 waiters and release them in one batch.
 //!
 //! Memory allocations are tracked via `alloc_tracker` and printed to stdout
 //! after all benchmarks complete.
@@ -23,6 +24,7 @@
 
 use std::future::Future;
 use std::hint::black_box;
+use std::iter;
 use std::pin::{Pin, pin};
 use std::task::{Context, Waker};
 use std::time::Instant;
@@ -51,6 +53,7 @@ fn entrypoint(c: &mut Criterion) {
     creation(c, &allocs);
     signal_round_trip(c, &allocs);
     async_poll_ready(c, &allocs);
+    many_waiters(c, &allocs);
 
     allocs.print_to_stdout();
 }
@@ -311,6 +314,23 @@ fn signal_round_trip(c: &mut Criterion, allocs: &AllocSession) {
 
     // --- competitors ---
 
+    let op = allocs.operation("signal_round_trip/event_listener/Event");
+    group.bench_function("event_listener/Event", |b| {
+        let el_event = ElEvent::<()>::new();
+        let waker = Waker::noop();
+        let mut cx = Context::from_waker(waker);
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                el_event.notify(1);
+                let mut future = pin!(el_event.listen());
+                let _ = black_box(future.as_mut().poll(&mut cx));
+            }
+            start.elapsed()
+        });
+    });
+
     let op = allocs.operation("signal_round_trip/rsevents/ManualResetEvent");
     group.bench_function("rsevents/ManualResetEvent", |b| {
         let rs_manual = RsManualReset::new(EventState::Set);
@@ -480,6 +500,138 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
                 listener!(el_event => el_listener);
                 let mut el_listener = pin!(el_listener);
                 let _ = black_box(Future::poll(el_listener.as_mut(), &mut cx));
+            }
+            start.elapsed()
+        });
+    });
+
+    group.finish();
+}
+
+/// Number of waiters used in the `many_waiters` benchmark group.
+const MANY_WAITER_COUNT: usize = 100;
+
+/// Measures the cost of releasing many waiters at once.
+///
+/// For manual-reset events, a single `set()` releases all waiters. For
+/// auto-reset events, each waiter requires its own `set()` call. All
+/// waiters are pre-registered before the measurement begins.
+fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
+    let mut group = c.benchmark_group("many_waiters");
+    let waker = Waker::noop();
+
+    let op = allocs.operation("many_waiters/events/ManualResetEvent");
+    group.bench_function("events/ManualResetEvent", |b| {
+        let mut cx = Context::from_waker(waker);
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                let event = ManualResetEvent::boxed();
+                let mut futures: Vec<_> = iter::repeat_with(|| Box::pin(event.wait()))
+                    .take(MANY_WAITER_COUNT)
+                    .collect();
+                for f in &mut futures {
+                    let _ = f.as_mut().poll(&mut cx);
+                }
+                event.set();
+                for f in &mut futures {
+                    let _ = black_box(f.as_mut().poll(&mut cx));
+                }
+            }
+            start.elapsed()
+        });
+    });
+
+    let op = allocs.operation("many_waiters/events/LocalManualResetEvent");
+    group.bench_function("events/LocalManualResetEvent", |b| {
+        let mut cx = Context::from_waker(waker);
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                let event = LocalManualResetEvent::boxed();
+                let mut futures: Vec<_> = iter::repeat_with(|| Box::pin(event.wait()))
+                    .take(MANY_WAITER_COUNT)
+                    .collect();
+                for f in &mut futures {
+                    let _ = f.as_mut().poll(&mut cx);
+                }
+                event.set();
+                for f in &mut futures {
+                    let _ = black_box(f.as_mut().poll(&mut cx));
+                }
+            }
+            start.elapsed()
+        });
+    });
+
+    let op = allocs.operation("many_waiters/events/AutoResetEvent");
+    group.bench_function("events/AutoResetEvent", |b| {
+        let mut cx = Context::from_waker(waker);
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                let event = AutoResetEvent::boxed();
+                let mut futures: Vec<_> = iter::repeat_with(|| Box::pin(event.wait()))
+                    .take(MANY_WAITER_COUNT)
+                    .collect();
+                for f in &mut futures {
+                    let _ = f.as_mut().poll(&mut cx);
+                }
+                for f in &mut futures {
+                    event.set();
+                    let _ = black_box(f.as_mut().poll(&mut cx));
+                }
+            }
+            start.elapsed()
+        });
+    });
+
+    let op = allocs.operation("many_waiters/events/LocalAutoResetEvent");
+    group.bench_function("events/LocalAutoResetEvent", |b| {
+        let mut cx = Context::from_waker(waker);
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                let event = LocalAutoResetEvent::boxed();
+                let mut futures: Vec<_> = iter::repeat_with(|| Box::pin(event.wait()))
+                    .take(MANY_WAITER_COUNT)
+                    .collect();
+                for f in &mut futures {
+                    let _ = f.as_mut().poll(&mut cx);
+                }
+                for f in &mut futures {
+                    event.set();
+                    let _ = black_box(f.as_mut().poll(&mut cx));
+                }
+            }
+            start.elapsed()
+        });
+    });
+
+    // --- competitors ---
+
+    let op = allocs.operation("many_waiters/event_listener/Event");
+    group.bench_function("event_listener/Event", |b| {
+        let mut cx = Context::from_waker(waker);
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                let el_event = ElEvent::<()>::new();
+                let mut futures: Vec<_> = iter::repeat_with(|| Box::pin(el_event.listen()))
+                    .take(MANY_WAITER_COUNT)
+                    .collect();
+                for f in &mut futures {
+                    let _ = f.as_mut().poll(&mut cx);
+                }
+                el_event.notify(MANY_WAITER_COUNT);
+                for f in &mut futures {
+                    let _ = black_box(f.as_mut().poll(&mut cx));
+                }
             }
             start.elapsed()
         });

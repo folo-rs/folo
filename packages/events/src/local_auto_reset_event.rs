@@ -612,6 +612,7 @@ impl fmt::Debug for RawLocalAutoResetWaitFuture {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::iter;
     use std::task::Waker;
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
@@ -1051,6 +1052,70 @@ mod tests {
 
         assert!(future.as_mut().poll(&mut cx).is_ready());
 
+        assert!(!event.try_acquire());
+    }
+
+    const WAITER_COUNT: usize = 100;
+
+    #[test]
+    fn many_sets_release_all_waiters() {
+        let event = LocalAutoResetEvent::boxed();
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        let mut futures: Vec<_> = iter::repeat_with(|| Box::pin(event.wait()))
+            .take(WAITER_COUNT)
+            .collect();
+
+        // Register all waiters.
+        for f in &mut futures {
+            assert!(f.as_mut().poll(&mut cx).is_pending());
+        }
+
+        // Each set() releases exactly one waiter.
+        for f in &mut futures {
+            event.set();
+            assert!(f.as_mut().poll(&mut cx).is_ready());
+        }
+
+        // No leftover signal.
+        assert!(!event.try_acquire());
+    }
+
+    #[test]
+    fn embedded_many_sets_release_all_waiters() {
+        let container = Box::pin(EmbeddedLocalAutoResetEvent::new());
+        // SAFETY: The container outlives the handle within this test.
+        let event = unsafe { LocalAutoResetEvent::embedded(container.as_ref()) };
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        let mut futures: Vec<_> = iter::repeat_with(|| Box::pin(event.wait()))
+            .take(WAITER_COUNT)
+            .collect();
+
+        for f in &mut futures {
+            assert!(f.as_mut().poll(&mut cx).is_pending());
+        }
+
+        for f in &mut futures {
+            event.set();
+            assert!(f.as_mut().poll(&mut cx).is_ready());
+        }
+
+        assert!(!event.try_acquire());
+    }
+
+    #[test]
+    fn many_sets_without_waiters_coalesce() {
+        let event = LocalAutoResetEvent::boxed();
+
+        for _ in 0..WAITER_COUNT {
+            event.set();
+        }
+
+        // Only one signal should be latched.
+        assert!(event.try_acquire());
         assert!(!event.try_acquire());
     }
 }
