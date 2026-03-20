@@ -119,9 +119,8 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
             for _ in 0..iters {
-                let container = EmbeddedManualResetEvent::new();
-                let pinned = unsafe { Pin::new_unchecked(&container) };
-                let handle = unsafe { ManualResetEvent::embedded(pinned) };
+                let container = pin!(EmbeddedManualResetEvent::new());
+                let handle = unsafe { ManualResetEvent::embedded(container.as_ref()) };
                 black_box(handle);
             }
             start.elapsed()
@@ -134,9 +133,8 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
             for _ in 0..iters {
-                let container = EmbeddedAutoResetEvent::new();
-                let pinned = unsafe { Pin::new_unchecked(&container) };
-                let handle = unsafe { AutoResetEvent::embedded(pinned) };
+                let container = pin!(EmbeddedAutoResetEvent::new());
+                let handle = unsafe { AutoResetEvent::embedded(container.as_ref()) };
                 black_box(handle);
             }
             start.elapsed()
@@ -149,9 +147,8 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
             for _ in 0..iters {
-                let container = EmbeddedLocalManualResetEvent::new();
-                let pinned = unsafe { Pin::new_unchecked(&container) };
-                let handle = unsafe { LocalManualResetEvent::embedded(pinned) };
+                let container = pin!(EmbeddedLocalManualResetEvent::new());
+                let handle = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
                 black_box(handle);
             }
             start.elapsed()
@@ -164,9 +161,8 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
             for _ in 0..iters {
-                let container = EmbeddedLocalAutoResetEvent::new();
-                let pinned = unsafe { Pin::new_unchecked(&container) };
-                let handle = unsafe { LocalAutoResetEvent::embedded(pinned) };
+                let container = pin!(EmbeddedLocalAutoResetEvent::new());
+                let handle = unsafe { LocalAutoResetEvent::embedded(container.as_ref()) };
                 black_box(handle);
             }
             start.elapsed()

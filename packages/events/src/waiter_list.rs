@@ -184,8 +184,8 @@ impl WaiterList {
     pub(crate) unsafe fn for_each(&self, mut f: impl FnMut(*mut WaiterNode)) {
         let mut current = self.head;
         while !current.is_null() {
-            // Read next before calling f, in case f invalidates current
-            // (it should not per the contract, but this is defensive).
+            // Read next before calling f so we do not hold a reference to
+            // the current node across the callback.
             // SAFETY: current is non-null and in the list.
             let next = unsafe { (*current).next };
             f(current);
@@ -199,10 +199,12 @@ impl WaiterList {
     }
 }
 
-// SAFETY: WaiterList contains raw pointers (*mut WaiterNode), which are !Send
-// by default. Sending a WaiterList to another thread is safe because the
-// pointers are never dereferenced without holding the owning event's Mutex,
-// ensuring exclusive access at any point in time.
+// SAFETY: WaiterList contains raw pointers (*mut WaiterNode), which are
+// !Send by default in Rust. Sending a WaiterList to another thread is safe
+// because the pointers are only ever dereferenced under controlled access:
+// sync event variants protect access with the owning Mutex, while local
+// event variants restrict to a single thread (their containing types are
+// !Send, so the WaiterList is never actually sent).
 unsafe impl Send for WaiterList {}
 
 #[cfg(test)]
