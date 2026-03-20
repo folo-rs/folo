@@ -301,10 +301,6 @@ impl Future for AutoResetWaitFuture {
         // Check if the flag is set (set() was called with no waiters).
         if state.is_set {
             state.is_set = false;
-            // Defense in depth: if a registered waiter somehow observes
-            // is_set (should not happen because set() pops a waiter when
-            // the list is non-empty), clean up the registration.
-            #[cfg_attr(coverage_nightly, coverage(off))]
             if this.registered {
                 // SAFETY: We hold the lock and the node is in the list.
                 unsafe {
@@ -584,10 +580,6 @@ impl Future for RawAutoResetWaitFuture {
         // Check if the flag is set (set() was called with no waiters).
         if state.is_set {
             state.is_set = false;
-            // Defense in depth: if a registered waiter somehow observes
-            // is_set (should not happen because set() pops a waiter when
-            // the list is non-empty), clean up the registration.
-            #[cfg_attr(coverage_nightly, coverage(off))]
             if this.registered {
                 // SAFETY: We hold the lock and the node is in the list.
                 unsafe {

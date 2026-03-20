@@ -215,10 +215,6 @@ impl Future for LocalAutoResetWaitFuture {
 
         if this.inner.is_set.get() {
             this.inner.is_set.set(false);
-            // Defense in depth: if a registered waiter somehow observes
-            // is_set (should not happen because set() pops a waiter when
-            // the list is non-empty), clean up the registration.
-            #[cfg_attr(coverage_nightly, coverage(off))]
             if this.registered {
                 // SAFETY: Single-threaded, node is in the list.
                 let waiters = unsafe { &mut *this.inner.waiters.get() };
@@ -508,10 +504,6 @@ impl Future for RawLocalAutoResetWaitFuture {
 
         if inner.is_set.get() {
             inner.is_set.set(false);
-            // Defense in depth: if a registered waiter somehow observes
-            // is_set (should not happen because set() pops a waiter when
-            // the list is non-empty), clean up the registration.
-            #[cfg_attr(coverage_nightly, coverage(off))]
             if this.registered {
                 // SAFETY: Single-threaded, node is in the list.
                 let waiters = unsafe { &mut *inner.waiters.get() };
