@@ -149,9 +149,15 @@ impl LocalManualResetEvent {
 
     /// Opens the gate, releasing all current awaiters and allowing future
     /// awaiters to pass through immediately.
+    ///
+    /// If the event is already set, this is a no-op.
     // Mutating set() to a no-op causes wait futures to hang.
     #[cfg_attr(test, mutants::skip)]
     pub fn set(&self) {
+        if self.inner.is_set.get() {
+            return;
+        }
+
         self.inner.is_set.set(true);
 
         // Collect wakers before waking to avoid re-entrancy issues: a waker
@@ -380,9 +386,15 @@ impl RawLocalManualResetEvent {
     }
 
     /// Opens the gate, releasing all current awaiters.
+    ///
+    /// If the event is already set, this is a no-op.
     // Mutating set() to a no-op causes wait futures to hang.
     #[cfg_attr(test, mutants::skip)]
     pub fn set(&self) {
+        if self.inner().is_set.get() {
+            return;
+        }
+
         self.inner().is_set.set(true);
 
         let mut wakers: Vec<Waker> = Vec::new();

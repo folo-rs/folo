@@ -175,6 +175,11 @@ impl ManualResetEvent {
         let mut wakers: Vec<Waker> = Vec::new();
         {
             let mut state = self.inner.state.lock().expect(NEVER_POISONED);
+
+            if state.is_set {
+                return;
+            }
+
             state.is_set = true;
 
             // Collect wakers from all registered waiters so we can wake them
@@ -470,6 +475,8 @@ impl RawManualResetEvent {
     }
 
     /// Opens the gate, releasing all current awaiters.
+    ///
+    /// If the event is already set, this is a no-op.
     // Mutating set() to a no-op causes wait futures to hang.
     #[cfg_attr(test, mutants::skip)]
     pub fn set(&self) {
@@ -477,6 +484,11 @@ impl RawManualResetEvent {
 
         {
             let mut state = self.inner().state.lock().expect(NEVER_POISONED);
+
+            if state.is_set {
+                return;
+            }
+
             state.is_set = true;
 
             // SAFETY: We hold the lock.

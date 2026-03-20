@@ -193,10 +193,10 @@ impl WaiterList {
     }
 }
 
-// SAFETY: WaiterList contains raw pointers to WaiterNode, which are !Send.
-// However, all pointer dereferences are protected by the owning event's Mutex,
-// ensuring single-threaded access at any point in time. The nodes themselves
-// live in pinned futures that may be on any thread.
+// SAFETY: WaiterList contains raw pointers (*mut WaiterNode), which are !Send
+// by default. Sending a WaiterList to another thread is safe because the
+// pointers are never dereferenced without holding the owning event's Mutex,
+// ensuring exclusive access at any point in time.
 unsafe impl Send for WaiterList {}
 
 #[cfg(test)]

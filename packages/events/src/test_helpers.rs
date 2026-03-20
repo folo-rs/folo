@@ -7,6 +7,12 @@ use std::task::{RawWaker, RawWakerVTable, Waker};
 /// This is used to test that `wake()` is never called while holding borrows
 /// on interior-mutable state (e.g. `UnsafeCell<WaiterList>`). If a re-entrant
 /// waker accesses the same state, Miri detects the aliased access as UB.
+///
+/// # Thread safety
+///
+/// This type is `!Send` and must only be used with single-threaded (`Local`)
+/// event types. The backing state uses `Cell` which is not thread-safe.
+/// For thread-safe event types, use [`AtomicWakeTracker`] instead.
 pub(crate) struct ReentrantWakerData {
     action: Box<dyn Fn()>,
     was_woken: Cell<bool>,
