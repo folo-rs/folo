@@ -6,23 +6,9 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::rc::Rc;
-use std::task::{self, Poll, Waker};
+use std::task::{self, Poll};
 
 use crate::waiter_list::{WaiterList, WaiterNode};
-
-/// Clones the waker from a waiter node and pushes it into the collector.
-///
-/// # Safety
-///
-/// The caller must guarantee that `node` points to a valid [`WaiterNode`].
-// Mutating collect_waker() to a no-op causes wait futures to hang.
-#[cfg_attr(test, mutants::skip)]
-fn collect_waker(wakers: &mut Vec<Waker>, node: *mut WaiterNode) {
-    // SAFETY: Caller guarantees the node pointer is valid.
-    if let Some(waker) = unsafe { (*node).waker.as_ref() } {
-        wakers.push(waker.clone());
-    }
-}
 
 /// Single-threaded async event that, once set, releases all current and future
 /// awaiters until explicitly reset.
@@ -160,22 +146,25 @@ impl LocalManualResetEvent {
 
         self.inner.is_set.set(true);
 
-        // Collect wakers before waking to avoid re-entrancy issues: a waker
-        // might cause the executor to poll a future that accesses our list.
-        let mut wakers: Vec<Waker> = Vec::new();
-
+        // Walk the waiter list one node at a time. For each node we take
+        // its waker and wake it before advancing. Because is_set is already
+        // true, any re-entrant access through the waker will see the set
+        // state and not mutate the waiter list, so this is safe.
+        //
         // SAFETY: Single-threaded access guaranteed by !Send on Self.
         let waiters = unsafe { &*self.inner.waiters.get() };
+        let mut cursor = waiters.head();
+        while !cursor.is_null() {
+            // SAFETY: Single-threaded — no concurrent access.
+            let next = unsafe { (*cursor).next };
+            // SAFETY: Single-threaded — no concurrent access.
+            let waker = unsafe { (*cursor).waker.take() };
 
-        // SAFETY: Single-threaded — no concurrent access.
-        unsafe {
-            waiters.for_each(|node| {
-                collect_waker(&mut wakers, node);
-            });
-        }
+            if let Some(w) = waker {
+                w.wake();
+            }
 
-        for waker in wakers {
-            waker.wake();
+            cursor = next;
         }
     }
 
@@ -397,20 +386,20 @@ impl RawLocalManualResetEvent {
 
         self.inner().is_set.set(true);
 
-        let mut wakers: Vec<Waker> = Vec::new();
-
         // SAFETY: Single-threaded access guaranteed by !Send on Self.
         let waiters = unsafe { &*self.inner().waiters.get() };
+        let mut cursor = waiters.head();
+        while !cursor.is_null() {
+            // SAFETY: Single-threaded — no concurrent access.
+            let next = unsafe { (*cursor).next };
+            // SAFETY: Single-threaded — no concurrent access.
+            let waker = unsafe { (*cursor).waker.take() };
 
-        // SAFETY: Single-threaded — no concurrent access.
-        unsafe {
-            waiters.for_each(|node| {
-                collect_waker(&mut wakers, node);
-            });
-        }
+            if let Some(w) = waker {
+                w.wake();
+            }
 
-        for waker in wakers {
-            waker.wake();
+            cursor = next;
         }
     }
 
@@ -548,6 +537,8 @@ impl fmt::Debug for RawLocalManualResetWaitFuture {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::task::Waker;
+
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;

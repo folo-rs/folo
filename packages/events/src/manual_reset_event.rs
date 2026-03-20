@@ -6,28 +6,11 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
-use std::task::{self, Poll, Waker};
+use std::task::{self, Poll};
 
 use crate::waiter_list::{WaiterList, WaiterNode};
 
 const NEVER_POISONED: &str = "we never panic while holding this lock";
-
-/// Clones the waker from a waiter node and pushes it into the collector.
-///
-/// # Safety
-///
-/// The caller must guarantee that `node` points to a valid [`WaiterNode`]
-/// (e.g. by holding the owning event's lock).
-// Mutating this to a no-op causes wait futures to hang because wakers
-// are never collected and therefore never woken. We cannot detect this
-// without real-time timeouts.
-#[cfg_attr(test, mutants::skip)]
-fn collect_waker(wakers: &mut Vec<Waker>, node: *mut WaiterNode) {
-    // SAFETY: Caller guarantees the node pointer is valid.
-    if let Some(waker) = unsafe { (*node).waker.as_ref() } {
-        wakers.push(waker.clone());
-    }
-}
 
 /// Thread-safe async event that, once set, releases all current and future
 /// awaiters until explicitly reset.
@@ -172,28 +155,31 @@ impl ManualResetEvent {
     // detect "wait never completes" without real-time timeouts.
     #[cfg_attr(test, mutants::skip)]
     pub fn set(&self) {
-        let mut wakers: Vec<Waker> = Vec::new();
-        {
-            let mut state = self.inner.state.lock().expect(NEVER_POISONED);
+        let mut state = self.inner.state.lock().expect(NEVER_POISONED);
 
-            if state.is_set {
-                return;
-            }
-
-            state.is_set = true;
-
-            // Collect wakers from all registered waiters so we can wake them
-            // after releasing the lock (preventing re-entrancy deadlocks).
-            // SAFETY: We hold the lock, so the list traversal is safe.
-            unsafe {
-                state.waiters.for_each(|node| {
-                    collect_waker(&mut wakers, node);
-                });
-            }
+        if state.is_set {
+            return;
         }
 
-        for waker in wakers {
-            waker.wake();
+        state.is_set = true;
+
+        // Walk the waiter list one node at a time. For each node we take
+        // its waker, release the lock, wake, and re-acquire the lock before
+        // advancing. This avoids allocating a Vec<Waker> to collect them.
+        let mut cursor = state.waiters.head();
+        while !cursor.is_null() {
+            // SAFETY: We hold the lock, so the node pointer is valid.
+            let next = unsafe { (*cursor).next };
+            // SAFETY: We hold the lock, so the node pointer is valid.
+            let waker = unsafe { (*cursor).waker.take() };
+            drop(state);
+
+            if let Some(w) = waker {
+                w.wake();
+            }
+
+            state = self.inner.state.lock().expect(NEVER_POISONED);
+            cursor = next;
         }
     }
 
@@ -480,27 +466,28 @@ impl RawManualResetEvent {
     // Mutating set() to a no-op causes wait futures to hang.
     #[cfg_attr(test, mutants::skip)]
     pub fn set(&self) {
-        let mut wakers: Vec<Waker> = Vec::new();
+        let mut state = self.inner().state.lock().expect(NEVER_POISONED);
 
-        {
-            let mut state = self.inner().state.lock().expect(NEVER_POISONED);
-
-            if state.is_set {
-                return;
-            }
-
-            state.is_set = true;
-
-            // SAFETY: We hold the lock.
-            unsafe {
-                state.waiters.for_each(|node| {
-                    collect_waker(&mut wakers, node);
-                });
-            }
+        if state.is_set {
+            return;
         }
 
-        for waker in wakers {
-            waker.wake();
+        state.is_set = true;
+
+        let mut cursor = state.waiters.head();
+        while !cursor.is_null() {
+            // SAFETY: We hold the lock, so the node pointer is valid.
+            let next = unsafe { (*cursor).next };
+            // SAFETY: We hold the lock, so the node pointer is valid.
+            let waker = unsafe { (*cursor).waker.take() };
+            drop(state);
+
+            if let Some(w) = waker {
+                w.wake();
+            }
+
+            state = self.inner().state.lock().expect(NEVER_POISONED);
+            cursor = next;
         }
     }
 
@@ -642,6 +629,7 @@ impl fmt::Debug for RawManualResetWaitFuture {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::sync::Barrier;
+    use std::task::Waker;
     use std::{iter, thread};
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};

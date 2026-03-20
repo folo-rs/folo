@@ -180,6 +180,7 @@ impl WaiterList {
     ///
     /// * The caller must hold the owning event's lock.
     /// * The callback must not add or remove nodes from the list.
+    #[cfg(test)]
     pub(crate) unsafe fn for_each(&self, mut f: impl FnMut(*mut WaiterNode)) {
         let mut current = self.head;
         while !current.is_null() {
@@ -190,6 +191,11 @@ impl WaiterList {
             f(current);
             current = next;
         }
+    }
+
+    /// Returns a pointer to the head node, or null if the list is empty.
+    pub(crate) fn head(&self) -> *mut WaiterNode {
+        self.head
     }
 }
 
