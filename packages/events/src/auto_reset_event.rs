@@ -1165,4 +1165,58 @@ mod tests {
 
         assert!(tracker.was_woken());
     }
+
+    // This tests a defense-in-depth branch in poll() that unregisters
+    // a waiter when is_set is observed while still registered. In normal
+    // usage, set() pops a waiter rather than setting is_set when the list
+    // is non-empty, so this state cannot arise through the public API.
+    // We force it by directly manipulating the guarded state.
+    #[test]
+    fn poll_unregisters_when_is_set_observed_while_registered() {
+        let event = AutoResetEvent::boxed();
+        let mut future = Box::pin(event.wait());
+
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        // First poll registers the future in the waiter list.
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+
+        // Force the "impossible" state: is_set=true while a waiter is
+        // registered. This bypasses set() which would pop the waiter.
+        {
+            let mut state = event.inner.state.lock().unwrap();
+            state.is_set = true;
+        }
+
+        // Second poll enters the is_set branch, unregisters, and completes.
+        assert!(future.as_mut().poll(&mut cx).is_ready());
+
+        // The signal was consumed.
+        assert!(!event.try_acquire());
+    }
+
+    #[test]
+    fn embedded_poll_unregisters_when_is_set_observed_while_registered() {
+        let container = Box::pin(EmbeddedAutoResetEvent::new());
+
+        // SAFETY: The container is pinned and outlives the handle.
+        let event = unsafe { AutoResetEvent::embedded(container.as_ref()) };
+
+        let mut future = Box::pin(event.wait());
+
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+
+        {
+            let mut state = event.inner().state.lock().unwrap();
+            state.is_set = true;
+        }
+
+        assert!(future.as_mut().poll(&mut cx).is_ready());
+
+        assert!(!event.try_acquire());
+    }
 }
