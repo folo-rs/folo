@@ -735,102 +735,87 @@ mod tests {
 
     // --- async tests ---
 
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn wait_completes_when_already_set() {
-        let event = AutoResetEvent::boxed();
-        event.set();
-        event.wait().await;
-        // Signal consumed.
-        assert!(!event.try_acquire());
-    }
-
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn wait_completes_after_set() {
-        let event = AutoResetEvent::boxed();
-        let waiter = event.clone();
-
-        let handle = tokio::spawn(async move {
-            waiter.wait().await;
+    #[test]
+    fn wait_completes_when_already_set() {
+        futures::executor::block_on(async {
+            let event = AutoResetEvent::boxed();
+            event.set();
+            event.wait().await;
+            // Signal consumed.
+            assert!(!event.try_acquire());
         });
-
-        tokio::task::yield_now().await;
-        event.set();
-        handle.await.unwrap();
     }
 
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn only_one_waiter_released_per_set() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
+    #[test]
+    fn wait_completes_after_set() {
         let event = AutoResetEvent::boxed();
-        let count = Arc::new(AtomicUsize::new(0));
+        let mut future = Box::pin(event.wait());
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
 
-        let mut handles = Vec::new();
-        for _ in 0..3 {
-            let e = event.clone();
-            let c = Arc::clone(&count);
-            handles.push(tokio::spawn(async move {
-                e.wait().await;
-                c.fetch_add(1, Ordering::Relaxed);
-            }));
-        }
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+        event.set();
+        assert!(future.as_mut().poll(&mut cx).is_ready());
+    }
 
-        // Let all three waiters register.
-        tokio::task::yield_now().await;
-        tokio::task::yield_now().await;
+    #[test]
+    fn only_one_waiter_released_per_set() {
+        let event = AutoResetEvent::boxed();
+
+        let mut f1 = Box::pin(event.wait());
+        let mut f2 = Box::pin(event.wait());
+        let mut f3 = Box::pin(event.wait());
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        // All three register.
+        assert!(f1.as_mut().poll(&mut cx).is_pending());
+        assert!(f2.as_mut().poll(&mut cx).is_pending());
+        assert!(f3.as_mut().poll(&mut cx).is_pending());
 
         // Signal once — exactly one waiter should complete.
         event.set();
-        tokio::task::yield_now().await;
-        tokio::task::yield_now().await;
-
-        assert_eq!(count.load(Ordering::Relaxed), 1);
+        assert!(f1.as_mut().poll(&mut cx).is_ready());
+        assert!(f2.as_mut().poll(&mut cx).is_pending());
+        assert!(f3.as_mut().poll(&mut cx).is_pending());
 
         // Signal twice more to release the remaining two.
         event.set();
+        assert!(f2.as_mut().poll(&mut cx).is_ready());
+
         event.set();
-
-        for h in handles {
-            h.await.unwrap();
-        }
-
-        assert_eq!(count.load(Ordering::Relaxed), 3);
+        assert!(f3.as_mut().poll(&mut cx).is_ready());
     }
 
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn cancelled_waiter_forwards_notification() {
+    #[test]
+    fn cancelled_waiter_forwards_notification() {
         let event = AutoResetEvent::boxed();
 
-        // Spawn a waiter that will be cancelled.
-        let e1 = event.clone();
-        let handle = tokio::spawn(async move {
-            tokio::select! {
-                () = e1.wait() => panic!("should be cancelled"),
-                () = tokio::task::yield_now() => {}
-            }
-        });
+        let mut future = Box::pin(event.wait());
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
 
-        handle.await.unwrap();
+        // Register the waiter.
+        assert!(future.as_mut().poll(&mut cx).is_pending());
 
-        // Now set and wait again — should work because cancellation does not
-        // lose the signal (the cancelled waiter was never notified).
+        // Drop without completing — cancellation should not lose the signal.
+        drop(future);
+
+        // Set and wait again — should work because the cancelled waiter
+        // was never notified.
         event.set();
-        event.wait().await;
+        let mut future2 = Box::pin(event.wait());
+        assert!(future2.as_mut().poll(&mut cx).is_ready());
     }
 
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn drop_unpolled_future_is_safe() {
+    #[test]
+    fn drop_unpolled_future_is_safe() {
         let event = AutoResetEvent::boxed();
         {
             let _future = event.wait();
         }
         event.set();
-        event.wait().await;
+        futures::executor::block_on(event.wait());
     }
 
     // --- multithreaded tests (Miri-compatible) ---
@@ -970,20 +955,20 @@ mod tests {
 
     // --- embedded variant tests ---
 
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn embedded_set_and_wait() {
-        let container = Box::pin(EmbeddedAutoResetEvent::new());
-        // SAFETY: The container outlives the handle within this test.
-        let event = unsafe { AutoResetEvent::embedded(container.as_ref()) };
+    #[test]
+    fn embedded_set_and_wait() {
+        futures::executor::block_on(async {
+            let container = Box::pin(EmbeddedAutoResetEvent::new());
+            // SAFETY: The container outlives the handle within this test.
+            let event = unsafe { AutoResetEvent::embedded(container.as_ref()) };
 
-        event.set();
-        event.wait().await;
+            event.set();
+            event.wait().await;
+        });
     }
 
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn embedded_clone_shares_state() {
+    #[test]
+    fn embedded_clone_shares_state() {
         let container = Box::pin(EmbeddedAutoResetEvent::new());
         // SAFETY: The container outlives the handle within this test.
         let a = unsafe { AutoResetEvent::embedded(container.as_ref()) };
@@ -993,9 +978,8 @@ mod tests {
         assert!(b.try_acquire());
     }
 
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn embedded_signal_consumed() {
+    #[test]
+    fn embedded_signal_consumed() {
         let container = Box::pin(EmbeddedAutoResetEvent::new());
         // SAFETY: The container outlives the handle within this test.
         let event = unsafe { AutoResetEvent::embedded(container.as_ref()) };
@@ -1006,18 +990,19 @@ mod tests {
         assert!(!event.try_acquire());
     }
 
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn embedded_drop_future_while_waiting() {
-        let container = Box::pin(EmbeddedAutoResetEvent::new());
-        // SAFETY: The container outlives the handle within this test.
-        let event = unsafe { AutoResetEvent::embedded(container.as_ref()) };
+    #[test]
+    fn embedded_drop_future_while_waiting() {
+        futures::executor::block_on(async {
+            let container = Box::pin(EmbeddedAutoResetEvent::new());
+            // SAFETY: The container outlives the handle within this test.
+            let event = unsafe { AutoResetEvent::embedded(container.as_ref()) };
 
-        {
-            let _future = event.wait();
-        }
-        event.set();
-        event.wait().await;
+            {
+                let _future = event.wait();
+            }
+            event.set();
+            event.wait().await;
+        });
     }
 
     // --- manual-poll tests (cover register→wake→ready cycle) ---

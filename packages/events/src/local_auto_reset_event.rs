@@ -652,53 +652,56 @@ mod tests {
         assert!(b.try_acquire());
     }
 
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn wait_completes_when_already_set() {
-        let event = LocalAutoResetEvent::boxed();
-        event.set();
-        event.wait().await;
-        assert!(!event.try_acquire());
+    #[test]
+    fn wait_completes_when_already_set() {
+        futures::executor::block_on(async {
+            let event = LocalAutoResetEvent::boxed();
+            event.set();
+            event.wait().await;
+            assert!(!event.try_acquire());
+        });
     }
 
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn wait_completes_after_set() {
-        let event = LocalAutoResetEvent::boxed();
+    #[test]
+    fn wait_completes_after_set() {
+        futures::executor::block_on(async {
+            let event = LocalAutoResetEvent::boxed();
 
-        // Set before the future is polled.
-        let future = event.wait();
-        event.set();
-        future.await;
+            // Set before the future is polled.
+            let future = event.wait();
+            event.set();
+            future.await;
+        });
     }
 
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn drop_future_while_waiting() {
-        let event = LocalAutoResetEvent::boxed();
-        {
-            let _f = event.wait();
-        }
-        event.set();
-        event.wait().await;
+    #[test]
+    fn drop_future_while_waiting() {
+        futures::executor::block_on(async {
+            let event = LocalAutoResetEvent::boxed();
+            {
+                let _f = event.wait();
+            }
+            event.set();
+            event.wait().await;
+        });
     }
 
     // --- embedded variant tests ---
 
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn embedded_set_and_wait() {
-        let container = Box::pin(EmbeddedLocalAutoResetEvent::new());
-        // SAFETY: The container outlives the handle.
-        let event = unsafe { LocalAutoResetEvent::embedded(container.as_ref()) };
+    #[test]
+    fn embedded_set_and_wait() {
+        futures::executor::block_on(async {
+            let container = Box::pin(EmbeddedLocalAutoResetEvent::new());
+            // SAFETY: The container outlives the handle.
+            let event = unsafe { LocalAutoResetEvent::embedded(container.as_ref()) };
 
-        event.set();
-        event.wait().await;
+            event.set();
+            event.wait().await;
+        });
     }
 
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn embedded_clone_shares_state() {
+    #[test]
+    fn embedded_clone_shares_state() {
         let container = Box::pin(EmbeddedLocalAutoResetEvent::new());
         // SAFETY: The container outlives the handle.
         let a = unsafe { LocalAutoResetEvent::embedded(container.as_ref()) };
@@ -708,9 +711,8 @@ mod tests {
         assert!(b.try_acquire());
     }
 
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn embedded_signal_consumed() {
+    #[test]
+    fn embedded_signal_consumed() {
         let container = Box::pin(EmbeddedLocalAutoResetEvent::new());
         // SAFETY: The container outlives the handle.
         let event = unsafe { LocalAutoResetEvent::embedded(container.as_ref()) };
@@ -720,18 +722,19 @@ mod tests {
         assert!(!event.try_acquire());
     }
 
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn embedded_drop_future_while_waiting() {
-        let container = Box::pin(EmbeddedLocalAutoResetEvent::new());
-        // SAFETY: The container outlives the handle.
-        let event = unsafe { LocalAutoResetEvent::embedded(container.as_ref()) };
+    #[test]
+    fn embedded_drop_future_while_waiting() {
+        futures::executor::block_on(async {
+            let container = Box::pin(EmbeddedLocalAutoResetEvent::new());
+            // SAFETY: The container outlives the handle.
+            let event = unsafe { LocalAutoResetEvent::embedded(container.as_ref()) };
 
-        {
-            let _future = event.wait();
-        }
-        event.set();
-        event.wait().await;
+            {
+                let _future = event.wait();
+            }
+            event.set();
+            event.wait().await;
+        });
     }
 
     // --- manual-poll tests (cover register→wake→ready cycle) ---

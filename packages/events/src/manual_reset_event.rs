@@ -682,85 +682,78 @@ mod tests {
 
     // --- async tests ---
 
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn wait_completes_when_already_set() {
-        let event = ManualResetEvent::boxed();
-        event.set();
-        event.wait().await;
-    }
-
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn wait_completes_after_set() {
-        let event = ManualResetEvent::boxed();
-        let waiter = event.clone();
-
-        let handle = tokio::spawn(async move {
-            waiter.wait().await;
+    #[test]
+    fn wait_completes_when_already_set() {
+        futures::executor::block_on(async {
+            let event = ManualResetEvent::boxed();
+            event.set();
+            event.wait().await;
         });
-
-        // Give the waiter a moment to register.
-        tokio::task::yield_now().await;
-
-        event.set();
-        handle.await.unwrap();
     }
 
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn multiple_waiters_all_released() {
+    #[test]
+    fn wait_completes_after_set() {
         let event = ManualResetEvent::boxed();
+        let mut future = Box::pin(event.wait());
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
 
-        let mut handles = Vec::new();
-        for _ in 0..5 {
-            let e = event.clone();
-            handles.push(tokio::spawn(async move {
-                e.wait().await;
-            }));
-        }
-
-        tokio::task::yield_now().await;
+        assert!(future.as_mut().poll(&mut cx).is_pending());
         event.set();
-
-        for h in handles {
-            h.await.unwrap();
-        }
+        assert!(future.as_mut().poll(&mut cx).is_ready());
     }
 
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn drop_future_while_waiting() {
+    #[test]
+    fn multiple_waiters_all_released() {
         let event = ManualResetEvent::boxed();
-        {
-            let _future = event.wait();
-            // future is dropped here without being polled — should not leak
-        }
-        // Event should still work fine.
+
+        let mut f1 = Box::pin(event.wait());
+        let mut f2 = Box::pin(event.wait());
+        let mut f3 = Box::pin(event.wait());
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        assert!(f1.as_mut().poll(&mut cx).is_pending());
+        assert!(f2.as_mut().poll(&mut cx).is_pending());
+        assert!(f3.as_mut().poll(&mut cx).is_pending());
+
+        // Set releases all.
         event.set();
-        event.wait().await;
+
+        assert!(f1.as_mut().poll(&mut cx).is_ready());
+        assert!(f2.as_mut().poll(&mut cx).is_ready());
+        assert!(f3.as_mut().poll(&mut cx).is_ready());
     }
 
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn drop_polled_future_while_waiting() {
-        let event = ManualResetEvent::boxed();
-
-        let waiter = event.clone();
-        let handle = tokio::spawn(async move {
-            // This polls at least once (registering in the waiter list).
-            tokio::select! {
-                () = waiter.wait() => panic!("should not complete"),
-                () = tokio::task::yield_now() => {}
+    #[test]
+    fn drop_future_while_waiting() {
+        futures::executor::block_on(async {
+            let event = ManualResetEvent::boxed();
+            {
+                let _future = event.wait();
             }
-            // Future is dropped here while registered — should unlink cleanly.
+            event.set();
+            event.wait().await;
         });
+    }
 
-        handle.await.unwrap();
+    #[test]
+    fn drop_polled_future_while_waiting() {
+        let event = ManualResetEvent::boxed();
+        let mut future = Box::pin(event.wait());
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        // Poll once to register in the waiter list.
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+
+        // Drop the registered future — should unlink cleanly.
+        drop(future);
 
         // Event should still work after the cancelled waiter is gone.
         event.set();
-        event.wait().await;
+        let mut future2 = Box::pin(event.wait());
+        assert!(future2.as_mut().poll(&mut cx).is_ready());
     }
 
     #[test]
@@ -906,33 +899,34 @@ mod tests {
 
     // --- embedded variant tests ---
 
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn embedded_set_and_wait() {
-        let container = Box::pin(EmbeddedManualResetEvent::new());
-        // SAFETY: The container outlives the handle within this test.
-        let event = unsafe { ManualResetEvent::embedded(container.as_ref()) };
+    #[test]
+    fn embedded_set_and_wait() {
+        futures::executor::block_on(async {
+            let container = Box::pin(EmbeddedManualResetEvent::new());
+            // SAFETY: The container outlives the handle within this test.
+            let event = unsafe { ManualResetEvent::embedded(container.as_ref()) };
 
-        event.set();
-        event.wait().await;
+            event.set();
+            event.wait().await;
+        });
     }
 
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn embedded_clone_shares_state() {
-        let container = Box::pin(EmbeddedManualResetEvent::new());
-        // SAFETY: The container outlives the handle within this test.
-        let a = unsafe { ManualResetEvent::embedded(container.as_ref()) };
-        let b = a;
+    #[test]
+    fn embedded_clone_shares_state() {
+        futures::executor::block_on(async {
+            let container = Box::pin(EmbeddedManualResetEvent::new());
+            // SAFETY: The container outlives the handle within this test.
+            let a = unsafe { ManualResetEvent::embedded(container.as_ref()) };
+            let b = a;
 
-        a.set();
-        assert!(b.is_set());
-        b.wait().await;
+            a.set();
+            assert!(b.is_set());
+            b.wait().await;
+        });
     }
 
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn embedded_reset_after_set() {
+    #[test]
+    fn embedded_reset_after_set() {
         let container = Box::pin(EmbeddedManualResetEvent::new());
         // SAFETY: The container outlives the handle within this test.
         let event = unsafe { ManualResetEvent::embedded(container.as_ref()) };
@@ -942,18 +936,19 @@ mod tests {
         assert!(!event.is_set());
     }
 
-    #[cfg_attr(miri, ignore)]
-    #[tokio::test]
-    async fn embedded_drop_future_while_waiting() {
-        let container = Box::pin(EmbeddedManualResetEvent::new());
-        // SAFETY: The container outlives the handle within this test.
-        let event = unsafe { ManualResetEvent::embedded(container.as_ref()) };
+    #[test]
+    fn embedded_drop_future_while_waiting() {
+        futures::executor::block_on(async {
+            let container = Box::pin(EmbeddedManualResetEvent::new());
+            // SAFETY: The container outlives the handle within this test.
+            let event = unsafe { ManualResetEvent::embedded(container.as_ref()) };
 
-        {
-            let _future = event.wait();
-        }
-        event.set();
-        event.wait().await;
+            {
+                let _future = event.wait();
+            }
+            event.set();
+            event.wait().await;
+        });
     }
 
     #[test]
