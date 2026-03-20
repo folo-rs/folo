@@ -142,6 +142,7 @@ mod tests {
     use crate::pal::FilesystemFacade;
 
     #[test]
+    #[serial] // This test depends on the current directory being inside a Cargo workspace.
     fn validate_workspace_context_nonexistent_file() {
         // Nonexistent files are now rejected by validate_workspace_context, not detect_package.
         let fs = FilesystemFacade::target();
