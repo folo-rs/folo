@@ -284,7 +284,7 @@ fn signal_round_trip(c: &mut Criterion, allocs: &AllocSession) {
 
     let op = allocs.operation("signal_round_trip/events/embedded/ManualResetEvent");
     group.bench_function("events/embedded/ManualResetEvent", |b| {
-        let container = Box::pin(EmbeddedManualResetEvent::new());
+        let container = pin!(EmbeddedManualResetEvent::new());
         let manual = unsafe { ManualResetEvent::embedded(container.as_ref()) };
         manual.set();
         b.iter_custom(|iters| {
@@ -299,7 +299,7 @@ fn signal_round_trip(c: &mut Criterion, allocs: &AllocSession) {
 
     let op = allocs.operation("signal_round_trip/events/embedded/AutoResetEvent");
     group.bench_function("events/embedded/AutoResetEvent", |b| {
-        let container = Box::pin(EmbeddedAutoResetEvent::new());
+        let container = pin!(EmbeddedAutoResetEvent::new());
         let auto = unsafe { AutoResetEvent::embedded(container.as_ref()) };
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
@@ -438,7 +438,7 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
 
     let op = allocs.operation("async_poll_ready/events/embedded/ManualResetEvent");
     group.bench_function("events/embedded/ManualResetEvent", |b| {
-        let container = Box::pin(EmbeddedManualResetEvent::new());
+        let container = pin!(EmbeddedManualResetEvent::new());
         let manual = unsafe { ManualResetEvent::embedded(container.as_ref()) };
         manual.set();
         let mut cx = Context::from_waker(waker);
@@ -455,7 +455,7 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
 
     let op = allocs.operation("async_poll_ready/events/embedded/AutoResetEvent");
     group.bench_function("events/embedded/AutoResetEvent", |b| {
-        let container = Box::pin(EmbeddedAutoResetEvent::new());
+        let container = pin!(EmbeddedAutoResetEvent::new());
         let auto = unsafe { AutoResetEvent::embedded(container.as_ref()) };
         let mut cx = Context::from_waker(waker);
         b.iter_custom(|iters| {
@@ -541,7 +541,7 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
             for _ in 0..iters {
-                let container = Box::pin(EmbeddedManualResetEvent::new());
+                let container = pin!(EmbeddedManualResetEvent::new());
                 let event = unsafe { ManualResetEvent::embedded(container.as_ref()) };
                 futures.clear();
                 futures.extend(iter::repeat_with(|| event.wait()).take(MANY_WAITER_COUNT));
@@ -565,7 +565,7 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
             for _ in 0..iters {
-                let container = Box::pin(EmbeddedLocalManualResetEvent::new());
+                let container = pin!(EmbeddedLocalManualResetEvent::new());
                 let event = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
                 futures.clear();
                 futures.extend(iter::repeat_with(|| event.wait()).take(MANY_WAITER_COUNT));
@@ -589,7 +589,7 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
             for _ in 0..iters {
-                let container = Box::pin(EmbeddedAutoResetEvent::new());
+                let container = pin!(EmbeddedAutoResetEvent::new());
                 let event = unsafe { AutoResetEvent::embedded(container.as_ref()) };
                 futures.clear();
                 futures.extend(iter::repeat_with(|| event.wait()).take(MANY_WAITER_COUNT));
@@ -613,7 +613,7 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
             for _ in 0..iters {
-                let container = Box::pin(EmbeddedLocalAutoResetEvent::new());
+                let container = pin!(EmbeddedLocalAutoResetEvent::new());
                 let event = unsafe { LocalAutoResetEvent::embedded(container.as_ref()) };
                 futures.clear();
                 futures.extend(iter::repeat_with(|| event.wait()).take(MANY_WAITER_COUNT));
