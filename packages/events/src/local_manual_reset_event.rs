@@ -146,25 +146,32 @@ impl LocalManualResetEvent {
 
         self.inner.is_set.set(true);
 
-        // Walk the waiter list one node at a time. For each node we take
-        // its waker and wake it before advancing. Because is_set is already
-        // true, any re-entrant access through the waker will see the set
-        // state and not mutate the waiter list, so this is safe.
-        //
-        // SAFETY: Single-threaded access guaranteed by !Send on Self.
-        let waiters = unsafe { &*self.inner.waiters.get() };
-        let mut cursor = waiters.head();
-        while !cursor.is_null() {
-            // SAFETY: Single-threaded — no concurrent access.
-            let next = unsafe { (*cursor).next };
-            // SAFETY: Single-threaded — no concurrent access.
-            let waker = unsafe { (*cursor).waker.take() };
+        // Wake all waiters. We access the waiter list through raw pointers
+        // rather than holding a `&WaiterList` reference, and we rescan from
+        // the head after each wake. This ensures no reference to the list
+        // and no stored `next` pointer survives across the `wake()` call,
+        // so re-entrant wakers can safely borrow and modify the list.
+        let waiters_ptr = self.inner.waiters.get();
+        loop {
+            let waker = {
+                // SAFETY: Single-threaded — no concurrent access.
+                let mut cursor = unsafe { (*waiters_ptr).head() };
+                loop {
+                    if cursor.is_null() {
+                        break None;
+                    }
+                    // SAFETY: Single-threaded — no concurrent access.
+                    let w = unsafe { (*cursor).waker.take() };
+                    if w.is_some() {
+                        break w;
+                    }
+                    // SAFETY: Single-threaded — no concurrent access.
+                    cursor = unsafe { (*cursor).next };
+                }
+            };
 
-            if let Some(w) = waker {
-                w.wake();
-            }
-
-            cursor = next;
+            let Some(w) = waker else { break };
+            w.wake();
         }
     }
 
@@ -386,20 +393,29 @@ impl RawLocalManualResetEvent {
 
         self.inner().is_set.set(true);
 
-        // SAFETY: Single-threaded access guaranteed by !Send on Self.
-        let waiters = unsafe { &*self.inner().waiters.get() };
-        let mut cursor = waiters.head();
-        while !cursor.is_null() {
-            // SAFETY: Single-threaded — no concurrent access.
-            let next = unsafe { (*cursor).next };
-            // SAFETY: Single-threaded — no concurrent access.
-            let waker = unsafe { (*cursor).waker.take() };
+        // Same rescan-from-head pattern as the boxed variant — see
+        // LocalManualResetEvent::set() for the detailed rationale.
+        let waiters_ptr = self.inner().waiters.get();
+        loop {
+            let waker = {
+                // SAFETY: Single-threaded — no concurrent access.
+                let mut cursor = unsafe { (*waiters_ptr).head() };
+                loop {
+                    if cursor.is_null() {
+                        break None;
+                    }
+                    // SAFETY: Single-threaded — no concurrent access.
+                    let w = unsafe { (*cursor).waker.take() };
+                    if w.is_some() {
+                        break w;
+                    }
+                    // SAFETY: Single-threaded — no concurrent access.
+                    cursor = unsafe { (*cursor).next };
+                }
+            };
 
-            if let Some(w) = waker {
-                w.wake();
-            }
-
-            cursor = next;
+            let Some(w) = waker else { break };
+            w.wake();
         }
     }
 
@@ -779,7 +795,8 @@ mod tests {
             let mut cx = task::Context::from_waker(noop);
             assert!(new_future.as_mut().poll(&mut cx).is_pending());
         });
-        let waker = waker_data.waker();
+        // SAFETY: Data outlives waker, single-threaded test.
+        let waker = unsafe { waker_data.waker() };
         let mut cx = task::Context::from_waker(&waker);
 
         let mut future = Box::pin(event.wait());
@@ -808,7 +825,8 @@ mod tests {
             let mut cx = task::Context::from_waker(noop);
             assert!(new_future.as_mut().poll(&mut cx).is_pending());
         });
-        let waker = waker_data.waker();
+        // SAFETY: Data outlives waker, single-threaded test.
+        let waker = unsafe { waker_data.waker() };
         let mut cx = task::Context::from_waker(&waker);
 
         let mut future = Box::pin(event.wait());
@@ -858,7 +876,8 @@ mod tests {
         let event = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
 
         let waker_data = ReentrantWakerData::new(|| {});
-        let waker = waker_data.waker();
+        // SAFETY: Data outlives waker, single-threaded test.
+        let waker = unsafe { waker_data.waker() };
         let mut cx = task::Context::from_waker(&waker);
 
         let mut future = Box::pin(event.wait());
@@ -876,11 +895,13 @@ mod tests {
         let event = LocalManualResetEvent::boxed();
 
         let tracker1 = ReentrantWakerData::new(|| {});
-        let waker1 = tracker1.waker();
+        // SAFETY: Data outlives waker, single-threaded test.
+        let waker1 = unsafe { tracker1.waker() };
         let mut cx1 = task::Context::from_waker(&waker1);
 
         let tracker2 = ReentrantWakerData::new(|| {});
-        let waker2 = tracker2.waker();
+        // SAFETY: Data outlives waker, single-threaded test.
+        let waker2 = unsafe { tracker2.waker() };
         let mut cx2 = task::Context::from_waker(&waker2);
 
         let mut future1 = Box::pin(event.wait());
@@ -908,11 +929,13 @@ mod tests {
         let event = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
 
         let tracker1 = ReentrantWakerData::new(|| {});
-        let waker1 = tracker1.waker();
+        // SAFETY: Data outlives waker, single-threaded test.
+        let waker1 = unsafe { tracker1.waker() };
         let mut cx1 = task::Context::from_waker(&waker1);
 
         let tracker2 = ReentrantWakerData::new(|| {});
-        let waker2 = tracker2.waker();
+        // SAFETY: Data outlives waker, single-threaded test.
+        let waker2 = unsafe { tracker2.waker() };
         let mut cx2 = task::Context::from_waker(&waker2);
 
         let mut future1 = Box::pin(event.wait());

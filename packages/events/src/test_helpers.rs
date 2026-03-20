@@ -33,14 +33,19 @@ impl ReentrantWakerData {
 
     /// Creates a [`Waker`] backed by this data.
     ///
-    /// The caller must ensure this `ReentrantWakerData` outlives all wakers
-    /// (and their clones) created from it.
-    pub(crate) fn waker(&self) -> Waker {
+    /// # Safety
+    ///
+    /// * The caller must ensure this `ReentrantWakerData` outlives all wakers
+    ///   (and their clones) created from it.
+    /// * The returned [`Waker`] (and any clones) must not be sent to or used
+    ///   from any thread other than the one that created it. The backing
+    ///   state uses [`Cell`] and a non-thread-safe closure.
+    pub(crate) unsafe fn waker(&self) -> Waker {
         let data: *const () = std::ptr::from_ref(self).cast();
 
-        // SAFETY: The caller ensures this ReentrantWakerData outlives all
-        // wakers created from it. Our vtable functions correctly handle the
-        // data pointer.
+        // SAFETY: The caller upholds the safety contract of `waker()`:
+        // the data outlives all wakers, and the waker is only used on
+        // the creating thread.
         unsafe { Waker::from_raw(RawWaker::new(data, &VTABLE)) }
     }
 

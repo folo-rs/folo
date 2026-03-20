@@ -163,23 +163,32 @@ impl ManualResetEvent {
 
         state.is_set = true;
 
-        // Walk the waiter list one node at a time. For each node we take
-        // its waker, release the lock, wake, and re-acquire the lock before
-        // advancing. This avoids allocating a Vec<Waker> to collect them.
-        let mut cursor = state.waiters.head();
-        while !cursor.is_null() {
-            // SAFETY: We hold the lock, so the node pointer is valid.
-            let next = unsafe { (*cursor).next };
-            // SAFETY: We hold the lock, so the node pointer is valid.
-            let waker = unsafe { (*cursor).waker.take() };
+        // Wake all waiters. We must rescan from the head after each wake
+        // because releasing the lock allows concurrent futures to be
+        // dropped or polled, which removes nodes from the list and could
+        // invalidate any stored `next` pointer.
+        loop {
+            let waker = {
+                let mut cursor = state.waiters.head();
+                loop {
+                    if cursor.is_null() {
+                        break None;
+                    }
+                    // SAFETY: We hold the lock.
+                    let w = unsafe { (*cursor).waker.take() };
+                    if w.is_some() {
+                        break w;
+                    }
+                    // SAFETY: We hold the lock.
+                    cursor = unsafe { (*cursor).next };
+                }
+            };
+
+            let Some(w) = waker else { break };
+
             drop(state);
-
-            if let Some(w) = waker {
-                w.wake();
-            }
-
+            w.wake();
             state = self.inner.state.lock().expect(NEVER_POISONED);
-            cursor = next;
         }
     }
 
@@ -478,20 +487,30 @@ impl RawManualResetEvent {
 
         state.is_set = true;
 
-        let mut cursor = state.waiters.head();
-        while !cursor.is_null() {
-            // SAFETY: We hold the lock, so the node pointer is valid.
-            let next = unsafe { (*cursor).next };
-            // SAFETY: We hold the lock, so the node pointer is valid.
-            let waker = unsafe { (*cursor).waker.take() };
+        // Wake all waiters. Same rescan-from-head pattern as the boxed
+        // variant — see ManualResetEvent::set() for the detailed rationale.
+        loop {
+            let waker = {
+                let mut cursor = state.waiters.head();
+                loop {
+                    if cursor.is_null() {
+                        break None;
+                    }
+                    // SAFETY: We hold the lock.
+                    let w = unsafe { (*cursor).waker.take() };
+                    if w.is_some() {
+                        break w;
+                    }
+                    // SAFETY: We hold the lock.
+                    cursor = unsafe { (*cursor).next };
+                }
+            };
+
+            let Some(w) = waker else { break };
+
             drop(state);
-
-            if let Some(w) = waker {
-                w.wake();
-            }
-
+            w.wake();
             state = self.inner().state.lock().expect(NEVER_POISONED);
-            cursor = next;
         }
     }
 

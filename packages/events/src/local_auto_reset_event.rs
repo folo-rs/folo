@@ -890,7 +890,8 @@ mod tests {
             // Re-entrantly call set(), which accesses the waiter list.
             event_clone.set();
         });
-        let waker = waker_data.waker();
+        // SAFETY: Data outlives waker, single-threaded test.
+        let waker = unsafe { waker_data.waker() };
         let mut cx = task::Context::from_waker(&waker);
 
         let mut future = Box::pin(event.wait());
@@ -921,7 +922,8 @@ mod tests {
         let waker_data = ReentrantWakerData::new(move || {
             event_clone.set();
         });
-        let waker = waker_data.waker();
+        // SAFETY: Data outlives waker, single-threaded test.
+        let waker = unsafe { waker_data.waker() };
         let mut reentrant_cx = task::Context::from_waker(&waker);
         let mut future2 = Box::pin(event.wait());
         assert!(future2.as_mut().poll(&mut reentrant_cx).is_pending());
@@ -947,7 +949,8 @@ mod tests {
         let waker_data = ReentrantWakerData::new(move || {
             event.set();
         });
-        let waker = waker_data.waker();
+        // SAFETY: Data outlives waker, single-threaded test.
+        let waker = unsafe { waker_data.waker() };
         let mut cx = task::Context::from_waker(&waker);
 
         let mut future = Box::pin(event.wait());
@@ -976,7 +979,8 @@ mod tests {
         let waker_data = ReentrantWakerData::new(move || {
             event.set();
         });
-        let waker = waker_data.waker();
+        // SAFETY: Data outlives waker, single-threaded test.
+        let waker = unsafe { waker_data.waker() };
         let mut reentrant_cx = task::Context::from_waker(&waker);
         let mut future2 = Box::pin(event.wait());
         assert!(future2.as_mut().poll(&mut reentrant_cx).is_pending());
@@ -996,7 +1000,8 @@ mod tests {
         let event = unsafe { LocalAutoResetEvent::embedded(container.as_ref()) };
 
         let waker_data = ReentrantWakerData::new(|| {});
-        let waker = waker_data.waker();
+        // SAFETY: Data outlives waker, single-threaded test.
+        let waker = unsafe { waker_data.waker() };
         let mut cx = task::Context::from_waker(&waker);
 
         let mut future = Box::pin(event.wait());
