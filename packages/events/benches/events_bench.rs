@@ -517,9 +517,10 @@ const MANY_WAITER_COUNT: usize = 100;
 /// auto-reset events, each waiter requires its own `set()` call. All
 /// waiters are pre-registered before the measurement begins.
 ///
-/// Futures are stored directly in a pre-allocated `Vec` and pinned
-/// in-place via `Pin::new_unchecked`. This avoids per-future heap
-/// allocations from `Box::pin()`. The pinning is sound because:
+/// Events use embedded (zero-alloc) containers to minimize allocation
+/// noise. Futures are stored directly in a pre-allocated `Vec` and
+/// pinned in-place via `Pin::new_unchecked`. The pinning is sound
+/// because:
 ///
 /// * Futures are moved into the `Vec` before any polling (no
 ///   self-referential state yet).
@@ -540,7 +541,8 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
             for _ in 0..iters {
-                let event = ManualResetEvent::boxed();
+                let container = Box::pin(EmbeddedManualResetEvent::new());
+                let event = unsafe { ManualResetEvent::embedded(container.as_ref()) };
                 futures.clear();
                 futures.extend(iter::repeat_with(|| event.wait()).take(MANY_WAITER_COUNT));
                 for f in &mut futures {
@@ -563,7 +565,8 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
             for _ in 0..iters {
-                let event = LocalManualResetEvent::boxed();
+                let container = Box::pin(EmbeddedLocalManualResetEvent::new());
+                let event = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
                 futures.clear();
                 futures.extend(iter::repeat_with(|| event.wait()).take(MANY_WAITER_COUNT));
                 for f in &mut futures {
@@ -586,7 +589,8 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
             for _ in 0..iters {
-                let event = AutoResetEvent::boxed();
+                let container = Box::pin(EmbeddedAutoResetEvent::new());
+                let event = unsafe { AutoResetEvent::embedded(container.as_ref()) };
                 futures.clear();
                 futures.extend(iter::repeat_with(|| event.wait()).take(MANY_WAITER_COUNT));
                 for f in &mut futures {
@@ -609,7 +613,8 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
             for _ in 0..iters {
-                let event = LocalAutoResetEvent::boxed();
+                let container = Box::pin(EmbeddedLocalAutoResetEvent::new());
+                let event = unsafe { LocalAutoResetEvent::embedded(container.as_ref()) };
                 futures.clear();
                 futures.extend(iter::repeat_with(|| event.wait()).take(MANY_WAITER_COUNT));
                 for f in &mut futures {
