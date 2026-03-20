@@ -17,12 +17,16 @@
     clippy::let_underscore_must_use,
     reason = "poll results are intentionally discarded in benchmarks"
 )]
+#![allow(
+    clippy::undocumented_unsafe_blocks,
+    reason = "benchmark pinning has trivial safety invariants"
+)]
 
 use std::future::Future;
 use std::hint::black_box;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Wake, Waker};
+use std::pin::{Pin, pin};
+use std::task::{Context, Waker};
+use std::time::Instant;
 
 use alloc_tracker::{Allocator, Session as AllocSession};
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -38,16 +42,6 @@ use rsevents::{
 
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
-
-struct NoopWake;
-
-impl Wake for NoopWake {
-    fn wake(self: Arc<Self>) {}
-}
-
-fn noop_waker() -> Waker {
-    Waker::from(Arc::new(NoopWake))
-}
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
@@ -69,57 +63,85 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
 
     let op = allocs.operation("creation/events/ManualResetEvent");
     group.bench_function("events/ManualResetEvent", |b| {
-        b.iter(|| {
-            let _span = op.measure_thread();
-            black_box(ManualResetEvent::boxed())
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(ManualResetEvent::boxed());
+            }
+            start.elapsed()
         });
     });
 
     let op = allocs.operation("creation/events/AutoResetEvent");
     group.bench_function("events/AutoResetEvent", |b| {
-        b.iter(|| {
-            let _span = op.measure_thread();
-            black_box(AutoResetEvent::boxed())
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(AutoResetEvent::boxed());
+            }
+            start.elapsed()
         });
     });
 
     let op = allocs.operation("creation/events/LocalManualResetEvent");
     group.bench_function("events/LocalManualResetEvent", |b| {
-        b.iter(|| {
-            let _span = op.measure_thread();
-            black_box(LocalManualResetEvent::boxed())
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(LocalManualResetEvent::boxed());
+            }
+            start.elapsed()
         });
     });
 
     let op = allocs.operation("creation/events/LocalAutoResetEvent");
     group.bench_function("events/LocalAutoResetEvent", |b| {
-        b.iter(|| {
-            let _span = op.measure_thread();
-            black_box(LocalAutoResetEvent::boxed())
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(LocalAutoResetEvent::boxed());
+            }
+            start.elapsed()
         });
     });
 
     let op = allocs.operation("creation/rsevents/ManualResetEvent");
     group.bench_function("rsevents/ManualResetEvent", |b| {
-        b.iter(|| {
-            let _span = op.measure_thread();
-            black_box(RsManualReset::new(EventState::Unset))
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(RsManualReset::new(EventState::Unset));
+            }
+            start.elapsed()
         });
     });
 
     let op = allocs.operation("creation/rsevents/AutoResetEvent");
     group.bench_function("rsevents/AutoResetEvent", |b| {
-        b.iter(|| {
-            let _span = op.measure_thread();
-            black_box(RsAutoReset::new(EventState::Unset))
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(RsAutoReset::new(EventState::Unset));
+            }
+            start.elapsed()
         });
     });
 
     let op = allocs.operation("creation/event_listener/Event");
     group.bench_function("event_listener/Event", |b| {
-        b.iter(|| {
-            let _span = op.measure_thread();
-            black_box(ElEvent::<()>::new())
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(ElEvent::<()>::new());
+            }
+            start.elapsed()
         });
     });
 
@@ -136,67 +158,86 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
 fn signal_round_trip(c: &mut Criterion, allocs: &AllocSession) {
     let mut group = c.benchmark_group("signal_round_trip");
 
-    // Manual-reset: pre-set, try_acquire() is a non-consuming check.
-    let manual = ManualResetEvent::boxed();
-    manual.set();
     let op = allocs.operation("signal_round_trip/events/ManualResetEvent");
     group.bench_function("events/ManualResetEvent", |b| {
-        b.iter(|| {
-            let _span = op.measure_thread();
-            black_box(manual.try_acquire())
+        let manual = ManualResetEvent::boxed();
+        manual.set();
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(manual.try_acquire());
+            }
+            start.elapsed()
         });
     });
 
-    let local_manual = LocalManualResetEvent::boxed();
-    local_manual.set();
     let op = allocs.operation("signal_round_trip/events/LocalManualResetEvent");
     group.bench_function("events/LocalManualResetEvent", |b| {
-        b.iter(|| {
-            let _span = op.measure_thread();
-            black_box(local_manual.try_acquire())
+        let local_manual = LocalManualResetEvent::boxed();
+        local_manual.set();
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(local_manual.try_acquire());
+            }
+            start.elapsed()
         });
     });
 
-    // Auto-reset: consumes the signal, so re-set each iteration.
-    let auto = AutoResetEvent::boxed();
     let op = allocs.operation("signal_round_trip/events/AutoResetEvent");
     group.bench_function("events/AutoResetEvent", |b| {
-        b.iter(|| {
-            let _span = op.measure_thread();
-            auto.set();
-            black_box(auto.try_acquire())
+        let auto = AutoResetEvent::boxed();
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                auto.set();
+                black_box(auto.try_acquire());
+            }
+            start.elapsed()
         });
     });
 
-    let local_auto = LocalAutoResetEvent::boxed();
     let op = allocs.operation("signal_round_trip/events/LocalAutoResetEvent");
     group.bench_function("events/LocalAutoResetEvent", |b| {
-        b.iter(|| {
-            let _span = op.measure_thread();
-            local_auto.set();
-            black_box(local_auto.try_acquire())
+        let local_auto = LocalAutoResetEvent::boxed();
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                local_auto.set();
+                black_box(local_auto.try_acquire());
+            }
+            start.elapsed()
         });
     });
 
-    // rsevents: ManualResetEvent stays set — wait() returns immediately.
-    let rs_manual = RsManualReset::new(EventState::Set);
     let op = allocs.operation("signal_round_trip/rsevents/ManualResetEvent");
     group.bench_function("rsevents/ManualResetEvent", |b| {
-        b.iter(|| {
-            let _span = op.measure_thread();
-            rs_manual.wait();
+        let rs_manual = RsManualReset::new(EventState::Set);
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                rs_manual.wait();
+            }
+            start.elapsed()
         });
     });
 
-    // rsevents: AutoResetEvent consumes signal on wait() — re-set per
-    // iteration.
-    let rs_auto = RsAutoReset::new(EventState::Unset);
     let op = allocs.operation("signal_round_trip/rsevents/AutoResetEvent");
     group.bench_function("rsevents/AutoResetEvent", |b| {
-        b.iter(|| {
-            let _span = op.measure_thread();
-            rs_auto.set();
-            rs_auto.wait();
+        let rs_auto = RsAutoReset::new(EventState::Unset);
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                rs_auto.set();
+                rs_auto.wait();
+            }
+            start.elapsed()
         });
     });
 
@@ -206,79 +247,89 @@ fn signal_round_trip(c: &mut Criterion, allocs: &AllocSession) {
 /// Measures the async fast path: set the event, create a wait future, pin it,
 /// and poll it to completion in a single poll.
 ///
-/// All implementations use `Box::pin` for pinning, ensuring a level playing
-/// field. The `Box` allocation overhead is constant across all implementations,
-/// keeping relative comparisons valid.
+/// Futures are pinned on the stack via the `pin!()` macro, avoiding heap
+/// allocations from `Box::pin()`.
 fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
     let mut group = c.benchmark_group("async_poll_ready");
+    let waker = Waker::noop();
 
-    // ManualResetEvent — pre-set, poll returns Ready immediately.
-    let manual = ManualResetEvent::boxed();
-    manual.set();
     let op = allocs.operation("async_poll_ready/events/ManualResetEvent");
     group.bench_function("events/ManualResetEvent", |b| {
-        let waker = noop_waker();
-        let mut cx = Context::from_waker(&waker);
-        b.iter(|| {
-            let _span = op.measure_thread();
-            let mut future = Box::pin(manual.wait());
-            let _ = black_box(future.as_mut().poll(&mut cx));
+        let manual = ManualResetEvent::boxed();
+        manual.set();
+        let mut cx = Context::from_waker(waker);
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                let mut future = pin!(manual.wait());
+                let _ = black_box(future.as_mut().poll(&mut cx));
+            }
+            start.elapsed()
         });
     });
 
-    let local_manual = LocalManualResetEvent::boxed();
-    local_manual.set();
     let op = allocs.operation("async_poll_ready/events/LocalManualResetEvent");
     group.bench_function("events/LocalManualResetEvent", |b| {
-        let waker = noop_waker();
-        let mut cx = Context::from_waker(&waker);
-        b.iter(|| {
-            let _span = op.measure_thread();
-            let mut future = Box::pin(local_manual.wait());
-            let _ = black_box(future.as_mut().poll(&mut cx));
+        let local_manual = LocalManualResetEvent::boxed();
+        local_manual.set();
+        let mut cx = Context::from_waker(waker);
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                let mut future = pin!(local_manual.wait());
+                let _ = black_box(future.as_mut().poll(&mut cx));
+            }
+            start.elapsed()
         });
     });
 
-    // AutoResetEvent — re-set each iteration because polling consumes the
-    // signal.
-    let auto = AutoResetEvent::boxed();
     let op = allocs.operation("async_poll_ready/events/AutoResetEvent");
     group.bench_function("events/AutoResetEvent", |b| {
-        let waker = noop_waker();
-        let mut cx = Context::from_waker(&waker);
-        b.iter(|| {
-            let _span = op.measure_thread();
-            auto.set();
-            let mut future = Box::pin(auto.wait());
-            let _ = black_box(future.as_mut().poll(&mut cx));
+        let auto = AutoResetEvent::boxed();
+        let mut cx = Context::from_waker(waker);
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                auto.set();
+                let mut future = pin!(auto.wait());
+                let _ = black_box(future.as_mut().poll(&mut cx));
+            }
+            start.elapsed()
         });
     });
 
-    let local_auto = LocalAutoResetEvent::boxed();
     let op = allocs.operation("async_poll_ready/events/LocalAutoResetEvent");
     group.bench_function("events/LocalAutoResetEvent", |b| {
-        let waker = noop_waker();
-        let mut cx = Context::from_waker(&waker);
-        b.iter(|| {
-            let _span = op.measure_thread();
-            local_auto.set();
-            let mut future = Box::pin(local_auto.wait());
-            let _ = black_box(future.as_mut().poll(&mut cx));
+        let local_auto = LocalAutoResetEvent::boxed();
+        let mut cx = Context::from_waker(waker);
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                local_auto.set();
+                let mut future = pin!(local_auto.wait());
+                let _ = black_box(future.as_mut().poll(&mut cx));
+            }
+            start.elapsed()
         });
     });
 
-    // event_listener — notify(1) stores signal, listen() + poll picks it up.
-    let el_event = ElEvent::<()>::new();
     let op = allocs.operation("async_poll_ready/event_listener/Event");
     group.bench_function("event_listener/Event", |b| {
-        let waker = noop_waker();
-        let mut cx = Context::from_waker(&waker);
-        b.iter(|| {
-            let _span = op.measure_thread();
-            el_event.notify(1);
-            let listener = el_event.listen();
-            let mut pinned = Box::pin(listener);
-            let _ = black_box(pinned.as_mut().poll(&mut cx));
+        let el_event = ElEvent::<()>::new();
+        let mut cx = Context::from_waker(waker);
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                el_event.notify(1);
+                let mut future = pin!(el_event.listen());
+                let _ = black_box(future.as_mut().poll(&mut cx));
+            }
+            start.elapsed()
         });
     });
 
@@ -292,149 +343,183 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
 /// signal round-trip, and async poll for both variants side by side.
 fn embedded_vs_boxed(c: &mut Criterion, allocs: &AllocSession) {
     let mut group = c.benchmark_group("embedded_vs_boxed");
+    let waker = Waker::noop();
 
     // --- creation ---
 
     let op = allocs.operation("embedded_vs_boxed/boxed_ManualResetEvent");
     group.bench_function("boxed/ManualResetEvent", |b| {
-        b.iter(|| {
-            let _span = op.measure_thread();
-            black_box(ManualResetEvent::boxed())
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(ManualResetEvent::boxed());
+            }
+            start.elapsed()
         });
     });
 
     let op = allocs.operation("embedded_vs_boxed/embedded_ManualResetEvent");
     group.bench_function("embedded/ManualResetEvent", |b| {
-        b.iter(|| {
-            let _span = op.measure_thread();
-            let container = EmbeddedManualResetEvent::new();
-            // SAFETY: container is not moved (stays on the stack) and
-            // outlives the handle within this iteration.
-            let pinned = unsafe { Pin::new_unchecked(&container) };
-            // SAFETY: The container outlives the handle (same scope).
-            let handle = unsafe { ManualResetEvent::embedded(pinned) };
-            black_box(handle);
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                let container = EmbeddedManualResetEvent::new();
+                let pinned = unsafe { Pin::new_unchecked(&container) };
+                let handle = unsafe { ManualResetEvent::embedded(pinned) };
+                black_box(handle);
+            }
+            start.elapsed()
         });
     });
 
     let op = allocs.operation("embedded_vs_boxed/boxed_AutoResetEvent");
     group.bench_function("boxed/AutoResetEvent", |b| {
-        b.iter(|| {
-            let _span = op.measure_thread();
-            black_box(AutoResetEvent::boxed())
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(AutoResetEvent::boxed());
+            }
+            start.elapsed()
         });
     });
 
     let op = allocs.operation("embedded_vs_boxed/embedded_AutoResetEvent");
     group.bench_function("embedded/AutoResetEvent", |b| {
-        b.iter(|| {
-            let _span = op.measure_thread();
-            let container = EmbeddedAutoResetEvent::new();
-            // SAFETY: container is not moved and outlives the handle.
-            let pinned = unsafe { Pin::new_unchecked(&container) };
-            // SAFETY: The container outlives the handle (same scope).
-            let handle = unsafe { AutoResetEvent::embedded(pinned) };
-            black_box(handle);
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                let container = EmbeddedAutoResetEvent::new();
+                let pinned = unsafe { Pin::new_unchecked(&container) };
+                let handle = unsafe { AutoResetEvent::embedded(pinned) };
+                black_box(handle);
+            }
+            start.elapsed()
         });
     });
 
     let op = allocs.operation("embedded_vs_boxed/boxed_LocalManualResetEvent");
     group.bench_function("boxed/LocalManualResetEvent", |b| {
-        b.iter(|| {
-            let _span = op.measure_thread();
-            black_box(LocalManualResetEvent::boxed())
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(LocalManualResetEvent::boxed());
+            }
+            start.elapsed()
         });
     });
 
     let op = allocs.operation("embedded_vs_boxed/embedded_LocalManualResetEvent");
     group.bench_function("embedded/LocalManualResetEvent", |b| {
-        b.iter(|| {
-            let _span = op.measure_thread();
-            let container = EmbeddedLocalManualResetEvent::new();
-            // SAFETY: container is not moved and outlives the handle.
-            let pinned = unsafe { Pin::new_unchecked(&container) };
-            // SAFETY: The container outlives the handle (same scope).
-            let handle = unsafe { LocalManualResetEvent::embedded(pinned) };
-            black_box(handle);
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                let container = EmbeddedLocalManualResetEvent::new();
+                let pinned = unsafe { Pin::new_unchecked(&container) };
+                let handle = unsafe { LocalManualResetEvent::embedded(pinned) };
+                black_box(handle);
+            }
+            start.elapsed()
         });
     });
 
     let op = allocs.operation("embedded_vs_boxed/boxed_LocalAutoResetEvent");
     group.bench_function("boxed/LocalAutoResetEvent", |b| {
-        b.iter(|| {
-            let _span = op.measure_thread();
-            black_box(LocalAutoResetEvent::boxed())
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(LocalAutoResetEvent::boxed());
+            }
+            start.elapsed()
         });
     });
 
     let op = allocs.operation("embedded_vs_boxed/embedded_LocalAutoResetEvent");
     group.bench_function("embedded/LocalAutoResetEvent", |b| {
-        b.iter(|| {
-            let _span = op.measure_thread();
-            let container = EmbeddedLocalAutoResetEvent::new();
-            // SAFETY: container is not moved and outlives the handle.
-            let pinned = unsafe { Pin::new_unchecked(&container) };
-            // SAFETY: The container outlives the handle (same scope).
-            let handle = unsafe { LocalAutoResetEvent::embedded(pinned) };
-            black_box(handle);
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                let container = EmbeddedLocalAutoResetEvent::new();
+                let pinned = unsafe { Pin::new_unchecked(&container) };
+                let handle = unsafe { LocalAutoResetEvent::embedded(pinned) };
+                black_box(handle);
+            }
+            start.elapsed()
         });
     });
 
     // --- signal round-trip (embedded) ---
 
-    let manual_container = Box::pin(EmbeddedManualResetEvent::new());
-    // SAFETY: The container outlives the benchmark closure.
-    let manual = unsafe { ManualResetEvent::embedded(manual_container.as_ref()) };
-    manual.set();
     let op = allocs.operation("embedded_vs_boxed/embedded_ManualResetEvent_signal");
     group.bench_function("embedded/ManualResetEvent/signal", |b| {
-        b.iter(|| {
-            let _span = op.measure_thread();
-            black_box(manual.try_acquire())
+        let manual_container = Box::pin(EmbeddedManualResetEvent::new());
+        let manual = unsafe { ManualResetEvent::embedded(manual_container.as_ref()) };
+        manual.set();
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(manual.try_acquire());
+            }
+            start.elapsed()
         });
     });
 
-    let auto_container = Box::pin(EmbeddedAutoResetEvent::new());
-    // SAFETY: The container outlives the benchmark closure.
-    let auto = unsafe { AutoResetEvent::embedded(auto_container.as_ref()) };
     let op = allocs.operation("embedded_vs_boxed/embedded_AutoResetEvent_signal");
     group.bench_function("embedded/AutoResetEvent/signal", |b| {
-        b.iter(|| {
-            let _span = op.measure_thread();
-            auto.set();
-            black_box(auto.try_acquire())
+        let auto_container = Box::pin(EmbeddedAutoResetEvent::new());
+        let auto = unsafe { AutoResetEvent::embedded(auto_container.as_ref()) };
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                auto.set();
+                black_box(auto.try_acquire());
+            }
+            start.elapsed()
         });
     });
 
     // --- async poll (embedded) ---
 
-    let manual_container = Box::pin(EmbeddedManualResetEvent::new());
-    // SAFETY: The container outlives the benchmark closure.
-    let manual = unsafe { ManualResetEvent::embedded(manual_container.as_ref()) };
-    manual.set();
     let op = allocs.operation("embedded_vs_boxed/embedded_ManualResetEvent_poll");
     group.bench_function("embedded/ManualResetEvent/poll", |b| {
-        let waker = noop_waker();
-        let mut cx = Context::from_waker(&waker);
-        b.iter(|| {
-            let _span = op.measure_thread();
-            let mut future = Box::pin(manual.wait());
-            let _ = black_box(future.as_mut().poll(&mut cx));
+        let manual_container = Box::pin(EmbeddedManualResetEvent::new());
+        let manual = unsafe { ManualResetEvent::embedded(manual_container.as_ref()) };
+        manual.set();
+        let mut cx = Context::from_waker(waker);
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                let mut future = pin!(manual.wait());
+                let _ = black_box(future.as_mut().poll(&mut cx));
+            }
+            start.elapsed()
         });
     });
 
-    let auto_container = Box::pin(EmbeddedAutoResetEvent::new());
-    // SAFETY: The container outlives the benchmark closure.
-    let auto = unsafe { AutoResetEvent::embedded(auto_container.as_ref()) };
     let op = allocs.operation("embedded_vs_boxed/embedded_AutoResetEvent_poll");
     group.bench_function("embedded/AutoResetEvent/poll", |b| {
-        let waker = noop_waker();
-        let mut cx = Context::from_waker(&waker);
-        b.iter(|| {
-            let _span = op.measure_thread();
-            auto.set();
-            let mut future = Box::pin(auto.wait());
-            let _ = black_box(future.as_mut().poll(&mut cx));
+        let auto_container = Box::pin(EmbeddedAutoResetEvent::new());
+        let auto = unsafe { AutoResetEvent::embedded(auto_container.as_ref()) };
+        let mut cx = Context::from_waker(waker);
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                auto.set();
+                let mut future = pin!(auto.wait());
+                let _ = black_box(future.as_mut().poll(&mut cx));
+            }
+            start.elapsed()
         });
     });
 
