@@ -516,6 +516,18 @@ const MANY_WAITER_COUNT: usize = 100;
 /// For manual-reset events, a single `set()` releases all waiters. For
 /// auto-reset events, each waiter requires its own `set()` call. All
 /// waiters are pre-registered before the measurement begins.
+///
+/// Futures are stored directly in a pre-allocated `Vec` and pinned
+/// in-place via `Pin::new_unchecked`. This avoids per-future heap
+/// allocations from `Box::pin()`. The pinning is sound because:
+///
+/// * Futures are moved into the `Vec` before any polling (no
+///   self-referential state yet).
+/// * After polling (which links them into the waiter list), they are
+///   never moved — the `Vec` does not reallocate because it has enough
+///   capacity from a previous iteration.
+/// * `clear()` drops futures in place, unlinking them from the waiter
+///   list.
 fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
     let mut group = c.benchmark_group("many_waiters");
     let waker = Waker::noop();
@@ -523,20 +535,20 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
     let op = allocs.operation("many_waiters/events/ManualResetEvent");
     group.bench_function("events/ManualResetEvent", |b| {
         let mut cx = Context::from_waker(waker);
+        let mut futures = Vec::new();
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
             for _ in 0..iters {
                 let event = ManualResetEvent::boxed();
-                let mut futures: Vec<_> = iter::repeat_with(|| Box::pin(event.wait()))
-                    .take(MANY_WAITER_COUNT)
-                    .collect();
+                futures.clear();
+                futures.extend(iter::repeat_with(|| event.wait()).take(MANY_WAITER_COUNT));
                 for f in &mut futures {
-                    let _ = f.as_mut().poll(&mut cx);
+                    let _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
                 }
                 event.set();
                 for f in &mut futures {
-                    let _ = black_box(f.as_mut().poll(&mut cx));
+                    let _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
                 }
             }
             start.elapsed()
@@ -546,20 +558,20 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
     let op = allocs.operation("many_waiters/events/LocalManualResetEvent");
     group.bench_function("events/LocalManualResetEvent", |b| {
         let mut cx = Context::from_waker(waker);
+        let mut futures = Vec::new();
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
             for _ in 0..iters {
                 let event = LocalManualResetEvent::boxed();
-                let mut futures: Vec<_> = iter::repeat_with(|| Box::pin(event.wait()))
-                    .take(MANY_WAITER_COUNT)
-                    .collect();
+                futures.clear();
+                futures.extend(iter::repeat_with(|| event.wait()).take(MANY_WAITER_COUNT));
                 for f in &mut futures {
-                    let _ = f.as_mut().poll(&mut cx);
+                    let _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
                 }
                 event.set();
                 for f in &mut futures {
-                    let _ = black_box(f.as_mut().poll(&mut cx));
+                    let _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
                 }
             }
             start.elapsed()
@@ -569,20 +581,20 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
     let op = allocs.operation("many_waiters/events/AutoResetEvent");
     group.bench_function("events/AutoResetEvent", |b| {
         let mut cx = Context::from_waker(waker);
+        let mut futures = Vec::new();
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
             for _ in 0..iters {
                 let event = AutoResetEvent::boxed();
-                let mut futures: Vec<_> = iter::repeat_with(|| Box::pin(event.wait()))
-                    .take(MANY_WAITER_COUNT)
-                    .collect();
+                futures.clear();
+                futures.extend(iter::repeat_with(|| event.wait()).take(MANY_WAITER_COUNT));
                 for f in &mut futures {
-                    let _ = f.as_mut().poll(&mut cx);
+                    let _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
                 }
                 for f in &mut futures {
                     event.set();
-                    let _ = black_box(f.as_mut().poll(&mut cx));
+                    let _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
                 }
             }
             start.elapsed()
@@ -592,20 +604,20 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
     let op = allocs.operation("many_waiters/events/LocalAutoResetEvent");
     group.bench_function("events/LocalAutoResetEvent", |b| {
         let mut cx = Context::from_waker(waker);
+        let mut futures = Vec::new();
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
             for _ in 0..iters {
                 let event = LocalAutoResetEvent::boxed();
-                let mut futures: Vec<_> = iter::repeat_with(|| Box::pin(event.wait()))
-                    .take(MANY_WAITER_COUNT)
-                    .collect();
+                futures.clear();
+                futures.extend(iter::repeat_with(|| event.wait()).take(MANY_WAITER_COUNT));
                 for f in &mut futures {
-                    let _ = f.as_mut().poll(&mut cx);
+                    let _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
                 }
                 for f in &mut futures {
                     event.set();
-                    let _ = black_box(f.as_mut().poll(&mut cx));
+                    let _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
                 }
             }
             start.elapsed()
@@ -617,20 +629,20 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
     let op = allocs.operation("many_waiters/event_listener/Event");
     group.bench_function("event_listener/Event", |b| {
         let mut cx = Context::from_waker(waker);
+        let mut futures = Vec::new();
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
             for _ in 0..iters {
                 let el_event = ElEvent::<()>::new();
-                let mut futures: Vec<_> = iter::repeat_with(|| Box::pin(el_event.listen()))
-                    .take(MANY_WAITER_COUNT)
-                    .collect();
+                futures.clear();
+                futures.extend(iter::repeat_with(|| el_event.listen()).take(MANY_WAITER_COUNT));
                 for f in &mut futures {
-                    let _ = f.as_mut().poll(&mut cx);
+                    let _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
                 }
                 el_event.notify(MANY_WAITER_COUNT);
                 for f in &mut futures {
-                    let _ = black_box(f.as_mut().poll(&mut cx));
+                    let _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
                 }
             }
             start.elapsed()
