@@ -1,21 +1,122 @@
+// Intrusive doubly-linked waiter queue shared by all event types.
+//
+// # Design
+//
+// This module provides a FIFO doubly-linked list of waiter nodes used to
+// park and wake futures that are waiting on an event. The list is intrusive:
+// each node is embedded directly inside the wait future (behind an
+// `UnsafeCell`) rather than being heap-allocated separately.
+//
+// # Ownership model
+//
+// The `WaiterList` does not own its nodes. Each `WaiterNode` is a field of
+// the wait future that created it (e.g. `AutoResetWaitFuture`). The node is
+// linked into the list when the future is first polled and unlinked either
+// by the future's `Drop` impl or (for auto-reset events) by `set()`.
+//
+// Nodes are pinned (`PhantomPinned`) because the list holds raw pointers to
+// them. The containing future must be pinned before polling, ensuring the
+// node address remains stable for its entire lifetime in the list.
+//
+// # Thread safety
+//
+// The list itself has no internal synchronization. Callers are responsible
+// for ensuring exclusive access:
+//
+// * **Sync event variants** (`ManualResetEvent`, `AutoResetEvent`): all node
+//   and list access is protected by the owning event's `Mutex`.
+// * **Local event variants** (`LocalManualResetEvent`, `LocalAutoResetEvent`):
+//   the containing types are `!Send`, so all access is confined to a single
+//   thread. No lock is needed.
+//
+// `WaiterList` has an explicit `unsafe impl Send` because it contains raw
+// pointers (`*mut WaiterNode`), which are `!Send` by default in Rust.
+// Sending is safe because sync variants wrap the list in a `Mutex` (so
+// pointers are never dereferenced without the lock), and local variants
+// never actually send the list across threads (their container is `!Send`).
+//
+// # Node lifecycle
+//
+// 1. **Creation**: a `WaiterNode` is created (unlinked, `notified = false`,
+//    `waker = None`) when the wait future is constructed via `event.wait()`.
+//
+// 2. **Registration**: on the first `poll()`, the future stores the caller's
+//    waker in the node and pushes it onto the list via `push_back()`. The
+//    future's `registered` flag is set to `true`.
+//
+// 3. **Re-poll**: if polled again before being woken, the future replaces
+//    the stored waker with the (possibly new) one from the context. The
+//    node stays in the list.
+//
+// 4. **Notification**: `set()` wakes one or more nodes depending on the
+//    event type:
+//    - **Auto-reset**: `pop_front()` removes one node, sets its `notified`
+//      flag to `true`, takes the waker, and calls `wake()`. The node is no
+//      longer in the list.
+//    - **Manual-reset**: walks the list via `head()`, takes each node's
+//      waker, and calls `wake()` — but nodes remain in the list. Futures
+//      remove themselves on their next poll (which sees `is_set == true`).
+//
+// 5. **Completion**: when the woken future is polled again, it sees either
+//    `notified == true` (auto-reset) or `is_set == true` (manual-reset),
+//    unlinks itself if still registered, and returns `Poll::Ready`.
+//
+// 6. **Cancellation (Drop)**: if a future is dropped while registered:
+//    - **Auto-reset, not notified**: simply removes the node from the list.
+//    - **Auto-reset, notified**: the signal must not be lost, so the drop
+//      impl forwards the notification to the next waiter (or re-sets the
+//      `is_set` flag if no waiters remain).
+//    - **Manual-reset**: simply removes the node from the list. No signal
+//      forwarding is needed because `is_set` remains `true`.
+//
+// # The `notified` flag
+//
+// Used only by auto-reset events. When `set()` pops a node, it sets
+// `notified = true` on that node before waking. This serves two purposes:
+//
+// * The future's `poll()` can detect that it was specifically chosen by
+//   `set()` and should return `Ready`, even though the event's `is_set`
+//   flag may already be `false` (consumed by another waiter).
+// * The future's `Drop` knows to forward the signal if the future is
+//   cancelled after being notified but before being polled to completion.
+//
+// # The `registered` flag
+//
+// Tracked on the future (not the node) to know whether the node is
+// currently in the list. This avoids scanning the list to check membership
+// and allows `Drop` to skip cleanup when the future was never polled or
+// has already been completed.
+//
+// # UnsafeCell for the node
+//
+// The node is wrapped in `UnsafeCell` inside the future because both
+// `poll()` (via `Pin::get_unchecked_mut`) and the event's `set()` (via
+// raw pointers from the list) need to access the same node. `UnsafeCell`
+// opts out of Rust's aliasing guarantees, making this sound as long as
+// accesses are serialized — which they are, by the Mutex or single-thread
+// invariant described above.
+//
+// # Re-entrancy in `set()`
+//
+// Waker `wake()` calls can be re-entrant: a waker may immediately poll
+// the future or drop it, causing further list mutations. The `set()`
+// implementations handle this by:
+//
+// * **Sync variants**: releasing the Mutex before calling `wake()`, then
+//   re-acquiring it and rescanning from the list head. No node pointer
+//   survives across the lock release.
+// * **Local variants**: accessing the list only through raw pointers (not
+//   `&mut WaiterList` references) and rescanning from head after each
+//   wake. No reference or stored `next` pointer survives across `wake()`.
+
 use std::marker::PhantomPinned;
 use std::task::Waker;
 
-// Intrusive doubly-linked list node for the waiter queue.
-//
-// Each node is embedded inside a wait future (behind UnsafeCell) and linked into
-// the event's waiter list when the future is first polled. All field accesses go
-// through raw pointers and are protected by the owning event's Mutex (sync
-// variants) or by the single-threaded invariant (local variants).
 pub(crate) struct WaiterNode {
     pub(crate) waker: Option<Waker>,
     pub(crate) next: *mut Self,
     pub(crate) prev: *mut Self,
-
-    // For AutoResetEvent: set to true when this specific waiter is chosen
-    // by set() to receive the token. ManualResetEvent does not use this flag.
     pub(crate) notified: bool,
-
     _pinned: PhantomPinned,
 }
 
@@ -31,11 +132,6 @@ impl WaiterNode {
     }
 }
 
-// FIFO doubly-linked intrusive list of waiter nodes.
-//
-// The list does not own the nodes — they live inside the wait futures. All
-// pointer dereferences require the caller to hold the owning event's lock
-// (or be on the single thread for local variants).
 pub(crate) struct WaiterList {
     head: *mut WaiterNode,
     tail: *mut WaiterNode,
@@ -199,12 +295,10 @@ impl WaiterList {
     }
 }
 
-// SAFETY: WaiterList contains raw pointers (*mut WaiterNode), which are
-// !Send by default in Rust. Sending a WaiterList to another thread is safe
-// because the pointers are only ever dereferenced under controlled access:
-// sync event variants protect access with the owning Mutex, while local
-// event variants restrict to a single thread (their containing types are
-// !Send, so the WaiterList is never actually sent).
+// SAFETY: See the module-level comment for the full thread safety rationale.
+// Raw pointers are `!Send` by default; this impl is sound because all pointer
+// dereferences are serialized by external synchronization (Mutex or
+// single-thread confinement).
 unsafe impl Send for WaiterList {}
 
 #[cfg(test)]
