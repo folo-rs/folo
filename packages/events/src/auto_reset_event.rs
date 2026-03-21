@@ -107,8 +107,10 @@ fn try_wait(mutex: &Mutex<State>) -> bool {
 ///
 /// # Safety
 ///
-/// The `node` must be pinned and must remain at the same memory address
-/// for the lifetime of the wait future.
+/// * The `node` must be pinned and must remain at the same memory address
+///   for the lifetime of the wait future.
+/// * The `mutex` must protect the waiter list that this node is (or will
+///   be) registered with.
 unsafe fn poll_wait(
     mutex: &Mutex<State>,
     node: &UnsafeCell<WaiterNode>,
@@ -162,7 +164,7 @@ unsafe fn poll_wait(
 ///
 /// # Safety
 ///
-/// Same requirements as `poll_wait`.
+/// Same requirements as [`poll_wait`].
 unsafe fn drop_wait(mutex: &Mutex<State>, node: &UnsafeCell<WaiterNode>, _registered: bool) {
     let node_ptr = node.get();
     let mut state = mutex.lock().expect(NEVER_POISONED);
@@ -246,7 +248,7 @@ impl AutoResetEvent {
     /// # futures::executor::block_on(async {
     /// let container = pin!(EmbeddedAutoResetEvent::new());
     ///
-    /// // SAFETY: The container outlives the handle.
+    /// // SAFETY: The container outlives the handle and all wait futures.
     /// let event = unsafe { AutoResetEvent::embedded(container.as_ref()) };
     /// let setter = event;
     ///
@@ -395,7 +397,8 @@ impl Future for AutoResetWaitFuture {
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
-        // SAFETY: The node is pinned via PhantomPinned.
+        // SAFETY: The node is pinned (PhantomPinned) and the state
+        // field is the mutex this node registers with.
         unsafe { poll_wait(&this.state, &this.node, &mut this.registered, waker) }
     }
 }
@@ -406,7 +409,8 @@ impl Drop for AutoResetWaitFuture {
             return;
         }
 
-        // SAFETY: The node is pinned via PhantomPinned.
+        // SAFETY: The node is pinned (PhantomPinned) and the state
+        // field is the mutex this node was registered with.
         unsafe { drop_wait(&self.state, &self.node, self.registered) }
     }
 }
@@ -448,7 +452,7 @@ impl fmt::Debug for AutoResetWaitFuture {
 /// # futures::executor::block_on(async {
 /// let container = pin!(EmbeddedAutoResetEvent::new());
 ///
-/// // SAFETY: The container outlives the handle.
+/// // SAFETY: The container outlives the handle and all wait futures.
 /// let event = unsafe { AutoResetEvent::embedded(container.as_ref()) };
 /// let setter = event;
 ///
@@ -579,7 +583,8 @@ impl Future for RawAutoResetWaitFuture {
         // SAFETY: The container outlives this future per the embedded()
         // contract.
         let state = unsafe { this.state.as_ref() };
-        // SAFETY: The node is pinned via PhantomPinned.
+        // SAFETY: The node is pinned (PhantomPinned) and the state
+        // is the mutex this node registers with.
         unsafe { poll_wait(state, &this.node, &mut this.registered, waker) }
     }
 }
@@ -593,7 +598,8 @@ impl Drop for RawAutoResetWaitFuture {
         // SAFETY: The container outlives this future per the embedded()
         // contract.
         let state = unsafe { self.state.as_ref() };
-        // SAFETY: The node is pinned via PhantomPinned.
+        // SAFETY: The node is pinned (PhantomPinned) and the state
+        // is the mutex this node was registered with.
         unsafe { drop_wait(state, &self.node, self.registered) }
     }
 }

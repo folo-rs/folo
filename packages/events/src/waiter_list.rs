@@ -156,7 +156,7 @@ impl WaiterList {
     ///
     /// * `node` must point to a valid, pinned `WaiterNode` that is not already
     ///   in any list.
-    /// * The caller must hold the owning event's lock.
+    /// * The caller must ensure exclusive access to the list.
     pub(crate) unsafe fn push_back(&mut self, node: *mut WaiterNode) {
         let node_mut = node;
 
@@ -188,7 +188,7 @@ impl WaiterList {
     ///
     /// * `node` must point to a valid, pinned `WaiterNode` that is currently
     ///   in this list.
-    /// * The caller must hold the owning event's lock.
+    /// * The caller must ensure exclusive access to the list.
     pub(crate) unsafe fn remove(&mut self, node: *mut WaiterNode) {
         // SAFETY: Caller guarantees node is valid and in the list.
         let prev = unsafe { (*node).prev };
@@ -231,7 +231,7 @@ impl WaiterList {
     ///
     /// # Safety
     ///
-    /// * The caller must hold the owning event's lock.
+    /// * The caller must ensure exclusive access to the list.
     /// * Any non-null node returned is valid and pinned.
     pub(crate) unsafe fn pop_front(&mut self) -> Option<*mut WaiterNode> {
         if self.head.is_null() {
@@ -274,7 +274,7 @@ impl WaiterList {
     ///
     /// # Safety
     ///
-    /// * The caller must hold the owning event's lock.
+    /// * The caller must ensure exclusive access to the list.
     /// * The callback must not add or remove nodes from the list.
     #[cfg(test)]
     pub(crate) unsafe fn for_each(&self, mut f: impl FnMut(*mut WaiterNode)) {

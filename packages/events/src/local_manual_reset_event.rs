@@ -126,7 +126,9 @@ impl Inner {
 
     /// # Safety
     ///
-    /// The `node` must be pinned and remain at a stable address.
+    /// * The `node` must be pinned and must remain at the same memory
+    ///   address for the lifetime of the wait future.
+    /// * The `node` must belong to a future created from the same event.
     unsafe fn poll_wait(
         &self,
         node: &UnsafeCell<WaiterNode>,
@@ -169,7 +171,7 @@ impl Inner {
 
     /// # Safety
     ///
-    /// Same as [`poll_wait`][Self::poll_wait].
+    /// Same requirements as [`poll_wait`][Self::poll_wait].
     unsafe fn drop_wait(&self, node: &UnsafeCell<WaiterNode>, registered: bool) {
         if registered {
             // SAFETY: Single-threaded, node is in the list.
@@ -229,7 +231,7 @@ impl LocalManualResetEvent {
     /// # futures::executor::block_on(async {
     /// let container = pin!(EmbeddedLocalManualResetEvent::new());
     ///
-    /// // SAFETY: The container outlives the handle.
+    /// // SAFETY: The container outlives the handle and all wait futures.
     /// let event = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
     /// let setter = event;
     ///
@@ -301,7 +303,8 @@ impl Future for LocalManualResetWaitFuture {
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<()> {
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
-        // SAFETY: The node is pinned via PhantomPinned.
+        // SAFETY: The node is pinned (PhantomPinned) and belongs to
+        // this event's waiter list.
         unsafe {
             this.inner
                 .poll_wait(&this.node, &mut this.registered, cx.waker().clone())
@@ -311,7 +314,8 @@ impl Future for LocalManualResetWaitFuture {
 
 impl Drop for LocalManualResetWaitFuture {
     fn drop(&mut self) {
-        // SAFETY: The node is pinned via PhantomPinned.
+        // SAFETY: The node is pinned (PhantomPinned) and belongs to
+        // this event's waiter list.
         unsafe {
             self.inner.drop_wait(&self.node, self.registered);
         }
@@ -358,7 +362,7 @@ impl fmt::Debug for LocalManualResetWaitFuture {
 /// # futures::executor::block_on(async {
 /// let container = pin!(EmbeddedLocalManualResetEvent::new());
 ///
-/// // SAFETY: The container outlives the handle.
+/// // SAFETY: The container outlives the handle and all wait futures.
 /// let event = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
 /// let waiter = event.clone();
 ///
@@ -491,9 +495,10 @@ impl Future for RawLocalManualResetWaitFuture {
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
         // SAFETY: The container outlives this future. Node is pinned
-        // via PhantomPinned.
+        // via PhantomPinned and belongs to this event's waiter list.
         let inner = unsafe { this.inner.as_ref() };
-        // SAFETY: The node is pinned via PhantomPinned.
+        // SAFETY: The node is pinned (PhantomPinned) and belongs to
+        // this event's waiter list.
         unsafe { inner.poll_wait(&this.node, &mut this.registered, cx.waker().clone()) }
     }
 }
@@ -501,9 +506,10 @@ impl Future for RawLocalManualResetWaitFuture {
 impl Drop for RawLocalManualResetWaitFuture {
     fn drop(&mut self) {
         // SAFETY: The container outlives this future. Node is pinned
-        // via PhantomPinned.
+        // via PhantomPinned and belongs to this event's waiter list.
         let inner = unsafe { self.inner.as_ref() };
-        // SAFETY: The node is pinned via PhantomPinned.
+        // SAFETY: The node is pinned (PhantomPinned) and belongs to
+        // this event's waiter list.
         unsafe {
             inner.drop_wait(&self.node, self.registered);
         }
