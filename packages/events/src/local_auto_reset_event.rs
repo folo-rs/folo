@@ -234,6 +234,10 @@ impl LocalAutoResetEvent {
     /// Creates a handle from an [`EmbeddedLocalAutoResetEvent`] container,
     /// avoiding heap allocation.
     ///
+    /// Calling this multiple times on the same container is safe and
+    /// returns handles that all operate on the same shared state, just
+    /// like copying or cloning a [`RawLocalAutoResetEvent`].
+    ///
     /// # Safety
     ///
     /// The caller must ensure that the [`EmbeddedLocalAutoResetEvent`]

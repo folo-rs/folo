@@ -200,6 +200,10 @@ impl ManualResetEvent {
     /// Creates a handle from an [`EmbeddedManualResetEvent`] container,
     /// avoiding heap allocation.
     ///
+    /// Calling this multiple times on the same container is safe and
+    /// returns handles that all operate on the same shared state, just
+    /// like copying or cloning a [`RawManualResetEvent`].
+    ///
     /// # Safety
     ///
     /// The caller must ensure that the [`EmbeddedManualResetEvent`] outlives
