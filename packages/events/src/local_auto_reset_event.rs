@@ -6,7 +6,7 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::rc::Rc;
-use std::task::{self, Poll};
+use std::task::{self, Poll, Waker};
 
 use crate::waiter_list::{WaiterList, WaiterNode};
 
@@ -64,6 +64,145 @@ struct Inner {
 impl UnwindSafe for Inner {}
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl RefUnwindSafe for Inner {}
+
+impl Inner {
+    // Mutating set() to a no-op causes wait futures to hang.
+    #[cfg_attr(test, mutants::skip)]
+    fn set(&self) {
+        // Capture the waker while borrowing the waiter list, then wake
+        // after the borrow ends to avoid aliased mutable access if
+        // the waker is re-entrant.
+        let waker = {
+            // SAFETY: Single-threaded access guaranteed by !Send.
+            let waiters = unsafe { &mut *self.waiters.get() };
+
+            // SAFETY: Single-threaded.
+            if let Some(node_ptr) = unsafe { waiters.pop_front() } {
+                // SAFETY: Single-threaded, node was just popped from
+                // our list.
+                unsafe {
+                    (*node_ptr).notified = true;
+                }
+
+                // SAFETY: Single-threaded.
+                unsafe { (*node_ptr).waker.take() }
+            } else {
+                self.is_set.set(true);
+                None
+            }
+        };
+
+        if let Some(w) = waker {
+            w.wake();
+        }
+    }
+
+    fn try_acquire(&self) -> bool {
+        if self.is_set.get() {
+            self.is_set.set(false);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// # Safety
+    ///
+    /// The `node` must be pinned and remain at a stable address.
+    unsafe fn poll_wait(
+        &self,
+        node: &UnsafeCell<WaiterNode>,
+        registered: &mut bool,
+        waker: Waker,
+    ) -> Poll<()> {
+        let node_ptr = node.get();
+
+        // SAFETY: Single-threaded access.
+        if unsafe { (*node_ptr).notified } {
+            *registered = false;
+            return Poll::Ready(());
+        }
+
+        if self.is_set.get() {
+            self.is_set.set(false);
+            if *registered {
+                // SAFETY: Single-threaded, node is in the list.
+                let waiters = unsafe { &mut *self.waiters.get() };
+                // SAFETY: Single-threaded, node is registered in
+                // this list.
+                unsafe {
+                    waiters.remove(node_ptr);
+                }
+                *registered = false;
+            }
+            return Poll::Ready(());
+        }
+
+        // SAFETY: Single-threaded access.
+        unsafe {
+            (*node_ptr).waker = Some(waker);
+        }
+
+        if !*registered {
+            // SAFETY: Single-threaded, node is pinned and not in
+            // any list.
+            let waiters = unsafe { &mut *self.waiters.get() };
+            // SAFETY: Single-threaded, node is not in any list.
+            unsafe {
+                waiters.push_back(node_ptr);
+            }
+            *registered = true;
+        }
+
+        Poll::Pending
+    }
+
+    /// # Safety
+    ///
+    /// Same as [`poll_wait`][Self::poll_wait].
+    unsafe fn drop_wait(&self, node: &UnsafeCell<WaiterNode>, registered: bool) {
+        if !registered {
+            return;
+        }
+
+        let node_ptr = node.get();
+
+        // SAFETY: Single-threaded access.
+        if unsafe { (*node_ptr).notified } {
+            // Cancelled after notification — forward to next waiter.
+            let waker = {
+                // SAFETY: Single-threaded.
+                let waiters = unsafe { &mut *self.waiters.get() };
+
+                // SAFETY: Single-threaded.
+                if let Some(next_node) = unsafe { waiters.pop_front() } {
+                    // SAFETY: Single-threaded.
+                    unsafe {
+                        (*next_node).notified = true;
+                    }
+                    // SAFETY: Single-threaded.
+                    unsafe { (*next_node).waker.take() }
+                } else {
+                    self.is_set.set(true);
+                    None
+                }
+            };
+
+            if let Some(w) = waker {
+                w.wake();
+            }
+        } else {
+            // Not notified — just remove from the list.
+            // SAFETY: Single-threaded, node is in the list.
+            let waiters = unsafe { &mut *self.waiters.get() };
+            // SAFETY: Single-threaded, node is registered in
+            // this list.
+            unsafe {
+                waiters.remove(node_ptr);
+            }
+        }
+    }
+}
 
 impl LocalAutoResetEvent {
     /// Creates a new event in the unset state.
@@ -130,32 +269,10 @@ impl LocalAutoResetEvent {
     /// to the set state.
     // Mutating set() to a no-op causes wait futures to hang.
     #[cfg_attr(test, mutants::skip)]
+    // Trivial forwarder.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn set(&self) {
-        // Capture the waker while borrowing the waiter list, then wake after
-        // the borrow ends to avoid aliased mutable access if the waker is
-        // re-entrant.
-        let waker = {
-            // SAFETY: Single-threaded access guaranteed by !Send.
-            let waiters = unsafe { &mut *self.inner.waiters.get() };
-
-            // SAFETY: Single-threaded.
-            if let Some(node_ptr) = unsafe { waiters.pop_front() } {
-                // SAFETY: Single-threaded, node was just popped.
-                unsafe {
-                    (*node_ptr).notified = true;
-                }
-
-                // SAFETY: Single-threaded.
-                unsafe { (*node_ptr).waker.take() }
-            } else {
-                self.inner.is_set.set(true);
-                None
-            }
-        };
-
-        if let Some(w) = waker {
-            w.wake();
-        }
+        self.inner.set();
     }
 
     /// Attempts to consume the signal without blocking.
@@ -163,13 +280,10 @@ impl LocalAutoResetEvent {
     /// Returns `true` if the event was set, transitioning it back to the
     /// unset state. Returns `false` if the event was not set.
     #[must_use]
+    // Trivial forwarder.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn try_acquire(&self) -> bool {
-        if self.inner.is_set.get() {
-            self.inner.is_set.set(false);
-            true
-        } else {
-            false
-        }
+        self.inner.try_acquire()
     }
 
     /// Returns a future that completes when the event is signaled.
@@ -209,91 +323,18 @@ impl Future for LocalAutoResetWaitFuture {
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<()> {
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
-        let node_ptr = this.node.get();
-
-        // SAFETY: Single-threaded access.
-        if unsafe { (*node_ptr).notified } {
-            this.registered = false;
-            return Poll::Ready(());
-        }
-
-        if this.inner.is_set.get() {
-            this.inner.is_set.set(false);
-            if this.registered {
-                // SAFETY: Single-threaded, node is in the list.
-                let waiters = unsafe { &mut *this.inner.waiters.get() };
-                // SAFETY: Single-threaded, node is registered in this list.
-                unsafe {
-                    waiters.remove(node_ptr);
-                }
-                this.registered = false;
-            }
-            return Poll::Ready(());
-        }
-
-        // SAFETY: Single-threaded access.
+        // SAFETY: The node is pinned via PhantomPinned.
         unsafe {
-            (*node_ptr).waker = Some(cx.waker().clone());
+            this.inner
+                .poll_wait(&this.node, &mut this.registered, cx.waker().clone())
         }
-
-        if !this.registered {
-            // SAFETY: Single-threaded, node is pinned and not in any list.
-            let waiters = unsafe { &mut *this.inner.waiters.get() };
-            // SAFETY: Single-threaded, node is not in any list.
-            unsafe {
-                waiters.push_back(node_ptr);
-            }
-            this.registered = true;
-        }
-
-        Poll::Pending
     }
 }
 
 impl Drop for LocalAutoResetWaitFuture {
     fn drop(&mut self) {
-        if !self.registered {
-            return;
-        }
-
-        let node_ptr = self.node.get();
-
-        // SAFETY: Single-threaded access.
-        if unsafe { (*node_ptr).notified } {
-            // Cancelled after notification — forward to next waiter.
-            // Capture the waker while borrowing the waiter list, then wake
-            // after the borrow ends to avoid aliased mutable access if the
-            // waker is re-entrant.
-            let waker = {
-                // SAFETY: Single-threaded.
-                let waiters = unsafe { &mut *self.inner.waiters.get() };
-
-                // SAFETY: Single-threaded.
-                if let Some(next_node) = unsafe { waiters.pop_front() } {
-                    // SAFETY: Single-threaded.
-                    unsafe {
-                        (*next_node).notified = true;
-                    }
-                    // SAFETY: Single-threaded.
-                    unsafe { (*next_node).waker.take() }
-                } else {
-                    self.inner.is_set.set(true);
-                    None
-                }
-            };
-
-            if let Some(w) = waker {
-                w.wake();
-            }
-        } else {
-            // Not notified — just remove from the list.
-            // SAFETY: Single-threaded, node is in the list.
-            let waiters = unsafe { &mut *self.inner.waiters.get() };
-            // SAFETY: Single-threaded, node is registered in this list.
-            unsafe {
-                waiters.remove(node_ptr);
-            }
-        }
+        // SAFETY: The node is pinned via PhantomPinned.
+        unsafe { self.inner.drop_wait(&self.node, self.registered) }
     }
 }
 
@@ -412,32 +453,10 @@ impl RawLocalAutoResetEvent {
     /// to the set state.
     // Mutating set() to a no-op causes wait futures to hang.
     #[cfg_attr(test, mutants::skip)]
+    // Trivial forwarder.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn set(&self) {
-        // Capture the waker while borrowing the waiter list, then wake after
-        // the borrow ends to avoid aliased mutable access if the waker is
-        // re-entrant.
-        let waker = {
-            // SAFETY: Single-threaded access guaranteed by !Send.
-            let waiters = unsafe { &mut *self.inner().waiters.get() };
-
-            // SAFETY: Single-threaded.
-            if let Some(node_ptr) = unsafe { waiters.pop_front() } {
-                // SAFETY: Single-threaded, node was just popped from our list.
-                unsafe {
-                    (*node_ptr).notified = true;
-                }
-
-                // SAFETY: Single-threaded.
-                unsafe { (*node_ptr).waker.take() }
-            } else {
-                self.inner().is_set.set(true);
-                None
-            }
-        };
-
-        if let Some(w) = waker {
-            w.wake();
-        }
+        self.inner().set();
     }
 
     /// Attempts to consume the signal without blocking.
@@ -445,13 +464,10 @@ impl RawLocalAutoResetEvent {
     /// Returns `true` if the event was set, transitioning it back to the
     /// unset state. Returns `false` if the event was not set.
     #[must_use]
+    // Trivial forwarder.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn try_acquire(&self) -> bool {
-        if self.inner().is_set.get() {
-            self.inner().is_set.set(false);
-            true
-        } else {
-            false
-        }
+        self.inner().try_acquire()
     }
 
     /// Returns a future that completes when the event is signaled.
@@ -494,96 +510,21 @@ impl Future for RawLocalAutoResetWaitFuture {
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<()> {
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
-        // SAFETY: The container outlives this future per the embedded()
-        // contract.
+        // SAFETY: The container outlives this future. Node is pinned via
+        // PhantomPinned.
         let inner = unsafe { this.inner.as_ref() };
-        let node_ptr = this.node.get();
-
-        // SAFETY: Single-threaded access.
-        if unsafe { (*node_ptr).notified } {
-            this.registered = false;
-            return Poll::Ready(());
-        }
-
-        if inner.is_set.get() {
-            inner.is_set.set(false);
-            if this.registered {
-                // SAFETY: Single-threaded, node is in the list.
-                let waiters = unsafe { &mut *inner.waiters.get() };
-                // SAFETY: Single-threaded, node is registered in this list.
-                unsafe {
-                    waiters.remove(node_ptr);
-                }
-                this.registered = false;
-            }
-            return Poll::Ready(());
-        }
-
-        // SAFETY: Single-threaded access.
-        unsafe {
-            (*node_ptr).waker = Some(cx.waker().clone());
-        }
-
-        if !this.registered {
-            // SAFETY: Single-threaded, node is pinned and not in any list.
-            let waiters = unsafe { &mut *inner.waiters.get() };
-            // SAFETY: Single-threaded, node is not in any list.
-            unsafe {
-                waiters.push_back(node_ptr);
-            }
-            this.registered = true;
-        }
-
-        Poll::Pending
+        // SAFETY: The node is pinned via PhantomPinned.
+        unsafe { inner.poll_wait(&this.node, &mut this.registered, cx.waker().clone()) }
     }
 }
 
 impl Drop for RawLocalAutoResetWaitFuture {
     fn drop(&mut self) {
-        if !self.registered {
-            return;
-        }
-
-        let node_ptr = self.node.get();
-        // SAFETY: The container outlives this future.
+        // SAFETY: The container outlives this future. Node is pinned via
+        // PhantomPinned.
         let inner = unsafe { self.inner.as_ref() };
-
-        // SAFETY: Single-threaded access.
-        if unsafe { (*node_ptr).notified } {
-            // Cancelled after notification — forward to next waiter.
-            // Capture the waker while borrowing the waiter list, then wake
-            // after the borrow ends to avoid aliased mutable access if the
-            // waker is re-entrant.
-            let waker = {
-                // SAFETY: Single-threaded.
-                let waiters = unsafe { &mut *inner.waiters.get() };
-
-                // SAFETY: Single-threaded.
-                if let Some(next_node) = unsafe { waiters.pop_front() } {
-                    // SAFETY: Single-threaded.
-                    unsafe {
-                        (*next_node).notified = true;
-                    }
-                    // SAFETY: Single-threaded.
-                    unsafe { (*next_node).waker.take() }
-                } else {
-                    inner.is_set.set(true);
-                    None
-                }
-            };
-
-            if let Some(w) = waker {
-                w.wake();
-            }
-        } else {
-            // Not notified — just remove from the list.
-            // SAFETY: Single-threaded, node is in the list.
-            let waiters = unsafe { &mut *inner.waiters.get() };
-            // SAFETY: Single-threaded, node is registered in this list.
-            unsafe {
-                waiters.remove(node_ptr);
-            }
-        }
+        // SAFETY: The node is pinned via PhantomPinned.
+        unsafe { inner.drop_wait(&self.node, self.registered) }
     }
 }
 

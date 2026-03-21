@@ -6,7 +6,7 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
-use std::task::{self, Poll};
+use std::task::{self, Poll, Waker};
 
 use crate::NEVER_POISONED;
 use crate::waiter_list::{WaiterList, WaiterNode};
@@ -67,6 +67,113 @@ struct GuardedState {
 // SAFETY: The raw pointers inside WaiterList are only dereferenced while the
 // Mutex is held, ensuring exclusive access.
 unsafe impl Send for GuardedState {}
+
+impl Inner {
+    // Mutating set() to a no-op causes wait futures to hang.
+    #[cfg_attr(test, mutants::skip)]
+    fn set(&self) {
+        let mut state = self.state.lock().expect(NEVER_POISONED);
+        if state.is_set {
+            return;
+        }
+        state.is_set = true;
+
+        // Wake all waiters using the rescan-from-head pattern.
+        // We drop the lock before waking each waiter to prevent deadlocks
+        // from re-entrant wakers. After waking, we re-acquire the lock and
+        // start scanning from the head again because nodes may have been
+        // removed during the unlock window.
+        loop {
+            let waker = {
+                let mut cursor = state.waiters.head();
+                loop {
+                    if cursor.is_null() {
+                        break None;
+                    }
+                    // SAFETY: We hold the lock.
+                    let w = unsafe { (*cursor).waker.take() };
+                    if w.is_some() {
+                        break w;
+                    }
+                    // SAFETY: We hold the lock.
+                    cursor = unsafe { (*cursor).next };
+                }
+            };
+
+            let Some(w) = waker else { break };
+            drop(state);
+            w.wake();
+            state = self.state.lock().expect(NEVER_POISONED);
+        }
+    }
+
+    fn reset(&self) {
+        let mut state = self.state.lock().expect(NEVER_POISONED);
+        state.is_set = false;
+    }
+
+    // Mutating is_set() to return false causes spin-loop tests to hang.
+    #[cfg_attr(test, mutants::skip)]
+    fn is_set(&self) -> bool {
+        let state = self.state.lock().expect(NEVER_POISONED);
+        state.is_set
+    }
+
+    fn try_acquire(&self) -> bool {
+        self.is_set()
+    }
+
+    /// # Safety
+    /// The `node` must be pinned and remain at a stable address.
+    unsafe fn poll_wait(
+        &self,
+        node: &UnsafeCell<WaiterNode>,
+        registered: &mut bool,
+        waker: Waker,
+    ) -> Poll<()> {
+        let mut state = self.state.lock().expect(NEVER_POISONED);
+        let node_ptr = node.get();
+
+        if state.is_set {
+            if *registered {
+                // SAFETY: We hold the lock and the node is in the list.
+                unsafe {
+                    state.waiters.remove(node_ptr);
+                }
+                *registered = false;
+            }
+            return Poll::Ready(());
+        }
+
+        // SAFETY: We hold the lock.
+        unsafe {
+            (*node_ptr).waker = Some(waker);
+        }
+
+        if !*registered {
+            // SAFETY: We hold the lock, node is pinned and not in any
+            // list.
+            unsafe {
+                state.waiters.push_back(node_ptr);
+            }
+            *registered = true;
+        }
+
+        Poll::Pending
+    }
+
+    /// # Safety
+    /// Same as `poll_wait`.
+    unsafe fn drop_wait(&self, node: &UnsafeCell<WaiterNode>, registered: bool) {
+        if registered {
+            let mut state = self.state.lock().expect(NEVER_POISONED);
+            // SAFETY: We hold the lock and the node is in the list.
+            unsafe {
+                state.waiters.remove(node.get());
+            }
+        }
+    }
+}
 
 impl ManualResetEvent {
     /// Creates a new event in the unset state.
@@ -159,42 +266,9 @@ impl ManualResetEvent {
     // Mutating set() to a no-op causes wait futures to hang. We cannot
     // detect "wait never completes" without real-time timeouts.
     #[cfg_attr(test, mutants::skip)]
+    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn set(&self) {
-        let mut state = self.inner.state.lock().expect(NEVER_POISONED);
-
-        if state.is_set {
-            return;
-        }
-
-        state.is_set = true;
-
-        // Wake all waiters. We must rescan from the head after each wake
-        // because releasing the lock allows concurrent futures to be
-        // dropped or polled, which removes nodes from the list and could
-        // invalidate any stored `next` pointer.
-        loop {
-            let waker = {
-                let mut cursor = state.waiters.head();
-                loop {
-                    if cursor.is_null() {
-                        break None;
-                    }
-                    // SAFETY: We hold the lock.
-                    let w = unsafe { (*cursor).waker.take() };
-                    if w.is_some() {
-                        break w;
-                    }
-                    // SAFETY: We hold the lock.
-                    cursor = unsafe { (*cursor).next };
-                }
-            };
-
-            let Some(w) = waker else { break };
-
-            drop(state);
-            w.wake();
-            state = self.inner.state.lock().expect(NEVER_POISONED);
-        }
+        self.inner.set();
     }
 
     /// Closes the gate. Future calls to [`wait()`][Self::wait] will block
@@ -202,9 +276,9 @@ impl ManualResetEvent {
     ///
     /// Awaiters that are already past the gate (i.e. whose futures have
     /// already returned [`Poll::Ready`]) are not affected.
+    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn reset(&self) {
-        let mut state = self.inner.state.lock().expect(NEVER_POISONED);
-        state.is_set = false;
+        self.inner.reset();
     }
 
     /// Returns `true` if the event is currently set.
@@ -215,9 +289,9 @@ impl ManualResetEvent {
     #[must_use]
     // Mutating is_set() to return false causes spin-loop tests to hang.
     #[cfg_attr(test, mutants::skip)]
+    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn is_set(&self) -> bool {
-        let state = self.inner.state.lock().expect(NEVER_POISONED);
-        state.is_set
+        self.inner.is_set()
     }
 
     /// Non-blocking check equivalent to [`is_set()`][Self::is_set].
@@ -226,8 +300,9 @@ impl ManualResetEvent {
     /// identically to `is_set()`. It is provided for API symmetry with
     /// [`AutoResetEvent::try_acquire()`][crate::AutoResetEvent::try_acquire].
     #[must_use]
+    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_acquire(&self) -> bool {
-        self.is_set()
+        self.inner.try_acquire()
     }
 
     /// Returns a future that completes when the event is set.
@@ -314,59 +389,21 @@ impl Future for ManualResetWaitFuture {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<()> {
+        let waker = cx.waker().clone();
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
-        let node_ptr = this.node.get();
-
-        // Clone the waker before acquiring the lock so a panicking clone
-        // implementation cannot poison the mutex.
-        let waker = cx.waker().clone();
-
-        let mut state = this.inner.state.lock().expect(NEVER_POISONED);
-
-        if state.is_set {
-            if this.registered {
-                // SAFETY: We hold the lock and the node is in the list.
-                unsafe {
-                    state.waiters.remove(node_ptr);
-                }
-                this.registered = false;
-            }
-            return Poll::Ready(());
-        }
-
-        // Event is not set — register or update the waker.
-        // SAFETY: We hold the lock, so exclusive access to the node is
-        // guaranteed.
+        // SAFETY: The node is pinned via PhantomPinned.
         unsafe {
-            (*node_ptr).waker = Some(waker);
+            this.inner
+                .poll_wait(&this.node, &mut this.registered, waker)
         }
-
-        if !this.registered {
-            // SAFETY: We hold the lock, the node is pinned (PhantomPinned +
-            // Pin<&mut Self>), and it is not in any list.
-            unsafe {
-                state.waiters.push_back(node_ptr);
-            }
-            this.registered = true;
-        }
-
-        Poll::Pending
     }
 }
 
 impl Drop for ManualResetWaitFuture {
     fn drop(&mut self) {
-        if self.registered {
-            let mut state = self.inner.state.lock().expect(NEVER_POISONED);
-
-            // SAFETY: We hold the lock. If registered is true, the node is
-            // still in the list (ManualResetEvent::set() does not remove
-            // nodes from the list).
-            unsafe {
-                state.waiters.remove(self.node.get());
-            }
-        }
+        // SAFETY: The node is pinned via PhantomPinned.
+        unsafe { self.inner.drop_wait(&self.node, self.registered) }
     }
 }
 
@@ -487,61 +524,31 @@ impl RawManualResetEvent {
     /// If the event is already set, this is a no-op.
     // Mutating set() to a no-op causes wait futures to hang.
     #[cfg_attr(test, mutants::skip)]
+    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn set(&self) {
-        let mut state = self.inner().state.lock().expect(NEVER_POISONED);
-
-        if state.is_set {
-            return;
-        }
-
-        state.is_set = true;
-
-        // Wake all waiters. Same rescan-from-head pattern as the boxed
-        // variant — see ManualResetEvent::set() for the detailed rationale.
-        loop {
-            let waker = {
-                let mut cursor = state.waiters.head();
-                loop {
-                    if cursor.is_null() {
-                        break None;
-                    }
-                    // SAFETY: We hold the lock.
-                    let w = unsafe { (*cursor).waker.take() };
-                    if w.is_some() {
-                        break w;
-                    }
-                    // SAFETY: We hold the lock.
-                    cursor = unsafe { (*cursor).next };
-                }
-            };
-
-            let Some(w) = waker else { break };
-
-            drop(state);
-            w.wake();
-            state = self.inner().state.lock().expect(NEVER_POISONED);
-        }
+        self.inner().set();
     }
 
     /// Closes the gate.
+    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn reset(&self) {
-        let mut state = self.inner().state.lock().expect(NEVER_POISONED);
-        state.is_set = false;
+        self.inner().reset();
     }
 
     /// Returns `true` if the event is currently set.
     #[must_use]
     // Mutating is_set() to return false causes spin-loop tests to hang.
     #[cfg_attr(test, mutants::skip)]
+    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn is_set(&self) -> bool {
-        let state = self.inner().state.lock().expect(NEVER_POISONED);
-        state.is_set
+        self.inner().is_set()
     }
 
     /// Non-blocking check equivalent to [`is_set()`][Self::is_set].
     #[must_use]
+    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_acquire(&self) -> bool {
-        self.is_set()
+        self.inner().try_acquire()
     }
 
     /// Returns a future that completes when the event is set.
@@ -578,59 +585,24 @@ impl Future for RawManualResetWaitFuture {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<()> {
+        let waker = cx.waker().clone();
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
-        // SAFETY: The container outlives this future per the embedded()
-        // contract.
+        // SAFETY: The container outlives this future. Node is pinned via
+        // PhantomPinned.
         let inner = unsafe { this.inner.as_ref() };
-        let node_ptr = this.node.get();
-
-        // Clone the waker before acquiring the lock so a panicking clone
-        // implementation cannot poison the mutex.
-        let waker = cx.waker().clone();
-
-        let mut state = inner.state.lock().expect(NEVER_POISONED);
-
-        if state.is_set {
-            if this.registered {
-                // SAFETY: We hold the lock and the node is in the list.
-                unsafe {
-                    state.waiters.remove(node_ptr);
-                }
-                this.registered = false;
-            }
-            return Poll::Ready(());
-        }
-
-        // SAFETY: We hold the lock.
-        unsafe {
-            (*node_ptr).waker = Some(waker);
-        }
-
-        if !this.registered {
-            // SAFETY: We hold the lock, node is pinned and not in any list.
-            unsafe {
-                state.waiters.push_back(node_ptr);
-            }
-            this.registered = true;
-        }
-
-        Poll::Pending
+        // SAFETY: The node is pinned via PhantomPinned.
+        unsafe { inner.poll_wait(&this.node, &mut this.registered, waker) }
     }
 }
 
 impl Drop for RawManualResetWaitFuture {
     fn drop(&mut self) {
-        if self.registered {
-            // SAFETY: The container outlives this future.
-            let inner = unsafe { self.inner.as_ref() };
-            let mut state = inner.state.lock().expect(NEVER_POISONED);
-
-            // SAFETY: We hold the lock and the node is in the list.
-            unsafe {
-                state.waiters.remove(self.node.get());
-            }
-        }
+        // SAFETY: The container outlives this future. Node is pinned via
+        // PhantomPinned.
+        let inner = unsafe { self.inner.as_ref() };
+        // SAFETY: The node is pinned via PhantomPinned.
+        unsafe { inner.drop_wait(&self.node, self.registered) }
     }
 }
 
