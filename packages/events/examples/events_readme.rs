@@ -1,19 +1,5 @@
-# Events
+//! Example for README.md demonstration of basic `events` usage.
 
-Async manual-reset and auto-reset events for multi-use signaling.
-
-This crate provides two families of event primitives:
-
-- **Manual-reset events** (`ManualResetEvent`, `LocalManualResetEvent`) — a gate that, once set, releases all current and future awaiters until explicitly reset.
-- **Auto-reset events** (`AutoResetEvent`, `LocalAutoResetEvent`) — a token dispenser that releases exactly one awaiter per `set()` call.
-
-Each family comes in a thread-safe variant (`Send + Sync`) and a single-threaded `Local` variant for improved efficiency when thread safety is not required.
-
-Events are lightweight cloneable handles. All clones from the same family share the same underlying state.
-
-## Example
-
-```rust
 use events::{AutoResetEvent, ManualResetEvent};
 
 #[tokio::main]
@@ -62,10 +48,3 @@ async fn manual_reset_gate() {
 
     println!("ManualResetEvent: gate opened, all waiters released.");
 }
-```
-
-## See also
-
-More details in the [package documentation](https://docs.rs/events/).
-
-This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for high-performance hardware-aware programming in Rust.
