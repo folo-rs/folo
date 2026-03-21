@@ -1,6 +1,6 @@
 [package]
 name = "events"
-description = "Superseded - use events_once instead"
+description = "Async manual-reset and auto-reset events for multi-use signaling"
 publish = true
 version = "0.5.3"
 
@@ -13,7 +13,32 @@ rust-version.workspace = true
 [package.metadata.docs.rs]
 all-features = true
 
+[package.metadata.cargo-udeps.ignore]
+development = [
+    "alloc_tracker",
+    "criterion",
+    "event-listener",
+    "futures",
+    "rsevents",
+    "tokio",
+]
+
 [dependencies]
+
+[dev-dependencies]
+alloc_tracker = { path = "../alloc_tracker" }
+criterion = { workspace = true }
+event-listener = { workspace = true }
+futures = { workspace = true }
+mutants = { workspace = true }
+rsevents = { workspace = true }
+static_assertions = { workspace = true }
+testing = { path = "../testing" }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+
+[[bench]]
+name = "events_bench"
+harness = false
 
 [lints]
 workspace = true
