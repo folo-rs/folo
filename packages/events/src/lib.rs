@@ -36,6 +36,9 @@
 //!
 //!     // Consumer waits for the gate to open.
 //!     event.wait().await;
+//!
+//!     // The gate stays open — it must be explicitly closed.
+//!     assert!(event.is_set());
 //! }
 //! ```
 //!

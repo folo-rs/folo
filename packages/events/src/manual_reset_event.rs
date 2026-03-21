@@ -40,6 +40,9 @@ use crate::waiter_list::{WaiterList, WaiterNode};
 ///     // Consumer waits for the gate to open.
 ///     event.wait().await;
 ///
+///     // The gate stays open — it must be explicitly closed.
+///     assert!(event.is_set());
+///
 ///     // Close the gate again.
 ///     event.reset();
 ///     assert!(!event.is_set());
@@ -148,6 +151,9 @@ impl ManualResetEvent {
     ///     });
     ///
     ///     event.wait().await;
+    ///
+    ///     // The gate stays open after waiting.
+    ///     assert!(event.is_set());
     /// }
     /// ```
     // Mutating set() to a no-op causes wait futures to hang. We cannot
@@ -254,6 +260,9 @@ impl ManualResetEvent {
     ///     // All waiters complete once the gate is opened.
     ///     w1.wait().await;
     ///     w2.wait().await;
+    ///
+    ///     // The gate stays open — it does not auto-reset.
+    ///     assert!(event.is_set());
     /// }
     /// ```
     #[must_use]
@@ -408,6 +417,9 @@ impl fmt::Debug for ManualResetWaitFuture {
 ///
 /// event.set();
 /// waiter.wait().await;
+///
+/// // The gate stays open — it must be explicitly closed.
+/// assert!(event.is_set());
 /// # });
 /// ```
 pub struct EmbeddedManualResetEvent {

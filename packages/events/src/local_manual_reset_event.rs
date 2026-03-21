@@ -41,6 +41,9 @@ use crate::waiter_list::{WaiterList, WaiterNode};
 ///             // Consumer waits for the gate to open.
 ///             event.wait().await;
 ///
+///             // The gate stays open — it must be explicitly closed.
+///             assert!(event.is_set());
+///
 ///             event.reset();
 ///             assert!(!event.is_set());
 ///         })
@@ -317,6 +320,9 @@ impl fmt::Debug for LocalManualResetWaitFuture {
 ///
 /// event.set();
 /// waiter.wait().await;
+///
+/// // The gate stays open — it must be explicitly closed.
+/// assert!(event.is_set());
 /// # });
 /// ```
 pub struct EmbeddedLocalManualResetEvent {
