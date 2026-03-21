@@ -1,9 +1,11 @@
 //! Benchmarks comparing `events` with `rsevents` and `event_listener`.
 //!
-//! Four benchmark groups measure different aspects of event overhead:
+//! Five benchmark groups measure different aspects of event overhead:
 //!
-//! * **creation** — how expensive is constructing an event object, comparing
-//!   boxed (heap-allocated) and embedded (zero-alloc) variants.
+//! * **`creation_boxed`** — how expensive is constructing a heap-allocated
+//!   event object (includes competitor crates that also heap-allocate).
+//! * **`creation_embedded`** — how expensive is constructing a zero-alloc
+//!   embedded event object (no competitors to compare against).
 //! * **`signal_round_trip`** — non-blocking set + acquire (sync fast path).
 //! * **`async_poll_ready`** — create a wait future, pin it, and poll it to
 //!   completion on a pre-set event (async fast path).
@@ -50,7 +52,8 @@ criterion_main!(benches);
 fn entrypoint(c: &mut Criterion) {
     let allocs = AllocSession::new();
 
-    creation(c, &allocs);
+    creation_boxed(c, &allocs);
+    creation_embedded(c, &allocs);
     signal_round_trip(c, &allocs);
     async_poll_ready(c, &allocs);
     many_waiters(c, &allocs);
@@ -58,12 +61,11 @@ fn entrypoint(c: &mut Criterion) {
     allocs.print_to_stdout();
 }
 
-/// Measures the overhead of creating an event object. Includes both boxed
-/// (heap-allocated) and embedded (zero-alloc) variants for our event types.
-fn creation(c: &mut Criterion, allocs: &AllocSession) {
-    let mut group = c.benchmark_group("creation");
+/// Measures the overhead of creating a heap-allocated event object.
+fn creation_boxed(c: &mut Criterion, allocs: &AllocSession) {
+    let mut group = c.benchmark_group("creation_boxed");
 
-    let op = allocs.operation("creation/events/ManualResetEvent");
+    let op = allocs.operation("creation_boxed/events/ManualResetEvent");
     group.bench_function("events/ManualResetEvent", |b| {
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
@@ -75,7 +77,7 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    let op = allocs.operation("creation/events/AutoResetEvent");
+    let op = allocs.operation("creation_boxed/events/AutoResetEvent");
     group.bench_function("events/AutoResetEvent", |b| {
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
@@ -87,7 +89,7 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    let op = allocs.operation("creation/events/LocalManualResetEvent");
+    let op = allocs.operation("creation_boxed/events/LocalManualResetEvent");
     group.bench_function("events/LocalManualResetEvent", |b| {
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
@@ -99,7 +101,7 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    let op = allocs.operation("creation/events/LocalAutoResetEvent");
+    let op = allocs.operation("creation_boxed/events/LocalAutoResetEvent");
     group.bench_function("events/LocalAutoResetEvent", |b| {
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
@@ -111,9 +113,52 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    // --- events (embedded) ---
+    // --- competitors (all heap-allocate) ---
 
-    let op = allocs.operation("creation/events/embedded/ManualResetEvent");
+    let op = allocs.operation("creation_boxed/rsevents/ManualResetEvent");
+    group.bench_function("rsevents/ManualResetEvent", |b| {
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(RsManualReset::new(EventState::Unset));
+            }
+            start.elapsed()
+        });
+    });
+
+    let op = allocs.operation("creation_boxed/rsevents/AutoResetEvent");
+    group.bench_function("rsevents/AutoResetEvent", |b| {
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(RsAutoReset::new(EventState::Unset));
+            }
+            start.elapsed()
+        });
+    });
+
+    let op = allocs.operation("creation_boxed/event_listener/Event");
+    group.bench_function("event_listener/Event", |b| {
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(ElEvent::<()>::new());
+            }
+            start.elapsed()
+        });
+    });
+
+    group.finish();
+}
+
+/// Measures the overhead of creating an embedded (zero-alloc) event object.
+fn creation_embedded(c: &mut Criterion, allocs: &AllocSession) {
+    let mut group = c.benchmark_group("creation_embedded");
+
+    let op = allocs.operation("creation_embedded/events/ManualResetEvent");
     group.bench_function("events/embedded/ManualResetEvent", |b| {
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
@@ -127,7 +172,7 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    let op = allocs.operation("creation/events/embedded/AutoResetEvent");
+    let op = allocs.operation("creation_embedded/events/AutoResetEvent");
     group.bench_function("events/embedded/AutoResetEvent", |b| {
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
@@ -141,7 +186,7 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    let op = allocs.operation("creation/events/embedded/LocalManualResetEvent");
+    let op = allocs.operation("creation_embedded/events/LocalManualResetEvent");
     group.bench_function("events/embedded/LocalManualResetEvent", |b| {
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
@@ -155,7 +200,7 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    let op = allocs.operation("creation/events/embedded/LocalAutoResetEvent");
+    let op = allocs.operation("creation_embedded/events/LocalAutoResetEvent");
     group.bench_function("events/embedded/LocalAutoResetEvent", |b| {
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
@@ -164,44 +209,6 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
                 let container = pin!(EmbeddedLocalAutoResetEvent::new());
                 let handle = unsafe { LocalAutoResetEvent::embedded(container.as_ref()) };
                 black_box(handle);
-            }
-            start.elapsed()
-        });
-    });
-
-    // --- competitors ---
-
-    let op = allocs.operation("creation/rsevents/ManualResetEvent");
-    group.bench_function("rsevents/ManualResetEvent", |b| {
-        b.iter_custom(|iters| {
-            let _span = op.measure_thread().iterations(iters);
-            let start = Instant::now();
-            for _ in 0..iters {
-                black_box(RsManualReset::new(EventState::Unset));
-            }
-            start.elapsed()
-        });
-    });
-
-    let op = allocs.operation("creation/rsevents/AutoResetEvent");
-    group.bench_function("rsevents/AutoResetEvent", |b| {
-        b.iter_custom(|iters| {
-            let _span = op.measure_thread().iterations(iters);
-            let start = Instant::now();
-            for _ in 0..iters {
-                black_box(RsAutoReset::new(EventState::Unset));
-            }
-            start.elapsed()
-        });
-    });
-
-    let op = allocs.operation("creation/event_listener/Event");
-    group.bench_function("event_listener/Event", |b| {
-        b.iter_custom(|iters| {
-            let _span = op.measure_thread().iterations(iters);
-            let start = Instant::now();
-            for _ in 0..iters {
-                black_box(ElEvent::<()>::new());
             }
             start.elapsed()
         });
