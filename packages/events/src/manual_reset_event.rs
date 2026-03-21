@@ -8,9 +8,8 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 use std::task::{self, Poll};
 
+use crate::NEVER_POISONED;
 use crate::waiter_list::{WaiterList, WaiterNode};
-
-const NEVER_POISONED: &str = "we never panic while holding this lock";
 
 /// Thread-safe async event that, once set, releases all current and future
 /// awaiters until explicitly reset.

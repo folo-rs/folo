@@ -71,6 +71,8 @@ mod waiter_list;
 #[cfg(test)]
 mod test_helpers;
 
+pub(crate) const NEVER_POISONED: &str = "we never panic while holding this lock";
+
 pub use auto_reset_event::{AutoResetEvent, EmbeddedAutoResetEvent, RawAutoResetEvent};
 pub use local_auto_reset_event::{
     EmbeddedLocalAutoResetEvent, LocalAutoResetEvent, RawLocalAutoResetEvent,
