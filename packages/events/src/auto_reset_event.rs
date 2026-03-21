@@ -42,7 +42,7 @@ use crate::waiter_list::{WaiterList, WaiterNode};
 ///     event.wait().await;
 ///
 ///     // Signal was consumed.
-///     assert!(!event.try_acquire());
+///     assert!(!event.try_wait());
 /// }
 /// ```
 #[derive(Clone)]
@@ -95,10 +95,10 @@ impl Inner {
         }
     }
 
-    // Mutating try_acquire() to return false causes spin-loop tests
+    // Mutating try_wait() to return false causes spin-loop tests
     // to hang.
     #[cfg_attr(test, mutants::skip)]
-    fn try_acquire(&self) -> bool {
+    fn try_wait(&self) -> bool {
         let mut state = self.state.lock().expect(NEVER_POISONED);
         if state.is_set {
             state.is_set = false;
@@ -222,7 +222,7 @@ impl AutoResetEvent {
     ///
     /// // Both handles operate on the same underlying event.
     /// clone.set();
-    /// assert!(event.try_acquire());
+    /// assert!(event.try_wait());
     /// ```
     #[must_use]
     pub fn boxed() -> Self {
@@ -274,7 +274,7 @@ impl AutoResetEvent {
     /// * If one or more tasks are waiting, a single waiter is released and
     ///   the event remains unset.
     /// * If no task is waiting, the event transitions to the set state so that
-    ///   the next [`wait()`][Self::wait] or [`try_acquire()`][Self::try_acquire]
+    ///   the next [`wait()`][Self::wait] or [`try_wait()`][Self::try_wait]
     ///   completes immediately.
     ///
     /// # Examples
@@ -312,20 +312,20 @@ impl AutoResetEvent {
     /// use events::AutoResetEvent;
     ///
     /// let event = AutoResetEvent::boxed();
-    /// assert!(!event.try_acquire());
+    /// assert!(!event.try_wait());
     ///
     /// event.set();
-    /// assert!(event.try_acquire());
+    /// assert!(event.try_wait());
     ///
     /// // Signal was consumed.
-    /// assert!(!event.try_acquire());
+    /// assert!(!event.try_wait());
     /// ```
     #[must_use]
-    // Mutating try_acquire() to return false causes spin-loop tests to hang.
+    // Mutating try_wait() to return false causes spin-loop tests to hang.
     #[cfg_attr(test, mutants::skip)]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
-    pub fn try_acquire(&self) -> bool {
-        self.inner.try_acquire()
+    pub fn try_wait(&self) -> bool {
+        self.inner.try_wait()
     }
 
     /// Returns a future that completes when the event is signaled.
@@ -542,11 +542,11 @@ impl RawAutoResetEvent {
     /// Returns `true` if the event was set, atomically transitioning it
     /// back to the unset state. Returns `false` if the event was not set.
     #[must_use]
-    // Mutating try_acquire() to return false causes spin-loop tests to hang.
+    // Mutating try_wait() to return false causes spin-loop tests to hang.
     #[cfg_attr(test, mutants::skip)]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
-    pub fn try_acquire(&self) -> bool {
-        self.inner().try_acquire()
+    pub fn try_wait(&self) -> bool {
+        self.inner().try_wait()
     }
 
     /// Returns a future that completes when the event is signaled.
@@ -664,16 +664,16 @@ mod tests {
     #[test]
     fn starts_unset() {
         let event = AutoResetEvent::boxed();
-        assert!(!event.try_acquire());
+        assert!(!event.try_wait());
     }
 
     #[test]
-    fn set_then_try_acquire() {
+    fn set_then_try_wait() {
         let event = AutoResetEvent::boxed();
         event.set();
-        assert!(event.try_acquire());
+        assert!(event.try_wait());
         // Signal consumed.
-        assert!(!event.try_acquire());
+        assert!(!event.try_wait());
     }
 
     #[test]
@@ -681,7 +681,7 @@ mod tests {
         let a = AutoResetEvent::boxed();
         let b = a.clone();
         a.set();
-        assert!(b.try_acquire());
+        assert!(b.try_wait());
     }
 
     #[test]
@@ -689,9 +689,9 @@ mod tests {
         let event = AutoResetEvent::boxed();
         event.set();
         event.set();
-        assert!(event.try_acquire());
+        assert!(event.try_wait());
         // Second set was a no-op (already set).
-        assert!(!event.try_acquire());
+        assert!(!event.try_wait());
     }
 
     // --- async tests ---
@@ -703,7 +703,7 @@ mod tests {
             event.set();
             event.wait().await;
             // Signal consumed.
-            assert!(!event.try_acquire());
+            assert!(!event.try_wait());
         });
     }
 
@@ -796,7 +796,7 @@ mod tests {
 
             barrier.wait();
 
-            while !event.try_acquire() {
+            while !event.try_wait() {
                 std::hint::spin_loop();
             }
 
@@ -822,7 +822,7 @@ mod tests {
 
                     // Each thread tries to acquire many times.
                     for _ in 0..200 {
-                        if e.try_acquire() {
+                        if e.try_wait() {
                             count.fetch_add(1, Ordering::Relaxed);
                         }
                         std::hint::spin_loop();
@@ -863,7 +863,7 @@ mod tests {
                     b.wait();
 
                     // Spin until we acquire a signal.
-                    while !e.try_acquire() {
+                    while !e.try_wait() {
                         std::hint::spin_loop();
                     }
 
@@ -906,7 +906,7 @@ mod tests {
 
             barrier.wait();
 
-            while !event.try_acquire() {
+            while !event.try_wait() {
                 std::hint::spin_loop();
             }
 
@@ -936,7 +936,7 @@ mod tests {
         let b = a;
 
         a.set();
-        assert!(b.try_acquire());
+        assert!(b.try_wait());
     }
 
     #[test]
@@ -946,9 +946,9 @@ mod tests {
         let event = unsafe { AutoResetEvent::embedded(container.as_ref()) };
 
         event.set();
-        assert!(event.try_acquire());
+        assert!(event.try_wait());
         // Signal was consumed.
-        assert!(!event.try_acquire());
+        assert!(!event.try_wait());
     }
 
     #[test]
@@ -985,7 +985,7 @@ mod tests {
         // exist, so Drop must re-set the event.
         drop(future);
 
-        assert!(event.try_acquire());
+        assert!(event.try_wait());
     }
 
     #[test]
@@ -1066,7 +1066,7 @@ mod tests {
 
         // Event should still work.
         event.set();
-        assert!(event.try_acquire());
+        assert!(event.try_wait());
     }
 
     #[test]
@@ -1084,7 +1084,7 @@ mod tests {
         drop(future);
 
         // Signal should be preserved.
-        assert!(event.try_acquire());
+        assert!(event.try_wait());
     }
 
     #[test]
@@ -1154,7 +1154,7 @@ mod tests {
         assert!(future.as_mut().poll(&mut cx).is_ready());
 
         // The signal was consumed.
-        assert!(!event.try_acquire());
+        assert!(!event.try_wait());
     }
 
     #[test]
@@ -1178,7 +1178,7 @@ mod tests {
 
         assert!(future.as_mut().poll(&mut cx).is_ready());
 
-        assert!(!event.try_acquire());
+        assert!(!event.try_wait());
     }
 
     const WAITER_COUNT: usize = 100;
@@ -1205,7 +1205,7 @@ mod tests {
         }
 
         // No leftover signal.
-        assert!(!event.try_acquire());
+        assert!(!event.try_wait());
     }
 
     #[test]
@@ -1229,7 +1229,7 @@ mod tests {
             assert!(f.as_mut().poll(&mut cx).is_ready());
         }
 
-        assert!(!event.try_acquire());
+        assert!(!event.try_wait());
     }
 
     #[test]
@@ -1241,7 +1241,7 @@ mod tests {
         }
 
         // Only one signal should be latched.
-        assert!(event.try_acquire());
-        assert!(!event.try_acquire());
+        assert!(event.try_wait());
+        assert!(!event.try_wait());
     }
 }

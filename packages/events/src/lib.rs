@@ -38,7 +38,7 @@
 //!     event.wait().await;
 //!
 //!     // The gate stays open — it must be explicitly closed.
-//!     assert!(event.is_set());
+//!     assert!(event.try_wait());
 //! }
 //! ```
 //!
@@ -61,7 +61,7 @@
 //!     event.wait().await;
 //!
 //!     // Signal was consumed.
-//!     assert!(!event.try_acquire());
+//!     assert!(!event.try_wait());
 //! }
 //! ```
 

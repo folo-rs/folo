@@ -228,7 +228,7 @@ fn signal_round_trip(c: &mut Criterion, allocs: &AllocSession) {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
             for _ in 0..iters {
-                black_box(manual.try_acquire());
+                black_box(manual.try_wait());
             }
             start.elapsed()
         });
@@ -242,7 +242,7 @@ fn signal_round_trip(c: &mut Criterion, allocs: &AllocSession) {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
             for _ in 0..iters {
-                black_box(local_manual.try_acquire());
+                black_box(local_manual.try_wait());
             }
             start.elapsed()
         });
@@ -256,7 +256,7 @@ fn signal_round_trip(c: &mut Criterion, allocs: &AllocSession) {
             let start = Instant::now();
             for _ in 0..iters {
                 auto.set();
-                black_box(auto.try_acquire());
+                black_box(auto.try_wait());
             }
             start.elapsed()
         });
@@ -270,7 +270,7 @@ fn signal_round_trip(c: &mut Criterion, allocs: &AllocSession) {
             let start = Instant::now();
             for _ in 0..iters {
                 local_auto.set();
-                black_box(local_auto.try_acquire());
+                black_box(local_auto.try_wait());
             }
             start.elapsed()
         });
@@ -287,7 +287,7 @@ fn signal_round_trip(c: &mut Criterion, allocs: &AllocSession) {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
             for _ in 0..iters {
-                black_box(manual.try_acquire());
+                black_box(manual.try_wait());
             }
             start.elapsed()
         });
@@ -302,7 +302,7 @@ fn signal_round_trip(c: &mut Criterion, allocs: &AllocSession) {
             let start = Instant::now();
             for _ in 0..iters {
                 auto.set();
-                black_box(auto.try_acquire());
+                black_box(auto.try_wait());
             }
             start.elapsed()
         });

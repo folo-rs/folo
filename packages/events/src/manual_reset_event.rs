@@ -42,11 +42,11 @@ use crate::waiter_list::{WaiterList, WaiterNode};
 ///     event.wait().await;
 ///
 ///     // The gate stays open — it must be explicitly closed.
-///     assert!(event.is_set());
+///     assert!(event.try_wait());
 ///
 ///     // Close the gate again.
 ///     event.reset();
-///     assert!(!event.is_set());
+///     assert!(!event.try_wait());
 /// }
 /// ```
 #[derive(Clone)]
@@ -112,15 +112,11 @@ impl Inner {
         state.is_set = false;
     }
 
-    // Mutating is_set() to return false causes spin-loop tests to hang.
+    // Mutating try_wait() to return false causes spin-loop tests to hang.
     #[cfg_attr(test, mutants::skip)]
-    fn is_set(&self) -> bool {
+    fn try_wait(&self) -> bool {
         let state = self.state.lock().expect(NEVER_POISONED);
         state.is_set
-    }
-
-    fn try_acquire(&self) -> bool {
-        self.is_set()
     }
 
     /// # Safety
@@ -191,7 +187,7 @@ impl ManualResetEvent {
     ///
     /// // Both handles operate on the same underlying event.
     /// clone.set();
-    /// assert!(event.is_set());
+    /// assert!(event.try_wait());
     /// ```
     #[must_use]
     pub fn boxed() -> Self {
@@ -260,7 +256,7 @@ impl ManualResetEvent {
     ///     event.wait().await;
     ///
     ///     // The gate stays open after waiting.
-    ///     assert!(event.is_set());
+    ///     assert!(event.try_wait());
     /// }
     /// ```
     // Mutating set() to a no-op causes wait futures to hang. We cannot
@@ -287,22 +283,11 @@ impl ManualResetEvent {
     /// returned value is immediately stale. Use this for diagnostics or
     /// best-effort checks, not for synchronization.
     #[must_use]
-    // Mutating is_set() to return false causes spin-loop tests to hang.
+    // Mutating try_wait() to return false causes spin-loop tests to hang.
     #[cfg_attr(test, mutants::skip)]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
-    pub fn is_set(&self) -> bool {
-        self.inner.is_set()
-    }
-
-    /// Non-blocking check equivalent to [`is_set()`][Self::is_set].
-    ///
-    /// For `ManualResetEvent` the signal is never consumed, so this behaves
-    /// identically to `is_set()`. It is provided for API symmetry with
-    /// [`AutoResetEvent::try_acquire()`][crate::AutoResetEvent::try_acquire].
-    #[must_use]
-    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
-    pub fn try_acquire(&self) -> bool {
-        self.inner.try_acquire()
+    pub fn try_wait(&self) -> bool {
+        self.inner.try_wait()
     }
 
     /// Returns a future that completes when the event is set.
@@ -337,7 +322,7 @@ impl ManualResetEvent {
     ///     w2.wait().await;
     ///
     ///     // The gate stays open — it does not auto-reset.
-    ///     assert!(event.is_set());
+    ///     assert!(event.try_wait());
     /// }
     /// ```
     #[must_use]
@@ -410,7 +395,7 @@ impl Drop for ManualResetWaitFuture {
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract for Debug format.
 impl fmt::Debug for ManualResetEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let is_set = self.is_set();
+        let is_set = self.try_wait();
         f.debug_struct("ManualResetEvent")
             .field("is_set", &is_set)
             .finish()
@@ -455,7 +440,7 @@ impl fmt::Debug for ManualResetWaitFuture {
 /// waiter.wait().await;
 ///
 /// // The gate stays open — it must be explicitly closed.
-/// assert!(event.is_set());
+/// assert!(event.try_wait());
 /// # });
 /// ```
 pub struct EmbeddedManualResetEvent {
@@ -537,18 +522,11 @@ impl RawManualResetEvent {
 
     /// Returns `true` if the event is currently set.
     #[must_use]
-    // Mutating is_set() to return false causes spin-loop tests to hang.
+    // Mutating try_wait() to return false causes spin-loop tests to hang.
     #[cfg_attr(test, mutants::skip)]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
-    pub fn is_set(&self) -> bool {
-        self.inner().is_set()
-    }
-
-    /// Non-blocking check equivalent to [`is_set()`][Self::is_set].
-    #[must_use]
-    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
-    pub fn try_acquire(&self) -> bool {
-        self.inner().try_acquire()
+    pub fn try_wait(&self) -> bool {
+        self.inner().try_wait()
     }
 
     /// Returns a future that completes when the event is set.
@@ -617,7 +595,7 @@ impl fmt::Debug for EmbeddedManualResetEvent {
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for RawManualResetEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let is_set = self.is_set();
+        let is_set = self.try_wait();
         f.debug_struct("RawManualResetEvent")
             .field("is_set", &is_set)
             .finish()
@@ -661,15 +639,15 @@ mod tests {
     #[test]
     fn starts_unset() {
         let event = ManualResetEvent::boxed();
-        assert!(!event.is_set());
-        assert!(!event.try_acquire());
+        assert!(!event.try_wait());
+        assert!(!event.try_wait());
     }
 
     #[test]
     fn set_makes_is_set_true() {
         let event = ManualResetEvent::boxed();
         event.set();
-        assert!(event.is_set());
+        assert!(event.try_wait());
     }
 
     #[test]
@@ -677,7 +655,7 @@ mod tests {
         let event = ManualResetEvent::boxed();
         event.set();
         event.reset();
-        assert!(!event.is_set());
+        assert!(!event.try_wait());
     }
 
     #[test]
@@ -685,7 +663,7 @@ mod tests {
         let a = ManualResetEvent::boxed();
         let b = a.clone();
         a.set();
-        assert!(b.is_set());
+        assert!(b.try_wait());
     }
 
     // --- async tests ---
@@ -801,7 +779,7 @@ mod tests {
 
             // Spin until set. This is acceptable in tests — the other thread
             // will set the event promptly after the barrier.
-            while !event.is_set() {
+            while !event.try_wait() {
                 std::hint::spin_loop();
             }
 
@@ -825,7 +803,7 @@ mod tests {
                 thread::spawn(move || {
                     b.wait();
 
-                    while !e.is_set() {
+                    while !e.try_wait() {
                         std::hint::spin_loop();
                     }
 
@@ -897,7 +875,7 @@ mod tests {
 
             barrier.wait();
 
-            while !event.is_set() {
+            while !event.try_wait() {
                 std::hint::spin_loop();
             }
 
@@ -928,7 +906,7 @@ mod tests {
             let b = a;
 
             a.set();
-            assert!(b.is_set());
+            assert!(b.try_wait());
             b.wait().await;
         });
     }
@@ -941,7 +919,7 @@ mod tests {
 
         event.set();
         event.reset();
-        assert!(!event.is_set());
+        assert!(!event.try_wait());
     }
 
     #[test]
@@ -1027,27 +1005,27 @@ mod tests {
     }
 
     #[test]
-    fn try_acquire_returns_true_when_set() {
+    fn try_wait_returns_true_when_set() {
         let event = ManualResetEvent::boxed();
         event.set();
-        assert!(event.try_acquire());
+        assert!(event.try_wait());
     }
 
     #[test]
-    fn embedded_try_acquire_returns_false_when_unset() {
+    fn embedded_try_wait_returns_false_when_unset() {
         let container = Box::pin(EmbeddedManualResetEvent::new());
         // SAFETY: The container outlives the handle.
         let event = unsafe { ManualResetEvent::embedded(container.as_ref()) };
-        assert!(!event.try_acquire());
+        assert!(!event.try_wait());
     }
 
     #[test]
-    fn embedded_try_acquire_returns_true_when_set() {
+    fn embedded_try_wait_returns_true_when_set() {
         let container = Box::pin(EmbeddedManualResetEvent::new());
         // SAFETY: The container outlives the handle.
         let event = unsafe { ManualResetEvent::embedded(container.as_ref()) };
         event.set();
-        assert!(event.try_acquire());
+        assert!(event.try_wait());
     }
 
     #[test]
@@ -1134,11 +1112,11 @@ mod tests {
     fn set_when_already_set_is_noop() {
         let event = ManualResetEvent::boxed();
         event.set();
-        assert!(event.is_set());
+        assert!(event.try_wait());
 
         // Second set() should be a no-op (early return).
         event.set();
-        assert!(event.is_set());
+        assert!(event.try_wait());
     }
 
     #[test]
@@ -1149,9 +1127,9 @@ mod tests {
         let event = unsafe { ManualResetEvent::embedded(container.as_ref()) };
 
         event.set();
-        assert!(event.is_set());
+        assert!(event.try_wait());
 
         event.set();
-        assert!(event.is_set());
+        assert!(event.try_wait());
     }
 }

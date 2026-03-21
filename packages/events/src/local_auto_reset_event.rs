@@ -43,7 +43,7 @@ use crate::waiter_list::{WaiterList, WaiterNode};
 ///             event.wait().await;
 ///
 ///             // Signal was consumed.
-///             assert!(!event.try_acquire());
+///             assert!(!event.try_wait());
 ///         })
 ///         .await;
 /// }
@@ -97,7 +97,7 @@ impl Inner {
         }
     }
 
-    fn try_acquire(&self) -> bool {
+    fn try_wait(&self) -> bool {
         if self.is_set.get() {
             self.is_set.set(false);
             true
@@ -216,7 +216,7 @@ impl LocalAutoResetEvent {
     /// use events::LocalAutoResetEvent;
     ///
     /// let event = LocalAutoResetEvent::boxed();
-    /// assert!(!event.try_acquire());
+    /// assert!(!event.try_wait());
     /// ```
     #[must_use]
     pub fn boxed() -> Self {
@@ -282,8 +282,8 @@ impl LocalAutoResetEvent {
     #[must_use]
     // Trivial forwarder.
     #[cfg_attr(coverage_nightly, coverage(off))]
-    pub fn try_acquire(&self) -> bool {
-        self.inner.try_acquire()
+    pub fn try_wait(&self) -> bool {
+        self.inner.try_wait()
     }
 
     /// Returns a future that completes when the event is signaled.
@@ -466,8 +466,8 @@ impl RawLocalAutoResetEvent {
     #[must_use]
     // Trivial forwarder.
     #[cfg_attr(coverage_nightly, coverage(off))]
-    pub fn try_acquire(&self) -> bool {
-        self.inner().try_acquire()
+    pub fn try_wait(&self) -> bool {
+        self.inner().try_wait()
     }
 
     /// Returns a future that completes when the event is signaled.
@@ -578,15 +578,15 @@ mod tests {
     #[test]
     fn starts_unset() {
         let event = LocalAutoResetEvent::boxed();
-        assert!(!event.try_acquire());
+        assert!(!event.try_wait());
     }
 
     #[test]
-    fn set_then_try_acquire() {
+    fn set_then_try_wait() {
         let event = LocalAutoResetEvent::boxed();
         event.set();
-        assert!(event.try_acquire());
-        assert!(!event.try_acquire());
+        assert!(event.try_wait());
+        assert!(!event.try_wait());
     }
 
     #[test]
@@ -594,7 +594,7 @@ mod tests {
         let a = LocalAutoResetEvent::boxed();
         let b = a.clone();
         a.set();
-        assert!(b.try_acquire());
+        assert!(b.try_wait());
     }
 
     #[test]
@@ -603,7 +603,7 @@ mod tests {
             let event = LocalAutoResetEvent::boxed();
             event.set();
             event.wait().await;
-            assert!(!event.try_acquire());
+            assert!(!event.try_wait());
         });
     }
 
@@ -653,7 +653,7 @@ mod tests {
         let b = a;
 
         a.set();
-        assert!(b.try_acquire());
+        assert!(b.try_wait());
     }
 
     #[test]
@@ -663,8 +663,8 @@ mod tests {
         let event = unsafe { LocalAutoResetEvent::embedded(container.as_ref()) };
 
         event.set();
-        assert!(event.try_acquire());
-        assert!(!event.try_acquire());
+        assert!(event.try_wait());
+        assert!(!event.try_wait());
     }
 
     #[test]
@@ -712,7 +712,7 @@ mod tests {
         drop(future);
 
         event.set();
-        assert!(event.try_acquire());
+        assert!(event.try_wait());
     }
 
     #[test]
@@ -727,7 +727,7 @@ mod tests {
         drop(future);
 
         // Signal should be preserved.
-        assert!(event.try_acquire());
+        assert!(event.try_wait());
     }
 
     #[test]
@@ -776,7 +776,7 @@ mod tests {
         drop(future);
 
         event.set();
-        assert!(event.try_acquire());
+        assert!(event.try_wait());
     }
 
     #[test]
@@ -793,7 +793,7 @@ mod tests {
         event.set();
         drop(future);
 
-        assert!(event.try_acquire());
+        assert!(event.try_wait());
     }
 
     #[test]
@@ -984,7 +984,7 @@ mod tests {
         assert!(future.as_mut().poll(&mut cx).is_ready());
 
         // The signal was consumed.
-        assert!(!event.try_acquire());
+        assert!(!event.try_wait());
     }
 
     #[test]
@@ -1001,7 +1001,7 @@ mod tests {
 
         assert!(future.as_mut().poll(&mut cx).is_ready());
 
-        assert!(!event.try_acquire());
+        assert!(!event.try_wait());
     }
 
     const WAITER_COUNT: usize = 100;
@@ -1028,7 +1028,7 @@ mod tests {
         }
 
         // No leftover signal.
-        assert!(!event.try_acquire());
+        assert!(!event.try_wait());
     }
 
     #[test]
@@ -1052,7 +1052,7 @@ mod tests {
             assert!(f.as_mut().poll(&mut cx).is_ready());
         }
 
-        assert!(!event.try_acquire());
+        assert!(!event.try_wait());
     }
 
     #[test]
@@ -1064,7 +1064,7 @@ mod tests {
         }
 
         // Only one signal should be latched.
-        assert!(event.try_acquire());
-        assert!(!event.try_acquire());
+        assert!(event.try_wait());
+        assert!(!event.try_wait());
     }
 }

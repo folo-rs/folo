@@ -43,10 +43,10 @@ use crate::waiter_list::{WaiterList, WaiterNode};
 ///             event.wait().await;
 ///
 ///             // The gate stays open — it must be explicitly closed.
-///             assert!(event.is_set());
+///             assert!(event.try_wait());
 ///
 ///             event.reset();
-///             assert!(!event.is_set());
+///             assert!(!event.try_wait());
 ///         })
 ///         .await;
 /// }
@@ -120,12 +120,8 @@ impl Inner {
         self.is_set.set(false);
     }
 
-    fn is_set(&self) -> bool {
+    fn try_wait(&self) -> bool {
         self.is_set.get()
-    }
-
-    fn try_acquire(&self) -> bool {
-        self.is_set()
     }
 
     /// # Safety
@@ -201,7 +197,7 @@ impl LocalManualResetEvent {
     /// let clone = event.clone();
     ///
     /// clone.set();
-    /// assert!(event.is_set());
+    /// assert!(event.try_wait());
     /// ```
     #[must_use]
     pub fn boxed() -> Self {
@@ -269,16 +265,8 @@ impl LocalManualResetEvent {
     // Trivial forwarder.
     #[cfg_attr(coverage_nightly, coverage(off))]
     #[must_use]
-    pub fn is_set(&self) -> bool {
-        self.inner.is_set()
-    }
-
-    /// Non-blocking check equivalent to [`is_set()`][Self::is_set].
-    // Trivial forwarder.
-    #[cfg_attr(coverage_nightly, coverage(off))]
-    #[must_use]
-    pub fn try_acquire(&self) -> bool {
-        self.inner.try_acquire()
+    pub fn try_wait(&self) -> bool {
+        self.inner.try_wait()
     }
 
     /// Returns a future that completes when the event is set.
@@ -378,7 +366,7 @@ impl fmt::Debug for LocalManualResetWaitFuture {
 /// waiter.wait().await;
 ///
 /// // The gate stays open — it must be explicitly closed.
-/// assert!(event.is_set());
+/// assert!(event.try_wait());
 /// # });
 /// ```
 pub struct EmbeddedLocalManualResetEvent {
@@ -463,16 +451,8 @@ impl RawLocalManualResetEvent {
     // Trivial forwarder.
     #[cfg_attr(coverage_nightly, coverage(off))]
     #[must_use]
-    pub fn is_set(&self) -> bool {
-        self.inner().is_set()
-    }
-
-    /// Non-blocking check equivalent to [`is_set()`][Self::is_set].
-    // Trivial forwarder.
-    #[cfg_attr(coverage_nightly, coverage(off))]
-    #[must_use]
-    pub fn try_acquire(&self) -> bool {
-        self.inner().try_acquire()
+    pub fn try_wait(&self) -> bool {
+        self.inner().try_wait()
     }
 
     /// Returns a future that completes when the event is set.
@@ -541,7 +521,7 @@ impl fmt::Debug for EmbeddedLocalManualResetEvent {
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for RawLocalManualResetEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let is_set = self.is_set();
+        let is_set = self.try_wait();
         f.debug_struct("RawLocalManualResetEvent")
             .field("is_set", &is_set)
             .finish()
@@ -581,16 +561,16 @@ mod tests {
     #[test]
     fn starts_unset() {
         let event = LocalManualResetEvent::boxed();
-        assert!(!event.is_set());
+        assert!(!event.try_wait());
     }
 
     #[test]
     fn set_and_reset() {
         let event = LocalManualResetEvent::boxed();
         event.set();
-        assert!(event.is_set());
+        assert!(event.try_wait());
         event.reset();
-        assert!(!event.is_set());
+        assert!(!event.try_wait());
     }
 
     #[test]
@@ -598,7 +578,7 @@ mod tests {
         let a = LocalManualResetEvent::boxed();
         let b = a.clone();
         a.set();
-        assert!(b.is_set());
+        assert!(b.try_wait());
     }
 
     #[test]
@@ -657,7 +637,7 @@ mod tests {
             let b = a;
 
             a.set();
-            assert!(b.is_set());
+            assert!(b.try_wait());
             b.wait().await;
         });
     }
@@ -670,7 +650,7 @@ mod tests {
 
         event.set();
         event.reset();
-        assert!(!event.is_set());
+        assert!(!event.try_wait());
     }
 
     #[test]
@@ -845,33 +825,33 @@ mod tests {
     }
 
     #[test]
-    fn try_acquire_returns_false_when_unset() {
+    fn try_wait_returns_false_when_unset() {
         let event = LocalManualResetEvent::boxed();
-        assert!(!event.try_acquire());
+        assert!(!event.try_wait());
     }
 
     #[test]
-    fn try_acquire_returns_true_when_set() {
+    fn try_wait_returns_true_when_set() {
         let event = LocalManualResetEvent::boxed();
         event.set();
-        assert!(event.try_acquire());
+        assert!(event.try_wait());
     }
 
     #[test]
-    fn embedded_try_acquire_returns_false_when_unset() {
+    fn embedded_try_wait_returns_false_when_unset() {
         let container = Box::pin(EmbeddedLocalManualResetEvent::new());
         // SAFETY: The container outlives the handle.
         let event = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
-        assert!(!event.try_acquire());
+        assert!(!event.try_wait());
     }
 
     #[test]
-    fn embedded_try_acquire_returns_true_when_set() {
+    fn embedded_try_wait_returns_true_when_set() {
         let container = Box::pin(EmbeddedLocalManualResetEvent::new());
         // SAFETY: The container outlives the handle.
         let event = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
         event.set();
-        assert!(event.try_acquire());
+        assert!(event.try_wait());
     }
 
     #[test]
@@ -963,11 +943,11 @@ mod tests {
     fn set_when_already_set_is_noop() {
         let event = LocalManualResetEvent::boxed();
         event.set();
-        assert!(event.is_set());
+        assert!(event.try_wait());
 
         // Second set() should be a no-op (early return).
         event.set();
-        assert!(event.is_set());
+        assert!(event.try_wait());
     }
 
     #[test]
@@ -978,9 +958,9 @@ mod tests {
         let event = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
 
         event.set();
-        assert!(event.is_set());
+        assert!(event.try_wait());
 
         event.set();
-        assert!(event.is_set());
+        assert!(event.try_wait());
     }
 }

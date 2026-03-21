@@ -37,7 +37,7 @@ async fn auto_reset_signal() {
     event.wait().await;
 
     // The signal was consumed — a second check returns false.
-    assert!(!event.try_acquire());
+    assert!(!event.try_wait());
 
     println!("AutoResetEvent: signal received and consumed.");
 }
@@ -58,7 +58,7 @@ async fn manual_reset_gate() {
 
     // The gate stays open — subsequent waits complete immediately.
     event.wait().await;
-    assert!(event.is_set());
+    assert!(event.try_wait());
 
     println!("ManualResetEvent: gate opened, all waiters released.");
 }

@@ -33,7 +33,7 @@ async fn local_auto_reset() {
     });
 
     event.wait().await;
-    assert!(!event.try_acquire());
+    assert!(!event.try_wait());
     worker.await.expect("task did not panic");
 
     println!("LocalAutoResetEvent: signal consumed on single thread.");
@@ -54,12 +54,12 @@ async fn local_manual_reset() {
     event.wait().await;
 
     // Gate stays open.
-    assert!(event.is_set());
+    assert!(event.try_wait());
     event.wait().await;
 
     // Reset closes the gate.
     event.reset();
-    assert!(!event.is_set());
+    assert!(!event.try_wait());
 
     worker.await.expect("task did not panic");
 
