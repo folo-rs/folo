@@ -68,6 +68,9 @@ impl RefUnwindSafe for Inner {}
 impl LocalAutoResetEvent {
     /// Creates a new event in the unset state.
     ///
+    /// The state is heap-allocated. Clone the handle to share the same
+    /// event. For stack-allocated state, see [`embedded()`][Self::embedded].
+    ///
     /// # Examples
     ///
     /// ```
@@ -87,8 +90,8 @@ impl LocalAutoResetEvent {
         }
     }
 
-    /// Creates a handle backed by an [`EmbeddedLocalAutoResetEvent`]
-    /// container instead of a heap-allocated [`Rc`].
+    /// Creates a handle from an [`EmbeddedLocalAutoResetEvent`] container,
+    /// avoiding heap allocation.
     ///
     /// # Safety
     ///
@@ -377,8 +380,7 @@ impl RefUnwindSafe for EmbeddedLocalAutoResetEvent {}
 
 /// Handle to an embedded [`LocalAutoResetEvent`].
 ///
-/// Created via [`LocalAutoResetEvent::embedded()`]. This handle uses a
-/// raw pointer to the embedded state instead of an [`Rc`]. The caller is
+/// Created via [`LocalAutoResetEvent::embedded()`]. The caller is
 /// responsible for ensuring the [`EmbeddedLocalAutoResetEvent`] outlives
 /// all handles and wait futures.
 ///

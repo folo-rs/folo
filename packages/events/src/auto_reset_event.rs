@@ -67,9 +67,8 @@ unsafe impl Send for GuardedState {}
 impl AutoResetEvent {
     /// Creates a new event in the unset state.
     ///
-    /// The returned handle is backed by a heap-allocated shared state
-    /// ([`Arc`]). Clone the handle to obtain additional references to the
-    /// same event.
+    /// The state is heap-allocated. Clone the handle to share the same
+    /// event. For stack-allocated state, see [`embedded()`][Self::embedded].
     ///
     /// # Examples
     ///
@@ -95,8 +94,8 @@ impl AutoResetEvent {
         }
     }
 
-    /// Creates a handle backed by an [`EmbeddedAutoResetEvent`] container
-    /// instead of a heap-allocated [`Arc`].
+    /// Creates a handle from an [`EmbeddedAutoResetEvent`] container,
+    /// avoiding heap allocation.
     ///
     /// # Safety
     ///
@@ -449,10 +448,9 @@ impl Default for EmbeddedAutoResetEvent {
 
 /// Handle to an embedded [`AutoResetEvent`].
 ///
-/// Created via [`AutoResetEvent::embedded()`]. This handle uses a raw
-/// pointer to the embedded state instead of an [`Arc`]. The caller is
-/// responsible for ensuring the [`EmbeddedAutoResetEvent`] outlives all
-/// handles and wait futures.
+/// Created via [`AutoResetEvent::embedded()`]. The caller is responsible
+/// for ensuring the [`EmbeddedAutoResetEvent`] outlives all handles and
+/// wait futures.
 ///
 /// The API is identical to [`AutoResetEvent`].
 #[derive(Clone, Copy)]

@@ -71,9 +71,8 @@ unsafe impl Send for GuardedState {}
 impl ManualResetEvent {
     /// Creates a new event in the unset state.
     ///
-    /// The returned handle is backed by a heap-allocated shared state
-    /// ([`Arc`]). Clone the handle to obtain additional references to the
-    /// same event.
+    /// The state is heap-allocated. Clone the handle to share the same
+    /// event. For stack-allocated state, see [`embedded()`][Self::embedded].
     ///
     /// # Examples
     ///
@@ -99,8 +98,8 @@ impl ManualResetEvent {
         }
     }
 
-    /// Creates a handle backed by an [`EmbeddedManualResetEvent`] container
-    /// instead of a heap-allocated [`Arc`].
+    /// Creates a handle from an [`EmbeddedManualResetEvent`] container,
+    /// avoiding heap allocation.
     ///
     /// # Safety
     ///
@@ -237,8 +236,8 @@ impl ManualResetEvent {
     /// completes immediately. If the event is reset between being woken and
     /// being re-polled, the future goes back to pending.
     ///
-    /// The returned future borrows nothing — it holds an [`Arc`] clone of
-    /// the shared state internally, so it can be sent to other tasks freely.
+    /// The returned future is `Send` and can be passed to other tasks
+    /// freely.
     ///
     /// # Examples
     ///
@@ -452,10 +451,9 @@ impl Default for EmbeddedManualResetEvent {
 
 /// Handle to an embedded [`ManualResetEvent`].
 ///
-/// Created via [`ManualResetEvent::embedded()`]. This handle uses a raw
-/// pointer to the embedded state instead of an [`Arc`]. The caller is
-/// responsible for ensuring the [`EmbeddedManualResetEvent`] outlives all
-/// handles and wait futures.
+/// Created via [`ManualResetEvent::embedded()`]. The caller is responsible
+/// for ensuring the [`EmbeddedManualResetEvent`] outlives all handles and
+/// wait futures.
 ///
 /// The API is identical to [`ManualResetEvent`].
 #[derive(Clone, Copy)]

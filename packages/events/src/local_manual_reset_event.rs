@@ -79,8 +79,8 @@ impl RefUnwindSafe for Inner {}
 impl LocalManualResetEvent {
     /// Creates a new event in the unset state.
     ///
-    /// The returned handle is backed by an [`Rc`]-allocated shared state.
-    /// Clone the handle to obtain additional references to the same event.
+    /// The state is heap-allocated. Clone the handle to share the same
+    /// event. For stack-allocated state, see [`embedded()`][Self::embedded].
     ///
     /// # Examples
     ///
@@ -104,8 +104,8 @@ impl LocalManualResetEvent {
         }
     }
 
-    /// Creates a handle backed by an [`EmbeddedLocalManualResetEvent`]
-    /// container instead of a heap-allocated [`Rc`].
+    /// Creates a handle from an [`EmbeddedLocalManualResetEvent`]
+    /// container, avoiding heap allocation.
     ///
     /// # Safety
     ///
@@ -362,8 +362,7 @@ impl RefUnwindSafe for EmbeddedLocalManualResetEvent {}
 
 /// Handle to an embedded [`LocalManualResetEvent`].
 ///
-/// Created via [`LocalManualResetEvent::embedded()`]. This handle uses a
-/// raw pointer to the embedded state instead of an [`Rc`]. The caller is
+/// Created via [`LocalManualResetEvent::embedded()`]. The caller is
 /// responsible for ensuring the [`EmbeddedLocalManualResetEvent`] outlives
 /// all handles and wait futures.
 ///
