@@ -10,8 +10,9 @@ use std::task::{self, Poll};
 
 use crate::waiter_list::{WaiterList, WaiterNode};
 
-/// Single-threaded async event that, once set, releases all current and future
-/// awaiters until explicitly reset.
+/// Single-threaded async manual-reset event.
+///
+/// Once set, releases all current and future awaiters until explicitly reset.
 ///
 /// This is the `!Send` counterpart of [`ManualResetEvent`][crate::ManualResetEvent].
 /// It avoids atomic operations and locking, making it more efficient on
@@ -296,11 +297,11 @@ impl fmt::Debug for LocalManualResetWaitFuture {
 // Embedded variant
 // ---------------------------------------------------------------------------
 
-/// Container for embedding a [`LocalManualResetEvent`]'s state directly in a
-/// struct, avoiding the heap allocation that [`LocalManualResetEvent::boxed()`]
-/// requires.
+/// Embedded-state container for [`LocalManualResetEvent`].
 ///
-/// Create the container with [`new()`][Self::new], pin it, then call
+/// Stores the event state inline in a struct, avoiding the heap allocation
+/// that [`LocalManualResetEvent::boxed()`] requires. Create the container
+/// with [`new()`][Self::new], pin it, then call
 /// [`LocalManualResetEvent::embedded()`] to obtain a
 /// [`RawLocalManualResetEvent`] handle.
 ///
@@ -359,12 +360,12 @@ impl UnwindSafe for EmbeddedLocalManualResetEvent {}
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl RefUnwindSafe for EmbeddedLocalManualResetEvent {}
 
-/// Handle to an embedded [`LocalManualResetEvent`] created via
-/// [`LocalManualResetEvent::embedded()`].
+/// Handle to an embedded [`LocalManualResetEvent`].
 ///
-/// This handle uses a raw pointer to the embedded state instead of an
-/// [`Rc`]. The caller is responsible for ensuring the
-/// [`EmbeddedLocalManualResetEvent`] outlives all handles and wait futures.
+/// Created via [`LocalManualResetEvent::embedded()`]. This handle uses a
+/// raw pointer to the embedded state instead of an [`Rc`]. The caller is
+/// responsible for ensuring the [`EmbeddedLocalManualResetEvent`] outlives
+/// all handles and wait futures.
 ///
 /// The API is identical to [`LocalManualResetEvent`].
 #[derive(Clone, Copy)]

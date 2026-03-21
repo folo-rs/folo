@@ -11,8 +11,9 @@ use std::task::{self, Poll};
 use crate::NEVER_POISONED;
 use crate::waiter_list::{WaiterList, WaiterNode};
 
-/// Thread-safe async event that, once set, releases all current and future
-/// awaiters until explicitly reset.
+/// Thread-safe async manual-reset event.
+///
+/// Once set, releases all current and future awaiters until explicitly reset.
 ///
 /// A `ManualResetEvent` acts as a gate: while set, every call to
 /// [`wait()`][Self::wait] completes immediately. Calling [`reset()`][Self::reset]
@@ -393,13 +394,12 @@ impl fmt::Debug for ManualResetWaitFuture {
 // Embedded variant
 // ---------------------------------------------------------------------------
 
-/// Container for embedding a [`ManualResetEvent`]'s state directly in a
-/// struct, avoiding the heap allocation that [`ManualResetEvent::boxed()`]
-/// requires.
+/// Embedded-state container for [`ManualResetEvent`].
 ///
-/// Create the container with [`new()`][Self::new], pin it, then call
-/// [`ManualResetEvent::embedded()`] to obtain a [`RawManualResetEvent`]
-/// handle.
+/// Stores the event state inline in a struct, avoiding the heap allocation
+/// that [`ManualResetEvent::boxed()`] requires. Create the container with
+/// [`new()`][Self::new], pin it, then call [`ManualResetEvent::embedded()`]
+/// to obtain a [`RawManualResetEvent`] handle.
 ///
 /// # Examples
 ///
@@ -450,12 +450,12 @@ impl Default for EmbeddedManualResetEvent {
     }
 }
 
-/// Handle to an embedded [`ManualResetEvent`] created via
-/// [`ManualResetEvent::embedded()`].
+/// Handle to an embedded [`ManualResetEvent`].
 ///
-/// This handle uses a raw pointer to the embedded state instead of an
-/// [`Arc`]. The caller is responsible for ensuring the
-/// [`EmbeddedManualResetEvent`] outlives all handles and wait futures.
+/// Created via [`ManualResetEvent::embedded()`]. This handle uses a raw
+/// pointer to the embedded state instead of an [`Arc`]. The caller is
+/// responsible for ensuring the [`EmbeddedManualResetEvent`] outlives all
+/// handles and wait futures.
 ///
 /// The API is identical to [`ManualResetEvent`].
 #[derive(Clone, Copy)]

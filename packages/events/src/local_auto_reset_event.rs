@@ -10,8 +10,9 @@ use std::task::{self, Poll};
 
 use crate::waiter_list::{WaiterList, WaiterNode};
 
-/// Single-threaded async event that releases exactly one awaiter per
-/// [`set()`][Self::set] call.
+/// Single-threaded async auto-reset event.
+///
+/// Releases exactly one awaiter per [`set()`][Self::set] call.
 ///
 /// This is the `!Send` counterpart of [`AutoResetEvent`][crate::AutoResetEvent].
 /// It avoids atomic operations and locking, making it more efficient on
@@ -314,11 +315,11 @@ impl fmt::Debug for LocalAutoResetWaitFuture {
 // Embedded variant
 // ---------------------------------------------------------------------------
 
-/// Container for embedding a [`LocalAutoResetEvent`]'s state directly in a
-/// struct, avoiding the heap allocation that [`LocalAutoResetEvent::boxed()`]
-/// requires.
+/// Embedded-state container for [`LocalAutoResetEvent`].
 ///
-/// Create the container with [`new()`][Self::new], pin it, then call
+/// Stores the event state inline in a struct, avoiding the heap allocation
+/// that [`LocalAutoResetEvent::boxed()`] requires. Create the container
+/// with [`new()`][Self::new], pin it, then call
 /// [`LocalAutoResetEvent::embedded()`] to obtain a
 /// [`RawLocalAutoResetEvent`] handle.
 ///
@@ -374,12 +375,12 @@ impl UnwindSafe for EmbeddedLocalAutoResetEvent {}
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl RefUnwindSafe for EmbeddedLocalAutoResetEvent {}
 
-/// Handle to an embedded [`LocalAutoResetEvent`] created via
-/// [`LocalAutoResetEvent::embedded()`].
+/// Handle to an embedded [`LocalAutoResetEvent`].
 ///
-/// This handle uses a raw pointer to the embedded state instead of an
-/// [`Rc`]. The caller is responsible for ensuring the
-/// [`EmbeddedLocalAutoResetEvent`] outlives all handles and wait futures.
+/// Created via [`LocalAutoResetEvent::embedded()`]. This handle uses a
+/// raw pointer to the embedded state instead of an [`Rc`]. The caller is
+/// responsible for ensuring the [`EmbeddedLocalAutoResetEvent`] outlives
+/// all handles and wait futures.
 ///
 /// The API is identical to [`LocalAutoResetEvent`].
 #[derive(Clone, Copy)]

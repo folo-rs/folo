@@ -11,8 +11,9 @@ use std::task::{self, Poll, Waker};
 use crate::NEVER_POISONED;
 use crate::waiter_list::{WaiterList, WaiterNode};
 
-/// Thread-safe async event that releases exactly one awaiter per
-/// [`set()`][Self::set] call.
+/// Thread-safe async auto-reset event.
+///
+/// Releases exactly one awaiter per [`set()`][Self::set] call.
 ///
 /// If no one is waiting when `set()` is called, the event remembers the signal
 /// so that the next [`wait()`][Self::wait] completes immediately (consuming the
@@ -393,13 +394,12 @@ impl fmt::Debug for AutoResetWaitFuture {
 // Embedded variant
 // ---------------------------------------------------------------------------
 
-/// Container for embedding an [`AutoResetEvent`]'s state directly in a
-/// struct, avoiding the heap allocation that [`AutoResetEvent::boxed()`]
-/// requires.
+/// Embedded-state container for [`AutoResetEvent`].
 ///
-/// Create the container with [`new()`][Self::new], pin it, then call
-/// [`AutoResetEvent::embedded()`] to obtain a [`RawAutoResetEvent`]
-/// handle.
+/// Stores the event state inline in a struct, avoiding the heap allocation
+/// that [`AutoResetEvent::boxed()`] requires. Create the container with
+/// [`new()`][Self::new], pin it, then call [`AutoResetEvent::embedded()`]
+/// to obtain a [`RawAutoResetEvent`] handle.
 ///
 /// # Examples
 ///
@@ -447,12 +447,12 @@ impl Default for EmbeddedAutoResetEvent {
     }
 }
 
-/// Handle to an embedded [`AutoResetEvent`] created via
-/// [`AutoResetEvent::embedded()`].
+/// Handle to an embedded [`AutoResetEvent`].
 ///
-/// This handle uses a raw pointer to the embedded state instead of an
-/// [`Arc`]. The caller is responsible for ensuring the
-/// [`EmbeddedAutoResetEvent`] outlives all handles and wait futures.
+/// Created via [`AutoResetEvent::embedded()`]. This handle uses a raw
+/// pointer to the embedded state instead of an [`Arc`]. The caller is
+/// responsible for ensuring the [`EmbeddedAutoResetEvent`] outlives all
+/// handles and wait futures.
 ///
 /// The API is identical to [`AutoResetEvent`].
 #[derive(Clone, Copy)]
