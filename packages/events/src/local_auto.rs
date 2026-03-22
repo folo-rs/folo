@@ -60,9 +60,7 @@ struct Inner {
 }
 
 // Marker trait impls have no executable code.
-#[cfg_attr(coverage_nightly, coverage(off))]
 impl UnwindSafe for Inner {}
-#[cfg_attr(coverage_nightly, coverage(off))]
 impl RefUnwindSafe for Inner {}
 
 impl Inner {
@@ -318,9 +316,7 @@ pub struct LocalAutoResetWaitFuture {
 }
 
 // Marker trait impls have no executable code.
-#[cfg_attr(coverage_nightly, coverage(off))]
 impl UnwindSafe for LocalAutoResetWaitFuture {}
-#[cfg_attr(coverage_nightly, coverage(off))]
 impl RefUnwindSafe for LocalAutoResetWaitFuture {}
 
 impl Future for LocalAutoResetWaitFuture {
@@ -422,9 +418,7 @@ impl Default for EmbeddedLocalAutoResetEvent {
 
 // Inner already implements UnwindSafe and RefUnwindSafe.
 // Marker trait impls have no executable code.
-#[cfg_attr(coverage_nightly, coverage(off))]
 impl UnwindSafe for EmbeddedLocalAutoResetEvent {}
-#[cfg_attr(coverage_nightly, coverage(off))]
 impl RefUnwindSafe for EmbeddedLocalAutoResetEvent {}
 
 /// Handle to an embedded [`LocalAutoResetEvent`].
@@ -442,9 +436,7 @@ pub struct RawLocalAutoResetEvent {
 // NonNull is !Send and !Sync by default, which is correct for local types.
 
 // Marker trait impls have no executable code.
-#[cfg_attr(coverage_nightly, coverage(off))]
 impl UnwindSafe for RawLocalAutoResetEvent {}
-#[cfg_attr(coverage_nightly, coverage(off))]
 impl RefUnwindSafe for RawLocalAutoResetEvent {}
 
 impl RawLocalAutoResetEvent {
@@ -507,9 +499,7 @@ pub struct RawLocalAutoResetWaitFuture {
 // correct for local types.
 
 // Marker trait impls have no executable code.
-#[cfg_attr(coverage_nightly, coverage(off))]
 impl UnwindSafe for RawLocalAutoResetWaitFuture {}
-#[cfg_attr(coverage_nightly, coverage(off))]
 impl RefUnwindSafe for RawLocalAutoResetWaitFuture {}
 
 impl Future for RawLocalAutoResetWaitFuture {

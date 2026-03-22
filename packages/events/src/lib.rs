@@ -65,10 +65,10 @@
 //! }
 //! ```
 
-mod auto_reset_event;
-mod local_auto_reset_event;
-mod local_manual_reset_event;
-mod manual_reset_event;
+mod auto;
+mod local_auto;
+mod local_manual;
+mod manual;
 mod waiter_list;
 
 #[cfg(test)]
@@ -76,25 +76,19 @@ mod test_helpers;
 
 pub(crate) const NEVER_POISONED: &str = "we never panic while holding this lock";
 
-pub use auto_reset_event::{AutoResetEvent, EmbeddedAutoResetEvent, RawAutoResetEvent};
-pub use local_auto_reset_event::{
-    EmbeddedLocalAutoResetEvent, LocalAutoResetEvent, RawLocalAutoResetEvent,
-};
-pub use local_manual_reset_event::{
+pub use auto::{AutoResetEvent, EmbeddedAutoResetEvent, RawAutoResetEvent};
+pub use local_auto::{EmbeddedLocalAutoResetEvent, LocalAutoResetEvent, RawLocalAutoResetEvent};
+pub use local_manual::{
     EmbeddedLocalManualResetEvent, LocalManualResetEvent, RawLocalManualResetEvent,
 };
-pub use manual_reset_event::{EmbeddedManualResetEvent, ManualResetEvent, RawManualResetEvent};
+pub use manual::{EmbeddedManualResetEvent, ManualResetEvent, RawManualResetEvent};
 
 /// Future types returned by event `wait()` methods.
 ///
 /// These futures are `!Unpin` and must be pinned before polling.
 pub mod futures {
-    pub use crate::auto_reset_event::{AutoResetWaitFuture, RawAutoResetWaitFuture};
-    pub use crate::local_auto_reset_event::{
-        LocalAutoResetWaitFuture, RawLocalAutoResetWaitFuture,
-    };
-    pub use crate::local_manual_reset_event::{
-        LocalManualResetWaitFuture, RawLocalManualResetWaitFuture,
-    };
-    pub use crate::manual_reset_event::{ManualResetWaitFuture, RawManualResetWaitFuture};
+    pub use crate::auto::{AutoResetWaitFuture, RawAutoResetWaitFuture};
+    pub use crate::local_auto::{LocalAutoResetWaitFuture, RawLocalAutoResetWaitFuture};
+    pub use crate::local_manual::{LocalManualResetWaitFuture, RawLocalManualResetWaitFuture};
+    pub use crate::manual::{ManualResetWaitFuture, RawManualResetWaitFuture};
 }

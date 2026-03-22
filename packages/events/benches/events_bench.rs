@@ -3,9 +3,10 @@
 //! Five benchmark groups measure different aspects of event overhead:
 //!
 //! * **`creation_boxed`** — how expensive is constructing a heap-allocated
-//!   event object (includes competitor crates that also heap-allocate).
+//!   event object.
 //! * **`creation_embedded`** — how expensive is constructing a zero-alloc
-//!   embedded event object (no competitors to compare against).
+//!   embedded event object (includes competitor crates that also avoid
+//!   heap allocation).
 //! * **`signal_round_trip`** — non-blocking set + acquire (sync fast path).
 //! * **`async_poll_ready`** — create a wait future, pin it, and poll it to
 //!   completion on a pre-set event (async fast path).
@@ -113,44 +114,6 @@ fn creation_boxed(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    // --- competitors (all heap-allocate) ---
-
-    let op = allocs.operation("creation_boxed/rsevents/ManualResetEvent");
-    group.bench_function("rsevents/ManualResetEvent", |b| {
-        b.iter_custom(|iters| {
-            let _span = op.measure_thread().iterations(iters);
-            let start = Instant::now();
-            for _ in 0..iters {
-                black_box(RsManualReset::new(EventState::Unset));
-            }
-            start.elapsed()
-        });
-    });
-
-    let op = allocs.operation("creation_boxed/rsevents/AutoResetEvent");
-    group.bench_function("rsevents/AutoResetEvent", |b| {
-        b.iter_custom(|iters| {
-            let _span = op.measure_thread().iterations(iters);
-            let start = Instant::now();
-            for _ in 0..iters {
-                black_box(RsAutoReset::new(EventState::Unset));
-            }
-            start.elapsed()
-        });
-    });
-
-    let op = allocs.operation("creation_boxed/event_listener/Event");
-    group.bench_function("event_listener/Event", |b| {
-        b.iter_custom(|iters| {
-            let _span = op.measure_thread().iterations(iters);
-            let start = Instant::now();
-            for _ in 0..iters {
-                black_box(ElEvent::<()>::new());
-            }
-            start.elapsed()
-        });
-    });
-
     group.finish();
 }
 
@@ -209,6 +172,44 @@ fn creation_embedded(c: &mut Criterion, allocs: &AllocSession) {
                 let container = pin!(EmbeddedLocalAutoResetEvent::new());
                 let handle = unsafe { LocalAutoResetEvent::embedded(container.as_ref()) };
                 black_box(handle);
+            }
+            start.elapsed()
+        });
+    });
+
+    // --- competitors ---
+
+    let op = allocs.operation("creation_embedded/rsevents/ManualResetEvent");
+    group.bench_function("rsevents/ManualResetEvent", |b| {
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(RsManualReset::new(EventState::Unset));
+            }
+            start.elapsed()
+        });
+    });
+
+    let op = allocs.operation("creation_embedded/rsevents/AutoResetEvent");
+    group.bench_function("rsevents/AutoResetEvent", |b| {
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(RsAutoReset::new(EventState::Unset));
+            }
+            start.elapsed()
+        });
+    });
+
+    let op = allocs.operation("creation_embedded/event_listener/Event");
+    group.bench_function("event_listener/Event", |b| {
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(ElEvent::<()>::new());
             }
             start.elapsed()
         });
@@ -631,6 +632,9 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
             start.elapsed()
         });
     });
+
+    // rsevents uses synchronous blocking and cannot register multiple
+    // async waiters, so it is excluded from this benchmark group.
 
     // --- competitors ---
 

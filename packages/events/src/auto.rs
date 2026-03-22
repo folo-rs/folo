@@ -55,7 +55,7 @@ struct State {
     waiters: WaiterList,
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))] // Marker trait impl.
+// Marker trait impl.
 // SAFETY: The raw pointers inside WaiterList are only dereferenced while the
 // Mutex is held, ensuring exclusive access.
 unsafe impl Send for State {}
@@ -376,7 +376,7 @@ pub struct AutoResetWaitFuture {
     _pinned: PhantomPinned,
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))] // Marker trait impl.
+// Marker trait impl.
 // SAFETY: All UnsafeCell<WaiterNode> fields are accessed exclusively under the
 // event's Mutex. The Arc<Mutex<State>> is Send + Sync. The raw pointers inside
 // WaiterNode are only dereferenced under the Mutex.
@@ -385,9 +385,9 @@ unsafe impl Send for AutoResetWaitFuture {}
 // The UnsafeCell<WaiterNode> field causes auto-trait inference to mark the
 // future as !UnwindSafe and !RefUnwindSafe. However, all mutable access to
 // the node goes through the Mutex, preventing inconsistent state observation.
-#[cfg_attr(coverage_nightly, coverage(off))] // Marker trait impl.
+// Marker trait impl.
 impl UnwindSafe for AutoResetWaitFuture {}
-#[cfg_attr(coverage_nightly, coverage(off))] // Marker trait impl.
+// Marker trait impl.
 impl RefUnwindSafe for AutoResetWaitFuture {}
 
 impl Future for AutoResetWaitFuture {
@@ -502,18 +502,18 @@ pub struct RawAutoResetEvent {
     state: NonNull<Mutex<State>>,
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))] // Marker trait impl.
+// Marker trait impl.
 // SAFETY: Mutex<State> is Send + Sync. The raw pointer is only dereferenced
 // to obtain &Mutex<State>, which is safe to share across threads.
 unsafe impl Send for RawAutoResetEvent {}
 
-#[cfg_attr(coverage_nightly, coverage(off))] // Marker trait impl.
+// Marker trait impl.
 // SAFETY: Same as Send — all mutable access is mediated by the Mutex.
 unsafe impl Sync for RawAutoResetEvent {}
 
-#[cfg_attr(coverage_nightly, coverage(off))] // Marker trait impl.
+// Marker trait impl.
 impl UnwindSafe for RawAutoResetEvent {}
-#[cfg_attr(coverage_nightly, coverage(off))] // Marker trait impl.
+// Marker trait impl.
 impl RefUnwindSafe for RawAutoResetEvent {}
 
 impl RawAutoResetEvent {
@@ -563,14 +563,14 @@ pub struct RawAutoResetWaitFuture {
     _pinned: PhantomPinned,
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))] // Marker trait impl.
+// Marker trait impl.
 // SAFETY: Same reasoning as AutoResetWaitFuture — all node access is
 // protected by the Mutex.
 unsafe impl Send for RawAutoResetWaitFuture {}
 
-#[cfg_attr(coverage_nightly, coverage(off))] // Marker trait impl.
+// Marker trait impl.
 impl UnwindSafe for RawAutoResetWaitFuture {}
-#[cfg_attr(coverage_nightly, coverage(off))] // Marker trait impl.
+// Marker trait impl.
 impl RefUnwindSafe for RawAutoResetWaitFuture {}
 
 impl Future for RawAutoResetWaitFuture {
