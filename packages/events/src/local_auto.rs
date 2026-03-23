@@ -54,16 +54,14 @@ pub struct LocalAutoResetEvent {
     inner: Rc<Inner>,
 }
 
-// The set flag and waiter list are mutually exclusive: if the event is set
+// The signal flag and waiter list are mutually exclusive: if the event is set
 // there are no waiters, and if there are waiters the event is not set. This
 // enum encodes that invariant at the type level.
 enum InnerState {
-    /// No signal stored, no waiters registered.
-    Idle,
+    /// Not signaled. The waiter list may be empty or non-empty.
+    Unset(WaiterList),
     /// Signal stored (will be consumed by the next wait or `try_wait`).
     Set,
-    /// One or more waiters are registered.
-    Waiting(WaiterList),
 }
 
 struct Inner {
@@ -88,35 +86,25 @@ impl Inner {
             let state = unsafe { &mut *state_ptr };
 
             match state {
-                InnerState::Idle | InnerState::Set => {
-                    *state = InnerState::Set;
-                    None
-                }
-                InnerState::Waiting(waiters) => {
-                    // SAFETY: Single-threaded, Waiting guarantees
-                    // non-empty list.
-                    let node_ptr = unsafe { waiters.pop_front() }.expect(
-                        "Waiting variant guarantees \
-                             at least one node",
-                    );
-                    // SAFETY: Single-threaded, node was just popped.
-                    unsafe {
-                        (*node_ptr).notified = true;
-                    }
-
+                InnerState::Set => None,
+                InnerState::Unset(waiters) => {
                     // SAFETY: Single-threaded.
-                    unsafe { (*node_ptr).waker.take() }
+                    if let Some(node_ptr) = unsafe { waiters.pop_front() } {
+                        // SAFETY: Single-threaded, node was just popped.
+                        unsafe {
+                            (*node_ptr).notified = true;
+                        }
+
+                        // SAFETY: Single-threaded.
+                        unsafe { (*node_ptr).waker.take() }
+                    } else {
+                        // No waiters — store the signal.
+                        *state = InnerState::Set;
+                        None
+                    }
                 }
             }
         };
-
-        // SAFETY: Single-threaded, new borrow scope.
-        let state = unsafe { &mut *state_ptr };
-        if let InnerState::Waiting(waiters) = state
-            && waiters.head().is_null()
-        {
-            *state = InnerState::Idle;
-        }
 
         if let Some(w) = waker {
             w.wake();
@@ -127,7 +115,7 @@ impl Inner {
         // SAFETY: Single-threaded access.
         let state = unsafe { &mut *self.state.get() };
         if matches!(state, InnerState::Set) {
-            *state = InnerState::Idle;
+            *state = InnerState::Unset(WaiterList::new());
             true
         } else {
             false
@@ -162,29 +150,10 @@ impl Inner {
                     !*registered,
                     "Set state is exclusive with registered waiters"
                 );
-                *state = InnerState::Idle;
+                *state = InnerState::Unset(WaiterList::new());
                 Poll::Ready(())
             }
-            InnerState::Idle => {
-                debug_assert!(
-                    !*registered,
-                    "Idle state is exclusive with registered waiters"
-                );
-                // SAFETY: Single-threaded access.
-                unsafe {
-                    (*node_ptr).waker = Some(waker);
-                }
-                let mut waiters = WaiterList::new();
-                // SAFETY: Single-threaded, node is pinned and not in
-                // any list.
-                unsafe {
-                    waiters.push_back(node_ptr);
-                }
-                *state = InnerState::Waiting(waiters);
-                *registered = true;
-                Poll::Pending
-            }
-            InnerState::Waiting(waiters) => {
+            InnerState::Unset(waiters) => {
                 // SAFETY: Single-threaded access.
                 unsafe {
                     (*node_ptr).waker = Some(waker);
@@ -216,9 +185,10 @@ impl Inner {
         if unsafe { (*node_ptr).notified } {
             let state_ptr = self.state.get();
             // SAFETY: Single-threaded access.
-            let old_state = unsafe { mem::replace(&mut *state_ptr, InnerState::Idle) };
+            let old_state =
+                unsafe { mem::replace(&mut *state_ptr, InnerState::Unset(WaiterList::new())) };
             let waker = match old_state {
-                InnerState::Waiting(mut waiters) => {
+                InnerState::Unset(mut waiters) => {
                     // SAFETY: Single-threaded.
                     if let Some(next_node) = unsafe { waiters.pop_front() } {
                         // SAFETY: Single-threaded.
@@ -227,18 +197,24 @@ impl Inner {
                         }
                         // SAFETY: Single-threaded.
                         let waker = unsafe { (*next_node).waker.take() };
-                        if !waiters.head().is_null() {
-                            // SAFETY: Single-threaded.
-                            unsafe {
-                                *state_ptr = InnerState::Waiting(waiters);
-                            }
+                        // Restore the waiter list.
+                        // SAFETY: Single-threaded.
+                        unsafe {
+                            *state_ptr = InnerState::Unset(waiters);
                         }
                         waker
                     } else {
+                        // No more waiters — restore the signal so
+                        // it is not lost.
+                        // SAFETY: Single-threaded.
+                        unsafe {
+                            *state_ptr = InnerState::Set;
+                        }
                         None
                     }
                 }
-                InnerState::Idle | InnerState::Set => {
+                InnerState::Set => {
+                    // Already set — restore.
                     // SAFETY: Single-threaded.
                     unsafe {
                         *state_ptr = InnerState::Set;
@@ -254,27 +230,17 @@ impl Inner {
             // SAFETY: Single-threaded access.
             let state = unsafe { &mut *self.state.get() };
             match state {
-                InnerState::Waiting(waiters) => {
+                InnerState::Unset(waiters) => {
                     // SAFETY: Single-threaded, node is in the list.
                     unsafe {
                         waiters.remove(node_ptr);
                     }
                 }
-                _ => {
+                InnerState::Set => {
                     // Not notified + registered ⟹ node is in a
-                    // waiter list ⟹ state must be Waiting.
-                    debug_assert!(
-                        false,
-                        "registered non-notified node requires \
-                         Waiting state"
-                    );
+                    // waiter list ⟹ state must be Unset.
+                    debug_assert!(false, "registered non-notified node requires Unset state");
                 }
-            }
-            // Transition Waiting → Idle if the list became empty.
-            if let InnerState::Waiting(waiters) = &*state
-                && waiters.head().is_null()
-            {
-                *state = InnerState::Idle;
             }
         }
     }
@@ -299,7 +265,7 @@ impl LocalAutoResetEvent {
     pub fn boxed() -> Self {
         Self {
             inner: Rc::new(Inner {
-                state: UnsafeCell::new(InnerState::Idle),
+                state: UnsafeCell::new(InnerState::Unset(WaiterList::new())),
                 _not_send: PhantomData,
             }),
         }
@@ -476,7 +442,7 @@ impl EmbeddedLocalAutoResetEvent {
     pub fn new() -> Self {
         Self {
             inner: Inner {
-                state: UnsafeCell::new(InnerState::Idle),
+                state: UnsafeCell::new(InnerState::Unset(WaiterList::new())),
                 _not_send: PhantomData,
             },
             _pinned: PhantomPinned,
