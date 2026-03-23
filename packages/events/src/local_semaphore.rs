@@ -986,6 +986,124 @@ mod tests {
         assert!(sem.try_acquire().is_some());
     }
 
+    #[test]
+    fn zero_initial_permits() {
+        let sem = LocalSemaphore::boxed(0);
+        assert!(sem.try_acquire().is_none());
+    }
+
+    #[test]
+    fn try_acquire_many_exact_max() {
+        let sem = LocalSemaphore::boxed(5);
+        let permit = sem.try_acquire_many(5).unwrap();
+        assert!(sem.try_acquire().is_none());
+        drop(permit);
+        assert!(sem.try_acquire().is_some());
+    }
+
+    #[test]
+    fn try_acquire_many_exceeds_max() {
+        let sem = LocalSemaphore::boxed(3);
+        assert!(sem.try_acquire_many(4).is_none());
+        // Semaphore is untouched — still has 3 available.
+        assert!(sem.try_acquire_many(3).is_some());
+    }
+
+    #[test]
+    fn acquire_many_all_at_once() {
+        futures::executor::block_on(async {
+            let sem = LocalSemaphore::boxed(5);
+            let permit = sem.acquire_many(5).await;
+            assert!(sem.try_acquire().is_none());
+            drop(permit);
+            assert!(sem.try_acquire_many(5).is_some());
+        });
+    }
+
+    #[test]
+    fn try_acquire_bypasses_waiter_queue() {
+        let sem = LocalSemaphore::boxed(3);
+        let _p1 = sem.try_acquire().unwrap();
+        let _p2 = sem.try_acquire().unwrap();
+        // 1 permit available, 2 held.
+
+        // Register a waiter wanting 2 permits (more than available).
+        let mut f1 = Box::pin(sem.acquire_many(2));
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        assert!(f1.as_mut().poll(&mut cx).is_pending());
+
+        // try_acquire(1) succeeds despite a queued waiter because
+        // try_acquire does not consult the waiter queue.
+        assert!(sem.try_acquire().is_some());
+    }
+
+    #[test]
+    fn release_wakes_multiple_waiters() {
+        let sem = LocalSemaphore::boxed(3);
+        let p1 = sem.try_acquire().unwrap();
+        let p2 = sem.try_acquire().unwrap();
+        let p3 = sem.try_acquire().unwrap();
+
+        let mut f1 = Box::pin(sem.acquire());
+        let mut f2 = Box::pin(sem.acquire());
+        let mut f3 = Box::pin(sem.acquire());
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        assert!(f1.as_mut().poll(&mut cx).is_pending());
+        assert!(f2.as_mut().poll(&mut cx).is_pending());
+        assert!(f3.as_mut().poll(&mut cx).is_pending());
+
+        // Release all 3 permits. Each release wakes the next waiter.
+        drop(p1);
+        drop(p2);
+        drop(p3);
+
+        assert!(f1.as_mut().poll(&mut cx).is_ready());
+        assert!(f2.as_mut().poll(&mut cx).is_ready());
+        assert!(f3.as_mut().poll(&mut cx).is_ready());
+    }
+
+    #[test]
+    fn multiple_sequential_cancellations() {
+        let sem = LocalSemaphore::boxed(1);
+        let permit = sem.try_acquire().unwrap();
+
+        let mut f1 = Box::pin(sem.acquire());
+        let mut f2 = Box::pin(sem.acquire());
+        let mut f3 = Box::pin(sem.acquire());
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        assert!(f1.as_mut().poll(&mut cx).is_pending());
+        assert!(f2.as_mut().poll(&mut cx).is_pending());
+        assert!(f3.as_mut().poll(&mut cx).is_pending());
+
+        // Dropping the permit notifies f1.
+        drop(permit);
+        // Cancel f1 without polling — forwards to f2.
+        drop(f1);
+        // Cancel f2 without polling — forwards to f3.
+        drop(f2);
+        // f3 should now have the permit.
+        assert!(f3.as_mut().poll(&mut cx).is_ready());
+    }
+
+    #[test]
+    fn permits_released_on_panic() {
+        let sem = LocalSemaphore::boxed(1);
+        let handle = sem.clone();
+        let result = std::panic::catch_unwind(move || {
+            let _permit = handle.try_acquire().unwrap();
+            panic!("intentional");
+        });
+        assert!(result.is_err());
+        // Permit drop during unwinding must return the permit.
+        assert!(sem.try_acquire().is_some());
+    }
+
     // --- embedded variant tests ---
 
     #[test]

@@ -899,6 +899,65 @@ mod tests {
         assert!(mutex.try_lock().is_some());
     }
 
+    #[test]
+    fn try_lock_fails_when_lock_transferred() {
+        let mutex = LocalMutex::boxed(0_u32);
+        let guard = mutex.try_lock().unwrap();
+
+        let mut f1 = Box::pin(mutex.lock());
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        assert!(f1.as_mut().poll(&mut cx).is_pending());
+
+        // Drop the guard — lock ownership transfers to f1 (notified,
+        // locked stays true). try_lock must fail because the lock is
+        // still logically held.
+        drop(guard);
+        assert!(mutex.try_lock().is_none());
+
+        // Confirm f1 can complete.
+        assert!(f1.as_mut().poll(&mut cx).is_ready());
+    }
+
+    #[test]
+    fn unlock_releases_on_panic() {
+        let mutex = LocalMutex::boxed(0_u32);
+        let handle = mutex.clone();
+        let result = std::panic::catch_unwind(move || {
+            let _guard = handle.try_lock().unwrap();
+            panic!("intentional");
+        });
+        assert!(result.is_err());
+        // Guard drop during unwinding must release the lock.
+        assert!(mutex.try_lock().is_some());
+    }
+
+    #[test]
+    fn multiple_sequential_cancellations() {
+        let mutex = LocalMutex::boxed(0_u32);
+        let guard = mutex.try_lock().unwrap();
+
+        let mut f1 = Box::pin(mutex.lock());
+        let mut f2 = Box::pin(mutex.lock());
+        let mut f3 = Box::pin(mutex.lock());
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        assert!(f1.as_mut().poll(&mut cx).is_pending());
+        assert!(f2.as_mut().poll(&mut cx).is_pending());
+        assert!(f3.as_mut().poll(&mut cx).is_pending());
+
+        // Dropping the guard notifies f1.
+        drop(guard);
+        // Cancel f1 without polling — forwards to f2.
+        drop(f1);
+        // Cancel f2 without polling — forwards to f3.
+        drop(f2);
+        // f3 should now hold the lock.
+        assert!(f3.as_mut().poll(&mut cx).is_ready());
+    }
+
     // --- embedded variant tests ---
 
     #[test]

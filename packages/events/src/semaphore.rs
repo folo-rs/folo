@@ -1074,7 +1074,10 @@ mod tests {
 
     #[test]
     fn release_wakes_multiple_waiters() {
-        let sem = Semaphore::boxed(0);
+        let sem = Semaphore::boxed(3);
+        let p1 = sem.try_acquire().unwrap();
+        let p2 = sem.try_acquire().unwrap();
+        let p3 = sem.try_acquire().unwrap();
 
         let mut f1 = Box::pin(sem.acquire());
         let mut f2 = Box::pin(sem.acquire());
@@ -1086,28 +1089,14 @@ mod tests {
         assert!(f2.as_mut().poll(&mut cx).is_pending());
         assert!(f3.as_mut().poll(&mut cx).is_pending());
 
-        // Adding 3 permits via a permit that held 3 should wake all.
-        // Simulate by creating a boxed(3) and taking a 3-permit.
-        let sem2 = Semaphore::boxed(3);
-        let big_permit = sem2.try_acquire_many(3).unwrap();
-        // We cannot easily inject permits. Instead, test via the
-        // internal release_permits function indirectly by releasing
-        // one at a time.
-        drop(f1);
-        drop(f2);
-        drop(f3);
-        drop(big_permit);
+        // Release all 3 permits. Each release wakes the next waiter.
+        drop(p1);
+        drop(p2);
+        drop(p3);
 
-        // Fresh test: release 3 permits at once into the pool.
-        let sem3 = Semaphore::boxed(3);
-        let mut g1 = Box::pin(sem3.acquire());
-        let mut g2 = Box::pin(sem3.acquire());
-        let mut g3 = Box::pin(sem3.acquire());
-
-        // All should succeed immediately.
-        assert!(g1.as_mut().poll(&mut cx).is_ready());
-        assert!(g2.as_mut().poll(&mut cx).is_ready());
-        assert!(g3.as_mut().poll(&mut cx).is_ready());
+        assert!(f1.as_mut().poll(&mut cx).is_ready());
+        assert!(f2.as_mut().poll(&mut cx).is_ready());
+        assert!(f3.as_mut().poll(&mut cx).is_ready());
     }
 
     #[test]
@@ -1155,6 +1144,97 @@ mod tests {
         {
             let _future = sem.acquire();
         }
+        assert!(sem.try_acquire().is_some());
+    }
+
+    #[test]
+    fn zero_initial_permits() {
+        let sem = Semaphore::boxed(0);
+        assert!(sem.try_acquire().is_none());
+    }
+
+    #[test]
+    fn try_acquire_many_exact_max() {
+        let sem = Semaphore::boxed(5);
+        let permit = sem.try_acquire_many(5).unwrap();
+        assert!(sem.try_acquire().is_none());
+        drop(permit);
+        assert!(sem.try_acquire().is_some());
+    }
+
+    #[test]
+    fn try_acquire_many_exceeds_max() {
+        let sem = Semaphore::boxed(3);
+        assert!(sem.try_acquire_many(4).is_none());
+        // Semaphore is untouched — still has 3 available.
+        assert!(sem.try_acquire_many(3).is_some());
+    }
+
+    #[test]
+    fn acquire_many_all_at_once() {
+        futures::executor::block_on(async {
+            let sem = Semaphore::boxed(5);
+            let permit = sem.acquire_many(5).await;
+            assert!(sem.try_acquire().is_none());
+            drop(permit);
+            assert!(sem.try_acquire_many(5).is_some());
+        });
+    }
+
+    #[test]
+    fn try_acquire_bypasses_waiter_queue() {
+        let sem = Semaphore::boxed(3);
+        let _p1 = sem.try_acquire().unwrap();
+        let _p2 = sem.try_acquire().unwrap();
+        // 1 permit available, 2 held.
+
+        // Register a waiter wanting 2 permits (more than available).
+        let mut f1 = Box::pin(sem.acquire_many(2));
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        assert!(f1.as_mut().poll(&mut cx).is_pending());
+
+        // try_acquire(1) succeeds despite a queued waiter because
+        // try_acquire does not consult the waiter queue.
+        assert!(sem.try_acquire().is_some());
+    }
+
+    #[test]
+    fn multiple_sequential_cancellations() {
+        let sem = Semaphore::boxed(1);
+        let permit = sem.try_acquire().unwrap();
+
+        let mut f1 = Box::pin(sem.acquire());
+        let mut f2 = Box::pin(sem.acquire());
+        let mut f3 = Box::pin(sem.acquire());
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        assert!(f1.as_mut().poll(&mut cx).is_pending());
+        assert!(f2.as_mut().poll(&mut cx).is_pending());
+        assert!(f3.as_mut().poll(&mut cx).is_pending());
+
+        // Dropping the permit notifies f1.
+        drop(permit);
+        // Cancel f1 without polling — forwards to f2.
+        drop(f1);
+        // Cancel f2 without polling — forwards to f3.
+        drop(f2);
+        // f3 should now have the permit.
+        assert!(f3.as_mut().poll(&mut cx).is_ready());
+    }
+
+    #[test]
+    fn permits_released_on_panic() {
+        let sem = Semaphore::boxed(1);
+        let handle = sem.clone();
+        let result = std::panic::catch_unwind(move || {
+            let _permit = handle.try_acquire().unwrap();
+            panic!("intentional");
+        });
+        assert!(result.is_err());
+        // Permit drop during unwinding must return the permit.
         assert!(sem.try_acquire().is_some());
     }
 
