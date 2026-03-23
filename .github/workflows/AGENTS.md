@@ -30,10 +30,10 @@ Split from the monolithic `just validate-local` into individual jobs:
   - test-docs
   - **docs** — Multi-platform because conditional compilation affects generated documentation
   - miri
-  - **miri-harder-events-once** / **miri-harder-infinity-pool** — Windows-only, sharded
+  - **miri-harder-events-once** / **miri-harder-infinity-pool** / **miri-harder-events** — Windows-only, sharded
     - Runs Miri with 64 seeds per test (`-Zmiri-many-seeds=..64`) for select packages
     - Sharded across parallel runners to reduce wall-clock time (4 shards for events_once,
-      8 shards for infinity_pool)
+      8 shards for infinity_pool, 2 shards for events)
     - Very slow, so only run for specific packages on a single platform
   - **machete** — Multi-platform because conditional compilation affects dependency analysis
   - check-release

@@ -297,6 +297,28 @@ jobs:
       - name: Run miri-harder for infinity_pool on windows-latest (shard ${{ matrix.shard }})
         run: just package=infinity_pool miri-harder ${{ matrix.shard }}
 
+  miri-harder-events:
+    needs: [delta]
+    if: >-
+      needs.delta.outputs.skip_all != 'true'
+      && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'events'))
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1/2, 2/2]
+    timeout-minutes: 90
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run miri-harder for events on windows-latest (shard ${{ matrix.shard }})
+        run: just package=events miri-harder ${{ matrix.shard }}
+
   machete:
     needs: [delta]
     if: needs.delta.outputs.skip_all != 'true'

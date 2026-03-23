@@ -253,6 +253,12 @@ API documentation on types and functions should describe the API contract (i.e. 
 the outputs and the behavior) not how it is implemented. Do not discuss implementation details
 like private helper types or reference the internal field structure of a type in API documentation.
 
+# Keep API documentation summary lines short
+
+The first line of each `///` doc comment is used as the summary in rustdoc type and method tables.
+Keep this first line short and concise so it does not wrap to the next line in the generated
+documentation. Move detailed descriptions to subsequent paragraphs after a blank `///` line.
+
 # Lint suppressions
 
 It is fine to suppress Clippy and compiler lints in the code if it is justified. All suppressions
