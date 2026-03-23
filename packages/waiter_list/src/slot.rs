@@ -78,12 +78,15 @@ impl WaiterSlot {
     /// the slot as registered. On subsequent calls it only updates the
     /// stored waker (the node is already in the list).
     ///
+    /// Takes ownership of the waker so no cloning happens while the
+    /// caller holds a lock. Clone the waker before acquiring locks.
+    ///
     /// # Safety
     ///
     /// * The caller must have exclusive access to both the node and
     ///   the list (e.g. by holding a lock).
     /// * The slot must be at a pinned, stable address.
-    pub unsafe fn register(&mut self, list: &mut WaiterList, waker: &Waker) {
+    pub unsafe fn register(&mut self, list: &mut WaiterList, waker: Waker) {
         let node_ptr = self.node.get();
         // SAFETY: Caller guarantees exclusive access.
         unsafe {
@@ -109,7 +112,7 @@ impl WaiterSlot {
     /// # Safety
     ///
     /// Same requirements as [`register()`][Self::register].
-    pub unsafe fn register_with_data(&mut self, list: &mut WaiterList, waker: &Waker, data: usize) {
+    pub unsafe fn register_with_data(&mut self, list: &mut WaiterList, waker: Waker, data: usize) {
         let node_ptr = self.node.get();
         // SAFETY: Caller guarantees exclusive access.
         unsafe {
@@ -264,11 +267,10 @@ mod tests {
     fn register_sets_registered_flag() {
         let mut slot = WaiterSlot::new();
         let mut list = WaiterList::new();
-        let waker = Waker::noop();
 
         // SAFETY: Test has exclusive access.
         unsafe {
-            slot.register(&mut list, waker);
+            slot.register(&mut list, Waker::noop().clone());
         }
         assert!(slot.is_registered());
         assert!(!list.is_empty());
@@ -278,15 +280,14 @@ mod tests {
     fn register_idempotent_on_second_call() {
         let mut slot = WaiterSlot::new();
         let mut list = WaiterList::new();
-        let waker = Waker::noop();
 
         // SAFETY: Test has exclusive access.
         unsafe {
-            slot.register(&mut list, waker);
+            slot.register(&mut list, Waker::noop().clone());
         }
         // SAFETY: Test has exclusive access.
         unsafe {
-            slot.register(&mut list, waker);
+            slot.register(&mut list, Waker::noop().clone());
         }
 
         // Still registered, list still has exactly one node.
@@ -301,11 +302,10 @@ mod tests {
     fn register_with_data_stores_user_data() {
         let mut slot = WaiterSlot::new();
         let mut list = WaiterList::new();
-        let waker = Waker::noop();
 
         // SAFETY: Test has exclusive access.
         unsafe {
-            slot.register_with_data(&mut list, waker, 42);
+            slot.register_with_data(&mut list, Waker::noop().clone(), 42);
         }
         assert!(slot.is_registered());
 
@@ -318,11 +318,10 @@ mod tests {
     fn unregister_removes_from_list() {
         let mut slot = WaiterSlot::new();
         let mut list = WaiterList::new();
-        let waker = Waker::noop();
 
         // SAFETY: Test has exclusive access.
         unsafe {
-            slot.register(&mut list, waker);
+            slot.register(&mut list, Waker::noop().clone());
         }
         // SAFETY: Test has exclusive access.
         unsafe {
@@ -358,11 +357,10 @@ mod tests {
     fn take_notification_returns_true_and_clears_registered() {
         let mut slot = WaiterSlot::new();
         let mut list = WaiterList::new();
-        let waker = Waker::noop();
 
         // SAFETY: Test has exclusive access.
         unsafe {
-            slot.register(&mut list, waker);
+            slot.register(&mut list, Waker::noop().clone());
         }
 
         // Simulate what the primitive does: pop + set_notified.
@@ -387,11 +385,10 @@ mod tests {
     fn is_notified_does_not_change_registered() {
         let mut slot = WaiterSlot::new();
         let mut list = WaiterList::new();
-        let waker = Waker::noop();
 
         // SAFETY: Test has exclusive access.
         unsafe {
-            slot.register(&mut list, waker);
+            slot.register(&mut list, Waker::noop().clone());
         }
         // SAFETY: Test has exclusive access.
         let node = unsafe { list.pop_front() }.unwrap();
@@ -411,12 +408,11 @@ mod tests {
     fn full_lifecycle_register_notify_take() {
         let mut slot = WaiterSlot::new();
         let mut list = WaiterList::new();
-        let waker = Waker::noop();
 
         // Register.
         // SAFETY: Test has exclusive access.
         unsafe {
-            slot.register(&mut list, waker);
+            slot.register(&mut list, Waker::noop().clone());
         }
         assert!(slot.is_registered());
 
@@ -439,12 +435,11 @@ mod tests {
     fn full_lifecycle_register_unregister() {
         let mut slot = WaiterSlot::new();
         let mut list = WaiterList::new();
-        let waker = Waker::noop();
 
         // Register.
         // SAFETY: Test has exclusive access.
         unsafe {
-            slot.register(&mut list, waker);
+            slot.register(&mut list, Waker::noop().clone());
         }
         assert!(slot.is_registered());
 

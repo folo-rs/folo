@@ -543,7 +543,7 @@ mod tests {
         let pa: *mut WaiterNode = &raw mut a;
 
         let waker = noop_waker();
-        a.store_waker(&waker);
+        a.store_waker(waker);
 
         unsafe {
             list.push_back(pa);

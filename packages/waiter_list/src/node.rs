@@ -77,11 +77,11 @@ impl WaiterNode {
 
     /// Stores a waker for this node, replacing any previously stored waker.
     ///
-    /// Typically called during the future's `poll()` to ensure the waker
-    /// is up to date (the executor may provide a different waker on
-    /// subsequent polls).
-    pub fn store_waker(&mut self, waker: &Waker) {
-        self.waker = Some(waker.clone());
+    /// Takes ownership of the waker to avoid cloning under a lock.
+    /// Callers should clone the waker before acquiring any locks and
+    /// pass the owned clone here.
+    pub fn store_waker(&mut self, waker: Waker) {
+        self.waker = Some(waker);
     }
 
     /// Extracts and returns the stored waker, if any.
@@ -204,7 +204,7 @@ mod tests {
     fn store_and_take_waker() {
         let mut node = WaiterNode::new();
         let waker = noop_waker();
-        node.store_waker(&waker);
+        node.store_waker(waker);
         assert!(node.take_waker().is_some());
     }
 
@@ -212,7 +212,7 @@ mod tests {
     fn take_waker_twice_returns_none() {
         let mut node = WaiterNode::new();
         let waker = noop_waker();
-        node.store_waker(&waker);
+        node.store_waker(waker);
         drop(node.take_waker());
         assert!(node.take_waker().is_none());
     }
@@ -222,8 +222,8 @@ mod tests {
         let mut node = WaiterNode::new();
         let w1 = noop_waker();
         let w2 = noop_waker();
-        node.store_waker(&w1);
-        node.store_waker(&w2);
+        node.store_waker(w1);
+        node.store_waker(w2);
         assert!(node.take_waker().is_some());
     }
 

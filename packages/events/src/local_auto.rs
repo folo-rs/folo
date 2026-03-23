@@ -126,7 +126,7 @@ impl Inner {
     /// * The `slot` must be pinned and must remain at the same memory
     ///   address for the lifetime of the wait future.
     /// * The `slot` must belong to a future created from the same event.
-    unsafe fn poll_wait(&self, slot: &mut WaiterSlot, waker: &Waker) -> Poll<()> {
+    unsafe fn poll_wait(&self, slot: &mut WaiterSlot, waker: Waker) -> Poll<()> {
         // SAFETY: Single-threaded access.
         if unsafe { slot.take_notification() } {
             return Poll::Ready(());
@@ -344,11 +344,13 @@ impl Future for LocalAutoResetWaitFuture {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<()> {
+        let waker = cx.waker().clone();
+
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
         // SAFETY: The slot is pinned inside this future and belongs
         // to this event's waiter list.
-        unsafe { this.inner.poll_wait(&mut this.slot, cx.waker()) }
+        unsafe { this.inner.poll_wait(&mut this.slot, waker) }
     }
 }
 
@@ -519,6 +521,8 @@ impl Future for RawLocalAutoResetWaitFuture {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<()> {
+        let waker = cx.waker().clone();
+
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
         // SAFETY: The container outlives this future per the embedded()
@@ -526,7 +530,7 @@ impl Future for RawLocalAutoResetWaitFuture {
         let inner = unsafe { this.inner.as_ref() };
         // SAFETY: The slot is pinned inside this future and belongs
         // to this event's waiter list.
-        unsafe { inner.poll_wait(&mut this.slot, cx.waker()) }
+        unsafe { inner.poll_wait(&mut this.slot, waker) }
     }
 }
 

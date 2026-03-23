@@ -163,7 +163,7 @@ fn try_lock_inner(lock_state: &StdMutex<LockState>) -> bool {
 unsafe fn poll_lock(
     lock_state: &StdMutex<LockState>,
     slot: &mut WaiterSlot,
-    waker: &Waker,
+    waker: Waker,
 ) -> Poll<()> {
     let mut state = lock_state.lock().expect(NEVER_POISONED);
 
@@ -463,13 +463,17 @@ impl<'a, T> Future for MutexLockFuture<'a, T> {
     type Output = MutexGuard<'a, T>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<MutexGuard<'a, T>> {
+        // Clone the waker before acquiring the lock so a panicking
+        // clone cannot poison the mutex.
+        let waker = cx.waker().clone();
+
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
         // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
         // and the lock_state field is the lock this slot registers
         // with.
-        match unsafe { poll_lock(this.lock_state, &mut this.slot, cx.waker()) } {
+        match unsafe { poll_lock(this.lock_state, &mut this.slot, waker) } {
             Poll::Ready(()) => Poll::Ready(MutexGuard {
                 lock_state: this.lock_state,
                 data: this.data,
@@ -724,6 +728,10 @@ impl<T> Future for RawMutexLockFuture<T> {
     type Output = RawMutexGuard<T>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<RawMutexGuard<T>> {
+        // Clone the waker before acquiring the lock so a panicking
+        // clone cannot poison the mutex.
+        let waker = cx.waker().clone();
+
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
@@ -732,7 +740,7 @@ impl<T> Future for RawMutexLockFuture<T> {
         let inner = unsafe { this.inner.as_ref() };
         // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
         // and the lock_state is the lock this slot registers with.
-        match unsafe { poll_lock(&inner.lock_state, &mut this.slot, cx.waker()) } {
+        match unsafe { poll_lock(&inner.lock_state, &mut this.slot, waker) } {
             Poll::Ready(()) => Poll::Ready(RawMutexGuard { inner: this.inner }),
             Poll::Pending => Poll::Pending,
         }

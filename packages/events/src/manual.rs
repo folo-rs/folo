@@ -149,7 +149,7 @@ fn try_wait(mutex: &Mutex<State>) -> bool {
 ///   for the lifetime of the wait future.
 /// * The `mutex` must protect the waiter list that this slot is (or will
 ///   be) registered with.
-unsafe fn poll_wait(mutex: &Mutex<State>, slot: &mut WaiterSlot, waker: &Waker) -> Poll<()> {
+unsafe fn poll_wait(mutex: &Mutex<State>, slot: &mut WaiterSlot, waker: Waker) -> Poll<()> {
     let mut state = mutex.lock().expect(NEVER_POISONED);
 
     if state.is_set {
@@ -381,7 +381,7 @@ impl Future for ManualResetWaitFuture {
         let this = unsafe { self.get_unchecked_mut() };
         // SAFETY: The slot is pinned inside this future and the state
         // field is the mutex this slot registers with.
-        unsafe { poll_wait(&this.state, &mut this.slot, &waker) }
+        unsafe { poll_wait(&this.state, &mut this.slot, waker) }
     }
 }
 
@@ -566,7 +566,7 @@ impl Future for RawManualResetWaitFuture {
         let state = unsafe { this.state.as_ref() };
         // SAFETY: The slot is pinned inside this future and the state
         // is the mutex this slot registers with.
-        unsafe { poll_wait(state, &mut this.slot, &waker) }
+        unsafe { poll_wait(state, &mut this.slot, waker) }
     }
 }
 

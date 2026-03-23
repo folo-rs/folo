@@ -117,7 +117,7 @@ impl<T> Inner<T> {
     ///   address for the lifetime of the lock future.
     /// * The `slot` must belong to a future created from the same
     ///   mutex.
-    unsafe fn poll_lock(&self, slot: &mut WaiterSlot, waker: &Waker) -> Poll<()> {
+    unsafe fn poll_lock(&self, slot: &mut WaiterSlot, waker: Waker) -> Poll<()> {
         // SAFETY: Single-threaded access.
         if unsafe { slot.take_notification() } {
             return Poll::Ready(());
@@ -372,13 +372,15 @@ impl<'a, T> Future for LocalMutexLockFuture<'a, T> {
     type Output = LocalMutexGuard<'a, T>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<LocalMutexGuard<'a, T>> {
+        let waker = cx.waker().clone();
+
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
         // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
         // and the lock_state field is the lock this slot registers
         // with.
-        match unsafe { this.inner.poll_lock(&mut this.slot, cx.waker()) } {
+        match unsafe { this.inner.poll_lock(&mut this.slot, waker) } {
             Poll::Ready(()) => Poll::Ready(LocalMutexGuard { inner: this.inner }),
             Poll::Pending => Poll::Pending,
         }
@@ -601,6 +603,8 @@ impl<T> Future for RawLocalMutexLockFuture<T> {
     type Output = RawLocalMutexGuard<T>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<RawLocalMutexGuard<T>> {
+        let waker = cx.waker().clone();
+
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
@@ -609,7 +613,7 @@ impl<T> Future for RawLocalMutexLockFuture<T> {
         let inner = unsafe { this.inner.as_ref() };
         // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
         // and the lock_state is the lock this slot registers with.
-        match unsafe { inner.poll_lock(&mut this.slot, cx.waker()) } {
+        match unsafe { inner.poll_lock(&mut this.slot, waker) } {
             Poll::Ready(()) => Poll::Ready(RawLocalMutexGuard { inner: this.inner }),
             Poll::Pending => Poll::Pending,
         }

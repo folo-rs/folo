@@ -206,7 +206,7 @@ unsafe fn poll_acquire(
     state_mutex: &Mutex<SemaphoreState>,
     slot: &mut WaiterSlot,
     permits: usize,
-    waker: &Waker,
+    waker: Waker,
 ) -> Poll<()> {
     let mut state = state_mutex.lock().expect(NEVER_POISONED);
 
@@ -517,12 +517,16 @@ impl<'a> Future for SemaphoreAcquireFuture<'a> {
     type Output = SemaphorePermit<'a>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<SemaphorePermit<'a>> {
+        // Clone the waker before acquiring the lock so a panicking
+        // clone cannot poison the mutex.
+        let waker = cx.waker().clone();
+
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
         // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
         // and the state field is the mutex this slot registers with.
-        match unsafe { poll_acquire(this.state, &mut this.slot, this.permits, cx.waker()) } {
+        match unsafe { poll_acquire(this.state, &mut this.slot, this.permits, waker) } {
             Poll::Ready(()) => Poll::Ready(SemaphorePermit {
                 state: this.state,
                 permits: this.permits,
@@ -781,6 +785,10 @@ impl Future for RawSemaphoreAcquireFuture {
     type Output = RawSemaphorePermit;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<RawSemaphorePermit> {
+        // Clone the waker before acquiring the lock so a panicking
+        // clone cannot poison the mutex.
+        let waker = cx.waker().clone();
+
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
@@ -789,7 +797,7 @@ impl Future for RawSemaphoreAcquireFuture {
         let inner = unsafe { this.inner.as_ref() };
         // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
         // and the state is the mutex this slot registers with.
-        match unsafe { poll_acquire(&inner.state, &mut this.slot, this.permits, cx.waker()) } {
+        match unsafe { poll_acquire(&inner.state, &mut this.slot, this.permits, waker) } {
             Poll::Ready(()) => Poll::Ready(RawSemaphorePermit {
                 inner: this.inner,
                 permits: this.permits,

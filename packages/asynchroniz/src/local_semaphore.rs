@@ -158,12 +158,7 @@ impl Inner {
     ///   address for the lifetime of the acquire future.
     /// * The `slot` must belong to a future created from the same
     ///   semaphore.
-    unsafe fn poll_acquire(
-        &self,
-        slot: &mut WaiterSlot,
-        permits: usize,
-        waker: &Waker,
-    ) -> Poll<()> {
+    unsafe fn poll_acquire(&self, slot: &mut WaiterSlot, permits: usize, waker: Waker) -> Poll<()> {
         // SAFETY: Single-threaded access.
         if unsafe { slot.take_notification() } {
             return Poll::Ready(());
@@ -415,15 +410,14 @@ impl<'a> Future for LocalSemaphoreAcquireFuture<'a> {
     type Output = LocalSemaphorePermit<'a>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<LocalSemaphorePermit<'a>> {
+        let waker = cx.waker().clone();
+
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
         // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
         // and the state field is the lock this slot registers with.
-        match unsafe {
-            this.inner
-                .poll_acquire(&mut this.slot, this.permits, cx.waker())
-        } {
+        match unsafe { this.inner.poll_acquire(&mut this.slot, this.permits, waker) } {
             Poll::Ready(()) => Poll::Ready(LocalSemaphorePermit {
                 inner: this.inner,
                 permits: this.permits,
@@ -644,6 +638,8 @@ impl Future for RawLocalSemaphoreAcquireFuture {
     type Output = RawLocalSemaphorePermit;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<RawLocalSemaphorePermit> {
+        let waker = cx.waker().clone();
+
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
@@ -652,7 +648,7 @@ impl Future for RawLocalSemaphoreAcquireFuture {
         let inner = unsafe { this.inner.as_ref() };
         // SAFETY: poll_acquire requires single-threaded access,
         // which LocalSemaphore guarantees (!Send).
-        match unsafe { inner.poll_acquire(&mut this.slot, this.permits, cx.waker()) } {
+        match unsafe { inner.poll_acquire(&mut this.slot, this.permits, waker) } {
             Poll::Ready(()) => Poll::Ready(RawLocalSemaphorePermit {
                 inner: this.inner,
                 permits: this.permits,
