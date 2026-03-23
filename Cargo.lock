@@ -242,6 +242,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "asynchroniz"
+version = "0.1.0"
+dependencies = [
+ "alloc_tracker",
+ "async-lock",
+ "criterion",
+ "futures",
+ "mutants",
+ "static_assertions",
+ "testing",
+ "tokio",
+ "waiter_list",
+]
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -643,6 +658,7 @@ dependencies = [
  "static_assertions",
  "testing",
  "tokio",
+ "waiter_list",
 ]
 
 [[package]]
@@ -2304,6 +2320,15 @@ dependencies = [
  "threadpool",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "waiter_list"
+version = "0.1.0"
+dependencies = [
+ "mutants",
+ "simple-mermaid",
+ "static_assertions",
 ]
 
 [[package]]

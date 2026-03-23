@@ -1,6 +1,6 @@
 # Events
 
-Async manual-reset and auto-reset events for multi-use signaling.
+Async event primitives with intrusive waiter lists.
 
 This crate provides two families of event primitives:
 

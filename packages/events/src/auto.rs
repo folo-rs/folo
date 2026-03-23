@@ -1,16 +1,15 @@
-use std::cell::UnsafeCell;
-use std::fmt;
 use std::future::Future;
 use std::marker::PhantomPinned;
-use std::mem;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 use std::task::{self, Poll, Waker};
+use std::{fmt, mem};
+
+use waiter_list::{WaiterList, WaiterSlot};
 
 use crate::NEVER_POISONED;
-use crate::waiter_list::{WaiterList, WaiterNode};
 
 /// Thread-safe async auto-reset event.
 ///
@@ -84,11 +83,11 @@ fn set(mutex: &Mutex<State>) {
                     // SAFETY: We hold the lock and just popped this
                     // node.
                     unsafe {
-                        (*node_ptr).notified = true;
+                        (*node_ptr).set_notified();
                     }
 
                     // SAFETY: Same node, we hold the lock.
-                    waker = unsafe { (*node_ptr).waker.take() };
+                    waker = unsafe { (*node_ptr).take_waker() };
                 } else {
                     // No waiters — store the signal.
                     *state = State::Set;
@@ -120,25 +119,17 @@ fn try_wait(mutex: &Mutex<State>) -> bool {
 ///
 /// # Safety
 ///
-/// * The `node` must be pinned and must remain at the same memory address
+/// * The `slot` must be pinned and must remain at the same memory address
 ///   for the lifetime of the wait future.
-/// * The `mutex` must protect the waiter list that this node is (or will
+/// * The `mutex` must protect the waiter list that this slot is (or will
 ///   be) registered with.
-unsafe fn poll_wait(
-    mutex: &Mutex<State>,
-    node: &UnsafeCell<WaiterNode>,
-    registered: &mut bool,
-    waker: Waker,
-) -> Poll<()> {
-    let node_ptr = node.get();
-
+unsafe fn poll_wait(mutex: &Mutex<State>, slot: &mut WaiterSlot, waker: Waker) -> Poll<()> {
     let mut state = mutex.lock().expect(NEVER_POISONED);
 
     // Check if we were directly notified by set() (it popped us
     // from the list and set our notified flag).
-    // SAFETY: We hold the lock.
-    if unsafe { (*node_ptr).notified } {
-        *registered = false;
+    // SAFETY: We hold the lock that protects the waiter list and node.
+    if unsafe { slot.take_notification() } {
         return Poll::Ready(());
     }
 
@@ -146,24 +137,17 @@ unsafe fn poll_wait(
         State::Set => {
             // Signal available — consume it.
             debug_assert!(
-                !*registered,
+                !slot.is_registered(),
                 "Set state is exclusive with registered waiters"
             );
             *state = State::Unset(WaiterList::new());
             Poll::Ready(())
         }
         State::Unset(waiters) => {
-            // SAFETY: We hold the lock.
+            // SAFETY: We hold the lock, slot is pinned and lives as
+            // long as the future.
             unsafe {
-                (*node_ptr).waker = Some(waker);
-            }
-            if !*registered {
-                // SAFETY: We hold the lock, node is pinned and not
-                // in any list.
-                unsafe {
-                    waiters.push_back(node_ptr);
-                }
-                *registered = true;
+                slot.register(waiters, waker);
             }
             Poll::Pending
         }
@@ -175,17 +159,16 @@ unsafe fn poll_wait(
 /// # Safety
 ///
 /// Same requirements as [`poll_wait`].
-unsafe fn drop_wait(mutex: &Mutex<State>, node: &UnsafeCell<WaiterNode>, registered: bool) {
-    // The caller must only call this when the node is registered. Both
+unsafe fn drop_wait(mutex: &Mutex<State>, slot: &mut WaiterSlot) {
+    // The caller must only call this when the slot is registered. Both
     // AutoResetWaitFuture::drop and RawAutoResetWaitFuture::drop guard
-    // on `self.registered` before calling, so this should always hold.
-    debug_assert!(registered);
+    // on `slot.is_registered()` before calling, so this should always hold.
+    debug_assert!(slot.is_registered());
 
-    let node_ptr = node.get();
     let mut state = mutex.lock().expect(NEVER_POISONED);
 
-    // SAFETY: We hold the lock.
-    if unsafe { (*node_ptr).notified } {
+    // SAFETY: We hold the lock that protects the waiter list and node.
+    if unsafe { slot.is_notified() } {
         // We were notified but the future was cancelled before it
         // could complete. Forward the notification to the next
         // waiter so that no signal is lost.
@@ -197,10 +180,10 @@ unsafe fn drop_wait(mutex: &Mutex<State>, node: &UnsafeCell<WaiterNode>, registe
                     // SAFETY: We hold the lock and just popped
                     // this node.
                     unsafe {
-                        (*next_node).notified = true;
+                        (*next_node).set_notified();
                     }
                     // SAFETY: Same node, we hold the lock.
-                    let waker = unsafe { (*next_node).waker.take() };
+                    let waker = unsafe { (*next_node).take_waker() };
                     // Restore the waiter list.
                     *state = State::Unset(waiters);
                     drop(state);
@@ -223,10 +206,10 @@ unsafe fn drop_wait(mutex: &Mutex<State>, node: &UnsafeCell<WaiterNode>, registe
         // Not notified — just remove from the list.
         match &mut *state {
             State::Unset(waiters) => {
-                // SAFETY: We hold the lock and the node is in the
-                // list.
+                // SAFETY: We hold the lock and the slot is registered
+                // in this list.
                 unsafe {
-                    waiters.remove(node_ptr);
+                    slot.unregister(waiters);
                 }
             }
             State::Set => {
@@ -394,9 +377,7 @@ impl AutoResetEvent {
     pub fn wait(&self) -> AutoResetWaitFuture {
         AutoResetWaitFuture {
             state: Arc::clone(&self.state),
-            node: UnsafeCell::new(WaiterNode::new()),
-            registered: false,
-            _pinned: PhantomPinned,
+            slot: WaiterSlot::new(),
         }
     }
 }
@@ -406,28 +387,15 @@ impl AutoResetEvent {
 /// Completes with `()` when the event signal is acquired.
 pub struct AutoResetWaitFuture {
     state: Arc<Mutex<State>>,
-
-    // Behind UnsafeCell so that raw pointers from the event's waiter list can
-    // coexist with the &mut Self we obtain in poll() via get_unchecked_mut().
-    // UnsafeCell opts out of the noalias guarantee for its contents.
-    node: UnsafeCell<WaiterNode>,
-
-    // Whether this future's node is currently in the event's waiter list.
-    // Only accessed through &mut Self in poll()/drop(), never through the list.
-    registered: bool,
-
-    _pinned: PhantomPinned,
+    slot: WaiterSlot,
 }
 
 // Marker trait impl.
-// SAFETY: All UnsafeCell<WaiterNode> fields are accessed exclusively under the
-// event's Mutex. The Arc<Mutex<State>> is Send + Sync. The raw pointers inside
-// WaiterNode are only dereferenced under the Mutex.
+// SAFETY: WaiterSlot is Send. All slot access is protected by the event's
+// Mutex. The Arc<Mutex<State>> is Send + Sync.
 unsafe impl Send for AutoResetWaitFuture {}
 
-// The UnsafeCell<WaiterNode> field causes auto-trait inference to mark the
-// future as !UnwindSafe and !RefUnwindSafe. However, all mutable access to
-// the node goes through the Mutex, preventing inconsistent state observation.
+// WaiterSlot is UnwindSafe and RefUnwindSafe.
 // Marker trait impl.
 impl UnwindSafe for AutoResetWaitFuture {}
 // Marker trait impl.
@@ -444,21 +412,21 @@ impl Future for AutoResetWaitFuture {
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
-        // SAFETY: The node is pinned (PhantomPinned) and the state
-        // field is the mutex this node registers with.
-        unsafe { poll_wait(&this.state, &this.node, &mut this.registered, waker) }
+        // SAFETY: The slot is pinned inside this future and the state
+        // field is the mutex this slot registers with.
+        unsafe { poll_wait(&this.state, &mut this.slot, waker) }
     }
 }
 
 impl Drop for AutoResetWaitFuture {
     fn drop(&mut self) {
-        if !self.registered {
+        if !self.slot.is_registered() {
             return;
         }
 
-        // SAFETY: The node is pinned (PhantomPinned) and the state
-        // field is the mutex this node was registered with.
-        unsafe { drop_wait(&self.state, &self.node, self.registered) }
+        // SAFETY: The slot is pinned inside this future and the state
+        // field is the mutex this slot was registered with.
+        unsafe { drop_wait(&self.state, &mut self.slot) }
     }
 }
 
@@ -473,7 +441,7 @@ impl fmt::Debug for AutoResetEvent {
 impl fmt::Debug for AutoResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AutoResetWaitFuture")
-            .field("registered", &self.registered)
+            .field("registered", &self.slot.is_registered())
             .finish_non_exhaustive()
     }
 }
@@ -588,9 +556,7 @@ impl RawAutoResetEvent {
     pub fn wait(&self) -> RawAutoResetWaitFuture {
         RawAutoResetWaitFuture {
             state: self.state,
-            node: UnsafeCell::new(WaiterNode::new()),
-            registered: false,
-            _pinned: PhantomPinned,
+            slot: WaiterSlot::new(),
         }
     }
 }
@@ -598,17 +564,12 @@ impl RawAutoResetEvent {
 /// Future returned by [`RawAutoResetEvent::wait()`].
 pub struct RawAutoResetWaitFuture {
     state: NonNull<Mutex<State>>,
-
-    // See AutoResetWaitFuture for field documentation.
-    node: UnsafeCell<WaiterNode>,
-    registered: bool,
-
-    _pinned: PhantomPinned,
+    slot: WaiterSlot,
 }
 
 // Marker trait impl.
-// SAFETY: Same reasoning as AutoResetWaitFuture — all node access is
-// protected by the Mutex.
+// SAFETY: WaiterSlot is Send. All slot access is protected by the event's
+// Mutex.
 unsafe impl Send for RawAutoResetWaitFuture {}
 
 // Marker trait impl.
@@ -630,24 +591,24 @@ impl Future for RawAutoResetWaitFuture {
         // SAFETY: The container outlives this future per the embedded()
         // contract.
         let state = unsafe { this.state.as_ref() };
-        // SAFETY: The node is pinned (PhantomPinned) and the state
-        // is the mutex this node registers with.
-        unsafe { poll_wait(state, &this.node, &mut this.registered, waker) }
+        // SAFETY: The slot is pinned inside this future and the state
+        // is the mutex this slot registers with.
+        unsafe { poll_wait(state, &mut this.slot, waker) }
     }
 }
 
 impl Drop for RawAutoResetWaitFuture {
     fn drop(&mut self) {
-        if !self.registered {
+        if !self.slot.is_registered() {
             return;
         }
 
         // SAFETY: The container outlives this future per the embedded()
         // contract.
         let state = unsafe { self.state.as_ref() };
-        // SAFETY: The node is pinned (PhantomPinned) and the state
-        // is the mutex this node was registered with.
-        unsafe { drop_wait(state, &self.node, self.registered) }
+        // SAFETY: The slot is pinned inside this future and the state
+        // is the mutex this slot was registered with.
+        unsafe { drop_wait(state, &mut self.slot) }
     }
 }
 
@@ -670,7 +631,7 @@ impl fmt::Debug for RawAutoResetEvent {
 impl fmt::Debug for RawAutoResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RawAutoResetWaitFuture")
-            .field("registered", &self.registered)
+            .field("registered", &self.slot.is_registered())
             .finish_non_exhaustive()
     }
 }
