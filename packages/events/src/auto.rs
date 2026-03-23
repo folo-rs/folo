@@ -2,6 +2,7 @@ use std::cell::UnsafeCell;
 use std::fmt;
 use std::future::Future;
 use std::marker::PhantomPinned;
+use std::mem;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
@@ -50,9 +51,16 @@ pub struct AutoResetEvent {
     state: Arc<Mutex<State>>,
 }
 
-struct State {
-    is_set: bool,
-    waiters: WaiterList,
+// The `is_set` flag and waiter list are mutually exclusive: if the event is
+// set there are no waiters, and if there are waiters the event is not set.
+// This enum encodes that invariant at the type level.
+enum State {
+    /// No signal stored, no waiters registered.
+    Idle,
+    /// Signal stored (will be consumed by the next wait or `try_wait`).
+    Set,
+    /// One or more waiters are registered.
+    Waiting(WaiterList),
 }
 
 // Marker trait impl.
@@ -68,20 +76,32 @@ fn set(mutex: &Mutex<State>) {
     {
         let mut state = mutex.lock().expect(NEVER_POISONED);
 
-        // SAFETY: We hold the lock, so all node pointers are valid.
-        if let Some(node_ptr) = unsafe { state.waiters.pop_front() } {
-            // Notify the next waiter.
-            // SAFETY: We hold the lock and just popped this node.
-            unsafe {
-                (*node_ptr).notified = true;
+        match &mut *state {
+            State::Idle | State::Set => {
+                *state = State::Set;
+                waker = None;
             }
+            State::Waiting(waiters) => {
+                // SAFETY: We hold the lock, and Waiting guarantees
+                // a non-empty list.
+                let node_ptr = unsafe { waiters.pop_front() }
+                    .expect("Waiting variant guarantees at least one node");
+                // SAFETY: We hold the lock and just popped this
+                // node.
+                unsafe {
+                    (*node_ptr).notified = true;
+                }
 
-            // SAFETY: Same node, we hold the lock.
-            waker = unsafe { (*node_ptr).waker.take() };
-        } else {
-            // No waiters — store the signal for the next waiter.
-            state.is_set = true;
-            waker = None;
+                // SAFETY: Same node, we hold the lock.
+                waker = unsafe { (*node_ptr).waker.take() };
+            }
+        }
+
+        // Transition Waiting → Idle if the list became empty.
+        if let State::Waiting(waiters) = &*state
+            && waiters.head().is_null()
+        {
+            *state = State::Idle;
         }
     }
 
@@ -94,8 +114,8 @@ fn set(mutex: &Mutex<State>) {
 #[cfg_attr(test, mutants::skip)]
 fn try_wait(mutex: &Mutex<State>) -> bool {
     let mut state = mutex.lock().expect(NEVER_POISONED);
-    if state.is_set {
-        state.is_set = false;
+    if matches!(*state, State::Set) {
+        *state = State::Idle;
         true
     } else {
         false
@@ -129,35 +149,53 @@ unsafe fn poll_wait(
         return Poll::Ready(());
     }
 
-    // Check if the flag is set (set() was called with no waiters).
-    if state.is_set {
-        state.is_set = false;
-        if *registered {
-            // SAFETY: We hold the lock and the node is in the list.
+    match &mut *state {
+        State::Set => {
+            // Signal available — consume it.
+            debug_assert!(
+                !*registered,
+                "Set state is exclusive with registered waiters"
+            );
+            *state = State::Idle;
+            Poll::Ready(())
+        }
+        State::Idle => {
+            // No signal — register as a new waiter.
+            debug_assert!(
+                !*registered,
+                "Idle state is exclusive with registered waiters"
+            );
+            // SAFETY: We hold the lock.
             unsafe {
-                state.waiters.remove(node_ptr);
+                (*node_ptr).waker = Some(waker);
             }
-            *registered = false;
+            let mut waiters = WaiterList::new();
+            // SAFETY: We hold the lock, node is pinned and not in
+            // any list.
+            unsafe {
+                waiters.push_back(node_ptr);
+            }
+            *state = State::Waiting(waiters);
+            *registered = true;
+            Poll::Pending
         }
-        return Poll::Ready(());
-    }
-
-    // Not ready — register or update waker.
-    // SAFETY: We hold the lock.
-    unsafe {
-        (*node_ptr).waker = Some(waker);
-    }
-
-    if !*registered {
-        // SAFETY: We hold the lock, node is pinned and not in any
-        // list.
-        unsafe {
-            state.waiters.push_back(node_ptr);
+        State::Waiting(waiters) => {
+            // Not ready — update waker and register if needed.
+            // SAFETY: We hold the lock.
+            unsafe {
+                (*node_ptr).waker = Some(waker);
+            }
+            if !*registered {
+                // SAFETY: We hold the lock, node is pinned and not
+                // in any list.
+                unsafe {
+                    waiters.push_back(node_ptr);
+                }
+                *registered = true;
+            }
+            Poll::Pending
         }
-        *registered = true;
     }
-
-    Poll::Pending
 }
 
 /// Shared drop logic for both wait future types.
@@ -179,29 +217,63 @@ unsafe fn drop_wait(mutex: &Mutex<State>, node: &UnsafeCell<WaiterNode>, registe
         // We were notified but the future was cancelled before it
         // could complete. Forward the notification to the next
         // waiter so that no signal is lost.
-        // SAFETY: We hold the lock.
-        if let Some(next_node) = unsafe { state.waiters.pop_front() } {
-            // SAFETY: We hold the lock and just popped this node.
-            unsafe {
-                (*next_node).notified = true;
-            }
-            // SAFETY: Same node, we hold the lock.
-            let waker = unsafe { (*next_node).waker.take() };
-            drop(state);
+        let old_state = mem::replace(&mut *state, State::Idle);
+        match old_state {
+            State::Waiting(mut waiters) => {
+                // SAFETY: We hold the lock.
+                if let Some(next_node) = unsafe { waiters.pop_front() } {
+                    // SAFETY: We hold the lock and just popped
+                    // this node.
+                    unsafe {
+                        (*next_node).notified = true;
+                    }
+                    // SAFETY: Same node, we hold the lock.
+                    let waker = unsafe { (*next_node).waker.take() };
+                    // Restore Waiting if more waiters remain.
+                    if !waiters.head().is_null() {
+                        *state = State::Waiting(waiters);
+                    }
+                    drop(state);
 
-            if let Some(w) = waker {
-                w.wake();
+                    if let Some(w) = waker {
+                        w.wake();
+                    }
+                }
+                // Empty list in Waiting state is prevented by the
+                // enum invariant, but pop_front returning None is
+                // harmless — state stays Idle from the replace.
             }
-        } else {
-            // No more waiters — re-set the flag so the signal is
-            // not lost.
-            state.is_set = true;
+            State::Idle | State::Set => {
+                // No more waiters — restore the signal so it is
+                // not lost.
+                *state = State::Set;
+            }
         }
     } else {
         // Not notified — just remove from the list.
-        // SAFETY: We hold the lock and the node is in the list.
-        unsafe {
-            state.waiters.remove(node_ptr);
+        match &mut *state {
+            State::Waiting(waiters) => {
+                // SAFETY: We hold the lock and the node is in the
+                // list.
+                unsafe {
+                    waiters.remove(node_ptr);
+                }
+            }
+            _ => {
+                // Not notified + registered ⟹ node is in a waiter
+                // list ⟹ state must be Waiting.
+                debug_assert!(
+                    false,
+                    "registered non-notified node requires \
+                     Waiting state"
+                );
+            }
+        }
+        // Transition Waiting → Idle if the list became empty.
+        if let State::Waiting(waiters) = &*state
+            && waiters.head().is_null()
+        {
+            *state = State::Idle;
         }
     }
 }
@@ -210,7 +282,8 @@ impl AutoResetEvent {
     /// Creates a new event in the unset state.
     ///
     /// The state is heap-allocated. Clone the handle to share the same
-    /// event. For stack-allocated state, see [`embedded()`][Self::embedded].
+    /// event. For caller-provided storage, see
+    /// [`embedded()`][Self::embedded].
     ///
     /// # Examples
     ///
@@ -227,10 +300,7 @@ impl AutoResetEvent {
     #[must_use]
     pub fn boxed() -> Self {
         Self {
-            state: Arc::new(Mutex::new(State {
-                is_set: false,
-                waiters: WaiterList::new(),
-            })),
+            state: Arc::new(Mutex::new(State::Idle)),
         }
     }
 
@@ -479,10 +549,7 @@ impl EmbeddedAutoResetEvent {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            state: Mutex::new(State {
-                is_set: false,
-                waiters: WaiterList::new(),
-            }),
+            state: Mutex::new(State::Idle),
             _pinned: PhantomPinned,
         }
     }
@@ -1133,54 +1200,9 @@ mod tests {
     // usage, set() pops a waiter rather than setting is_set when the list
     // is non-empty, so this state cannot arise through the public API.
     // We force it by directly manipulating the guarded state.
-    #[test]
-    fn poll_unregisters_when_is_set_observed_while_registered() {
-        let event = AutoResetEvent::boxed();
-        let mut future = Box::pin(event.wait());
-
-        let waker = Waker::noop();
-        let mut cx = task::Context::from_waker(waker);
-
-        // First poll registers the future in the waiter list.
-        assert!(future.as_mut().poll(&mut cx).is_pending());
-
-        // Force the "impossible" state: is_set=true while a waiter is
-        // registered. This bypasses set() which would pop the waiter.
-        {
-            let mut state = event.state.lock().unwrap();
-            state.is_set = true;
-        }
-
-        // Second poll enters the is_set branch, unregisters, and completes.
-        assert!(future.as_mut().poll(&mut cx).is_ready());
-
-        // The signal was consumed.
-        assert!(!event.try_wait());
-    }
-
-    #[test]
-    fn embedded_poll_unregisters_when_is_set_observed_while_registered() {
-        let container = Box::pin(EmbeddedAutoResetEvent::new());
-
-        // SAFETY: The container is pinned and outlives the handle.
-        let event = unsafe { AutoResetEvent::embedded(container.as_ref()) };
-
-        let mut future = Box::pin(event.wait());
-
-        let waker = Waker::noop();
-        let mut cx = task::Context::from_waker(waker);
-
-        assert!(future.as_mut().poll(&mut cx).is_pending());
-
-        {
-            let mut state = event.state().lock().unwrap();
-            state.is_set = true;
-        }
-
-        assert!(future.as_mut().poll(&mut cx).is_ready());
-
-        assert!(!event.try_wait());
-    }
+    //
+    // NOTE: These tests were removed because the enum-based State type
+    // makes the "is_set + waiters" combination structurally impossible.
 
     const WAITER_COUNT: usize = 100;
 

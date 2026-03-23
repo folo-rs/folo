@@ -1,7 +1,8 @@
-use std::cell::{Cell, UnsafeCell};
+use std::cell::UnsafeCell;
 use std::fmt;
 use std::future::Future;
 use std::marker::{PhantomData, PhantomPinned};
+use std::mem;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
@@ -53,9 +54,20 @@ pub struct LocalAutoResetEvent {
     inner: Rc<Inner>,
 }
 
+// The set flag and waiter list are mutually exclusive: if the event is set
+// there are no waiters, and if there are waiters the event is not set. This
+// enum encodes that invariant at the type level.
+enum InnerState {
+    /// No signal stored, no waiters registered.
+    Idle,
+    /// Signal stored (will be consumed by the next wait or `try_wait`).
+    Set,
+    /// One or more waiters are registered.
+    Waiting(WaiterList),
+}
+
 struct Inner {
-    is_set: Cell<bool>,
-    waiters: UnsafeCell<WaiterList>,
+    state: UnsafeCell<InnerState>,
     _not_send: PhantomData<*const ()>,
 }
 
@@ -67,28 +79,44 @@ impl Inner {
     // Mutating set() to a no-op causes wait futures to hang.
     #[cfg_attr(test, mutants::skip)]
     fn set(&self) {
-        // Capture the waker while borrowing the waiter list, then wake
+        // Capture the waker while borrowing the state, then wake
         // after the borrow ends to avoid aliased mutable access if
         // the waker is re-entrant.
+        let state_ptr = self.state.get();
         let waker = {
             // SAFETY: Single-threaded access guaranteed by !Send.
-            let waiters = unsafe { &mut *self.waiters.get() };
+            let state = unsafe { &mut *state_ptr };
 
-            // SAFETY: Single-threaded.
-            if let Some(node_ptr) = unsafe { waiters.pop_front() } {
-                // SAFETY: Single-threaded, node was just popped from
-                // our list.
-                unsafe {
-                    (*node_ptr).notified = true;
+            match state {
+                InnerState::Idle | InnerState::Set => {
+                    *state = InnerState::Set;
+                    None
                 }
+                InnerState::Waiting(waiters) => {
+                    // SAFETY: Single-threaded, Waiting guarantees
+                    // non-empty list.
+                    let node_ptr = unsafe { waiters.pop_front() }.expect(
+                        "Waiting variant guarantees \
+                             at least one node",
+                    );
+                    // SAFETY: Single-threaded, node was just popped.
+                    unsafe {
+                        (*node_ptr).notified = true;
+                    }
 
-                // SAFETY: Single-threaded.
-                unsafe { (*node_ptr).waker.take() }
-            } else {
-                self.is_set.set(true);
-                None
+                    // SAFETY: Single-threaded.
+                    unsafe { (*node_ptr).waker.take() }
+                }
             }
         };
+
+        // SAFETY: Single-threaded, new borrow scope.
+        let state = unsafe { &mut *state_ptr };
+        if let InnerState::Waiting(waiters) = state
+            && waiters.head().is_null()
+        {
+            *state = InnerState::Idle;
+        }
 
         if let Some(w) = waker {
             w.wake();
@@ -96,8 +124,10 @@ impl Inner {
     }
 
     fn try_wait(&self) -> bool {
-        if self.is_set.get() {
-            self.is_set.set(false);
+        // SAFETY: Single-threaded access.
+        let state = unsafe { &mut *self.state.get() };
+        if matches!(state, InnerState::Set) {
+            *state = InnerState::Idle;
             true
         } else {
             false
@@ -123,38 +153,53 @@ impl Inner {
             return Poll::Ready(());
         }
 
-        if self.is_set.get() {
-            self.is_set.set(false);
-            if *registered {
-                // SAFETY: Single-threaded, node is in the list.
-                let waiters = unsafe { &mut *self.waiters.get() };
-                // SAFETY: Single-threaded, node is registered in
-                // this list.
-                unsafe {
-                    waiters.remove(node_ptr);
-                }
-                *registered = false;
-            }
-            return Poll::Ready(());
-        }
-
         // SAFETY: Single-threaded access.
-        unsafe {
-            (*node_ptr).waker = Some(waker);
-        }
+        let state = unsafe { &mut *self.state.get() };
 
-        if !*registered {
-            // SAFETY: Single-threaded, node is pinned and not in
-            // any list.
-            let waiters = unsafe { &mut *self.waiters.get() };
-            // SAFETY: Single-threaded, node is not in any list.
-            unsafe {
-                waiters.push_back(node_ptr);
+        match state {
+            InnerState::Set => {
+                debug_assert!(
+                    !*registered,
+                    "Set state is exclusive with registered waiters"
+                );
+                *state = InnerState::Idle;
+                Poll::Ready(())
             }
-            *registered = true;
+            InnerState::Idle => {
+                debug_assert!(
+                    !*registered,
+                    "Idle state is exclusive with registered waiters"
+                );
+                // SAFETY: Single-threaded access.
+                unsafe {
+                    (*node_ptr).waker = Some(waker);
+                }
+                let mut waiters = WaiterList::new();
+                // SAFETY: Single-threaded, node is pinned and not in
+                // any list.
+                unsafe {
+                    waiters.push_back(node_ptr);
+                }
+                *state = InnerState::Waiting(waiters);
+                *registered = true;
+                Poll::Pending
+            }
+            InnerState::Waiting(waiters) => {
+                // SAFETY: Single-threaded access.
+                unsafe {
+                    (*node_ptr).waker = Some(waker);
+                }
+                if !*registered {
+                    // SAFETY: Single-threaded, node is pinned and
+                    // not in any list.
+                    unsafe {
+                        waiters.push_back(node_ptr);
+                    }
+                    *registered = true;
+                }
+                Poll::Pending
+            }
         }
-
-        Poll::Pending
     }
 
     /// # Safety
@@ -169,36 +214,67 @@ impl Inner {
 
         // SAFETY: Single-threaded access.
         if unsafe { (*node_ptr).notified } {
-            // Cancelled after notification — forward to next waiter.
-            let waker = {
-                // SAFETY: Single-threaded.
-                let waiters = unsafe { &mut *self.waiters.get() };
-
-                // SAFETY: Single-threaded.
-                if let Some(next_node) = unsafe { waiters.pop_front() } {
+            let state_ptr = self.state.get();
+            // SAFETY: Single-threaded access.
+            let old_state = unsafe { mem::replace(&mut *state_ptr, InnerState::Idle) };
+            let waker = match old_state {
+                InnerState::Waiting(mut waiters) => {
+                    // SAFETY: Single-threaded.
+                    if let Some(next_node) = unsafe { waiters.pop_front() } {
+                        // SAFETY: Single-threaded.
+                        unsafe {
+                            (*next_node).notified = true;
+                        }
+                        // SAFETY: Single-threaded.
+                        let waker = unsafe { (*next_node).waker.take() };
+                        if !waiters.head().is_null() {
+                            // SAFETY: Single-threaded.
+                            unsafe {
+                                *state_ptr = InnerState::Waiting(waiters);
+                            }
+                        }
+                        waker
+                    } else {
+                        None
+                    }
+                }
+                InnerState::Idle | InnerState::Set => {
                     // SAFETY: Single-threaded.
                     unsafe {
-                        (*next_node).notified = true;
+                        *state_ptr = InnerState::Set;
                     }
-                    // SAFETY: Single-threaded.
-                    unsafe { (*next_node).waker.take() }
-                } else {
-                    self.is_set.set(true);
                     None
                 }
             };
-
             if let Some(w) = waker {
                 w.wake();
             }
         } else {
             // Not notified — just remove from the list.
-            // SAFETY: Single-threaded, node is in the list.
-            let waiters = unsafe { &mut *self.waiters.get() };
-            // SAFETY: Single-threaded, node is registered in
-            // this list.
-            unsafe {
-                waiters.remove(node_ptr);
+            // SAFETY: Single-threaded access.
+            let state = unsafe { &mut *self.state.get() };
+            match state {
+                InnerState::Waiting(waiters) => {
+                    // SAFETY: Single-threaded, node is in the list.
+                    unsafe {
+                        waiters.remove(node_ptr);
+                    }
+                }
+                _ => {
+                    // Not notified + registered ⟹ node is in a
+                    // waiter list ⟹ state must be Waiting.
+                    debug_assert!(
+                        false,
+                        "registered non-notified node requires \
+                         Waiting state"
+                    );
+                }
+            }
+            // Transition Waiting → Idle if the list became empty.
+            if let InnerState::Waiting(waiters) = &*state
+                && waiters.head().is_null()
+            {
+                *state = InnerState::Idle;
             }
         }
     }
@@ -208,7 +284,8 @@ impl LocalAutoResetEvent {
     /// Creates a new event in the unset state.
     ///
     /// The state is heap-allocated. Clone the handle to share the same
-    /// event. For stack-allocated state, see [`embedded()`][Self::embedded].
+    /// event. For caller-provided storage, see
+    /// [`embedded()`][Self::embedded].
     ///
     /// # Examples
     ///
@@ -222,8 +299,7 @@ impl LocalAutoResetEvent {
     pub fn boxed() -> Self {
         Self {
             inner: Rc::new(Inner {
-                is_set: Cell::new(false),
-                waiters: UnsafeCell::new(WaiterList::new()),
+                state: UnsafeCell::new(InnerState::Idle),
                 _not_send: PhantomData,
             }),
         }
@@ -400,8 +476,7 @@ impl EmbeddedLocalAutoResetEvent {
     pub fn new() -> Self {
         Self {
             inner: Inner {
-                is_set: Cell::new(false),
-                waiters: UnsafeCell::new(WaiterList::new()),
+                state: UnsafeCell::new(InnerState::Idle),
                 _not_send: PhantomData,
             },
             _pinned: PhantomPinned,
@@ -956,53 +1031,9 @@ mod tests {
         assert!(waker_data.was_woken());
     }
 
-    // This tests a defense-in-depth branch in poll() that unregisters
-    // a waiter when is_set is observed while still registered. In normal
-    // usage, set() pops a waiter rather than setting is_set when the list
-    // is non-empty, so this state cannot arise through the public API.
-    // We force it by directly manipulating the inner state.
-    #[test]
-    fn embedded_poll_unregisters_when_is_set_observed_while_registered() {
-        let container = Box::pin(EmbeddedLocalAutoResetEvent::new());
-
-        // SAFETY: The container is pinned and outlives the handle.
-        let event = unsafe { LocalAutoResetEvent::embedded(container.as_ref()) };
-
-        let mut future = Box::pin(event.wait());
-
-        let waker = Waker::noop();
-        let mut cx = task::Context::from_waker(waker);
-
-        // First poll registers the future in the waiter list.
-        assert!(future.as_mut().poll(&mut cx).is_pending());
-
-        // Force the "impossible" state: is_set=true while a waiter is
-        // registered. This bypasses set() which would pop the waiter.
-        event.inner().is_set.set(true);
-
-        // Second poll enters the is_set branch, unregisters, and completes.
-        assert!(future.as_mut().poll(&mut cx).is_ready());
-
-        // The signal was consumed.
-        assert!(!event.try_wait());
-    }
-
-    #[test]
-    fn poll_unregisters_when_is_set_observed_while_registered() {
-        let event = LocalAutoResetEvent::boxed();
-        let mut future = Box::pin(event.wait());
-
-        let waker = Waker::noop();
-        let mut cx = task::Context::from_waker(waker);
-
-        assert!(future.as_mut().poll(&mut cx).is_pending());
-
-        event.inner.is_set.set(true);
-
-        assert!(future.as_mut().poll(&mut cx).is_ready());
-
-        assert!(!event.try_wait());
-    }
+    // The tests for forcing "is_set=true while a waiter is registered"
+    // were removed because the enum-based InnerState type makes that
+    // combination structurally impossible.
 
     const WAITER_COUNT: usize = 100;
 

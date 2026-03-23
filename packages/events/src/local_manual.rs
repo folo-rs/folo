@@ -209,7 +209,8 @@ impl LocalManualResetEvent {
     /// Creates a new event in the unset state.
     ///
     /// The state is heap-allocated. Clone the handle to share the same
-    /// event. For stack-allocated state, see [`embedded()`][Self::embedded].
+    /// event. For caller-provided storage, see
+    /// [`embedded()`][Self::embedded].
     ///
     /// # Examples
     ///
