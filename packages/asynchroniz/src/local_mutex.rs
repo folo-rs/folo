@@ -162,6 +162,8 @@ impl<T> Inner<T> {
     ///
     /// Same requirements as [`poll_lock`][Self::poll_lock].
     unsafe fn drop_lock_wait(&self, node: &UnsafeCell<WaiterNode>, registered: bool) {
+        // Defense in depth — callers already check `registered`.
+        #[cfg_attr(coverage_nightly, coverage(off))]
         if !registered {
             return;
         }

@@ -46,6 +46,7 @@ mod mutex;
 mod semaphore;
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[allow(dead_code, reason = "test utilities prepared for future use")]
 mod test_helpers;
 

@@ -94,14 +94,23 @@ fn release_permits(state_mutex: &Mutex<SemaphoreState>, count: usize) {
     // Combine the permit addition and the first waiter check into a
     // single lock scope, avoiding a second lock acquisition when no
     // waiters are queued (the common uncontended case).
-    let waker = {
+    let (waker, head_satisfiable) = {
         let mut state = state_mutex.lock().expect(NEVER_POISONED);
         state.available = state
             .available
             .checked_add(count)
             .expect("permit count overflow is unreachable");
-        try_wake_head(&mut state)
+        let head = state.waiters.head();
+        // SAFETY: We hold the lock and head is non-null.
+        let satisfiable = !head.is_null() && state.available >= unsafe { (*head).user_data() };
+        (try_wake_head(&mut state), satisfiable)
     };
+    // If the head waiter was satisfiable, try_wake_head must have
+    // returned a waker.
+    debug_assert!(
+        !head_satisfiable || waker.is_some(),
+        "head waiter was satisfiable but try_wake_head returned None"
+    );
 
     if let Some(w) = waker {
         w.wake();
@@ -1412,5 +1421,28 @@ mod tests {
             barrier.wait();
             t.join().unwrap();
         });
+    }
+
+    #[test]
+    fn multi_permit_release_wakes_multiple_single_permit_waiters() {
+        // Releasing a multi-permit hold should wake multiple
+        // single-permit waiters via the wake_waiters loop.
+        let sem = Semaphore::boxed(2);
+        let big_permit = sem.try_acquire_many(2).unwrap();
+
+        let mut f1 = Box::pin(sem.acquire());
+        let mut f2 = Box::pin(sem.acquire());
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        assert!(f1.as_mut().poll(&mut cx).is_pending());
+        assert!(f2.as_mut().poll(&mut cx).is_pending());
+
+        // Release 2 permits at once — try_wake_head handles the
+        // first waiter, wake_waiters must find the second.
+        drop(big_permit);
+
+        assert!(f1.as_mut().poll(&mut cx).is_ready());
+        assert!(f2.as_mut().poll(&mut cx).is_ready());
     }
 }

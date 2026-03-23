@@ -214,6 +214,8 @@ impl Inner {
         registered: bool,
         permits: usize,
     ) {
+        // Defense in depth — callers already check `registered`.
+        #[cfg_attr(coverage_nightly, coverage(off))]
         if !registered {
             return;
         }
@@ -1190,6 +1192,29 @@ mod tests {
         // Drop f1 without polling — must forward to f2.
         drop(f1);
 
+        assert!(f2.as_mut().poll(&mut cx).is_ready());
+    }
+
+    #[test]
+    fn multi_permit_release_wakes_multiple_single_permit_waiters() {
+        // Releasing a multi-permit hold should wake multiple
+        // single-permit waiters via the wake_waiters loop.
+        let sem = LocalSemaphore::boxed(2);
+        let big_permit = sem.try_acquire_many(2).unwrap();
+
+        let mut f1 = Box::pin(sem.acquire());
+        let mut f2 = Box::pin(sem.acquire());
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        assert!(f1.as_mut().poll(&mut cx).is_pending());
+        assert!(f2.as_mut().poll(&mut cx).is_pending());
+
+        // Release 2 permits at once — try_wake_head handles the
+        // first waiter, wake_waiters must find the second.
+        drop(big_permit);
+
+        assert!(f1.as_mut().poll(&mut cx).is_ready());
         assert!(f2.as_mut().poll(&mut cx).is_ready());
     }
 }
