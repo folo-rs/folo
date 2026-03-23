@@ -29,7 +29,7 @@ fast_time = { version = "0.1.17", path = "packages/fast_time", default-features 
 foldhash = { version = "0.2", default-features = false, features = ["std"] }
 folo_ffi = { version = "0.1.13", path = "packages/folo_ffi", default-features = false }
 frozen-collections = { version = "0.8", default-features = false }
-future_deque = { version = "0.1.0", path = "packages/future_deque", default-features = false }
+future_deque = { version = "0.1.1", path = "packages/future_deque", default-features = false }
 futures = { version = "0.3", default-features = false, features = [
     "std",
     "executor",

@@ -2,7 +2,7 @@
 name = "future_deque"
 description = "Pool-backed deque collections for managing groups of futures"
 publish = true
-version = "0.1.0"
+version = "0.1.1"
 
 authors.workspace = true
 edition.workspace = true
