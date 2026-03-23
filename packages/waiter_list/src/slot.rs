@@ -246,6 +246,12 @@ mod tests {
     }
 
     #[test]
+    fn default_slot_is_unregistered() {
+        let slot = WaiterSlot::default();
+        assert!(!slot.is_registered());
+    }
+
+    #[test]
     fn node_ptr_is_stable() {
         let slot = WaiterSlot::new();
         let p1 = slot.node_ptr();
