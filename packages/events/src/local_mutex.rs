@@ -1014,4 +1014,50 @@ mod tests {
             assert_eq!(*guard, 42);
         });
     }
+
+    #[test]
+    fn embedded_drop_registered_future() {
+        let container = Box::pin(EmbeddedLocalMutex::new(42_u32));
+        // SAFETY: The container outlives all handles.
+        let mutex = unsafe { LocalMutex::embedded(container.as_ref()) };
+
+        let guard = mutex.try_lock().unwrap();
+
+        // Poll to register as a waiter (registered = true).
+        let mut future = Box::pin(mutex.lock());
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+
+        // Drop the registered future — must clean up the waiter node.
+        drop(future);
+        drop(guard);
+
+        assert!(mutex.try_lock().is_some());
+    }
+
+    #[test]
+    fn embedded_notified_then_dropped_forwards_to_next() {
+        let container = Box::pin(EmbeddedLocalMutex::new(0_u32));
+        // SAFETY: The container outlives all handles.
+        let mutex = unsafe { LocalMutex::embedded(container.as_ref()) };
+
+        let guard = mutex.try_lock().unwrap();
+
+        let mut f1 = Box::pin(mutex.lock());
+        let mut f2 = Box::pin(mutex.lock());
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        assert!(f1.as_mut().poll(&mut cx).is_pending());
+        assert!(f2.as_mut().poll(&mut cx).is_pending());
+
+        // Drop guard — f1 is notified (lock transferred).
+        drop(guard);
+        // Drop f1 without polling — must forward to f2.
+        drop(f1);
+
+        assert!(f2.as_mut().poll(&mut cx).is_ready());
+    }
 }

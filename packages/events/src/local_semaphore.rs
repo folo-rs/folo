@@ -1148,4 +1148,50 @@ mod tests {
             drop(permit);
         });
     }
+
+    #[test]
+    fn embedded_drop_registered_future() {
+        let container = Box::pin(EmbeddedLocalSemaphore::new(1));
+        // SAFETY: The container outlives all handles.
+        let sem = unsafe { LocalSemaphore::embedded(container.as_ref()) };
+
+        let permit = sem.try_acquire().unwrap();
+
+        // Poll to register as a waiter (registered = true).
+        let mut future = Box::pin(sem.acquire());
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+
+        // Drop the registered future — must clean up the waiter node.
+        drop(future);
+        drop(permit);
+
+        assert!(sem.try_acquire().is_some());
+    }
+
+    #[test]
+    fn embedded_notified_then_dropped_forwards_to_next() {
+        let container = Box::pin(EmbeddedLocalSemaphore::new(1));
+        // SAFETY: The container outlives all handles.
+        let sem = unsafe { LocalSemaphore::embedded(container.as_ref()) };
+
+        let permit = sem.try_acquire().unwrap();
+
+        let mut f1 = Box::pin(sem.acquire());
+        let mut f2 = Box::pin(sem.acquire());
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        assert!(f1.as_mut().poll(&mut cx).is_pending());
+        assert!(f2.as_mut().poll(&mut cx).is_pending());
+
+        // Drop permit — f1 is notified.
+        drop(permit);
+        // Drop f1 without polling — must forward to f2.
+        drop(f1);
+
+        assert!(f2.as_mut().poll(&mut cx).is_ready());
+    }
 }

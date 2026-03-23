@@ -73,15 +73,25 @@ async fn async_mutex() {
     let mutex = Mutex::boxed(0_u32);
     let writer = mutex.clone();
 
-    // A background task acquires the lock and mutates the value.
-    tokio::spawn(async move {
+    // A background task acquires the lock and increments the value.
+    let handle = tokio::spawn(async move {
         let mut guard = writer.lock().await;
-        *guard = 42;
+        *guard = guard.wrapping_add(1);
     });
 
-    // The main task waits for the lock and reads the value.
+    // The main task also increments the value while holding the lock.
+    {
+        let mut guard = mutex.lock().await;
+        *guard = guard.wrapping_add(1);
+    }
+
+    // Wait for the background task to complete.
+    handle.await.unwrap();
+
+    // Both increments happened under mutual exclusion — the final
+    // value is always 2, regardless of which task ran first.
     let guard = mutex.lock().await;
-    assert_eq!(*guard, 42);
+    assert_eq!(*guard, 2);
 
     println!("Mutex: protected value is {}", *guard);
 }
