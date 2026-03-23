@@ -96,8 +96,11 @@ impl AtomicWakeTracker {
 
     /// Creates a [`Waker`] backed by this tracker.
     ///
-    /// The caller must ensure this tracker outlives all wakers created from it.
-    pub(crate) fn waker(&self) -> Waker {
+    /// # Safety
+    ///
+    /// The caller must ensure this `AtomicWakeTracker` outlives all wakers
+    /// (and their clones) created from it.
+    pub(crate) unsafe fn waker(&self) -> Waker {
         let data: *const () = std::ptr::from_ref(self).cast();
 
         // SAFETY: The caller ensures this AtomicWakeTracker outlives all

@@ -782,7 +782,8 @@ mod tests {
         let event = ManualResetEvent::boxed();
 
         let tracker = AtomicWakeTracker::new();
-        let waker = tracker.waker();
+        // SAFETY: The tracker outlives the waker.
+        let waker = unsafe { tracker.waker() };
         let mut cx = task::Context::from_waker(&waker);
 
         let mut future = Box::pin(event.wait());
@@ -1070,7 +1071,8 @@ mod tests {
         let event = unsafe { ManualResetEvent::embedded(container.as_ref()) };
 
         let tracker = AtomicWakeTracker::new();
-        let waker = tracker.waker();
+        // SAFETY: The tracker outlives the waker.
+        let waker = unsafe { tracker.waker() };
         let mut cx = task::Context::from_waker(&waker);
 
         let mut future = Box::pin(event.wait());
@@ -1088,11 +1090,13 @@ mod tests {
         let event = ManualResetEvent::boxed();
 
         let tracker1 = AtomicWakeTracker::new();
-        let waker1 = tracker1.waker();
+        // SAFETY: The tracker outlives the waker.
+        let waker1 = unsafe { tracker1.waker() };
         let mut cx1 = task::Context::from_waker(&waker1);
 
         let tracker2 = AtomicWakeTracker::new();
-        let waker2 = tracker2.waker();
+        // SAFETY: The tracker outlives the waker.
+        let waker2 = unsafe { tracker2.waker() };
         let mut cx2 = task::Context::from_waker(&waker2);
 
         let mut future1 = Box::pin(event.wait());
@@ -1120,11 +1124,13 @@ mod tests {
         let event = unsafe { ManualResetEvent::embedded(container.as_ref()) };
 
         let tracker1 = AtomicWakeTracker::new();
-        let waker1 = tracker1.waker();
+        // SAFETY: The tracker outlives the waker.
+        let waker1 = unsafe { tracker1.waker() };
         let mut cx1 = task::Context::from_waker(&waker1);
 
         let tracker2 = AtomicWakeTracker::new();
-        let waker2 = tracker2.waker();
+        // SAFETY: The tracker outlives the waker.
+        let waker2 = unsafe { tracker2.waker() };
         let mut cx2 = task::Context::from_waker(&waker2);
 
         let mut future1 = Box::pin(event.wait());

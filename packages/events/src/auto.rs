@@ -1057,7 +1057,8 @@ mod tests {
         let event = AutoResetEvent::boxed();
 
         let tracker = AtomicWakeTracker::new();
-        let waker = tracker.waker();
+        // SAFETY: The tracker outlives the waker.
+        let waker = unsafe { tracker.waker() };
         let mut cx = task::Context::from_waker(&waker);
 
         let mut future = Box::pin(event.wait());
@@ -1155,7 +1156,8 @@ mod tests {
         let event = unsafe { AutoResetEvent::embedded(container.as_ref()) };
 
         let tracker = AtomicWakeTracker::new();
-        let waker = tracker.waker();
+        // SAFETY: The tracker outlives the waker.
+        let waker = unsafe { tracker.waker() };
         let mut cx = task::Context::from_waker(&waker);
 
         let mut future = Box::pin(event.wait());
