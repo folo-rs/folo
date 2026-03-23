@@ -161,13 +161,7 @@ impl<T> Inner<T> {
     /// # Safety
     ///
     /// Same requirements as [`poll_lock`][Self::poll_lock].
-    unsafe fn drop_lock_wait(&self, node: &UnsafeCell<WaiterNode>, registered: bool) {
-        // Defense in depth — callers already check `registered`.
-        #[cfg_attr(coverage_nightly, coverage(off))]
-        if !registered {
-            return;
-        }
-
+    unsafe fn drop_lock_wait(&self, node: &UnsafeCell<WaiterNode>) {
         let node_ptr = node.get();
 
         // SAFETY: Single-threaded access.
@@ -428,7 +422,7 @@ impl<T> Drop for LocalMutexLockFuture<'_, T> {
         // SAFETY: The node is pinned (PhantomPinned) and the
         // lock_state is the lock this node was registered with.
         unsafe {
-            self.inner.drop_lock_wait(&self.node, self.registered);
+            self.inner.drop_lock_wait(&self.node);
         }
     }
 }
@@ -668,7 +662,7 @@ impl<T> Drop for RawLocalMutexLockFuture<T> {
         // SAFETY: The node is pinned (PhantomPinned) and the
         // lock_state is the lock this node was registered with.
         unsafe {
-            inner.drop_lock_wait(&self.node, self.registered);
+            inner.drop_lock_wait(&self.node);
         }
     }
 }

@@ -208,18 +208,7 @@ impl Inner {
     /// # Safety
     ///
     /// Same requirements as [`poll_acquire`][Self::poll_acquire].
-    unsafe fn drop_acquire_wait(
-        &self,
-        node: &UnsafeCell<WaiterNode>,
-        registered: bool,
-        permits: usize,
-    ) {
-        // Defense in depth — callers already check `registered`.
-        #[cfg_attr(coverage_nightly, coverage(off))]
-        if !registered {
-            return;
-        }
-
+    unsafe fn drop_acquire_wait(&self, node: &UnsafeCell<WaiterNode>, permits: usize) {
         let node_ptr = node.get();
 
         // SAFETY: Single-threaded access.
@@ -477,8 +466,7 @@ impl Drop for LocalSemaphoreAcquireFuture<'_> {
         // SAFETY: The node is pinned (PhantomPinned) and the state
         // is the lock this node was registered with.
         unsafe {
-            self.inner
-                .drop_acquire_wait(&self.node, self.registered, self.permits);
+            self.inner.drop_acquire_wait(&self.node, self.permits);
         }
     }
 }
@@ -719,7 +707,7 @@ impl Drop for RawLocalSemaphoreAcquireFuture {
         // SAFETY: drop_acquire_wait requires single-threaded access,
         // which LocalSemaphore guarantees (!Send).
         unsafe {
-            inner.drop_acquire_wait(&self.node, self.registered, self.permits);
+            inner.drop_acquire_wait(&self.node, self.permits);
         }
     }
 }
