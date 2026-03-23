@@ -1,4 +1,4 @@
-//! Benchmarks comparing `events` mutex and semaphore with Tokio and
+//! Benchmarks comparing `asynchroniz` mutex and semaphore with Tokio and
 //! async-lock.
 //!
 //! Four benchmark groups measure different aspects:
@@ -74,8 +74,8 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
 
     // --- Boxed ---
 
-    let op = allocs.operation("sync_creation/events/Mutex");
-    group.bench_function("events/Mutex", |b| {
+    let op = allocs.operation("sync_creation/asynchroniz/Mutex");
+    group.bench_function("asynchroniz/Mutex", |b| {
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
@@ -86,8 +86,8 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    let op = allocs.operation("sync_creation/events/Semaphore");
-    group.bench_function("events/Semaphore", |b| {
+    let op = allocs.operation("sync_creation/asynchroniz/Semaphore");
+    group.bench_function("asynchroniz/Semaphore", |b| {
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
@@ -98,8 +98,8 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    let op = allocs.operation("sync_creation/events/LocalMutex");
-    group.bench_function("events/LocalMutex", |b| {
+    let op = allocs.operation("sync_creation/asynchroniz/LocalMutex");
+    group.bench_function("asynchroniz/LocalMutex", |b| {
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
@@ -110,8 +110,8 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    let op = allocs.operation("sync_creation/events/LocalSemaphore");
-    group.bench_function("events/LocalSemaphore", |b| {
+    let op = allocs.operation("sync_creation/asynchroniz/LocalSemaphore");
+    group.bench_function("asynchroniz/LocalSemaphore", |b| {
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
@@ -124,8 +124,8 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
 
     // --- Embedded ---
 
-    let op = allocs.operation("sync_creation/events/embedded/Mutex");
-    group.bench_function("events/embedded/Mutex", |b| {
+    let op = allocs.operation("sync_creation/asynchroniz/embedded/Mutex");
+    group.bench_function("asynchroniz/embedded/Mutex", |b| {
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
@@ -138,8 +138,8 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    let op = allocs.operation("sync_creation/events/embedded/Semaphore");
-    group.bench_function("events/embedded/Semaphore", |b| {
+    let op = allocs.operation("sync_creation/asynchroniz/embedded/Semaphore");
+    group.bench_function("asynchroniz/embedded/Semaphore", |b| {
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
@@ -216,8 +216,8 @@ fn round_trip(c: &mut Criterion, allocs: &AllocSession) {
 
     // --- events Mutex ---
 
-    let op = allocs.operation("sync_round_trip/events/Mutex/try_lock");
-    group.bench_function("events/Mutex/try_lock", |b| {
+    let op = allocs.operation("sync_round_trip/asynchroniz/Mutex/try_lock");
+    group.bench_function("asynchroniz/Mutex/try_lock", |b| {
         let mutex = Mutex::boxed(0_u32);
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
@@ -232,8 +232,8 @@ fn round_trip(c: &mut Criterion, allocs: &AllocSession) {
 
     // --- events Semaphore ---
 
-    let op = allocs.operation("sync_round_trip/events/Semaphore/try_acquire");
-    group.bench_function("events/Semaphore/try_acquire", |b| {
+    let op = allocs.operation("sync_round_trip/asynchroniz/Semaphore/try_acquire");
+    group.bench_function("asynchroniz/Semaphore/try_acquire", |b| {
         let sem = Semaphore::boxed(1);
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
@@ -248,8 +248,8 @@ fn round_trip(c: &mut Criterion, allocs: &AllocSession) {
 
     // --- events LocalMutex ---
 
-    let op = allocs.operation("sync_round_trip/events/LocalMutex/try_lock");
-    group.bench_function("events/LocalMutex/try_lock", |b| {
+    let op = allocs.operation("sync_round_trip/asynchroniz/LocalMutex/try_lock");
+    group.bench_function("asynchroniz/LocalMutex/try_lock", |b| {
         let mutex = LocalMutex::boxed(0_u32);
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
@@ -264,8 +264,8 @@ fn round_trip(c: &mut Criterion, allocs: &AllocSession) {
 
     // --- events LocalSemaphore ---
 
-    let op = allocs.operation("sync_round_trip/events/LocalSemaphore/try_acquire");
-    group.bench_function("events/LocalSemaphore/try_acquire", |b| {
+    let op = allocs.operation("sync_round_trip/asynchroniz/LocalSemaphore/try_acquire");
+    group.bench_function("asynchroniz/LocalSemaphore/try_acquire", |b| {
         let sem = LocalSemaphore::boxed(1);
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
@@ -357,8 +357,8 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
 
     // --- events Mutex ---
 
-    let op = allocs.operation("sync_async_poll_ready/events/Mutex");
-    group.bench_function("events/Mutex", |b| {
+    let op = allocs.operation("sync_async_poll_ready/asynchroniz/Mutex");
+    group.bench_function("asynchroniz/Mutex", |b| {
         let mutex = Mutex::boxed(0_u32);
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
@@ -374,8 +374,8 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
 
     // --- events Semaphore ---
 
-    let op = allocs.operation("sync_async_poll_ready/events/Semaphore");
-    group.bench_function("events/Semaphore", |b| {
+    let op = allocs.operation("sync_async_poll_ready/asynchroniz/Semaphore");
+    group.bench_function("asynchroniz/Semaphore", |b| {
         let sem = Semaphore::boxed(1);
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
@@ -391,8 +391,8 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
 
     // --- events LocalMutex ---
 
-    let op = allocs.operation("sync_async_poll_ready/events/LocalMutex");
-    group.bench_function("events/LocalMutex", |b| {
+    let op = allocs.operation("sync_async_poll_ready/asynchroniz/LocalMutex");
+    group.bench_function("asynchroniz/LocalMutex", |b| {
         let mutex = LocalMutex::boxed(0_u32);
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
@@ -407,8 +407,8 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
 
     // --- events LocalSemaphore ---
 
-    let op = allocs.operation("sync_async_poll_ready/events/LocalSemaphore");
-    group.bench_function("events/LocalSemaphore", |b| {
+    let op = allocs.operation("sync_async_poll_ready/asynchroniz/LocalSemaphore");
+    group.bench_function("asynchroniz/LocalSemaphore", |b| {
         let sem = LocalSemaphore::boxed(1);
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
@@ -508,8 +508,8 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
 
     // --- events Mutex ---
 
-    let op = allocs.operation("sync_many_waiters/events/Mutex");
-    group.bench_function("events/Mutex", |b| {
+    let op = allocs.operation("sync_many_waiters/asynchroniz/Mutex");
+    group.bench_function("asynchroniz/Mutex", |b| {
         let container = pin!(EmbeddedMutex::new(0_u32));
         let mutex = unsafe { Mutex::embedded(container.as_ref()) };
 
@@ -551,8 +551,8 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
 
     // --- events Semaphore ---
 
-    let op = allocs.operation("sync_many_waiters/events/Semaphore");
-    group.bench_function("events/Semaphore", |b| {
+    let op = allocs.operation("sync_many_waiters/asynchroniz/Semaphore");
+    group.bench_function("asynchroniz/Semaphore", |b| {
         let container = pin!(EmbeddedSemaphore::new(1));
         let sem = unsafe { Semaphore::embedded(container.as_ref()) };
 
@@ -589,8 +589,8 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
 
     // --- events LocalMutex ---
 
-    let op = allocs.operation("sync_many_waiters/events/LocalMutex");
-    group.bench_function("events/LocalMutex", |b| {
+    let op = allocs.operation("sync_many_waiters/asynchroniz/LocalMutex");
+    group.bench_function("asynchroniz/LocalMutex", |b| {
         let container = pin!(EmbeddedLocalMutex::new(0_u32));
         let mutex = unsafe { LocalMutex::embedded(container.as_ref()) };
 
@@ -625,8 +625,8 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
 
     // --- events LocalSemaphore ---
 
-    let op = allocs.operation("sync_many_waiters/events/LocalSemaphore");
-    group.bench_function("events/LocalSemaphore", |b| {
+    let op = allocs.operation("sync_many_waiters/asynchroniz/LocalSemaphore");
+    group.bench_function("asynchroniz/LocalSemaphore", |b| {
         let container = pin!(EmbeddedLocalSemaphore::new(1));
         let sem = unsafe { LocalSemaphore::embedded(container.as_ref()) };
 

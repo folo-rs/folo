@@ -11,8 +11,8 @@ use std::task::{RawWaker, RawWakerVTable, Waker};
 /// # Thread safety
 ///
 /// This type is `!Send` and must only be used with single-threaded (`Local`)
-/// event types. The backing state uses `Cell` which is not thread-safe.
-/// For thread-safe event types, use [`AtomicWakeTracker`] instead.
+/// primitive types. The backing state uses `Cell` which is not thread-safe.
+/// For thread-safe primitive types, use [`AtomicWakeTracker`] instead.
 pub(crate) struct ReentrantWakerData {
     action: Box<dyn Fn()>,
     was_woken: Cell<bool>,
