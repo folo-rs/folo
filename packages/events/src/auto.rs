@@ -165,7 +165,12 @@ unsafe fn poll_wait(
 /// # Safety
 ///
 /// Same requirements as [`poll_wait`].
-unsafe fn drop_wait(mutex: &Mutex<State>, node: &UnsafeCell<WaiterNode>, _registered: bool) {
+unsafe fn drop_wait(mutex: &Mutex<State>, node: &UnsafeCell<WaiterNode>, registered: bool) {
+    // The caller must only call this when the node is registered. Both
+    // AutoResetWaitFuture::drop and RawAutoResetWaitFuture::drop guard
+    // on `self.registered` before calling, so this should always hold.
+    debug_assert!(registered);
+
     let node_ptr = node.get();
     let mut state = mutex.lock().expect(NEVER_POISONED);
 

@@ -74,6 +74,16 @@ struct Inner {
 impl UnwindSafe for Inner {}
 impl RefUnwindSafe for Inner {}
 
+// Test hook that fires after each wake() call in Inner::set(). This allows
+// tests to inject re-entrant operations (e.g. calling reset() and re-polling
+// a future) between wake iterations, reproducing scenarios that would
+// otherwise require specific executor behavior.
+#[cfg(test)]
+thread_local! {
+    static HOOK_SET_AFTER_WAKE: std::cell::RefCell<Option<Box<dyn Fn()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 impl Inner {
     // Mutating set() to a no-op causes wait futures to hang.
     #[cfg_attr(test, mutants::skip)]
@@ -111,6 +121,19 @@ impl Inner {
 
             let Some(w) = waker else { break };
             w.wake();
+
+            #[cfg(test)]
+            HOOK_SET_AFTER_WAKE.with(|hook| {
+                if let Some(f) = hook.borrow().as_ref() {
+                    f();
+                }
+            });
+
+            // If someone called reset() during wake (possibly re-entrantly),
+            // stop waking — the gate has been closed.
+            if !self.is_set.get() {
+                break;
+            }
         }
     }
 
@@ -962,5 +985,55 @@ mod tests {
 
         event.set();
         assert!(event.try_wait());
+    }
+
+    // --- livelock regression test ---
+
+    /// Verifies that `set()` terminates even if `reset()` is called
+    /// re-entrantly while the wake loop is in progress.
+    ///
+    /// Without the `is_set` re-check after each wake, `set()` would loop
+    /// forever: it wakes a waiter, the hook resets the event and re-polls
+    /// the future (re-storing a waker), and `set()` rescans from head —
+    /// finding the fresh waker and repeating indefinitely.
+    #[test]
+    fn set_terminates_when_reset_called_during_wake_loop() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        testing::with_watchdog(|| {
+            let event = LocalManualResetEvent::boxed();
+            let future = Box::pin(event.wait());
+
+            // First poll: register as a waiter with a noop waker.
+            let waker = Waker::noop();
+            let mut cx = task::Context::from_waker(waker);
+            let future_cell: Rc<RefCell<Pin<Box<LocalManualResetWaitFuture>>>> =
+                Rc::new(RefCell::new(future));
+            assert!(future_cell.borrow_mut().as_mut().poll(&mut cx).is_pending());
+
+            // Install hook: after each wake(), reset the event and re-poll
+            // the future so it re-stores a waker. This simulates a
+            // re-entrant waker that resets the event and immediately
+            // re-polls.
+            let event_for_hook = event.clone();
+            let future_for_hook = Rc::clone(&future_cell);
+
+            HOOK_SET_AFTER_WAKE.with(|hook| {
+                *hook.borrow_mut() = Some(Box::new(move || {
+                    event_for_hook.reset();
+                    let w = Waker::noop();
+                    let mut cx = task::Context::from_waker(w);
+                    let _poll = future_for_hook.borrow_mut().as_mut().poll(&mut cx);
+                }));
+            });
+
+            event.set();
+
+            // Cleanup.
+            HOOK_SET_AFTER_WAKE.with(|hook| {
+                *hook.borrow_mut() = None;
+            });
+        });
     }
 }
