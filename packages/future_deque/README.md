@@ -17,8 +17,8 @@ Both types implement `Future<Output = ()>`, returning `Poll::Ready(())` when all
 futures have completed (or the deque is empty). This enables `.await` to wait for all
 futures to finish before popping results.
 
-With the `futures-stream` feature (enabled by default), both types also implement
-`futures_core::Stream`, yielding completed results from the front.
+With the `futures-stream` feature, both types also implement `futures_core::Stream`,
+yielding completed results from the front.
 
 ## Example
 
@@ -44,6 +44,7 @@ assert_eq!(deque.poll_front(cx), Poll::Ready(None));
 
 ## See also
 
-[API documentation on docs.rs.](https://docs.rs/future_deque/latest/future_deque/)
+More details in the [package documentation](https://docs.rs/future_deque/).
 
-Part of the [Folo](https://github.com/folo-rs/folo) project.
+This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for
+high-performance hardware-aware programming in Rust.

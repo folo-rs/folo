@@ -145,6 +145,8 @@ Auxiliary packages developed and published by this project:
 
 * `cargo-detect-package` - cargo subcommand to detect which package is used based on a provided path and to run another subcommand on that package.
 * `cpulist` - utilities for parsing and emitting Linux cpulist strings, used by `many_cpus`.
+* [`events`][events] - async manual-reset and auto-reset events for multi-use signaling.
+* [`future_deque`][future_deque] - pool-backed deque collections for managing groups of futures with precise control over polling order and result retrieval.
 * `new_zealand` - [utilities for working with non-zero integers][nonzero].
 
 Packages present in the repo but not relevant to a general audience:
@@ -157,15 +159,13 @@ Packages present in the repo but not relevant to a general audience:
 * `testing` - private helpers for testing and examples in Folo packages.
 * `ui_tests` - compile-time UI tests for workspace packages; not published.
 
-Deprecated packages:
-
-* `events` - deprecated, use `events_once` which offers more refined API surface, as well as improved correctness and performance.
-
 [all_the_time]: packages/all_the_time/README.md
 [alloc_tracker]: packages/alloc_tracker/README.md
 [criterion]: https://bheisler.github.io/criterion.rs/book/criterion_rs.html
+[events]: packages/events/README.md
 [events_once]: packages/events_once/README.md
 [fast_time]: packages/fast_time/README.md
+[future_deque]: packages/future_deque/README.md
 [infinity_pool]: packages/infinity_pool/README.md
 [linked]: packages/linked/README.md
 [many_cpus]: packages/many_cpus/README.md
