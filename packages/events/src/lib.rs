@@ -68,6 +68,28 @@
 //!     assert!(!event.try_wait());
 //! }
 //! ```
+//!
+//! # Performance
+//!
+//! Measured with Criterion on an x86-64 development machine. Lower is better.
+//!
+//! ## Mutex
+//!
+//! | Benchmark | `Mutex` | `LocalMutex` | tokio | async-lock |
+//! |---|---|---|---|---|
+//! | Round trip | **29 ns** | **2.4 ns** | 33 ns | 37 ns |
+//! | Async poll ready | **35 ns** | **6.1 ns** | 52 ns | 66 ns |
+//! | Many waiters (×100) | **6.5 µs** | **2.1 µs** | 13.5 µs | 26.5 µs |
+//!
+//! ## Semaphore
+//!
+//! | Benchmark | `Semaphore` | `LocalSemaphore` | tokio | async-lock |
+//! |---|---|---|---|---|
+//! | Round trip | **31 ns** | **5.8 ns** | 66 ns | 64 ns |
+//! | Async poll ready | **37 ns** | **11 ns** | 46 ns | 41 ns |
+//! | Many waiters (×100) | **16 µs** | **3.0 µs** | 12.6 µs | 22 µs |
+//!
+//! Run `cargo bench -p events` to reproduce.
 
 mod auto;
 mod local_auto;
