@@ -16,6 +16,7 @@ all-features = true
 [package.metadata.cargo-udeps.ignore]
 development = [
     "alloc_tracker",
+    "async-lock",
     "criterion",
     "event-listener",
     "futures",
@@ -27,6 +28,7 @@ development = [
 
 [dev-dependencies]
 alloc_tracker = { path = "../alloc_tracker" }
+async-lock = { workspace = true }
 criterion = { workspace = true }
 event-listener = { workspace = true }
 futures = { workspace = true }

@@ -635,6 +635,7 @@ name = "events"
 version = "0.6.0"
 dependencies = [
  "alloc_tracker",
+ "async-lock",
  "criterion",
  "event-listener 5.4.1",
  "futures",
