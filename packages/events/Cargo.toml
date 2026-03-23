@@ -1,6 +1,6 @@
 [package]
 name = "events"
-description = "Async manual-reset and auto-reset events for multi-use signaling"
+description = "Async synchronization primitives with intrusive waiter lists"
 publish = true
 version = "0.6.0"
 
@@ -34,10 +34,14 @@ mutants = { workspace = true }
 rsevents = { workspace = true }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync"] }
 
 [[bench]]
 name = "events_bench"
+harness = false
+
+[[bench]]
+name = "events_sync_bench"
 harness = false
 
 [lints]

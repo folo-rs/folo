@@ -1,4 +1,5 @@
-// Intrusive doubly-linked waiter queue shared by all event types.
+// Intrusive doubly-linked waiter queue shared by all synchronization
+// primitives (events, mutexes, semaphores).
 //
 // # Design
 //
@@ -121,10 +122,14 @@ pub(crate) struct WaiterNode {
     pub(crate) next: *mut Self,
     pub(crate) prev: *mut Self,
 
-    /// Set to `true` by `set()` after this node is popped from the waiter
-    /// list. The owning future checks this flag on the next poll to know
-    /// it should complete with `Ready`.
+    /// Set to `true` by `set()` (or `unlock()` / `release()`) after this
+    /// node is popped from the waiter list. The owning future checks this
+    /// flag on the next poll to know it should complete with `Ready`.
     pub(crate) notified: bool,
+
+    /// Number of permits this waiter wants to acquire. Only used by the
+    /// semaphore; events and mutexes leave this at the default value of 0.
+    pub(crate) permits_requested: usize,
 
     _pinned: PhantomPinned,
 }
@@ -136,6 +141,7 @@ impl WaiterNode {
             next: std::ptr::null_mut(),
             prev: std::ptr::null_mut(),
             notified: false,
+            permits_requested: 0,
             _pinned: PhantomPinned,
         }
     }

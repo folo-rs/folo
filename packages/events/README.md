@@ -1,11 +1,13 @@
 # Events
 
-Async manual-reset and auto-reset events for multi-use signaling.
+Async synchronization primitives with intrusive waiter lists.
 
-This crate provides two families of event primitives:
+This crate provides several families of synchronization primitives:
 
 - **Manual-reset events** (`ManualResetEvent`, `LocalManualResetEvent`) — a gate that, once set, releases all current and future awaiters until explicitly reset.
 - **Auto-reset events** (`AutoResetEvent`, `LocalAutoResetEvent`) — a token dispenser that releases exactly one awaiter per `set()` call.
+- **Mutexes** (`Mutex`, `LocalMutex`) — async mutual exclusion with `Deref`/`DerefMut` guards.
+- **Semaphores** (`Semaphore`, `LocalSemaphore`) — permit-based concurrency control with single and multi-permit acquire.
 
 Each family comes in a thread-safe variant (`Send + Sync`) and a single-threaded `Local` variant for improved efficiency when thread safety is not required.
 
@@ -14,12 +16,14 @@ Events are lightweight cloneable handles. All clones from the same family share 
 ## Example
 
 ```rust
-use events::{AutoResetEvent, ManualResetEvent};
+use events::{AutoResetEvent, ManualResetEvent, Mutex, Semaphore};
 
 #[tokio::main]
 async fn main() {
     auto_reset_signal().await;
     manual_reset_gate().await;
+    async_mutex().await;
+    async_semaphore().await;
 }
 
 /// An [`AutoResetEvent`] releases exactly one awaiter per `set()` call.
@@ -61,6 +65,46 @@ async fn manual_reset_gate() {
     assert!(event.try_wait());
 
     println!("ManualResetEvent: gate opened, all waiters released.");
+}
+
+/// A [`Mutex`] provides async mutual exclusion with a guard that gives
+/// `Deref`/`DerefMut` access to the protected value.
+async fn async_mutex() {
+    let mutex = Mutex::boxed(0_u32);
+    let writer = mutex.clone();
+
+    // A background task acquires the lock and mutates the value.
+    tokio::spawn(async move {
+        let mut guard = writer.lock().await;
+        *guard = 42;
+    });
+
+    // The main task waits for the lock and reads the value.
+    let guard = mutex.lock().await;
+    assert_eq!(*guard, 42);
+
+    println!("Mutex: protected value is {}", *guard);
+}
+
+/// A [`Semaphore`] controls concurrent access by maintaining a pool of
+/// permits. Each `acquire()` consumes a permit and each drop returns it.
+async fn async_semaphore() {
+    let sem = Semaphore::boxed(2);
+
+    // Acquire two permits, exhausting the pool.
+    let permit_a = sem.acquire().await;
+    let permit_b = sem.acquire().await;
+
+    // No permits left — try_acquire returns None.
+    assert!(sem.try_acquire().is_none());
+
+    // Releasing one permit makes it available again.
+    drop(permit_a);
+    let _permit_c = sem.acquire().await;
+
+    drop(permit_b);
+
+    println!("Semaphore: permits acquired and released.");
 }
 ```
 

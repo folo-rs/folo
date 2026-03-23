@@ -1,9 +1,9 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-//! Async manual-reset and auto-reset events for multi-use signaling.
+//! Async synchronization primitives with intrusive waiter lists.
 //!
-//! This crate provides two families of event primitives:
+//! This crate provides several families of synchronization primitives:
 //!
 //! * **Manual-reset events** ([`ManualResetEvent`], [`LocalManualResetEvent`]) — a gate
 //!   that, once set, releases all current and future awaiters until explicitly
@@ -11,6 +11,10 @@
 //! * **Auto-reset events** ([`AutoResetEvent`], [`LocalAutoResetEvent`]) — a token
 //!   dispenser that releases exactly one awaiter per
 //!   [`set()`][AutoResetEvent::set] call.
+//! * **Mutexes** ([`Mutex`], [`LocalMutex`]) — async mutual exclusion with
+//!   `Deref`/`DerefMut` guards.
+//! * **Semaphores** ([`Semaphore`], [`LocalSemaphore`]) — permit-based
+//!   concurrency control with single and multi-permit acquire.
 //!
 //! Each family comes in a thread-safe variant (`Send + Sync`) and a
 //! single-threaded `Local` variant for improved efficiency when thread safety
@@ -68,7 +72,11 @@
 mod auto;
 mod local_auto;
 mod local_manual;
+mod local_mutex;
+mod local_semaphore;
 mod manual;
+mod mutex;
+mod semaphore;
 mod waiter_list;
 
 #[cfg(test)]
@@ -81,14 +89,30 @@ pub use local_auto::{EmbeddedLocalAutoResetEvent, LocalAutoResetEvent, RawLocalA
 pub use local_manual::{
     EmbeddedLocalManualResetEvent, LocalManualResetEvent, RawLocalManualResetEvent,
 };
+pub use local_mutex::{
+    EmbeddedLocalMutex, LocalMutex, LocalMutexGuard, RawLocalMutex, RawLocalMutexGuard,
+};
+pub use local_semaphore::{
+    EmbeddedLocalSemaphore, LocalSemaphore, LocalSemaphorePermit, RawLocalSemaphore,
+    RawLocalSemaphorePermit,
+};
 pub use manual::{EmbeddedManualResetEvent, ManualResetEvent, RawManualResetEvent};
+pub use mutex::{EmbeddedMutex, Mutex, MutexGuard, RawMutex, RawMutexGuard};
+pub use semaphore::{
+    EmbeddedSemaphore, RawSemaphore, RawSemaphorePermit, Semaphore, SemaphorePermit,
+};
 
-/// Future types returned by event `wait()` methods.
+/// Future types returned by event and synchronization primitive
+/// `wait()` / `lock()` methods.
 ///
 /// These futures are `!Unpin` and must be pinned before polling.
 pub mod futures {
     pub use crate::auto::{AutoResetWaitFuture, RawAutoResetWaitFuture};
     pub use crate::local_auto::{LocalAutoResetWaitFuture, RawLocalAutoResetWaitFuture};
     pub use crate::local_manual::{LocalManualResetWaitFuture, RawLocalManualResetWaitFuture};
+    pub use crate::local_mutex::{LocalMutexLockFuture, RawLocalMutexLockFuture};
+    pub use crate::local_semaphore::{LocalSemaphoreAcquireFuture, RawLocalSemaphoreAcquireFuture};
     pub use crate::manual::{ManualResetWaitFuture, RawManualResetWaitFuture};
+    pub use crate::mutex::{MutexLockFuture, RawMutexLockFuture};
+    pub use crate::semaphore::{RawSemaphoreAcquireFuture, SemaphoreAcquireFuture};
 }
