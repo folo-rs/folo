@@ -41,7 +41,10 @@ use std::time::Instant;
 
 use alloc_tracker::{Allocator, Session as AllocSession};
 use criterion::{Criterion, criterion_group, criterion_main};
-use events::{EmbeddedMutex, EmbeddedSemaphore, LocalMutex, LocalSemaphore, Mutex, Semaphore};
+use events::{
+    EmbeddedLocalMutex, EmbeddedLocalSemaphore, EmbeddedMutex, EmbeddedSemaphore, LocalMutex,
+    LocalSemaphore, Mutex, Semaphore,
+};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
@@ -243,6 +246,38 @@ fn round_trip(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
+    // --- events LocalMutex ---
+
+    let op = allocs.operation("sync_round_trip/events/LocalMutex/try_lock");
+    group.bench_function("events/LocalMutex/try_lock", |b| {
+        let mutex = LocalMutex::boxed(0_u32);
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                let guard = mutex.try_lock();
+                black_box(guard);
+            }
+            start.elapsed()
+        });
+    });
+
+    // --- events LocalSemaphore ---
+
+    let op = allocs.operation("sync_round_trip/events/LocalSemaphore/try_acquire");
+    group.bench_function("events/LocalSemaphore/try_acquire", |b| {
+        let sem = LocalSemaphore::boxed(1);
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                let permit = sem.try_acquire();
+                black_box(permit);
+            }
+            start.elapsed()
+        });
+    });
+
     // --- Tokio Mutex ---
 
     let op = allocs.operation("sync_round_trip/tokio/Mutex/try_lock");
@@ -349,6 +384,38 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
                 let mut future = pin!(sem.acquire());
                 let _ = black_box(future.as_mut().poll(&mut cx));
                 // Permit dropped here, releasing.
+            }
+            start.elapsed()
+        });
+    });
+
+    // --- events LocalMutex ---
+
+    let op = allocs.operation("sync_async_poll_ready/events/LocalMutex");
+    group.bench_function("events/LocalMutex", |b| {
+        let mutex = LocalMutex::boxed(0_u32);
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                let mut future = pin!(mutex.lock());
+                let _ = black_box(future.as_mut().poll(&mut cx));
+            }
+            start.elapsed()
+        });
+    });
+
+    // --- events LocalSemaphore ---
+
+    let op = allocs.operation("sync_async_poll_ready/events/LocalSemaphore");
+    group.bench_function("events/LocalSemaphore", |b| {
+        let sem = LocalSemaphore::boxed(1);
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                let mut future = pin!(sem.acquire());
+                let _ = black_box(future.as_mut().poll(&mut cx));
             }
             start.elapsed()
         });
@@ -507,6 +574,78 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
                 }
 
                 // Release the permit.
+                drop(permit);
+
+                for f in &mut futures {
+                    let _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
+                }
+
+                futures.clear();
+            }
+
+            start.elapsed()
+        });
+    });
+
+    // --- events LocalMutex ---
+
+    let op = allocs.operation("sync_many_waiters/events/LocalMutex");
+    group.bench_function("events/LocalMutex", |b| {
+        let container = pin!(EmbeddedLocalMutex::new(0_u32));
+        let mutex = unsafe { LocalMutex::embedded(container.as_ref()) };
+
+        let mut futures: Vec<_> = Vec::with_capacity(MANY_WAITER_COUNT);
+
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+
+            for _ in 0..iters {
+                let guard = mutex.try_lock().unwrap();
+
+                futures.clear();
+                futures.extend(iter::repeat_with(|| mutex.lock()).take(MANY_WAITER_COUNT));
+
+                for f in &mut futures {
+                    let _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
+                }
+
+                drop(guard);
+
+                for f in &mut futures {
+                    let _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
+                }
+
+                futures.clear();
+            }
+
+            start.elapsed()
+        });
+    });
+
+    // --- events LocalSemaphore ---
+
+    let op = allocs.operation("sync_many_waiters/events/LocalSemaphore");
+    group.bench_function("events/LocalSemaphore", |b| {
+        let container = pin!(EmbeddedLocalSemaphore::new(1));
+        let sem = unsafe { LocalSemaphore::embedded(container.as_ref()) };
+
+        let mut futures: Vec<_> = Vec::with_capacity(MANY_WAITER_COUNT);
+
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+
+            for _ in 0..iters {
+                let permit = sem.try_acquire().unwrap();
+
+                futures.clear();
+                futures.extend(iter::repeat_with(|| sem.acquire()).take(MANY_WAITER_COUNT));
+
+                for f in &mut futures {
+                    let _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
+                }
+
                 drop(permit);
 
                 for f in &mut futures {
