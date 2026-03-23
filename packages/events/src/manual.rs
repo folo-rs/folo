@@ -55,6 +55,10 @@ pub struct ManualResetEvent {
 }
 
 struct State {
+    /// Whether the event is currently in the signaled state. Unlike
+    /// auto-reset events, this is not mutually exclusive with waiters —
+    /// waiters stay registered while the event is set and are woken
+    /// one-by-one in a loop.
     is_set: bool,
     waiters: WaiterList,
 }
@@ -374,6 +378,7 @@ pub struct ManualResetWaitFuture {
     // UnsafeCell opts out of the noalias guarantee for its contents.
     node: UnsafeCell<WaiterNode>,
 
+    // Whether this future's node is currently in the event's waiter list.
     // Only accessed through &mut Self in poll()/drop(), never through the list.
     registered: bool,
 
@@ -567,8 +572,11 @@ impl RawManualResetEvent {
 /// Future returned by [`RawManualResetEvent::wait()`].
 pub struct RawManualResetWaitFuture {
     state: NonNull<Mutex<State>>,
+
+    // See ManualResetWaitFuture for field documentation.
     node: UnsafeCell<WaiterNode>,
     registered: bool,
+
     _pinned: PhantomPinned,
 }
 

@@ -406,8 +406,16 @@ impl AutoResetEvent {
 /// Completes with `()` when the event signal is acquired.
 pub struct AutoResetWaitFuture {
     state: Arc<Mutex<State>>,
+
+    // Behind UnsafeCell so that raw pointers from the event's waiter list can
+    // coexist with the &mut Self we obtain in poll() via get_unchecked_mut().
+    // UnsafeCell opts out of the noalias guarantee for its contents.
     node: UnsafeCell<WaiterNode>,
+
+    // Whether this future's node is currently in the event's waiter list.
+    // Only accessed through &mut Self in poll()/drop(), never through the list.
     registered: bool,
+
     _pinned: PhantomPinned,
 }
 
@@ -590,8 +598,11 @@ impl RawAutoResetEvent {
 /// Future returned by [`RawAutoResetEvent::wait()`].
 pub struct RawAutoResetWaitFuture {
     state: NonNull<Mutex<State>>,
+
+    // See AutoResetWaitFuture for field documentation.
     node: UnsafeCell<WaiterNode>,
     registered: bool,
+
     _pinned: PhantomPinned,
 }
 

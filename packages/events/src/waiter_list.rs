@@ -113,10 +113,19 @@ use std::marker::PhantomPinned;
 use std::task::Waker;
 
 pub(crate) struct WaiterNode {
+    /// The waker to call when this waiter is selected for notification.
+    /// Stored by `poll_wait()` and consumed by `set()`.
     pub(crate) waker: Option<Waker>,
+
+    /// Intrusive doubly-linked list pointers, managed by [`WaiterList`].
     pub(crate) next: *mut Self,
     pub(crate) prev: *mut Self,
+
+    /// Set to `true` by `set()` after this node is popped from the waiter
+    /// list. The owning future checks this flag on the next poll to know
+    /// it should complete with `Ready`.
     pub(crate) notified: bool,
+
     _pinned: PhantomPinned,
 }
 

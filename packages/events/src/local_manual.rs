@@ -57,6 +57,10 @@ pub struct LocalManualResetEvent {
 }
 
 struct Inner {
+    /// Whether the event is currently in the signaled state. Unlike
+    /// auto-reset events, this is not mutually exclusive with waiters —
+    /// waiters stay registered while the event is set and are woken
+    /// one-by-one in a loop.
     is_set: Cell<bool>,
 
     // UnsafeCell because we mutate the list through shared references (Rc).
@@ -312,8 +316,16 @@ impl LocalManualResetEvent {
 /// Future returned by [`LocalManualResetEvent::wait()`].
 pub struct LocalManualResetWaitFuture {
     inner: Rc<Inner>,
+
+    // Behind UnsafeCell so that raw pointers from the event's waiter list can
+    // coexist with the &mut Self we obtain in poll() via get_unchecked_mut().
+    // UnsafeCell opts out of the noalias guarantee for its contents.
     node: UnsafeCell<WaiterNode>,
+
+    // Whether this future's node is currently in the event's waiter list.
+    // Only accessed through &mut Self in poll()/drop(), never through the list.
     registered: bool,
+
     _pinned: PhantomPinned,
 }
 
@@ -494,8 +506,11 @@ impl RawLocalManualResetEvent {
 /// Future returned by [`RawLocalManualResetEvent::wait()`].
 pub struct RawLocalManualResetWaitFuture {
     inner: NonNull<Inner>,
+
+    // See LocalManualResetWaitFuture for field documentation.
     node: UnsafeCell<WaiterNode>,
     registered: bool,
+
     _pinned: PhantomPinned,
 }
 
