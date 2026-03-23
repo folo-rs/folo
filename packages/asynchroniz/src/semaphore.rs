@@ -261,11 +261,8 @@ unsafe fn poll_acquire(
 unsafe fn drop_acquire_wait(
     state_mutex: &Mutex<SemaphoreState>,
     node: &UnsafeCell<WaiterNode>,
-    registered: bool,
     permits: usize,
 ) {
-    debug_assert!(registered);
-
     let node_ptr = node.get();
     let mut state = state_mutex.lock().expect(NEVER_POISONED);
 
@@ -574,12 +571,14 @@ impl<'a> Future for SemaphoreAcquireFuture<'a> {
 impl Drop for SemaphoreAcquireFuture<'_> {
     fn drop(&mut self) {
         if !self.registered {
+            // Not yet polled — no cleanup needed.
+            debug_assert!(!self.registered, "registered future must not skip cleanup");
             return;
         }
 
         // SAFETY: The node is pinned (PhantomPinned) and the state
         // field is the mutex this node was registered with.
-        unsafe { drop_acquire_wait(self.state, &self.node, self.registered, self.permits) }
+        unsafe { drop_acquire_wait(self.state, &self.node, self.permits) }
     }
 }
 
@@ -850,6 +849,8 @@ impl Future for RawSemaphoreAcquireFuture {
 impl Drop for RawSemaphoreAcquireFuture {
     fn drop(&mut self) {
         if !self.registered {
+            // Not yet polled — no cleanup needed.
+            debug_assert!(!self.registered, "registered future must not skip cleanup");
             return;
         }
 
@@ -858,7 +859,7 @@ impl Drop for RawSemaphoreAcquireFuture {
         let inner = unsafe { self.inner.as_ref() };
         // SAFETY: The node is pinned (PhantomPinned) and the state
         // is the mutex this node was registered with.
-        unsafe { drop_acquire_wait(&inner.state, &self.node, self.registered, self.permits) }
+        unsafe { drop_acquire_wait(&inner.state, &self.node, self.permits) }
     }
 }
 

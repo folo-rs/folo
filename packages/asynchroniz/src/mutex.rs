@@ -209,14 +209,7 @@ unsafe fn poll_lock(
 /// # Safety
 ///
 /// Same requirements as [`poll_lock`].
-unsafe fn drop_lock_wait(
-    lock_state: &StdMutex<LockState>,
-    node: &UnsafeCell<WaiterNode>,
-    registered: bool,
-) {
-    // The caller must only call this when the node is registered.
-    debug_assert!(registered);
-
+unsafe fn drop_lock_wait(lock_state: &StdMutex<LockState>, node: &UnsafeCell<WaiterNode>) {
     let node_ptr = node.get();
     let mut state = lock_state.lock().expect(NEVER_POISONED);
 
@@ -520,12 +513,14 @@ impl<'a, T> Future for MutexLockFuture<'a, T> {
 impl<T> Drop for MutexLockFuture<'_, T> {
     fn drop(&mut self) {
         if !self.registered {
+            // Not yet polled — no cleanup needed.
+            debug_assert!(!self.registered, "registered future must not skip cleanup");
             return;
         }
 
         // SAFETY: The node is pinned (PhantomPinned) and the
         // lock_state field is the lock this node was registered with.
-        unsafe { drop_lock_wait(self.lock_state, &self.node, self.registered) }
+        unsafe { drop_lock_wait(self.lock_state, &self.node) }
     }
 }
 
@@ -787,6 +782,8 @@ impl<T> Future for RawMutexLockFuture<T> {
 impl<T> Drop for RawMutexLockFuture<T> {
     fn drop(&mut self) {
         if !self.registered {
+            // Not yet polled — no cleanup needed.
+            debug_assert!(!self.registered, "registered future must not skip cleanup");
             return;
         }
 
@@ -795,7 +792,7 @@ impl<T> Drop for RawMutexLockFuture<T> {
         let inner = unsafe { self.inner.as_ref() };
         // SAFETY: The node is pinned (PhantomPinned) and the
         // lock_state is the lock this node was registered with.
-        unsafe { drop_lock_wait(&inner.lock_state, &self.node, self.registered) }
+        unsafe { drop_lock_wait(&inner.lock_state, &self.node) }
     }
 }
 
