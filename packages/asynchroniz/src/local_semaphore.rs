@@ -8,7 +8,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::task::{self, Poll, Waker};
 
-use waiter_list::{WaiterList, WaiterNode};
+use waiter_list::{WaiterList, WaiterSlot};
 
 /// Single-threaded async semaphore.
 ///
@@ -154,52 +154,35 @@ impl Inner {
 
     /// # Safety
     ///
-    /// * The `node` must be pinned and must remain at the same memory
+    /// * The `slot` must be pinned and must remain at the same memory
     ///   address for the lifetime of the acquire future.
-    /// * The `node` must belong to a future created from the same
+    /// * The `slot` must belong to a future created from the same
     ///   semaphore.
     unsafe fn poll_acquire(
         &self,
-        node: &UnsafeCell<WaiterNode>,
-        registered: &mut bool,
+        slot: &mut WaiterSlot,
         permits: usize,
         waker: &Waker,
     ) -> Poll<()> {
-        let node_ptr = node.get();
-
         // SAFETY: Single-threaded access.
-        if unsafe { (*node_ptr).is_notified() } {
-            *registered = false;
+        if unsafe { slot.take_notification() } {
             return Poll::Ready(());
         }
 
         // SAFETY: Single-threaded access.
         let state = unsafe { &mut *self.state.get() };
 
-        if !*registered && state.available >= permits {
+        if !slot.is_registered() && state.available >= permits {
             state.available = state
                 .available
                 .checked_sub(permits)
                 .expect("available >= permits was just checked");
             Poll::Ready(())
         } else {
-            // SAFETY: Single-threaded, node_ptr is from our pinned
-            // UnsafeCell.
+            // SAFETY: Single-threaded, slot is pinned and not yet
+            // in the list (or already registered with a stale waker).
             unsafe {
-                (*node_ptr).store_waker(waker);
-            }
-            // SAFETY: Single-threaded, node_ptr is from our pinned
-            // UnsafeCell.
-            unsafe {
-                (*node_ptr).set_user_data(permits);
-            }
-            if !*registered {
-                // SAFETY: Single-threaded, node is pinned and
-                // not in any list.
-                unsafe {
-                    state.waiters.push_back(node_ptr);
-                }
-                *registered = true;
+                slot.register_with_data(&mut state.waiters, waker, permits);
             }
             Poll::Pending
         }
@@ -208,11 +191,11 @@ impl Inner {
     /// # Safety
     ///
     /// Same requirements as [`poll_acquire`][Self::poll_acquire].
-    unsafe fn drop_acquire_wait(&self, node: &UnsafeCell<WaiterNode>, permits: usize) {
-        let node_ptr = node.get();
+    unsafe fn drop_acquire_wait(&self, slot: &mut WaiterSlot, permits: usize) {
+        let node_ptr = slot.node_ptr();
 
         // SAFETY: Single-threaded access.
-        if unsafe { (*node_ptr).is_notified() } {
+        if unsafe { slot.is_notified() } {
             // We were given permits but the future was cancelled.
             // Return the permits and try to wake the head waiter in
             // the same access scope.
@@ -290,9 +273,7 @@ impl LocalSemaphore {
     /// let container = pin!(EmbeddedLocalSemaphore::new(1));
     ///
     /// // SAFETY: The container outlives the handle and all permits.
-    /// let sem = unsafe {
-    ///     LocalSemaphore::embedded(container.as_ref())
-    /// };
+    /// let sem = unsafe { LocalSemaphore::embedded(container.as_ref()) };
     ///
     /// let permit = sem.acquire().await;
     /// assert!(sem.try_acquire().is_none());
@@ -339,9 +320,7 @@ impl LocalSemaphore {
         LocalSemaphoreAcquireFuture {
             inner: &self.inner,
             permits,
-            node: UnsafeCell::new(WaiterNode::new()),
-            registered: false,
-            _pinned: PhantomPinned,
+            slot: WaiterSlot::new(),
         }
     }
 
@@ -425,10 +404,7 @@ pub struct LocalSemaphoreAcquireFuture<'a> {
     inner: &'a Inner,
     permits: usize,
 
-    node: UnsafeCell<WaiterNode>,
-    registered: bool,
-
-    _pinned: PhantomPinned,
+    slot: WaiterSlot,
 }
 
 // Marker trait impls have no executable code.
@@ -442,11 +418,11 @@ impl<'a> Future for LocalSemaphoreAcquireFuture<'a> {
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
-        // SAFETY: The node is pinned (PhantomPinned) and the state
-        // field is the lock this node registers with.
+        // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
+        // and the state field is the lock this slot registers with.
         match unsafe {
             this.inner
-                .poll_acquire(&this.node, &mut this.registered, this.permits, cx.waker())
+                .poll_acquire(&mut this.slot, this.permits, cx.waker())
         } {
             Poll::Ready(()) => Poll::Ready(LocalSemaphorePermit {
                 inner: this.inner,
@@ -459,14 +435,14 @@ impl<'a> Future for LocalSemaphoreAcquireFuture<'a> {
 
 impl Drop for LocalSemaphoreAcquireFuture<'_> {
     fn drop(&mut self) {
-        if !self.registered {
+        if !self.slot.is_registered() {
             return;
         }
 
-        // SAFETY: The node is pinned (PhantomPinned) and the state
-        // is the lock this node was registered with.
+        // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
+        // and the state is the lock this slot was registered with.
         unsafe {
-            self.inner.drop_acquire_wait(&self.node, self.permits);
+            self.inner.drop_acquire_wait(&mut self.slot, self.permits);
         }
     }
 }
@@ -496,7 +472,7 @@ impl fmt::Debug for LocalSemaphoreAcquireFuture<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalSemaphoreAcquireFuture")
             .field("permits", &self.permits)
-            .field("registered", &self.registered)
+            .field("registered", &self.slot.is_registered())
             .finish_non_exhaustive()
     }
 }
@@ -521,9 +497,7 @@ impl fmt::Debug for LocalSemaphoreAcquireFuture<'_> {
 /// let container = pin!(EmbeddedLocalSemaphore::new(1));
 ///
 /// // SAFETY: The container outlives the handle and all permits.
-/// let sem = unsafe {
-///     LocalSemaphore::embedded(container.as_ref())
-/// };
+/// let sem = unsafe { LocalSemaphore::embedded(container.as_ref()) };
 ///
 /// let permit = sem.acquire().await;
 /// assert!(sem.try_acquire().is_none());
@@ -595,9 +569,7 @@ impl RawLocalSemaphore {
         RawLocalSemaphoreAcquireFuture {
             inner: self.inner,
             permits,
-            node: UnsafeCell::new(WaiterNode::new()),
-            registered: false,
-            _pinned: PhantomPinned,
+            slot: WaiterSlot::new(),
         }
     }
 
@@ -661,10 +633,7 @@ pub struct RawLocalSemaphoreAcquireFuture {
     inner: NonNull<Inner>,
     permits: usize,
 
-    node: UnsafeCell<WaiterNode>,
-    registered: bool,
-
-    _pinned: PhantomPinned,
+    slot: WaiterSlot,
 }
 
 // Marker trait impls have no executable code.
@@ -683,9 +652,7 @@ impl Future for RawLocalSemaphoreAcquireFuture {
         let inner = unsafe { this.inner.as_ref() };
         // SAFETY: poll_acquire requires single-threaded access,
         // which LocalSemaphore guarantees (!Send).
-        match unsafe {
-            inner.poll_acquire(&this.node, &mut this.registered, this.permits, cx.waker())
-        } {
+        match unsafe { inner.poll_acquire(&mut this.slot, this.permits, cx.waker()) } {
             Poll::Ready(()) => Poll::Ready(RawLocalSemaphorePermit {
                 inner: this.inner,
                 permits: this.permits,
@@ -697,7 +664,7 @@ impl Future for RawLocalSemaphoreAcquireFuture {
 
 impl Drop for RawLocalSemaphoreAcquireFuture {
     fn drop(&mut self) {
-        if !self.registered {
+        if !self.slot.is_registered() {
             return;
         }
 
@@ -707,7 +674,7 @@ impl Drop for RawLocalSemaphoreAcquireFuture {
         // SAFETY: drop_acquire_wait requires single-threaded access,
         // which LocalSemaphore guarantees (!Send).
         unsafe {
-            inner.drop_acquire_wait(&self.node, self.permits);
+            inner.drop_acquire_wait(&mut self.slot, self.permits);
         }
     }
 }
@@ -741,7 +708,7 @@ impl fmt::Debug for RawLocalSemaphoreAcquireFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RawLocalSemaphoreAcquireFuture")
             .field("permits", &self.permits)
-            .field("registered", &self.registered)
+            .field("registered", &self.slot.is_registered())
             .finish_non_exhaustive()
     }
 }

@@ -20,7 +20,6 @@
 //! holds raw pointers to them. The containing future must be pinned before
 //! polling, ensuring the node address remains stable for its lifetime in the
 //! list.
-//!
 #![doc = simple_mermaid::mermaid!("../doc/list_structure.mermaid")]
 //!
 //! # Synchronization
@@ -43,6 +42,8 @@
 
 mod list;
 mod node;
+mod slot;
 
 pub use list::*;
 pub use node::*;
+pub use slot::*;

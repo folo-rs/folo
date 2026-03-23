@@ -9,7 +9,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::task::{self, Poll, Waker};
 
-use waiter_list::{WaiterList, WaiterNode};
+use waiter_list::{WaiterList, WaiterSlot};
 
 /// Single-threaded async mutex.
 ///
@@ -113,21 +113,13 @@ impl<T> Inner<T> {
 
     /// # Safety
     ///
-    /// * The `node` must be pinned and must remain at the same memory
+    /// * The `slot` must be pinned and must remain at the same memory
     ///   address for the lifetime of the lock future.
-    /// * The `node` must belong to a future created from the same
+    /// * The `slot` must belong to a future created from the same
     ///   mutex.
-    unsafe fn poll_lock(
-        &self,
-        node: &UnsafeCell<WaiterNode>,
-        registered: &mut bool,
-        waker: &Waker,
-    ) -> Poll<()> {
-        let node_ptr = node.get();
-
+    unsafe fn poll_lock(&self, slot: &mut WaiterSlot, waker: &Waker) -> Poll<()> {
         // SAFETY: Single-threaded access.
-        if unsafe { (*node_ptr).is_notified() } {
-            *registered = false;
+        if unsafe { slot.take_notification() } {
             return Poll::Ready(());
         }
 
@@ -136,23 +128,16 @@ impl<T> Inner<T> {
 
         if !state.locked {
             debug_assert!(
-                !*registered,
+                !slot.is_registered(),
                 "unlocked state is exclusive with registered waiters"
             );
             state.locked = true;
             Poll::Ready(())
         } else {
-            // SAFETY: Single-threaded access.
+            // SAFETY: Single-threaded, slot is pinned and not yet
+            // in the list (or already registered with a stale waker).
             unsafe {
-                (*node_ptr).store_waker(waker);
-            }
-            if !*registered {
-                // SAFETY: Single-threaded, node is pinned and not in
-                // any list.
-                unsafe {
-                    state.waiters.push_back(node_ptr);
-                }
-                *registered = true;
+                slot.register(&mut state.waiters, waker);
             }
             Poll::Pending
         }
@@ -161,11 +146,11 @@ impl<T> Inner<T> {
     /// # Safety
     ///
     /// Same requirements as [`poll_lock`][Self::poll_lock].
-    unsafe fn drop_lock_wait(&self, node: &UnsafeCell<WaiterNode>) {
-        let node_ptr = node.get();
+    unsafe fn drop_lock_wait(&self, slot: &mut WaiterSlot) {
+        let node_ptr = slot.node_ptr();
 
         // SAFETY: Single-threaded access.
-        if unsafe { (*node_ptr).is_notified() } {
+        if unsafe { slot.is_notified() } {
             let state_ptr = self.lock_state.get();
             // SAFETY: Single-threaded access.
             let state = unsafe { &mut *state_ptr };
@@ -251,8 +236,7 @@ impl<T> LocalMutex<T> {
     /// let container = pin!(EmbeddedLocalMutex::new(0_u32));
     ///
     /// // SAFETY: The container outlives the handle and all guards.
-    /// let mutex =
-    ///     unsafe { LocalMutex::embedded(container.as_ref()) };
+    /// let mutex = unsafe { LocalMutex::embedded(container.as_ref()) };
     ///
     /// let mut guard = mutex.lock().await;
     /// *guard += 1;
@@ -290,9 +274,7 @@ impl<T> LocalMutex<T> {
     pub fn lock(&self) -> LocalMutexLockFuture<'_, T> {
         LocalMutexLockFuture {
             inner: &self.inner,
-            node: UnsafeCell::new(WaiterNode::new()),
-            registered: false,
-            _pinned: PhantomPinned,
+            slot: WaiterSlot::new(),
         }
     }
 
@@ -379,15 +361,7 @@ impl<T> Drop for LocalMutexGuard<'_, T> {
 pub struct LocalMutexLockFuture<'a, T> {
     inner: &'a Inner<T>,
 
-    // Behind UnsafeCell so that raw pointers from the waiter list can
-    // coexist with the &mut Self we obtain in poll() via
-    // get_unchecked_mut().
-    node: UnsafeCell<WaiterNode>,
-
-    // Whether this future's node is currently in the waiter list.
-    registered: bool,
-
-    _pinned: PhantomPinned,
+    slot: WaiterSlot,
 }
 
 // Marker trait impls have no executable code.
@@ -401,12 +375,10 @@ impl<'a, T> Future for LocalMutexLockFuture<'a, T> {
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
-        // SAFETY: The node is pinned (PhantomPinned) and the
-        // lock_state field is the lock this node registers with.
-        match unsafe {
-            this.inner
-                .poll_lock(&this.node, &mut this.registered, cx.waker())
-        } {
+        // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
+        // and the lock_state field is the lock this slot registers
+        // with.
+        match unsafe { this.inner.poll_lock(&mut this.slot, cx.waker()) } {
             Poll::Ready(()) => Poll::Ready(LocalMutexGuard { inner: this.inner }),
             Poll::Pending => Poll::Pending,
         }
@@ -415,14 +387,15 @@ impl<'a, T> Future for LocalMutexLockFuture<'a, T> {
 
 impl<T> Drop for LocalMutexLockFuture<'_, T> {
     fn drop(&mut self) {
-        if !self.registered {
+        if !self.slot.is_registered() {
             return;
         }
 
-        // SAFETY: The node is pinned (PhantomPinned) and the
-        // lock_state is the lock this node was registered with.
+        // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
+        // and the lock_state is the lock this slot was registered
+        // with.
         unsafe {
-            self.inner.drop_lock_wait(&self.node);
+            self.inner.drop_lock_wait(&mut self.slot);
         }
     }
 }
@@ -449,7 +422,7 @@ impl<T> fmt::Debug for LocalMutexGuard<'_, T> {
 impl<T> fmt::Debug for LocalMutexLockFuture<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalMutexLockFuture")
-            .field("registered", &self.registered)
+            .field("registered", &self.slot.is_registered())
             .finish_non_exhaustive()
     }
 }
@@ -476,8 +449,7 @@ impl<T> fmt::Debug for LocalMutexLockFuture<'_, T> {
 /// let container = pin!(EmbeddedLocalMutex::new(42));
 ///
 /// // SAFETY: The container outlives the handle and all guards.
-/// let mutex =
-///     unsafe { LocalMutex::embedded(container.as_ref()) };
+/// let mutex = unsafe { LocalMutex::embedded(container.as_ref()) };
 ///
 /// let guard = mutex.lock().await;
 /// assert_eq!(*guard, 42);
@@ -546,9 +518,7 @@ impl<T> RawLocalMutex<T> {
     pub fn lock(&self) -> RawLocalMutexLockFuture<T> {
         RawLocalMutexLockFuture {
             inner: self.inner,
-            node: UnsafeCell::new(WaiterNode::new()),
-            registered: false,
-            _pinned: PhantomPinned,
+            slot: WaiterSlot::new(),
         }
     }
 
@@ -620,11 +590,7 @@ impl<T> Drop for RawLocalMutexGuard<T> {
 pub struct RawLocalMutexLockFuture<T> {
     inner: NonNull<Inner<T>>,
 
-    // See LocalMutexLockFuture for field documentation.
-    node: UnsafeCell<WaiterNode>,
-    registered: bool,
-
-    _pinned: PhantomPinned,
+    slot: WaiterSlot,
 }
 
 // Marker trait impls have no executable code.
@@ -641,9 +607,9 @@ impl<T> Future for RawLocalMutexLockFuture<T> {
         // SAFETY: The container outlives this future per the
         // embedded() contract.
         let inner = unsafe { this.inner.as_ref() };
-        // SAFETY: The node is pinned (PhantomPinned) and the
-        // lock_state is the lock this node registers with.
-        match unsafe { inner.poll_lock(&this.node, &mut this.registered, cx.waker()) } {
+        // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
+        // and the lock_state is the lock this slot registers with.
+        match unsafe { inner.poll_lock(&mut this.slot, cx.waker()) } {
             Poll::Ready(()) => Poll::Ready(RawLocalMutexGuard { inner: this.inner }),
             Poll::Pending => Poll::Pending,
         }
@@ -652,17 +618,18 @@ impl<T> Future for RawLocalMutexLockFuture<T> {
 
 impl<T> Drop for RawLocalMutexLockFuture<T> {
     fn drop(&mut self) {
-        if !self.registered {
+        if !self.slot.is_registered() {
             return;
         }
 
         // SAFETY: The container outlives this future per the
         // embedded() contract.
         let inner = unsafe { self.inner.as_ref() };
-        // SAFETY: The node is pinned (PhantomPinned) and the
-        // lock_state is the lock this node was registered with.
+        // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
+        // and the lock_state is the lock this slot was registered
+        // with.
         unsafe {
-            inner.drop_lock_wait(&self.node);
+            inner.drop_lock_wait(&mut self.slot);
         }
     }
 }
@@ -692,7 +659,7 @@ impl<T> fmt::Debug for RawLocalMutexGuard<T> {
 impl<T> fmt::Debug for RawLocalMutexLockFuture<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RawLocalMutexLockFuture")
-            .field("registered", &self.registered)
+            .field("registered", &self.slot.is_registered())
             .finish_non_exhaustive()
     }
 }

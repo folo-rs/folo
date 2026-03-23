@@ -1,15 +1,14 @@
 use std::cell::UnsafeCell;
-use std::fmt;
 use std::future::Future;
 use std::marker::{PhantomData, PhantomPinned};
-use std::mem;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::rc::Rc;
 use std::task::{self, Poll, Waker};
+use std::{fmt, mem};
 
-use waiter_list::{WaiterList, WaiterNode};
+use waiter_list::{WaiterList, WaiterSlot};
 
 /// Single-threaded async auto-reset event.
 ///
@@ -124,20 +123,12 @@ impl Inner {
 
     /// # Safety
     ///
-    /// * The `node` must be pinned and must remain at the same memory
+    /// * The `slot` must be pinned and must remain at the same memory
     ///   address for the lifetime of the wait future.
-    /// * The `node` must belong to a future created from the same event.
-    unsafe fn poll_wait(
-        &self,
-        node: &UnsafeCell<WaiterNode>,
-        registered: &mut bool,
-        waker: &Waker,
-    ) -> Poll<()> {
-        let node_ptr = node.get();
-
+    /// * The `slot` must belong to a future created from the same event.
+    unsafe fn poll_wait(&self, slot: &mut WaiterSlot, waker: &Waker) -> Poll<()> {
         // SAFETY: Single-threaded access.
-        if unsafe { (*node_ptr).is_notified() } {
-            *registered = false;
+        if unsafe { slot.take_notification() } {
             return Poll::Ready(());
         }
 
@@ -147,24 +138,17 @@ impl Inner {
         match state {
             InnerState::Set => {
                 debug_assert!(
-                    !*registered,
+                    !slot.is_registered(),
                     "Set state is exclusive with registered waiters"
                 );
                 *state = InnerState::Unset(WaiterList::new());
                 Poll::Ready(())
             }
             InnerState::Unset(waiters) => {
-                // SAFETY: Single-threaded access.
+                // SAFETY: Single-threaded, slot is pinned and lives
+                // as long as the future.
                 unsafe {
-                    (*node_ptr).store_waker(waker);
-                }
-                if !*registered {
-                    // SAFETY: Single-threaded, node is pinned and
-                    // not in any list.
-                    unsafe {
-                        waiters.push_back(node_ptr);
-                    }
-                    *registered = true;
+                    slot.register(waiters, waker);
                 }
                 Poll::Pending
             }
@@ -174,15 +158,13 @@ impl Inner {
     /// # Safety
     ///
     /// Same requirements as [`poll_wait`][Self::poll_wait].
-    unsafe fn drop_wait(&self, node: &UnsafeCell<WaiterNode>, registered: bool) {
-        if !registered {
+    unsafe fn drop_wait(&self, slot: &mut WaiterSlot) {
+        if !slot.is_registered() {
             return;
         }
 
-        let node_ptr = node.get();
-
         // SAFETY: Single-threaded access.
-        if unsafe { (*node_ptr).is_notified() } {
+        if unsafe { slot.is_notified() } {
             let state_ptr = self.state.get();
             // SAFETY: Single-threaded access.
             let old_state =
@@ -231,9 +213,10 @@ impl Inner {
             let state = unsafe { &mut *self.state.get() };
             match state {
                 InnerState::Unset(waiters) => {
-                    // SAFETY: Single-threaded, node is in the list.
+                    // SAFETY: Single-threaded, slot is registered in
+                    // this list.
                     unsafe {
-                        waiters.remove(node_ptr);
+                        slot.unregister(waiters);
                     }
                 }
                 InnerState::Set => {
@@ -342,9 +325,7 @@ impl LocalAutoResetEvent {
     pub fn wait(&self) -> LocalAutoResetWaitFuture {
         LocalAutoResetWaitFuture {
             inner: Rc::clone(&self.inner),
-            node: UnsafeCell::new(WaiterNode::new()),
-            registered: false,
-            _pinned: PhantomPinned,
+            slot: WaiterSlot::new(),
         }
     }
 }
@@ -352,17 +333,7 @@ impl LocalAutoResetEvent {
 /// Future returned by [`LocalAutoResetEvent::wait()`].
 pub struct LocalAutoResetWaitFuture {
     inner: Rc<Inner>,
-
-    // Behind UnsafeCell so that raw pointers from the event's waiter list can
-    // coexist with the &mut Self we obtain in poll() via get_unchecked_mut().
-    // UnsafeCell opts out of the noalias guarantee for its contents.
-    node: UnsafeCell<WaiterNode>,
-
-    // Whether this future's node is currently in the event's waiter list.
-    // Only accessed through &mut Self in poll()/drop(), never through the list.
-    registered: bool,
-
-    _pinned: PhantomPinned,
+    slot: WaiterSlot,
 }
 
 // Marker trait impls have no executable code.
@@ -375,20 +346,17 @@ impl Future for LocalAutoResetWaitFuture {
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<()> {
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
-        // SAFETY: The node is pinned (PhantomPinned) and belongs to
-        // this event's waiter list.
-        unsafe {
-            this.inner
-                .poll_wait(&this.node, &mut this.registered, cx.waker())
-        }
+        // SAFETY: The slot is pinned inside this future and belongs
+        // to this event's waiter list.
+        unsafe { this.inner.poll_wait(&mut this.slot, cx.waker()) }
     }
 }
 
 impl Drop for LocalAutoResetWaitFuture {
     fn drop(&mut self) {
-        // SAFETY: The node is pinned (PhantomPinned) and belongs to
-        // this event's waiter list.
-        unsafe { self.inner.drop_wait(&self.node, self.registered) }
+        // SAFETY: The slot is pinned inside this future and belongs
+        // to this event's waiter list.
+        unsafe { self.inner.drop_wait(&mut self.slot) }
     }
 }
 
@@ -404,7 +372,7 @@ impl fmt::Debug for LocalAutoResetEvent {
 impl fmt::Debug for LocalAutoResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalAutoResetWaitFuture")
-            .field("registered", &self.registered)
+            .field("registered", &self.slot.is_registered())
             .finish_non_exhaustive()
     }
 }
@@ -529,9 +497,7 @@ impl RawLocalAutoResetEvent {
     pub fn wait(&self) -> RawLocalAutoResetWaitFuture {
         RawLocalAutoResetWaitFuture {
             inner: self.inner,
-            node: UnsafeCell::new(WaiterNode::new()),
-            registered: false,
-            _pinned: PhantomPinned,
+            slot: WaiterSlot::new(),
         }
     }
 }
@@ -539,16 +505,11 @@ impl RawLocalAutoResetEvent {
 /// Future returned by [`RawLocalAutoResetEvent::wait()`].
 pub struct RawLocalAutoResetWaitFuture {
     inner: NonNull<Inner>,
-
-    // See LocalAutoResetWaitFuture for field documentation.
-    node: UnsafeCell<WaiterNode>,
-    registered: bool,
-
-    _pinned: PhantomPinned,
+    slot: WaiterSlot,
 }
 
-// NonNull and UnsafeCell make this !Send and !Sync by default, which is
-// correct for local types.
+// NonNull makes this !Send and !Sync by default, which is correct for local
+// types.
 
 // Marker trait impls have no executable code.
 impl UnwindSafe for RawLocalAutoResetWaitFuture {}
@@ -560,23 +521,23 @@ impl Future for RawLocalAutoResetWaitFuture {
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<()> {
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
-        // SAFETY: The container outlives this future. Node is pinned via
-        // PhantomPinned and belongs to this event's waiter list.
+        // SAFETY: The container outlives this future per the embedded()
+        // contract.
         let inner = unsafe { this.inner.as_ref() };
-        // SAFETY: The node is pinned (PhantomPinned) and belongs to
-        // this event's waiter list.
-        unsafe { inner.poll_wait(&this.node, &mut this.registered, cx.waker()) }
+        // SAFETY: The slot is pinned inside this future and belongs
+        // to this event's waiter list.
+        unsafe { inner.poll_wait(&mut this.slot, cx.waker()) }
     }
 }
 
 impl Drop for RawLocalAutoResetWaitFuture {
     fn drop(&mut self) {
-        // SAFETY: The container outlives this future. Node is pinned via
-        // PhantomPinned and belongs to this event's waiter list.
+        // SAFETY: The container outlives this future per the embedded()
+        // contract.
         let inner = unsafe { self.inner.as_ref() };
-        // SAFETY: The node is pinned (PhantomPinned) and belongs to
-        // this event's waiter list.
-        unsafe { inner.drop_wait(&self.node, self.registered) }
+        // SAFETY: The slot is pinned inside this future and belongs
+        // to this event's waiter list.
+        unsafe { inner.drop_wait(&mut self.slot) }
     }
 }
 
@@ -600,7 +561,7 @@ impl fmt::Debug for RawLocalAutoResetEvent {
 impl fmt::Debug for RawLocalAutoResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RawLocalAutoResetWaitFuture")
-            .field("registered", &self.registered)
+            .field("registered", &self.slot.is_registered())
             .finish_non_exhaustive()
     }
 }

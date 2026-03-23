@@ -9,8 +9,9 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::task::{self, Poll, Waker};
 
+use waiter_list::{WaiterList, WaiterSlot};
+
 use crate::NEVER_POISONED;
-use waiter_list::{WaiterList, WaiterNode};
 
 /// Thread-safe async mutex.
 ///
@@ -155,50 +156,39 @@ fn try_lock_inner(lock_state: &StdMutex<LockState>) -> bool {
 ///
 /// # Safety
 ///
-/// * The `node` must be pinned and must remain at the same memory
+/// * The `slot` must be pinned and must remain at the same memory
 ///   address for the lifetime of the lock future.
-/// * The `lock_state` must protect the waiter list that this node is
+/// * The `lock_state` must protect the waiter list that this slot is
 ///   (or will be) registered with.
 unsafe fn poll_lock(
     lock_state: &StdMutex<LockState>,
-    node: &UnsafeCell<WaiterNode>,
-    registered: &mut bool,
+    slot: &mut WaiterSlot,
     waker: &Waker,
 ) -> Poll<()> {
-    let node_ptr = node.get();
-
     let mut state = lock_state.lock().expect(NEVER_POISONED);
 
     // Check if we were directly notified by unlock() (it popped us
     // from the list and set our notified flag, transferring lock
     // ownership to us).
     // SAFETY: We hold the lock.
-    if unsafe { (*node_ptr).is_notified() } {
-        *registered = false;
+    if unsafe { slot.take_notification() } {
         return Poll::Ready(());
     }
 
     if !state.locked {
         // Lock is free — acquire it.
         debug_assert!(
-            !*registered,
+            !slot.is_registered(),
             "unlocked state is exclusive with registered waiters"
         );
         state.locked = true;
         Poll::Ready(())
     } else {
         // Lock is held — register as a waiter.
-        // SAFETY: We hold the lock.
+        // SAFETY: We hold the lock, slot is pinned and not yet
+        // in the list (or already registered with a stale waker).
         unsafe {
-            (*node_ptr).store_waker(waker);
-        }
-        if !*registered {
-            // SAFETY: We hold the lock, node is pinned and not
-            // in any list.
-            unsafe {
-                state.waiters.push_back(node_ptr);
-            }
-            *registered = true;
+            slot.register(&mut state.waiters, waker);
         }
         Poll::Pending
     }
@@ -209,12 +199,12 @@ unsafe fn poll_lock(
 /// # Safety
 ///
 /// Same requirements as [`poll_lock`].
-unsafe fn drop_lock_wait(lock_state: &StdMutex<LockState>, node: &UnsafeCell<WaiterNode>) {
-    let node_ptr = node.get();
+unsafe fn drop_lock_wait(lock_state: &StdMutex<LockState>, slot: &mut WaiterSlot) {
+    let node_ptr = slot.node_ptr();
     let mut state = lock_state.lock().expect(NEVER_POISONED);
 
     // SAFETY: We hold the lock.
-    if unsafe { (*node_ptr).is_notified() } {
+    if unsafe { slot.is_notified() } {
         // We were chosen as the next lock holder but the future was
         // cancelled. Forward the lock to the next waiter.
         // SAFETY: We hold the lock.
@@ -349,9 +339,7 @@ impl<T> Mutex<T> {
         MutexLockFuture {
             lock_state: &self.inner.lock_state,
             data: &self.inner.data,
-            node: UnsafeCell::new(WaiterNode::new()),
-            registered: false,
-            _pinned: PhantomPinned,
+            slot: WaiterSlot::new(),
         }
     }
 
@@ -455,30 +443,17 @@ pub struct MutexLockFuture<'a, T> {
     lock_state: &'a StdMutex<LockState>,
     data: &'a UnsafeCell<T>,
 
-    // Behind UnsafeCell so that raw pointers from the waiter list can
-    // coexist with the &mut Self we obtain in poll() via
-    // get_unchecked_mut(). UnsafeCell opts out of the noalias
-    // guarantee for its contents.
-    node: UnsafeCell<WaiterNode>,
-
-    // Whether this future's node is currently in the waiter list.
-    // Only accessed through &mut Self in poll()/drop(), never through
-    // the list.
-    registered: bool,
-
-    _pinned: PhantomPinned,
+    slot: WaiterSlot,
 }
 
 // Marker trait impl.
-// SAFETY: All UnsafeCell<WaiterNode> fields are accessed exclusively
-// under the mutex's internal lock. The references point to data behind
-// an Arc that is Send + Sync when T: Send.
+// SAFETY: All WaiterSlot fields are accessed exclusively under the
+// mutex's internal lock. The references point to data behind an Arc
+// that is Send + Sync when T: Send.
 unsafe impl<T: Send> Send for MutexLockFuture<'_, T> {}
 
-// The UnsafeCell<WaiterNode> field causes auto-trait inference to mark
-// the future as !UnwindSafe and !RefUnwindSafe. However, all mutable
-// access to the node goes through the internal lock, preventing
-// inconsistent state observation.
+// WaiterSlot is already Send + UnwindSafe + RefUnwindSafe, so the
+// future's unwind safety derives from its other fields.
 // Marker trait impl.
 impl<T> UnwindSafe for MutexLockFuture<'_, T> {}
 // Marker trait impl.
@@ -491,16 +466,10 @@ impl<'a, T> Future for MutexLockFuture<'a, T> {
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
-        // SAFETY: The node is pinned (PhantomPinned) and the
-        // lock_state field is the lock this node registers with.
-        match unsafe {
-            poll_lock(
-                this.lock_state,
-                &this.node,
-                &mut this.registered,
-                cx.waker(),
-            )
-        } {
+        // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
+        // and the lock_state field is the lock this slot registers
+        // with.
+        match unsafe { poll_lock(this.lock_state, &mut this.slot, cx.waker()) } {
             Poll::Ready(()) => Poll::Ready(MutexGuard {
                 lock_state: this.lock_state,
                 data: this.data,
@@ -512,15 +481,19 @@ impl<'a, T> Future for MutexLockFuture<'a, T> {
 
 impl<T> Drop for MutexLockFuture<'_, T> {
     fn drop(&mut self) {
-        if !self.registered {
+        if !self.slot.is_registered() {
             // Not yet polled — no cleanup needed.
-            debug_assert!(!self.registered, "registered future must not skip cleanup");
+            debug_assert!(
+                !self.slot.is_registered(),
+                "registered future must not skip cleanup"
+            );
             return;
         }
 
-        // SAFETY: The node is pinned (PhantomPinned) and the
-        // lock_state field is the lock this node was registered with.
-        unsafe { drop_lock_wait(self.lock_state, &self.node) }
+        // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
+        // and the lock_state field is the lock this slot was
+        // registered with.
+        unsafe { drop_lock_wait(self.lock_state, &mut self.slot) }
     }
 }
 
@@ -546,7 +519,7 @@ impl<T> fmt::Debug for MutexGuard<'_, T> {
 impl<T> fmt::Debug for MutexLockFuture<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MutexLockFuture")
-            .field("registered", &self.registered)
+            .field("registered", &self.slot.is_registered())
             .finish_non_exhaustive()
     }
 }
@@ -651,9 +624,7 @@ impl<T> RawMutex<T> {
     pub fn lock(&self) -> RawMutexLockFuture<T> {
         RawMutexLockFuture {
             inner: self.inner,
-            node: UnsafeCell::new(WaiterNode::new()),
-            registered: false,
-            _pinned: PhantomPinned,
+            slot: WaiterSlot::new(),
         }
     }
 
@@ -736,15 +707,11 @@ impl<T> Drop for RawMutexGuard<T> {
 pub struct RawMutexLockFuture<T> {
     inner: NonNull<MutexInner<T>>,
 
-    // See MutexLockFuture for field documentation.
-    node: UnsafeCell<WaiterNode>,
-    registered: bool,
-
-    _pinned: PhantomPinned,
+    slot: WaiterSlot,
 }
 
 // Marker trait impl.
-// SAFETY: Same reasoning as MutexLockFuture — all node access is
+// SAFETY: Same reasoning as MutexLockFuture — all slot access is
 // protected by the internal lock.
 unsafe impl<T: Send> Send for RawMutexLockFuture<T> {}
 
@@ -763,16 +730,9 @@ impl<T> Future for RawMutexLockFuture<T> {
         // SAFETY: The container outlives this future per the
         // embedded() contract.
         let inner = unsafe { this.inner.as_ref() };
-        // SAFETY: The node is pinned (PhantomPinned) and the
-        // lock_state is the lock this node registers with.
-        match unsafe {
-            poll_lock(
-                &inner.lock_state,
-                &this.node,
-                &mut this.registered,
-                cx.waker(),
-            )
-        } {
+        // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
+        // and the lock_state is the lock this slot registers with.
+        match unsafe { poll_lock(&inner.lock_state, &mut this.slot, cx.waker()) } {
             Poll::Ready(()) => Poll::Ready(RawMutexGuard { inner: this.inner }),
             Poll::Pending => Poll::Pending,
         }
@@ -781,18 +741,22 @@ impl<T> Future for RawMutexLockFuture<T> {
 
 impl<T> Drop for RawMutexLockFuture<T> {
     fn drop(&mut self) {
-        if !self.registered {
+        if !self.slot.is_registered() {
             // Not yet polled — no cleanup needed.
-            debug_assert!(!self.registered, "registered future must not skip cleanup");
+            debug_assert!(
+                !self.slot.is_registered(),
+                "registered future must not skip cleanup"
+            );
             return;
         }
 
         // SAFETY: The container outlives this future per the
         // embedded() contract.
         let inner = unsafe { self.inner.as_ref() };
-        // SAFETY: The node is pinned (PhantomPinned) and the
-        // lock_state is the lock this node was registered with.
-        unsafe { drop_lock_wait(&inner.lock_state, &self.node) }
+        // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
+        // and the lock_state is the lock this slot was registered
+        // with.
+        unsafe { drop_lock_wait(&inner.lock_state, &mut self.slot) }
     }
 }
 
@@ -821,7 +785,7 @@ impl<T> fmt::Debug for RawMutexGuard<T> {
 impl<T> fmt::Debug for RawMutexLockFuture<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RawMutexLockFuture")
-            .field("registered", &self.registered)
+            .field("registered", &self.slot.is_registered())
             .finish_non_exhaustive()
     }
 }
