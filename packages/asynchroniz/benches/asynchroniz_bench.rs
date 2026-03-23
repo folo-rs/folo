@@ -40,11 +40,11 @@ use std::task::{Context, Waker};
 use std::time::Instant;
 
 use alloc_tracker::{Allocator, Session as AllocSession};
-use criterion::{Criterion, criterion_group, criterion_main};
-use events::{
+use asynchroniz::{
     EmbeddedLocalMutex, EmbeddedLocalSemaphore, EmbeddedMutex, EmbeddedSemaphore, LocalMutex,
     LocalSemaphore, Mutex, Semaphore,
 };
+use criterion::{Criterion, criterion_group, criterion_main};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();

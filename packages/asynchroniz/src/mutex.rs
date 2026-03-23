@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::task::{self, Poll, Waker};
 
 use crate::NEVER_POISONED;
-use crate::waiter_list::{WaiterList, WaiterNode};
+use waiter_list::{WaiterList, WaiterNode};
 
 /// Thread-safe async mutex.
 ///
@@ -43,7 +43,7 @@ use crate::waiter_list::{WaiterList, WaiterNode};
 /// # Examples
 ///
 /// ```
-/// use events::Mutex;
+/// use asynchroniz::Mutex;
 ///
 /// #[tokio::main]
 /// async fn main() {
@@ -121,11 +121,11 @@ fn unlock(lock_state: &StdMutex<LockState>) {
             // next poll.
             // SAFETY: We hold the lock and just popped this node.
             unsafe {
-                (*node_ptr).notified = true;
+                (*node_ptr).set_notified();
             }
 
             // SAFETY: Same node, we hold the lock.
-            waker = unsafe { (*node_ptr).waker.take() };
+            waker = unsafe { (*node_ptr).take_waker() };
         } else {
             // No waiters — release the lock.
             state.locked = false;
@@ -163,7 +163,7 @@ unsafe fn poll_lock(
     lock_state: &StdMutex<LockState>,
     node: &UnsafeCell<WaiterNode>,
     registered: &mut bool,
-    waker: Waker,
+    waker: &Waker,
 ) -> Poll<()> {
     let node_ptr = node.get();
 
@@ -173,7 +173,7 @@ unsafe fn poll_lock(
     // from the list and set our notified flag, transferring lock
     // ownership to us).
     // SAFETY: We hold the lock.
-    if unsafe { (*node_ptr).notified } {
+    if unsafe { (*node_ptr).is_notified() } {
         *registered = false;
         return Poll::Ready(());
     }
@@ -190,7 +190,7 @@ unsafe fn poll_lock(
         // Lock is held — register as a waiter.
         // SAFETY: We hold the lock.
         unsafe {
-            (*node_ptr).waker = Some(waker);
+            (*node_ptr).store_waker(waker);
         }
         if !*registered {
             // SAFETY: We hold the lock, node is pinned and not
@@ -221,17 +221,17 @@ unsafe fn drop_lock_wait(
     let mut state = lock_state.lock().expect(NEVER_POISONED);
 
     // SAFETY: We hold the lock.
-    if unsafe { (*node_ptr).notified } {
+    if unsafe { (*node_ptr).is_notified() } {
         // We were chosen as the next lock holder but the future was
         // cancelled. Forward the lock to the next waiter.
         // SAFETY: We hold the lock.
         if let Some(next_node) = unsafe { state.waiters.pop_front() } {
             // SAFETY: We hold the lock and just popped this node.
             unsafe {
-                (*next_node).notified = true;
+                (*next_node).set_notified();
             }
             // SAFETY: Same node, we hold the lock.
-            let waker = unsafe { (*next_node).waker.take() };
+            let waker = unsafe { (*next_node).take_waker() };
             drop(state);
 
             if let Some(w) = waker {
@@ -260,7 +260,7 @@ impl<T> Mutex<T> {
     /// # Examples
     ///
     /// ```
-    /// use events::Mutex;
+    /// use asynchroniz::Mutex;
     ///
     /// let mutex = Mutex::boxed(42);
     /// let clone = mutex.clone();
@@ -299,7 +299,7 @@ impl<T> Mutex<T> {
     /// ```
     /// use std::pin::pin;
     ///
-    /// use events::{EmbeddedMutex, Mutex};
+    /// use asynchroniz::{EmbeddedMutex, Mutex};
     ///
     /// # futures::executor::block_on(async {
     /// let container = pin!(EmbeddedMutex::new(0_u32));
@@ -335,7 +335,7 @@ impl<T> Mutex<T> {
     /// # Examples
     ///
     /// ```
-    /// use events::Mutex;
+    /// use asynchroniz::Mutex;
     ///
     /// #[tokio::main]
     /// async fn main() {
@@ -370,7 +370,7 @@ impl<T> Mutex<T> {
     /// # Examples
     ///
     /// ```
-    /// use events::Mutex;
+    /// use asynchroniz::Mutex;
     ///
     /// let mutex = Mutex::boxed(42);
     ///
@@ -495,16 +495,19 @@ impl<'a, T> Future for MutexLockFuture<'a, T> {
     type Output = MutexGuard<'a, T>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<MutexGuard<'a, T>> {
-        // Clone the waker before acquiring the lock so a panicking
-        // clone implementation cannot poison the mutex.
-        let waker = cx.waker().clone();
-
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
         // SAFETY: The node is pinned (PhantomPinned) and the
         // lock_state field is the lock this node registers with.
-        match unsafe { poll_lock(this.lock_state, &this.node, &mut this.registered, waker) } {
+        match unsafe {
+            poll_lock(
+                this.lock_state,
+                &this.node,
+                &mut this.registered,
+                cx.waker(),
+            )
+        } {
             Poll::Ready(()) => Poll::Ready(MutexGuard {
                 lock_state: this.lock_state,
                 data: this.data,
@@ -569,7 +572,7 @@ impl<T> fmt::Debug for MutexLockFuture<'_, T> {
 /// ```
 /// use std::pin::pin;
 ///
-/// use events::{EmbeddedMutex, Mutex};
+/// use asynchroniz::{EmbeddedMutex, Mutex};
 ///
 /// # futures::executor::block_on(async {
 /// let container = pin!(EmbeddedMutex::new(42));
@@ -759,10 +762,6 @@ impl<T> Future for RawMutexLockFuture<T> {
     type Output = RawMutexGuard<T>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<RawMutexGuard<T>> {
-        // Clone the waker before acquiring the lock so a panicking
-        // clone implementation cannot poison the mutex.
-        let waker = cx.waker().clone();
-
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
@@ -771,7 +770,14 @@ impl<T> Future for RawMutexLockFuture<T> {
         let inner = unsafe { this.inner.as_ref() };
         // SAFETY: The node is pinned (PhantomPinned) and the
         // lock_state is the lock this node registers with.
-        match unsafe { poll_lock(&inner.lock_state, &this.node, &mut this.registered, waker) } {
+        match unsafe {
+            poll_lock(
+                &inner.lock_state,
+                &this.node,
+                &mut this.registered,
+                cx.waker(),
+            )
+        } {
             Poll::Ready(()) => Poll::Ready(RawMutexGuard { inner: this.inner }),
             Poll::Pending => Poll::Pending,
         }

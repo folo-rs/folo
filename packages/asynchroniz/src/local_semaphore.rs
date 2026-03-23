@@ -8,7 +8,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::task::{self, Poll, Waker};
 
-use crate::waiter_list::{WaiterList, WaiterNode};
+use waiter_list::{WaiterList, WaiterNode};
 
 /// Single-threaded async semaphore.
 ///
@@ -23,7 +23,7 @@ use crate::waiter_list::{WaiterList, WaiterNode};
 /// # Examples
 ///
 /// ```
-/// use events::LocalSemaphore;
+/// use asynchroniz::LocalSemaphore;
 ///
 /// #[tokio::main]
 /// async fn main() {
@@ -94,7 +94,7 @@ impl Inner {
         }
 
         // SAFETY: Single-threaded, head is non-null.
-        let requested = unsafe { (*head).permits_requested };
+        let requested = unsafe { (*head).user_data() };
 
         if state.available >= requested {
             state.available = state
@@ -107,10 +107,10 @@ impl Inner {
                 unsafe { state.waiters.pop_front() }.expect("head was non-null so pop cannot fail");
             // SAFETY: Single-threaded.
             unsafe {
-                (*node).notified = true;
+                (*node).set_notified();
             }
             // SAFETY: Single-threaded.
-            unsafe { (*node).waker.take() }
+            unsafe { (*node).take_waker() }
         } else {
             // Head-of-line blocking.
             None
@@ -163,12 +163,12 @@ impl Inner {
         node: &UnsafeCell<WaiterNode>,
         registered: &mut bool,
         permits: usize,
-        waker: Waker,
+        waker: &Waker,
     ) -> Poll<()> {
         let node_ptr = node.get();
 
         // SAFETY: Single-threaded access.
-        if unsafe { (*node_ptr).notified } {
+        if unsafe { (*node_ptr).is_notified() } {
             *registered = false;
             return Poll::Ready(());
         }
@@ -186,12 +186,12 @@ impl Inner {
             // SAFETY: Single-threaded, node_ptr is from our pinned
             // UnsafeCell.
             unsafe {
-                (*node_ptr).waker = Some(waker);
+                (*node_ptr).store_waker(waker);
             }
             // SAFETY: Single-threaded, node_ptr is from our pinned
             // UnsafeCell.
             unsafe {
-                (*node_ptr).permits_requested = permits;
+                (*node_ptr).set_user_data(permits);
             }
             if !*registered {
                 // SAFETY: Single-threaded, node is pinned and
@@ -221,7 +221,7 @@ impl Inner {
         let node_ptr = node.get();
 
         // SAFETY: Single-threaded access.
-        if unsafe { (*node_ptr).notified } {
+        if unsafe { (*node_ptr).is_notified() } {
             // We were given permits but the future was cancelled.
             // Return the permits and try to wake the head waiter in
             // the same access scope.
@@ -260,7 +260,7 @@ impl LocalSemaphore {
     /// # Examples
     ///
     /// ```
-    /// use events::LocalSemaphore;
+    /// use asynchroniz::LocalSemaphore;
     ///
     /// let sem = LocalSemaphore::boxed(3);
     /// assert!(sem.try_acquire().is_some());
@@ -293,7 +293,7 @@ impl LocalSemaphore {
     /// ```
     /// use std::pin::pin;
     ///
-    /// use events::{EmbeddedLocalSemaphore, LocalSemaphore};
+    /// use asynchroniz::{EmbeddedLocalSemaphore, LocalSemaphore};
     ///
     /// # futures::executor::block_on(async {
     /// let container = pin!(EmbeddedLocalSemaphore::new(1));
@@ -321,7 +321,7 @@ impl LocalSemaphore {
     /// # Examples
     ///
     /// ```
-    /// use events::LocalSemaphore;
+    /// use asynchroniz::LocalSemaphore;
     ///
     /// # futures::executor::block_on(async {
     /// let sem = LocalSemaphore::boxed(1);
@@ -359,7 +359,7 @@ impl LocalSemaphore {
     /// # Examples
     ///
     /// ```
-    /// use events::LocalSemaphore;
+    /// use asynchroniz::LocalSemaphore;
     ///
     /// let sem = LocalSemaphore::boxed(1);
     /// let permit = sem.try_acquire().unwrap();
@@ -448,8 +448,6 @@ impl<'a> Future for LocalSemaphoreAcquireFuture<'a> {
     type Output = LocalSemaphorePermit<'a>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<LocalSemaphorePermit<'a>> {
-        let waker = cx.waker().clone();
-
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
@@ -457,7 +455,7 @@ impl<'a> Future for LocalSemaphoreAcquireFuture<'a> {
         // field is the lock this node registers with.
         match unsafe {
             this.inner
-                .poll_acquire(&this.node, &mut this.registered, this.permits, waker)
+                .poll_acquire(&this.node, &mut this.registered, this.permits, cx.waker())
         } {
             Poll::Ready(()) => Poll::Ready(LocalSemaphorePermit {
                 inner: this.inner,
@@ -527,7 +525,7 @@ impl fmt::Debug for LocalSemaphoreAcquireFuture<'_> {
 /// ```
 /// use std::pin::pin;
 ///
-/// use events::{EmbeddedLocalSemaphore, LocalSemaphore};
+/// use asynchroniz::{EmbeddedLocalSemaphore, LocalSemaphore};
 ///
 /// # futures::executor::block_on(async {
 /// let container = pin!(EmbeddedLocalSemaphore::new(1));
@@ -687,8 +685,6 @@ impl Future for RawLocalSemaphoreAcquireFuture {
     type Output = RawLocalSemaphorePermit;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<RawLocalSemaphorePermit> {
-        let waker = cx.waker().clone();
-
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
@@ -697,7 +693,9 @@ impl Future for RawLocalSemaphoreAcquireFuture {
         let inner = unsafe { this.inner.as_ref() };
         // SAFETY: poll_acquire requires single-threaded access,
         // which LocalSemaphore guarantees (!Send).
-        match unsafe { inner.poll_acquire(&this.node, &mut this.registered, this.permits, waker) } {
+        match unsafe {
+            inner.poll_acquire(&this.node, &mut this.registered, this.permits, cx.waker())
+        } {
             Poll::Ready(()) => Poll::Ready(RawLocalSemaphorePermit {
                 inner: this.inner,
                 permits: this.permits,

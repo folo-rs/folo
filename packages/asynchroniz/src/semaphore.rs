@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{self, Poll, Waker};
 
 use crate::NEVER_POISONED;
-use crate::waiter_list::{WaiterList, WaiterNode};
+use waiter_list::{WaiterList, WaiterNode};
 
 /// Thread-safe async semaphore.
 ///
@@ -39,7 +39,7 @@ use crate::waiter_list::{WaiterList, WaiterNode};
 /// # Examples
 ///
 /// ```
-/// use events::Semaphore;
+/// use asynchroniz::Semaphore;
 ///
 /// #[tokio::main]
 /// async fn main() {
@@ -123,7 +123,7 @@ fn try_wake_head(state: &mut SemaphoreState) -> Option<Waker> {
     }
 
     // SAFETY: Caller holds the lock and head is non-null.
-    let requested = unsafe { (*head).permits_requested };
+    let requested = unsafe { (*head).user_data() };
 
     if state.available >= requested {
         state.available = state
@@ -136,10 +136,10 @@ fn try_wake_head(state: &mut SemaphoreState) -> Option<Waker> {
             unsafe { state.waiters.pop_front() }.expect("head was non-null so pop cannot fail");
         // SAFETY: Caller holds the lock and just popped this node.
         unsafe {
-            (*node).notified = true;
+            (*node).set_notified();
         }
         // SAFETY: Same node, caller holds the lock.
-        unsafe { (*node).waker.take() }
+        unsafe { (*node).take_waker() }
     } else {
         // Head-of-line blocking: not enough permits for the head
         // waiter.
@@ -198,7 +198,7 @@ unsafe fn poll_acquire(
     node: &UnsafeCell<WaiterNode>,
     registered: &mut bool,
     permits: usize,
-    waker: Waker,
+    waker: &Waker,
 ) -> Poll<()> {
     let node_ptr = node.get();
 
@@ -207,7 +207,7 @@ unsafe fn poll_acquire(
     // Check if we were directly notified by release_permits()
     // (it popped us from the list and reserved our permits).
     // SAFETY: We hold the lock.
-    if unsafe { (*node_ptr).notified } {
+    if unsafe { (*node_ptr).is_notified() } {
         *registered = false;
         return Poll::Ready(());
     }
@@ -225,12 +225,12 @@ unsafe fn poll_acquire(
         // SAFETY: We hold the lock, node_ptr is from our pinned
         // UnsafeCell.
         unsafe {
-            (*node_ptr).waker = Some(waker);
+            (*node_ptr).store_waker(waker);
         }
         // SAFETY: We hold the lock, node_ptr is from our pinned
         // UnsafeCell.
         unsafe {
-            (*node_ptr).permits_requested = permits;
+            (*node_ptr).set_user_data(permits);
         }
         if !*registered {
             // SAFETY: We hold the lock, node is pinned and not
@@ -261,7 +261,7 @@ unsafe fn drop_acquire_wait(
     let mut state = state_mutex.lock().expect(NEVER_POISONED);
 
     // SAFETY: We hold the lock.
-    if unsafe { (*node_ptr).notified } {
+    if unsafe { (*node_ptr).is_notified() } {
         // We were given permits but the future was cancelled.
         // Return the permits and try to wake other waiters, all
         // within the same lock scope.
@@ -294,7 +294,7 @@ impl Semaphore {
     /// # Examples
     ///
     /// ```
-    /// use events::Semaphore;
+    /// use asynchroniz::Semaphore;
     ///
     /// let sem = Semaphore::boxed(3);
     /// assert!(sem.try_acquire().is_some());
@@ -329,7 +329,7 @@ impl Semaphore {
     /// ```
     /// use std::pin::pin;
     ///
-    /// use events::{EmbeddedSemaphore, Semaphore};
+    /// use asynchroniz::{EmbeddedSemaphore, Semaphore};
     ///
     /// # futures::executor::block_on(async {
     /// let container = pin!(EmbeddedSemaphore::new(1));
@@ -362,7 +362,7 @@ impl Semaphore {
     /// # Examples
     ///
     /// ```
-    /// use events::Semaphore;
+    /// use asynchroniz::Semaphore;
     ///
     /// # futures::executor::block_on(async {
     /// let sem = Semaphore::boxed(1);
@@ -387,7 +387,7 @@ impl Semaphore {
     /// # Examples
     ///
     /// ```
-    /// use events::Semaphore;
+    /// use asynchroniz::Semaphore;
     ///
     /// # futures::executor::block_on(async {
     /// let sem = Semaphore::boxed(5);
@@ -419,7 +419,7 @@ impl Semaphore {
     /// # Examples
     ///
     /// ```
-    /// use events::Semaphore;
+    /// use asynchroniz::Semaphore;
     ///
     /// let sem = Semaphore::boxed(1);
     /// let permit = sem.try_acquire().unwrap();
@@ -447,7 +447,7 @@ impl Semaphore {
     /// # Examples
     ///
     /// ```
-    /// use events::Semaphore;
+    /// use asynchroniz::Semaphore;
     ///
     /// let sem = Semaphore::boxed(5);
     /// let permit = sem.try_acquire_many(3).unwrap();
@@ -539,8 +539,6 @@ impl<'a> Future for SemaphoreAcquireFuture<'a> {
     type Output = SemaphorePermit<'a>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<SemaphorePermit<'a>> {
-        let waker = cx.waker().clone();
-
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
@@ -552,7 +550,7 @@ impl<'a> Future for SemaphoreAcquireFuture<'a> {
                 &this.node,
                 &mut this.registered,
                 this.permits,
-                waker,
+                cx.waker(),
             )
         } {
             Poll::Ready(()) => Poll::Ready(SemaphorePermit {
@@ -622,7 +620,7 @@ impl fmt::Debug for SemaphoreAcquireFuture<'_> {
 /// ```
 /// use std::pin::pin;
 ///
-/// use events::{EmbeddedSemaphore, Semaphore};
+/// use asynchroniz::{EmbeddedSemaphore, Semaphore};
 ///
 /// # futures::executor::block_on(async {
 /// let container = pin!(EmbeddedSemaphore::new(2));
@@ -814,8 +812,6 @@ impl Future for RawSemaphoreAcquireFuture {
     type Output = RawSemaphorePermit;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<RawSemaphorePermit> {
-        let waker = cx.waker().clone();
-
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
@@ -830,7 +826,7 @@ impl Future for RawSemaphoreAcquireFuture {
                 &this.node,
                 &mut this.registered,
                 this.permits,
-                waker,
+                cx.waker(),
             )
         } {
             Poll::Ready(()) => Poll::Ready(RawSemaphorePermit {

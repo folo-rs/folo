@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{self, Poll, Waker};
 
 use crate::NEVER_POISONED;
-use crate::waiter_list::{WaiterList, WaiterNode};
+use waiter_list::{WaiterList, WaiterNode};
 
 /// Thread-safe async auto-reset event.
 ///
@@ -84,11 +84,11 @@ fn set(mutex: &Mutex<State>) {
                     // SAFETY: We hold the lock and just popped this
                     // node.
                     unsafe {
-                        (*node_ptr).notified = true;
+                        (*node_ptr).set_notified();
                     }
 
                     // SAFETY: Same node, we hold the lock.
-                    waker = unsafe { (*node_ptr).waker.take() };
+                    waker = unsafe { (*node_ptr).take_waker() };
                 } else {
                     // No waiters — store the signal.
                     *state = State::Set;
@@ -128,7 +128,7 @@ unsafe fn poll_wait(
     mutex: &Mutex<State>,
     node: &UnsafeCell<WaiterNode>,
     registered: &mut bool,
-    waker: Waker,
+    waker: &Waker,
 ) -> Poll<()> {
     let node_ptr = node.get();
 
@@ -137,7 +137,7 @@ unsafe fn poll_wait(
     // Check if we were directly notified by set() (it popped us
     // from the list and set our notified flag).
     // SAFETY: We hold the lock.
-    if unsafe { (*node_ptr).notified } {
+    if unsafe { (*node_ptr).is_notified() } {
         *registered = false;
         return Poll::Ready(());
     }
@@ -155,7 +155,7 @@ unsafe fn poll_wait(
         State::Unset(waiters) => {
             // SAFETY: We hold the lock.
             unsafe {
-                (*node_ptr).waker = Some(waker);
+                (*node_ptr).store_waker(waker);
             }
             if !*registered {
                 // SAFETY: We hold the lock, node is pinned and not
@@ -185,7 +185,7 @@ unsafe fn drop_wait(mutex: &Mutex<State>, node: &UnsafeCell<WaiterNode>, registe
     let mut state = mutex.lock().expect(NEVER_POISONED);
 
     // SAFETY: We hold the lock.
-    if unsafe { (*node_ptr).notified } {
+    if unsafe { (*node_ptr).is_notified() } {
         // We were notified but the future was cancelled before it
         // could complete. Forward the notification to the next
         // waiter so that no signal is lost.
@@ -197,10 +197,10 @@ unsafe fn drop_wait(mutex: &Mutex<State>, node: &UnsafeCell<WaiterNode>, registe
                     // SAFETY: We hold the lock and just popped
                     // this node.
                     unsafe {
-                        (*next_node).notified = true;
+                        (*next_node).set_notified();
                     }
                     // SAFETY: Same node, we hold the lock.
-                    let waker = unsafe { (*next_node).waker.take() };
+                    let waker = unsafe { (*next_node).take_waker() };
                     // Restore the waiter list.
                     *state = State::Unset(waiters);
                     drop(state);
@@ -446,7 +446,7 @@ impl Future for AutoResetWaitFuture {
 
         // SAFETY: The node is pinned (PhantomPinned) and the state
         // field is the mutex this node registers with.
-        unsafe { poll_wait(&this.state, &this.node, &mut this.registered, waker) }
+        unsafe { poll_wait(&this.state, &this.node, &mut this.registered, &waker) }
     }
 }
 
@@ -632,7 +632,7 @@ impl Future for RawAutoResetWaitFuture {
         let state = unsafe { this.state.as_ref() };
         // SAFETY: The node is pinned (PhantomPinned) and the state
         // is the mutex this node registers with.
-        unsafe { poll_wait(state, &this.node, &mut this.registered, waker) }
+        unsafe { poll_wait(state, &this.node, &mut this.registered, &waker) }
     }
 }
 

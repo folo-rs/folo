@@ -9,7 +9,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::task::{self, Poll, Waker};
 
-use crate::waiter_list::{WaiterList, WaiterNode};
+use waiter_list::{WaiterList, WaiterNode};
 
 /// Single-threaded async mutex.
 ///
@@ -24,7 +24,7 @@ use crate::waiter_list::{WaiterList, WaiterNode};
 /// # Examples
 ///
 /// ```
-/// use events::LocalMutex;
+/// use asynchroniz::LocalMutex;
 ///
 /// #[tokio::main]
 /// async fn main() {
@@ -82,11 +82,11 @@ impl<T> Inner<T> {
                 // lock stays held.
                 // SAFETY: Single-threaded, node was just popped.
                 unsafe {
-                    (*node_ptr).notified = true;
+                    (*node_ptr).set_notified();
                 }
 
                 // SAFETY: Single-threaded.
-                unsafe { (*node_ptr).waker.take() }
+                unsafe { (*node_ptr).take_waker() }
             } else {
                 state.locked = false;
                 None
@@ -121,12 +121,12 @@ impl<T> Inner<T> {
         &self,
         node: &UnsafeCell<WaiterNode>,
         registered: &mut bool,
-        waker: Waker,
+        waker: &Waker,
     ) -> Poll<()> {
         let node_ptr = node.get();
 
         // SAFETY: Single-threaded access.
-        if unsafe { (*node_ptr).notified } {
+        if unsafe { (*node_ptr).is_notified() } {
             *registered = false;
             return Poll::Ready(());
         }
@@ -144,7 +144,7 @@ impl<T> Inner<T> {
         } else {
             // SAFETY: Single-threaded access.
             unsafe {
-                (*node_ptr).waker = Some(waker);
+                (*node_ptr).store_waker(waker);
             }
             if !*registered {
                 // SAFETY: Single-threaded, node is pinned and not in
@@ -169,7 +169,7 @@ impl<T> Inner<T> {
         let node_ptr = node.get();
 
         // SAFETY: Single-threaded access.
-        if unsafe { (*node_ptr).notified } {
+        if unsafe { (*node_ptr).is_notified() } {
             let state_ptr = self.lock_state.get();
             // SAFETY: Single-threaded access.
             let state = unsafe { &mut *state_ptr };
@@ -178,10 +178,10 @@ impl<T> Inner<T> {
             let waker = if let Some(next_node) = unsafe { state.waiters.pop_front() } {
                 // SAFETY: Single-threaded.
                 unsafe {
-                    (*next_node).notified = true;
+                    (*next_node).set_notified();
                 }
                 // SAFETY: Single-threaded.
-                unsafe { (*next_node).waker.take() }
+                unsafe { (*next_node).take_waker() }
             } else {
                 state.locked = false;
                 None
@@ -212,7 +212,7 @@ impl<T> LocalMutex<T> {
     /// # Examples
     ///
     /// ```
-    /// use events::LocalMutex;
+    /// use asynchroniz::LocalMutex;
     ///
     /// let mutex = LocalMutex::boxed(42);
     /// assert_eq!(*mutex.try_lock().unwrap(), 42);
@@ -249,7 +249,7 @@ impl<T> LocalMutex<T> {
     /// ```
     /// use std::pin::pin;
     ///
-    /// use events::{EmbeddedLocalMutex, LocalMutex};
+    /// use asynchroniz::{EmbeddedLocalMutex, LocalMutex};
     ///
     /// # futures::executor::block_on(async {
     /// let container = pin!(EmbeddedLocalMutex::new(0_u32));
@@ -281,7 +281,7 @@ impl<T> LocalMutex<T> {
     /// # Examples
     ///
     /// ```
-    /// use events::LocalMutex;
+    /// use asynchroniz::LocalMutex;
     ///
     /// # futures::executor::block_on(async {
     /// let mutex = LocalMutex::boxed(String::new());
@@ -308,7 +308,7 @@ impl<T> LocalMutex<T> {
     /// # Examples
     ///
     /// ```
-    /// use events::LocalMutex;
+    /// use asynchroniz::LocalMutex;
     ///
     /// let mutex = LocalMutex::boxed(42);
     ///
@@ -402,8 +402,6 @@ impl<'a, T> Future for LocalMutexLockFuture<'a, T> {
     type Output = LocalMutexGuard<'a, T>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<LocalMutexGuard<'a, T>> {
-        let waker = cx.waker().clone();
-
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
@@ -411,7 +409,7 @@ impl<'a, T> Future for LocalMutexLockFuture<'a, T> {
         // lock_state field is the lock this node registers with.
         match unsafe {
             this.inner
-                .poll_lock(&this.node, &mut this.registered, waker)
+                .poll_lock(&this.node, &mut this.registered, cx.waker())
         } {
             Poll::Ready(()) => Poll::Ready(LocalMutexGuard { inner: this.inner }),
             Poll::Pending => Poll::Pending,
@@ -476,7 +474,7 @@ impl<T> fmt::Debug for LocalMutexLockFuture<'_, T> {
 /// ```
 /// use std::pin::pin;
 ///
-/// use events::{EmbeddedLocalMutex, LocalMutex};
+/// use asynchroniz::{EmbeddedLocalMutex, LocalMutex};
 ///
 /// # futures::executor::block_on(async {
 /// let container = pin!(EmbeddedLocalMutex::new(42));
@@ -641,8 +639,6 @@ impl<T> Future for RawLocalMutexLockFuture<T> {
     type Output = RawLocalMutexGuard<T>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<RawLocalMutexGuard<T>> {
-        let waker = cx.waker().clone();
-
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
@@ -651,7 +647,7 @@ impl<T> Future for RawLocalMutexLockFuture<T> {
         let inner = unsafe { this.inner.as_ref() };
         // SAFETY: The node is pinned (PhantomPinned) and the
         // lock_state is the lock this node registers with.
-        match unsafe { inner.poll_lock(&this.node, &mut this.registered, waker) } {
+        match unsafe { inner.poll_lock(&this.node, &mut this.registered, cx.waker()) } {
             Poll::Ready(()) => Poll::Ready(RawLocalMutexGuard { inner: this.inner }),
             Poll::Pending => Poll::Pending,
         }

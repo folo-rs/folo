@@ -9,7 +9,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::task::{self, Poll, Waker};
 
-use crate::waiter_list::{WaiterList, WaiterNode};
+use waiter_list::{WaiterList, WaiterNode};
 
 /// Single-threaded async auto-reset event.
 ///
@@ -92,11 +92,11 @@ impl Inner {
                     if let Some(node_ptr) = unsafe { waiters.pop_front() } {
                         // SAFETY: Single-threaded, node was just popped.
                         unsafe {
-                            (*node_ptr).notified = true;
+                            (*node_ptr).set_notified();
                         }
 
                         // SAFETY: Single-threaded.
-                        unsafe { (*node_ptr).waker.take() }
+                        unsafe { (*node_ptr).take_waker() }
                     } else {
                         // No waiters — store the signal.
                         *state = InnerState::Set;
@@ -131,12 +131,12 @@ impl Inner {
         &self,
         node: &UnsafeCell<WaiterNode>,
         registered: &mut bool,
-        waker: Waker,
+        waker: &Waker,
     ) -> Poll<()> {
         let node_ptr = node.get();
 
         // SAFETY: Single-threaded access.
-        if unsafe { (*node_ptr).notified } {
+        if unsafe { (*node_ptr).is_notified() } {
             *registered = false;
             return Poll::Ready(());
         }
@@ -156,7 +156,7 @@ impl Inner {
             InnerState::Unset(waiters) => {
                 // SAFETY: Single-threaded access.
                 unsafe {
-                    (*node_ptr).waker = Some(waker);
+                    (*node_ptr).store_waker(waker);
                 }
                 if !*registered {
                     // SAFETY: Single-threaded, node is pinned and
@@ -182,7 +182,7 @@ impl Inner {
         let node_ptr = node.get();
 
         // SAFETY: Single-threaded access.
-        if unsafe { (*node_ptr).notified } {
+        if unsafe { (*node_ptr).is_notified() } {
             let state_ptr = self.state.get();
             // SAFETY: Single-threaded access.
             let old_state =
@@ -193,10 +193,10 @@ impl Inner {
                     if let Some(next_node) = unsafe { waiters.pop_front() } {
                         // SAFETY: Single-threaded.
                         unsafe {
-                            (*next_node).notified = true;
+                            (*next_node).set_notified();
                         }
                         // SAFETY: Single-threaded.
-                        let waker = unsafe { (*next_node).waker.take() };
+                        let waker = unsafe { (*next_node).take_waker() };
                         // Restore the waiter list.
                         // SAFETY: Single-threaded.
                         unsafe {
@@ -379,7 +379,7 @@ impl Future for LocalAutoResetWaitFuture {
         // this event's waiter list.
         unsafe {
             this.inner
-                .poll_wait(&this.node, &mut this.registered, cx.waker().clone())
+                .poll_wait(&this.node, &mut this.registered, cx.waker())
         }
     }
 }
@@ -565,7 +565,7 @@ impl Future for RawLocalAutoResetWaitFuture {
         let inner = unsafe { this.inner.as_ref() };
         // SAFETY: The node is pinned (PhantomPinned) and belongs to
         // this event's waiter list.
-        unsafe { inner.poll_wait(&this.node, &mut this.registered, cx.waker().clone()) }
+        unsafe { inner.poll_wait(&this.node, &mut this.registered, cx.waker()) }
     }
 }
 

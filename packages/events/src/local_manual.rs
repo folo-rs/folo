@@ -8,7 +8,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::task::{self, Poll, Waker};
 
-use crate::waiter_list::{WaiterList, WaiterNode};
+use waiter_list::{WaiterList, WaiterNode};
 
 /// Single-threaded async manual-reset event.
 ///
@@ -113,13 +113,13 @@ impl Inner {
                     }
                     // SAFETY: Single-threaded — no concurrent
                     // access.
-                    let w = unsafe { (*cursor).waker.take() };
+                    let w = unsafe { (*cursor).take_waker() };
                     if w.is_some() {
                         break w;
                     }
                     // SAFETY: Single-threaded — no concurrent
                     // access.
-                    cursor = unsafe { (*cursor).next };
+                    cursor = unsafe { (*cursor).next_in_list() };
                 }
             };
 
@@ -158,7 +158,7 @@ impl Inner {
         &self,
         node: &UnsafeCell<WaiterNode>,
         registered: &mut bool,
-        waker: Waker,
+        waker: &Waker,
     ) -> Poll<()> {
         let node_ptr = node.get();
 
@@ -177,7 +177,7 @@ impl Inner {
 
         // SAFETY: Single-threaded access.
         unsafe {
-            (*node_ptr).waker = Some(waker);
+            (*node_ptr).store_waker(waker);
         }
 
         if !*registered {
@@ -343,7 +343,7 @@ impl Future for LocalManualResetWaitFuture {
         // this event's waiter list.
         unsafe {
             this.inner
-                .poll_wait(&this.node, &mut this.registered, cx.waker().clone())
+                .poll_wait(&this.node, &mut this.registered, cx.waker())
         }
     }
 }
@@ -532,7 +532,7 @@ impl Future for RawLocalManualResetWaitFuture {
         let inner = unsafe { this.inner.as_ref() };
         // SAFETY: The node is pinned (PhantomPinned) and belongs to
         // this event's waiter list.
-        unsafe { inner.poll_wait(&this.node, &mut this.registered, cx.waker().clone()) }
+        unsafe { inner.poll_wait(&this.node, &mut this.registered, cx.waker()) }
     }
 }
 

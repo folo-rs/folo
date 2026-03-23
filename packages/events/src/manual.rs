@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{self, Poll, Waker};
 
 use crate::NEVER_POISONED;
-use crate::waiter_list::{WaiterList, WaiterNode};
+use waiter_list::{WaiterList, WaiterNode};
 
 /// Thread-safe async manual-reset event.
 ///
@@ -100,12 +100,12 @@ fn set(mutex: &Mutex<State>) {
                     break None;
                 }
                 // SAFETY: We hold the lock.
-                let w = unsafe { (*cursor).waker.take() };
+                let w = unsafe { (*cursor).take_waker() };
                 if w.is_some() {
                     break w;
                 }
                 // SAFETY: We hold the lock.
-                cursor = unsafe { (*cursor).next };
+                cursor = unsafe { (*cursor).next_in_list() };
             }
         };
 
@@ -153,7 +153,7 @@ unsafe fn poll_wait(
     mutex: &Mutex<State>,
     node: &UnsafeCell<WaiterNode>,
     registered: &mut bool,
-    waker: Waker,
+    waker: &Waker,
 ) -> Poll<()> {
     let mut state = mutex.lock().expect(NEVER_POISONED);
     let node_ptr = node.get();
@@ -171,7 +171,7 @@ unsafe fn poll_wait(
 
     // SAFETY: We hold the lock.
     unsafe {
-        (*node_ptr).waker = Some(waker);
+        (*node_ptr).store_waker(waker);
     }
 
     if !*registered {
@@ -410,7 +410,7 @@ impl Future for ManualResetWaitFuture {
         let this = unsafe { self.get_unchecked_mut() };
         // SAFETY: The node is pinned (PhantomPinned) and the state
         // field is the mutex this node registers with.
-        unsafe { poll_wait(&this.state, &this.node, &mut this.registered, waker) }
+        unsafe { poll_wait(&this.state, &this.node, &mut this.registered, &waker) }
     }
 }
 
@@ -602,7 +602,7 @@ impl Future for RawManualResetWaitFuture {
         let state = unsafe { this.state.as_ref() };
         // SAFETY: The node is pinned (PhantomPinned) and the state
         // is the mutex this node registers with.
-        unsafe { poll_wait(state, &this.node, &mut this.registered, waker) }
+        unsafe { poll_wait(state, &this.node, &mut this.registered, &waker) }
     }
 }
 
