@@ -222,9 +222,11 @@ impl<T: 'static> Default for RawLocalEventPool<T> {
 // SAFETY: The pool is thread-safe - the only reason it does not have it via auto traits is that
 // we have the NonNUll pointer that disables thread safety auto traits. However, all the logic is
 // actually protected via the core Mutex, so all is well.
-unsafe impl<T: 'static> Send for RawLocalEventPool<T> {}
+// The `'static` bound is already on the struct, so it is not repeated here. Repeating it
+// would trigger a rustc bug in async generator Send inference with trait object type params.
+unsafe impl<T> Send for RawLocalEventPool<T> {}
 // SAFETY: See above.
-unsafe impl<T: 'static> Sync for RawLocalEventPool<T> {}
+unsafe impl<T> Sync for RawLocalEventPool<T> {}
 
 // The NonNull<UnsafeCell<RawLocalEventPoolCore<T>>> field disables
 // auto-trait inference for UnwindSafe/RefUnwindSafe. The pointed-to data

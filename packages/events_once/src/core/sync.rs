@@ -925,7 +925,9 @@ where
 }
 
 // SAFETY: We are a synchronization primitive, so we do our own synchronization.
-unsafe impl<T: Send + 'static> Sync for Event<T> {}
+// The `'static` bound is already on the struct, so it is not repeated here. Repeating it
+// would trigger a rustc bug in async generator Send inference with trait object type params.
+unsafe impl<T: Send> Sync for Event<T> {}
 
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 #[expect(clippy::missing_fields_in_debug, reason = "phantoms are boring")]

@@ -1,6 +1,8 @@
 //! Process-wide processor time tracking span.
 
+use std::cell::Cell;
 use std::marker::PhantomData;
+use std::panic::RefUnwindSafe;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -53,12 +55,16 @@ pub struct ProcessSpan {
     platform: PlatformFacade,
     start_time: Duration,
     iterations: u64,
-    _not_sync: PhantomData<*mut ()>,
+    // Cell<()> is natively Send + !Sync, which opts the type out of Sync without requiring
+    // an unsafe impl Send. Using PhantomData<*mut ()> + unsafe impl Send would be simpler
+    // but triggers a rustc bug in async generator Send inference when T is a trait object.
+    // We use the Cell<()> pattern here for consistency with the rest of the workspace.
+    _not_sync: PhantomData<Cell<()>>,
 }
 
-// SAFETY: ProcessSpan contains no fields that prevent Send. The PhantomData<*mut ()> marker
-// is only used to prevent Sync, not Send.
-unsafe impl Send for ProcessSpan {}
+// The Cell<()> marker is zero-sized with no actual mutable state, so there is nothing to
+// observe in an inconsistent state during unwind.
+impl RefUnwindSafe for ProcessSpan {}
 
 impl ProcessSpan {
     /// Creates a new process span for the given operation and iteration count.

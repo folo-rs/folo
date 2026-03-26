@@ -1,4 +1,5 @@
 use std::any::type_name;
+use std::cell::Cell;
 use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::{fmt, ptr};
@@ -15,20 +16,11 @@ where
 
     _t: PhantomData<fn(T)>,
 
-    // We are not compatible with concurrent sender use from multiple threads.
-    // This is just to leave us design flexibility - the API consumes the sender
-    // so there is not really anything you can do with it concurrently anyway.
-    _not_sync: PhantomData<*mut ()>,
-}
-
-// SAFETY: SenderCore contains no fields that prevent Send. The PhantomData<*mut ()>
-// marker is only used to prevent Sync, not Send. The actual Send bound is enforced
-// by the generic constraint T: Send.
-unsafe impl<E, T> Send for SenderCore<E, T>
-where
-    E: EventRef<T> + Send,
-    T: Send + 'static,
-{
+    // Cell<()> is natively Send + !Sync, which opts the type out of Sync without requiring
+    // an unsafe impl Send. Using PhantomData<*mut ()> + unsafe impl Send would be simpler
+    // but triggers a rustc bug in async generator Send inference when T is a trait object.
+    // See: https://github.com/folo-rs/folo/issues/142
+    _not_sync: PhantomData<Cell<()>>,
 }
 
 impl<E, T> SenderCore<E, T>
@@ -107,6 +99,9 @@ mod tests {
 
     assert_impl_all!(SenderCore<PtrRef<u32>, u32>: Send);
     assert_not_impl_any!(SenderCore<PtrRef<u32>, u32>: Sync);
+
+    // Trait object payloads must preserve Send (regression test for #142).
+    assert_impl_all!(SenderCore<BoxedRef<Box<dyn Send>>, Box<dyn Send>>: Send);
 
     // The event payload being `!Unpin` should not cause the endpoints to become `!Unpin`.
     assert_impl_all!(SenderCore<BoxedRef<PhantomPinned>, PhantomPinned>: Unpin);

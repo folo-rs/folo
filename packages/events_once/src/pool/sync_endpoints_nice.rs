@@ -153,6 +153,10 @@ mod tests {
     assert_impl_all!(PooledReceiver<u32>: Send);
     assert_not_impl_any!(PooledReceiver<u32>: Sync);
 
+    // Trait object payloads must preserve Send (regression test for #142).
+    assert_impl_all!(PooledSender<Box<dyn Send>>: Send);
+    assert_impl_all!(PooledReceiver<Box<dyn Send>>: Send);
+
     assert_impl_all!(
         PooledSender<u32>: UnwindSafe, RefUnwindSafe
     );

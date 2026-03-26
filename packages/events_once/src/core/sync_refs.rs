@@ -53,7 +53,9 @@ where
 }
 
 // SAFETY: This is only used with the thread-safe event (the event is Sync).
-unsafe impl<T> Send for PtrRef<T> where T: Send + 'static {}
+// The `'static` bound is already on the struct, so it is not repeated here. Repeating it
+// would trigger a rustc bug in async generator Send inference with trait object type params.
+unsafe impl<T: Send> Send for PtrRef<T> {}
 
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: Send + 'static> fmt::Debug for PtrRef<T> {
@@ -128,7 +130,9 @@ where
 }
 
 // SAFETY: This is only used with the thread-safe event (the event is Sync).
-unsafe impl<T> Send for BoxedRef<T> where T: Send + 'static {}
+// The `'static` bound is already on the struct, so it is not repeated here. Repeating it
+// would trigger a rustc bug in async generator Send inference with trait object type params.
+unsafe impl<T: Send> Send for BoxedRef<T> {}
 
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: Send + 'static> fmt::Debug for BoxedRef<T> {
