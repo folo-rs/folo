@@ -10,8 +10,8 @@ repository = "https://github.com/folo-rs/folo"
 rust-version = "1.88"
 
 [workspace.dependencies]
-all_the_time = { version = "0.4.14", path = "packages/all_the_time", default-features = false }
-alloc_tracker = { version = "0.5.18", path = "packages/alloc_tracker", default-features = false }
+all_the_time = { version = "0.4.15", path = "packages/all_the_time", default-features = false }
+alloc_tracker = { version = "0.5.19", path = "packages/alloc_tracker", default-features = false }
 arc-swap = { version = "1.7", default-features = false }
 argh = { version = "0.1.13", default-features = false, features = ["help"] }
 axum = { version = "0.8", default-features = false }
@@ -23,7 +23,7 @@ event-listener = { version = "5.4", default-features = false, features = [
     "std",
 ] }
 events = { version = "0.6.0", path = "packages/events", default-features = false }
-events_once = { version = "0.5.18", path = "packages/events_once", default-features = false }
+events_once = { version = "0.5.19", path = "packages/events_once", default-features = false }
 fake_headers = { version = "0.0", default-features = false }
 fast_time = { version = "0.1.17", path = "packages/fast_time", default-features = false }
 foldhash = { version = "0.2", default-features = false, features = ["std"] }
@@ -84,7 +84,7 @@ tokio = { version = "1.43", default-features = false }
 toml = { version = "0.9.2", default-features = false }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 trybuild = { version = "1.0", default-features = false }
-vicinal = { version = "0.1.14", path = "packages/vicinal", default-features = false }
+vicinal = { version = "0.1.15", path = "packages/vicinal", default-features = false }
 windows = { version = "0.62", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]

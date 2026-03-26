@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "all_the_time"
-version = "0.4.14"
+version = "0.4.15"
 dependencies = [
  "cpu-time",
  "criterion",
@@ -23,7 +23,7 @@ dependencies = [
 
 [[package]]
 name = "alloc_tracker"
-version = "0.5.18"
+version = "0.5.19"
 dependencies = [
  "criterion",
  "mutants",
@@ -647,7 +647,7 @@ dependencies = [
 
 [[package]]
 name = "events_once"
-version = "0.5.18"
+version = "0.5.19"
 dependencies = [
  "criterion",
  "futures",
@@ -1430,7 +1430,7 @@ dependencies = [
 
 [[package]]
 name = "par_bench"
-version = "0.2.32"
+version = "0.2.33"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -2284,7 +2284,7 @@ checksum = "7ba6f5989077681266825251a52748b8c1d8a4ad098cc37e440103d0ea717fc0"
 
 [[package]]
 name = "vicinal"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
