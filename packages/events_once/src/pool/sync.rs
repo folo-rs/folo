@@ -220,6 +220,9 @@ mod tests {
 
     assert_impl_all!(EventPool<u32>: Send, Sync);
 
+    // Trait object payloads must preserve Send + Sync (regression test for #142).
+    assert_impl_all!(EventPool<Box<dyn Send + Sync>>: Send, Sync);
+
     assert_impl_all!(
         EventPool<u32>: UnwindSafe, RefUnwindSafe
     );

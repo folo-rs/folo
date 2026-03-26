@@ -926,7 +926,7 @@ where
 
 // SAFETY: We are a synchronization primitive, so we do our own synchronization.
 // The `'static` bound is already on the struct, so it is not repeated here. Repeating it
-// would trigger a rustc bug in async generator Send inference with trait object type params.
+// would trigger a rustc bug (rust-lang/rust#110338) in async generator Send inference
 unsafe impl<T: Send> Sync for Event<T> {}
 
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
@@ -969,6 +969,9 @@ mod tests {
     use crate::IntoValueError;
 
     assert_impl_all!(Event<u32>: Send, Sync, UnwindSafe, RefUnwindSafe);
+
+    // Trait object payloads must preserve Send + Sync (regression test for #142).
+    assert_impl_all!(Event<Box<dyn Send>>: Send, Sync);
 
     #[test]
     fn boxed_send_receive() {

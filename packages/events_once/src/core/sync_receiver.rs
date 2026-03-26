@@ -27,7 +27,7 @@ where
 
     // Cell<()> is natively Send + !Sync, which opts the type out of Sync without requiring
     // an unsafe impl Send. Using PhantomData<*mut ()> + unsafe impl Send would be simpler
-    // but triggers a rustc bug in async generator Send inference when T is a trait object.
+    // but triggers a rustc bug (rust-lang/rust#110338) in async generator Send inference
     // See: https://github.com/folo-rs/folo/issues/142
     _not_sync: PhantomData<Cell<()>>,
 }
