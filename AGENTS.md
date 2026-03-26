@@ -640,12 +640,13 @@ static_assertions::assert_impl_all!(MyType: UnwindSafe, RefUnwindSafe);
 If a type cannot reasonably be made unwind-safe (e.g. it wraps a lock guard), pin the negative
 contract with `assert_not_impl_any!` and a comment explaining why.
 
-When a `!Sync` marker is needed, use `PhantomData<Cell<()>>` with a manual `impl RefUnwindSafe`.
-The `Cell<()>` type is natively `Send + !Sync`, so no `unsafe impl Send` is required. The
-`Cell<()>` is zero-sized and carries no actual mutable state, so the manual `impl RefUnwindSafe`
-is sound. Do not use `PhantomData<*mut ()>` with `unsafe impl Send` — while this achieves the
-same `!Sync` effect, it triggers a rustc bug where async generator auto-trait inference cannot
-prove `Send` when the type parameter is a trait object (`dyn Trait`).
+When a `!Sync` marker is needed, use `PhantomData<Cell<()>>`. The `Cell<()>` type is natively
+`Send + !Sync`, so no `unsafe impl Send` is required. Since `Cell` wraps `UnsafeCell` which is
+`!RefUnwindSafe`, a manual `impl RefUnwindSafe` is needed on the containing type. This is sound
+only if all other fields are also ref-unwind-safe — verify this before adding the impl. Do not
+use `PhantomData<*mut ()>` with `unsafe impl Send` — while this achieves the same `!Sync` effect,
+it triggers a rustc bug where async generator auto-trait inference cannot prove `Send` when the
+type parameter is a trait object (`dyn Trait`).
 
 More broadly, never put a `'static` bound on an `unsafe impl Send` or `unsafe impl Sync`. If
 the struct definition already requires `T: 'static`, the bound is redundant on the impl and
