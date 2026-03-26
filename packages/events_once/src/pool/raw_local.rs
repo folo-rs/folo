@@ -219,16 +219,6 @@ impl<T: 'static> Default for RawLocalEventPool<T> {
     }
 }
 
-// SAFETY: The pool is single-threaded (uses RefCell internally) but needs Send + Sync because
-// the pool object may be owned by a thread-safe container while only being accessed from one
-// thread at a time. The caller is responsible for not sharing access across threads.
-// The `'static` bound is already on the struct, so it is not repeated here. Repeating it
-// would trigger a rustc bug (rust-lang/rust#110338) in async generator Send inference
-// with trait object type params.
-unsafe impl<T> Send for RawLocalEventPool<T> {}
-// SAFETY: See above.
-unsafe impl<T> Sync for RawLocalEventPool<T> {}
-
 // The NonNull<UnsafeCell<RawLocalEventPoolCore<T>>> field disables
 // auto-trait inference for UnwindSafe/RefUnwindSafe. The pointed-to data
 // is owned by this type and protected by a RefCell, so shared references
@@ -244,15 +234,12 @@ mod tests {
     use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::task::{self, Poll, Waker};
 
-    use static_assertions::assert_impl_all;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
     use crate::Disconnected;
 
-    assert_impl_all!(RawLocalEventPool<u32>: Send, Sync);
-
-    // Trait object payloads must preserve Send + Sync (regression test for #142).
-    assert_impl_all!(RawLocalEventPool<Box<dyn Send>>: Send, Sync);
+    assert_not_impl_any!(RawLocalEventPool<u32>: Send, Sync);
 
     assert_impl_all!(
         RawLocalEventPool<u32>: UnwindSafe, RefUnwindSafe
