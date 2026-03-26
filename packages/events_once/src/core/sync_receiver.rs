@@ -48,7 +48,6 @@ where
 
     /// Checks whether a value is ready to be received.
     ///
-    ///
     /// Both a real value and a "disconnected" signal count,
     /// as they are just different kinds of values.
     ///

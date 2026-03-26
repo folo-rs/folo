@@ -219,9 +219,9 @@ impl<T: 'static> Default for RawLocalEventPool<T> {
     }
 }
 
-// SAFETY: The pool is thread-safe - the only reason it does not have it via auto traits is that
-// we have the NonNUll pointer that disables thread safety auto traits. However, all the logic is
-// actually protected via the core Mutex, so all is well.
+// SAFETY: The pool is single-threaded (uses RefCell internally) but needs Send + Sync because
+// the pool object may be owned by a thread-safe container while only being accessed from one
+// thread at a time. The caller is responsible for not sharing access across threads.
 // The `'static` bound is already on the struct, so it is not repeated here. Repeating it
 // would trigger a rustc bug (rust-lang/rust#110338) in async generator Send inference
 // with trait object type params.

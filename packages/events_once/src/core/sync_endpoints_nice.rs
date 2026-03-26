@@ -295,6 +295,18 @@ mod tests {
     assert_impl_all!(BoxedSender<Box<dyn Send>>: Send);
     assert_impl_all!(BoxedReceiver<Box<dyn Send>>: Send);
 
+    // Verify that an async block awaiting a trait-object receiver is Send. Static assertions
+    // alone do not catch the bug because it only manifests in async generator analysis.
+    fn _assert_future_send<F: Future + Send>(_: F) {}
+
+    fn _boxed_receiver_trait_object_future_is_send() {
+        let (_tx, rx) = crate::Event::<Box<dyn Send>>::boxed();
+
+        _assert_future_send(async move {
+            drop(rx.await);
+        });
+    }
+
     assert_impl_all!(
         BoxedSender<u32>: UnwindSafe, RefUnwindSafe
     );
