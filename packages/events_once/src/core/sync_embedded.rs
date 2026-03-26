@@ -91,6 +91,9 @@ mod tests {
     assert_impl_all!(EmbeddedEvent<u32>: Send);
     assert_not_impl_any!(EmbeddedEvent<u32>: Sync);
 
+    // Trait object payloads must preserve Send (regression test for #142).
+    assert_impl_all!(EmbeddedEvent<Box<dyn Send>>: Send);
+
     assert_impl_all!(
         EmbeddedEvent<u32>: UnwindSafe, RefUnwindSafe
     );

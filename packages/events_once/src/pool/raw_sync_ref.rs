@@ -84,7 +84,9 @@ impl<T: Send + 'static> fmt::Debug for RawPooledRef<T> {
 
 // SAFETY: The events are synchronization primitives and can be referenced from any thread.
 // The reference itself is not synchronized, so is not Sync, but it can move between threads.
-unsafe impl<T: Send + 'static> Send for RawPooledRef<T> {}
+// The `'static` bound is already on the struct, so it is not repeated here. Repeating it
+// would trigger a rustc bug (rust-lang/rust#110338) in async generator Send inference
+unsafe impl<T: Send> Send for RawPooledRef<T> {}
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -95,4 +97,7 @@ mod tests {
 
     assert_impl_all!(RawPooledRef<u32>: Send);
     assert_not_impl_any!(RawPooledRef<u32>: Sync);
+
+    // Trait object payloads must preserve Send (regression test for #142).
+    assert_impl_all!(RawPooledRef<Box<dyn Send>>: Send);
 }

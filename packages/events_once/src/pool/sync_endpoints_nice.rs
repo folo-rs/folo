@@ -153,6 +153,23 @@ mod tests {
     assert_impl_all!(PooledReceiver<u32>: Send);
     assert_not_impl_any!(PooledReceiver<u32>: Sync);
 
+    // Trait object payloads must preserve Send (regression test for #142).
+    assert_impl_all!(PooledSender<Box<dyn Send>>: Send);
+    assert_impl_all!(PooledReceiver<Box<dyn Send>>: Send);
+
+    // Verify that an async block awaiting a trait-object receiver is Send. Static assertions
+    // alone do not catch the bug because it only manifests in async generator analysis.
+    fn _assert_future_send<F: Future + Send>(_: F) {}
+
+    fn _pooled_receiver_trait_object_future_is_send() {
+        let pool = EventPool::<Box<dyn Send>>::new();
+        let (_tx, rx) = pool.rent();
+
+        _assert_future_send(async move {
+            drop(rx.await);
+        });
+    }
+
     assert_impl_all!(
         PooledSender<u32>: UnwindSafe, RefUnwindSafe
     );
