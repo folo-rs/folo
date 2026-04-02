@@ -60,9 +60,9 @@ oneshot = { version = "0.1", default-features = false, features = [
     "std",
     "async",
 ] }
-opentelemetry = { version = "0.28", default-features = false }
-opentelemetry-stdout = { version = "0.28", default-features = false }
-opentelemetry_sdk = { version = "0.28", default-features = false }
+opentelemetry = { version = "0.31", default-features = false }
+opentelemetry-stdout = { version = "0.31", default-features = false }
+opentelemetry_sdk = { version = "0.31", default-features = false }
 pastey = { version = "0.1.1", default-features = false }
 pin-project = { version = "1.1", default-features = false }
 proc-macro2 = { version = "1.0", default-features = false }
@@ -79,7 +79,7 @@ static_assertions = { version = "1", default-features = false }
 syn = { version = "2.0", default-features = false }
 tempfile = { version = "3.20", default-features = false }
 threadpool = { version = "1.8.1", default-features = false }
-tick = { version = "0.1", default-features = false }
+tick = { version = "0.2", default-features = false }
 tokio = { version = "1.43", default-features = false }
 toml = { version = "0.9.2", default-features = false }
 tracing = { version = "0.1", default-features = false, features = ["std"] }

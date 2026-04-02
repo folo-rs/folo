@@ -3,14 +3,9 @@
 //! This test is in a separate binary to establish controlled circumstances - no other tests
 //! will have recorded nm events, so we can verify the exact metrics exported.
 
-#![allow(
-    clippy::indexing_slicing,
-    reason = "integration tests with known-valid indices verified by earlier assertions"
-)]
-
 use nm::Event;
 use nm_otel::Publisher;
-use opentelemetry_sdk::metrics::data::Sum;
+use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
 use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
 use tick::Clock;
 
@@ -51,11 +46,16 @@ fn run_one_iteration_computes_deltas_across_iterations() {
     let metrics = exporter.get_finished_metrics().unwrap();
     let mut first_count = None;
     for resource_metrics in &metrics {
-        for scope_metrics in &resource_metrics.scope_metrics {
-            for metric in &scope_metrics.metrics {
-                if metric.name == "delta_test_event" {
-                    let sum = metric.data.as_any().downcast_ref::<Sum<u64>>().unwrap();
-                    first_count = Some(sum.data_points[0].value);
+        for scope_metrics in resource_metrics.scope_metrics() {
+            for metric in scope_metrics.metrics() {
+                if metric.name() == "delta_test_event" {
+                    let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+                        panic!("expected Sum<u64> metric data");
+                    };
+                    let mut data_points = sum.data_points();
+                    let first = data_points.next().unwrap();
+                    assert!(data_points.next().is_none());
+                    first_count = Some(first.value());
                 }
             }
         }
@@ -75,11 +75,16 @@ fn run_one_iteration_computes_deltas_across_iterations() {
     let metrics = exporter.get_finished_metrics().unwrap();
     let mut second_count = None;
     for resource_metrics in &metrics {
-        for scope_metrics in &resource_metrics.scope_metrics {
-            for metric in &scope_metrics.metrics {
-                if metric.name == "delta_test_event" {
-                    let sum = metric.data.as_any().downcast_ref::<Sum<u64>>().unwrap();
-                    second_count = Some(sum.data_points[0].value);
+        for scope_metrics in resource_metrics.scope_metrics() {
+            for metric in scope_metrics.metrics() {
+                if metric.name() == "delta_test_event" {
+                    let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+                        panic!("expected Sum<u64> metric data");
+                    };
+                    let mut data_points = sum.data_points();
+                    let first = data_points.next().unwrap();
+                    assert!(data_points.next().is_none());
+                    second_count = Some(first.value());
                 }
             }
         }
