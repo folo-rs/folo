@@ -10,7 +10,7 @@
 
 use nm::Event;
 use nm_otel::Publisher;
-use opentelemetry_sdk::metrics::data::Sum;
+use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
 use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
 use tick::Clock;
 
@@ -51,11 +51,15 @@ fn run_one_iteration_computes_deltas_across_iterations() {
     let metrics = exporter.get_finished_metrics().unwrap();
     let mut first_count = None;
     for resource_metrics in &metrics {
-        for scope_metrics in &resource_metrics.scope_metrics {
-            for metric in &scope_metrics.metrics {
-                if metric.name == "delta_test_event" {
-                    let sum = metric.data.as_any().downcast_ref::<Sum<u64>>().unwrap();
-                    first_count = Some(sum.data_points[0].value);
+        for scope_metrics in resource_metrics.scope_metrics() {
+            for metric in scope_metrics.metrics() {
+                if metric.name() == "delta_test_event" {
+                    if let AggregatedMetrics::U64(metric_data) = metric.data() {
+                        if let MetricData::Sum(sum) = metric_data {
+                            let data_points: Vec<_> = sum.data_points().collect();
+                            first_count = Some(data_points[0].value());
+                        }
+                    }
                 }
             }
         }
@@ -75,11 +79,15 @@ fn run_one_iteration_computes_deltas_across_iterations() {
     let metrics = exporter.get_finished_metrics().unwrap();
     let mut second_count = None;
     for resource_metrics in &metrics {
-        for scope_metrics in &resource_metrics.scope_metrics {
-            for metric in &scope_metrics.metrics {
-                if metric.name == "delta_test_event" {
-                    let sum = metric.data.as_any().downcast_ref::<Sum<u64>>().unwrap();
-                    second_count = Some(sum.data_points[0].value);
+        for scope_metrics in resource_metrics.scope_metrics() {
+            for metric in scope_metrics.metrics() {
+                if metric.name() == "delta_test_event" {
+                    if let AggregatedMetrics::U64(metric_data) = metric.data() {
+                        if let MetricData::Sum(sum) = metric_data {
+                            let data_points: Vec<_> = sum.data_points().collect();
+                            second_count = Some(data_points[0].value());
+                        }
+                    }
                 }
             }
         }
