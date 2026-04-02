@@ -3,11 +3,6 @@
 //! This test is in a separate binary to establish controlled circumstances - no other tests
 //! will have recorded nm events, so we can verify the exact metrics exported.
 
-#![allow(
-    clippy::indexing_slicing,
-    reason = "integration tests with known-valid indices verified by earlier assertions"
-)]
-
 use nm::Event;
 use nm_otel::Publisher;
 use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
@@ -63,9 +58,10 @@ fn run_one_iteration_exports_recorded_events() {
                         panic!("expected Sum<u64> metric data");
                     };
                     assert!(sum.is_monotonic());
-                    let data_points: Vec<_> = sum.data_points().collect();
-                    assert_eq!(data_points.len(), 1);
-                    assert_eq!(data_points[0].value(), 10);
+                    let mut data_points = sum.data_points();
+                    let first = data_points.next().unwrap();
+                    assert!(data_points.next().is_none());
+                    assert_eq!(first.value(), 10);
                 }
             }
         }

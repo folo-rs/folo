@@ -3,11 +3,6 @@
 //! This test is in a separate binary to establish controlled circumstances - no other tests
 //! will have recorded nm events, so we can verify the exact metrics exported.
 
-#![allow(
-    clippy::indexing_slicing,
-    reason = "integration tests with known-valid indices verified by earlier assertions"
-)]
-
 use nm::Event;
 use nm_otel::Publisher;
 use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
@@ -57,7 +52,10 @@ fn run_one_iteration_computes_deltas_across_iterations() {
                     let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
                         panic!("expected Sum<u64> metric data");
                     };
-                    first_count = Some(sum.data_points().next().unwrap().value());
+                    let mut data_points = sum.data_points();
+                    let first = data_points.next().unwrap();
+                    assert!(data_points.next().is_none());
+                    first_count = Some(first.value());
                 }
             }
         }
@@ -83,7 +81,10 @@ fn run_one_iteration_computes_deltas_across_iterations() {
                     let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
                         panic!("expected Sum<u64> metric data");
                     };
-                    second_count = Some(sum.data_points().next().unwrap().value());
+                    let mut data_points = sum.data_points();
+                    let first = data_points.next().unwrap();
+                    assert!(data_points.next().is_none());
+                    second_count = Some(first.value());
                 }
             }
         }
