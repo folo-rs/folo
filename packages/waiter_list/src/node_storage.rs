@@ -6,21 +6,21 @@ use std::task::Waker;
 
 use crate::{WaiterList, WaiterNode};
 
-/// A slot for embedding a [`WaiterNode`] inside a wait future.
+/// Storage for embedding a [`WaiterNode`] inside a wait future.
 ///
-/// Wraps an [`UnsafeCell<WaiterNode>`] together with a registration flag and a
-/// pinning marker — the three fields that every wait future needs. The slot
-/// provides safe accessors where possible and consolidates the common
-/// register/unregister patterns behind a smaller number of `unsafe` calls.
+/// Bundles a [`WaiterNode`] with a registration flag and a pinning
+/// marker, providing safe accessors where possible and consolidating
+/// the common register/unregister patterns behind a smaller number of
+/// `unsafe` calls.
 ///
 /// # Usage
 ///
-/// Embed a `WaiterNodeStorage` in your future struct instead of maintaining separate
-/// `UnsafeCell<WaiterNode>`, `registered: bool`, and `PhantomPinned` fields:
+/// Embed a `WaiterNodeStorage` in your future struct instead of
+/// maintaining separate node, registration, and pinning fields:
 ///
 /// ```ignore
 /// struct MyWaitFuture {
-///     slot: WaiterNodeStorage,
+///     storage: WaiterNodeStorage,
 ///     // ... other future-specific fields
 /// }
 /// ```
@@ -34,7 +34,7 @@ use crate::{WaiterList, WaiterNode};
 /// Two methods are safe:
 ///
 /// * [`is_registered()`][Self::is_registered] reads a plain `bool` owned
-///   by the slot.
+///   by the storage.
 /// * [`node_ptr()`][Self::node_ptr] returns a raw pointer without
 ///   dereferencing it.
 pub struct WaiterNodeStorage {
@@ -225,7 +225,7 @@ impl RefUnwindSafe for WaiterNodeStorage {}
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for WaiterNodeStorage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("WaiterNodeStorage")
+        f.debug_struct(std::any::type_name::<Self>())
             .field("registered", &self.registered)
             .finish_non_exhaustive()
     }
@@ -273,7 +273,8 @@ mod tests {
             slot.register(&mut list, Waker::noop().clone());
         }
         assert!(slot.is_registered());
-        assert!(!list.is_empty());
+        // SAFETY: Test has exclusive access.
+        assert!(!unsafe { list.is_empty() });
     }
 
     #[test]
@@ -295,7 +296,8 @@ mod tests {
         // SAFETY: Test has exclusive access.
         let popped = unsafe { list.pop_front() };
         assert!(popped.is_some());
-        assert!(list.is_empty());
+        // SAFETY: Test has exclusive access.
+        assert!(unsafe { list.is_empty() });
     }
 
     #[test]
@@ -329,7 +331,8 @@ mod tests {
         }
 
         assert!(!slot.is_registered());
-        assert!(list.is_empty());
+        // SAFETY: Test has exclusive access.
+        assert!(unsafe { list.is_empty() });
     }
 
     #[test]
@@ -449,6 +452,7 @@ mod tests {
             slot.unregister(&mut list);
         }
         assert!(!slot.is_registered());
-        assert!(list.is_empty());
+        // SAFETY: Test has exclusive access.
+        assert!(unsafe { list.is_empty() });
     }
 }

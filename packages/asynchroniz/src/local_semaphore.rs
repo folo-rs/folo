@@ -87,7 +87,8 @@ impl Inner {
     /// Tries to satisfy the head waiter, returning its waker if
     /// successful.
     fn try_wake_head(state: &mut SemaphoreState) -> Option<Waker> {
-        let head = state.waiters.head();
+        // SAFETY: We hold the lock.
+        let head = unsafe { state.waiters.head() };
 
         if head.is_null() {
             return None;

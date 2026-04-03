@@ -47,8 +47,8 @@
 
 mod list;
 mod node;
-mod slot;
+mod node_storage;
 
 pub use list::*;
 pub use node::*;
-pub use slot::*;
+pub use node_storage::*;

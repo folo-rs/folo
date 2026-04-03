@@ -1,13 +1,14 @@
 use std::panic::{RefUnwindSafe, UnwindSafe};
+use std::ptr;
 
 use crate::WaiterNode;
 
 /// A FIFO doubly-linked list of pinned [`WaiterNode`]s.
 ///
 /// The list does not own its nodes. Nodes are embedded in async futures and
-/// linked/unlinked as waiters register and complete. All operations that
-/// modify the list are `unsafe` because they require the caller to uphold
-/// pointer validity and exclusive-access invariants.
+/// linked/unlinked as waiters register and complete. All operations are
+/// `unsafe` because they require the caller to uphold pointer validity and
+/// exclusive-access invariants.
 ///
 /// # Synchronization
 ///
@@ -15,17 +16,6 @@ use crate::WaiterNode;
 /// exclusive access for every operation — typically by holding a
 /// [`Mutex`][std::sync::Mutex] guard or by confining the list to a single
 /// thread via `!Send` on the containing type.
-///
-/// # Complexity
-///
-/// All operations are O(1):
-///
-/// | Operation | Description |
-/// |---|---|
-/// | [`push_back`][Self::push_back] | Append to tail |
-/// | [`pop_front`][Self::pop_front] | Remove from head |
-/// | [`remove`][Self::remove] | Remove arbitrary node |
-/// | [`head`][Self::head] | Read head pointer |
 pub struct WaiterList {
     head: *mut WaiterNode,
     tail: *mut WaiterNode,
@@ -39,29 +29,37 @@ impl WaiterList {
     /// ```
     /// use waiter_list::WaiterList;
     ///
-    /// let list = WaiterList::new();
-    /// assert!(list.is_empty());
+    /// let mut list = WaiterList::new();
+    /// // SAFETY: We have exclusive access.
+    /// assert!(unsafe { list.is_empty() });
     /// ```
     #[must_use]
     pub fn new() -> Self {
         Self {
-            head: std::ptr::null_mut(),
-            tail: std::ptr::null_mut(),
+            head: ptr::null_mut(),
+            tail: ptr::null_mut(),
         }
     }
 
     /// Returns `true` if the list contains no nodes.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure exclusive access to the list.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub unsafe fn is_empty(&mut self) -> bool {
         self.head.is_null()
     }
 
     /// Returns a raw pointer to the head (front) node.
     ///
-    /// Returns a null pointer if the list is empty. The pointer is valid
-    /// only as long as the caller maintains exclusive access to the list.
+    /// Returns a null pointer if the list is empty.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure exclusive access to the list.
     #[must_use]
-    pub fn head(&self) -> *mut WaiterNode {
+    pub unsafe fn head(&mut self) -> *mut WaiterNode {
         self.head
     }
 
@@ -75,7 +73,7 @@ impl WaiterList {
     pub unsafe fn push_back(&mut self, node: *mut WaiterNode) {
         // SAFETY: Caller guarantees `node` is valid.
         unsafe {
-            (*node).next = std::ptr::null_mut();
+            (*node).next = ptr::null_mut();
         }
 
         // SAFETY: Caller guarantees `node` is valid.
@@ -131,11 +129,11 @@ impl WaiterList {
         // Clear the removed node's links for safety.
         // SAFETY: Caller guarantees `node` is valid.
         unsafe {
-            (*node).next = std::ptr::null_mut();
+            (*node).next = ptr::null_mut();
         }
         // SAFETY: Caller guarantees `node` is valid.
         unsafe {
-            (*node).prev = std::ptr::null_mut();
+            (*node).prev = ptr::null_mut();
         }
     }
 
@@ -161,22 +159,22 @@ impl WaiterList {
         self.head = next;
 
         if next.is_null() {
-            self.tail = std::ptr::null_mut();
+            self.tail = ptr::null_mut();
         } else {
             // SAFETY: `next` is a valid node in the list.
             unsafe {
-                (*next).prev = std::ptr::null_mut();
+                (*next).prev = ptr::null_mut();
             }
         }
 
         // Clear the removed node's links.
         // SAFETY: `node` is valid (we just read from it above).
         unsafe {
-            (*node).next = std::ptr::null_mut();
+            (*node).next = ptr::null_mut();
         }
         // SAFETY: `node` is valid.
         unsafe {
-            (*node).prev = std::ptr::null_mut();
+            (*node).prev = ptr::null_mut();
         }
 
         Some(node)
@@ -217,14 +215,17 @@ impl Default for WaiterList {
 // between threads as long as access remains exclusive.
 unsafe impl Send for WaiterList {}
 
+// WaiterList contains only raw pointers. All pointer
+// dereferences are serialized by external synchronization, so no
+// inconsistent state can be observed during unwind.
 impl UnwindSafe for WaiterList {}
 impl RefUnwindSafe for WaiterList {}
 
 impl std::fmt::Debug for WaiterList {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WaiterList")
-            .field("is_empty", &self.is_empty())
-            .finish()
+        f.debug_struct(std::any::type_name::<Self>())
+            .field("is_empty", &self.head.is_null())
+            .finish_non_exhaustive()
     }
 }
 
@@ -250,20 +251,20 @@ mod tests {
         }
         fn noop(_: *const ()) {}
         static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, noop, noop, noop);
-        unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
+        unsafe { Waker::from_raw(RawWaker::new(ptr::null(), &VTABLE)) }
     }
 
     #[test]
     fn new_list_is_empty() {
-        let list = WaiterList::new();
-        assert!(list.is_empty());
-        assert!(list.head().is_null());
+        let mut list = WaiterList::new();
+        assert!(unsafe { list.is_empty() });
+        assert!(unsafe { list.head() }.is_null());
     }
 
     #[test]
     fn default_list_is_empty() {
-        let list = WaiterList::default();
-        assert!(list.is_empty());
+        let mut list = WaiterList::default();
+        assert!(unsafe { list.is_empty() });
     }
 
     #[test]
@@ -281,12 +282,12 @@ mod tests {
         unsafe {
             list.push_back(pa);
         }
-        assert!(!list.is_empty());
-        assert!(std::ptr::eq(list.head(), pa));
+        assert!(!unsafe { list.is_empty() });
+        assert!(ptr::eq(unsafe { list.head() }, pa));
 
         let popped = unsafe { list.pop_front() };
-        assert!(std::ptr::eq(popped.unwrap(), pa));
-        assert!(list.is_empty());
+        assert!(ptr::eq(popped.unwrap(), pa));
+        assert!(unsafe { list.is_empty() });
     }
 
     #[test]
@@ -306,18 +307,18 @@ mod tests {
             list.push_back(pc);
         }
 
-        assert!(!list.is_empty());
+        assert!(!unsafe { list.is_empty() });
 
         let first = unsafe { list.pop_front() };
-        assert!(std::ptr::eq(first.unwrap(), pa));
+        assert!(ptr::eq(first.unwrap(), pa));
 
         let second = unsafe { list.pop_front() };
-        assert!(std::ptr::eq(second.unwrap(), pb));
+        assert!(ptr::eq(second.unwrap(), pb));
 
         let third = unsafe { list.pop_front() };
-        assert!(std::ptr::eq(third.unwrap(), pc));
+        assert!(ptr::eq(third.unwrap(), pc));
 
-        assert!(list.is_empty());
+        assert!(unsafe { list.is_empty() });
         assert!(unsafe { list.pop_front() }.is_none());
     }
 
@@ -337,8 +338,8 @@ mod tests {
         }
 
         let first = unsafe { list.pop_front() };
-        assert!(std::ptr::eq(first.unwrap(), pb));
-        assert!(list.is_empty());
+        assert!(ptr::eq(first.unwrap(), pb));
+        assert!(unsafe { list.is_empty() });
     }
 
     #[test]
@@ -357,8 +358,8 @@ mod tests {
         }
 
         let first = unsafe { list.pop_front() };
-        assert!(std::ptr::eq(first.unwrap(), pa));
-        assert!(list.is_empty());
+        assert!(ptr::eq(first.unwrap(), pa));
+        assert!(unsafe { list.is_empty() });
     }
 
     #[test]
@@ -380,12 +381,12 @@ mod tests {
         }
 
         let first = unsafe { list.pop_front() };
-        assert!(std::ptr::eq(first.unwrap(), pa));
+        assert!(ptr::eq(first.unwrap(), pa));
 
         let second = unsafe { list.pop_front() };
-        assert!(std::ptr::eq(second.unwrap(), pc));
+        assert!(ptr::eq(second.unwrap(), pc));
 
-        assert!(list.is_empty());
+        assert!(unsafe { list.is_empty() });
     }
 
     #[test]
@@ -399,7 +400,7 @@ mod tests {
             list.remove(pa);
         }
 
-        assert!(list.is_empty());
+        assert!(unsafe { list.is_empty() });
     }
 
     #[test]
@@ -434,8 +435,8 @@ mod tests {
         }
 
         let popped = unsafe { list.pop_front() };
-        assert!(std::ptr::eq(popped.unwrap(), pb));
-        assert!(list.is_empty());
+        assert!(ptr::eq(popped.unwrap(), pb));
+        assert!(unsafe { list.is_empty() });
     }
 
     #[test]
@@ -457,19 +458,19 @@ mod tests {
         }
 
         let first = unsafe { list.pop_front() };
-        assert!(std::ptr::eq(first.unwrap(), pa));
+        assert!(ptr::eq(first.unwrap(), pa));
 
         unsafe {
             list.push_back(pc);
         }
 
         let second = unsafe { list.pop_front() };
-        assert!(std::ptr::eq(second.unwrap(), pb));
+        assert!(ptr::eq(second.unwrap(), pb));
 
         let third = unsafe { list.pop_front() };
-        assert!(std::ptr::eq(third.unwrap(), pc));
+        assert!(ptr::eq(third.unwrap(), pc));
 
-        assert!(list.is_empty());
+        assert!(unsafe { list.is_empty() });
     }
 
     #[test]
@@ -489,14 +490,14 @@ mod tests {
             list.push_back(pc);
         }
 
-        let head = list.head();
-        assert!(std::ptr::eq(head, pa));
+        let head = unsafe { list.head() };
+        assert!(ptr::eq(head, pa));
 
         let second = unsafe { (*head).next_in_list() };
-        assert!(std::ptr::eq(second, pb));
+        assert!(ptr::eq(second, pb));
 
         let third = unsafe { (*second).next_in_list() };
-        assert!(std::ptr::eq(third, pc));
+        assert!(ptr::eq(third, pc));
 
         let end = unsafe { (*third).next_in_list() };
         assert!(end.is_null());
@@ -522,8 +523,8 @@ mod tests {
         }
 
         assert_eq!(visited.len(), 2);
-        assert!(std::ptr::eq(visited[0], pa));
-        assert!(std::ptr::eq(visited[1], pb));
+        assert!(ptr::eq(visited[0], pa));
+        assert!(ptr::eq(visited[1], pb));
     }
 
     #[test]
@@ -590,7 +591,7 @@ mod tests {
     fn ten_elements_maintain_fifo() {
         let mut list = WaiterList::new();
         let mut nodes: Vec<WaiterNode> = std::iter::repeat_with(WaiterNode::new).take(10).collect();
-        let ptrs: Vec<*mut WaiterNode> = nodes.iter_mut().map(std::ptr::from_mut).collect();
+        let ptrs: Vec<*mut WaiterNode> = nodes.iter_mut().map(ptr::from_mut).collect();
 
         for &p in &ptrs {
             unsafe {
@@ -600,10 +601,10 @@ mod tests {
 
         for &expected in &ptrs {
             let popped = unsafe { list.pop_front() }.unwrap();
-            assert!(std::ptr::eq(popped, expected));
+            assert!(ptr::eq(popped, expected));
         }
 
-        assert!(list.is_empty());
+        assert!(unsafe { list.is_empty() });
     }
 
     #[test]

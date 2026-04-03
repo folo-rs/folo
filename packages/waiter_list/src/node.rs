@@ -2,31 +2,15 @@ use std::marker::PhantomPinned;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::task::Waker;
 
-/// A node in an intrusive doubly-linked [`crate::WaiterList`].
+/// A node in a [`WaiterList`][crate::WaiterList].
 ///
 /// Each node stores a [`Waker`] for async notification, a boolean notification
-/// flag, and a `usize` of caller-defined data. Nodes are embedded directly
-/// inside wait futures and linked into a [`crate::WaiterList`] via raw pointers.
+/// flag, and a `usize` of caller-defined data. Embed nodes inside wait futures
+/// and register them with a [`WaiterList`][crate::WaiterList] to park the
+/// future until a synchronization event occurs.
 ///
-/// Once a node has been pushed into a list, it must remain at a stable memory
-/// address until it is removed. The [`PhantomPinned`] marker enforces this
-/// contract at the type level — the containing future must be pinned before
-/// the node can be registered.
-///
-/// # Fields
-///
-/// All fields are private and accessed through methods:
-///
-/// * **Waker** — stored by the future's `poll()`, consumed by the primitive's
-///   notification logic. See [`store_waker()`][Self::store_waker] and
-///   [`take_waker()`][Self::take_waker].
-/// * **Notified flag** — set by the primitive after popping the node, checked
-///   by the future on its next poll. See [`is_notified()`][Self::is_notified]
-///   and [`set_notified()`][Self::set_notified].
-/// * **User data** — a `usize` of caller-defined metadata (e.g. the number
-///   of permits a semaphore waiter requests). Defaults to `0`. See
-///   [`user_data()`][Self::user_data] and
-///   [`set_user_data()`][Self::set_user_data].
+/// Once registered, a node must remain at a stable memory address until it
+/// is removed from the list.
 #[non_exhaustive]
 pub struct WaiterNode {
     /// The waker to call when this waiter is selected for notification.
@@ -77,6 +61,11 @@ impl WaiterNode {
 
     /// Stores a waker for this node, replacing any previously stored waker.
     ///
+    /// Typically called during the future's `poll()` to ensure the waker
+    /// is up to date. The waker is later consumed by the synchronization
+    /// primitive via [`take_waker()`][Self::take_waker] when this node
+    /// is selected for notification.
+    ///
     /// Takes ownership of the waker to avoid cloning under a lock.
     /// Callers should clone the waker before acquiring any locks and
     /// pass the owned clone here.
@@ -86,8 +75,9 @@ impl WaiterNode {
 
     /// Extracts and returns the stored waker, if any.
     ///
-    /// After this call, the node holds no waker. The caller is responsible
-    /// for calling [`Waker::wake()`] outside any lock scope to avoid
+    /// Called by the synchronization primitive after popping this node
+    /// from the list and setting the notified flag. The caller must
+    /// invoke [`Waker::wake()`] outside any lock scope to avoid
     /// re-entrancy issues.
     pub fn take_waker(&mut self) -> Option<Waker> {
         self.waker.take()
@@ -145,12 +135,15 @@ impl Default for WaiterNode {
 // not be moved across threads. Consumers wrap nodes in UnsafeCell and handle
 // Send via their own unsafe impls on the containing future type.
 
+// WaiterNode has no interior mutability visible to callers — all
+// mutation goes through &mut self. No inconsistent state can be
+// observed during unwind.
 impl UnwindSafe for WaiterNode {}
 impl RefUnwindSafe for WaiterNode {}
 
 impl std::fmt::Debug for WaiterNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WaiterNode")
+        f.debug_struct(std::any::type_name::<Self>())
             .field("has_waker", &self.waker.is_some())
             .field("notified", &self.notified)
             .field("user_data", &self.user_data)
