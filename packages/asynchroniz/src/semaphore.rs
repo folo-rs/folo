@@ -6,7 +6,7 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 use std::task::{self, Poll, Waker};
 
-use waiter_list::{WaiterList, WaiterSlot};
+use waiter_list::{WaiterList, WaiterNodeStorage};
 
 use crate::constants::NEVER_POISONED;
 
@@ -199,7 +199,7 @@ fn try_acquire_inner(state_mutex: &Mutex<SemaphoreState>, permits: usize) -> boo
 ///   is (or will be) registered with.
 unsafe fn poll_acquire(
     state_mutex: &Mutex<SemaphoreState>,
-    slot: Pin<&mut WaiterSlot>,
+    slot: Pin<&mut WaiterNodeStorage>,
     permits: usize,
     waker: Waker,
 ) -> Poll<()> {
@@ -240,7 +240,7 @@ unsafe fn poll_acquire(
 /// Same requirements as [`poll_acquire`].
 unsafe fn drop_acquire_wait(
     state_mutex: &Mutex<SemaphoreState>,
-    slot: Pin<&mut WaiterSlot>,
+    slot: Pin<&mut WaiterNodeStorage>,
     permits: usize,
 ) {
     // SAFETY: We do not move the slot.
@@ -391,7 +391,7 @@ impl Semaphore {
         SemaphoreAcquireFuture {
             state: &self.inner.state,
             permits,
-            slot: WaiterSlot::new(),
+            slot: WaiterNodeStorage::new(),
         }
     }
 
@@ -490,11 +490,11 @@ pub struct SemaphoreAcquireFuture<'a> {
     state: &'a Mutex<SemaphoreState>,
     permits: usize,
 
-    slot: WaiterSlot,
+    slot: WaiterNodeStorage,
 }
 
 // Marker trait impl.
-// SAFETY: All WaiterSlot fields are accessed exclusively under the
+// SAFETY: All WaiterNodeStorage fields are accessed exclusively under the
 // semaphore's internal Mutex. The reference points to data behind an
 // Arc that is Send + Sync.
 unsafe impl Send for SemaphoreAcquireFuture<'_> {}
@@ -671,7 +671,7 @@ impl EmbeddedSemaphoreRef {
         EmbeddedSemaphoreAcquireFuture {
             inner: self.inner,
             permits,
-            slot: WaiterSlot::new(),
+            slot: WaiterNodeStorage::new(),
         }
     }
 
@@ -743,7 +743,7 @@ pub struct EmbeddedSemaphoreAcquireFuture {
     inner: NonNull<SemaphoreInner>,
     permits: usize,
 
-    slot: WaiterSlot,
+    slot: WaiterNodeStorage,
 }
 
 // Marker trait impl.

@@ -15,12 +15,12 @@ use crate::{WaiterList, WaiterNode};
 ///
 /// # Usage
 ///
-/// Embed a `WaiterSlot` in your future struct instead of maintaining separate
+/// Embed a `WaiterNodeStorage` in your future struct instead of maintaining separate
 /// `UnsafeCell<WaiterNode>`, `registered: bool`, and `PhantomPinned` fields:
 ///
 /// ```ignore
 /// struct MyWaitFuture {
-///     slot: WaiterSlot,
+///     slot: WaiterNodeStorage,
 ///     // ... other future-specific fields
 /// }
 /// ```
@@ -37,13 +37,13 @@ use crate::{WaiterList, WaiterNode};
 ///   by the slot.
 /// * [`node_ptr()`][Self::node_ptr] returns a raw pointer without
 ///   dereferencing it.
-pub struct WaiterSlot {
+pub struct WaiterNodeStorage {
     node: UnsafeCell<WaiterNode>,
     registered: bool,
     _pinned: PhantomPinned,
 }
 
-impl WaiterSlot {
+impl WaiterNodeStorage {
     /// Creates a new slot with an unlinked, unregistered node.
     #[must_use]
     pub fn new() -> Self {
@@ -201,31 +201,31 @@ impl WaiterSlot {
     }
 }
 
-impl Default for WaiterSlot {
+impl Default for WaiterNodeStorage {
     fn default() -> Self {
         Self::new()
     }
 }
 
-// SAFETY: WaiterSlot is used in futures that are `Send`. The raw
+// SAFETY: WaiterNodeStorage is used in futures that are `Send`. The raw
 // pointers inside WaiterNode are only dereferenced while the caller
 // holds a lock, so sending across threads is safe.
-unsafe impl Send for WaiterSlot {}
+unsafe impl Send for WaiterNodeStorage {}
 
-// WaiterSlot is !Sync because it contains UnsafeCell and raw pointers.
+// WaiterNodeStorage is !Sync because it contains UnsafeCell and raw pointers.
 // The UnsafeCell<WaiterNode> already makes the type !Sync via auto
 // trait rules, so no explicit marker is needed.
 
 // The slot contains no interior mutability visible to callers (all
 // mutation requires unsafe + exclusive access). Observing inconsistent
 // state during unwind is not possible.
-impl UnwindSafe for WaiterSlot {}
-impl RefUnwindSafe for WaiterSlot {}
+impl UnwindSafe for WaiterNodeStorage {}
+impl RefUnwindSafe for WaiterNodeStorage {}
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl fmt::Debug for WaiterSlot {
+impl fmt::Debug for WaiterNodeStorage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("WaiterSlot")
+        f.debug_struct("WaiterNodeStorage")
             .field("registered", &self.registered)
             .finish_non_exhaustive()
     }
@@ -239,24 +239,24 @@ mod tests {
 
     use super::*;
 
-    assert_impl_all!(WaiterSlot: Send, UnwindSafe, RefUnwindSafe);
-    assert_not_impl_any!(WaiterSlot: Sync);
+    assert_impl_all!(WaiterNodeStorage: Send, UnwindSafe, RefUnwindSafe);
+    assert_not_impl_any!(WaiterNodeStorage: Sync);
 
     #[test]
     fn new_slot_is_unregistered() {
-        let slot = WaiterSlot::new();
+        let slot = WaiterNodeStorage::new();
         assert!(!slot.is_registered());
     }
 
     #[test]
     fn default_slot_is_unregistered() {
-        let slot = WaiterSlot::default();
+        let slot = WaiterNodeStorage::default();
         assert!(!slot.is_registered());
     }
 
     #[test]
     fn node_ptr_is_stable() {
-        let slot = WaiterSlot::new();
+        let slot = WaiterNodeStorage::new();
         let p1 = slot.node_ptr();
         let p2 = slot.node_ptr();
         assert_eq!(p1, p2);
@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn register_sets_registered_flag() {
-        let mut slot = WaiterSlot::new();
+        let mut slot = WaiterNodeStorage::new();
         let mut list = WaiterList::new();
 
         // SAFETY: Test has exclusive access.
@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn register_idempotent_on_second_call() {
-        let mut slot = WaiterSlot::new();
+        let mut slot = WaiterNodeStorage::new();
         let mut list = WaiterList::new();
 
         // SAFETY: Test has exclusive access.
@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn register_with_data_stores_user_data() {
-        let mut slot = WaiterSlot::new();
+        let mut slot = WaiterNodeStorage::new();
         let mut list = WaiterList::new();
 
         // SAFETY: Test has exclusive access.
@@ -316,7 +316,7 @@ mod tests {
 
     #[test]
     fn unregister_removes_from_list() {
-        let mut slot = WaiterSlot::new();
+        let mut slot = WaiterNodeStorage::new();
         let mut list = WaiterList::new();
 
         // SAFETY: Test has exclusive access.
@@ -334,7 +334,7 @@ mod tests {
 
     #[test]
     fn unregister_when_not_registered_is_noop() {
-        let mut slot = WaiterSlot::new();
+        let mut slot = WaiterNodeStorage::new();
         let mut list = WaiterList::new();
 
         // SAFETY: Test has exclusive access.
@@ -346,7 +346,7 @@ mod tests {
 
     #[test]
     fn take_notification_returns_false_when_not_notified() {
-        let mut slot = WaiterSlot::new();
+        let mut slot = WaiterNodeStorage::new();
 
         // SAFETY: Test has exclusive access.
         let notified = unsafe { slot.take_notification() };
@@ -355,7 +355,7 @@ mod tests {
 
     #[test]
     fn take_notification_returns_true_and_clears_registered() {
-        let mut slot = WaiterSlot::new();
+        let mut slot = WaiterNodeStorage::new();
         let mut list = WaiterList::new();
 
         // SAFETY: Test has exclusive access.
@@ -383,7 +383,7 @@ mod tests {
 
     #[test]
     fn is_notified_does_not_change_registered() {
-        let mut slot = WaiterSlot::new();
+        let mut slot = WaiterNodeStorage::new();
         let mut list = WaiterList::new();
 
         // SAFETY: Test has exclusive access.
@@ -406,7 +406,7 @@ mod tests {
 
     #[test]
     fn full_lifecycle_register_notify_take() {
-        let mut slot = WaiterSlot::new();
+        let mut slot = WaiterNodeStorage::new();
         let mut list = WaiterList::new();
 
         // Register.
@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn full_lifecycle_register_unregister() {
-        let mut slot = WaiterSlot::new();
+        let mut slot = WaiterNodeStorage::new();
         let mut list = WaiterList::new();
 
         // Register.

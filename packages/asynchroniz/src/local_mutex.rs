@@ -8,7 +8,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::task::{self, Poll, Waker};
 
-use waiter_list::{WaiterList, WaiterSlot};
+use waiter_list::{WaiterList, WaiterNodeStorage};
 
 /// Single-threaded async mutex.
 ///
@@ -115,7 +115,7 @@ impl<T> Inner<T> {
     ///
     /// * The `slot` must belong to a future created from the same
     ///   mutex.
-    unsafe fn poll_lock(&self, slot: Pin<&mut WaiterSlot>, waker: Waker) -> Poll<()> {
+    unsafe fn poll_lock(&self, slot: Pin<&mut WaiterNodeStorage>, waker: Waker) -> Poll<()> {
         // SAFETY: We do not move the slot.
         let slot = unsafe { slot.get_unchecked_mut() };
 
@@ -147,7 +147,7 @@ impl<T> Inner<T> {
     /// # Safety
     ///
     /// Same requirements as [`poll_lock`][Self::poll_lock].
-    unsafe fn drop_lock_wait(&self, slot: Pin<&mut WaiterSlot>) {
+    unsafe fn drop_lock_wait(&self, slot: Pin<&mut WaiterNodeStorage>) {
         // SAFETY: We do not move the slot.
         let slot = unsafe { slot.get_unchecked_mut() };
         let node_ptr = slot.node_ptr();
@@ -276,7 +276,7 @@ impl<T> LocalMutex<T> {
     pub fn lock(&self) -> LocalMutexLockFuture<'_, T> {
         LocalMutexLockFuture {
             inner: &self.inner,
-            slot: WaiterSlot::new(),
+            slot: WaiterNodeStorage::new(),
         }
     }
 
@@ -358,7 +358,7 @@ impl<T> Drop for LocalMutexGuard<'_, T> {
 pub struct LocalMutexLockFuture<'a, T> {
     inner: &'a Inner<T>,
 
-    slot: WaiterSlot,
+    slot: WaiterNodeStorage,
 }
 
 impl<'a, T> Future for LocalMutexLockFuture<'a, T> {
@@ -512,7 +512,7 @@ impl<T> EmbeddedLocalMutexRef<T> {
     pub fn lock(&self) -> EmbeddedLocalMutexLockFuture<T> {
         EmbeddedLocalMutexLockFuture {
             inner: self.inner,
-            slot: WaiterSlot::new(),
+            slot: WaiterNodeStorage::new(),
         }
     }
 
@@ -579,7 +579,7 @@ impl<T> Drop for EmbeddedLocalMutexGuard<T> {
 pub struct EmbeddedLocalMutexLockFuture<T> {
     inner: NonNull<Inner<T>>,
 
-    slot: WaiterSlot,
+    slot: WaiterNodeStorage,
 }
 
 impl<T> Future for EmbeddedLocalMutexLockFuture<T> {

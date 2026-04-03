@@ -8,7 +8,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::task::{self, Poll, Waker};
 
-use waiter_list::{WaiterList, WaiterSlot};
+use waiter_list::{WaiterList, WaiterNodeStorage};
 
 /// Single-threaded async manual-reset event.
 ///
@@ -152,7 +152,7 @@ impl Inner {
     /// # Safety
     ///
     /// * The `slot` must belong to a future created from the same event.
-    unsafe fn poll_wait(&self, slot: Pin<&mut WaiterSlot>, waker: Waker) -> Poll<()> {
+    unsafe fn poll_wait(&self, slot: Pin<&mut WaiterNodeStorage>, waker: Waker) -> Poll<()> {
         // SAFETY: We do not move the slot.
         let slot = unsafe { slot.get_unchecked_mut() };
         if self.is_set.get() {
@@ -182,7 +182,7 @@ impl Inner {
     /// # Safety
     ///
     /// Same requirements as [`poll_wait`][Self::poll_wait].
-    unsafe fn drop_wait(&self, slot: Pin<&mut WaiterSlot>) {
+    unsafe fn drop_wait(&self, slot: Pin<&mut WaiterNodeStorage>) {
         // SAFETY: We do not move the slot.
         let slot = unsafe { slot.get_unchecked_mut() };
         if slot.is_registered() {
@@ -294,7 +294,7 @@ impl LocalManualResetEvent {
     pub fn wait(&self) -> LocalManualResetWaitFuture {
         LocalManualResetWaitFuture {
             inner: Rc::clone(&self.inner),
-            slot: WaiterSlot::new(),
+            slot: WaiterNodeStorage::new(),
         }
     }
 }
@@ -302,7 +302,7 @@ impl LocalManualResetEvent {
 /// Future returned by [`LocalManualResetEvent::wait()`].
 pub struct LocalManualResetWaitFuture {
     inner: Rc<Inner>,
-    slot: WaiterSlot,
+    slot: WaiterNodeStorage,
 }
 
 // Marker trait impls have no executable code.
@@ -473,7 +473,7 @@ impl RawLocalManualResetEvent {
     pub fn wait(&self) -> RawLocalManualResetWaitFuture {
         RawLocalManualResetWaitFuture {
             inner: self.inner,
-            slot: WaiterSlot::new(),
+            slot: WaiterNodeStorage::new(),
         }
     }
 }
@@ -481,7 +481,7 @@ impl RawLocalManualResetEvent {
 /// Future returned by [`RawLocalManualResetEvent::wait()`].
 pub struct RawLocalManualResetWaitFuture {
     inner: NonNull<Inner>,
-    slot: WaiterSlot,
+    slot: WaiterNodeStorage,
 }
 
 // NonNull makes this !Send and !Sync by default, which is correct for local

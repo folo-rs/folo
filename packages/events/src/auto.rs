@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{self, Poll, Waker};
 use std::{fmt, mem};
 
-use waiter_list::{WaiterList, WaiterSlot};
+use waiter_list::{WaiterList, WaiterNodeStorage};
 
 use crate::NEVER_POISONED;
 
@@ -121,7 +121,11 @@ fn try_wait(mutex: &Mutex<State>) -> bool {
 ///
 /// * The `mutex` must protect the waiter list that this slot is (or will
 ///   be) registered with.
-unsafe fn poll_wait(mutex: &Mutex<State>, slot: Pin<&mut WaiterSlot>, waker: Waker) -> Poll<()> {
+unsafe fn poll_wait(
+    mutex: &Mutex<State>,
+    slot: Pin<&mut WaiterNodeStorage>,
+    waker: Waker,
+) -> Poll<()> {
     // SAFETY: We do not move the slot.
     let slot = unsafe { slot.get_unchecked_mut() };
     let mut state = mutex.lock().expect(NEVER_POISONED);
@@ -159,7 +163,7 @@ unsafe fn poll_wait(mutex: &Mutex<State>, slot: Pin<&mut WaiterSlot>, waker: Wak
 /// # Safety
 ///
 /// Same requirements as [`poll_wait`].
-unsafe fn drop_wait(mutex: &Mutex<State>, slot: Pin<&mut WaiterSlot>) {
+unsafe fn drop_wait(mutex: &Mutex<State>, slot: Pin<&mut WaiterNodeStorage>) {
     // SAFETY: We do not move the slot.
     let slot = unsafe { slot.get_unchecked_mut() };
 
@@ -380,7 +384,7 @@ impl AutoResetEvent {
     pub fn wait(&self) -> AutoResetWaitFuture {
         AutoResetWaitFuture {
             state: Arc::clone(&self.state),
-            slot: WaiterSlot::new(),
+            slot: WaiterNodeStorage::new(),
         }
     }
 }
@@ -390,15 +394,15 @@ impl AutoResetEvent {
 /// Completes with `()` when the event signal is acquired.
 pub struct AutoResetWaitFuture {
     state: Arc<Mutex<State>>,
-    slot: WaiterSlot,
+    slot: WaiterNodeStorage,
 }
 
 // Marker trait impl.
-// SAFETY: WaiterSlot is Send. All slot access is protected by the event's
+// SAFETY: WaiterNodeStorage is Send. All slot access is protected by the event's
 // Mutex. The Arc<Mutex<State>> is Send + Sync.
 unsafe impl Send for AutoResetWaitFuture {}
 
-// WaiterSlot is UnwindSafe and RefUnwindSafe.
+// WaiterNodeStorage is UnwindSafe and RefUnwindSafe.
 // Marker trait impl.
 impl UnwindSafe for AutoResetWaitFuture {}
 // Marker trait impl.
@@ -563,7 +567,7 @@ impl RawAutoResetEvent {
     pub fn wait(&self) -> RawAutoResetWaitFuture {
         RawAutoResetWaitFuture {
             state: self.state,
-            slot: WaiterSlot::new(),
+            slot: WaiterNodeStorage::new(),
         }
     }
 }
@@ -571,11 +575,11 @@ impl RawAutoResetEvent {
 /// Future returned by [`RawAutoResetEvent::wait()`].
 pub struct RawAutoResetWaitFuture {
     state: NonNull<Mutex<State>>,
-    slot: WaiterSlot,
+    slot: WaiterNodeStorage,
 }
 
 // Marker trait impl.
-// SAFETY: WaiterSlot is Send. All slot access is protected by the event's
+// SAFETY: WaiterNodeStorage is Send. All slot access is protected by the event's
 // Mutex.
 unsafe impl Send for RawAutoResetWaitFuture {}
 

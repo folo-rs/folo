@@ -24,7 +24,7 @@
 //! * [`WaiterList`] — the queue itself.
 //! * [`WaiterNode`] — a single entry in the queue, embedded inside a
 //!   future.
-//! * [`WaiterSlot`] — a convenience wrapper that bundles a node with
+//! * [`WaiterNodeStorage`] — a convenience wrapper that bundles a node with
 //!   its registration state and a pinning marker, reducing boilerplate
 //!   in future implementations.
 //!

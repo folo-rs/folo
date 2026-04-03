@@ -8,7 +8,7 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::task::{self, Poll, Waker};
 
-use waiter_list::{WaiterList, WaiterSlot};
+use waiter_list::{WaiterList, WaiterNodeStorage};
 
 use crate::constants::NEVER_POISONED;
 
@@ -159,7 +159,7 @@ fn try_lock_inner(lock_state: &StdMutex<LockState>) -> bool {
 ///   (or will be) registered with.
 unsafe fn poll_lock(
     lock_state: &StdMutex<LockState>,
-    slot: Pin<&mut WaiterSlot>,
+    slot: Pin<&mut WaiterNodeStorage>,
     waker: Waker,
 ) -> Poll<()> {
     // SAFETY: We do not move the slot; Pin enforces the address
@@ -199,7 +199,7 @@ unsafe fn poll_lock(
 /// # Safety
 ///
 /// Same requirements as [`poll_lock`].
-unsafe fn drop_lock_wait(lock_state: &StdMutex<LockState>, slot: Pin<&mut WaiterSlot>) {
+unsafe fn drop_lock_wait(lock_state: &StdMutex<LockState>, slot: Pin<&mut WaiterNodeStorage>) {
     // SAFETY: We do not move the slot.
     let slot = unsafe { slot.get_unchecked_mut() };
     let node_ptr = slot.node_ptr();
@@ -342,7 +342,7 @@ impl<T> Mutex<T> {
         MutexLockFuture {
             lock_state: &self.inner.lock_state,
             data: &self.inner.data,
-            slot: WaiterSlot::new(),
+            slot: WaiterNodeStorage::new(),
         }
     }
 
@@ -440,11 +440,11 @@ pub struct MutexLockFuture<'a, T> {
     lock_state: &'a StdMutex<LockState>,
     data: &'a UnsafeCell<T>,
 
-    slot: WaiterSlot,
+    slot: WaiterNodeStorage,
 }
 
 // Marker trait impl.
-// SAFETY: All WaiterSlot fields are accessed exclusively under the
+// SAFETY: All WaiterNodeStorage fields are accessed exclusively under the
 // mutex's internal lock. The references point to data behind an Arc
 // that is Send + Sync when T: Send.
 unsafe impl<T: Send> Send for MutexLockFuture<'_, T> {}
@@ -612,7 +612,7 @@ impl<T> EmbeddedMutexRef<T> {
     pub fn lock(&self) -> EmbeddedMutexLockFuture<T> {
         EmbeddedMutexLockFuture {
             inner: self.inner,
-            slot: WaiterSlot::new(),
+            slot: WaiterNodeStorage::new(),
         }
     }
 
@@ -689,7 +689,7 @@ impl<T> Drop for EmbeddedMutexGuard<T> {
 pub struct EmbeddedMutexLockFuture<T> {
     inner: NonNull<MutexInner<T>>,
 
-    slot: WaiterSlot,
+    slot: WaiterNodeStorage,
 }
 
 // Marker trait impl.

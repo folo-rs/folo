@@ -8,7 +8,7 @@ use std::rc::Rc;
 use std::task::{self, Poll, Waker};
 use std::{fmt, mem};
 
-use waiter_list::{WaiterList, WaiterSlot};
+use waiter_list::{WaiterList, WaiterNodeStorage};
 
 /// Single-threaded async auto-reset event.
 ///
@@ -124,7 +124,7 @@ impl Inner {
     /// # Safety
     ///
     /// * The `slot` must belong to a future created from the same event.
-    unsafe fn poll_wait(&self, slot: Pin<&mut WaiterSlot>, waker: Waker) -> Poll<()> {
+    unsafe fn poll_wait(&self, slot: Pin<&mut WaiterNodeStorage>, waker: Waker) -> Poll<()> {
         // SAFETY: We do not move the slot.
         let slot = unsafe { slot.get_unchecked_mut() };
 
@@ -159,7 +159,7 @@ impl Inner {
     /// # Safety
     ///
     /// Same requirements as [`poll_wait`][Self::poll_wait].
-    unsafe fn drop_wait(&self, slot: Pin<&mut WaiterSlot>) {
+    unsafe fn drop_wait(&self, slot: Pin<&mut WaiterNodeStorage>) {
         // SAFETY: We do not move the slot.
         let slot = unsafe { slot.get_unchecked_mut() };
         if !slot.is_registered() {
@@ -328,7 +328,7 @@ impl LocalAutoResetEvent {
     pub fn wait(&self) -> LocalAutoResetWaitFuture {
         LocalAutoResetWaitFuture {
             inner: Rc::clone(&self.inner),
-            slot: WaiterSlot::new(),
+            slot: WaiterNodeStorage::new(),
         }
     }
 }
@@ -336,7 +336,7 @@ impl LocalAutoResetEvent {
 /// Future returned by [`LocalAutoResetEvent::wait()`].
 pub struct LocalAutoResetWaitFuture {
     inner: Rc<Inner>,
-    slot: WaiterSlot,
+    slot: WaiterNodeStorage,
 }
 
 // Marker trait impls have no executable code.
@@ -504,7 +504,7 @@ impl RawLocalAutoResetEvent {
     pub fn wait(&self) -> RawLocalAutoResetWaitFuture {
         RawLocalAutoResetWaitFuture {
             inner: self.inner,
-            slot: WaiterSlot::new(),
+            slot: WaiterNodeStorage::new(),
         }
     }
 }
@@ -512,7 +512,7 @@ impl RawLocalAutoResetEvent {
 /// Future returned by [`RawLocalAutoResetEvent::wait()`].
 pub struct RawLocalAutoResetWaitFuture {
     inner: NonNull<Inner>,
-    slot: WaiterSlot,
+    slot: WaiterNodeStorage,
 }
 
 // NonNull makes this !Send and !Sync by default, which is correct for local

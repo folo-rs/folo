@@ -7,7 +7,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::task::{self, Poll, Waker};
 
-use waiter_list::{WaiterList, WaiterSlot};
+use waiter_list::{WaiterList, WaiterNodeStorage};
 
 /// Single-threaded async semaphore.
 ///
@@ -158,7 +158,7 @@ impl Inner {
     ///   semaphore.
     unsafe fn poll_acquire(
         &self,
-        slot: Pin<&mut WaiterSlot>,
+        slot: Pin<&mut WaiterNodeStorage>,
         permits: usize,
         waker: Waker,
     ) -> Poll<()> {
@@ -192,7 +192,7 @@ impl Inner {
     /// # Safety
     ///
     /// Same requirements as [`poll_acquire`][Self::poll_acquire].
-    unsafe fn drop_acquire_wait(&self, slot: Pin<&mut WaiterSlot>, permits: usize) {
+    unsafe fn drop_acquire_wait(&self, slot: Pin<&mut WaiterNodeStorage>, permits: usize) {
         // SAFETY: We do not move the slot.
         let slot = unsafe { slot.get_unchecked_mut() };
         let node_ptr = slot.node_ptr();
@@ -323,7 +323,7 @@ impl LocalSemaphore {
         LocalSemaphoreAcquireFuture {
             inner: &self.inner,
             permits,
-            slot: WaiterSlot::new(),
+            slot: WaiterNodeStorage::new(),
         }
     }
 
@@ -401,7 +401,7 @@ pub struct LocalSemaphoreAcquireFuture<'a> {
     inner: &'a Inner,
     permits: usize,
 
-    slot: WaiterSlot,
+    slot: WaiterNodeStorage,
 }
 
 impl<'a> Future for LocalSemaphoreAcquireFuture<'a> {
@@ -562,7 +562,7 @@ impl EmbeddedLocalSemaphoreRef {
         EmbeddedLocalSemaphoreAcquireFuture {
             inner: self.inner,
             permits,
-            slot: WaiterSlot::new(),
+            slot: WaiterNodeStorage::new(),
         }
     }
 
@@ -620,7 +620,7 @@ pub struct EmbeddedLocalSemaphoreAcquireFuture {
     inner: NonNull<Inner>,
     permits: usize,
 
-    slot: WaiterSlot,
+    slot: WaiterNodeStorage,
 }
 
 impl Future for EmbeddedLocalSemaphoreAcquireFuture {
