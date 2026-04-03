@@ -10,8 +10,8 @@ repository = "https://github.com/folo-rs/folo"
 rust-version = "1.88"
 
 [workspace.dependencies]
-all_the_time = { version = "0.4.14", path = "packages/all_the_time", default-features = false }
-alloc_tracker = { version = "0.5.18", path = "packages/alloc_tracker", default-features = false }
+all_the_time = { version = "0.4.15", path = "packages/all_the_time", default-features = false }
+alloc_tracker = { version = "0.5.19", path = "packages/alloc_tracker", default-features = false }
 arc-swap = { version = "1.7", default-features = false }
 argh = { version = "0.1.13", default-features = false, features = ["help"] }
 async-lock = { version = "3.4", default-features = false }
@@ -25,7 +25,7 @@ event-listener = { version = "5.4", default-features = false, features = [
     "std",
 ] }
 events = { version = "0.6.0", path = "packages/events", default-features = false }
-events_once = { version = "0.5.18", path = "packages/events_once", default-features = false }
+events_once = { version = "0.5.19", path = "packages/events_once", default-features = false }
 fake_headers = { version = "0.0", default-features = false }
 fast_time = { version = "0.1.17", path = "packages/fast_time", default-features = false }
 foldhash = { version = "0.2", default-features = false, features = ["std"] }
@@ -54,6 +54,7 @@ mutants = { version = "0.0.3", default-features = false }
 negative-impl = { version = "0.1", default-features = false }
 new_zealand = { version = "1.0.6", path = "packages/new_zealand", default-features = false }
 nm = { version = "0.1.30", path = "packages/nm", default-features = false }
+nm_otel = { version = "0.3.0", path = "packages/nm_otel", default-features = false }
 nonempty = { version = "0.12", default-features = false }
 num-integer = { version = "0.1.46", default-features = false }
 num-traits = { version = "0.2.19", default-features = false }
@@ -62,9 +63,9 @@ oneshot = { version = "0.1", default-features = false, features = [
     "std",
     "async",
 ] }
-opentelemetry = { version = "0.28", default-features = false }
-opentelemetry-stdout = { version = "0.28", default-features = false }
-opentelemetry_sdk = { version = "0.28", default-features = false }
+opentelemetry = { version = "0.31", default-features = false }
+opentelemetry-stdout = { version = "0.31", default-features = false }
+opentelemetry_sdk = { version = "0.31", default-features = false }
 pastey = { version = "0.1.1", default-features = false }
 pin-project = { version = "1.1", default-features = false }
 proc-macro2 = { version = "1.0", default-features = false }
@@ -81,12 +82,12 @@ static_assertions = { version = "1", default-features = false }
 syn = { version = "2.0", default-features = false }
 tempfile = { version = "3.20", default-features = false }
 threadpool = { version = "1.8.1", default-features = false }
-tick = { version = "0.1", default-features = false }
+tick = { version = "0.2", default-features = false }
 tokio = { version = "1.43", default-features = false }
 toml = { version = "0.9.2", default-features = false }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 trybuild = { version = "1.0", default-features = false }
-vicinal = { version = "0.1.14", path = "packages/vicinal", default-features = false }
+vicinal = { version = "0.1.15", path = "packages/vicinal", default-features = false }
 waiter_list = { version = "0.1.0", path = "packages/waiter_list", default-features = false }
 windows = { version = "0.62", default-features = false, features = ["std"] }
 

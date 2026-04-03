@@ -3,14 +3,9 @@
 //! This test is in a separate binary to establish controlled circumstances - no other tests
 //! will have recorded nm events, so we can verify the exact metrics exported.
 
-#![allow(
-    clippy::indexing_slicing,
-    reason = "integration tests with known-valid indices verified by earlier assertions"
-)]
-
 use nm::Event;
 use nm_otel::Publisher;
-use opentelemetry_sdk::metrics::data::Sum;
+use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
 use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
 use tick::Clock;
 
@@ -53,16 +48,20 @@ fn run_one_iteration_exports_recorded_events() {
     // Find our test event's count metric.
     let mut found_count = false;
     for resource_metrics in &metrics {
-        for scope_metrics in &resource_metrics.scope_metrics {
-            for metric in &scope_metrics.metrics {
-                if metric.name == "integration_test_event" {
+        for scope_metrics in resource_metrics.scope_metrics() {
+            for metric in scope_metrics.metrics() {
+                if metric.name() == "integration_test_event" {
                     found_count = true;
 
                     // Verify it is a counter with the expected value.
-                    let sum = metric.data.as_any().downcast_ref::<Sum<u64>>().unwrap();
-                    assert!(sum.is_monotonic);
-                    assert_eq!(sum.data_points.len(), 1);
-                    assert_eq!(sum.data_points[0].value, 10);
+                    let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+                        panic!("expected Sum<u64> metric data");
+                    };
+                    assert!(sum.is_monotonic());
+                    let mut data_points = sum.data_points();
+                    let first = data_points.next().unwrap();
+                    assert!(data_points.next().is_none());
+                    assert_eq!(first.value(), 10);
                 }
             }
         }

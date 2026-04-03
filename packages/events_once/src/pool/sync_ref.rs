@@ -79,4 +79,7 @@ mod tests {
     use super::*;
 
     assert_impl_all!(PooledRef<u32>: Send, Sync);
+
+    // Trait object payloads must preserve Send (regression test for #142).
+    assert_impl_all!(PooledRef<Box<dyn Send>>: Send);
 }

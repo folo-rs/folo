@@ -219,13 +219,6 @@ impl<T: 'static> Default for RawLocalEventPool<T> {
     }
 }
 
-// SAFETY: The pool is thread-safe - the only reason it does not have it via auto traits is that
-// we have the NonNUll pointer that disables thread safety auto traits. However, all the logic is
-// actually protected via the core Mutex, so all is well.
-unsafe impl<T: 'static> Send for RawLocalEventPool<T> {}
-// SAFETY: See above.
-unsafe impl<T: 'static> Sync for RawLocalEventPool<T> {}
-
 // The NonNull<UnsafeCell<RawLocalEventPoolCore<T>>> field disables
 // auto-trait inference for UnwindSafe/RefUnwindSafe. The pointed-to data
 // is owned by this type and protected by a RefCell, so shared references
@@ -241,12 +234,12 @@ mod tests {
     use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::task::{self, Poll, Waker};
 
-    use static_assertions::assert_impl_all;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
     use crate::Disconnected;
 
-    assert_impl_all!(RawLocalEventPool<u32>: Send, Sync);
+    assert_not_impl_any!(RawLocalEventPool<u32>: Send, Sync);
 
     assert_impl_all!(
         RawLocalEventPool<u32>: UnwindSafe, RefUnwindSafe
