@@ -36,6 +36,7 @@ use std::future::Future;
 use std::hint::black_box;
 use std::iter;
 use std::pin::{Pin, pin};
+use std::sync::Arc;
 use std::task::{Context, Waker};
 use std::time::Instant;
 
@@ -152,7 +153,7 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    // --- Tokio ---
+    // --- Tokio (boxed via Arc) ---
 
     let op = allocs.operation("sync_creation/tokio/Mutex");
     group.bench_function("tokio/Mutex", |b| {
@@ -160,7 +161,7 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
             for _ in 0..iters {
-                black_box(tokio::sync::Mutex::new(0_u32));
+                black_box(Arc::new(tokio::sync::Mutex::new(0_u32)));
             }
             start.elapsed()
         });
@@ -172,16 +173,68 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
             for _ in 0..iters {
+                black_box(Arc::new(tokio::sync::Semaphore::new(1)));
+            }
+            start.elapsed()
+        });
+    });
+
+    // --- Tokio (stack-allocated, comparable to embedded) ---
+
+    let op = allocs.operation("sync_creation/tokio/stack/Mutex");
+    group.bench_function("tokio/stack/Mutex", |b| {
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(tokio::sync::Mutex::new(0_u32));
+            }
+            start.elapsed()
+        });
+    });
+
+    let op = allocs.operation("sync_creation/tokio/stack/Semaphore");
+    group.bench_function("tokio/stack/Semaphore", |b| {
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
                 black_box(tokio::sync::Semaphore::new(1));
             }
             start.elapsed()
         });
     });
 
-    // --- async-lock ---
+    // --- async-lock (boxed via Arc) ---
 
     let op = allocs.operation("sync_creation/async-lock/Mutex");
     group.bench_function("async-lock/Mutex", |b| {
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(Arc::new(async_lock::Mutex::new(0_u32)));
+            }
+            start.elapsed()
+        });
+    });
+
+    let op = allocs.operation("sync_creation/async-lock/Semaphore");
+    group.bench_function("async-lock/Semaphore", |b| {
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                black_box(Arc::new(async_lock::Semaphore::new(1)));
+            }
+            start.elapsed()
+        });
+    });
+
+    // --- async-lock (stack-allocated, comparable to embedded) ---
+
+    let op = allocs.operation("sync_creation/async-lock/stack/Mutex");
+    group.bench_function("async-lock/stack/Mutex", |b| {
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
@@ -192,8 +245,8 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    let op = allocs.operation("sync_creation/async-lock/Semaphore");
-    group.bench_function("async-lock/Semaphore", |b| {
+    let op = allocs.operation("sync_creation/async-lock/stack/Semaphore");
+    group.bench_function("async-lock/stack/Semaphore", |b| {
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
             let start = Instant::now();
