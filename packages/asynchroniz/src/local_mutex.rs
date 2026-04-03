@@ -20,6 +20,9 @@ use waiter_list::{WaiterList, WaiterSlot};
 /// from the same [`boxed()`][Self::boxed] call share the same
 /// underlying state.
 ///
+/// To avoid the heap allocation, use [`EmbeddedLocalMutex`] with
+/// [`embedded()`][Self::embedded] instead.
+///
 /// # Examples
 ///
 /// ```
@@ -31,11 +34,13 @@ use waiter_list::{WaiterList, WaiterSlot};
 ///     local
 ///         .run_until(async {
 ///             let mutex = LocalMutex::boxed(0_u32);
-///             let handle = mutex.clone();
 ///
-///             tokio::task::spawn_local(async move {
-///                 let mut guard = handle.lock().await;
-///                 *guard += 1;
+///             tokio::task::spawn_local({
+///                 let mutex = mutex.clone();
+///                 async move {
+///                     let mut guard = mutex.lock().await;
+///                     *guard += 1;
+///                 }
 ///             });
 ///
 ///             let guard = mutex.lock().await;

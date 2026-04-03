@@ -19,6 +19,9 @@ use waiter_list::{WaiterList, WaiterSlot};
 /// derived from the same [`boxed()`][Self::boxed] call share the same
 /// underlying state.
 ///
+/// To avoid the heap allocation, use [`EmbeddedLocalSemaphore`] with
+/// [`embedded()`][Self::embedded] instead.
+///
 /// # Examples
 ///
 /// ```
@@ -30,10 +33,12 @@ use waiter_list::{WaiterList, WaiterSlot};
 ///     local
 ///         .run_until(async {
 ///             let sem = LocalSemaphore::boxed(2);
-///             let handle = sem.clone();
 ///
-///             tokio::task::spawn_local(async move {
-///                 let _permit = handle.acquire().await;
+///             tokio::task::spawn_local({
+///                 let sem = sem.clone();
+///                 async move {
+///                     let _permit = sem.acquire().await;
+///                 }
 ///             });
 ///
 ///             let _permit = sem.acquire().await;

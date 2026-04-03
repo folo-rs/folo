@@ -21,6 +21,9 @@ use crate::constants::NEVER_POISONED;
 /// from the same [`boxed()`][Self::boxed] call share the same
 /// underlying state.
 ///
+/// To avoid the heap allocation, use [`EmbeddedSemaphore`] with
+/// [`embedded()`][Self::embedded] instead.
+///
 /// # Fairness
 ///
 /// Waiters are served in FIFO order with head-of-line blocking: if
@@ -43,11 +46,12 @@ use crate::constants::NEVER_POISONED;
 /// #[tokio::main]
 /// async fn main() {
 ///     let sem = Semaphore::boxed(2);
-///     let handle = sem.clone();
 ///
-///     tokio::spawn(async move {
-///         let _permit = handle.acquire().await;
-///         // Hold one permit in the background task.
+///     tokio::spawn({
+///         let sem = sem.clone();
+///         async move {
+///             let _permit = sem.acquire().await;
+///         }
 ///     });
 ///
 ///     let _permit = sem.acquire().await;

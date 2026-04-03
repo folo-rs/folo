@@ -27,6 +27,9 @@ use crate::constants::NEVER_POISONED;
 /// the same [`boxed()`][Self::boxed] call share the same underlying
 /// state.
 ///
+/// To avoid the heap allocation, use [`EmbeddedMutex`] with
+/// [`embedded()`][Self::embedded] instead.
+///
 /// # Fairness
 ///
 /// Waiters are served in FIFO order. When a lock holder unlocks while
@@ -48,11 +51,13 @@ use crate::constants::NEVER_POISONED;
 /// #[tokio::main]
 /// async fn main() {
 ///     let mutex = Mutex::boxed(0_u32);
-///     let handle = mutex.clone();
 ///
-///     tokio::spawn(async move {
-///         let mut guard = handle.lock().await;
-///         *guard += 1;
+///     tokio::spawn({
+///         let mutex = mutex.clone();
+///         async move {
+///             let mut guard = mutex.lock().await;
+///             *guard += 1;
+///         }
 ///     });
 ///
 ///     let guard = mutex.lock().await;
@@ -318,11 +323,13 @@ impl<T> Mutex<T> {
     /// #[tokio::main]
     /// async fn main() {
     ///     let mutex = Mutex::boxed(String::new());
-    ///     let handle = mutex.clone();
     ///
-    ///     tokio::spawn(async move {
-    ///         let mut guard = handle.lock().await;
-    ///         guard.push_str("hello");
+    ///     tokio::spawn({
+    ///         let mutex = mutex.clone();
+    ///         async move {
+    ///             let mut guard = mutex.lock().await;
+    ///             guard.push_str("hello");
+    ///         }
     ///     });
     ///
     ///     let guard = mutex.lock().await;
