@@ -3,7 +3,6 @@ use std::fmt;
 use std::future::Future;
 use std::marker::PhantomPinned;
 use std::ops::{Deref, DerefMut};
-use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -11,7 +10,7 @@ use std::task::{self, Poll, Waker};
 
 use waiter_list::{WaiterList, WaiterSlot};
 
-use crate::NEVER_POISONED;
+use crate::constants::NEVER_POISONED;
 
 /// Thread-safe async mutex.
 ///
@@ -99,13 +98,9 @@ unsafe impl<T: Send> Sync for MutexInner<T> {}
 unsafe impl Send for LockState {}
 
 // The `UnsafeCell<T>` causes auto-trait inference to mark `MutexInner`
-// as `!UnwindSafe` and `!RefUnwindSafe`. However, all mutable access
-// to the data goes through the lock, preventing inconsistent state
-// observation.
-// Marker trait impl.
-impl<T> UnwindSafe for MutexInner<T> {}
-// Marker trait impl.
-impl<T> RefUnwindSafe for MutexInner<T> {}
+// as `!UnwindSafe` and `!RefUnwindSafe`. This is correct: user code
+// can panic while holding the lock, potentially leaving the guarded
+// data in an inconsistent state.
 
 // Mutating unlock() to a no-op causes lock futures to hang.
 #[cfg_attr(test, mutants::skip)]
@@ -400,11 +395,6 @@ unsafe impl<T: Send> Send for MutexGuard<'_, T> {}
 // Marker trait impl.
 unsafe impl<T: Send + Sync> Sync for MutexGuard<'_, T> {}
 
-// Marker trait impl.
-impl<T> UnwindSafe for MutexGuard<'_, T> {}
-// Marker trait impl.
-impl<T> RefUnwindSafe for MutexGuard<'_, T> {}
-
 impl<T> Deref for MutexGuard<'_, T> {
     type Target = T;
 
@@ -451,13 +441,6 @@ pub struct MutexLockFuture<'a, T> {
 // mutex's internal lock. The references point to data behind an Arc
 // that is Send + Sync when T: Send.
 unsafe impl<T: Send> Send for MutexLockFuture<'_, T> {}
-
-// WaiterSlot is already Send + UnwindSafe + RefUnwindSafe, so the
-// future's unwind safety derives from its other fields.
-// Marker trait impl.
-impl<T> UnwindSafe for MutexLockFuture<'_, T> {}
-// Marker trait impl.
-impl<T> RefUnwindSafe for MutexLockFuture<'_, T> {}
 
 impl<'a, T> Future for MutexLockFuture<'a, T> {
     type Output = MutexGuard<'a, T>;
@@ -610,11 +593,6 @@ unsafe impl<T: Send> Send for RawMutex<T> {}
 // internal lock.
 unsafe impl<T: Send> Sync for RawMutex<T> {}
 
-// Marker trait impl.
-impl<T> UnwindSafe for RawMutex<T> {}
-// Marker trait impl.
-impl<T> RefUnwindSafe for RawMutex<T> {}
-
 impl<T> RawMutex<T> {
     fn inner(&self) -> &MutexInner<T> {
         // SAFETY: The caller of `embedded()` guarantees the container
@@ -665,11 +643,6 @@ unsafe impl<T: Send> Send for RawMutexGuard<T> {}
 // T: Sync.
 unsafe impl<T: Send + Sync> Sync for RawMutexGuard<T> {}
 
-// Marker trait impl.
-impl<T> UnwindSafe for RawMutexGuard<T> {}
-// Marker trait impl.
-impl<T> RefUnwindSafe for RawMutexGuard<T> {}
-
 impl<T> Deref for RawMutexGuard<T> {
     type Target = T;
 
@@ -718,11 +691,6 @@ pub struct RawMutexLockFuture<T> {
 // SAFETY: Same reasoning as MutexLockFuture — all slot access is
 // protected by the internal lock.
 unsafe impl<T: Send> Send for RawMutexLockFuture<T> {}
-
-// Marker trait impl.
-impl<T> UnwindSafe for RawMutexLockFuture<T> {}
-// Marker trait impl.
-impl<T> RefUnwindSafe for RawMutexLockFuture<T> {}
 
 impl<T> Future for RawMutexLockFuture<T> {
     type Output = RawMutexGuard<T>;
@@ -810,33 +778,18 @@ mod tests {
 
     // --- trait assertions ---
 
-    assert_impl_all!(
-        Mutex<u32>: Send, Sync, Clone, UnwindSafe, RefUnwindSafe
-    );
-    assert_impl_all!(
-        MutexGuard<'static, u32>: Send, Sync, UnwindSafe, RefUnwindSafe
-    );
+    assert_impl_all!(Mutex<u32>: Send, Sync, Clone);
+    assert_impl_all!(MutexGuard<'static, u32>: Send, Sync);
     assert_not_impl_any!(MutexGuard<'static, u32>: Clone);
-    assert_impl_all!(
-        MutexLockFuture<'static, u32>: Send, UnwindSafe, RefUnwindSafe
-    );
+    assert_impl_all!(MutexLockFuture<'static, u32>: Send);
     assert_not_impl_any!(MutexLockFuture<'static, u32>: Sync, Unpin);
 
-    assert_impl_all!(
-        EmbeddedMutex<u32>: Send, Sync, UnwindSafe, RefUnwindSafe
-    );
+    assert_impl_all!(EmbeddedMutex<u32>: Send, Sync);
     assert_not_impl_any!(EmbeddedMutex<u32>: Unpin);
-    assert_impl_all!(
-        RawMutex<u32>: Send, Sync, Clone, Copy,
-        UnwindSafe, RefUnwindSafe
-    );
-    assert_impl_all!(
-        RawMutexGuard<u32>: Send, Sync, UnwindSafe, RefUnwindSafe
-    );
+    assert_impl_all!(RawMutex<u32>: Send, Sync, Clone, Copy);
+    assert_impl_all!(RawMutexGuard<u32>: Send, Sync);
     assert_not_impl_any!(RawMutexGuard<u32>: Clone);
-    assert_impl_all!(
-        RawMutexLockFuture<u32>: Send, UnwindSafe, RefUnwindSafe
-    );
+    assert_impl_all!(RawMutexLockFuture<u32>: Send);
     assert_not_impl_any!(RawMutexLockFuture<u32>: Sync, Unpin);
 
     // Guard Sync requires T: Sync. Cell is Send but not Sync.
@@ -1023,10 +976,10 @@ mod tests {
     fn unlock_releases_on_panic() {
         let mutex = Mutex::boxed(0_u32);
         let handle = mutex.clone();
-        let result = std::panic::catch_unwind(move || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
             let _guard = handle.try_lock().unwrap();
             panic!("intentional");
-        });
+        }));
         assert!(result.is_err());
         // Guard drop during unwinding must release the lock.
         assert!(mutex.try_lock().is_some());

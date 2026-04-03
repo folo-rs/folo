@@ -3,7 +3,6 @@ use std::fmt;
 use std::future::Future;
 use std::marker::{PhantomData, PhantomPinned};
 use std::ops::{Deref, DerefMut};
-use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::rc::Rc;
@@ -60,10 +59,6 @@ struct Inner<T> {
     data: UnsafeCell<T>,
     _not_send: PhantomData<*const ()>,
 }
-
-// Marker trait impls have no executable code.
-impl<T> UnwindSafe for Inner<T> {}
-impl<T> RefUnwindSafe for Inner<T> {}
 
 impl<T> Inner<T> {
     // Mutating unlock to a no-op causes lock futures to hang.
@@ -322,10 +317,6 @@ pub struct LocalMutexGuard<'a, T> {
     inner: &'a Inner<T>,
 }
 
-// Marker trait impls have no executable code.
-impl<T> UnwindSafe for LocalMutexGuard<'_, T> {}
-impl<T> RefUnwindSafe for LocalMutexGuard<'_, T> {}
-
 impl<T> Deref for LocalMutexGuard<'_, T> {
     type Target = T;
 
@@ -363,10 +354,6 @@ pub struct LocalMutexLockFuture<'a, T> {
 
     slot: WaiterSlot,
 }
-
-// Marker trait impls have no executable code.
-impl<T> UnwindSafe for LocalMutexLockFuture<'_, T> {}
-impl<T> RefUnwindSafe for LocalMutexLockFuture<'_, T> {}
 
 impl<'a, T> Future for LocalMutexLockFuture<'a, T> {
     type Output = LocalMutexGuard<'a, T>;
@@ -503,10 +490,6 @@ pub struct RawLocalMutex<T> {
     inner: NonNull<Inner<T>>,
 }
 
-// Marker trait impls have no executable code.
-impl<T> UnwindSafe for RawLocalMutex<T> {}
-impl<T> RefUnwindSafe for RawLocalMutex<T> {}
-
 impl<T> RawLocalMutex<T> {
     fn inner(&self) -> &Inner<T> {
         // SAFETY: The caller of `embedded()` guarantees the container
@@ -546,10 +529,6 @@ impl<T> RawLocalMutex<T> {
 pub struct RawLocalMutexGuard<T> {
     inner: NonNull<Inner<T>>,
 }
-
-// Marker trait impls have no executable code.
-impl<T> UnwindSafe for RawLocalMutexGuard<T> {}
-impl<T> RefUnwindSafe for RawLocalMutexGuard<T> {}
 
 impl<T> Deref for RawLocalMutexGuard<T> {
     type Target = T;
@@ -594,10 +573,6 @@ pub struct RawLocalMutexLockFuture<T> {
 
     slot: WaiterSlot,
 }
-
-// Marker trait impls have no executable code.
-impl<T> UnwindSafe for RawLocalMutexLockFuture<T> {}
-impl<T> RefUnwindSafe for RawLocalMutexLockFuture<T> {}
 
 impl<T> Future for RawLocalMutexLockFuture<T> {
     type Output = RawLocalMutexGuard<T>;
@@ -671,50 +646,23 @@ impl<T> fmt::Debug for RawLocalMutexLockFuture<T> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
 
     // --- trait assertions ---
 
-    assert_impl_all!(
-        LocalMutex<u32>: Clone, UnwindSafe, RefUnwindSafe
-    );
+    assert_impl_all!(LocalMutex<u32>: Clone);
     assert_not_impl_any!(LocalMutex<u32>: Send, Sync);
-    assert_impl_all!(
-        LocalMutexGuard<'static, u32>: UnwindSafe, RefUnwindSafe
-    );
     assert_not_impl_any!(LocalMutexGuard<'static, u32>: Send, Sync, Clone);
-    assert_impl_all!(
-        LocalMutexLockFuture<'static, u32>: UnwindSafe, RefUnwindSafe
-    );
-    assert_not_impl_any!(
-        LocalMutexLockFuture<'static, u32>: Send, Sync, Unpin
-    );
+    assert_not_impl_any!(LocalMutexLockFuture<'static, u32>: Send, Sync, Unpin);
 
     assert_not_impl_any!(EmbeddedLocalMutex<u32>: Send, Sync, Unpin);
-    assert_impl_all!(
-        EmbeddedLocalMutex<u32>: UnwindSafe, RefUnwindSafe
-    );
-    assert_not_impl_any!(
-        RawLocalMutex<u32>: Send, Sync
-    );
-    assert_impl_all!(
-        RawLocalMutex<u32>: Clone, Copy,
-        UnwindSafe, RefUnwindSafe
-    );
-    assert_not_impl_any!(
-        RawLocalMutexGuard<u32>: Send, Sync, Clone
-    );
-    assert_impl_all!(
-        RawLocalMutexGuard<u32>: UnwindSafe, RefUnwindSafe
-    );
-    assert_not_impl_any!(
-        RawLocalMutexLockFuture<u32>: Send, Sync, Unpin
-    );
-    assert_impl_all!(
-        RawLocalMutexLockFuture<u32>: UnwindSafe, RefUnwindSafe
-    );
+    assert_impl_all!(RawLocalMutex<u32>: Clone, Copy);
+    assert_not_impl_any!(RawLocalMutex<u32>: Send, Sync);
+    assert_not_impl_any!(RawLocalMutexGuard<u32>: Send, Sync, Clone);
+    assert_not_impl_any!(RawLocalMutexLockFuture<u32>: Send, Sync, Unpin);
 
     // --- basic functionality ---
 
@@ -887,10 +835,10 @@ mod tests {
     fn unlock_releases_on_panic() {
         let mutex = LocalMutex::boxed(0_u32);
         let handle = mutex.clone();
-        let result = std::panic::catch_unwind(move || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
             let _guard = handle.try_lock().unwrap();
             panic!("intentional");
-        });
+        }));
         assert!(result.is_err());
         // Guard drop during unwinding must release the lock.
         assert!(mutex.try_lock().is_some());

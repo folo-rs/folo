@@ -16,20 +16,8 @@
 
 #![allow(missing_docs, reason = "benchmark code")]
 #![allow(
-    clippy::let_underscore_must_use,
-    reason = "poll results are intentionally discarded in benchmarks"
-)]
-#![allow(
     clippy::undocumented_unsafe_blocks,
     reason = "benchmark pinning has trivial safety invariants"
-)]
-#![allow(
-    let_underscore_drop,
-    reason = "guards and permits are intentionally dropped after poll"
-)]
-#![allow(
-    unused_must_use,
-    reason = "Result values from try_lock/try_acquire are consumed by black_box"
 )]
 
 use std::future::Future;
@@ -66,14 +54,8 @@ fn entrypoint(c: &mut Criterion) {
 
 const MANY_WAITER_COUNT: usize = 100;
 
-// -----------------------------------------------------------------------
-// Creation
-// -----------------------------------------------------------------------
-
 fn creation(c: &mut Criterion, allocs: &AllocSession) {
     let mut group = c.benchmark_group("sync_creation");
-
-    // --- Boxed ---
 
     let op = allocs.operation("sync_creation/asynchroniz/Mutex");
     group.bench_function("asynchroniz/Mutex", |b| {
@@ -123,8 +105,6 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    // --- Embedded ---
-
     let op = allocs.operation("sync_creation/asynchroniz/embedded/Mutex");
     group.bench_function("asynchroniz/embedded/Mutex", |b| {
         b.iter_custom(|iters| {
@@ -153,8 +133,6 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    // --- Tokio (boxed via Arc) ---
-
     let op = allocs.operation("sync_creation/tokio/Mutex");
     group.bench_function("tokio/Mutex", |b| {
         b.iter_custom(|iters| {
@@ -178,8 +156,6 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
             start.elapsed()
         });
     });
-
-    // --- Tokio (stack-allocated, comparable to embedded) ---
 
     let op = allocs.operation("sync_creation/tokio/stack/Mutex");
     group.bench_function("tokio/stack/Mutex", |b| {
@@ -205,8 +181,6 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    // --- async-lock (boxed via Arc) ---
-
     let op = allocs.operation("sync_creation/async-lock/Mutex");
     group.bench_function("async-lock/Mutex", |b| {
         b.iter_custom(|iters| {
@@ -230,8 +204,6 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
             start.elapsed()
         });
     });
-
-    // --- async-lock (stack-allocated, comparable to embedded) ---
 
     let op = allocs.operation("sync_creation/async-lock/stack/Mutex");
     group.bench_function("async-lock/stack/Mutex", |b| {
@@ -260,14 +232,8 @@ fn creation(c: &mut Criterion, allocs: &AllocSession) {
     group.finish();
 }
 
-// -----------------------------------------------------------------------
-// Round trip (uncontended lock + unlock / acquire + release)
-// -----------------------------------------------------------------------
-
 fn round_trip(c: &mut Criterion, allocs: &AllocSession) {
     let mut group = c.benchmark_group("sync_round_trip");
-
-    // --- events Mutex ---
 
     let op = allocs.operation("sync_round_trip/asynchroniz/Mutex/try_lock");
     group.bench_function("asynchroniz/Mutex/try_lock", |b| {
@@ -277,13 +243,11 @@ fn round_trip(c: &mut Criterion, allocs: &AllocSession) {
             let start = Instant::now();
             for _ in 0..iters {
                 let guard = mutex.try_lock();
-                black_box(guard);
+                drop(black_box(guard));
             }
             start.elapsed()
         });
     });
-
-    // --- events Semaphore ---
 
     let op = allocs.operation("sync_round_trip/asynchroniz/Semaphore/try_acquire");
     group.bench_function("asynchroniz/Semaphore/try_acquire", |b| {
@@ -293,13 +257,11 @@ fn round_trip(c: &mut Criterion, allocs: &AllocSession) {
             let start = Instant::now();
             for _ in 0..iters {
                 let permit = sem.try_acquire();
-                black_box(permit);
+                drop(black_box(permit));
             }
             start.elapsed()
         });
     });
-
-    // --- events LocalMutex ---
 
     let op = allocs.operation("sync_round_trip/asynchroniz/LocalMutex/try_lock");
     group.bench_function("asynchroniz/LocalMutex/try_lock", |b| {
@@ -309,13 +271,11 @@ fn round_trip(c: &mut Criterion, allocs: &AllocSession) {
             let start = Instant::now();
             for _ in 0..iters {
                 let guard = mutex.try_lock();
-                black_box(guard);
+                drop(black_box(guard));
             }
             start.elapsed()
         });
     });
-
-    // --- events LocalSemaphore ---
 
     let op = allocs.operation("sync_round_trip/asynchroniz/LocalSemaphore/try_acquire");
     group.bench_function("asynchroniz/LocalSemaphore/try_acquire", |b| {
@@ -325,13 +285,11 @@ fn round_trip(c: &mut Criterion, allocs: &AllocSession) {
             let start = Instant::now();
             for _ in 0..iters {
                 let permit = sem.try_acquire();
-                black_box(permit);
+                drop(black_box(permit));
             }
             start.elapsed()
         });
     });
-
-    // --- Tokio Mutex ---
 
     let op = allocs.operation("sync_round_trip/tokio/Mutex/try_lock");
     group.bench_function("tokio/Mutex/try_lock", |b| {
@@ -341,13 +299,11 @@ fn round_trip(c: &mut Criterion, allocs: &AllocSession) {
             let start = Instant::now();
             for _ in 0..iters {
                 let guard = mutex.try_lock();
-                black_box(guard);
+                drop(black_box(guard));
             }
             start.elapsed()
         });
     });
-
-    // --- Tokio Semaphore ---
 
     let op = allocs.operation("sync_round_trip/tokio/Semaphore/try_acquire");
     group.bench_function("tokio/Semaphore/try_acquire", |b| {
@@ -357,13 +313,11 @@ fn round_trip(c: &mut Criterion, allocs: &AllocSession) {
             let start = Instant::now();
             for _ in 0..iters {
                 let permit = sem.try_acquire();
-                black_box(permit);
+                drop(black_box(permit));
             }
             start.elapsed()
         });
     });
-
-    // --- async-lock Mutex ---
 
     let op = allocs.operation("sync_round_trip/async-lock/Mutex/try_lock");
     group.bench_function("async-lock/Mutex/try_lock", |b| {
@@ -373,13 +327,11 @@ fn round_trip(c: &mut Criterion, allocs: &AllocSession) {
             let start = Instant::now();
             for _ in 0..iters {
                 let guard = mutex.try_lock();
-                black_box(guard);
+                drop(black_box(guard));
             }
             start.elapsed()
         });
     });
-
-    // --- async-lock Semaphore ---
 
     let op = allocs.operation("sync_round_trip/async-lock/Semaphore/try_acquire");
     group.bench_function("async-lock/Semaphore/try_acquire", |b| {
@@ -389,7 +341,7 @@ fn round_trip(c: &mut Criterion, allocs: &AllocSession) {
             let start = Instant::now();
             for _ in 0..iters {
                 let permit = sem.try_acquire();
-                black_box(permit);
+                drop(black_box(permit));
             }
             start.elapsed()
         });
@@ -398,17 +350,11 @@ fn round_trip(c: &mut Criterion, allocs: &AllocSession) {
     group.finish();
 }
 
-// -----------------------------------------------------------------------
-// Async poll ready (lock/acquire on available primitive, single poll)
-// -----------------------------------------------------------------------
-
 fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
     let mut group = c.benchmark_group("sync_async_poll_ready");
 
     let waker = Waker::noop();
     let mut cx = Context::from_waker(waker);
-
-    // --- events Mutex ---
 
     let op = allocs.operation("sync_async_poll_ready/asynchroniz/Mutex");
     group.bench_function("asynchroniz/Mutex", |b| {
@@ -418,14 +364,12 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
             let start = Instant::now();
             for _ in 0..iters {
                 let mut future = pin!(mutex.lock());
-                let _ = black_box(future.as_mut().poll(&mut cx));
+                drop(black_box(future.as_mut().poll(&mut cx)));
                 // Guard dropped here, releasing the lock.
             }
             start.elapsed()
         });
     });
-
-    // --- events Semaphore ---
 
     let op = allocs.operation("sync_async_poll_ready/asynchroniz/Semaphore");
     group.bench_function("asynchroniz/Semaphore", |b| {
@@ -435,14 +379,12 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
             let start = Instant::now();
             for _ in 0..iters {
                 let mut future = pin!(sem.acquire());
-                let _ = black_box(future.as_mut().poll(&mut cx));
+                drop(black_box(future.as_mut().poll(&mut cx)));
                 // Permit dropped here, releasing.
             }
             start.elapsed()
         });
     });
-
-    // --- events LocalMutex ---
 
     let op = allocs.operation("sync_async_poll_ready/asynchroniz/LocalMutex");
     group.bench_function("asynchroniz/LocalMutex", |b| {
@@ -452,13 +394,11 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
             let start = Instant::now();
             for _ in 0..iters {
                 let mut future = pin!(mutex.lock());
-                let _ = black_box(future.as_mut().poll(&mut cx));
+                drop(black_box(future.as_mut().poll(&mut cx)));
             }
             start.elapsed()
         });
     });
-
-    // --- events LocalSemaphore ---
 
     let op = allocs.operation("sync_async_poll_ready/asynchroniz/LocalSemaphore");
     group.bench_function("asynchroniz/LocalSemaphore", |b| {
@@ -468,13 +408,11 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
             let start = Instant::now();
             for _ in 0..iters {
                 let mut future = pin!(sem.acquire());
-                let _ = black_box(future.as_mut().poll(&mut cx));
+                drop(black_box(future.as_mut().poll(&mut cx)));
             }
             start.elapsed()
         });
     });
-
-    // --- Tokio Mutex ---
 
     let op = allocs.operation("sync_async_poll_ready/tokio/Mutex");
     group.bench_function("tokio/Mutex", |b| {
@@ -484,13 +422,11 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
             let start = Instant::now();
             for _ in 0..iters {
                 let mut future = pin!(mutex.lock());
-                let _ = black_box(future.as_mut().poll(&mut cx));
+                drop(black_box(future.as_mut().poll(&mut cx)));
             }
             start.elapsed()
         });
     });
-
-    // --- Tokio Semaphore ---
 
     let op = allocs.operation("sync_async_poll_ready/tokio/Semaphore");
     group.bench_function("tokio/Semaphore", |b| {
@@ -500,13 +436,11 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
             let start = Instant::now();
             for _ in 0..iters {
                 let mut future = pin!(sem.acquire());
-                let _ = black_box(future.as_mut().poll(&mut cx));
+                drop(black_box(future.as_mut().poll(&mut cx)));
             }
             start.elapsed()
         });
     });
-
-    // --- async-lock Mutex ---
 
     let op = allocs.operation("sync_async_poll_ready/async-lock/Mutex");
     group.bench_function("async-lock/Mutex", |b| {
@@ -516,13 +450,11 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
             let start = Instant::now();
             for _ in 0..iters {
                 let mut future = pin!(mutex.lock());
-                let _ = black_box(future.as_mut().poll(&mut cx));
+                drop(black_box(future.as_mut().poll(&mut cx)));
             }
             start.elapsed()
         });
     });
-
-    // --- async-lock Semaphore ---
 
     let op = allocs.operation("sync_async_poll_ready/async-lock/Semaphore");
     group.bench_function("async-lock/Semaphore", |b| {
@@ -532,7 +464,7 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
             let start = Instant::now();
             for _ in 0..iters {
                 let mut future = pin!(sem.acquire());
-                let _ = black_box(future.as_mut().poll(&mut cx));
+                drop(black_box(future.as_mut().poll(&mut cx)));
             }
             start.elapsed()
         });
@@ -540,10 +472,6 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
 
     group.finish();
 }
-
-// -----------------------------------------------------------------------
-// Many waiters
-// -----------------------------------------------------------------------
 
 /// Registers `MANY_WAITER_COUNT` waiters on a locked mutex or
 /// zero-permit semaphore, then releases them one at a time.
@@ -558,8 +486,6 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
 
     let waker = Waker::noop();
     let mut cx = Context::from_waker(waker);
-
-    // --- events Mutex ---
 
     let op = allocs.operation("sync_many_waiters/asynchroniz/Mutex");
     group.bench_function("asynchroniz/Mutex", |b| {
@@ -581,7 +507,7 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
 
                 // Poll all futures to register them as waiters.
                 for f in &mut futures {
-                    let _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
+                    drop(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
                 }
 
                 // Release the lock — each guard drop wakes the
@@ -592,7 +518,7 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
                 // and the resulting guard is dropped, waking the
                 // next.
                 for f in &mut futures {
-                    let _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
+                    drop(black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx)));
                 }
 
                 futures.clear();
@@ -601,8 +527,6 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
             start.elapsed()
         });
     });
-
-    // --- events Semaphore ---
 
     let op = allocs.operation("sync_many_waiters/asynchroniz/Semaphore");
     group.bench_function("asynchroniz/Semaphore", |b| {
@@ -623,14 +547,14 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
                 futures.extend(iter::repeat_with(|| sem.acquire()).take(MANY_WAITER_COUNT));
 
                 for f in &mut futures {
-                    let _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
+                    drop(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
                 }
 
                 // Release the permit.
                 drop(permit);
 
                 for f in &mut futures {
-                    let _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
+                    drop(black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx)));
                 }
 
                 futures.clear();
@@ -639,8 +563,6 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
             start.elapsed()
         });
     });
-
-    // --- events LocalMutex ---
 
     let op = allocs.operation("sync_many_waiters/asynchroniz/LocalMutex");
     group.bench_function("asynchroniz/LocalMutex", |b| {
@@ -660,13 +582,13 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
                 futures.extend(iter::repeat_with(|| mutex.lock()).take(MANY_WAITER_COUNT));
 
                 for f in &mut futures {
-                    let _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
+                    drop(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
                 }
 
                 drop(guard);
 
                 for f in &mut futures {
-                    let _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
+                    drop(black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx)));
                 }
 
                 futures.clear();
@@ -675,8 +597,6 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
             start.elapsed()
         });
     });
-
-    // --- events LocalSemaphore ---
 
     let op = allocs.operation("sync_many_waiters/asynchroniz/LocalSemaphore");
     group.bench_function("asynchroniz/LocalSemaphore", |b| {
@@ -696,13 +616,13 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
                 futures.extend(iter::repeat_with(|| sem.acquire()).take(MANY_WAITER_COUNT));
 
                 for f in &mut futures {
-                    let _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
+                    drop(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
                 }
 
                 drop(permit);
 
                 for f in &mut futures {
-                    let _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
+                    drop(black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx)));
                 }
 
                 futures.clear();
@@ -711,8 +631,6 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
             start.elapsed()
         });
     });
-
-    // --- Tokio Mutex ---
 
     let op = allocs.operation("sync_many_waiters/tokio/Mutex");
     group.bench_function("tokio/Mutex", |b| {
@@ -731,13 +649,13 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
                 futures.extend(iter::repeat_with(|| mutex.lock()).take(MANY_WAITER_COUNT));
 
                 for f in &mut futures {
-                    let _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
+                    drop(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
                 }
 
                 drop(guard);
 
                 for f in &mut futures {
-                    let _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
+                    drop(black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx)));
                 }
 
                 futures.clear();
@@ -746,8 +664,6 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
             start.elapsed()
         });
     });
-
-    // --- Tokio Semaphore ---
 
     let op = allocs.operation("sync_many_waiters/tokio/Semaphore");
     group.bench_function("tokio/Semaphore", |b| {
@@ -766,13 +682,13 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
                 futures.extend(iter::repeat_with(|| sem.acquire()).take(MANY_WAITER_COUNT));
 
                 for f in &mut futures {
-                    let _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
+                    drop(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
                 }
 
                 drop(permit);
 
                 for f in &mut futures {
-                    let _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
+                    drop(black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx)));
                 }
 
                 futures.clear();
@@ -781,8 +697,6 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
             start.elapsed()
         });
     });
-
-    // --- async-lock Mutex ---
 
     let op = allocs.operation("sync_many_waiters/async-lock/Mutex");
     group.bench_function("async-lock/Mutex", |b| {
@@ -801,13 +715,13 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
                 futures.extend(iter::repeat_with(|| mutex.lock()).take(MANY_WAITER_COUNT));
 
                 for f in &mut futures {
-                    let _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
+                    drop(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
                 }
 
                 drop(guard);
 
                 for f in &mut futures {
-                    let _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
+                    drop(black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx)));
                 }
 
                 futures.clear();
@@ -816,8 +730,6 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
             start.elapsed()
         });
     });
-
-    // --- async-lock Semaphore ---
 
     let op = allocs.operation("sync_many_waiters/async-lock/Semaphore");
     group.bench_function("async-lock/Semaphore", |b| {
@@ -836,13 +748,13 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
                 futures.extend(iter::repeat_with(|| sem.acquire()).take(MANY_WAITER_COUNT));
 
                 for f in &mut futures {
-                    let _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
+                    drop(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
                 }
 
                 drop(permit);
 
                 for f in &mut futures {
-                    let _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
+                    drop(black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx)));
                 }
 
                 futures.clear();

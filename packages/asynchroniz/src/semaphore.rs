@@ -1,7 +1,6 @@
 use std::fmt;
 use std::future::Future;
 use std::marker::PhantomPinned;
-use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
@@ -9,7 +8,7 @@ use std::task::{self, Poll, Waker};
 
 use waiter_list::{WaiterList, WaiterSlot};
 
-use crate::NEVER_POISONED;
+use crate::constants::NEVER_POISONED;
 
 /// Thread-safe async semaphore.
 ///
@@ -82,11 +81,6 @@ struct SemaphoreState {
 // are only dereferenced while the `Mutex` is held.
 // Marker trait impl.
 unsafe impl Send for SemaphoreState {}
-
-// Marker trait impl.
-impl UnwindSafe for SemaphoreInner {}
-// Marker trait impl.
-impl RefUnwindSafe for SemaphoreInner {}
 
 // Mutating release_permits to a no-op causes acquire futures to hang.
 #[cfg_attr(test, mutants::skip)]
@@ -473,11 +467,6 @@ pub struct SemaphorePermit<'a> {
     permits: usize,
 }
 
-// Marker trait impl.
-impl UnwindSafe for SemaphorePermit<'_> {}
-// Marker trait impl.
-impl RefUnwindSafe for SemaphorePermit<'_> {}
-
 impl Drop for SemaphorePermit<'_> {
     // Mutating drop to a no-op causes the permits to leak.
     #[cfg_attr(test, mutants::skip)]
@@ -507,11 +496,6 @@ pub struct SemaphoreAcquireFuture<'a> {
 // semaphore's internal Mutex. The reference points to data behind an
 // Arc that is Send + Sync.
 unsafe impl Send for SemaphoreAcquireFuture<'_> {}
-
-// Marker trait impl.
-impl UnwindSafe for SemaphoreAcquireFuture<'_> {}
-// Marker trait impl.
-impl RefUnwindSafe for SemaphoreAcquireFuture<'_> {}
 
 impl<'a> Future for SemaphoreAcquireFuture<'a> {
     type Output = SemaphorePermit<'a>;
@@ -657,11 +641,6 @@ unsafe impl Send for RawSemaphore {}
 // internal lock.
 unsafe impl Sync for RawSemaphore {}
 
-// Marker trait impl.
-impl UnwindSafe for RawSemaphore {}
-// Marker trait impl.
-impl RefUnwindSafe for RawSemaphore {}
-
 impl RawSemaphore {
     fn inner(&self) -> &SemaphoreInner {
         // SAFETY: The caller of `embedded()` guarantees the
@@ -743,11 +722,6 @@ unsafe impl Send for RawSemaphorePermit {}
 // SAFETY: Sharing &RawSemaphorePermit gives no mutable access.
 unsafe impl Sync for RawSemaphorePermit {}
 
-// Marker trait impl.
-impl UnwindSafe for RawSemaphorePermit {}
-// Marker trait impl.
-impl RefUnwindSafe for RawSemaphorePermit {}
-
 impl Drop for RawSemaphorePermit {
     // Mutating drop to a no-op causes permits to leak.
     #[cfg_attr(test, mutants::skip)]
@@ -775,11 +749,6 @@ pub struct RawSemaphoreAcquireFuture {
 // SAFETY: Same reasoning as SemaphoreAcquireFuture — all slot access
 // is protected by the internal Mutex.
 unsafe impl Send for RawSemaphoreAcquireFuture {}
-
-// Marker trait impl.
-impl UnwindSafe for RawSemaphoreAcquireFuture {}
-// Marker trait impl.
-impl RefUnwindSafe for RawSemaphoreAcquireFuture {}
 
 impl Future for RawSemaphoreAcquireFuture {
     type Output = RawSemaphorePermit;
@@ -873,35 +842,18 @@ mod tests {
 
     // --- trait assertions ---
 
-    assert_impl_all!(
-        Semaphore: Send, Sync, Clone, UnwindSafe, RefUnwindSafe
-    );
-    assert_impl_all!(
-        SemaphorePermit<'static>: Send, Sync, UnwindSafe, RefUnwindSafe
-    );
+    assert_impl_all!(Semaphore: Send, Sync, Clone);
+    assert_impl_all!(SemaphorePermit<'static>: Send, Sync);
     assert_not_impl_any!(SemaphorePermit<'static>: Clone);
-    assert_impl_all!(
-        SemaphoreAcquireFuture<'static>: Send, UnwindSafe, RefUnwindSafe
-    );
+    assert_impl_all!(SemaphoreAcquireFuture<'static>: Send);
     assert_not_impl_any!(SemaphoreAcquireFuture<'static>: Sync, Unpin);
 
-    assert_impl_all!(
-        EmbeddedSemaphore: Send, Sync, UnwindSafe, RefUnwindSafe
-    );
+    assert_impl_all!(EmbeddedSemaphore: Send, Sync);
     assert_not_impl_any!(EmbeddedSemaphore: Unpin);
-    assert_impl_all!(
-        RawSemaphore: Send, Sync, Clone, Copy,
-        UnwindSafe, RefUnwindSafe
-    );
-    assert_impl_all!(
-        RawSemaphorePermit: Send, Sync,
-        UnwindSafe, RefUnwindSafe
-    );
+    assert_impl_all!(RawSemaphore: Send, Sync, Clone, Copy);
+    assert_impl_all!(RawSemaphorePermit: Send, Sync);
     assert_not_impl_any!(RawSemaphorePermit: Clone);
-    assert_impl_all!(
-        RawSemaphoreAcquireFuture: Send,
-        UnwindSafe, RefUnwindSafe
-    );
+    assert_impl_all!(RawSemaphoreAcquireFuture: Send);
     assert_not_impl_any!(RawSemaphoreAcquireFuture: Sync, Unpin);
 
     // --- basic functionality ---
@@ -1199,10 +1151,10 @@ mod tests {
     fn permits_released_on_panic() {
         let sem = Semaphore::boxed(1);
         let handle = sem.clone();
-        let result = std::panic::catch_unwind(move || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
             let _permit = handle.try_acquire().unwrap();
             panic!("intentional");
-        });
+        }));
         assert!(result.is_err());
         // Permit drop during unwinding must return the permit.
         assert!(sem.try_acquire().is_some());

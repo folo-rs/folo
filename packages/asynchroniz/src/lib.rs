@@ -1,13 +1,12 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-//! Async mutex and semaphore primitives with intrusive waiter lists.
+//! Async mutex and semaphore primitives.
 //!
-//! This crate provides async synchronization primitives built on the
-//! [`waiter_list`] crate's intrusive doubly-linked waiter queue:
+//! This crate provides async synchronization primitives:
 //!
 //! * **Mutexes** ([`Mutex`], [`LocalMutex`]) — async mutual exclusion with
-//!   `Deref`/`DerefMut` guards and FIFO fairness.
+//!   `Deref`/`DerefMut` guards.
 //! * **Semaphores** ([`Semaphore`], [`LocalSemaphore`]) — permit-based
 //!   concurrency control with single and multi-permit acquire.
 //!
@@ -40,33 +39,18 @@
 //!
 //! Run `cargo bench -p asynchroniz` to reproduce.
 
+mod constants;
 mod local_mutex;
 mod local_semaphore;
 mod mutex;
 mod semaphore;
 
-#[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
-#[allow(dead_code, reason = "test utilities prepared for future use")]
-mod test_helpers;
-
-pub(crate) const NEVER_POISONED: &str = "we never panic while holding this lock";
-
-pub use local_mutex::{
-    EmbeddedLocalMutex, LocalMutex, LocalMutexGuard, RawLocalMutex, RawLocalMutexGuard,
-};
-pub use local_semaphore::{
-    EmbeddedLocalSemaphore, LocalSemaphore, LocalSemaphorePermit, RawLocalSemaphore,
-    RawLocalSemaphorePermit,
-};
-pub use mutex::{EmbeddedMutex, Mutex, MutexGuard, RawMutex, RawMutexGuard};
-pub use semaphore::{
-    EmbeddedSemaphore, RawSemaphore, RawSemaphorePermit, Semaphore, SemaphorePermit,
-};
+pub use local_mutex::*;
+pub use local_semaphore::*;
+pub use mutex::*;
+pub use semaphore::*;
 
 /// Future types returned by `lock()` and `acquire()` methods.
-///
-/// These futures are `!Unpin` and must be pinned before polling.
 pub mod futures {
     pub use crate::local_mutex::{LocalMutexLockFuture, RawLocalMutexLockFuture};
     pub use crate::local_semaphore::{LocalSemaphoreAcquireFuture, RawLocalSemaphoreAcquireFuture};

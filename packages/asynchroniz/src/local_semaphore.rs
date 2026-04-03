@@ -2,7 +2,6 @@ use std::cell::UnsafeCell;
 use std::fmt;
 use std::future::Future;
 use std::marker::{PhantomData, PhantomPinned};
-use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::rc::Rc;
@@ -56,10 +55,6 @@ struct Inner {
     state: UnsafeCell<SemaphoreState>,
     _not_send: PhantomData<*const ()>,
 }
-
-// Marker trait impls have no executable code.
-impl UnwindSafe for Inner {}
-impl RefUnwindSafe for Inner {}
 
 impl Inner {
     // Mutating release_permits to a no-op causes acquire futures to
@@ -374,10 +369,6 @@ pub struct LocalSemaphorePermit<'a> {
     permits: usize,
 }
 
-// Marker trait impls have no executable code.
-impl UnwindSafe for LocalSemaphorePermit<'_> {}
-impl RefUnwindSafe for LocalSemaphorePermit<'_> {}
-
 impl Drop for LocalSemaphorePermit<'_> {
     // Mutating drop to a no-op causes permits to leak.
     #[cfg_attr(test, mutants::skip)]
@@ -401,10 +392,6 @@ pub struct LocalSemaphoreAcquireFuture<'a> {
 
     slot: WaiterSlot,
 }
-
-// Marker trait impls have no executable code.
-impl UnwindSafe for LocalSemaphoreAcquireFuture<'_> {}
-impl RefUnwindSafe for LocalSemaphoreAcquireFuture<'_> {}
 
 impl<'a> Future for LocalSemaphoreAcquireFuture<'a> {
     type Output = LocalSemaphorePermit<'a>;
@@ -532,10 +519,6 @@ pub struct RawLocalSemaphore {
     inner: NonNull<Inner>,
 }
 
-// Marker trait impls have no executable code.
-impl UnwindSafe for RawLocalSemaphore {}
-impl RefUnwindSafe for RawLocalSemaphore {}
-
 impl RawLocalSemaphore {
     fn inner(&self) -> &Inner {
         // SAFETY: The caller of `embedded()` guarantees the
@@ -606,10 +589,6 @@ pub struct RawLocalSemaphorePermit {
     permits: usize,
 }
 
-// Marker trait impls have no executable code.
-impl UnwindSafe for RawLocalSemaphorePermit {}
-impl RefUnwindSafe for RawLocalSemaphorePermit {}
-
 impl Drop for RawLocalSemaphorePermit {
     // Mutating drop to a no-op causes permits to leak.
     #[cfg_attr(test, mutants::skip)]
@@ -629,10 +608,6 @@ pub struct RawLocalSemaphoreAcquireFuture {
 
     slot: WaiterSlot,
 }
-
-// Marker trait impls have no executable code.
-impl UnwindSafe for RawLocalSemaphoreAcquireFuture {}
-impl RefUnwindSafe for RawLocalSemaphoreAcquireFuture {}
 
 impl Future for RawLocalSemaphoreAcquireFuture {
     type Output = RawLocalSemaphorePermit;
@@ -712,53 +687,23 @@ impl fmt::Debug for RawLocalSemaphoreAcquireFuture {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
 
     // --- trait assertions ---
 
-    assert_impl_all!(
-        LocalSemaphore: Clone, UnwindSafe, RefUnwindSafe
-    );
+    assert_impl_all!(LocalSemaphore: Clone);
     assert_not_impl_any!(LocalSemaphore: Send, Sync);
-    assert_impl_all!(
-        LocalSemaphorePermit<'static>: UnwindSafe, RefUnwindSafe
-    );
-    assert_not_impl_any!(
-        LocalSemaphorePermit<'static>: Send, Sync, Clone
-    );
-    assert_impl_all!(
-        LocalSemaphoreAcquireFuture<'static>: UnwindSafe, RefUnwindSafe
-    );
-    assert_not_impl_any!(
-        LocalSemaphoreAcquireFuture<'static>: Send, Sync, Unpin
-    );
+    assert_not_impl_any!(LocalSemaphorePermit<'static>: Send, Sync, Clone);
+    assert_not_impl_any!(LocalSemaphoreAcquireFuture<'static>: Send, Sync, Unpin);
 
-    assert_not_impl_any!(
-        EmbeddedLocalSemaphore: Send, Sync, Unpin
-    );
-    assert_impl_all!(
-        EmbeddedLocalSemaphore: UnwindSafe, RefUnwindSafe
-    );
+    assert_not_impl_any!(EmbeddedLocalSemaphore: Send, Sync, Unpin);
+    assert_impl_all!(RawLocalSemaphore: Clone, Copy);
     assert_not_impl_any!(RawLocalSemaphore: Send, Sync);
-    assert_impl_all!(
-        RawLocalSemaphore: Clone, Copy,
-        UnwindSafe, RefUnwindSafe
-    );
-    assert_not_impl_any!(
-        RawLocalSemaphorePermit: Send, Sync, Clone
-    );
-    assert_impl_all!(
-        RawLocalSemaphorePermit: UnwindSafe, RefUnwindSafe
-    );
-    assert_not_impl_any!(
-        RawLocalSemaphoreAcquireFuture: Send, Sync, Unpin
-    );
-    assert_impl_all!(
-        RawLocalSemaphoreAcquireFuture: UnwindSafe,
-        RefUnwindSafe
-    );
+    assert_not_impl_any!(RawLocalSemaphorePermit: Send, Sync, Clone);
+    assert_not_impl_any!(RawLocalSemaphoreAcquireFuture: Send, Sync, Unpin);
 
     // --- basic functionality ---
 
@@ -1046,10 +991,10 @@ mod tests {
     fn permits_released_on_panic() {
         let sem = LocalSemaphore::boxed(1);
         let handle = sem.clone();
-        let result = std::panic::catch_unwind(move || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
             let _permit = handle.try_acquire().unwrap();
             panic!("intentional");
-        });
+        }));
         assert!(result.is_err());
         // Permit drop during unwinding must return the permit.
         assert!(sem.try_acquire().is_some());
