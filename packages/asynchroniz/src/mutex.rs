@@ -151,7 +151,7 @@ fn try_lock_inner(lock_state: &StdMutex<LockState>) -> bool {
 }
 
 /// Shared poll logic for both `MutexLockFuture` and
-/// `RawMutexLockFuture`.
+/// `EmbeddedMutexLockFuture`.
 ///
 /// # Safety
 ///
@@ -272,8 +272,8 @@ impl<T> Mutex<T> {
     /// # Safety
     ///
     /// The caller must ensure that the [`EmbeddedMutex`] outlives all
-    /// returned handles, all [`RawMutexLockFuture`]s, and all
-    /// [`RawMutexGuard`]s created from them.
+    /// returned handles, all [`EmbeddedMutexLockFuture`]s, and all
+    /// [`EmbeddedMutexGuard`]s created from them.
     ///
     /// # Examples
     ///
@@ -294,9 +294,9 @@ impl<T> Mutex<T> {
     /// # });
     /// ```
     #[must_use]
-    pub unsafe fn embedded(place: Pin<&EmbeddedMutex<T>>) -> RawMutex<T> {
+    pub unsafe fn embedded(place: Pin<&EmbeddedMutex<T>>) -> EmbeddedMutexRef<T> {
         let inner = NonNull::from(&place.get_ref().inner);
-        RawMutex { inner }
+        EmbeddedMutexRef { inner }
     }
 
     /// Returns a future that resolves to a [`MutexGuard`] when the
@@ -522,7 +522,7 @@ impl<T> fmt::Debug for MutexLockFuture<'_, T> {
 /// Inline storage for mutex state, avoiding heap allocation.
 ///
 /// Pin the container, then call [`Mutex::embedded()`] to obtain a
-/// [`RawMutex`] reference that operates on the embedded state.
+/// [`EmbeddedMutexRef`] reference that operates on the embedded state.
 ///
 /// # Examples
 ///
@@ -580,32 +580,32 @@ where
 ///
 /// The API is identical to [`Mutex`].
 #[derive(Clone, Copy)]
-pub struct RawMutex<T> {
+pub struct EmbeddedMutexRef<T> {
     inner: NonNull<MutexInner<T>>,
 }
 
 // Marker trait impl.
 // SAFETY: The `NonNull<MutexInner<T>>` only points to a value whose
 // access is serialized by the internal `StdMutex`.
-unsafe impl<T: Send> Send for RawMutex<T> {}
+unsafe impl<T: Send> Send for EmbeddedMutexRef<T> {}
 
 // Marker trait impl.
 // SAFETY: Same as Send — all mutable access is mediated by the
 // internal lock.
-unsafe impl<T: Send> Sync for RawMutex<T> {}
+unsafe impl<T: Send> Sync for EmbeddedMutexRef<T> {}
 
-impl<T> RawMutex<T> {
+impl<T> EmbeddedMutexRef<T> {
     fn inner(&self) -> &MutexInner<T> {
         // SAFETY: The caller of `embedded()` guarantees the container
         // outlives this handle.
         unsafe { self.inner.as_ref() }
     }
 
-    /// Returns a future that resolves to a [`RawMutexGuard`] when the
+    /// Returns a future that resolves to a [`EmbeddedMutexGuard`] when the
     /// lock is acquired.
     #[must_use]
-    pub fn lock(&self) -> RawMutexLockFuture<T> {
-        RawMutexLockFuture {
+    pub fn lock(&self) -> EmbeddedMutexLockFuture<T> {
+        EmbeddedMutexLockFuture {
             inner: self.inner,
             slot: WaiterSlot::new(),
         }
@@ -615,35 +615,35 @@ impl<T> RawMutex<T> {
     #[must_use]
     // Mutating try_lock to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
-    pub fn try_lock(&self) -> Option<RawMutexGuard<T>> {
+    pub fn try_lock(&self) -> Option<EmbeddedMutexGuard<T>> {
         if try_lock_inner(&self.inner().lock_state) {
-            Some(RawMutexGuard { inner: self.inner })
+            Some(EmbeddedMutexGuard { inner: self.inner })
         } else {
             None
         }
     }
 }
 
-/// RAII guard returned by [`RawMutex::lock()`] and
-/// [`RawMutex::try_lock()`].
+/// RAII guard returned by [`EmbeddedMutexRef::lock()`] and
+/// [`EmbeddedMutexRef::try_lock()`].
 ///
 /// Provides [`Deref`] and [`DerefMut`] access to the mutex-protected
 /// value. The lock is released when the guard is dropped.
-pub struct RawMutexGuard<T> {
+pub struct EmbeddedMutexGuard<T> {
     inner: NonNull<MutexInner<T>>,
 }
 
 // Marker trait impl.
 // SAFETY: Same reasoning as MutexGuard — only one guard exists at a
 // time, and the lock serializes access.
-unsafe impl<T: Send> Send for RawMutexGuard<T> {}
+unsafe impl<T: Send> Send for EmbeddedMutexGuard<T> {}
 
 // Marker trait impl.
-// SAFETY: Sharing &RawMutexGuard across threads gives &T, requiring
+// SAFETY: Sharing &EmbeddedMutexGuard across threads gives &T, requiring
 // T: Sync.
-unsafe impl<T: Send + Sync> Sync for RawMutexGuard<T> {}
+unsafe impl<T: Send + Sync> Sync for EmbeddedMutexGuard<T> {}
 
-impl<T> Deref for RawMutexGuard<T> {
+impl<T> Deref for EmbeddedMutexGuard<T> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -656,7 +656,7 @@ impl<T> Deref for RawMutexGuard<T> {
     }
 }
 
-impl<T> DerefMut for RawMutexGuard<T> {
+impl<T> DerefMut for EmbeddedMutexGuard<T> {
     fn deref_mut(&mut self) -> &mut T {
         // SAFETY: The embedded() contract guarantees the container
         // outlives this guard.
@@ -667,7 +667,7 @@ impl<T> DerefMut for RawMutexGuard<T> {
     }
 }
 
-impl<T> Drop for RawMutexGuard<T> {
+impl<T> Drop for EmbeddedMutexGuard<T> {
     // Mutating drop to a no-op would cause the lock to never release.
     #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
@@ -678,10 +678,10 @@ impl<T> Drop for RawMutexGuard<T> {
     }
 }
 
-/// Future returned by [`RawMutex::lock()`].
+/// Future returned by [`EmbeddedMutexRef::lock()`].
 ///
-/// Completes with a [`RawMutexGuard`] when the lock is acquired.
-pub struct RawMutexLockFuture<T> {
+/// Completes with a [`EmbeddedMutexGuard`] when the lock is acquired.
+pub struct EmbeddedMutexLockFuture<T> {
     inner: NonNull<MutexInner<T>>,
 
     slot: WaiterSlot,
@@ -690,12 +690,12 @@ pub struct RawMutexLockFuture<T> {
 // Marker trait impl.
 // SAFETY: Same reasoning as MutexLockFuture — all slot access is
 // protected by the internal lock.
-unsafe impl<T: Send> Send for RawMutexLockFuture<T> {}
+unsafe impl<T: Send> Send for EmbeddedMutexLockFuture<T> {}
 
-impl<T> Future for RawMutexLockFuture<T> {
-    type Output = RawMutexGuard<T>;
+impl<T> Future for EmbeddedMutexLockFuture<T> {
+    type Output = EmbeddedMutexGuard<T>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<RawMutexGuard<T>> {
+    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<EmbeddedMutexGuard<T>> {
         // Clone the waker before acquiring the lock so a panicking
         // clone cannot poison the mutex.
         let waker = cx.waker().clone();
@@ -709,13 +709,13 @@ impl<T> Future for RawMutexLockFuture<T> {
         // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
         // and the lock_state is the lock this slot registers with.
         match unsafe { poll_lock(&inner.lock_state, &mut this.slot, waker) } {
-            Poll::Ready(()) => Poll::Ready(RawMutexGuard { inner: this.inner }),
+            Poll::Ready(()) => Poll::Ready(EmbeddedMutexGuard { inner: this.inner }),
             Poll::Pending => Poll::Pending,
         }
     }
 }
 
-impl<T> Drop for RawMutexLockFuture<T> {
+impl<T> Drop for EmbeddedMutexLockFuture<T> {
     fn drop(&mut self) {
         if !self.slot.is_registered() {
             // Not yet polled — no cleanup needed.
@@ -744,23 +744,23 @@ impl<T> fmt::Debug for EmbeddedMutex<T> {
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl<T> fmt::Debug for RawMutex<T> {
+impl<T> fmt::Debug for EmbeddedMutexRef<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawMutex").finish_non_exhaustive()
+        f.debug_struct("EmbeddedMutexRef").finish_non_exhaustive()
     }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl<T> fmt::Debug for RawMutexGuard<T> {
+impl<T> fmt::Debug for EmbeddedMutexGuard<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawMutexGuard").finish_non_exhaustive()
+        f.debug_struct("EmbeddedMutexGuard").finish_non_exhaustive()
     }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl<T> fmt::Debug for RawMutexLockFuture<T> {
+impl<T> fmt::Debug for EmbeddedMutexLockFuture<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawMutexLockFuture")
+        f.debug_struct("EmbeddedMutexLockFuture")
             .field("registered", &self.slot.is_registered())
             .finish_non_exhaustive()
     }
@@ -786,11 +786,11 @@ mod tests {
 
     assert_impl_all!(EmbeddedMutex<u32>: Send, Sync);
     assert_not_impl_any!(EmbeddedMutex<u32>: Unpin);
-    assert_impl_all!(RawMutex<u32>: Send, Sync, Clone, Copy);
-    assert_impl_all!(RawMutexGuard<u32>: Send, Sync);
-    assert_not_impl_any!(RawMutexGuard<u32>: Clone);
-    assert_impl_all!(RawMutexLockFuture<u32>: Send);
-    assert_not_impl_any!(RawMutexLockFuture<u32>: Sync, Unpin);
+    assert_impl_all!(EmbeddedMutexRef<u32>: Send, Sync, Clone, Copy);
+    assert_impl_all!(EmbeddedMutexGuard<u32>: Send, Sync);
+    assert_not_impl_any!(EmbeddedMutexGuard<u32>: Clone);
+    assert_impl_all!(EmbeddedMutexLockFuture<u32>: Send);
+    assert_not_impl_any!(EmbeddedMutexLockFuture<u32>: Sync, Unpin);
 
     // Guard Sync requires T: Sync. Cell is Send but not Sync.
     assert_not_impl_any!(

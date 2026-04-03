@@ -191,7 +191,7 @@ fn try_acquire_inner(state_mutex: &Mutex<SemaphoreState>, permits: usize) -> boo
 }
 
 /// Shared poll logic for both `SemaphoreAcquireFuture` and
-/// `RawSemaphoreAcquireFuture`.
+/// `EmbeddedSemaphoreAcquireFuture`.
 ///
 /// # Safety
 ///
@@ -306,8 +306,8 @@ impl Semaphore {
     /// # Safety
     ///
     /// The caller must ensure that the [`EmbeddedSemaphore`] outlives
-    /// all returned handles, all [`RawSemaphoreAcquireFuture`]s, and
-    /// all [`RawSemaphorePermit`]s created from them.
+    /// all returned handles, all [`EmbeddedSemaphoreAcquireFuture`]s, and
+    /// all [`EmbeddedSemaphorePermit`]s created from them.
     ///
     /// # Examples
     ///
@@ -329,9 +329,9 @@ impl Semaphore {
     /// # });
     /// ```
     #[must_use]
-    pub unsafe fn embedded(place: Pin<&EmbeddedSemaphore>) -> RawSemaphore {
+    pub unsafe fn embedded(place: Pin<&EmbeddedSemaphore>) -> EmbeddedSemaphoreRef {
         let inner = NonNull::from(&place.get_ref().inner);
-        RawSemaphore { inner }
+        EmbeddedSemaphoreRef { inner }
     }
 
     /// Returns a future that resolves to a [`SemaphorePermit`] when
@@ -575,7 +575,7 @@ impl fmt::Debug for SemaphoreAcquireFuture<'_> {
 /// Inline storage for semaphore state, avoiding heap allocation.
 ///
 /// Pin the container, then call [`Semaphore::embedded()`] to obtain a
-/// [`RawSemaphore`] reference that operates on the embedded state.
+/// [`EmbeddedSemaphoreRef`] reference that operates on the embedded state.
 ///
 /// # Examples
 ///
@@ -625,45 +625,45 @@ impl EmbeddedSemaphore {
 ///
 /// The API is identical to [`Semaphore`].
 #[derive(Clone, Copy)]
-pub struct RawSemaphore {
+pub struct EmbeddedSemaphoreRef {
     inner: NonNull<SemaphoreInner>,
 }
 
 // Marker trait impl.
 // SAFETY: The NonNull<SemaphoreInner> only points to a value whose
 // access is serialized by the internal Mutex.
-unsafe impl Send for RawSemaphore {}
+unsafe impl Send for EmbeddedSemaphoreRef {}
 
 // Marker trait impl.
 // SAFETY: Same as Send — all mutable access is mediated by the
 // internal lock.
-unsafe impl Sync for RawSemaphore {}
+unsafe impl Sync for EmbeddedSemaphoreRef {}
 
-impl RawSemaphore {
+impl EmbeddedSemaphoreRef {
     fn inner(&self) -> &SemaphoreInner {
         // SAFETY: The caller of `embedded()` guarantees the
         // container outlives this handle.
         unsafe { self.inner.as_ref() }
     }
 
-    /// Returns a future that resolves to a [`RawSemaphorePermit`]
+    /// Returns a future that resolves to a [`EmbeddedSemaphorePermit`]
     /// when a single permit is available.
     #[must_use]
-    pub fn acquire(&self) -> RawSemaphoreAcquireFuture {
+    pub fn acquire(&self) -> EmbeddedSemaphoreAcquireFuture {
         self.acquire_many(1)
     }
 
-    /// Returns a future that resolves to a [`RawSemaphorePermit`]
+    /// Returns a future that resolves to a [`EmbeddedSemaphorePermit`]
     /// holding `permits` permits.
     ///
     /// # Panics
     ///
     /// Panics if `permits` is zero.
     #[must_use]
-    pub fn acquire_many(&self, permits: usize) -> RawSemaphoreAcquireFuture {
+    pub fn acquire_many(&self, permits: usize) -> EmbeddedSemaphoreAcquireFuture {
         assert!(permits > 0, "cannot acquire zero permits");
 
-        RawSemaphoreAcquireFuture {
+        EmbeddedSemaphoreAcquireFuture {
             inner: self.inner,
             permits,
             slot: WaiterSlot::new(),
@@ -674,7 +674,7 @@ impl RawSemaphore {
     #[must_use]
     // Mutating try_acquire to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
-    pub fn try_acquire(&self) -> Option<RawSemaphorePermit> {
+    pub fn try_acquire(&self) -> Option<EmbeddedSemaphorePermit> {
         self.try_acquire_many(1)
     }
 
@@ -686,11 +686,11 @@ impl RawSemaphore {
     #[must_use]
     // Mutating try_acquire_many to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
-    pub fn try_acquire_many(&self, permits: usize) -> Option<RawSemaphorePermit> {
+    pub fn try_acquire_many(&self, permits: usize) -> Option<EmbeddedSemaphorePermit> {
         assert!(permits > 0, "cannot acquire zero permits");
 
         if try_acquire_inner(&self.inner().state, permits) {
-            Some(RawSemaphorePermit {
+            Some(EmbeddedSemaphorePermit {
                 inner: self.inner,
                 permits,
             })
@@ -700,11 +700,11 @@ impl RawSemaphore {
     }
 }
 
-/// RAII permit returned by [`RawSemaphore::acquire()`] and
-/// [`RawSemaphore::try_acquire()`].
+/// RAII permit returned by [`EmbeddedSemaphoreRef::acquire()`] and
+/// [`EmbeddedSemaphoreRef::try_acquire()`].
 ///
 /// The permit is returned to the semaphore when dropped.
-pub struct RawSemaphorePermit {
+pub struct EmbeddedSemaphorePermit {
     inner: NonNull<SemaphoreInner>,
     permits: usize,
 }
@@ -712,13 +712,13 @@ pub struct RawSemaphorePermit {
 // Marker trait impl.
 // SAFETY: The permit only holds a NonNull to a Mutex-protected value
 // and a plain usize. Sending across threads is safe.
-unsafe impl Send for RawSemaphorePermit {}
+unsafe impl Send for EmbeddedSemaphorePermit {}
 
 // Marker trait impl.
-// SAFETY: Sharing &RawSemaphorePermit gives no mutable access.
-unsafe impl Sync for RawSemaphorePermit {}
+// SAFETY: Sharing &EmbeddedSemaphorePermit gives no mutable access.
+unsafe impl Sync for EmbeddedSemaphorePermit {}
 
-impl Drop for RawSemaphorePermit {
+impl Drop for EmbeddedSemaphorePermit {
     // Mutating drop to a no-op causes permits to leak.
     #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
@@ -729,12 +729,12 @@ impl Drop for RawSemaphorePermit {
     }
 }
 
-/// Future returned by [`RawSemaphore::acquire()`] and
-/// [`RawSemaphore::acquire_many()`].
+/// Future returned by [`EmbeddedSemaphoreRef::acquire()`] and
+/// [`EmbeddedSemaphoreRef::acquire_many()`].
 ///
-/// Completes with a [`RawSemaphorePermit`] when enough permits are
+/// Completes with a [`EmbeddedSemaphorePermit`] when enough permits are
 /// available.
-pub struct RawSemaphoreAcquireFuture {
+pub struct EmbeddedSemaphoreAcquireFuture {
     inner: NonNull<SemaphoreInner>,
     permits: usize,
 
@@ -744,12 +744,12 @@ pub struct RawSemaphoreAcquireFuture {
 // Marker trait impl.
 // SAFETY: Same reasoning as SemaphoreAcquireFuture — all slot access
 // is protected by the internal Mutex.
-unsafe impl Send for RawSemaphoreAcquireFuture {}
+unsafe impl Send for EmbeddedSemaphoreAcquireFuture {}
 
-impl Future for RawSemaphoreAcquireFuture {
-    type Output = RawSemaphorePermit;
+impl Future for EmbeddedSemaphoreAcquireFuture {
+    type Output = EmbeddedSemaphorePermit;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<RawSemaphorePermit> {
+    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<EmbeddedSemaphorePermit> {
         // Clone the waker before acquiring the lock so a panicking
         // clone cannot poison the mutex.
         let waker = cx.waker().clone();
@@ -763,7 +763,7 @@ impl Future for RawSemaphoreAcquireFuture {
         // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
         // and the state is the mutex this slot registers with.
         match unsafe { poll_acquire(&inner.state, &mut this.slot, this.permits, waker) } {
-            Poll::Ready(()) => Poll::Ready(RawSemaphorePermit {
+            Poll::Ready(()) => Poll::Ready(EmbeddedSemaphorePermit {
                 inner: this.inner,
                 permits: this.permits,
             }),
@@ -772,7 +772,7 @@ impl Future for RawSemaphoreAcquireFuture {
     }
 }
 
-impl Drop for RawSemaphoreAcquireFuture {
+impl Drop for EmbeddedSemaphoreAcquireFuture {
     fn drop(&mut self) {
         if !self.slot.is_registered() {
             // Not yet polled — no cleanup needed.
@@ -800,25 +800,26 @@ impl fmt::Debug for EmbeddedSemaphore {
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl fmt::Debug for RawSemaphore {
+impl fmt::Debug for EmbeddedSemaphoreRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawSemaphore").finish_non_exhaustive()
+        f.debug_struct("EmbeddedSemaphoreRef")
+            .finish_non_exhaustive()
     }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl fmt::Debug for RawSemaphorePermit {
+impl fmt::Debug for EmbeddedSemaphorePermit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawSemaphorePermit")
+        f.debug_struct("EmbeddedSemaphorePermit")
             .field("permits", &self.permits)
             .finish_non_exhaustive()
     }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl fmt::Debug for RawSemaphoreAcquireFuture {
+impl fmt::Debug for EmbeddedSemaphoreAcquireFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawSemaphoreAcquireFuture")
+        f.debug_struct("EmbeddedSemaphoreAcquireFuture")
             .field("permits", &self.permits)
             .field("registered", &self.slot.is_registered())
             .finish_non_exhaustive()
@@ -846,11 +847,11 @@ mod tests {
 
     assert_impl_all!(EmbeddedSemaphore: Send, Sync);
     assert_not_impl_any!(EmbeddedSemaphore: Unpin);
-    assert_impl_all!(RawSemaphore: Send, Sync, Clone, Copy);
-    assert_impl_all!(RawSemaphorePermit: Send, Sync);
-    assert_not_impl_any!(RawSemaphorePermit: Clone);
-    assert_impl_all!(RawSemaphoreAcquireFuture: Send);
-    assert_not_impl_any!(RawSemaphoreAcquireFuture: Sync, Unpin);
+    assert_impl_all!(EmbeddedSemaphoreRef: Send, Sync, Clone, Copy);
+    assert_impl_all!(EmbeddedSemaphorePermit: Send, Sync);
+    assert_not_impl_any!(EmbeddedSemaphorePermit: Clone);
+    assert_impl_all!(EmbeddedSemaphoreAcquireFuture: Send);
+    assert_not_impl_any!(EmbeddedSemaphoreAcquireFuture: Sync, Unpin);
 
     // --- basic functionality ---
 

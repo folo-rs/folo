@@ -254,8 +254,8 @@ impl LocalSemaphore {
     ///
     /// The caller must ensure that the [`EmbeddedLocalSemaphore`]
     /// outlives all returned handles, all
-    /// [`RawLocalSemaphoreAcquireFuture`]s, and all
-    /// [`RawLocalSemaphorePermit`]s created from them.
+    /// [`EmbeddedLocalSemaphoreAcquireFuture`]s, and all
+    /// [`EmbeddedLocalSemaphorePermit`]s created from them.
     ///
     /// # Examples
     ///
@@ -277,9 +277,9 @@ impl LocalSemaphore {
     /// # });
     /// ```
     #[must_use]
-    pub unsafe fn embedded(place: Pin<&EmbeddedLocalSemaphore>) -> RawLocalSemaphore {
+    pub unsafe fn embedded(place: Pin<&EmbeddedLocalSemaphore>) -> EmbeddedLocalSemaphoreRef {
         let inner = NonNull::from(&place.get_ref().inner);
-        RawLocalSemaphore { inner }
+        EmbeddedLocalSemaphoreRef { inner }
     }
 
     /// Returns a future that resolves to a [`LocalSemaphorePermit`]
@@ -468,7 +468,7 @@ impl fmt::Debug for LocalSemaphoreAcquireFuture<'_> {
 /// Inline storage for semaphore state, avoiding heap allocation.
 ///
 /// Pin the container, then call [`LocalSemaphore::embedded()`] to
-/// obtain a [`RawLocalSemaphore`] reference that operates on the
+/// obtain a [`EmbeddedLocalSemaphoreRef`] reference that operates on the
 /// embedded state.
 ///
 /// # Examples
@@ -519,11 +519,11 @@ impl EmbeddedLocalSemaphore {
 ///
 /// The API is identical to [`LocalSemaphore`].
 #[derive(Clone, Copy)]
-pub struct RawLocalSemaphore {
+pub struct EmbeddedLocalSemaphoreRef {
     inner: NonNull<Inner>,
 }
 
-impl RawLocalSemaphore {
+impl EmbeddedLocalSemaphoreRef {
     fn inner(&self) -> &Inner {
         // SAFETY: The caller of `embedded()` guarantees the
         // container outlives this handle.
@@ -531,23 +531,23 @@ impl RawLocalSemaphore {
     }
 
     /// Returns a future that resolves to a
-    /// [`RawLocalSemaphorePermit`] when a single permit is available.
+    /// [`EmbeddedLocalSemaphorePermit`] when a single permit is available.
     #[must_use]
-    pub fn acquire(&self) -> RawLocalSemaphoreAcquireFuture {
+    pub fn acquire(&self) -> EmbeddedLocalSemaphoreAcquireFuture {
         self.acquire_many(1)
     }
 
     /// Returns a future that resolves to a
-    /// [`RawLocalSemaphorePermit`] holding `permits` permits.
+    /// [`EmbeddedLocalSemaphorePermit`] holding `permits` permits.
     ///
     /// # Panics
     ///
     /// Panics if `permits` is zero.
     #[must_use]
-    pub fn acquire_many(&self, permits: usize) -> RawLocalSemaphoreAcquireFuture {
+    pub fn acquire_many(&self, permits: usize) -> EmbeddedLocalSemaphoreAcquireFuture {
         assert!(permits > 0, "cannot acquire zero permits");
 
-        RawLocalSemaphoreAcquireFuture {
+        EmbeddedLocalSemaphoreAcquireFuture {
             inner: self.inner,
             permits,
             slot: WaiterSlot::new(),
@@ -558,7 +558,7 @@ impl RawLocalSemaphore {
     #[must_use]
     // Mutating try_acquire to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
-    pub fn try_acquire(&self) -> Option<RawLocalSemaphorePermit> {
+    pub fn try_acquire(&self) -> Option<EmbeddedLocalSemaphorePermit> {
         self.try_acquire_many(1)
     }
 
@@ -570,11 +570,11 @@ impl RawLocalSemaphore {
     #[must_use]
     // Mutating try_acquire_many to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
-    pub fn try_acquire_many(&self, permits: usize) -> Option<RawLocalSemaphorePermit> {
+    pub fn try_acquire_many(&self, permits: usize) -> Option<EmbeddedLocalSemaphorePermit> {
         assert!(permits > 0, "cannot acquire zero permits");
 
         if self.inner().try_acquire(permits) {
-            Some(RawLocalSemaphorePermit {
+            Some(EmbeddedLocalSemaphorePermit {
                 inner: self.inner,
                 permits,
             })
@@ -584,14 +584,14 @@ impl RawLocalSemaphore {
     }
 }
 
-/// RAII permit returned by [`RawLocalSemaphore::acquire()`] and
-/// [`RawLocalSemaphore::try_acquire()`].
-pub struct RawLocalSemaphorePermit {
+/// RAII permit returned by [`EmbeddedLocalSemaphoreRef::acquire()`] and
+/// [`EmbeddedLocalSemaphoreRef::try_acquire()`].
+pub struct EmbeddedLocalSemaphorePermit {
     inner: NonNull<Inner>,
     permits: usize,
 }
 
-impl Drop for RawLocalSemaphorePermit {
+impl Drop for EmbeddedLocalSemaphorePermit {
     // Mutating drop to a no-op causes permits to leak.
     #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
@@ -602,19 +602,22 @@ impl Drop for RawLocalSemaphorePermit {
     }
 }
 
-/// Future returned by [`RawLocalSemaphore::acquire()`] and
-/// [`RawLocalSemaphore::acquire_many()`].
-pub struct RawLocalSemaphoreAcquireFuture {
+/// Future returned by [`EmbeddedLocalSemaphoreRef::acquire()`] and
+/// [`EmbeddedLocalSemaphoreRef::acquire_many()`].
+pub struct EmbeddedLocalSemaphoreAcquireFuture {
     inner: NonNull<Inner>,
     permits: usize,
 
     slot: WaiterSlot,
 }
 
-impl Future for RawLocalSemaphoreAcquireFuture {
-    type Output = RawLocalSemaphorePermit;
+impl Future for EmbeddedLocalSemaphoreAcquireFuture {
+    type Output = EmbeddedLocalSemaphorePermit;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<RawLocalSemaphorePermit> {
+    fn poll(
+        self: Pin<&mut Self>,
+        cx: &mut task::Context<'_>,
+    ) -> Poll<EmbeddedLocalSemaphorePermit> {
         let waker = cx.waker().clone();
 
         // SAFETY: We only access fields, we do not move self.
@@ -626,7 +629,7 @@ impl Future for RawLocalSemaphoreAcquireFuture {
         // SAFETY: poll_acquire requires single-threaded access,
         // which LocalSemaphore guarantees (!Send).
         match unsafe { inner.poll_acquire(&mut this.slot, this.permits, waker) } {
-            Poll::Ready(()) => Poll::Ready(RawLocalSemaphorePermit {
+            Poll::Ready(()) => Poll::Ready(EmbeddedLocalSemaphorePermit {
                 inner: this.inner,
                 permits: this.permits,
             }),
@@ -635,7 +638,7 @@ impl Future for RawLocalSemaphoreAcquireFuture {
     }
 }
 
-impl Drop for RawLocalSemaphoreAcquireFuture {
+impl Drop for EmbeddedLocalSemaphoreAcquireFuture {
     fn drop(&mut self) {
         if !self.slot.is_registered() {
             return;
@@ -661,25 +664,26 @@ impl fmt::Debug for EmbeddedLocalSemaphore {
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl fmt::Debug for RawLocalSemaphore {
+impl fmt::Debug for EmbeddedLocalSemaphoreRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawLocalSemaphore").finish_non_exhaustive()
+        f.debug_struct("EmbeddedLocalSemaphoreRef")
+            .finish_non_exhaustive()
     }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl fmt::Debug for RawLocalSemaphorePermit {
+impl fmt::Debug for EmbeddedLocalSemaphorePermit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawLocalSemaphorePermit")
+        f.debug_struct("EmbeddedLocalSemaphorePermit")
             .field("permits", &self.permits)
             .finish_non_exhaustive()
     }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl fmt::Debug for RawLocalSemaphoreAcquireFuture {
+impl fmt::Debug for EmbeddedLocalSemaphoreAcquireFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawLocalSemaphoreAcquireFuture")
+        f.debug_struct("EmbeddedLocalSemaphoreAcquireFuture")
             .field("permits", &self.permits)
             .field("registered", &self.slot.is_registered())
             .finish_non_exhaustive()
@@ -702,10 +706,10 @@ mod tests {
     assert_not_impl_any!(LocalSemaphoreAcquireFuture<'static>: Send, Sync, Unpin);
 
     assert_not_impl_any!(EmbeddedLocalSemaphore: Send, Sync, Unpin);
-    assert_impl_all!(RawLocalSemaphore: Clone, Copy);
-    assert_not_impl_any!(RawLocalSemaphore: Send, Sync);
-    assert_not_impl_any!(RawLocalSemaphorePermit: Send, Sync, Clone);
-    assert_not_impl_any!(RawLocalSemaphoreAcquireFuture: Send, Sync, Unpin);
+    assert_impl_all!(EmbeddedLocalSemaphoreRef: Clone, Copy);
+    assert_not_impl_any!(EmbeddedLocalSemaphoreRef: Send, Sync);
+    assert_not_impl_any!(EmbeddedLocalSemaphorePermit: Send, Sync, Clone);
+    assert_not_impl_any!(EmbeddedLocalSemaphoreAcquireFuture: Send, Sync, Unpin);
 
     // --- basic functionality ---
 

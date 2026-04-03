@@ -221,8 +221,8 @@ impl<T> LocalMutex<T> {
     /// # Safety
     ///
     /// The caller must ensure that the [`EmbeddedLocalMutex`] outlives
-    /// all returned handles, all [`RawLocalMutexLockFuture`]s, and all
-    /// [`RawLocalMutexGuard`]s created from them.
+    /// all returned handles, all [`EmbeddedLocalMutexLockFuture`]s, and all
+    /// [`EmbeddedLocalMutexGuard`]s created from them.
     ///
     /// # Examples
     ///
@@ -243,9 +243,9 @@ impl<T> LocalMutex<T> {
     /// # });
     /// ```
     #[must_use]
-    pub unsafe fn embedded(place: Pin<&EmbeddedLocalMutex<T>>) -> RawLocalMutex<T> {
+    pub unsafe fn embedded(place: Pin<&EmbeddedLocalMutex<T>>) -> EmbeddedLocalMutexRef<T> {
         let inner = NonNull::from(&place.get_ref().inner);
-        RawLocalMutex { inner }
+        EmbeddedLocalMutexRef { inner }
     }
 
     /// Returns a future that resolves to a [`LocalMutexGuard`] when
@@ -426,7 +426,7 @@ impl<T> fmt::Debug for LocalMutexLockFuture<'_, T> {
 /// Inline storage for mutex state, avoiding heap allocation.
 ///
 /// Pin the container, then call [`LocalMutex::embedded()`] to obtain
-/// a [`RawLocalMutex`] reference that operates on the embedded state.
+/// a [`EmbeddedLocalMutexRef`] reference that operates on the embedded state.
 ///
 /// # Examples
 ///
@@ -447,7 +447,7 @@ impl<T> fmt::Debug for LocalMutexLockFuture<'_, T> {
 /// ```
 pub struct EmbeddedLocalMutex<T> {
     inner: Inner<T>,
-    // Pinning is required because references (via RawLocalMutex)
+    // Pinning is required because references (via EmbeddedLocalMutexRef)
     // hold a NonNull pointer to the inner state.
     _pinned: PhantomPinned,
 }
@@ -488,11 +488,11 @@ where
 ///
 /// Provides the same API as [`LocalMutex`].
 #[derive(Clone, Copy)]
-pub struct RawLocalMutex<T> {
+pub struct EmbeddedLocalMutexRef<T> {
     inner: NonNull<Inner<T>>,
 }
 
-impl<T> RawLocalMutex<T> {
+impl<T> EmbeddedLocalMutexRef<T> {
     fn inner(&self) -> &Inner<T> {
         // SAFETY: The caller of `embedded()` guarantees the container
         // outlives this handle.
@@ -501,11 +501,11 @@ impl<T> RawLocalMutex<T> {
 
     /// Acquires exclusive access to the guarded value.
     ///
-    /// Returns a future that resolves to a [`RawLocalMutexGuard`]
+    /// Returns a future that resolves to a [`EmbeddedLocalMutexGuard`]
     /// providing [`Deref`]/[`DerefMut`] access to the value.
     #[must_use]
-    pub fn lock(&self) -> RawLocalMutexLockFuture<T> {
-        RawLocalMutexLockFuture {
+    pub fn lock(&self) -> EmbeddedLocalMutexLockFuture<T> {
+        EmbeddedLocalMutexLockFuture {
             inner: self.inner,
             slot: WaiterSlot::new(),
         }
@@ -515,25 +515,25 @@ impl<T> RawLocalMutex<T> {
     #[must_use]
     // Mutating try_lock to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
-    pub fn try_lock(&self) -> Option<RawLocalMutexGuard<T>> {
+    pub fn try_lock(&self) -> Option<EmbeddedLocalMutexGuard<T>> {
         if self.inner().try_lock() {
-            Some(RawLocalMutexGuard { inner: self.inner })
+            Some(EmbeddedLocalMutexGuard { inner: self.inner })
         } else {
             None
         }
     }
 }
 
-/// RAII guard returned by [`RawLocalMutex::lock()`] and
-/// [`RawLocalMutex::try_lock()`].
+/// RAII guard returned by [`EmbeddedLocalMutexRef::lock()`] and
+/// [`EmbeddedLocalMutexRef::try_lock()`].
 ///
 /// Provides [`Deref`] and [`DerefMut`] access to the mutex-protected
 /// value. The lock is released when the guard is dropped.
-pub struct RawLocalMutexGuard<T> {
+pub struct EmbeddedLocalMutexGuard<T> {
     inner: NonNull<Inner<T>>,
 }
 
-impl<T> Deref for RawLocalMutexGuard<T> {
+impl<T> Deref for EmbeddedLocalMutexGuard<T> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -546,7 +546,7 @@ impl<T> Deref for RawLocalMutexGuard<T> {
     }
 }
 
-impl<T> DerefMut for RawLocalMutexGuard<T> {
+impl<T> DerefMut for EmbeddedLocalMutexGuard<T> {
     fn deref_mut(&mut self) -> &mut T {
         // SAFETY: The embedded() contract guarantees the container
         // outlives this guard.
@@ -557,7 +557,7 @@ impl<T> DerefMut for RawLocalMutexGuard<T> {
     }
 }
 
-impl<T> Drop for RawLocalMutexGuard<T> {
+impl<T> Drop for EmbeddedLocalMutexGuard<T> {
     // Mutating drop to a no-op would cause the lock to never release.
     #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
@@ -568,19 +568,19 @@ impl<T> Drop for RawLocalMutexGuard<T> {
     }
 }
 
-/// Future returned by [`RawLocalMutex::lock()`].
+/// Future returned by [`EmbeddedLocalMutexRef::lock()`].
 ///
-/// Completes with a [`RawLocalMutexGuard`] when the lock is acquired.
-pub struct RawLocalMutexLockFuture<T> {
+/// Completes with a [`EmbeddedLocalMutexGuard`] when the lock is acquired.
+pub struct EmbeddedLocalMutexLockFuture<T> {
     inner: NonNull<Inner<T>>,
 
     slot: WaiterSlot,
 }
 
-impl<T> Future for RawLocalMutexLockFuture<T> {
-    type Output = RawLocalMutexGuard<T>;
+impl<T> Future for EmbeddedLocalMutexLockFuture<T> {
+    type Output = EmbeddedLocalMutexGuard<T>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<RawLocalMutexGuard<T>> {
+    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<EmbeddedLocalMutexGuard<T>> {
         let waker = cx.waker().clone();
 
         // SAFETY: We only access fields, we do not move self.
@@ -592,13 +592,13 @@ impl<T> Future for RawLocalMutexLockFuture<T> {
         // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
         // and the lock_state is the lock this slot registers with.
         match unsafe { inner.poll_lock(&mut this.slot, waker) } {
-            Poll::Ready(()) => Poll::Ready(RawLocalMutexGuard { inner: this.inner }),
+            Poll::Ready(()) => Poll::Ready(EmbeddedLocalMutexGuard { inner: this.inner }),
             Poll::Pending => Poll::Pending,
         }
     }
 }
 
-impl<T> Drop for RawLocalMutexLockFuture<T> {
+impl<T> Drop for EmbeddedLocalMutexLockFuture<T> {
     fn drop(&mut self) {
         if !self.slot.is_registered() {
             return;
@@ -624,23 +624,25 @@ impl<T> fmt::Debug for EmbeddedLocalMutex<T> {
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl<T> fmt::Debug for RawLocalMutex<T> {
+impl<T> fmt::Debug for EmbeddedLocalMutexRef<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawLocalMutex").finish_non_exhaustive()
+        f.debug_struct("EmbeddedLocalMutexRef")
+            .finish_non_exhaustive()
     }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl<T> fmt::Debug for RawLocalMutexGuard<T> {
+impl<T> fmt::Debug for EmbeddedLocalMutexGuard<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawLocalMutexGuard").finish_non_exhaustive()
+        f.debug_struct("EmbeddedLocalMutexGuard")
+            .finish_non_exhaustive()
     }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl<T> fmt::Debug for RawLocalMutexLockFuture<T> {
+impl<T> fmt::Debug for EmbeddedLocalMutexLockFuture<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawLocalMutexLockFuture")
+        f.debug_struct("EmbeddedLocalMutexLockFuture")
             .field("registered", &self.slot.is_registered())
             .finish_non_exhaustive()
     }
@@ -662,10 +664,10 @@ mod tests {
     assert_not_impl_any!(LocalMutexLockFuture<'static, u32>: Send, Sync, Unpin);
 
     assert_not_impl_any!(EmbeddedLocalMutex<u32>: Send, Sync, Unpin);
-    assert_impl_all!(RawLocalMutex<u32>: Clone, Copy);
-    assert_not_impl_any!(RawLocalMutex<u32>: Send, Sync);
-    assert_not_impl_any!(RawLocalMutexGuard<u32>: Send, Sync, Clone);
-    assert_not_impl_any!(RawLocalMutexLockFuture<u32>: Send, Sync, Unpin);
+    assert_impl_all!(EmbeddedLocalMutexRef<u32>: Clone, Copy);
+    assert_not_impl_any!(EmbeddedLocalMutexRef<u32>: Send, Sync);
+    assert_not_impl_any!(EmbeddedLocalMutexGuard<u32>: Send, Sync, Clone);
+    assert_not_impl_any!(EmbeddedLocalMutexLockFuture<u32>: Send, Sync, Unpin);
 
     // --- basic functionality ---
 
