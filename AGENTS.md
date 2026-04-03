@@ -74,6 +74,10 @@ types, we re-export them all at the parent, so while we have modules like
 `packages/many_cpus/src/hardware_tracker.rs` the type itself is exported at the crate root as
 `many_cpus::HardwareTracker` instead of at the module as `many_cpus::hardware_tracker::HardwareTracker`.
 
+`lib.rs` and `mod.rs` files should only contain API documentation and re-exports. Do not define
+constants, helper functions, or other items in these files — move them to dedicated files (e.g.
+`constants.rs`) for better filesystem organization.
+
 # Scripting
 
 You can assume PowerShell 7 (`pwsh`) is available on every operating system and environment.
@@ -90,6 +94,35 @@ There are many Clippy rules defined in the workspace-level `Cargo.toml`.
 Follow these even in doctests. Note that Clippy does not actually check doctests! You will need to
 manually check what Clippy rules we enable in the workspace-level `Cargo.toml` and follow them in
 the inline examples in API documentation.
+
+# Discarding values
+
+Use `_ = expr;` to discard values, not `let _ = expr;`. The `let` keyword is unnecessary and
+triggers `clippy::let_underscore_must_use`. Use `drop(expr)` when you want to explicitly drop a
+value that has a destructor.
+
+# Cloning into closures
+
+When cloning a variable to move it into a closure, create a separate scope for the clone instead
+of polluting the parent scope with renamed variables.
+
+Bad:
+
+```rust
+let handle = mutex.clone();
+spawn(async move { handle.something(); });
+```
+
+Good:
+
+```rust
+spawn({
+    let mutex = mutex.clone();
+    async move {
+        mutex.something();
+    }
+});
+```
 
 # Language
 
@@ -212,6 +245,9 @@ Comments that merely restate the obvious are not desired. Comments should add va
 why something is done, what it accomplishes, or how it works. Avoid comments that simply repeat
 what the code does.
 
+Do not use section separator comments (e.g. `// --- Section ---` or `// ======= Title =======`)
+to create visual "chapters" in code. Code organization should be clear from naming and structure.
+
 Bad comment:
 
 ```rust
@@ -252,6 +288,13 @@ Performance-critical code should include Criterion benchmarks to help detect reg
 API documentation on types and functions should describe the API contract (i.e. the inputs,
 the outputs and the behavior) not how it is implemented. Do not discuss implementation details
 like private helper types or reference the internal field structure of a type in API documentation.
+
+Specific things that are implementation details and do NOT belong in API documentation:
+
+* Internal data structures (e.g. "uses an intrusive linked list").
+* Internal ordering guarantees (e.g. "FIFO") unless they are part of the API contract.
+* What fields a node or struct contains internally.
+* Whether a future is `Unpin` or not (obvious from the type's auto-trait inference).
 
 # Keep API documentation summary lines short
 
@@ -639,6 +682,11 @@ static_assertions::assert_impl_all!(MyType: UnwindSafe, RefUnwindSafe);
 
 If a type cannot reasonably be made unwind-safe (e.g. it wraps a lock guard), pin the negative
 contract with `assert_not_impl_any!` and a comment explaining why.
+
+**Exception: types that guard user data** (e.g. mutex guards, lock types wrapping `UnsafeCell<T>`)
+should NOT implement `UnwindSafe` or `RefUnwindSafe`. User code can panic while holding the lock,
+leaving the guarded data in an inconsistent state. Let the compiler's auto-trait inference
+correctly mark these types as `!UnwindSafe`. Do not add manual `impl UnwindSafe` for such types.
 
 When a `!Sync` marker is needed, use `PhantomData<Cell<()>>`. The `Cell<()>` type is natively
 `Send + !Sync`, so no `unsafe impl Send` is required. Since `Cell` wraps `UnsafeCell` which is
