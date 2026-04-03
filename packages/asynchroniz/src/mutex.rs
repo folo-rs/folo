@@ -379,10 +379,6 @@ impl<T> Mutex<T> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// MutexGuard
-// ---------------------------------------------------------------------------
-
 /// RAII guard returned by [`Mutex::lock()`] and [`Mutex::try_lock()`].
 ///
 /// Provides [`Deref`] and [`DerefMut`] access to the mutex-protected
@@ -428,10 +424,6 @@ impl<T> Drop for MutexGuard<'_, T> {
         unlock(self.lock_state);
     }
 }
-
-// ---------------------------------------------------------------------------
-// MutexLockFuture
-// ---------------------------------------------------------------------------
 
 /// Future returned by [`Mutex::lock()`].
 ///
@@ -493,10 +485,6 @@ impl<T> Drop for MutexLockFuture<'_, T> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Debug impls
-// ---------------------------------------------------------------------------
-
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl<T> fmt::Debug for Mutex<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -519,10 +507,6 @@ impl<T> fmt::Debug for MutexLockFuture<'_, T> {
             .finish_non_exhaustive()
     }
 }
-
-// ---------------------------------------------------------------------------
-// Embedded variant
-// ---------------------------------------------------------------------------
 
 /// Inline storage for mutex state, avoiding heap allocation.
 ///

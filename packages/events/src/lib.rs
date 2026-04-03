@@ -1,7 +1,7 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-//! Async event primitives with intrusive waiter lists.
+//! Async manual-reset and auto-reset event primitives.
 //!
 //! This crate provides async event primitives:
 //!

@@ -28,7 +28,7 @@
 //!   its registration state and a pinning marker, reducing boilerplate
 //!   in future implementations.
 //!
-#![doc = simple_mermaid::mermaid!("../doc/list_structure.mermaid")]
+#![doc = simple_mermaid::mermaid!("../docs/diagrams/list_structure.mermaid")]
 //!
 //! # Synchronization
 //!

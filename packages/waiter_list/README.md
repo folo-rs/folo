@@ -27,7 +27,7 @@ unsafe {
     list.push_back(pb);
 }
 
-assert!(!list.is_empty());
+assert!(!unsafe { list.is_empty() });
 
 // SAFETY: We have exclusive access to the list.
 let first = unsafe { list.pop_front() };

@@ -458,10 +458,6 @@ impl Semaphore {
     }
 }
 
-// ---------------------------------------------------------------------------
-// SemaphorePermit
-// ---------------------------------------------------------------------------
-
 /// RAII permit returned by [`Semaphore::acquire()`] and
 /// [`Semaphore::try_acquire()`].
 ///
@@ -478,10 +474,6 @@ impl Drop for SemaphorePermit<'_> {
         release_permits(self.state, self.permits);
     }
 }
-
-// ---------------------------------------------------------------------------
-// SemaphoreAcquireFuture
-// ---------------------------------------------------------------------------
 
 /// Future returned by [`Semaphore::acquire()`] and
 /// [`Semaphore::acquire_many()`].
@@ -545,10 +537,6 @@ impl Drop for SemaphoreAcquireFuture<'_> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Debug impls
-// ---------------------------------------------------------------------------
-
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for Semaphore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -574,10 +562,6 @@ impl fmt::Debug for SemaphoreAcquireFuture<'_> {
             .finish_non_exhaustive()
     }
 }
-
-// ---------------------------------------------------------------------------
-// Embedded variant
-// ---------------------------------------------------------------------------
 
 /// Inline storage for semaphore state, avoiding heap allocation.
 ///

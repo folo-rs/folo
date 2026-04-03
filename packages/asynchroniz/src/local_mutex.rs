@@ -310,10 +310,6 @@ impl<T> LocalMutex<T> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// LocalMutexGuard
-// ---------------------------------------------------------------------------
-
 /// RAII guard returned by [`LocalMutex::lock()`] and
 /// [`LocalMutex::try_lock()`].
 ///
@@ -347,10 +343,6 @@ impl<T> Drop for LocalMutexGuard<'_, T> {
         self.inner.unlock();
     }
 }
-
-// ---------------------------------------------------------------------------
-// LocalMutexLockFuture
-// ---------------------------------------------------------------------------
 
 /// Future returned by [`LocalMutex::lock()`].
 ///
@@ -397,10 +389,6 @@ impl<T> Drop for LocalMutexLockFuture<'_, T> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Debug impls
-// ---------------------------------------------------------------------------
-
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl<T> fmt::Debug for LocalMutex<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -423,10 +411,6 @@ impl<T> fmt::Debug for LocalMutexLockFuture<'_, T> {
             .finish_non_exhaustive()
     }
 }
-
-// ---------------------------------------------------------------------------
-// Embedded variant
-// ---------------------------------------------------------------------------
 
 /// Inline storage for mutex state, avoiding heap allocation.
 ///

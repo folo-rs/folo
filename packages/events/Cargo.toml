@@ -1,6 +1,6 @@
 [package]
 name = "events"
-description = "Async event primitives with intrusive waiter lists"
+description = "Async manual-reset and auto-reset event primitives"
 publish = true
 version = "0.6.0"
 

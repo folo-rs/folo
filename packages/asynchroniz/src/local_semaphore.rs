@@ -368,10 +368,6 @@ impl LocalSemaphore {
     }
 }
 
-// ---------------------------------------------------------------------------
-// LocalSemaphorePermit
-// ---------------------------------------------------------------------------
-
 /// RAII permit returned by [`LocalSemaphore::acquire()`] and
 /// [`LocalSemaphore::try_acquire()`].
 ///
@@ -388,10 +384,6 @@ impl Drop for LocalSemaphorePermit<'_> {
         self.inner.release_permits(self.permits);
     }
 }
-
-// ---------------------------------------------------------------------------
-// LocalSemaphoreAcquireFuture
-// ---------------------------------------------------------------------------
 
 /// Future returned by [`LocalSemaphore::acquire()`] and
 /// [`LocalSemaphore::acquire_many()`].
@@ -444,10 +436,6 @@ impl Drop for LocalSemaphoreAcquireFuture<'_> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Debug impls
-// ---------------------------------------------------------------------------
-
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for LocalSemaphore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -473,10 +461,6 @@ impl fmt::Debug for LocalSemaphoreAcquireFuture<'_> {
             .finish_non_exhaustive()
     }
 }
-
-// ---------------------------------------------------------------------------
-// Embedded variant
-// ---------------------------------------------------------------------------
 
 /// Inline storage for semaphore state, avoiding heap allocation.
 ///

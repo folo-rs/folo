@@ -1,6 +1,6 @@
 # Events
 
-Async event primitives with intrusive waiter lists.
+Async manual-reset and auto-reset event primitives.
 
 This crate provides two families of event primitives:
 
