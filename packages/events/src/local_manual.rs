@@ -151,10 +151,10 @@ impl Inner {
 
     /// # Safety
     ///
-    /// * The `slot` must be pinned and must remain at the same memory
-    ///   address for the lifetime of the wait future.
     /// * The `slot` must belong to a future created from the same event.
-    unsafe fn poll_wait(&self, slot: &mut WaiterSlot, waker: Waker) -> Poll<()> {
+    unsafe fn poll_wait(&self, slot: Pin<&mut WaiterSlot>, waker: Waker) -> Poll<()> {
+        // SAFETY: We do not move the slot.
+        let slot = unsafe { slot.get_unchecked_mut() };
         if self.is_set.get() {
             if slot.is_registered() {
                 // SAFETY: Single-threaded, slot is registered in this
@@ -182,7 +182,9 @@ impl Inner {
     /// # Safety
     ///
     /// Same requirements as [`poll_wait`][Self::poll_wait].
-    unsafe fn drop_wait(&self, slot: &mut WaiterSlot) {
+    unsafe fn drop_wait(&self, slot: Pin<&mut WaiterSlot>) {
+        // SAFETY: We do not move the slot.
+        let slot = unsafe { slot.get_unchecked_mut() };
         if slot.is_registered() {
             // SAFETY: Single-threaded, slot is registered in this
             // list.
@@ -315,18 +317,20 @@ impl Future for LocalManualResetWaitFuture {
 
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
-        // SAFETY: The slot is pinned inside this future and belongs
-        // to this event's waiter list.
-        unsafe { this.inner.poll_wait(&mut this.slot, waker) }
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
+        // SAFETY: The slot belongs to this event's waiter list.
+        unsafe { this.inner.poll_wait(slot, waker) }
     }
 }
 
 impl Drop for LocalManualResetWaitFuture {
     fn drop(&mut self) {
-        // SAFETY: The slot is pinned inside this future and belongs
-        // to this event's waiter list.
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
+        // SAFETY: The slot belongs to this event's waiter list.
         unsafe {
-            self.inner.drop_wait(&mut self.slot);
+            self.inner.drop_wait(slot);
         }
     }
 }
@@ -498,9 +502,10 @@ impl Future for RawLocalManualResetWaitFuture {
         // SAFETY: The container outlives this future per the embedded()
         // contract.
         let inner = unsafe { this.inner.as_ref() };
-        // SAFETY: The slot is pinned inside this future and belongs
-        // to this event's waiter list.
-        unsafe { inner.poll_wait(&mut this.slot, waker) }
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
+        // SAFETY: The slot belongs to this event's waiter list.
+        unsafe { inner.poll_wait(slot, waker) }
     }
 }
 
@@ -509,10 +514,11 @@ impl Drop for RawLocalManualResetWaitFuture {
         // SAFETY: The container outlives this future per the embedded()
         // contract.
         let inner = unsafe { self.inner.as_ref() };
-        // SAFETY: The slot is pinned inside this future and belongs
-        // to this event's waiter list.
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
+        // SAFETY: The slot belongs to this event's waiter list.
         unsafe {
-            inner.drop_wait(&mut self.slot);
+            inner.drop_wait(slot);
         }
     }
 }

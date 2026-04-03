@@ -154,11 +154,17 @@ impl Inner {
 
     /// # Safety
     ///
-    /// * The `slot` must be pinned and must remain at the same memory
-    ///   address for the lifetime of the acquire future.
     /// * The `slot` must belong to a future created from the same
     ///   semaphore.
-    unsafe fn poll_acquire(&self, slot: &mut WaiterSlot, permits: usize, waker: Waker) -> Poll<()> {
+    unsafe fn poll_acquire(
+        &self,
+        slot: Pin<&mut WaiterSlot>,
+        permits: usize,
+        waker: Waker,
+    ) -> Poll<()> {
+        // SAFETY: We do not move the slot.
+        let slot = unsafe { slot.get_unchecked_mut() };
+
         // SAFETY: Single-threaded access.
         if unsafe { slot.take_notification() } {
             return Poll::Ready(());
@@ -186,7 +192,9 @@ impl Inner {
     /// # Safety
     ///
     /// Same requirements as [`poll_acquire`][Self::poll_acquire].
-    unsafe fn drop_acquire_wait(&self, slot: &mut WaiterSlot, permits: usize) {
+    unsafe fn drop_acquire_wait(&self, slot: Pin<&mut WaiterSlot>, permits: usize) {
+        // SAFETY: We do not move the slot.
+        let slot = unsafe { slot.get_unchecked_mut() };
         let node_ptr = slot.node_ptr();
 
         // SAFETY: Single-threaded access.
@@ -405,9 +413,11 @@ impl<'a> Future for LocalSemaphoreAcquireFuture<'a> {
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
-        // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
-        // and the state field is the lock this slot registers with.
-        match unsafe { this.inner.poll_acquire(&mut this.slot, this.permits, waker) } {
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
+        // SAFETY: The state field is the lock this slot registers
+        // with.
+        match unsafe { this.inner.poll_acquire(slot, this.permits, waker) } {
             Poll::Ready(()) => Poll::Ready(LocalSemaphorePermit {
                 inner: this.inner,
                 permits: this.permits,
@@ -423,10 +433,12 @@ impl Drop for LocalSemaphoreAcquireFuture<'_> {
             return;
         }
 
-        // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
-        // and the state is the lock this slot was registered with.
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
+        // SAFETY: The state is the lock this slot was registered
+        // with.
         unsafe {
-            self.inner.drop_acquire_wait(&mut self.slot, self.permits);
+            self.inner.drop_acquire_wait(slot, self.permits);
         }
     }
 }
@@ -626,9 +638,11 @@ impl Future for EmbeddedLocalSemaphoreAcquireFuture {
         // SAFETY: The container outlives this future per the
         // embedded() contract.
         let inner = unsafe { this.inner.as_ref() };
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
         // SAFETY: poll_acquire requires single-threaded access,
         // which LocalSemaphore guarantees (!Send).
-        match unsafe { inner.poll_acquire(&mut this.slot, this.permits, waker) } {
+        match unsafe { inner.poll_acquire(slot, this.permits, waker) } {
             Poll::Ready(()) => Poll::Ready(EmbeddedLocalSemaphorePermit {
                 inner: this.inner,
                 permits: this.permits,
@@ -647,10 +661,12 @@ impl Drop for EmbeddedLocalSemaphoreAcquireFuture {
         // SAFETY: The container outlives this future per the
         // embedded() contract.
         let inner = unsafe { self.inner.as_ref() };
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
         // SAFETY: drop_acquire_wait requires single-threaded access,
         // which LocalSemaphore guarantees (!Send).
         unsafe {
-            inner.drop_acquire_wait(&mut self.slot, self.permits);
+            inner.drop_acquire_wait(slot, self.permits);
         }
     }
 }

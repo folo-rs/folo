@@ -145,11 +145,11 @@ fn try_wait(mutex: &Mutex<State>) -> bool {
 
 /// # Safety
 ///
-/// * The `slot` must be pinned and must remain at the same memory address
-///   for the lifetime of the wait future.
 /// * The `mutex` must protect the waiter list that this slot is (or will
 ///   be) registered with.
-unsafe fn poll_wait(mutex: &Mutex<State>, slot: &mut WaiterSlot, waker: Waker) -> Poll<()> {
+unsafe fn poll_wait(mutex: &Mutex<State>, slot: Pin<&mut WaiterSlot>, waker: Waker) -> Poll<()> {
+    // SAFETY: We do not move the slot.
+    let slot = unsafe { slot.get_unchecked_mut() };
     let mut state = mutex.lock().expect(NEVER_POISONED);
 
     if state.is_set {
@@ -175,7 +175,9 @@ unsafe fn poll_wait(mutex: &Mutex<State>, slot: &mut WaiterSlot, waker: Waker) -
 /// # Safety
 ///
 /// Same requirements as [`poll_wait`].
-unsafe fn drop_wait(mutex: &Mutex<State>, slot: &mut WaiterSlot) {
+unsafe fn drop_wait(mutex: &Mutex<State>, slot: Pin<&mut WaiterSlot>) {
+    // SAFETY: We do not move the slot.
+    let slot = unsafe { slot.get_unchecked_mut() };
     if slot.is_registered() {
         let mut state = mutex.lock().expect(NEVER_POISONED);
         // SAFETY: We hold the lock and the slot is registered in this
@@ -379,17 +381,21 @@ impl Future for ManualResetWaitFuture {
         let waker = cx.waker().clone();
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
-        // SAFETY: The slot is pinned inside this future and the state
-        // field is the mutex this slot registers with.
-        unsafe { poll_wait(&this.state, &mut this.slot, waker) }
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
+        // SAFETY: The state field is the mutex this slot registers
+        // with.
+        unsafe { poll_wait(&this.state, slot, waker) }
     }
 }
 
 impl Drop for ManualResetWaitFuture {
     fn drop(&mut self) {
-        // SAFETY: The slot is pinned inside this future and the state
-        // field is the mutex this slot was registered with.
-        unsafe { drop_wait(&self.state, &mut self.slot) }
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
+        // SAFETY: The state field is the mutex this slot was
+        // registered with.
+        unsafe { drop_wait(&self.state, slot) }
     }
 }
 
@@ -564,9 +570,10 @@ impl Future for RawManualResetWaitFuture {
         // SAFETY: The container outlives this future per the embedded()
         // contract.
         let state = unsafe { this.state.as_ref() };
-        // SAFETY: The slot is pinned inside this future and the state
-        // is the mutex this slot registers with.
-        unsafe { poll_wait(state, &mut this.slot, waker) }
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
+        // SAFETY: The state is the mutex this slot registers with.
+        unsafe { poll_wait(state, slot, waker) }
     }
 }
 
@@ -575,9 +582,11 @@ impl Drop for RawManualResetWaitFuture {
         // SAFETY: The container outlives this future per the embedded()
         // contract.
         let state = unsafe { self.state.as_ref() };
-        // SAFETY: The slot is pinned inside this future and the state
-        // is the mutex this slot was registered with.
-        unsafe { drop_wait(state, &mut self.slot) }
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
+        // SAFETY: The state is the mutex this slot was registered
+        // with.
+        unsafe { drop_wait(state, slot) }
     }
 }
 

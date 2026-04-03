@@ -113,11 +113,12 @@ impl<T> Inner<T> {
 
     /// # Safety
     ///
-    /// * The `slot` must be pinned and must remain at the same memory
-    ///   address for the lifetime of the lock future.
     /// * The `slot` must belong to a future created from the same
     ///   mutex.
-    unsafe fn poll_lock(&self, slot: &mut WaiterSlot, waker: Waker) -> Poll<()> {
+    unsafe fn poll_lock(&self, slot: Pin<&mut WaiterSlot>, waker: Waker) -> Poll<()> {
+        // SAFETY: We do not move the slot.
+        let slot = unsafe { slot.get_unchecked_mut() };
+
         // SAFETY: Single-threaded access.
         if unsafe { slot.take_notification() } {
             return Poll::Ready(());
@@ -146,7 +147,9 @@ impl<T> Inner<T> {
     /// # Safety
     ///
     /// Same requirements as [`poll_lock`][Self::poll_lock].
-    unsafe fn drop_lock_wait(&self, slot: &mut WaiterSlot) {
+    unsafe fn drop_lock_wait(&self, slot: Pin<&mut WaiterSlot>) {
+        // SAFETY: We do not move the slot.
+        let slot = unsafe { slot.get_unchecked_mut() };
         let node_ptr = slot.node_ptr();
 
         // SAFETY: Single-threaded access.
@@ -367,10 +370,11 @@ impl<'a, T> Future for LocalMutexLockFuture<'a, T> {
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
-        // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
-        // and the lock_state field is the lock this slot registers
-        // with.
-        match unsafe { this.inner.poll_lock(&mut this.slot, waker) } {
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
+        // SAFETY: The lock_state field is the lock this slot
+        // registers with.
+        match unsafe { this.inner.poll_lock(slot, waker) } {
             Poll::Ready(()) => Poll::Ready(LocalMutexGuard { inner: this.inner }),
             Poll::Pending => Poll::Pending,
         }
@@ -383,11 +387,12 @@ impl<T> Drop for LocalMutexLockFuture<'_, T> {
             return;
         }
 
-        // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
-        // and the lock_state is the lock this slot was registered
-        // with.
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
+        // SAFETY: The lock_state is the lock this slot was
+        // registered with.
         unsafe {
-            self.inner.drop_lock_wait(&mut self.slot);
+            self.inner.drop_lock_wait(slot);
         }
     }
 }
@@ -589,9 +594,10 @@ impl<T> Future for EmbeddedLocalMutexLockFuture<T> {
         // SAFETY: The container outlives this future per the
         // embedded() contract.
         let inner = unsafe { this.inner.as_ref() };
-        // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
-        // and the lock_state is the lock this slot registers with.
-        match unsafe { inner.poll_lock(&mut this.slot, waker) } {
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
+        // SAFETY: The lock_state is the lock this slot registers with.
+        match unsafe { inner.poll_lock(slot, waker) } {
             Poll::Ready(()) => Poll::Ready(EmbeddedLocalMutexGuard { inner: this.inner }),
             Poll::Pending => Poll::Pending,
         }
@@ -607,11 +613,12 @@ impl<T> Drop for EmbeddedLocalMutexLockFuture<T> {
         // SAFETY: The container outlives this future per the
         // embedded() contract.
         let inner = unsafe { self.inner.as_ref() };
-        // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
-        // and the lock_state is the lock this slot was registered
-        // with.
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
+        // SAFETY: The lock_state is the lock this slot was
+        // registered with.
         unsafe {
-            inner.drop_lock_wait(&mut self.slot);
+            inner.drop_lock_wait(slot);
         }
     }
 }

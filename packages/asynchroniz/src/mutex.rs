@@ -155,15 +155,16 @@ fn try_lock_inner(lock_state: &StdMutex<LockState>) -> bool {
 ///
 /// # Safety
 ///
-/// * The `slot` must be pinned and must remain at the same memory
-///   address for the lifetime of the lock future.
 /// * The `lock_state` must protect the waiter list that this slot is
 ///   (or will be) registered with.
 unsafe fn poll_lock(
     lock_state: &StdMutex<LockState>,
-    slot: &mut WaiterSlot,
+    slot: Pin<&mut WaiterSlot>,
     waker: Waker,
 ) -> Poll<()> {
+    // SAFETY: We do not move the slot; Pin enforces the address
+    // stability that the waiter list requires.
+    let slot = unsafe { slot.get_unchecked_mut() };
     let mut state = lock_state.lock().expect(NEVER_POISONED);
 
     // Check if we were directly notified by unlock() (it popped us
@@ -198,7 +199,9 @@ unsafe fn poll_lock(
 /// # Safety
 ///
 /// Same requirements as [`poll_lock`].
-unsafe fn drop_lock_wait(lock_state: &StdMutex<LockState>, slot: &mut WaiterSlot) {
+unsafe fn drop_lock_wait(lock_state: &StdMutex<LockState>, slot: Pin<&mut WaiterSlot>) {
+    // SAFETY: We do not move the slot.
+    let slot = unsafe { slot.get_unchecked_mut() };
     let node_ptr = slot.node_ptr();
     let mut state = lock_state.lock().expect(NEVER_POISONED);
 
@@ -457,10 +460,11 @@ impl<'a, T> Future for MutexLockFuture<'a, T> {
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
-        // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
-        // and the lock_state field is the lock this slot registers
-        // with.
-        match unsafe { poll_lock(this.lock_state, &mut this.slot, waker) } {
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
+        // SAFETY: The lock_state field is the lock this slot
+        // registers with.
+        match unsafe { poll_lock(this.lock_state, slot, waker) } {
             Poll::Ready(()) => Poll::Ready(MutexGuard {
                 lock_state: this.lock_state,
                 data: this.data,
@@ -481,10 +485,11 @@ impl<T> Drop for MutexLockFuture<'_, T> {
             return;
         }
 
-        // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
-        // and the lock_state field is the lock this slot was
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
+        // SAFETY: The lock_state field is the lock this slot was
         // registered with.
-        unsafe { drop_lock_wait(self.lock_state, &mut self.slot) }
+        unsafe { drop_lock_wait(self.lock_state, slot) }
     }
 }
 
@@ -706,9 +711,10 @@ impl<T> Future for EmbeddedMutexLockFuture<T> {
         // SAFETY: The container outlives this future per the
         // embedded() contract.
         let inner = unsafe { this.inner.as_ref() };
-        // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
-        // and the lock_state is the lock this slot registers with.
-        match unsafe { poll_lock(&inner.lock_state, &mut this.slot, waker) } {
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
+        // SAFETY: The lock_state is the lock this slot registers with.
+        match unsafe { poll_lock(&inner.lock_state, slot, waker) } {
             Poll::Ready(()) => Poll::Ready(EmbeddedMutexGuard { inner: this.inner }),
             Poll::Pending => Poll::Pending,
         }
@@ -729,10 +735,11 @@ impl<T> Drop for EmbeddedMutexLockFuture<T> {
         // SAFETY: The container outlives this future per the
         // embedded() contract.
         let inner = unsafe { self.inner.as_ref() };
-        // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
-        // and the lock_state is the lock this slot was registered
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
+        // SAFETY: The lock_state is the lock this slot was registered
         // with.
-        unsafe { drop_lock_wait(&inner.lock_state, &mut self.slot) }
+        unsafe { drop_lock_wait(&inner.lock_state, slot) }
     }
 }
 

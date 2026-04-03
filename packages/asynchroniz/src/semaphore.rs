@@ -195,16 +195,16 @@ fn try_acquire_inner(state_mutex: &Mutex<SemaphoreState>, permits: usize) -> boo
 ///
 /// # Safety
 ///
-/// * The `slot` must be pinned and must remain at the same memory
-///   address for the lifetime of the acquire future.
 /// * The `state_mutex` must protect the waiter list that this slot
 ///   is (or will be) registered with.
 unsafe fn poll_acquire(
     state_mutex: &Mutex<SemaphoreState>,
-    slot: &mut WaiterSlot,
+    slot: Pin<&mut WaiterSlot>,
     permits: usize,
     waker: Waker,
 ) -> Poll<()> {
+    // SAFETY: We do not move the slot.
+    let slot = unsafe { slot.get_unchecked_mut() };
     let mut state = state_mutex.lock().expect(NEVER_POISONED);
 
     // Check if we were directly notified by release_permits()
@@ -240,9 +240,11 @@ unsafe fn poll_acquire(
 /// Same requirements as [`poll_acquire`].
 unsafe fn drop_acquire_wait(
     state_mutex: &Mutex<SemaphoreState>,
-    slot: &mut WaiterSlot,
+    slot: Pin<&mut WaiterSlot>,
     permits: usize,
 ) {
+    // SAFETY: We do not move the slot.
+    let slot = unsafe { slot.get_unchecked_mut() };
     let node_ptr = slot.node_ptr();
     let mut state = state_mutex.lock().expect(NEVER_POISONED);
 
@@ -508,9 +510,11 @@ impl<'a> Future for SemaphoreAcquireFuture<'a> {
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
-        // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
-        // and the state field is the mutex this slot registers with.
-        match unsafe { poll_acquire(this.state, &mut this.slot, this.permits, waker) } {
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
+        // SAFETY: The state field is the mutex this slot registers
+        // with.
+        match unsafe { poll_acquire(this.state, slot, this.permits, waker) } {
             Poll::Ready(()) => Poll::Ready(SemaphorePermit {
                 state: this.state,
                 permits: this.permits,
@@ -531,10 +535,11 @@ impl Drop for SemaphoreAcquireFuture<'_> {
             return;
         }
 
-        // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
-        // and the state field is the mutex this slot was registered
-        // with.
-        unsafe { drop_acquire_wait(self.state, &mut self.slot, self.permits) }
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
+        // SAFETY: The state field is the mutex this slot was
+        // registered with.
+        unsafe { drop_acquire_wait(self.state, slot, self.permits) }
     }
 }
 
@@ -760,9 +765,10 @@ impl Future for EmbeddedSemaphoreAcquireFuture {
         // SAFETY: The container outlives this future per the
         // embedded() contract.
         let inner = unsafe { this.inner.as_ref() };
-        // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
-        // and the state is the mutex this slot registers with.
-        match unsafe { poll_acquire(&inner.state, &mut this.slot, this.permits, waker) } {
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
+        // SAFETY: The state is the mutex this slot registers with.
+        match unsafe { poll_acquire(&inner.state, slot, this.permits, waker) } {
             Poll::Ready(()) => Poll::Ready(EmbeddedSemaphorePermit {
                 inner: this.inner,
                 permits: this.permits,
@@ -786,9 +792,11 @@ impl Drop for EmbeddedSemaphoreAcquireFuture {
         // SAFETY: The container outlives this future per the
         // embedded() contract.
         let inner = unsafe { self.inner.as_ref() };
-        // SAFETY: The slot is pinned (via WaiterSlot's PhantomPinned)
-        // and the state is the mutex this slot was registered with.
-        unsafe { drop_acquire_wait(&inner.state, &mut self.slot, self.permits) }
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
+        // SAFETY: The state is the mutex this slot was registered
+        // with.
+        unsafe { drop_acquire_wait(&inner.state, slot, self.permits) }
     }
 }
 
