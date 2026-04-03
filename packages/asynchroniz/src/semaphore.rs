@@ -506,7 +506,7 @@ impl<'a> Future for SemaphoreAcquireFuture<'a> {
 
         // SAFETY: The slot is pinned inside this future and not moved.
         let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
-        // SAFETY: The state field is the mutex this slot registers
+        // SAFETY: The state field is the semaphore state this slot registers
         // with.
         match unsafe { poll_acquire(this.state, slot, this.permits, waker) } {
             Poll::Ready(()) => Poll::Ready(SemaphorePermit {
@@ -521,11 +521,6 @@ impl<'a> Future for SemaphoreAcquireFuture<'a> {
 impl Drop for SemaphoreAcquireFuture<'_> {
     fn drop(&mut self) {
         if !self.slot.is_registered() {
-            // Not yet polled — no cleanup needed.
-            debug_assert!(
-                !self.slot.is_registered(),
-                "registered future must not skip cleanup"
-            );
             return;
         }
 
@@ -767,11 +762,6 @@ impl Future for EmbeddedSemaphoreAcquireFuture {
 impl Drop for EmbeddedSemaphoreAcquireFuture {
     fn drop(&mut self) {
         if !self.slot.is_registered() {
-            // Not yet polled — no cleanup needed.
-            debug_assert!(
-                !self.slot.is_registered(),
-                "registered future must not skip cleanup"
-            );
             return;
         }
 
@@ -831,8 +821,6 @@ mod tests {
 
     use super::*;
 
-    // --- trait assertions ---
-
     assert_impl_all!(Semaphore: Send, Sync, Clone);
     assert_impl_all!(SemaphorePermit<'static>: Send, Sync);
     assert_not_impl_any!(SemaphorePermit<'static>: Clone);
@@ -846,8 +834,6 @@ mod tests {
     assert_not_impl_any!(EmbeddedSemaphorePermit: Clone);
     assert_impl_all!(EmbeddedSemaphoreAcquireFuture: Send);
     assert_not_impl_any!(EmbeddedSemaphoreAcquireFuture: Sync, Unpin);
-
-    // --- basic functionality ---
 
     #[test]
     fn acquire_and_release() {
@@ -903,8 +889,6 @@ mod tests {
         let sem = Semaphore::boxed(1);
         let _permit = sem.try_acquire_many(0);
     }
-
-    // --- async tests ---
 
     #[test]
     fn acquire_completes_when_available() {
@@ -1151,8 +1135,6 @@ mod tests {
         assert!(sem.try_acquire().is_some());
     }
 
-    // --- multithreaded tests (Miri-compatible) ---
-
     #[test]
     fn acquire_from_another_thread() {
         testing::with_watchdog(|| {
@@ -1219,8 +1201,6 @@ mod tests {
             assert!(max_concurrent.load(Ordering::Relaxed) <= 2);
         });
     }
-
-    // --- embedded variant tests ---
 
     #[test]
     fn embedded_acquire_and_release() {

@@ -23,6 +23,19 @@ use waiter_list::{WaiterList, WaiterNodeStorage};
 /// To avoid the heap allocation, use [`EmbeddedLocalMutex`] with
 /// [`embedded()`][Self::embedded] instead.
 ///
+/// # Fairness
+///
+/// Waiters are served in FIFO order. When a lock holder unlocks while
+/// waiters are queued, the lock is transferred directly to the
+/// longest-waiting future, preventing starvation.
+///
+/// # Cancellation safety
+///
+/// If a lock future that has been notified is dropped before it is
+/// polled to completion, the lock is forwarded to the next waiter (or
+/// released if no waiters remain). No lock acquisition is lost due to
+/// cancellation.
+///
 /// # Examples
 ///
 /// ```
@@ -647,8 +660,6 @@ mod tests {
 
     use super::*;
 
-    // --- trait assertions ---
-
     assert_impl_all!(LocalMutex<u32>: Clone);
     assert_not_impl_any!(LocalMutex<u32>: Send, Sync);
     assert_not_impl_any!(LocalMutexGuard<'static, u32>: Send, Sync, Clone);
@@ -659,8 +670,6 @@ mod tests {
     assert_not_impl_any!(EmbeddedLocalMutexRef<u32>: Send, Sync);
     assert_not_impl_any!(EmbeddedLocalMutexGuard<u32>: Send, Sync, Clone);
     assert_not_impl_any!(EmbeddedLocalMutexLockFuture<u32>: Send, Sync, Unpin);
-
-    // --- basic functionality ---
 
     #[test]
     fn starts_unlocked() {
@@ -705,8 +714,6 @@ mod tests {
         }
         assert_eq!(*mutex.try_lock().unwrap(), 99);
     }
-
-    // --- async tests ---
 
     #[test]
     fn lock_completes_when_unlocked() {
@@ -864,8 +871,6 @@ mod tests {
         // f3 should now hold the lock.
         assert!(f3.as_mut().poll(&mut cx).is_ready());
     }
-
-    // --- embedded variant tests ---
 
     #[test]
     fn embedded_lock_and_unlock() {

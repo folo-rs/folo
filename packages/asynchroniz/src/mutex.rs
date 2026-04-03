@@ -469,11 +469,6 @@ impl<'a, T> Future for MutexLockFuture<'a, T> {
 impl<T> Drop for MutexLockFuture<'_, T> {
     fn drop(&mut self) {
         if !self.slot.is_registered() {
-            // Not yet polled — no cleanup needed.
-            debug_assert!(
-                !self.slot.is_registered(),
-                "registered future must not skip cleanup"
-            );
             return;
         }
 
@@ -708,11 +703,6 @@ impl<T> Future for EmbeddedMutexLockFuture<T> {
 impl<T> Drop for EmbeddedMutexLockFuture<T> {
     fn drop(&mut self) {
         if !self.slot.is_registered() {
-            // Not yet polled — no cleanup needed.
-            debug_assert!(
-                !self.slot.is_registered(),
-                "registered future must not skip cleanup"
-            );
             return;
         }
 
@@ -767,8 +757,6 @@ mod tests {
 
     use super::*;
 
-    // --- trait assertions ---
-
     assert_impl_all!(Mutex<u32>: Send, Sync, Clone);
     assert_impl_all!(MutexGuard<'static, u32>: Send, Sync);
     assert_not_impl_any!(MutexGuard<'static, u32>: Clone);
@@ -787,8 +775,6 @@ mod tests {
     assert_not_impl_any!(
         MutexGuard<'static, std::cell::Cell<u32>>: Sync
     );
-
-    // --- basic functionality ---
 
     #[test]
     fn starts_unlocked() {
@@ -833,8 +819,6 @@ mod tests {
         }
         assert_eq!(*mutex.try_lock().unwrap(), 99);
     }
-
-    // --- async tests ---
 
     #[test]
     fn lock_completes_when_unlocked() {
@@ -1001,8 +985,6 @@ mod tests {
         assert!(f3.as_mut().poll(&mut cx).is_ready());
     }
 
-    // --- multithreaded tests (Miri-compatible) ---
-
     #[test]
     fn lock_from_another_thread() {
         testing::with_watchdog(|| {
@@ -1066,8 +1048,6 @@ mod tests {
             assert_eq!(*guard, u32::try_from(thread_count * iterations).unwrap());
         });
     }
-
-    // --- embedded variant tests ---
 
     #[test]
     fn embedded_lock_and_unlock() {

@@ -190,7 +190,7 @@ impl WaiterList {
     ///
     /// * The caller must ensure exclusive access to the list.
     /// * The callback must not modify the list structure (no push/pop/remove).
-    pub unsafe fn for_each(&self, mut f: impl FnMut(*mut WaiterNode)) {
+    pub unsafe fn for_each(&mut self, mut f: impl FnMut(*mut WaiterNode)) {
         let mut current = self.head;
         while !current.is_null() {
             // Read next before calling `f` so we do not hold a reference
@@ -529,7 +529,7 @@ mod tests {
 
     #[test]
     fn for_each_on_empty_list_does_nothing() {
-        let list = WaiterList::new();
+        let mut list = WaiterList::new();
         let mut count = 0_usize;
         unsafe {
             list.for_each(|_| count = count.checked_add(1).unwrap());

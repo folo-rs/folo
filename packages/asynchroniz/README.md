@@ -1,6 +1,6 @@
 # asynchroniz
 
-Async mutex and semaphore primitives with intrusive waiter lists.
+Async mutex and semaphore primitives.
 
 This crate provides async synchronization primitives:
 

@@ -11,7 +11,6 @@ use std::task::Waker;
 ///
 /// Once registered, a node must remain at a stable memory address until it
 /// is removed from the list.
-#[non_exhaustive]
 pub struct WaiterNode {
     /// The waker to call when this waiter is selected for notification.
     waker: Option<Waker>,
@@ -131,8 +130,8 @@ impl Default for WaiterNode {
 }
 
 // WaiterNode contains raw pointers (*mut Self) which make it !Send and !Sync
-// by default. This is correct: nodes are pinned at a fixed address and must
-// not be moved across threads. Consumers wrap nodes in UnsafeCell and handle
+// by default. This is correct: once registered in a list, nodes must remain
+// at a stable pinned address. Consumers wrap nodes in UnsafeCell and handle
 // Send via their own unsafe impls on the containing future type.
 
 // WaiterNode has no interior mutability visible to callers — all

@@ -143,7 +143,7 @@ query tens of thousands of times per second.
 
 Auxiliary packages developed and published by this project:
 
-* [`asynchroniz`][asynchroniz] - async mutex and semaphore with intrusive waiter lists.
+* [`asynchroniz`][asynchroniz] - async mutex and semaphore primitives.
 * `cargo-detect-package` - cargo subcommand to detect which package is used based on a provided path and to run another subcommand on that package.
 * `cpulist` - utilities for parsing and emitting Linux cpulist strings, used by `many_cpus`.
 * [`events`][events] - async manual-reset and auto-reset events for multi-use signaling.

@@ -22,6 +22,20 @@ use waiter_list::{WaiterList, WaiterNodeStorage};
 /// To avoid the heap allocation, use [`EmbeddedLocalSemaphore`] with
 /// [`embedded()`][Self::embedded] instead.
 ///
+/// # Fairness
+///
+/// Waiters are served in FIFO order with head-of-line blocking: if
+/// the first waiter requests more permits than are currently
+/// available, later waiters also wait even if they could be satisfied.
+/// This prevents starvation of multi-permit acquires.
+///
+/// # Cancellation safety
+///
+/// If an acquire future that has been notified is dropped before it
+/// is polled to completion, the permits are returned and any newly
+/// satisfiable waiters are woken. No permits are lost due to
+/// cancellation.
+///
 /// # Examples
 ///
 /// ```
@@ -87,7 +101,7 @@ impl Inner {
     /// Tries to satisfy the head waiter, returning its waker if
     /// successful.
     fn try_wake_head(state: &mut SemaphoreState) -> Option<Waker> {
-        // SAFETY: We hold the lock.
+        // SAFETY: Single-threaded access.
         let head = unsafe { state.waiters.head() };
 
         if head.is_null() {
@@ -408,7 +422,7 @@ impl<'a> Future for LocalSemaphoreAcquireFuture<'a> {
 
         // SAFETY: The slot is pinned inside this future and not moved.
         let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
-        // SAFETY: The state field is the lock this slot registers
+        // SAFETY: The state field is the semaphore state this slot registers
         // with.
         match unsafe { this.inner.poll_acquire(slot, this.permits, waker) } {
             Poll::Ready(()) => Poll::Ready(LocalSemaphorePermit {
@@ -699,8 +713,6 @@ mod tests {
 
     use super::*;
 
-    // --- trait assertions ---
-
     assert_impl_all!(LocalSemaphore: Clone);
     assert_not_impl_any!(LocalSemaphore: Send, Sync);
     assert_not_impl_any!(LocalSemaphorePermit<'static>: Send, Sync, Clone);
@@ -711,8 +723,6 @@ mod tests {
     assert_not_impl_any!(EmbeddedLocalSemaphoreRef: Send, Sync);
     assert_not_impl_any!(EmbeddedLocalSemaphorePermit: Send, Sync, Clone);
     assert_not_impl_any!(EmbeddedLocalSemaphoreAcquireFuture: Send, Sync, Unpin);
-
-    // --- basic functionality ---
 
     #[test]
     fn acquire_and_release() {
@@ -768,8 +778,6 @@ mod tests {
         let sem = LocalSemaphore::boxed(1);
         let _permit = sem.try_acquire_many(0);
     }
-
-    // --- async tests ---
 
     #[test]
     fn acquire_completes_when_available() {
@@ -1006,8 +1014,6 @@ mod tests {
         // Permit drop during unwinding must return the permit.
         assert!(sem.try_acquire().is_some());
     }
-
-    // --- embedded variant tests ---
 
     #[test]
     fn embedded_acquire_and_release() {

@@ -1,6 +1,6 @@
 [package]
 name = "asynchroniz"
-description = "Async mutex and semaphore primitives with intrusive waiter lists"
+description = "Async mutex and semaphore primitives"
 publish = true
 version = "0.1.0"
 
