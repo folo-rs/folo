@@ -63,7 +63,6 @@ pub struct Semaphore {
 }
 
 impl Clone for Semaphore {
-    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
@@ -298,12 +297,11 @@ impl Semaphore {
         }
     }
 
-    /// Creates a handle from an [`EmbeddedSemaphore`] container,
-    /// avoiding heap allocation.
+    /// Creates an instance that references the state in the
+    /// [`EmbeddedSemaphore`].
     ///
-    /// Calling this multiple times on the same container is safe and
-    /// returns handles that all operate on the same shared state,
-    /// just like copying or cloning a [`RawSemaphore`].
+    /// Calling this multiple times on the same container returns
+    /// handles that all operate on the same shared state.
     ///
     /// # Safety
     ///
@@ -414,7 +412,6 @@ impl Semaphore {
     #[must_use]
     // Mutating try_acquire to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
-    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_acquire(&self) -> Option<SemaphorePermit<'_>> {
         self.try_acquire_many(1)
     }
@@ -443,7 +440,6 @@ impl Semaphore {
     #[must_use]
     // Mutating try_acquire_many to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
-    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_acquire_many(&self, permits: usize) -> Option<SemaphorePermit<'_>> {
         assert!(permits > 0, "cannot acquire zero permits");
 
@@ -576,12 +572,10 @@ impl fmt::Debug for SemaphoreAcquireFuture<'_> {
 // Embedded variant
 // ---------------------------------------------------------------------------
 
-/// Embedded-state container for [`Semaphore`].
+/// Inline storage for semaphore state, avoiding heap allocation.
 ///
-/// Stores the semaphore state inline, avoiding the heap allocation
-/// that [`Semaphore::boxed()`] requires. Create the container with
-/// [`new()`][Self::new], pin it, then call [`Semaphore::embedded()`]
-/// to obtain a [`RawSemaphore`] handle.
+/// Pin the container, then call [`Semaphore::embedded()`] to obtain a
+/// [`RawSemaphore`] reference that operates on the embedded state.
 ///
 /// # Examples
 ///
@@ -623,7 +617,7 @@ impl EmbeddedSemaphore {
     }
 }
 
-/// Handle to an embedded [`Semaphore`].
+/// Reference to an [`EmbeddedSemaphore`].
 ///
 /// Created via [`Semaphore::embedded()`]. The caller is responsible
 /// for ensuring the [`EmbeddedSemaphore`] outlives all handles,
@@ -680,7 +674,6 @@ impl RawSemaphore {
     #[must_use]
     // Mutating try_acquire to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
-    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_acquire(&self) -> Option<RawSemaphorePermit> {
         self.try_acquire_many(1)
     }
@@ -693,7 +686,6 @@ impl RawSemaphore {
     #[must_use]
     // Mutating try_acquire_many to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
-    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_acquire_many(&self, permits: usize) -> Option<RawSemaphorePermit> {
         assert!(permits > 0, "cannot acquire zero permits");
 

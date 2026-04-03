@@ -247,8 +247,8 @@ impl LocalSemaphore {
         }
     }
 
-    /// Creates a handle from an [`EmbeddedLocalSemaphore`] container,
-    /// avoiding heap allocation.
+    /// Creates an instance that references the state in the
+    /// [`EmbeddedLocalSemaphore`].
     ///
     /// # Safety
     ///
@@ -333,7 +333,6 @@ impl LocalSemaphore {
     #[must_use]
     // Mutating try_acquire to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
-    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_acquire(&self) -> Option<LocalSemaphorePermit<'_>> {
         self.try_acquire_many(1)
     }
@@ -346,7 +345,6 @@ impl LocalSemaphore {
     #[must_use]
     // Mutating try_acquire_many to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
-    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_acquire_many(&self, permits: usize) -> Option<LocalSemaphorePermit<'_>> {
         assert!(permits > 0, "cannot acquire zero permits");
 
@@ -467,10 +465,11 @@ impl fmt::Debug for LocalSemaphoreAcquireFuture<'_> {
 // Embedded variant
 // ---------------------------------------------------------------------------
 
-/// Embedded-state container for [`LocalSemaphore`].
+/// Inline storage for semaphore state, avoiding heap allocation.
 ///
-/// Stores the semaphore state inline, avoiding the heap allocation
-/// that [`LocalSemaphore::boxed()`] requires.
+/// Pin the container, then call [`LocalSemaphore::embedded()`] to
+/// obtain a [`RawLocalSemaphore`] reference that operates on the
+/// embedded state.
 ///
 /// # Examples
 ///
@@ -512,7 +511,7 @@ impl EmbeddedLocalSemaphore {
     }
 }
 
-/// Handle to an embedded [`LocalSemaphore`].
+/// Reference to an [`EmbeddedLocalSemaphore`].
 ///
 /// Created via [`LocalSemaphore::embedded()`]. The caller is
 /// responsible for ensuring the [`EmbeddedLocalSemaphore`] outlives
@@ -559,7 +558,6 @@ impl RawLocalSemaphore {
     #[must_use]
     // Mutating try_acquire to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
-    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_acquire(&self) -> Option<RawLocalSemaphorePermit> {
         self.try_acquire_many(1)
     }
@@ -572,7 +570,6 @@ impl RawLocalSemaphore {
     #[must_use]
     // Mutating try_acquire_many to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
-    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_acquire_many(&self, permits: usize) -> Option<RawLocalSemaphorePermit> {
         assert!(permits > 0, "cannot acquire zero permits");
 

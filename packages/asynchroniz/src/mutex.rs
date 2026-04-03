@@ -70,7 +70,6 @@ pub struct Mutex<T> {
 }
 
 impl<T> Clone for Mutex<T> {
-    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
@@ -264,12 +263,11 @@ impl<T> Mutex<T> {
         }
     }
 
-    /// Creates a handle from an [`EmbeddedMutex`] container, avoiding
-    /// heap allocation.
+    /// Creates an instance that references the state in the
+    /// [`EmbeddedMutex`].
     ///
-    /// Calling this multiple times on the same container is safe and
-    /// returns handles that all operate on the same shared state, just
-    /// like copying or cloning a [`RawMutex`].
+    /// Calling this multiple times on the same container returns
+    /// handles that all operate on the same shared state.
     ///
     /// # Safety
     ///
@@ -366,7 +364,6 @@ impl<T> Mutex<T> {
     #[must_use]
     // Mutating try_lock to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
-    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_lock(&self) -> Option<MutexGuard<'_, T>> {
         if try_lock_inner(&self.inner.lock_state) {
             Some(MutexGuard {
@@ -522,12 +519,10 @@ impl<T> fmt::Debug for MutexLockFuture<'_, T> {
 // Embedded variant
 // ---------------------------------------------------------------------------
 
-/// Embedded-state container for [`Mutex`].
+/// Inline storage for mutex state, avoiding heap allocation.
 ///
-/// Stores the mutex state inline, avoiding the heap allocation that
-/// [`Mutex::boxed()`] requires. Create the container with
-/// [`new()`][Self::new], pin it, then call [`Mutex::embedded()`] to
-/// obtain a [`RawMutex`] handle.
+/// Pin the container, then call [`Mutex::embedded()`] to obtain a
+/// [`RawMutex`] reference that operates on the embedded state.
 ///
 /// # Examples
 ///
@@ -572,13 +567,12 @@ impl<T> Default for EmbeddedMutex<T>
 where
     T: Default,
 {
-    #[cfg_attr(coverage_nightly, coverage(off))]
     fn default() -> Self {
         Self::new(T::default())
     }
 }
 
-/// Handle to an embedded [`Mutex`].
+/// Reference to an [`EmbeddedMutex`].
 ///
 /// Created via [`Mutex::embedded()`]. The caller is responsible for
 /// ensuring the [`EmbeddedMutex`] outlives all handles, lock futures,
@@ -621,7 +615,6 @@ impl<T> RawMutex<T> {
     #[must_use]
     // Mutating try_lock to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
-    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_lock(&self) -> Option<RawMutexGuard<T>> {
         if try_lock_inner(&self.inner().lock_state) {
             Some(RawMutexGuard { inner: self.inner })

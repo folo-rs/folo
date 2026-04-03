@@ -212,12 +212,11 @@ impl<T> LocalMutex<T> {
         }
     }
 
-    /// Creates a handle from an [`EmbeddedLocalMutex`] container,
-    /// avoiding heap allocation.
+    /// Creates an instance that references the state in the
+    /// [`EmbeddedLocalMutex`].
     ///
-    /// Calling this multiple times on the same container is safe and
-    /// returns handles that all operate on the same shared state, just
-    /// like copying or cloning a [`RawLocalMutex`].
+    /// Calling this multiple times on the same container returns
+    /// handles that all operate on the same shared state.
     ///
     /// # Safety
     ///
@@ -299,7 +298,6 @@ impl<T> LocalMutex<T> {
     #[must_use]
     // Mutating try_lock to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
-    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_lock(&self) -> Option<LocalMutexGuard<'_, T>> {
         if self.inner.try_lock() {
             Some(LocalMutexGuard { inner: &self.inner })
@@ -425,12 +423,10 @@ impl<T> fmt::Debug for LocalMutexLockFuture<'_, T> {
 // Embedded variant
 // ---------------------------------------------------------------------------
 
-/// Embedded-state container for [`LocalMutex`].
+/// Inline storage for mutex state, avoiding heap allocation.
 ///
-/// Stores the mutex state inline, avoiding the heap allocation that
-/// [`LocalMutex::boxed()`] requires. Create the container with
-/// [`new()`][Self::new], pin it, then call
-/// [`LocalMutex::embedded()`] to obtain a [`RawLocalMutex`] handle.
+/// Pin the container, then call [`LocalMutex::embedded()`] to obtain
+/// a [`RawLocalMutex`] reference that operates on the embedded state.
 ///
 /// # Examples
 ///
@@ -451,6 +447,8 @@ impl<T> fmt::Debug for LocalMutexLockFuture<'_, T> {
 /// ```
 pub struct EmbeddedLocalMutex<T> {
     inner: Inner<T>,
+    // Pinning is required because references (via RawLocalMutex)
+    // hold a NonNull pointer to the inner state.
     _pinned: PhantomPinned,
 }
 
@@ -477,19 +475,18 @@ impl<T> Default for EmbeddedLocalMutex<T>
 where
     T: Default,
 {
-    #[cfg_attr(coverage_nightly, coverage(off))]
     fn default() -> Self {
         Self::new(T::default())
     }
 }
 
-/// Handle to an embedded [`LocalMutex`].
+/// Reference to an [`EmbeddedLocalMutex`].
 ///
 /// Created via [`LocalMutex::embedded()`]. The caller is responsible
-/// for ensuring the [`EmbeddedLocalMutex`] outlives all handles, lock
-/// futures, and guards.
+/// for ensuring the [`EmbeddedLocalMutex`] outlives all references,
+/// lock futures, and guards.
 ///
-/// The API is identical to [`LocalMutex`].
+/// Provides the same API as [`LocalMutex`].
 #[derive(Clone, Copy)]
 pub struct RawLocalMutex<T> {
     inner: NonNull<Inner<T>>,
@@ -502,8 +499,10 @@ impl<T> RawLocalMutex<T> {
         unsafe { self.inner.as_ref() }
     }
 
+    /// Acquires exclusive access to the guarded value.
+    ///
     /// Returns a future that resolves to a [`RawLocalMutexGuard`]
-    /// when the lock is acquired.
+    /// providing [`Deref`]/[`DerefMut`] access to the value.
     #[must_use]
     pub fn lock(&self) -> RawLocalMutexLockFuture<T> {
         RawLocalMutexLockFuture {
@@ -516,7 +515,6 @@ impl<T> RawLocalMutex<T> {
     #[must_use]
     // Mutating try_lock to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
-    #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_lock(&self) -> Option<RawLocalMutexGuard<T>> {
         if self.inner().try_lock() {
             Some(RawLocalMutexGuard { inner: self.inner })
