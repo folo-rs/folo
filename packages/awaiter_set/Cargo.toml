@@ -1,6 +1,6 @@
 [package]
 name = "awaiter_set"
-description = "Intrusive doubly-linked waiter queue for async synchronization primitives"
+description = "Zero-allocation awaiter tracking for async synchronization primitives"
 publish = true
 version = "0.1.0"
 

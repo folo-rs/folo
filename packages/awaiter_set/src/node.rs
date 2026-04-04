@@ -2,7 +2,7 @@ use std::marker::PhantomPinned;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::task::Waker;
 
-/// A node in a [`AwaiterSet`][crate::AwaiterSet].
+/// A node in an [`AwaiterSet`][crate::AwaiterSet].
 ///
 /// Each node stores a [`Waker`] for async notification, a boolean notification
 /// flag, and a `usize` of caller-defined data. Embed nodes inside wait futures

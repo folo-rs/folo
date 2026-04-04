@@ -167,21 +167,26 @@ impl<T> Inner<T> {
 
         // SAFETY: Single-threaded access.
         if unsafe { slot.is_notified() } {
-            let state_ptr = self.lock_state.get();
-            // SAFETY: Single-threaded access.
-            let state = unsafe { &mut *state_ptr };
+            // Capture the waker while borrowing the state, then wake
+            // after the borrow ends to avoid aliased mutable access
+            // if the waker is re-entrant.
+            let waker = {
+                let state_ptr = self.lock_state.get();
+                // SAFETY: Single-threaded access.
+                let state = unsafe { &mut *state_ptr };
 
-            // SAFETY: Single-threaded.
-            let waker = if let Some(next_node) = unsafe { state.waiters.take_one() } {
                 // SAFETY: Single-threaded.
-                unsafe {
-                    (*next_node).set_notified();
+                if let Some(next_node) = unsafe { state.waiters.take_one() } {
+                    // SAFETY: Single-threaded.
+                    unsafe {
+                        (*next_node).set_notified();
+                    }
+                    // SAFETY: Single-threaded.
+                    unsafe { (*next_node).take_waker() }
+                } else {
+                    state.locked = false;
+                    None
                 }
-                // SAFETY: Single-threaded.
-                unsafe { (*next_node).take_waker() }
-            } else {
-                state.locked = false;
-                None
             };
 
             if let Some(w) = waker {
