@@ -435,6 +435,9 @@ impl<'a> Future for LocalSemaphoreAcquireFuture<'a> {
 }
 
 impl Drop for LocalSemaphoreAcquireFuture<'_> {
+    // Inverting the is_registered() guard causes the Drop to hang
+    // because it runs cleanup on an unregistered slot.
+    #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
         if !self.slot.is_registered() {
             return;
@@ -652,6 +655,9 @@ impl Future for EmbeddedLocalSemaphoreAcquireFuture {
 }
 
 impl Drop for EmbeddedLocalSemaphoreAcquireFuture {
+    // Inverting the is_registered() guard causes the Drop to hang
+    // because it runs cleanup on an unregistered slot.
+    #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
         if !self.slot.is_registered() {
             return;

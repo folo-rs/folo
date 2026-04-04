@@ -387,6 +387,9 @@ impl<'a, T> Future for LocalMutexLockFuture<'a, T> {
 }
 
 impl<T> Drop for LocalMutexLockFuture<'_, T> {
+    // Inverting the is_registered() guard causes the Drop to hang
+    // because it runs cleanup on an unregistered slot.
+    #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
         if !self.slot.is_registered() {
             return;
@@ -602,6 +605,9 @@ impl<T> Future for EmbeddedLocalMutexLockFuture<T> {
 }
 
 impl<T> Drop for EmbeddedLocalMutexLockFuture<T> {
+    // Inverting the is_registered() guard causes the Drop to hang
+    // because it runs cleanup on an unregistered slot.
+    #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
         if !self.slot.is_registered() {
             return;
