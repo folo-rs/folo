@@ -8,7 +8,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::task::{self, Poll, Waker};
 
-use waiter_list::{WaiterList, WaiterNodeStorage};
+use awaiter_set::{AAwaiterNodeStorage, AwaiterSet};
 
 /// Single-threaded async manual-reset event.
 ///
@@ -65,7 +65,7 @@ struct Inner {
 
     // UnsafeCell because we mutate the list through shared references (Rc).
     // All access is single-threaded, guaranteed by the !Send marker.
-    waiters: UnsafeCell<WaiterList>,
+    waiters: UnsafeCell<AwaiterSet>,
 
     // Prevent Send and Sync.
     _not_send: PhantomData<*const ()>,
@@ -154,7 +154,7 @@ impl Inner {
     /// # Safety
     ///
     /// * The `slot` must belong to a future created from the same event.
-    unsafe fn poll_wait(&self, slot: Pin<&mut WaiterNodeStorage>, waker: Waker) -> Poll<()> {
+    unsafe fn poll_wait(&self, slot: Pin<&mut AAwaiterNodeStorage>, waker: Waker) -> Poll<()> {
         // SAFETY: We do not move the slot.
         let slot = unsafe { slot.get_unchecked_mut() };
         if self.is_set.get() {
@@ -184,7 +184,7 @@ impl Inner {
     /// # Safety
     ///
     /// Same requirements as [`poll_wait`][Self::poll_wait].
-    unsafe fn drop_wait(&self, slot: Pin<&mut WaiterNodeStorage>) {
+    unsafe fn drop_wait(&self, slot: Pin<&mut AAwaiterNodeStorage>) {
         // SAFETY: We do not move the slot.
         let slot = unsafe { slot.get_unchecked_mut() };
         if slot.is_registered() {
@@ -222,7 +222,7 @@ impl LocalManualResetEvent {
         Self {
             inner: Rc::new(Inner {
                 is_set: Cell::new(false),
-                waiters: UnsafeCell::new(WaiterList::new()),
+                waiters: UnsafeCell::new(AwaiterSet::new()),
                 _not_send: PhantomData,
             }),
         }
@@ -296,7 +296,7 @@ impl LocalManualResetEvent {
     pub fn wait(&self) -> LocalManualResetWaitFuture {
         LocalManualResetWaitFuture {
             inner: Rc::clone(&self.inner),
-            slot: WaiterNodeStorage::new(),
+            slot: AAwaiterNodeStorage::new(),
         }
     }
 }
@@ -304,7 +304,7 @@ impl LocalManualResetEvent {
 /// Future returned by [`LocalManualResetEvent::wait()`].
 pub struct LocalManualResetWaitFuture {
     inner: Rc<Inner>,
-    slot: WaiterNodeStorage,
+    slot: AAwaiterNodeStorage,
 }
 
 // Marker trait impls have no executable code.
@@ -400,7 +400,7 @@ impl EmbeddedLocalManualResetEvent {
         Self {
             inner: Inner {
                 is_set: Cell::new(false),
-                waiters: UnsafeCell::new(WaiterList::new()),
+                waiters: UnsafeCell::new(AwaiterSet::new()),
                 _not_send: PhantomData,
             },
             _pinned: PhantomPinned,
@@ -475,7 +475,7 @@ impl RawLocalManualResetEvent {
     pub fn wait(&self) -> RawLocalManualResetWaitFuture {
         RawLocalManualResetWaitFuture {
             inner: self.inner,
-            slot: WaiterNodeStorage::new(),
+            slot: AAwaiterNodeStorage::new(),
         }
     }
 }
@@ -483,7 +483,7 @@ impl RawLocalManualResetEvent {
 /// Future returned by [`RawLocalManualResetEvent::wait()`].
 pub struct RawLocalManualResetWaitFuture {
     inner: NonNull<Inner>,
-    slot: WaiterNodeStorage,
+    slot: AAwaiterNodeStorage,
 }
 
 // NonNull makes this !Send and !Sync by default, which is correct for local
@@ -777,7 +777,7 @@ mod tests {
     // --- re-entrancy tests (prove wake() is called outside waiter list borrow) ---
     //
     // These tests use a custom waker that re-entrantly accesses the same event
-    // when woken. If wake() were called while a &WaiterList borrow from
+    // when woken. If wake() were called while a &AwaiterSet borrow from
     // UnsafeCell is still active, the re-entrant mutable access would create
     // aliased references and Miri would flag the UB.
 

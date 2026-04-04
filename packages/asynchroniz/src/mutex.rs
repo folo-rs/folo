@@ -8,7 +8,7 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::task::{self, Poll, Waker};
 
-use waiter_list::{WaiterList, WaiterNodeStorage};
+use awaiter_set::{AAwaiterNodeStorage, AwaiterSet};
 
 use crate::constants::NEVER_POISONED;
 
@@ -84,7 +84,7 @@ struct MutexInner<T> {
 
 struct LockState {
     locked: bool,
-    waiters: WaiterList,
+    waiters: AwaiterSet,
 }
 
 // SAFETY: All access to the `UnsafeCell<T>` goes through the lock,
@@ -95,7 +95,7 @@ struct LockState {
 // Marker trait impl.
 unsafe impl<T: Send> Sync for MutexInner<T> {}
 
-// SAFETY: `LockState` contains raw pointers (via `WaiterList`) which
+// SAFETY: `LockState` contains raw pointers (via `AwaiterSet`) which
 // are `!Send` by default. Sending is safe because the pointers are
 // only dereferenced while the `StdMutex` is held.
 // Marker trait impl.
@@ -115,7 +115,7 @@ fn unlock(lock_state: &StdMutex<LockState>) {
         let mut state = lock_state.lock().expect(NEVER_POISONED);
 
         // SAFETY: We hold the lock.
-        if let Some(node_ptr) = unsafe { state.waiters.pop_front() } {
+        if let Some(node_ptr) = unsafe { state.waiters.take_one() } {
             // Transfer lock ownership to the next waiter. The lock
             // stays held — the new owner will create its guard on the
             // next poll.
@@ -159,7 +159,7 @@ fn try_lock_inner(lock_state: &StdMutex<LockState>) -> bool {
 ///   (or will be) registered with.
 unsafe fn poll_lock(
     lock_state: &StdMutex<LockState>,
-    slot: Pin<&mut WaiterNodeStorage>,
+    slot: Pin<&mut AAwaiterNodeStorage>,
     waker: Waker,
 ) -> Poll<()> {
     // SAFETY: We do not move the slot; Pin enforces the address
@@ -199,7 +199,7 @@ unsafe fn poll_lock(
 /// # Safety
 ///
 /// Same requirements as [`poll_lock`].
-unsafe fn drop_lock_wait(lock_state: &StdMutex<LockState>, slot: Pin<&mut WaiterNodeStorage>) {
+unsafe fn drop_lock_wait(lock_state: &StdMutex<LockState>, slot: Pin<&mut AAwaiterNodeStorage>) {
     // SAFETY: We do not move the slot.
     let slot = unsafe { slot.get_unchecked_mut() };
     let node_ptr = slot.node_ptr();
@@ -210,7 +210,7 @@ unsafe fn drop_lock_wait(lock_state: &StdMutex<LockState>, slot: Pin<&mut Waiter
         // We were chosen as the next lock holder but the future was
         // cancelled. Forward the lock to the next waiter.
         // SAFETY: We hold the lock.
-        if let Some(next_node) = unsafe { state.waiters.pop_front() } {
+        if let Some(next_node) = unsafe { state.waiters.take_one() } {
             // SAFETY: We hold the lock and just popped this node.
             unsafe {
                 (*next_node).set_notified();
@@ -259,7 +259,7 @@ impl<T> Mutex<T> {
             inner: Arc::new(MutexInner {
                 lock_state: StdMutex::new(LockState {
                     locked: false,
-                    waiters: WaiterList::new(),
+                    waiters: AwaiterSet::new(),
                 }),
                 data: UnsafeCell::new(value),
             }),
@@ -342,7 +342,7 @@ impl<T> Mutex<T> {
         MutexLockFuture {
             lock_state: &self.inner.lock_state,
             data: &self.inner.data,
-            slot: WaiterNodeStorage::new(),
+            slot: AAwaiterNodeStorage::new(),
         }
     }
 
@@ -432,11 +432,11 @@ pub struct MutexLockFuture<'a, T> {
     lock_state: &'a StdMutex<LockState>,
     data: &'a UnsafeCell<T>,
 
-    slot: WaiterNodeStorage,
+    slot: AAwaiterNodeStorage,
 }
 
 // Marker trait impl.
-// SAFETY: All WaiterNodeStorage fields are accessed exclusively under the
+// SAFETY: All AAwaiterNodeStorage fields are accessed exclusively under the
 // mutex's internal lock. The references point to data behind an Arc
 // that is Send + Sync when T: Send.
 unsafe impl<T: Send> Send for MutexLockFuture<'_, T> {}
@@ -538,7 +538,7 @@ impl<T> EmbeddedMutex<T> {
             inner: MutexInner {
                 lock_state: StdMutex::new(LockState {
                     locked: false,
-                    waiters: WaiterList::new(),
+                    waiters: AwaiterSet::new(),
                 }),
                 data: UnsafeCell::new(value),
             },
@@ -591,7 +591,7 @@ impl<T> EmbeddedMutexRef<T> {
     pub fn lock(&self) -> EmbeddedMutexLockFuture<T> {
         EmbeddedMutexLockFuture {
             inner: self.inner,
-            slot: WaiterNodeStorage::new(),
+            slot: AAwaiterNodeStorage::new(),
         }
     }
 
@@ -668,7 +668,7 @@ impl<T> Drop for EmbeddedMutexGuard<T> {
 pub struct EmbeddedMutexLockFuture<T> {
     inner: NonNull<MutexInner<T>>,
 
-    slot: WaiterNodeStorage,
+    slot: AAwaiterNodeStorage,
 }
 
 // Marker trait impl.

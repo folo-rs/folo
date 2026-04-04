@@ -149,7 +149,7 @@ Auxiliary packages developed and published by this project:
 * [`events`][events] - async manual-reset and auto-reset events for multi-use signaling.
 * [`future_deque`][future_deque] - pool-backed deque collections for managing groups of futures with precise control over polling order and result retrieval.
 * `new_zealand` - [utilities for working with non-zero integers][nonzero].
-* [`waiter_list`][waiter_list] - intrusive doubly-linked waiter queue for async synchronization primitives.
+* [`awaiter_set`][awaiter_set] - zero-allocation awaiter tracking for async synchronization primitives.
 
 Packages present in the repo but not relevant to a general audience:
 
@@ -182,7 +182,7 @@ Packages present in the repo but not relevant to a general audience:
 [region_local]: packages/region_local/README.md
 [structural_changes]: https://sander.saares.eu/2025/03/31/structural-changes-for-48-throughput-in-a-rust-web-service/
 [vicinal]: packages/vicinal/README.md
-[waiter_list]: packages/waiter_list/README.md
+[awaiter_set]: packages/awaiter_set/README.md
 
 # Development environment setup
 

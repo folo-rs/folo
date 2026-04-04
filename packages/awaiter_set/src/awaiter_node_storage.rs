@@ -4,30 +4,30 @@ use std::marker::PhantomPinned;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::task::Waker;
 
-use crate::{WaiterList, WaiterNode};
+use crate::{AwaiterNode, AwaiterSet};
 
-/// Storage for embedding a [`WaiterNode`] inside a wait future.
+/// Storage for embedding a [`AwaiterNode`] inside a wait future.
 ///
-/// Bundles a [`WaiterNode`] with a registration flag and a pinning
+/// Bundles a [`AwaiterNode`] with a registration flag and a pinning
 /// marker, providing safe accessors where possible and consolidating
 /// the common register/unregister patterns behind a smaller number of
 /// `unsafe` calls.
 ///
 /// # Usage
 ///
-/// Embed a `WaiterNodeStorage` in your future struct instead of
+/// Embed a `AAwaiterNodeStorage` in your future struct instead of
 /// maintaining separate node, registration, and pinning fields:
 ///
 /// ```ignore
 /// struct MyWaitFuture {
-///     storage: WaiterNodeStorage,
+///     storage: AAwaiterNodeStorage,
 ///     // ... other future-specific fields
 /// }
 /// ```
 ///
 /// # Safety model
 ///
-/// Methods that read or write the inner [`WaiterNode`] are `unsafe` because
+/// Methods that read or write the inner [`AwaiterNode`] are `unsafe` because
 /// the caller must guarantee exclusive access — either by holding a mutex or
 /// by confining all access to a single thread (`!Send`).
 ///
@@ -37,37 +37,37 @@ use crate::{WaiterList, WaiterNode};
 ///   by the storage.
 /// * [`node_ptr()`][Self::node_ptr] returns a raw pointer without
 ///   dereferencing it.
-pub struct WaiterNodeStorage {
-    node: UnsafeCell<WaiterNode>,
+pub struct AAwaiterNodeStorage {
+    node: UnsafeCell<AwaiterNode>,
     registered: bool,
     _pinned: PhantomPinned,
 }
 
-impl WaiterNodeStorage {
+impl AAwaiterNodeStorage {
     /// Creates a new slot with an unlinked, unregistered node.
     #[must_use]
     pub fn new() -> Self {
         Self {
-            node: UnsafeCell::new(WaiterNode::new()),
+            node: UnsafeCell::new(AwaiterNode::new()),
             registered: false,
             _pinned: PhantomPinned,
         }
     }
 
     /// Returns `true` if the node is currently registered in a
-    /// [`WaiterList`].
+    /// [`AwaiterSet`].
     #[must_use]
     pub fn is_registered(&self) -> bool {
         self.registered
     }
 
-    /// Returns a raw pointer to the inner [`WaiterNode`].
+    /// Returns a raw pointer to the inner [`AwaiterNode`].
     ///
     /// Obtaining the pointer is safe. Dereferencing it requires the
     /// caller to guarantee exclusive access to the node (e.g. by
     /// holding a lock or confining access to one thread).
     #[must_use]
-    pub fn node_ptr(&self) -> *mut WaiterNode {
+    pub fn node_ptr(&self) -> *mut AwaiterNode {
         self.node.get()
     }
 
@@ -86,7 +86,7 @@ impl WaiterNodeStorage {
     /// * The caller must have exclusive access to both the node and
     ///   the list (e.g. by holding a lock).
     /// * The slot must be at a pinned, stable address.
-    pub unsafe fn register(&mut self, list: &mut WaiterList, waker: Waker) {
+    pub unsafe fn register(&mut self, list: &mut AwaiterSet, waker: Waker) {
         let node_ptr = self.node.get();
         // SAFETY: Caller guarantees exclusive access.
         unsafe {
@@ -96,7 +96,7 @@ impl WaiterNodeStorage {
             // SAFETY: Caller guarantees exclusive access and the
             // node is pinned and not in any list.
             unsafe {
-                list.push_back(node_ptr);
+                list.insert(node_ptr);
             }
             self.registered = true;
         }
@@ -106,13 +106,13 @@ impl WaiterNodeStorage {
     /// in `list` if not already registered.
     ///
     /// Behaves like [`register()`][Self::register] but also sets the
-    /// node's [`user_data`][WaiterNode::user_data] (e.g. the number
+    /// node's [`user_data`][AwaiterNode::user_data] (e.g. the number
     /// of permits a semaphore waiter requests).
     ///
     /// # Safety
     ///
     /// Same requirements as [`register()`][Self::register].
-    pub unsafe fn register_with_data(&mut self, list: &mut WaiterList, waker: Waker, data: usize) {
+    pub unsafe fn register_with_data(&mut self, list: &mut AwaiterSet, waker: Waker, data: usize) {
         let node_ptr = self.node.get();
         // SAFETY: Caller guarantees exclusive access.
         unsafe {
@@ -126,7 +126,7 @@ impl WaiterNodeStorage {
             // SAFETY: Caller guarantees exclusive access and the
             // node is pinned and not in any list.
             unsafe {
-                list.push_back(node_ptr);
+                list.insert(node_ptr);
             }
             self.registered = true;
         }
@@ -142,7 +142,7 @@ impl WaiterNodeStorage {
     /// * The caller must have exclusive access to both the node and
     ///   the list.
     /// * The node must be in `list` (not some other list).
-    pub unsafe fn unregister(&mut self, list: &mut WaiterList) {
+    pub unsafe fn unregister(&mut self, list: &mut AwaiterSet) {
         if self.registered {
             // SAFETY: Caller guarantees exclusive access and that
             // the node is in this list.
@@ -201,29 +201,29 @@ impl WaiterNodeStorage {
     }
 }
 
-impl Default for WaiterNodeStorage {
+impl Default for AAwaiterNodeStorage {
     fn default() -> Self {
         Self::new()
     }
 }
 
-// SAFETY: WaiterNodeStorage is used in futures that are `Send`. The raw
-// pointers inside WaiterNode are only dereferenced while the caller
+// SAFETY: AAwaiterNodeStorage is used in futures that are `Send`. The raw
+// pointers inside AwaiterNode are only dereferenced while the caller
 // holds a lock, so sending across threads is safe.
-unsafe impl Send for WaiterNodeStorage {}
+unsafe impl Send for AAwaiterNodeStorage {}
 
-// WaiterNodeStorage is !Sync because it contains UnsafeCell and raw pointers.
-// The UnsafeCell<WaiterNode> already makes the type !Sync via auto
+// AAwaiterNodeStorage is !Sync because it contains UnsafeCell and raw pointers.
+// The UnsafeCell<AwaiterNode> already makes the type !Sync via auto
 // trait rules, so no explicit marker is needed.
 
 // The slot contains no interior mutability visible to callers (all
 // mutation requires unsafe + exclusive access). Observing inconsistent
 // state during unwind is not possible.
-impl UnwindSafe for WaiterNodeStorage {}
-impl RefUnwindSafe for WaiterNodeStorage {}
+impl UnwindSafe for AAwaiterNodeStorage {}
+impl RefUnwindSafe for AAwaiterNodeStorage {}
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl fmt::Debug for WaiterNodeStorage {
+impl fmt::Debug for AAwaiterNodeStorage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(std::any::type_name::<Self>())
             .field("registered", &self.registered)
@@ -239,24 +239,24 @@ mod tests {
 
     use super::*;
 
-    assert_impl_all!(WaiterNodeStorage: Send, UnwindSafe, RefUnwindSafe);
-    assert_not_impl_any!(WaiterNodeStorage: Sync);
+    assert_impl_all!(AAwaiterNodeStorage: Send, UnwindSafe, RefUnwindSafe);
+    assert_not_impl_any!(AAwaiterNodeStorage: Sync);
 
     #[test]
     fn new_slot_is_unregistered() {
-        let slot = WaiterNodeStorage::new();
+        let slot = AAwaiterNodeStorage::new();
         assert!(!slot.is_registered());
     }
 
     #[test]
     fn default_slot_is_unregistered() {
-        let slot = WaiterNodeStorage::default();
+        let slot = AAwaiterNodeStorage::default();
         assert!(!slot.is_registered());
     }
 
     #[test]
     fn node_ptr_is_stable() {
-        let slot = WaiterNodeStorage::new();
+        let slot = AAwaiterNodeStorage::new();
         let p1 = slot.node_ptr();
         let p2 = slot.node_ptr();
         assert_eq!(p1, p2);
@@ -265,8 +265,8 @@ mod tests {
 
     #[test]
     fn register_sets_registered_flag() {
-        let mut slot = WaiterNodeStorage::new();
-        let mut list = WaiterList::new();
+        let mut slot = AAwaiterNodeStorage::new();
+        let mut list = AwaiterSet::new();
 
         // SAFETY: Test has exclusive access.
         unsafe {
@@ -279,8 +279,8 @@ mod tests {
 
     #[test]
     fn register_idempotent_on_second_call() {
-        let mut slot = WaiterNodeStorage::new();
-        let mut list = WaiterList::new();
+        let mut slot = AAwaiterNodeStorage::new();
+        let mut list = AwaiterSet::new();
 
         // SAFETY: Test has exclusive access.
         unsafe {
@@ -294,7 +294,7 @@ mod tests {
         // Still registered, list still has exactly one node.
         assert!(slot.is_registered());
         // SAFETY: Test has exclusive access.
-        let popped = unsafe { list.pop_front() };
+        let popped = unsafe { list.take_one() };
         assert!(popped.is_some());
         // SAFETY: Test has exclusive access.
         assert!(unsafe { list.is_empty() });
@@ -302,8 +302,8 @@ mod tests {
 
     #[test]
     fn register_with_data_stores_user_data() {
-        let mut slot = WaiterNodeStorage::new();
-        let mut list = WaiterList::new();
+        let mut slot = AAwaiterNodeStorage::new();
+        let mut list = AwaiterSet::new();
 
         // SAFETY: Test has exclusive access.
         unsafe {
@@ -318,8 +318,8 @@ mod tests {
 
     #[test]
     fn unregister_removes_from_list() {
-        let mut slot = WaiterNodeStorage::new();
-        let mut list = WaiterList::new();
+        let mut slot = AAwaiterNodeStorage::new();
+        let mut list = AwaiterSet::new();
 
         // SAFETY: Test has exclusive access.
         unsafe {
@@ -337,8 +337,8 @@ mod tests {
 
     #[test]
     fn unregister_when_not_registered_is_noop() {
-        let mut slot = WaiterNodeStorage::new();
-        let mut list = WaiterList::new();
+        let mut slot = AAwaiterNodeStorage::new();
+        let mut list = AwaiterSet::new();
 
         // SAFETY: Test has exclusive access.
         unsafe {
@@ -349,7 +349,7 @@ mod tests {
 
     #[test]
     fn take_notification_returns_false_when_not_notified() {
-        let mut slot = WaiterNodeStorage::new();
+        let mut slot = AAwaiterNodeStorage::new();
 
         // SAFETY: Test has exclusive access.
         let notified = unsafe { slot.take_notification() };
@@ -358,8 +358,8 @@ mod tests {
 
     #[test]
     fn take_notification_returns_true_and_clears_registered() {
-        let mut slot = WaiterNodeStorage::new();
-        let mut list = WaiterList::new();
+        let mut slot = AAwaiterNodeStorage::new();
+        let mut list = AwaiterSet::new();
 
         // SAFETY: Test has exclusive access.
         unsafe {
@@ -368,7 +368,7 @@ mod tests {
 
         // Simulate what the primitive does: pop + set_notified.
         // SAFETY: Test has exclusive access.
-        let node = unsafe { list.pop_front() }.unwrap();
+        let node = unsafe { list.take_one() }.unwrap();
         // SAFETY: Test has exclusive access, node is valid.
         unsafe {
             (*node).set_notified();
@@ -386,15 +386,15 @@ mod tests {
 
     #[test]
     fn is_notified_does_not_change_registered() {
-        let mut slot = WaiterNodeStorage::new();
-        let mut list = WaiterList::new();
+        let mut slot = AAwaiterNodeStorage::new();
+        let mut list = AwaiterSet::new();
 
         // SAFETY: Test has exclusive access.
         unsafe {
             slot.register(&mut list, Waker::noop().clone());
         }
         // SAFETY: Test has exclusive access.
-        let node = unsafe { list.pop_front() }.unwrap();
+        let node = unsafe { list.take_one() }.unwrap();
         // SAFETY: Test has exclusive access, node is valid.
         unsafe {
             (*node).set_notified();
@@ -409,8 +409,8 @@ mod tests {
 
     #[test]
     fn full_lifecycle_register_notify_take() {
-        let mut slot = WaiterNodeStorage::new();
-        let mut list = WaiterList::new();
+        let mut slot = AAwaiterNodeStorage::new();
+        let mut list = AwaiterSet::new();
 
         // Register.
         // SAFETY: Test has exclusive access.
@@ -421,7 +421,7 @@ mod tests {
 
         // Simulate notification.
         // SAFETY: Test has exclusive access.
-        let node = unsafe { list.pop_front() }.unwrap();
+        let node = unsafe { list.take_one() }.unwrap();
         // SAFETY: Test has exclusive access, node is valid.
         unsafe {
             (*node).set_notified();
@@ -436,8 +436,8 @@ mod tests {
 
     #[test]
     fn full_lifecycle_register_unregister() {
-        let mut slot = WaiterNodeStorage::new();
-        let mut list = WaiterList::new();
+        let mut slot = AAwaiterNodeStorage::new();
+        let mut list = AwaiterSet::new();
 
         // Register.
         // SAFETY: Test has exclusive access.

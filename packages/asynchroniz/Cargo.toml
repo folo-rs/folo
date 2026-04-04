@@ -23,7 +23,7 @@ development = [
 ]
 
 [dependencies]
-waiter_list = { workspace = true }
+awaiter_set = { workspace = true }
 
 [dev-dependencies]
 alloc_tracker = { path = "../alloc_tracker" }

@@ -2,16 +2,16 @@ use std::marker::PhantomPinned;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::task::Waker;
 
-/// A node in a [`WaiterList`][crate::WaiterList].
+/// A node in a [`AwaiterSet`][crate::AwaiterSet].
 ///
 /// Each node stores a [`Waker`] for async notification, a boolean notification
 /// flag, and a `usize` of caller-defined data. Embed nodes inside wait futures
-/// and register them with a [`WaiterList`][crate::WaiterList] to park the
+/// and register them with a [`AwaiterSet`][crate::AwaiterSet] to park the
 /// future until a synchronization event occurs.
 ///
 /// Once registered, a node must remain at a stable memory address until it
 /// is removed from the list.
-pub struct WaiterNode {
+pub struct AwaiterNode {
     /// The waker to call when this waiter is selected for notification.
     waker: Option<Waker>,
 
@@ -24,14 +24,14 @@ pub struct WaiterNode {
     /// count here; other primitives leave it at the default of `0`.
     user_data: usize,
 
-    /// Intrusive doubly-linked list pointers, managed by [`WaiterList`].
+    /// Intrusive doubly-linked list pointers, managed by [`AwaiterSet`].
     pub(crate) next: *mut Self,
     pub(crate) prev: *mut Self,
 
     _pinned: PhantomPinned,
 }
 
-impl WaiterNode {
+impl AwaiterNode {
     /// Creates a new unlinked node.
     ///
     /// The node starts with no waker, `notified` set to `false`,
@@ -40,9 +40,9 @@ impl WaiterNode {
     /// # Examples
     ///
     /// ```
-    /// use waiter_list::WaiterNode;
+    /// use awaiter_set::AwaiterNode;
     ///
-    /// let node = WaiterNode::new();
+    /// let node = AwaiterNode::new();
     /// assert!(!node.is_notified());
     /// assert_eq!(node.user_data(), 0);
     /// ```
@@ -123,24 +123,24 @@ impl WaiterNode {
     }
 }
 
-impl Default for WaiterNode {
+impl Default for AwaiterNode {
     fn default() -> Self {
         Self::new()
     }
 }
 
-// WaiterNode contains raw pointers (*mut Self) which make it !Send and !Sync
+// AwaiterNode contains raw pointers (*mut Self) which make it !Send and !Sync
 // by default. This is correct: once registered in a list, nodes must remain
 // at a stable pinned address. Consumers wrap nodes in UnsafeCell and handle
 // Send via their own unsafe impls on the containing future type.
 
-// WaiterNode has no interior mutability visible to callers — all
+// AwaiterNode has no interior mutability visible to callers — all
 // mutation goes through &mut self. No inconsistent state can be
 // observed during unwind.
-impl UnwindSafe for WaiterNode {}
-impl RefUnwindSafe for WaiterNode {}
+impl UnwindSafe for AwaiterNode {}
+impl RefUnwindSafe for AwaiterNode {}
 
-impl std::fmt::Debug for WaiterNode {
+impl std::fmt::Debug for AwaiterNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(std::any::type_name::<Self>())
             .field("has_waker", &self.waker.is_some())
@@ -163,8 +163,8 @@ mod tests {
 
     use super::*;
 
-    static_assertions::assert_not_impl_any!(WaiterNode: Send, Sync);
-    static_assertions::assert_impl_all!(WaiterNode: UnwindSafe, RefUnwindSafe);
+    static_assertions::assert_not_impl_any!(AwaiterNode: Send, Sync);
+    static_assertions::assert_impl_all!(AwaiterNode: UnwindSafe, RefUnwindSafe);
 
     fn noop_waker() -> Waker {
         fn clone(data: *const ()) -> RawWaker {
@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn new_node_has_expected_defaults() {
-        let mut node = WaiterNode::new();
+        let mut node = AwaiterNode::new();
         assert!(!node.is_notified());
         assert_eq!(node.user_data(), 0);
         assert!(node.next_in_list().is_null());
@@ -187,14 +187,14 @@ mod tests {
 
     #[test]
     fn default_is_same_as_new() {
-        let node = WaiterNode::default();
+        let node = AwaiterNode::default();
         assert!(!node.is_notified());
         assert_eq!(node.user_data(), 0);
     }
 
     #[test]
     fn store_and_take_waker() {
-        let mut node = WaiterNode::new();
+        let mut node = AwaiterNode::new();
         let waker = noop_waker();
         node.store_waker(waker);
         assert!(node.take_waker().is_some());
@@ -202,7 +202,7 @@ mod tests {
 
     #[test]
     fn take_waker_twice_returns_none() {
-        let mut node = WaiterNode::new();
+        let mut node = AwaiterNode::new();
         let waker = noop_waker();
         node.store_waker(waker);
         drop(node.take_waker());
@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn store_waker_replaces_previous() {
-        let mut node = WaiterNode::new();
+        let mut node = AwaiterNode::new();
         let w1 = noop_waker();
         let w2 = noop_waker();
         node.store_waker(w1);
@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn set_and_check_notified() {
-        let mut node = WaiterNode::new();
+        let mut node = AwaiterNode::new();
         assert!(!node.is_notified());
         node.set_notified();
         assert!(node.is_notified());
@@ -229,15 +229,15 @@ mod tests {
 
     #[test]
     fn set_and_get_user_data() {
-        let mut node = WaiterNode::new();
+        let mut node = AwaiterNode::new();
         node.set_user_data(42);
         assert_eq!(node.user_data(), 42);
     }
 
     #[test]
     fn debug_output_does_not_panic() {
-        let node = WaiterNode::new();
+        let node = AwaiterNode::new();
         let debug = format!("{node:?}");
-        assert!(debug.contains("WaiterNode"));
+        assert!(debug.contains("AwaiterNode"));
     }
 }

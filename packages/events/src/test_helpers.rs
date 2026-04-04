@@ -5,7 +5,7 @@ use std::task::{RawWaker, RawWakerVTable, Waker};
 /// A custom waker that executes a caller-supplied closure when woken.
 ///
 /// This is used to test that `wake()` is never called while holding borrows
-/// on interior-mutable state (e.g. `UnsafeCell<WaiterList>`). If a re-entrant
+/// on interior-mutable state (e.g. `UnsafeCell<AwaiterSet>`). If a re-entrant
 /// waker accesses the same state, Miri detects the aliased access as UB.
 ///
 /// # Thread safety

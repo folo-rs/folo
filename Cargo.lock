@@ -97,13 +97,13 @@ version = "0.1.0"
 dependencies = [
  "alloc_tracker",
  "async-lock",
+ "awaiter_set",
  "criterion",
  "futures",
  "mutants",
  "static_assertions",
  "testing",
  "tokio",
- "waiter_list",
 ]
 
 [[package]]
@@ -117,6 +117,15 @@ name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
+
+[[package]]
+name = "awaiter_set"
+version = "0.1.0"
+dependencies = [
+ "mutants",
+ "simple-mermaid",
+ "static_assertions",
+]
 
 [[package]]
 name = "axum"
@@ -481,6 +490,7 @@ name = "events"
 version = "0.6.0"
 dependencies = [
  "alloc_tracker",
+ "awaiter_set",
  "criterion",
  "event-listener",
  "futures",
@@ -489,7 +499,6 @@ dependencies = [
  "static_assertions",
  "testing",
  "tokio",
- "waiter_list",
 ]
 
 [[package]]
@@ -2062,15 +2071,6 @@ dependencies = [
  "threadpool",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "waiter_list"
-version = "0.1.0"
-dependencies = [
- "mutants",
- "simple-mermaid",
- "static_assertions",
 ]
 
 [[package]]

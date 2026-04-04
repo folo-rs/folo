@@ -8,7 +8,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::task::{self, Poll, Waker};
 
-use waiter_list::{WaiterList, WaiterNodeStorage};
+use awaiter_set::{AAwaiterNodeStorage, AwaiterSet};
 
 /// Single-threaded async mutex.
 ///
@@ -69,7 +69,7 @@ pub struct LocalMutex<T> {
 
 struct LockState {
     locked: bool,
-    waiters: WaiterList,
+    waiters: AwaiterSet,
 }
 
 struct Inner<T> {
@@ -90,7 +90,7 @@ impl<T> Inner<T> {
             let state = unsafe { &mut *self.lock_state.get() };
 
             // SAFETY: Single-threaded.
-            if let Some(node_ptr) = unsafe { state.waiters.pop_front() } {
+            if let Some(node_ptr) = unsafe { state.waiters.take_one() } {
                 // Transfer lock ownership to the next waiter. The
                 // lock stays held.
                 // SAFETY: Single-threaded, node was just popped.
@@ -128,7 +128,7 @@ impl<T> Inner<T> {
     ///
     /// * The `slot` must belong to a future created from the same
     ///   mutex.
-    unsafe fn poll_lock(&self, slot: Pin<&mut WaiterNodeStorage>, waker: Waker) -> Poll<()> {
+    unsafe fn poll_lock(&self, slot: Pin<&mut AAwaiterNodeStorage>, waker: Waker) -> Poll<()> {
         // SAFETY: We do not move the slot.
         let slot = unsafe { slot.get_unchecked_mut() };
 
@@ -160,7 +160,7 @@ impl<T> Inner<T> {
     /// # Safety
     ///
     /// Same requirements as [`poll_lock`][Self::poll_lock].
-    unsafe fn drop_lock_wait(&self, slot: Pin<&mut WaiterNodeStorage>) {
+    unsafe fn drop_lock_wait(&self, slot: Pin<&mut AAwaiterNodeStorage>) {
         // SAFETY: We do not move the slot.
         let slot = unsafe { slot.get_unchecked_mut() };
         let node_ptr = slot.node_ptr();
@@ -172,7 +172,7 @@ impl<T> Inner<T> {
             let state = unsafe { &mut *state_ptr };
 
             // SAFETY: Single-threaded.
-            let waker = if let Some(next_node) = unsafe { state.waiters.pop_front() } {
+            let waker = if let Some(next_node) = unsafe { state.waiters.take_one() } {
                 // SAFETY: Single-threaded.
                 unsafe {
                     (*next_node).set_notified();
@@ -220,7 +220,7 @@ impl<T> LocalMutex<T> {
             inner: Rc::new(Inner {
                 lock_state: UnsafeCell::new(LockState {
                     locked: false,
-                    waiters: WaiterList::new(),
+                    waiters: AwaiterSet::new(),
                 }),
                 data: UnsafeCell::new(value),
                 _not_send: PhantomData,
@@ -289,7 +289,7 @@ impl<T> LocalMutex<T> {
     pub fn lock(&self) -> LocalMutexLockFuture<'_, T> {
         LocalMutexLockFuture {
             inner: &self.inner,
-            slot: WaiterNodeStorage::new(),
+            slot: AAwaiterNodeStorage::new(),
         }
     }
 
@@ -363,7 +363,7 @@ impl<T> Drop for LocalMutexGuard<'_, T> {
 pub struct LocalMutexLockFuture<'a, T> {
     inner: &'a Inner<T>,
 
-    slot: WaiterNodeStorage,
+    slot: AAwaiterNodeStorage,
 }
 
 impl<'a, T> Future for LocalMutexLockFuture<'a, T> {
@@ -463,7 +463,7 @@ impl<T> EmbeddedLocalMutex<T> {
             inner: Inner {
                 lock_state: UnsafeCell::new(LockState {
                     locked: false,
-                    waiters: WaiterList::new(),
+                    waiters: AwaiterSet::new(),
                 }),
                 data: UnsafeCell::new(value),
                 _not_send: PhantomData,
@@ -509,7 +509,7 @@ impl<T> EmbeddedLocalMutexRef<T> {
     pub fn lock(&self) -> EmbeddedLocalMutexLockFuture<T> {
         EmbeddedLocalMutexLockFuture {
             inner: self.inner,
-            slot: WaiterNodeStorage::new(),
+            slot: AAwaiterNodeStorage::new(),
         }
     }
 
@@ -576,7 +576,7 @@ impl<T> Drop for EmbeddedLocalMutexGuard<T> {
 pub struct EmbeddedLocalMutexLockFuture<T> {
     inner: NonNull<Inner<T>>,
 
-    slot: WaiterNodeStorage,
+    slot: AAwaiterNodeStorage,
 }
 
 impl<T> Future for EmbeddedLocalMutexLockFuture<T> {

@@ -8,7 +8,7 @@ use std::rc::Rc;
 use std::task::{self, Poll, Waker};
 use std::{fmt, mem};
 
-use waiter_list::{WaiterList, WaiterNodeStorage};
+use awaiter_set::{AAwaiterNodeStorage, AwaiterSet};
 
 /// Single-threaded async auto-reset event.
 ///
@@ -58,7 +58,7 @@ pub struct LocalAutoResetEvent {
 // enum encodes that invariant at the type level.
 enum InnerState {
     /// Not signaled. The waiter list may be empty or non-empty.
-    Unset(WaiterList),
+    Unset(AwaiterSet),
     /// Signal stored (will be consumed by the next wait or `try_wait`).
     Set,
 }
@@ -88,7 +88,7 @@ impl Inner {
                 InnerState::Set => None,
                 InnerState::Unset(waiters) => {
                     // SAFETY: Single-threaded.
-                    if let Some(node_ptr) = unsafe { waiters.pop_front() } {
+                    if let Some(node_ptr) = unsafe { waiters.take_one() } {
                         // SAFETY: Single-threaded, node was just popped.
                         unsafe {
                             (*node_ptr).set_notified();
@@ -114,7 +114,7 @@ impl Inner {
         // SAFETY: Single-threaded access.
         let state = unsafe { &mut *self.state.get() };
         if matches!(state, InnerState::Set) {
-            *state = InnerState::Unset(WaiterList::new());
+            *state = InnerState::Unset(AwaiterSet::new());
             true
         } else {
             false
@@ -124,7 +124,7 @@ impl Inner {
     /// # Safety
     ///
     /// * The `slot` must belong to a future created from the same event.
-    unsafe fn poll_wait(&self, slot: Pin<&mut WaiterNodeStorage>, waker: Waker) -> Poll<()> {
+    unsafe fn poll_wait(&self, slot: Pin<&mut AAwaiterNodeStorage>, waker: Waker) -> Poll<()> {
         // SAFETY: We do not move the slot.
         let slot = unsafe { slot.get_unchecked_mut() };
 
@@ -142,7 +142,7 @@ impl Inner {
                     !slot.is_registered(),
                     "Set state is exclusive with registered waiters"
                 );
-                *state = InnerState::Unset(WaiterList::new());
+                *state = InnerState::Unset(AwaiterSet::new());
                 Poll::Ready(())
             }
             InnerState::Unset(waiters) => {
@@ -159,7 +159,7 @@ impl Inner {
     /// # Safety
     ///
     /// Same requirements as [`poll_wait`][Self::poll_wait].
-    unsafe fn drop_wait(&self, slot: Pin<&mut WaiterNodeStorage>) {
+    unsafe fn drop_wait(&self, slot: Pin<&mut AAwaiterNodeStorage>) {
         // SAFETY: We do not move the slot.
         let slot = unsafe { slot.get_unchecked_mut() };
         if !slot.is_registered() {
@@ -171,11 +171,11 @@ impl Inner {
             let state_ptr = self.state.get();
             // SAFETY: Single-threaded access.
             let old_state =
-                unsafe { mem::replace(&mut *state_ptr, InnerState::Unset(WaiterList::new())) };
+                unsafe { mem::replace(&mut *state_ptr, InnerState::Unset(AwaiterSet::new())) };
             let waker = match old_state {
                 InnerState::Unset(mut waiters) => {
                     // SAFETY: Single-threaded.
-                    if let Some(next_node) = unsafe { waiters.pop_front() } {
+                    if let Some(next_node) = unsafe { waiters.take_one() } {
                         // SAFETY: Single-threaded.
                         unsafe {
                             (*next_node).set_notified();
@@ -251,7 +251,7 @@ impl LocalAutoResetEvent {
     pub fn boxed() -> Self {
         Self {
             inner: Rc::new(Inner {
-                state: UnsafeCell::new(InnerState::Unset(WaiterList::new())),
+                state: UnsafeCell::new(InnerState::Unset(AwaiterSet::new())),
                 _not_send: PhantomData,
             }),
         }
@@ -328,7 +328,7 @@ impl LocalAutoResetEvent {
     pub fn wait(&self) -> LocalAutoResetWaitFuture {
         LocalAutoResetWaitFuture {
             inner: Rc::clone(&self.inner),
-            slot: WaiterNodeStorage::new(),
+            slot: AAwaiterNodeStorage::new(),
         }
     }
 }
@@ -336,7 +336,7 @@ impl LocalAutoResetEvent {
 /// Future returned by [`LocalAutoResetEvent::wait()`].
 pub struct LocalAutoResetWaitFuture {
     inner: Rc<Inner>,
-    slot: WaiterNodeStorage,
+    slot: AAwaiterNodeStorage,
 }
 
 // Marker trait impls have no executable code.
@@ -425,7 +425,7 @@ impl EmbeddedLocalAutoResetEvent {
     pub fn new() -> Self {
         Self {
             inner: Inner {
-                state: UnsafeCell::new(InnerState::Unset(WaiterList::new())),
+                state: UnsafeCell::new(InnerState::Unset(AwaiterSet::new())),
                 _not_send: PhantomData,
             },
             _pinned: PhantomPinned,
@@ -504,7 +504,7 @@ impl RawLocalAutoResetEvent {
     pub fn wait(&self) -> RawLocalAutoResetWaitFuture {
         RawLocalAutoResetWaitFuture {
             inner: self.inner,
-            slot: WaiterNodeStorage::new(),
+            slot: AAwaiterNodeStorage::new(),
         }
     }
 }
@@ -512,7 +512,7 @@ impl RawLocalAutoResetEvent {
 /// Future returned by [`RawLocalAutoResetEvent::wait()`].
 pub struct RawLocalAutoResetWaitFuture {
     inner: NonNull<Inner>,
-    slot: WaiterNodeStorage,
+    slot: AAwaiterNodeStorage,
 }
 
 // NonNull makes this !Send and !Sync by default, which is correct for local
@@ -840,10 +840,10 @@ mod tests {
         assert!(future2.as_mut().poll(&mut cx).is_ready());
     }
 
-    // --- re-entrancy tests (prove wake() is called outside &mut WaiterList borrow) ---
+    // --- re-entrancy tests (prove wake() is called outside &mut AwaiterSet borrow) ---
     //
     // These tests use a custom waker that re-entrantly accesses the same event
-    // when woken. If wake() were called while an &mut WaiterList borrow from
+    // when woken. If wake() were called while an &mut AwaiterSet borrow from
     // UnsafeCell is still active, the re-entrant access would create aliased
     // mutable references and Miri would flag the UB.
 
@@ -867,7 +867,7 @@ mod tests {
 
         // Outer set() pops the waiter, releases the waiter list borrow,
         // then calls wake(). The re-entrant set() safely obtains its own
-        // &mut WaiterList.
+        // &mut AwaiterSet.
         event.set();
 
         assert!(waker_data.was_woken());

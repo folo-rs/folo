@@ -7,7 +7,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::task::{self, Poll, Waker};
 
-use waiter_list::{WaiterList, WaiterNodeStorage};
+use awaiter_set::{AAwaiterNodeStorage, AwaiterSet};
 
 /// Single-threaded async semaphore.
 ///
@@ -67,7 +67,7 @@ pub struct LocalSemaphore {
 
 struct SemaphoreState {
     available: usize,
-    waiters: WaiterList,
+    waiters: AwaiterSet,
 }
 
 struct Inner {
@@ -119,7 +119,7 @@ impl Inner {
 
             // SAFETY: Single-threaded.
             let node =
-                unsafe { state.waiters.pop_front() }.expect("head was non-null so pop cannot fail");
+                unsafe { state.waiters.take_one() }.expect("head was non-null so pop cannot fail");
             // SAFETY: Single-threaded.
             unsafe {
                 (*node).set_notified();
@@ -173,7 +173,7 @@ impl Inner {
     ///   semaphore.
     unsafe fn poll_acquire(
         &self,
-        slot: Pin<&mut WaiterNodeStorage>,
+        slot: Pin<&mut AAwaiterNodeStorage>,
         permits: usize,
         waker: Waker,
     ) -> Poll<()> {
@@ -207,7 +207,7 @@ impl Inner {
     /// # Safety
     ///
     /// Same requirements as [`poll_acquire`][Self::poll_acquire].
-    unsafe fn drop_acquire_wait(&self, slot: Pin<&mut WaiterNodeStorage>, permits: usize) {
+    unsafe fn drop_acquire_wait(&self, slot: Pin<&mut AAwaiterNodeStorage>, permits: usize) {
         // SAFETY: We do not move the slot.
         let slot = unsafe { slot.get_unchecked_mut() };
         let node_ptr = slot.node_ptr();
@@ -263,7 +263,7 @@ impl LocalSemaphore {
             inner: Rc::new(Inner {
                 state: UnsafeCell::new(SemaphoreState {
                     available: permits,
-                    waiters: WaiterList::new(),
+                    waiters: AwaiterSet::new(),
                 }),
                 _not_send: PhantomData,
             }),
@@ -338,7 +338,7 @@ impl LocalSemaphore {
         LocalSemaphoreAcquireFuture {
             inner: &self.inner,
             permits,
-            slot: WaiterNodeStorage::new(),
+            slot: AAwaiterNodeStorage::new(),
         }
     }
 
@@ -408,7 +408,7 @@ pub struct LocalSemaphoreAcquireFuture<'a> {
     inner: &'a Inner,
     permits: usize,
 
-    slot: WaiterNodeStorage,
+    slot: AAwaiterNodeStorage,
 }
 
 impl<'a> Future for LocalSemaphoreAcquireFuture<'a> {
@@ -513,7 +513,7 @@ impl EmbeddedLocalSemaphore {
             inner: Inner {
                 state: UnsafeCell::new(SemaphoreState {
                     available: permits,
-                    waiters: WaiterList::new(),
+                    waiters: AwaiterSet::new(),
                 }),
                 _not_send: PhantomData,
             },
@@ -561,7 +561,7 @@ impl EmbeddedLocalSemaphoreRef {
         EmbeddedLocalSemaphoreAcquireFuture {
             inner: self.inner,
             permits,
-            slot: WaiterNodeStorage::new(),
+            slot: AAwaiterNodeStorage::new(),
         }
     }
 
@@ -619,7 +619,7 @@ pub struct EmbeddedLocalSemaphoreAcquireFuture {
     inner: NonNull<Inner>,
     permits: usize,
 
-    slot: WaiterNodeStorage,
+    slot: AAwaiterNodeStorage,
 }
 
 impl Future for EmbeddedLocalSemaphoreAcquireFuture {

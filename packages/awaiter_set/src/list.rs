@@ -1,35 +1,35 @@
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::ptr;
 
-use crate::WaiterNode;
+use crate::AwaiterNode;
 
-/// A FIFO doubly-linked list of pinned [`WaiterNode`]s.
+/// A set of pinned [`AwaiterNode`]s awaiting notification.
 ///
-/// The list does not own its nodes. Nodes are embedded in async futures and
-/// linked/unlinked as waiters register and complete. All operations are
-/// `unsafe` because they require the caller to uphold pointer validity and
-/// exclusive-access invariants.
+/// The set does not own its nodes. Nodes are embedded in async futures
+/// and linked/unlinked as awaiters register and complete. All
+/// operations are `unsafe` because they require the caller to uphold
+/// pointer validity and exclusive-access invariants.
 ///
 /// # Synchronization
 ///
-/// `WaiterList` has no internal synchronization. The caller must ensure
-/// exclusive access for every operation — typically by holding a
-/// [`Mutex`][std::sync::Mutex] guard or by confining the list to a single
-/// thread via `!Send` on the containing type.
-pub struct WaiterList {
-    head: *mut WaiterNode,
-    tail: *mut WaiterNode,
+/// `AwaiterSet` has no internal synchronization. The caller must
+/// ensure exclusive access for every operation — typically by holding
+/// a [`Mutex`][std::sync::Mutex] guard or by confining the set to a
+/// single thread via `!Send` on the containing type.
+pub struct AwaiterSet {
+    head: *mut AwaiterNode,
+    tail: *mut AwaiterNode,
 }
 
-impl WaiterList {
+impl AwaiterSet {
     /// Creates a new empty list.
     ///
     /// # Examples
     ///
     /// ```
-    /// use waiter_list::WaiterList;
+    /// use awaiter_set::AwaiterSet;
     ///
-    /// let mut list = WaiterList::new();
+    /// let mut list = AwaiterSet::new();
     /// // SAFETY: We have exclusive access.
     /// assert!(unsafe { list.is_empty() });
     /// ```
@@ -51,7 +51,7 @@ impl WaiterList {
         self.head.is_null()
     }
 
-    /// Returns a raw pointer to the head (front) node.
+    /// Returns a raw pointer to the next node to be taken.
     ///
     /// Returns a null pointer if the list is empty.
     ///
@@ -59,18 +59,18 @@ impl WaiterList {
     ///
     /// The caller must ensure exclusive access to the list.
     #[must_use]
-    pub unsafe fn head(&mut self) -> *mut WaiterNode {
+    pub unsafe fn head(&mut self) -> *mut AwaiterNode {
         self.head
     }
 
-    /// Appends a node to the back of the list (FIFO enqueue).
+    /// Inserts a node into the set.
     ///
     /// # Safety
     ///
-    /// * `node` must point to a valid, pinned [`WaiterNode`] that is not
+    /// * `node` must point to a valid, pinned [`AwaiterNode`] that is not
     ///   already in any list.
     /// * The caller must ensure exclusive access to the list.
-    pub unsafe fn push_back(&mut self, node: *mut WaiterNode) {
+    pub unsafe fn insert(&mut self, node: *mut AwaiterNode) {
         // SAFETY: Caller guarantees `node` is valid.
         unsafe {
             (*node).next = ptr::null_mut();
@@ -99,10 +99,10 @@ impl WaiterList {
     ///
     /// # Safety
     ///
-    /// * `node` must point to a valid, pinned [`WaiterNode`] that is
+    /// * `node` must point to a valid, pinned [`AwaiterNode`] that is
     ///   currently in this list.
     /// * The caller must ensure exclusive access to the list.
-    pub unsafe fn remove(&mut self, node: *mut WaiterNode) {
+    pub unsafe fn remove(&mut self, node: *mut AwaiterNode) {
         // SAFETY: Caller guarantees `node` is valid and in the list.
         let prev = unsafe { (*node).prev };
         // SAFETY: Caller guarantees `node` is valid and in the list.
@@ -137,7 +137,7 @@ impl WaiterList {
         }
     }
 
-    /// Removes and returns the front node (FIFO dequeue).
+    /// Removes and returns one node from the set.
     ///
     /// Returns `None` if the list is empty.
     ///
@@ -146,7 +146,7 @@ impl WaiterList {
     /// * The caller must ensure exclusive access to the list.
     /// * Any returned pointer is valid and pinned; the node is no longer
     ///   in the list after this call.
-    pub unsafe fn pop_front(&mut self) -> Option<*mut WaiterNode> {
+    pub unsafe fn take_one(&mut self) -> Option<*mut AwaiterNode> {
         if self.head.is_null() {
             return None;
         }
@@ -180,7 +180,7 @@ impl WaiterList {
         Some(node)
     }
 
-    /// Iterates over all nodes front-to-back, calling `f` for each.
+    /// Iterates over all nodes, calling `f` for each.
     ///
     /// The next-pointer is read before invoking the callback, so the
     /// callback may safely modify the current node's waker or flags.
@@ -190,7 +190,7 @@ impl WaiterList {
     ///
     /// * The caller must ensure exclusive access to the list.
     /// * The callback must not modify the list structure (no push/pop/remove).
-    pub unsafe fn for_each(&mut self, mut f: impl FnMut(*mut WaiterNode)) {
+    pub unsafe fn for_each(&mut self, mut f: impl FnMut(*mut AwaiterNode)) {
         let mut current = self.head;
         while !current.is_null() {
             // Read next before calling `f` so we do not hold a reference
@@ -203,7 +203,7 @@ impl WaiterList {
     }
 }
 
-impl Default for WaiterList {
+impl Default for AwaiterSet {
     fn default() -> Self {
         Self::new()
     }
@@ -213,15 +213,15 @@ impl Default for WaiterList {
 // all pointer dereferences are serialized by external synchronization
 // (Mutex or single-thread confinement). The list can safely be moved
 // between threads as long as access remains exclusive.
-unsafe impl Send for WaiterList {}
+unsafe impl Send for AwaiterSet {}
 
-// WaiterList contains only raw pointers. All pointer
+// AwaiterSet contains only raw pointers. All pointer
 // dereferences are serialized by external synchronization, so no
 // inconsistent state can be observed during unwind.
-impl UnwindSafe for WaiterList {}
-impl RefUnwindSafe for WaiterList {}
+impl UnwindSafe for AwaiterSet {}
+impl RefUnwindSafe for AwaiterSet {}
 
-impl std::fmt::Debug for WaiterList {
+impl std::fmt::Debug for AwaiterSet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(std::any::type_name::<Self>())
             .field("is_empty", &self.head.is_null())
@@ -242,8 +242,8 @@ mod tests {
 
     use super::*;
 
-    static_assertions::assert_impl_all!(WaiterList: Send, UnwindSafe, RefUnwindSafe);
-    static_assertions::assert_not_impl_any!(WaiterList: Sync);
+    static_assertions::assert_impl_all!(AwaiterSet: Send, UnwindSafe, RefUnwindSafe);
+    static_assertions::assert_not_impl_any!(AwaiterSet: Sync);
 
     fn noop_waker() -> Waker {
         fn clone(data: *const ()) -> RawWaker {
@@ -256,134 +256,134 @@ mod tests {
 
     #[test]
     fn new_list_is_empty() {
-        let mut list = WaiterList::new();
+        let mut list = AwaiterSet::new();
         assert!(unsafe { list.is_empty() });
         assert!(unsafe { list.head() }.is_null());
     }
 
     #[test]
     fn default_list_is_empty() {
-        let mut list = WaiterList::default();
+        let mut list = AwaiterSet::default();
         assert!(unsafe { list.is_empty() });
     }
 
     #[test]
-    fn pop_front_on_empty_returns_none() {
-        let mut list = WaiterList::new();
-        assert!(unsafe { list.pop_front() }.is_none());
+    fn take_one_on_empty_returns_none() {
+        let mut list = AwaiterSet::new();
+        assert!(unsafe { list.take_one() }.is_none());
     }
 
     #[test]
     fn push_and_pop_single_element() {
-        let mut list = WaiterList::new();
-        let mut a = WaiterNode::new();
-        let pa: *mut WaiterNode = &raw mut a;
+        let mut list = AwaiterSet::new();
+        let mut a = AwaiterNode::new();
+        let pa: *mut AwaiterNode = &raw mut a;
 
         unsafe {
-            list.push_back(pa);
+            list.insert(pa);
         }
         assert!(!unsafe { list.is_empty() });
         assert!(ptr::eq(unsafe { list.head() }, pa));
 
-        let popped = unsafe { list.pop_front() };
+        let popped = unsafe { list.take_one() };
         assert!(ptr::eq(popped.unwrap(), pa));
         assert!(unsafe { list.is_empty() });
     }
 
     #[test]
     fn fifo_ordering() {
-        let mut list = WaiterList::new();
-        let mut a = WaiterNode::new();
-        let mut b = WaiterNode::new();
-        let mut c = WaiterNode::new();
+        let mut list = AwaiterSet::new();
+        let mut a = AwaiterNode::new();
+        let mut b = AwaiterNode::new();
+        let mut c = AwaiterNode::new();
 
-        let pa: *mut WaiterNode = &raw mut a;
-        let pb: *mut WaiterNode = &raw mut b;
-        let pc: *mut WaiterNode = &raw mut c;
+        let pa: *mut AwaiterNode = &raw mut a;
+        let pb: *mut AwaiterNode = &raw mut b;
+        let pc: *mut AwaiterNode = &raw mut c;
 
         unsafe {
-            list.push_back(pa);
-            list.push_back(pb);
-            list.push_back(pc);
+            list.insert(pa);
+            list.insert(pb);
+            list.insert(pc);
         }
 
         assert!(!unsafe { list.is_empty() });
 
-        let first = unsafe { list.pop_front() };
+        let first = unsafe { list.take_one() };
         assert!(ptr::eq(first.unwrap(), pa));
 
-        let second = unsafe { list.pop_front() };
+        let second = unsafe { list.take_one() };
         assert!(ptr::eq(second.unwrap(), pb));
 
-        let third = unsafe { list.pop_front() };
+        let third = unsafe { list.take_one() };
         assert!(ptr::eq(third.unwrap(), pc));
 
         assert!(unsafe { list.is_empty() });
-        assert!(unsafe { list.pop_front() }.is_none());
+        assert!(unsafe { list.take_one() }.is_none());
     }
 
     #[test]
     fn remove_head_node() {
-        let mut list = WaiterList::new();
-        let mut a = WaiterNode::new();
-        let mut b = WaiterNode::new();
+        let mut list = AwaiterSet::new();
+        let mut a = AwaiterNode::new();
+        let mut b = AwaiterNode::new();
 
-        let pa: *mut WaiterNode = &raw mut a;
-        let pb: *mut WaiterNode = &raw mut b;
+        let pa: *mut AwaiterNode = &raw mut a;
+        let pb: *mut AwaiterNode = &raw mut b;
 
         unsafe {
-            list.push_back(pa);
-            list.push_back(pb);
+            list.insert(pa);
+            list.insert(pb);
             list.remove(pa);
         }
 
-        let first = unsafe { list.pop_front() };
+        let first = unsafe { list.take_one() };
         assert!(ptr::eq(first.unwrap(), pb));
         assert!(unsafe { list.is_empty() });
     }
 
     #[test]
     fn remove_tail_node() {
-        let mut list = WaiterList::new();
-        let mut a = WaiterNode::new();
-        let mut b = WaiterNode::new();
+        let mut list = AwaiterSet::new();
+        let mut a = AwaiterNode::new();
+        let mut b = AwaiterNode::new();
 
-        let pa: *mut WaiterNode = &raw mut a;
-        let pb: *mut WaiterNode = &raw mut b;
+        let pa: *mut AwaiterNode = &raw mut a;
+        let pb: *mut AwaiterNode = &raw mut b;
 
         unsafe {
-            list.push_back(pa);
-            list.push_back(pb);
+            list.insert(pa);
+            list.insert(pb);
             list.remove(pb);
         }
 
-        let first = unsafe { list.pop_front() };
+        let first = unsafe { list.take_one() };
         assert!(ptr::eq(first.unwrap(), pa));
         assert!(unsafe { list.is_empty() });
     }
 
     #[test]
     fn remove_middle_node() {
-        let mut list = WaiterList::new();
-        let mut a = WaiterNode::new();
-        let mut b = WaiterNode::new();
-        let mut c = WaiterNode::new();
+        let mut list = AwaiterSet::new();
+        let mut a = AwaiterNode::new();
+        let mut b = AwaiterNode::new();
+        let mut c = AwaiterNode::new();
 
-        let pa: *mut WaiterNode = &raw mut a;
-        let pb: *mut WaiterNode = &raw mut b;
-        let pc: *mut WaiterNode = &raw mut c;
+        let pa: *mut AwaiterNode = &raw mut a;
+        let pb: *mut AwaiterNode = &raw mut b;
+        let pc: *mut AwaiterNode = &raw mut c;
 
         unsafe {
-            list.push_back(pa);
-            list.push_back(pb);
-            list.push_back(pc);
+            list.insert(pa);
+            list.insert(pb);
+            list.insert(pc);
             list.remove(pb);
         }
 
-        let first = unsafe { list.pop_front() };
+        let first = unsafe { list.take_one() };
         assert!(ptr::eq(first.unwrap(), pa));
 
-        let second = unsafe { list.pop_front() };
+        let second = unsafe { list.take_one() };
         assert!(ptr::eq(second.unwrap(), pc));
 
         assert!(unsafe { list.is_empty() });
@@ -391,12 +391,12 @@ mod tests {
 
     #[test]
     fn remove_only_node() {
-        let mut list = WaiterList::new();
-        let mut a = WaiterNode::new();
-        let pa: *mut WaiterNode = &raw mut a;
+        let mut list = AwaiterSet::new();
+        let mut a = AwaiterNode::new();
+        let pa: *mut AwaiterNode = &raw mut a;
 
         unsafe {
-            list.push_back(pa);
+            list.insert(pa);
             list.remove(pa);
         }
 
@@ -405,15 +405,15 @@ mod tests {
 
     #[test]
     fn remove_clears_node_links() {
-        let mut list = WaiterList::new();
-        let mut a = WaiterNode::new();
-        let mut b = WaiterNode::new();
-        let pa: *mut WaiterNode = &raw mut a;
-        let pb: *mut WaiterNode = &raw mut b;
+        let mut list = AwaiterSet::new();
+        let mut a = AwaiterNode::new();
+        let mut b = AwaiterNode::new();
+        let pa: *mut AwaiterNode = &raw mut a;
+        let pb: *mut AwaiterNode = &raw mut b;
 
         unsafe {
-            list.push_back(pa);
-            list.push_back(pb);
+            list.insert(pa);
+            list.insert(pb);
             list.remove(pa);
         }
 
@@ -422,52 +422,52 @@ mod tests {
 
     #[test]
     fn reuse_after_removal() {
-        let mut list = WaiterList::new();
-        let mut a = WaiterNode::new();
-        let mut b = WaiterNode::new();
-        let pa: *mut WaiterNode = &raw mut a;
-        let pb: *mut WaiterNode = &raw mut b;
+        let mut list = AwaiterSet::new();
+        let mut a = AwaiterNode::new();
+        let mut b = AwaiterNode::new();
+        let pa: *mut AwaiterNode = &raw mut a;
+        let pb: *mut AwaiterNode = &raw mut b;
 
         unsafe {
-            list.push_back(pa);
+            list.insert(pa);
             list.remove(pa);
-            list.push_back(pb);
+            list.insert(pb);
         }
 
-        let popped = unsafe { list.pop_front() };
+        let popped = unsafe { list.take_one() };
         assert!(ptr::eq(popped.unwrap(), pb));
         assert!(unsafe { list.is_empty() });
     }
 
     #[test]
     fn interleaved_push_and_pop() {
-        let mut list = WaiterList::new();
-        let mut a = WaiterNode::new();
-        let mut b = WaiterNode::new();
-        let mut c = WaiterNode::new();
+        let mut list = AwaiterSet::new();
+        let mut a = AwaiterNode::new();
+        let mut b = AwaiterNode::new();
+        let mut c = AwaiterNode::new();
 
-        let pa: *mut WaiterNode = &raw mut a;
-        let pb: *mut WaiterNode = &raw mut b;
-        let pc: *mut WaiterNode = &raw mut c;
+        let pa: *mut AwaiterNode = &raw mut a;
+        let pb: *mut AwaiterNode = &raw mut b;
+        let pc: *mut AwaiterNode = &raw mut c;
 
         unsafe {
-            list.push_back(pa);
+            list.insert(pa);
         }
         unsafe {
-            list.push_back(pb);
+            list.insert(pb);
         }
 
-        let first = unsafe { list.pop_front() };
+        let first = unsafe { list.take_one() };
         assert!(ptr::eq(first.unwrap(), pa));
 
         unsafe {
-            list.push_back(pc);
+            list.insert(pc);
         }
 
-        let second = unsafe { list.pop_front() };
+        let second = unsafe { list.take_one() };
         assert!(ptr::eq(second.unwrap(), pb));
 
-        let third = unsafe { list.pop_front() };
+        let third = unsafe { list.take_one() };
         assert!(ptr::eq(third.unwrap(), pc));
 
         assert!(unsafe { list.is_empty() });
@@ -475,19 +475,19 @@ mod tests {
 
     #[test]
     fn traversal_via_next_in_list() {
-        let mut list = WaiterList::new();
-        let mut a = WaiterNode::new();
-        let mut b = WaiterNode::new();
-        let mut c = WaiterNode::new();
+        let mut list = AwaiterSet::new();
+        let mut a = AwaiterNode::new();
+        let mut b = AwaiterNode::new();
+        let mut c = AwaiterNode::new();
 
-        let pa: *mut WaiterNode = &raw mut a;
-        let pb: *mut WaiterNode = &raw mut b;
-        let pc: *mut WaiterNode = &raw mut c;
+        let pa: *mut AwaiterNode = &raw mut a;
+        let pb: *mut AwaiterNode = &raw mut b;
+        let pc: *mut AwaiterNode = &raw mut c;
 
         unsafe {
-            list.push_back(pa);
-            list.push_back(pb);
-            list.push_back(pc);
+            list.insert(pa);
+            list.insert(pb);
+            list.insert(pc);
         }
 
         let head = unsafe { list.head() };
@@ -505,16 +505,16 @@ mod tests {
 
     #[test]
     fn for_each_visits_all_nodes_in_order() {
-        let mut list = WaiterList::new();
-        let mut a = WaiterNode::new();
-        let mut b = WaiterNode::new();
+        let mut list = AwaiterSet::new();
+        let mut a = AwaiterNode::new();
+        let mut b = AwaiterNode::new();
 
-        let pa: *mut WaiterNode = &raw mut a;
-        let pb: *mut WaiterNode = &raw mut b;
+        let pa: *mut AwaiterNode = &raw mut a;
+        let pb: *mut AwaiterNode = &raw mut b;
 
         unsafe {
-            list.push_back(pa);
-            list.push_back(pb);
+            list.insert(pa);
+            list.insert(pb);
         }
 
         let mut visited = Vec::new();
@@ -529,7 +529,7 @@ mod tests {
 
     #[test]
     fn for_each_on_empty_list_does_nothing() {
-        let mut list = WaiterList::new();
+        let mut list = AwaiterSet::new();
         let mut count = 0_usize;
         unsafe {
             list.for_each(|_| count = count.checked_add(1).unwrap());
@@ -539,48 +539,48 @@ mod tests {
 
     #[test]
     fn wakers_survive_list_operations() {
-        let mut list = WaiterList::new();
-        let mut a = WaiterNode::new();
-        let pa: *mut WaiterNode = &raw mut a;
+        let mut list = AwaiterSet::new();
+        let mut a = AwaiterNode::new();
+        let pa: *mut AwaiterNode = &raw mut a;
 
         let waker = noop_waker();
         a.store_waker(waker);
 
         unsafe {
-            list.push_back(pa);
+            list.insert(pa);
         }
 
-        let popped = unsafe { list.pop_front() }.unwrap();
+        let popped = unsafe { list.take_one() }.unwrap();
         let recovered = unsafe { (*popped).take_waker() };
         assert!(recovered.is_some());
     }
 
     #[test]
     fn user_data_survives_list_operations() {
-        let mut list = WaiterList::new();
-        let mut a = WaiterNode::new();
-        let pa: *mut WaiterNode = &raw mut a;
+        let mut list = AwaiterSet::new();
+        let mut a = AwaiterNode::new();
+        let pa: *mut AwaiterNode = &raw mut a;
 
         a.set_user_data(7);
         unsafe {
-            list.push_back(pa);
+            list.insert(pa);
         }
 
-        let popped = unsafe { list.pop_front() }.unwrap();
+        let popped = unsafe { list.take_one() }.unwrap();
         assert_eq!(unsafe { (*popped).user_data() }, 7);
     }
 
     #[test]
     fn notified_flag_survives_list_operations() {
-        let mut list = WaiterList::new();
-        let mut a = WaiterNode::new();
-        let pa: *mut WaiterNode = &raw mut a;
+        let mut list = AwaiterSet::new();
+        let mut a = AwaiterNode::new();
+        let pa: *mut AwaiterNode = &raw mut a;
 
         unsafe {
-            list.push_back(pa);
+            list.insert(pa);
         }
 
-        let popped = unsafe { list.pop_front() }.unwrap();
+        let popped = unsafe { list.take_one() }.unwrap();
         unsafe {
             (*popped).set_notified();
         }
@@ -589,18 +589,19 @@ mod tests {
 
     #[test]
     fn ten_elements_maintain_fifo() {
-        let mut list = WaiterList::new();
-        let mut nodes: Vec<WaiterNode> = std::iter::repeat_with(WaiterNode::new).take(10).collect();
-        let ptrs: Vec<*mut WaiterNode> = nodes.iter_mut().map(ptr::from_mut).collect();
+        let mut list = AwaiterSet::new();
+        let mut nodes: Vec<AwaiterNode> =
+            std::iter::repeat_with(AwaiterNode::new).take(10).collect();
+        let ptrs: Vec<*mut AwaiterNode> = nodes.iter_mut().map(ptr::from_mut).collect();
 
         for &p in &ptrs {
             unsafe {
-                list.push_back(p);
+                list.insert(p);
             }
         }
 
         for &expected in &ptrs {
-            let popped = unsafe { list.pop_front() }.unwrap();
+            let popped = unsafe { list.take_one() }.unwrap();
             assert!(ptr::eq(popped, expected));
         }
 
@@ -609,8 +610,8 @@ mod tests {
 
     #[test]
     fn debug_output_does_not_panic() {
-        let list = WaiterList::new();
+        let list = AwaiterSet::new();
         let debug = format!("{list:?}");
-        assert!(debug.contains("WaiterList"));
+        assert!(debug.contains("AwaiterSet"));
     }
 }

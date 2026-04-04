@@ -6,7 +6,7 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 use std::task::{self, Poll, Waker};
 
-use waiter_list::{WaiterList, WaiterNodeStorage};
+use awaiter_set::{AAwaiterNodeStorage, AwaiterSet};
 
 use crate::constants::NEVER_POISONED;
 
@@ -76,10 +76,10 @@ struct SemaphoreInner {
 
 struct SemaphoreState {
     available: usize,
-    waiters: WaiterList,
+    waiters: AwaiterSet,
 }
 
-// SAFETY: `SemaphoreState` contains raw pointers (via `WaiterList`)
+// SAFETY: `SemaphoreState` contains raw pointers (via `AwaiterSet`)
 // which are `!Send` by default. Sending is safe because the pointers
 // are only dereferenced while the `Mutex` is held.
 // Marker trait impl.
@@ -141,7 +141,7 @@ fn try_wake_head(state: &mut SemaphoreState) -> Option<Waker> {
 
         // SAFETY: Caller holds the lock.
         let node =
-            unsafe { state.waiters.pop_front() }.expect("head was non-null so pop cannot fail");
+            unsafe { state.waiters.take_one() }.expect("head was non-null so pop cannot fail");
         // SAFETY: Caller holds the lock and just popped this node.
         unsafe {
             (*node).set_notified();
@@ -201,7 +201,7 @@ fn try_acquire_inner(state_mutex: &Mutex<SemaphoreState>, permits: usize) -> boo
 ///   is (or will be) registered with.
 unsafe fn poll_acquire(
     state_mutex: &Mutex<SemaphoreState>,
-    slot: Pin<&mut WaiterNodeStorage>,
+    slot: Pin<&mut AAwaiterNodeStorage>,
     permits: usize,
     waker: Waker,
 ) -> Poll<()> {
@@ -242,7 +242,7 @@ unsafe fn poll_acquire(
 /// Same requirements as [`poll_acquire`].
 unsafe fn drop_acquire_wait(
     state_mutex: &Mutex<SemaphoreState>,
-    slot: Pin<&mut WaiterNodeStorage>,
+    slot: Pin<&mut AAwaiterNodeStorage>,
     permits: usize,
 ) {
     // SAFETY: We do not move the slot.
@@ -295,7 +295,7 @@ impl Semaphore {
             inner: Arc::new(SemaphoreInner {
                 state: Mutex::new(SemaphoreState {
                     available: permits,
-                    waiters: WaiterList::new(),
+                    waiters: AwaiterSet::new(),
                 }),
             }),
         }
@@ -393,7 +393,7 @@ impl Semaphore {
         SemaphoreAcquireFuture {
             state: &self.inner.state,
             permits,
-            slot: WaiterNodeStorage::new(),
+            slot: AAwaiterNodeStorage::new(),
         }
     }
 
@@ -484,11 +484,11 @@ pub struct SemaphoreAcquireFuture<'a> {
     state: &'a Mutex<SemaphoreState>,
     permits: usize,
 
-    slot: WaiterNodeStorage,
+    slot: AAwaiterNodeStorage,
 }
 
 // Marker trait impl.
-// SAFETY: All WaiterNodeStorage fields are accessed exclusively under the
+// SAFETY: All AAwaiterNodeStorage fields are accessed exclusively under the
 // semaphore's internal Mutex. The reference points to data behind an
 // Arc that is Send + Sync.
 unsafe impl Send for SemaphoreAcquireFuture<'_> {}
@@ -595,7 +595,7 @@ impl EmbeddedSemaphore {
             inner: SemaphoreInner {
                 state: Mutex::new(SemaphoreState {
                     available: permits,
-                    waiters: WaiterList::new(),
+                    waiters: AwaiterSet::new(),
                 }),
             },
             _pinned: PhantomPinned,
@@ -652,7 +652,7 @@ impl EmbeddedSemaphoreRef {
         EmbeddedSemaphoreAcquireFuture {
             inner: self.inner,
             permits,
-            slot: WaiterNodeStorage::new(),
+            slot: AAwaiterNodeStorage::new(),
         }
     }
 
@@ -724,7 +724,7 @@ pub struct EmbeddedSemaphoreAcquireFuture {
     inner: NonNull<SemaphoreInner>,
     permits: usize,
 
-    slot: WaiterNodeStorage,
+    slot: AAwaiterNodeStorage,
 }
 
 // Marker trait impl.

@@ -1,0 +1,23 @@
+---
+title: Awaiter set architecture
+---
+graph TB
+    subgraph Primitive["Synchronization primitive (e.g. Mutex)"]
+        STATE["state + AwaiterSet"]
+    end
+
+    subgraph FutureA["Lock/Acquire future A"]
+        STORAGE_A["AwaiterNodeStorage"]
+        NODE_A["AwaiterNode"]
+        STORAGE_A --> NODE_A
+    end
+
+    subgraph FutureB["Lock/Acquire future B"]
+        STORAGE_B["AwaiterNodeStorage"]
+        NODE_B["AwaiterNode"]
+        STORAGE_B --> NODE_B
+    end
+
+    STATE -- "registered" --> NODE_A
+    NODE_A -- "next" --> NODE_B
+    NODE_B -- "prev" --> NODE_A

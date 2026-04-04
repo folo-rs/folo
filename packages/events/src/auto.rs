@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{self, Poll, Waker};
 use std::{fmt, mem};
 
-use waiter_list::{WaiterList, WaiterNodeStorage};
+use awaiter_set::{AAwaiterNodeStorage, AwaiterSet};
 
 use crate::NEVER_POISONED;
 
@@ -55,13 +55,13 @@ pub struct AutoResetEvent {
 // enum encodes that invariant at the type level.
 enum State {
     /// Not signaled. The waiter list may be empty or non-empty.
-    Unset(WaiterList),
+    Unset(AwaiterSet),
     /// Signal stored (will be consumed by the next wait or `try_wait`).
     Set,
 }
 
 // Marker trait impl.
-// SAFETY: The raw pointers inside WaiterList are only dereferenced while the
+// SAFETY: The raw pointers inside AwaiterSet are only dereferenced while the
 // Mutex is held, ensuring exclusive access.
 unsafe impl Send for State {}
 
@@ -79,7 +79,7 @@ fn set(mutex: &Mutex<State>) {
             }
             State::Unset(waiters) => {
                 // SAFETY: We hold the lock.
-                if let Some(node_ptr) = unsafe { waiters.pop_front() } {
+                if let Some(node_ptr) = unsafe { waiters.take_one() } {
                     // SAFETY: We hold the lock and just popped this
                     // node.
                     unsafe {
@@ -107,7 +107,7 @@ fn set(mutex: &Mutex<State>) {
 fn try_wait(mutex: &Mutex<State>) -> bool {
     let mut state = mutex.lock().expect(NEVER_POISONED);
     if matches!(*state, State::Set) {
-        *state = State::Unset(WaiterList::new());
+        *state = State::Unset(AwaiterSet::new());
         true
     } else {
         false
@@ -123,7 +123,7 @@ fn try_wait(mutex: &Mutex<State>) -> bool {
 ///   be) registered with.
 unsafe fn poll_wait(
     mutex: &Mutex<State>,
-    slot: Pin<&mut WaiterNodeStorage>,
+    slot: Pin<&mut AAwaiterNodeStorage>,
     waker: Waker,
 ) -> Poll<()> {
     // SAFETY: We do not move the slot.
@@ -144,7 +144,7 @@ unsafe fn poll_wait(
                 !slot.is_registered(),
                 "Set state is exclusive with registered waiters"
             );
-            *state = State::Unset(WaiterList::new());
+            *state = State::Unset(AwaiterSet::new());
             Poll::Ready(())
         }
         State::Unset(waiters) => {
@@ -163,7 +163,7 @@ unsafe fn poll_wait(
 /// # Safety
 ///
 /// Same requirements as [`poll_wait`].
-unsafe fn drop_wait(mutex: &Mutex<State>, slot: Pin<&mut WaiterNodeStorage>) {
+unsafe fn drop_wait(mutex: &Mutex<State>, slot: Pin<&mut AAwaiterNodeStorage>) {
     // SAFETY: We do not move the slot.
     let slot = unsafe { slot.get_unchecked_mut() };
 
@@ -179,11 +179,11 @@ unsafe fn drop_wait(mutex: &Mutex<State>, slot: Pin<&mut WaiterNodeStorage>) {
         // We were notified but the future was cancelled before it
         // could complete. Forward the notification to the next
         // waiter so that no signal is lost.
-        let old_state = mem::replace(&mut *state, State::Unset(WaiterList::new()));
+        let old_state = mem::replace(&mut *state, State::Unset(AwaiterSet::new()));
         match old_state {
             State::Unset(mut waiters) => {
                 // SAFETY: We hold the lock.
-                if let Some(next_node) = unsafe { waiters.pop_front() } {
+                if let Some(next_node) = unsafe { waiters.take_one() } {
                     // SAFETY: We hold the lock and just popped
                     // this node.
                     unsafe {
@@ -250,7 +250,7 @@ impl AutoResetEvent {
     #[must_use]
     pub fn boxed() -> Self {
         Self {
-            state: Arc::new(Mutex::new(State::Unset(WaiterList::new()))),
+            state: Arc::new(Mutex::new(State::Unset(AwaiterSet::new()))),
         }
     }
 
@@ -384,7 +384,7 @@ impl AutoResetEvent {
     pub fn wait(&self) -> AutoResetWaitFuture {
         AutoResetWaitFuture {
             state: Arc::clone(&self.state),
-            slot: WaiterNodeStorage::new(),
+            slot: AAwaiterNodeStorage::new(),
         }
     }
 }
@@ -394,15 +394,15 @@ impl AutoResetEvent {
 /// Completes with `()` when the event signal is acquired.
 pub struct AutoResetWaitFuture {
     state: Arc<Mutex<State>>,
-    slot: WaiterNodeStorage,
+    slot: AAwaiterNodeStorage,
 }
 
 // Marker trait impl.
-// SAFETY: WaiterNodeStorage is Send. All slot access is protected by the event's
+// SAFETY: AAwaiterNodeStorage is Send. All slot access is protected by the event's
 // Mutex. The Arc<Mutex<State>> is Send + Sync.
 unsafe impl Send for AutoResetWaitFuture {}
 
-// WaiterNodeStorage is UnwindSafe and RefUnwindSafe.
+// AAwaiterNodeStorage is UnwindSafe and RefUnwindSafe.
 // Marker trait impl.
 impl UnwindSafe for AutoResetWaitFuture {}
 // Marker trait impl.
@@ -496,7 +496,7 @@ impl EmbeddedAutoResetEvent {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            state: Mutex::new(State::Unset(WaiterList::new())),
+            state: Mutex::new(State::Unset(AwaiterSet::new())),
             _pinned: PhantomPinned,
         }
     }
@@ -567,7 +567,7 @@ impl RawAutoResetEvent {
     pub fn wait(&self) -> RawAutoResetWaitFuture {
         RawAutoResetWaitFuture {
             state: self.state,
-            slot: WaiterNodeStorage::new(),
+            slot: AAwaiterNodeStorage::new(),
         }
     }
 }
@@ -575,11 +575,11 @@ impl RawAutoResetEvent {
 /// Future returned by [`RawAutoResetEvent::wait()`].
 pub struct RawAutoResetWaitFuture {
     state: NonNull<Mutex<State>>,
-    slot: WaiterNodeStorage,
+    slot: AAwaiterNodeStorage,
 }
 
 // Marker trait impl.
-// SAFETY: WaiterNodeStorage is Send. All slot access is protected by the event's
+// SAFETY: AAwaiterNodeStorage is Send. All slot access is protected by the event's
 // Mutex.
 unsafe impl Send for RawAutoResetWaitFuture {}
 
