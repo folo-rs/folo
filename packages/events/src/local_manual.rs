@@ -107,21 +107,13 @@ impl Inner {
             let waker = {
                 // SAFETY: Single-threaded — no concurrent access.
                 let waiters = unsafe { &mut *waiters_ptr };
-                let mut cursor = waiters.head();
-                loop {
-                    if cursor.is_null() {
-                        break None;
+                let mut found = None;
+                waiters.for_each(|node| {
+                    if found.is_none() {
+                        found = node.take_waker();
                     }
-                    // SAFETY: Single-threaded — no concurrent
-                    // access.
-                    let w = unsafe { (*cursor).take_waker() };
-                    if w.is_some() {
-                        break w;
-                    }
-                    // SAFETY: Single-threaded — no concurrent
-                    // access.
-                    cursor = unsafe { (*cursor).next_in_list() };
-                }
+                });
+                found
             };
 
             let Some(w) = waker else { break };

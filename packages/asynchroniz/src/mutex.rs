@@ -114,17 +114,12 @@ fn unlock(lock_state: &StdMutex<LockState>) {
     {
         let mut state = lock_state.lock().expect(NEVER_POISONED);
 
-        if let Some(node_ptr) = state.waiters.take_one() {
+        if let Some(node) = state.waiters.take_one() {
             // Transfer lock ownership to the next waiter. The lock
             // stays held — the new owner will create its guard on the
             // next poll.
-            // SAFETY: We hold the lock and just popped this node.
-            unsafe {
-                (*node_ptr).set_notified();
-            }
-
-            // SAFETY: Same node, we hold the lock.
-            waker = unsafe { (*node_ptr).take_waker() };
+            node.set_notified();
+            waker = node.take_waker();
         } else {
             // No waiters — release the lock.
             state.locked = false;
@@ -201,7 +196,6 @@ unsafe fn poll_lock(
 unsafe fn drop_lock_wait(lock_state: &StdMutex<LockState>, slot: Pin<&mut AwaiterNodeStorage>) {
     // SAFETY: We do not move the slot.
     let slot = unsafe { slot.get_unchecked_mut() };
-    let node_ptr = slot.node_ptr();
     let mut state = lock_state.lock().expect(NEVER_POISONED);
 
     // SAFETY: We hold the lock.
@@ -209,12 +203,8 @@ unsafe fn drop_lock_wait(lock_state: &StdMutex<LockState>, slot: Pin<&mut Awaite
         // We were chosen as the next lock holder but the future was
         // cancelled. Forward the lock to the next waiter.
         if let Some(next_node) = state.waiters.take_one() {
-            // SAFETY: We hold the lock and just popped this node.
-            unsafe {
-                (*next_node).set_notified();
-            }
-            // SAFETY: Same node, we hold the lock.
-            let waker = unsafe { (*next_node).take_waker() };
+            next_node.set_notified();
+            let waker = next_node.take_waker();
             drop(state);
 
             if let Some(w) = waker {
@@ -228,7 +218,7 @@ unsafe fn drop_lock_wait(lock_state: &StdMutex<LockState>, slot: Pin<&mut Awaite
         // Not notified — just remove from the waiter list.
         // SAFETY: We hold the lock and the node is in the list.
         unsafe {
-            state.waiters.remove(node_ptr);
+            slot.unregister(&mut state.waiters);
         }
     }
 }

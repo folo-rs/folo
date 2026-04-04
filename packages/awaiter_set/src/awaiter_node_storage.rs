@@ -2,6 +2,7 @@ use std::cell::UnsafeCell;
 use std::fmt;
 use std::marker::PhantomPinned;
 use std::panic::{RefUnwindSafe, UnwindSafe};
+use std::pin::Pin;
 use std::task::Waker;
 
 use crate::{AwaiterNode, AwaiterSet};
@@ -86,24 +87,29 @@ impl AwaiterNodeStorage {
     /// * The caller must have exclusive access to both the node and
     ///   the list (e.g. by holding a lock).
     /// * The slot must be at a pinned, stable address.
-    pub unsafe fn register(&mut self, list: &mut AwaiterSet, waker: Waker) {
+    pub unsafe fn register(&mut self, set: &mut AwaiterSet, waker: Waker) {
         let node_ptr = self.node.get();
         // SAFETY: Caller guarantees exclusive access.
         unsafe {
             (*node_ptr).store_waker(waker);
         }
         if !self.registered {
-            // SAFETY: Caller guarantees exclusive access and the
-            // node is pinned and not in any list.
+            // SAFETY: Caller guarantees exclusive access.
+            let node_ref = unsafe { &mut *node_ptr };
+            // SAFETY: The containing storage is pinned, so the node
+            // address is stable.
+            let pin = unsafe { Pin::new_unchecked(node_ref) };
+            // SAFETY: The node will remain valid and pinned until
+            // removed from the set.
             unsafe {
-                list.insert(node_ptr);
+                set.insert(pin);
             }
             self.registered = true;
         }
     }
 
     /// Stores a waker with caller-defined data and registers the node
-    /// in `list` if not already registered.
+    /// in `set` if not already registered.
     ///
     /// Behaves like [`register()`][Self::register] but also sets the
     /// node's [`user_data`][AwaiterNode::user_data] (e.g. the number
@@ -112,7 +118,7 @@ impl AwaiterNodeStorage {
     /// # Safety
     ///
     /// Same requirements as [`register()`][Self::register].
-    pub unsafe fn register_with_data(&mut self, list: &mut AwaiterSet, waker: Waker, data: usize) {
+    pub unsafe fn register_with_data(&mut self, set: &mut AwaiterSet, waker: Waker, data: usize) {
         let node_ptr = self.node.get();
         // SAFETY: Caller guarantees exclusive access.
         unsafe {
@@ -123,16 +129,20 @@ impl AwaiterNodeStorage {
             (*node_ptr).set_user_data(data);
         }
         if !self.registered {
-            // SAFETY: Caller guarantees exclusive access and the
-            // node is pinned and not in any list.
+            // SAFETY: Caller guarantees exclusive access.
+            let node_ref = unsafe { &mut *node_ptr };
+            // SAFETY: The containing storage is pinned.
+            let pin = unsafe { Pin::new_unchecked(node_ref) };
+            // SAFETY: The node will remain valid and pinned until
+            // removed from the set.
             unsafe {
-                list.insert(node_ptr);
+                set.insert(pin);
             }
             self.registered = true;
         }
     }
 
-    /// Removes the node from `list` if it is currently registered.
+    /// Removes the node from `set` if it is currently registered.
     ///
     /// After this call, [`is_registered()`][Self::is_registered]
     /// returns `false`.
@@ -140,14 +150,19 @@ impl AwaiterNodeStorage {
     /// # Safety
     ///
     /// * The caller must have exclusive access to both the node and
-    ///   the list.
-    /// * The node must be in `list` (not some other list).
-    pub unsafe fn unregister(&mut self, list: &mut AwaiterSet) {
+    ///   the set.
+    /// * The node must be in `set` (not some other set).
+    pub unsafe fn unregister(&mut self, set: &mut AwaiterSet) {
         if self.registered {
-            // SAFETY: Caller guarantees exclusive access and that
-            // the node is in this list.
+            let node_ptr = self.node.get();
+            // SAFETY: Caller guarantees exclusive access.
+            let node_ref = unsafe { &mut *node_ptr };
+            // SAFETY: The node is pinned and in this set.
+            let pin = unsafe { Pin::new_unchecked(node_ref) };
+            // SAFETY: The node is in this set per the caller's
+            // contract.
             unsafe {
-                list.remove(self.node.get());
+                set.remove(pin);
             }
             self.registered = false;
         }
@@ -364,10 +379,7 @@ mod tests {
 
         // Simulate what the primitive does: pop + set_notified.
         let node = list.take_one().unwrap();
-        // SAFETY: Test has exclusive access, node is valid.
-        unsafe {
-            (*node).set_notified();
-        }
+        node.set_notified();
 
         // The slot still thinks it is registered (the primitive
         // popped it, but the slot does not know yet).
@@ -389,10 +401,7 @@ mod tests {
             slot.register(&mut list, Waker::noop().clone());
         }
         let node = list.take_one().unwrap();
-        // SAFETY: Test has exclusive access, node is valid.
-        unsafe {
-            (*node).set_notified();
-        }
+        node.set_notified();
 
         // SAFETY: Test has exclusive access.
         let notified = unsafe { slot.is_notified() };
@@ -415,10 +424,7 @@ mod tests {
 
         // Simulate notification.
         let node = list.take_one().unwrap();
-        // SAFETY: Test has exclusive access, node is valid.
-        unsafe {
-            (*node).set_notified();
-        }
+        node.set_notified();
 
         // Take notification (as poll would do).
         // SAFETY: Test has exclusive access.

@@ -89,16 +89,11 @@ impl<T> Inner<T> {
             // SAFETY: Single-threaded access guaranteed by !Send.
             let state = unsafe { &mut *self.lock_state.get() };
 
-            if let Some(node_ptr) = state.waiters.take_one() {
+            if let Some(node) = state.waiters.take_one() {
                 // Transfer lock ownership to the next waiter. The
                 // lock stays held.
-                // SAFETY: Single-threaded, node was just popped.
-                unsafe {
-                    (*node_ptr).set_notified();
-                }
-
-                // SAFETY: Single-threaded.
-                unsafe { (*node_ptr).take_waker() }
+                node.set_notified();
+                node.take_waker()
             } else {
                 state.locked = false;
                 None
@@ -162,8 +157,6 @@ impl<T> Inner<T> {
     unsafe fn drop_lock_wait(&self, slot: Pin<&mut AwaiterNodeStorage>) {
         // SAFETY: We do not move the slot.
         let slot = unsafe { slot.get_unchecked_mut() };
-        let node_ptr = slot.node_ptr();
-
         // SAFETY: Single-threaded access.
         if unsafe { slot.is_notified() } {
             // Capture the waker while borrowing the state, then wake
@@ -175,12 +168,8 @@ impl<T> Inner<T> {
                 let state = unsafe { &mut *state_ptr };
 
                 if let Some(next_node) = state.waiters.take_one() {
-                    // SAFETY: Single-threaded.
-                    unsafe {
-                        (*next_node).set_notified();
-                    }
-                    // SAFETY: Single-threaded.
-                    unsafe { (*next_node).take_waker() }
+                    next_node.set_notified();
+                    next_node.take_waker()
                 } else {
                     state.locked = false;
                     None
@@ -196,7 +185,7 @@ impl<T> Inner<T> {
             let state = unsafe { &mut *self.lock_state.get() };
             // SAFETY: Single-threaded, node is in the list.
             unsafe {
-                state.waiters.remove(node_ptr);
+                slot.unregister(&mut state.waiters);
             }
         }
     }

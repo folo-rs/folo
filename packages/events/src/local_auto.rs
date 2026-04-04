@@ -87,14 +87,9 @@ impl Inner {
             match state {
                 InnerState::Set => None,
                 InnerState::Unset(waiters) => {
-                    if let Some(node_ptr) = waiters.take_one() {
-                        // SAFETY: Single-threaded, node was just popped.
-                        unsafe {
-                            (*node_ptr).set_notified();
-                        }
-
-                        // SAFETY: Single-threaded.
-                        unsafe { (*node_ptr).take_waker() }
+                    if let Some(node) = waiters.take_one() {
+                        node.set_notified();
+                        node.take_waker()
                     } else {
                         // No waiters — store the signal.
                         *state = InnerState::Set;
@@ -174,12 +169,8 @@ impl Inner {
             let waker = match old_state {
                 InnerState::Unset(mut waiters) => {
                     if let Some(next_node) = waiters.take_one() {
-                        // SAFETY: Single-threaded.
-                        unsafe {
-                            (*next_node).set_notified();
-                        }
-                        // SAFETY: Single-threaded.
-                        let waker = unsafe { (*next_node).take_waker() };
+                        next_node.set_notified();
+                        let waker = next_node.take_waker();
                         // Restore the waiter list.
                         // SAFETY: Single-threaded.
                         unsafe {

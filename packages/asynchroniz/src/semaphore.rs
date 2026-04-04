@@ -6,7 +6,7 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 use std::task::{self, Poll, Waker};
 
-use awaiter_set::{AwaiterNodeStorage, AwaiterSet};
+use awaiter_set::{AwaiterNode, AwaiterNodeStorage, AwaiterSet};
 
 use crate::constants::NEVER_POISONED;
 
@@ -97,9 +97,8 @@ fn release_permits(state_mutex: &Mutex<SemaphoreState>, count: usize) {
             .available
             .checked_add(count)
             .expect("permit count overflow is unreachable");
-        let head = state.waiters.head();
-        // SAFETY: We hold the lock and head is non-null.
-        let satisfiable = !head.is_null() && state.available >= unsafe { (*head).user_data() };
+        let head_requested = state.waiters.peek().map(AwaiterNode::user_data);
+        let satisfiable = head_requested.is_some_and(|req| state.available >= req);
         (try_wake_head(&mut state), satisfiable)
     };
     // If the head waiter was satisfiable, try_wake_head must have
@@ -122,14 +121,7 @@ fn release_permits(state_mutex: &Mutex<SemaphoreState>, count: usize) {
 ///
 /// Must be called while holding the state mutex.
 fn try_wake_head(state: &mut SemaphoreState) -> Option<Waker> {
-    let head = state.waiters.head();
-
-    if head.is_null() {
-        return None;
-    }
-
-    // SAFETY: Caller holds the lock and head is non-null.
-    let requested = unsafe { (*head).user_data() };
+    let requested = state.waiters.peek()?.user_data();
 
     if state.available >= requested {
         state.available = state
@@ -141,12 +133,8 @@ fn try_wake_head(state: &mut SemaphoreState) -> Option<Waker> {
             .waiters
             .take_one()
             .expect("head was non-null so pop cannot fail");
-        // SAFETY: Caller holds the lock and just popped this node.
-        unsafe {
-            (*node).set_notified();
-        }
-        // SAFETY: Same node, caller holds the lock.
-        unsafe { (*node).take_waker() }
+        node.set_notified();
+        node.take_waker()
     } else {
         // Head-of-line blocking: not enough permits for the head
         // waiter.
@@ -246,7 +234,6 @@ unsafe fn drop_acquire_wait(
 ) {
     // SAFETY: We do not move the slot.
     let slot = unsafe { slot.get_unchecked_mut() };
-    let node_ptr = slot.node_ptr();
     let mut state = state_mutex.lock().expect(NEVER_POISONED);
 
     // SAFETY: We hold the lock.
@@ -268,7 +255,7 @@ unsafe fn drop_acquire_wait(
         // Not notified — just remove from the waiter list.
         // SAFETY: We hold the lock and the node is in the list.
         unsafe {
-            state.waiters.remove(node_ptr);
+            slot.unregister(&mut state.waiters);
         }
     }
 }

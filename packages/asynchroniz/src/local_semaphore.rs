@@ -101,14 +101,7 @@ impl Inner {
     /// Tries to satisfy the head waiter, returning its waker if
     /// successful.
     fn try_wake_head(state: &mut SemaphoreState) -> Option<Waker> {
-        let head = state.waiters.head();
-
-        if head.is_null() {
-            return None;
-        }
-
-        // SAFETY: Single-threaded, head is non-null.
-        let requested = unsafe { (*head).user_data() };
+        let requested = state.waiters.peek()?.user_data();
 
         if state.available >= requested {
             state.available = state
@@ -120,12 +113,8 @@ impl Inner {
                 .waiters
                 .take_one()
                 .expect("head was non-null so pop cannot fail");
-            // SAFETY: Single-threaded.
-            unsafe {
-                (*node).set_notified();
-            }
-            // SAFETY: Single-threaded.
-            unsafe { (*node).take_waker() }
+            node.set_notified();
+            node.take_waker()
         } else {
             // Head-of-line blocking.
             None
@@ -210,8 +199,6 @@ impl Inner {
     unsafe fn drop_acquire_wait(&self, slot: Pin<&mut AwaiterNodeStorage>, permits: usize) {
         // SAFETY: We do not move the slot.
         let slot = unsafe { slot.get_unchecked_mut() };
-        let node_ptr = slot.node_ptr();
-
         // SAFETY: Single-threaded access.
         if unsafe { slot.is_notified() } {
             // We were given permits but the future was cancelled.
@@ -236,7 +223,7 @@ impl Inner {
             let state = unsafe { &mut *self.state.get() };
             // SAFETY: Single-threaded, node is in the list.
             unsafe {
-                state.waiters.remove(node_ptr);
+                slot.unregister(&mut state.waiters);
             }
         }
     }
