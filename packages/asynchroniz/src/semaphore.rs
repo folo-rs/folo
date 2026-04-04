@@ -137,9 +137,10 @@ fn try_wake_head(state: &mut SemaphoreState) -> Option<Waker> {
             .checked_sub(requested)
             .expect("available >= requested was just checked");
 
-        // SAFETY: Caller holds the lock.
-        let node =
-            unsafe { state.waiters.take_one() }.expect("head was non-null so pop cannot fail");
+        let node = state
+            .waiters
+            .take_one()
+            .expect("head was non-null so pop cannot fail");
         // SAFETY: Caller holds the lock and just popped this node.
         unsafe {
             (*node).set_notified();

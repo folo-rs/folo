@@ -89,8 +89,7 @@ impl<T> Inner<T> {
             // SAFETY: Single-threaded access guaranteed by !Send.
             let state = unsafe { &mut *self.lock_state.get() };
 
-            // SAFETY: Single-threaded.
-            if let Some(node_ptr) = unsafe { state.waiters.take_one() } {
+            if let Some(node_ptr) = state.waiters.take_one() {
                 // Transfer lock ownership to the next waiter. The
                 // lock stays held.
                 // SAFETY: Single-threaded, node was just popped.
@@ -175,8 +174,7 @@ impl<T> Inner<T> {
                 // SAFETY: Single-threaded access.
                 let state = unsafe { &mut *state_ptr };
 
-                // SAFETY: Single-threaded.
-                if let Some(next_node) = unsafe { state.waiters.take_one() } {
+                if let Some(next_node) = state.waiters.take_one() {
                     // SAFETY: Single-threaded.
                     unsafe {
                         (*next_node).set_notified();

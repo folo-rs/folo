@@ -78,8 +78,7 @@ fn set(mutex: &Mutex<State>) {
                 waker = None;
             }
             State::Unset(waiters) => {
-                // SAFETY: We hold the lock.
-                if let Some(node_ptr) = unsafe { waiters.take_one() } {
+                if let Some(node_ptr) = waiters.take_one() {
                     // SAFETY: We hold the lock and just popped this
                     // node.
                     unsafe {
@@ -182,8 +181,7 @@ unsafe fn drop_wait(mutex: &Mutex<State>, slot: Pin<&mut AwaiterNodeStorage>) {
         let old_state = mem::replace(&mut *state, State::Unset(AwaiterSet::new()));
         match old_state {
             State::Unset(mut waiters) => {
-                // SAFETY: We hold the lock.
-                if let Some(next_node) = unsafe { waiters.take_one() } {
+                if let Some(next_node) = waiters.take_one() {
                     // SAFETY: We hold the lock and just popped
                     // this node.
                     unsafe {

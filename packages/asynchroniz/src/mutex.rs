@@ -114,8 +114,7 @@ fn unlock(lock_state: &StdMutex<LockState>) {
     {
         let mut state = lock_state.lock().expect(NEVER_POISONED);
 
-        // SAFETY: We hold the lock.
-        if let Some(node_ptr) = unsafe { state.waiters.take_one() } {
+        if let Some(node_ptr) = state.waiters.take_one() {
             // Transfer lock ownership to the next waiter. The lock
             // stays held — the new owner will create its guard on the
             // next poll.
@@ -209,8 +208,7 @@ unsafe fn drop_lock_wait(lock_state: &StdMutex<LockState>, slot: Pin<&mut Awaite
     if unsafe { slot.is_notified() } {
         // We were chosen as the next lock holder but the future was
         // cancelled. Forward the lock to the next waiter.
-        // SAFETY: We hold the lock.
-        if let Some(next_node) = unsafe { state.waiters.take_one() } {
+        if let Some(next_node) = state.waiters.take_one() {
             // SAFETY: We hold the lock and just popped this node.
             unsafe {
                 (*next_node).set_notified();

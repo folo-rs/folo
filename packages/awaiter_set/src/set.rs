@@ -54,7 +54,6 @@ impl AwaiterSet {
     ///
     /// * `node` must point to a valid, pinned [`AwaiterNode`] that is not
     ///   already in any set.
-    /// * The caller must ensure exclusive access to the set.
     pub unsafe fn insert(&mut self, node: *mut AwaiterNode) {
         // SAFETY: Caller guarantees `node` is valid.
         unsafe {
@@ -86,7 +85,6 @@ impl AwaiterSet {
     ///
     /// * `node` must point to a valid, pinned [`AwaiterNode`] that is
     ///   currently in this set.
-    /// * The caller must ensure exclusive access to the set.
     pub unsafe fn remove(&mut self, node: *mut AwaiterNode) {
         // SAFETY: Caller guarantees `node` is valid and in the set.
         let prev = unsafe { (*node).prev };
@@ -124,14 +122,9 @@ impl AwaiterSet {
 
     /// Removes and returns one node from the set.
     ///
-    /// Returns `None` if the set is empty.
-    ///
-    /// # Safety
-    ///
-    /// * The caller must ensure exclusive access to the set.
-    /// * Any returned pointer is valid and pinned; the node is no longer
-    ///   in the set after this call.
-    pub unsafe fn take_one(&mut self) -> Option<*mut AwaiterNode> {
+    /// Returns `None` if the set is empty. The returned pointer points
+    /// to a valid, pinned node that is no longer in the set.
+    pub fn take_one(&mut self) -> Option<*mut AwaiterNode> {
         if self.head.is_null() {
             return None;
         }
@@ -170,12 +163,7 @@ impl AwaiterSet {
     /// The next-pointer is read before invoking the callback, so the
     /// callback may safely modify the current node's waker or flags.
     /// However, it must not add or remove nodes from the set.
-    ///
-    /// # Safety
-    ///
-    /// * The caller must ensure exclusive access to the set.
-    /// * The callback must not modify the set structure (no push/pop/remove).
-    pub unsafe fn for_each(&mut self, mut f: impl FnMut(*mut AwaiterNode)) {
+    pub fn for_each(&mut self, mut f: impl FnMut(*mut AwaiterNode)) {
         let mut current = self.head;
         while !current.is_null() {
             // Read next before calling `f` so we do not hold a reference
@@ -255,7 +243,7 @@ mod tests {
     #[test]
     fn take_one_on_empty_returns_none() {
         let mut list = AwaiterSet::new();
-        assert!(unsafe { list.take_one() }.is_none());
+        assert!(list.take_one().is_none());
     }
 
     #[test]
@@ -270,7 +258,7 @@ mod tests {
         assert!(!list.is_empty());
         assert!(ptr::eq(list.head(), pa));
 
-        let popped = unsafe { list.take_one() };
+        let popped = list.take_one();
         assert!(ptr::eq(popped.unwrap(), pa));
         assert!(list.is_empty());
     }
@@ -294,17 +282,17 @@ mod tests {
 
         assert!(!list.is_empty());
 
-        let first = unsafe { list.take_one() };
+        let first = list.take_one();
         assert!(ptr::eq(first.unwrap(), pa));
 
-        let second = unsafe { list.take_one() };
+        let second = list.take_one();
         assert!(ptr::eq(second.unwrap(), pb));
 
-        let third = unsafe { list.take_one() };
+        let third = list.take_one();
         assert!(ptr::eq(third.unwrap(), pc));
 
         assert!(list.is_empty());
-        assert!(unsafe { list.take_one() }.is_none());
+        assert!(list.take_one().is_none());
     }
 
     #[test]
@@ -322,7 +310,7 @@ mod tests {
             list.remove(pa);
         }
 
-        let first = unsafe { list.take_one() };
+        let first = list.take_one();
         assert!(ptr::eq(first.unwrap(), pb));
         assert!(list.is_empty());
     }
@@ -342,7 +330,7 @@ mod tests {
             list.remove(pb);
         }
 
-        let first = unsafe { list.take_one() };
+        let first = list.take_one();
         assert!(ptr::eq(first.unwrap(), pa));
         assert!(list.is_empty());
     }
@@ -365,10 +353,10 @@ mod tests {
             list.remove(pb);
         }
 
-        let first = unsafe { list.take_one() };
+        let first = list.take_one();
         assert!(ptr::eq(first.unwrap(), pa));
 
-        let second = unsafe { list.take_one() };
+        let second = list.take_one();
         assert!(ptr::eq(second.unwrap(), pc));
 
         assert!(list.is_empty());
@@ -419,7 +407,7 @@ mod tests {
             list.insert(pb);
         }
 
-        let popped = unsafe { list.take_one() };
+        let popped = list.take_one();
         assert!(ptr::eq(popped.unwrap(), pb));
         assert!(list.is_empty());
     }
@@ -442,17 +430,17 @@ mod tests {
             list.insert(pb);
         }
 
-        let first = unsafe { list.take_one() };
+        let first = list.take_one();
         assert!(ptr::eq(first.unwrap(), pa));
 
         unsafe {
             list.insert(pc);
         }
 
-        let second = unsafe { list.take_one() };
+        let second = list.take_one();
         assert!(ptr::eq(second.unwrap(), pb));
 
-        let third = unsafe { list.take_one() };
+        let third = list.take_one();
         assert!(ptr::eq(third.unwrap(), pc));
 
         assert!(list.is_empty());
@@ -503,9 +491,7 @@ mod tests {
         }
 
         let mut visited = Vec::new();
-        unsafe {
-            list.for_each(|node| visited.push(node));
-        }
+        list.for_each(|node| visited.push(node));
 
         assert_eq!(visited.len(), 2);
         assert!(ptr::eq(visited[0], pa));
@@ -516,9 +502,7 @@ mod tests {
     fn for_each_on_empty_list_does_nothing() {
         let mut list = AwaiterSet::new();
         let mut count = 0_usize;
-        unsafe {
-            list.for_each(|_| count = count.checked_add(1).unwrap());
-        }
+        list.for_each(|_| count = count.checked_add(1).unwrap());
         assert_eq!(count, 0);
     }
 
@@ -535,7 +519,7 @@ mod tests {
             list.insert(pa);
         }
 
-        let popped = unsafe { list.take_one() }.unwrap();
+        let popped = list.take_one().unwrap();
         let recovered = unsafe { (*popped).take_waker() };
         assert!(recovered.is_some());
     }
@@ -551,7 +535,7 @@ mod tests {
             list.insert(pa);
         }
 
-        let popped = unsafe { list.take_one() }.unwrap();
+        let popped = list.take_one().unwrap();
         assert_eq!(unsafe { (*popped).user_data() }, 7);
     }
 
@@ -565,7 +549,7 @@ mod tests {
             list.insert(pa);
         }
 
-        let popped = unsafe { list.take_one() }.unwrap();
+        let popped = list.take_one().unwrap();
         unsafe {
             (*popped).set_notified();
         }
@@ -586,7 +570,7 @@ mod tests {
         }
 
         for &expected in &ptrs {
-            let popped = unsafe { list.take_one() }.unwrap();
+            let popped = list.take_one().unwrap();
             assert!(ptr::eq(popped, expected));
         }
 

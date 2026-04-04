@@ -292,8 +292,7 @@ mod tests {
 
         // Still registered, list still has exactly one node.
         assert!(slot.is_registered());
-        // SAFETY: Test has exclusive access.
-        let popped = unsafe { list.take_one() };
+        let popped = list.take_one();
         assert!(popped.is_some());
         assert!(list.is_empty());
     }
@@ -364,8 +363,7 @@ mod tests {
         }
 
         // Simulate what the primitive does: pop + set_notified.
-        // SAFETY: Test has exclusive access.
-        let node = unsafe { list.take_one() }.unwrap();
+        let node = list.take_one().unwrap();
         // SAFETY: Test has exclusive access, node is valid.
         unsafe {
             (*node).set_notified();
@@ -390,8 +388,7 @@ mod tests {
         unsafe {
             slot.register(&mut list, Waker::noop().clone());
         }
-        // SAFETY: Test has exclusive access.
-        let node = unsafe { list.take_one() }.unwrap();
+        let node = list.take_one().unwrap();
         // SAFETY: Test has exclusive access, node is valid.
         unsafe {
             (*node).set_notified();
@@ -417,8 +414,7 @@ mod tests {
         assert!(slot.is_registered());
 
         // Simulate notification.
-        // SAFETY: Test has exclusive access.
-        let node = unsafe { list.take_one() }.unwrap();
+        let node = list.take_one().unwrap();
         // SAFETY: Test has exclusive access, node is valid.
         unsafe {
             (*node).set_notified();

@@ -116,9 +116,10 @@ impl Inner {
                 .checked_sub(requested)
                 .expect("available >= requested was just checked");
 
-            // SAFETY: Single-threaded.
-            let node =
-                unsafe { state.waiters.take_one() }.expect("head was non-null so pop cannot fail");
+            let node = state
+                .waiters
+                .take_one()
+                .expect("head was non-null so pop cannot fail");
             // SAFETY: Single-threaded.
             unsafe {
                 (*node).set_notified();
