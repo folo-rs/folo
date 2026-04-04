@@ -107,8 +107,7 @@ impl Inner {
             let waker = {
                 // SAFETY: Single-threaded — no concurrent access.
                 let waiters = unsafe { &mut *waiters_ptr };
-                // SAFETY: Single-threaded — no concurrent access.
-                let mut cursor = unsafe { waiters.head() };
+                let mut cursor = waiters.head();
                 loop {
                     if cursor.is_null() {
                         break None;

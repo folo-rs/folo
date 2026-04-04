@@ -273,8 +273,7 @@ mod tests {
             slot.register(&mut list, Waker::noop().clone());
         }
         assert!(slot.is_registered());
-        // SAFETY: Test has exclusive access.
-        assert!(!unsafe { list.is_empty() });
+        assert!(!list.is_empty());
     }
 
     #[test]
@@ -296,8 +295,7 @@ mod tests {
         // SAFETY: Test has exclusive access.
         let popped = unsafe { list.take_one() };
         assert!(popped.is_some());
-        // SAFETY: Test has exclusive access.
-        assert!(unsafe { list.is_empty() });
+        assert!(list.is_empty());
     }
 
     #[test]
@@ -331,8 +329,7 @@ mod tests {
         }
 
         assert!(!slot.is_registered());
-        // SAFETY: Test has exclusive access.
-        assert!(unsafe { list.is_empty() });
+        assert!(list.is_empty());
     }
 
     #[test]
@@ -452,7 +449,6 @@ mod tests {
             slot.unregister(&mut list);
         }
         assert!(!slot.is_registered());
-        // SAFETY: Test has exclusive access.
-        assert!(unsafe { list.is_empty() });
+        assert!(list.is_empty());
     }
 }

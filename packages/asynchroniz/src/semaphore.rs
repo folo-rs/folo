@@ -97,8 +97,7 @@ fn release_permits(state_mutex: &Mutex<SemaphoreState>, count: usize) {
             .available
             .checked_add(count)
             .expect("permit count overflow is unreachable");
-        // SAFETY: We hold the lock.
-        let head = unsafe { state.waiters.head() };
+        let head = state.waiters.head();
         // SAFETY: We hold the lock and head is non-null.
         let satisfiable = !head.is_null() && state.available >= unsafe { (*head).user_data() };
         (try_wake_head(&mut state), satisfiable)
@@ -123,8 +122,7 @@ fn release_permits(state_mutex: &Mutex<SemaphoreState>, count: usize) {
 ///
 /// Must be called while holding the state mutex.
 fn try_wake_head(state: &mut SemaphoreState) -> Option<Waker> {
-    // SAFETY: Caller holds the lock.
-    let head = unsafe { state.waiters.head() };
+    let head = state.waiters.head();
 
     if head.is_null() {
         return None;

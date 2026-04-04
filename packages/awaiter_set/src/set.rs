@@ -6,32 +6,25 @@ use crate::AwaiterNode;
 /// A set of pinned [`AwaiterNode`]s awaiting notification.
 ///
 /// The set does not own its nodes. Nodes are embedded in async futures
-/// and linked/unlinked as awaiters register and complete. All
-/// operations are `unsafe` because they require the caller to uphold
-/// pointer validity and exclusive-access invariants.
+/// and linked/unlinked as awaiters register and complete.
 ///
-/// # Synchronization
-///
-/// `AwaiterSet` has no internal synchronization. The caller must
-/// ensure exclusive access for every operation — typically by holding
-/// a [`Mutex`][std::sync::Mutex] guard or by confining the set to a
-/// single thread via `!Send` on the containing type.
+/// The set is `Send` but not `Sync` — it can be moved between threads
+/// but all access must be serialized by the caller.
 pub struct AwaiterSet {
     head: *mut AwaiterNode,
     tail: *mut AwaiterNode,
 }
 
 impl AwaiterSet {
-    /// Creates a new empty list.
+    /// Creates a new empty set.
     ///
     /// # Examples
     ///
     /// ```
     /// use awaiter_set::AwaiterSet;
     ///
-    /// let mut list = AwaiterSet::new();
-    /// // SAFETY: We have exclusive access.
-    /// assert!(unsafe { list.is_empty() });
+    /// let mut set = AwaiterSet::new();
+    /// assert!(set.is_empty());
     /// ```
     #[must_use]
     pub fn new() -> Self {
@@ -41,25 +34,17 @@ impl AwaiterSet {
         }
     }
 
-    /// Returns `true` if the list contains no nodes.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure exclusive access to the list.
+    /// Returns `true` if the set contains no nodes.
     #[must_use]
-    pub unsafe fn is_empty(&mut self) -> bool {
+    pub fn is_empty(&mut self) -> bool {
         self.head.is_null()
     }
 
     /// Returns a raw pointer to the next node to be taken.
     ///
-    /// Returns a null pointer if the list is empty.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure exclusive access to the list.
+    /// Returns a null pointer if the set is empty.
     #[must_use]
-    pub unsafe fn head(&mut self) -> *mut AwaiterNode {
+    pub fn head(&mut self) -> *mut AwaiterNode {
         self.head
     }
 
@@ -68,8 +53,8 @@ impl AwaiterSet {
     /// # Safety
     ///
     /// * `node` must point to a valid, pinned [`AwaiterNode`] that is not
-    ///   already in any list.
-    /// * The caller must ensure exclusive access to the list.
+    ///   already in any set.
+    /// * The caller must ensure exclusive access to the set.
     pub unsafe fn insert(&mut self, node: *mut AwaiterNode) {
         // SAFETY: Caller guarantees `node` is valid.
         unsafe {
@@ -84,7 +69,7 @@ impl AwaiterSet {
         if self.tail.is_null() {
             self.head = node;
         } else {
-            // SAFETY: `tail` is non-null and valid (list invariant).
+            // SAFETY: `tail` is non-null and valid (set invariant).
             unsafe {
                 (*self.tail).next = node;
             }
@@ -93,25 +78,25 @@ impl AwaiterSet {
         self.tail = node;
     }
 
-    /// Removes a specific node from the list.
+    /// Removes a specific node from the set.
     ///
     /// After removal, the node's list pointers are cleared (set to null).
     ///
     /// # Safety
     ///
     /// * `node` must point to a valid, pinned [`AwaiterNode`] that is
-    ///   currently in this list.
-    /// * The caller must ensure exclusive access to the list.
+    ///   currently in this set.
+    /// * The caller must ensure exclusive access to the set.
     pub unsafe fn remove(&mut self, node: *mut AwaiterNode) {
-        // SAFETY: Caller guarantees `node` is valid and in the list.
+        // SAFETY: Caller guarantees `node` is valid and in the set.
         let prev = unsafe { (*node).prev };
-        // SAFETY: Caller guarantees `node` is valid and in the list.
+        // SAFETY: Caller guarantees `node` is valid and in the set.
         let next = unsafe { (*node).next };
 
         if prev.is_null() {
             self.head = next;
         } else {
-            // SAFETY: `prev` is a valid node in the list.
+            // SAFETY: `prev` is a valid node in the set.
             unsafe {
                 (*prev).next = next;
             }
@@ -120,7 +105,7 @@ impl AwaiterSet {
         if next.is_null() {
             self.tail = prev;
         } else {
-            // SAFETY: `next` is a valid node in the list.
+            // SAFETY: `next` is a valid node in the set.
             unsafe {
                 (*next).prev = prev;
             }
@@ -139,13 +124,13 @@ impl AwaiterSet {
 
     /// Removes and returns one node from the set.
     ///
-    /// Returns `None` if the list is empty.
+    /// Returns `None` if the set is empty.
     ///
     /// # Safety
     ///
-    /// * The caller must ensure exclusive access to the list.
+    /// * The caller must ensure exclusive access to the set.
     /// * Any returned pointer is valid and pinned; the node is no longer
-    ///   in the list after this call.
+    ///   in the set after this call.
     pub unsafe fn take_one(&mut self) -> Option<*mut AwaiterNode> {
         if self.head.is_null() {
             return None;
@@ -161,7 +146,7 @@ impl AwaiterSet {
         if next.is_null() {
             self.tail = ptr::null_mut();
         } else {
-            // SAFETY: `next` is a valid node in the list.
+            // SAFETY: `next` is a valid node in the set.
             unsafe {
                 (*next).prev = ptr::null_mut();
             }
@@ -184,18 +169,18 @@ impl AwaiterSet {
     ///
     /// The next-pointer is read before invoking the callback, so the
     /// callback may safely modify the current node's waker or flags.
-    /// However, it must not add or remove nodes from the list.
+    /// However, it must not add or remove nodes from the set.
     ///
     /// # Safety
     ///
-    /// * The caller must ensure exclusive access to the list.
-    /// * The callback must not modify the list structure (no push/pop/remove).
+    /// * The caller must ensure exclusive access to the set.
+    /// * The callback must not modify the set structure (no push/pop/remove).
     pub unsafe fn for_each(&mut self, mut f: impl FnMut(*mut AwaiterNode)) {
         let mut current = self.head;
         while !current.is_null() {
             // Read next before calling `f` so we do not hold a reference
             // to the current node across the callback.
-            // SAFETY: `current` is non-null and in the list.
+            // SAFETY: `current` is non-null and in the set.
             let next = unsafe { (*current).next };
             f(current);
             current = next;
@@ -211,7 +196,7 @@ impl Default for AwaiterSet {
 
 // SAFETY: Raw pointers are `!Send` by default. This impl is sound because
 // all pointer dereferences are serialized by external synchronization
-// (Mutex or single-thread confinement). The list can safely be moved
+// (Mutex or single-thread confinement). the set can safely be moved
 // between threads as long as access remains exclusive.
 unsafe impl Send for AwaiterSet {}
 
@@ -257,14 +242,14 @@ mod tests {
     #[test]
     fn new_list_is_empty() {
         let mut list = AwaiterSet::new();
-        assert!(unsafe { list.is_empty() });
-        assert!(unsafe { list.head() }.is_null());
+        assert!(list.is_empty());
+        assert!(list.head().is_null());
     }
 
     #[test]
     fn default_list_is_empty() {
         let mut list = AwaiterSet::default();
-        assert!(unsafe { list.is_empty() });
+        assert!(list.is_empty());
     }
 
     #[test]
@@ -282,12 +267,12 @@ mod tests {
         unsafe {
             list.insert(pa);
         }
-        assert!(!unsafe { list.is_empty() });
-        assert!(ptr::eq(unsafe { list.head() }, pa));
+        assert!(!list.is_empty());
+        assert!(ptr::eq(list.head(), pa));
 
         let popped = unsafe { list.take_one() };
         assert!(ptr::eq(popped.unwrap(), pa));
-        assert!(unsafe { list.is_empty() });
+        assert!(list.is_empty());
     }
 
     #[test]
@@ -307,7 +292,7 @@ mod tests {
             list.insert(pc);
         }
 
-        assert!(!unsafe { list.is_empty() });
+        assert!(!list.is_empty());
 
         let first = unsafe { list.take_one() };
         assert!(ptr::eq(first.unwrap(), pa));
@@ -318,7 +303,7 @@ mod tests {
         let third = unsafe { list.take_one() };
         assert!(ptr::eq(third.unwrap(), pc));
 
-        assert!(unsafe { list.is_empty() });
+        assert!(list.is_empty());
         assert!(unsafe { list.take_one() }.is_none());
     }
 
@@ -339,7 +324,7 @@ mod tests {
 
         let first = unsafe { list.take_one() };
         assert!(ptr::eq(first.unwrap(), pb));
-        assert!(unsafe { list.is_empty() });
+        assert!(list.is_empty());
     }
 
     #[test]
@@ -359,7 +344,7 @@ mod tests {
 
         let first = unsafe { list.take_one() };
         assert!(ptr::eq(first.unwrap(), pa));
-        assert!(unsafe { list.is_empty() });
+        assert!(list.is_empty());
     }
 
     #[test]
@@ -386,7 +371,7 @@ mod tests {
         let second = unsafe { list.take_one() };
         assert!(ptr::eq(second.unwrap(), pc));
 
-        assert!(unsafe { list.is_empty() });
+        assert!(list.is_empty());
     }
 
     #[test]
@@ -400,7 +385,7 @@ mod tests {
             list.remove(pa);
         }
 
-        assert!(unsafe { list.is_empty() });
+        assert!(list.is_empty());
     }
 
     #[test]
@@ -436,7 +421,7 @@ mod tests {
 
         let popped = unsafe { list.take_one() };
         assert!(ptr::eq(popped.unwrap(), pb));
-        assert!(unsafe { list.is_empty() });
+        assert!(list.is_empty());
     }
 
     #[test]
@@ -470,7 +455,7 @@ mod tests {
         let third = unsafe { list.take_one() };
         assert!(ptr::eq(third.unwrap(), pc));
 
-        assert!(unsafe { list.is_empty() });
+        assert!(list.is_empty());
     }
 
     #[test]
@@ -490,7 +475,7 @@ mod tests {
             list.insert(pc);
         }
 
-        let head = unsafe { list.head() };
+        let head = list.head();
         assert!(ptr::eq(head, pa));
 
         let second = unsafe { (*head).next_in_list() };
@@ -605,7 +590,7 @@ mod tests {
             assert!(ptr::eq(popped, expected));
         }
 
-        assert!(unsafe { list.is_empty() });
+        assert!(list.is_empty());
     }
 
     #[test]

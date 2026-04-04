@@ -94,8 +94,7 @@ fn set(mutex: &Mutex<State>) {
     // removed during the unlock window.
     loop {
         let waker = {
-            // SAFETY: We hold the lock.
-            let mut cursor = unsafe { state.waiters.head() };
+            let mut cursor = state.waiters.head();
             loop {
                 if cursor.is_null() {
                     break None;

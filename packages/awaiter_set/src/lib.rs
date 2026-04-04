@@ -45,9 +45,9 @@
 //! changed during the unlock window.
 
 mod awaiter_node_storage;
-mod list;
 mod node;
+mod set;
 
 pub use awaiter_node_storage::*;
-pub use list::*;
 pub use node::*;
+pub use set::*;
