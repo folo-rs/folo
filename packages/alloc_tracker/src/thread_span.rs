@@ -129,10 +129,9 @@ impl Drop for ThreadSpan {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use super::*;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
 
-    use std::panic::RefUnwindSafe;
-    use std::panic::UnwindSafe;
+    use super::*;
 
     // Static assertions for thread safety.
     // ThreadSpan should NOT be Send or Sync due to PhantomData<*const ()>.

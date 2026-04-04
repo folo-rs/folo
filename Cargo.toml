@@ -16,6 +16,7 @@ arc-swap = { version = "1.7", default-features = false }
 argh = { version = "0.1.13", default-features = false, features = ["help"] }
 async-lock = { version = "3.4", default-features = false }
 asynchroniz = { version = "0.1.0", path = "packages/asynchroniz", default-features = false }
+awaiter_set = { version = "0.1.0", path = "packages/awaiter_set", default-features = false }
 axum = { version = "0.8", default-features = false }
 cpulist = { version = "1.1.2", path = "packages/cpulist", default-features = false }
 criterion = { version = "0.7", default-features = false }
@@ -88,7 +89,6 @@ toml = { version = "0.9.2", default-features = false }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 trybuild = { version = "1.0", default-features = false }
 vicinal = { version = "0.1.15", path = "packages/vicinal", default-features = false }
-awaiter_set = { version = "0.1.0", path = "packages/awaiter_set", default-features = false }
 windows = { version = "0.62", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]

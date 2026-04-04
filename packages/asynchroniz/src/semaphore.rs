@@ -6,7 +6,7 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 use std::task::{self, Poll, Waker};
 
-use awaiter_set::{AAwaiterNodeStorage, AwaiterSet};
+use awaiter_set::{AwaiterNodeStorage, AwaiterSet};
 
 use crate::constants::NEVER_POISONED;
 
@@ -201,7 +201,7 @@ fn try_acquire_inner(state_mutex: &Mutex<SemaphoreState>, permits: usize) -> boo
 ///   is (or will be) registered with.
 unsafe fn poll_acquire(
     state_mutex: &Mutex<SemaphoreState>,
-    slot: Pin<&mut AAwaiterNodeStorage>,
+    slot: Pin<&mut AwaiterNodeStorage>,
     permits: usize,
     waker: Waker,
 ) -> Poll<()> {
@@ -242,7 +242,7 @@ unsafe fn poll_acquire(
 /// Same requirements as [`poll_acquire`].
 unsafe fn drop_acquire_wait(
     state_mutex: &Mutex<SemaphoreState>,
-    slot: Pin<&mut AAwaiterNodeStorage>,
+    slot: Pin<&mut AwaiterNodeStorage>,
     permits: usize,
 ) {
     // SAFETY: We do not move the slot.
@@ -393,7 +393,7 @@ impl Semaphore {
         SemaphoreAcquireFuture {
             state: &self.inner.state,
             permits,
-            slot: AAwaiterNodeStorage::new(),
+            slot: AwaiterNodeStorage::new(),
         }
     }
 
@@ -484,11 +484,11 @@ pub struct SemaphoreAcquireFuture<'a> {
     state: &'a Mutex<SemaphoreState>,
     permits: usize,
 
-    slot: AAwaiterNodeStorage,
+    slot: AwaiterNodeStorage,
 }
 
 // Marker trait impl.
-// SAFETY: All AAwaiterNodeStorage fields are accessed exclusively under the
+// SAFETY: All AwaiterNodeStorage fields are accessed exclusively under the
 // semaphore's internal Mutex. The reference points to data behind an
 // Arc that is Send + Sync.
 unsafe impl Send for SemaphoreAcquireFuture<'_> {}
@@ -658,7 +658,7 @@ impl EmbeddedSemaphoreRef {
         EmbeddedSemaphoreAcquireFuture {
             inner: self.inner,
             permits,
-            slot: AAwaiterNodeStorage::new(),
+            slot: AwaiterNodeStorage::new(),
         }
     }
 
@@ -730,7 +730,7 @@ pub struct EmbeddedSemaphoreAcquireFuture {
     inner: NonNull<SemaphoreInner>,
     permits: usize,
 
-    slot: AAwaiterNodeStorage,
+    slot: AwaiterNodeStorage,
 }
 
 // Marker trait impl.

@@ -27,7 +27,6 @@
 //! * [`AwaiterNodeStorage`] — a convenience wrapper that bundles a
 //!   node with its registration state and a pinning marker, reducing
 //!   boilerplate in future implementations.
-//!
 #![doc = simple_mermaid::mermaid!("../docs/diagrams/list_structure.mermaid")]
 //!
 //! # Synchronization

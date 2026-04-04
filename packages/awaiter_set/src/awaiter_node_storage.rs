@@ -15,12 +15,12 @@ use crate::{AwaiterNode, AwaiterSet};
 ///
 /// # Usage
 ///
-/// Embed a `AAwaiterNodeStorage` in your future struct instead of
+/// Embed a `AwaiterNodeStorage` in your future struct instead of
 /// maintaining separate node, registration, and pinning fields:
 ///
 /// ```ignore
 /// struct MyWaitFuture {
-///     storage: AAwaiterNodeStorage,
+///     storage: AwaiterNodeStorage,
 ///     // ... other future-specific fields
 /// }
 /// ```
@@ -37,13 +37,13 @@ use crate::{AwaiterNode, AwaiterSet};
 ///   by the storage.
 /// * [`node_ptr()`][Self::node_ptr] returns a raw pointer without
 ///   dereferencing it.
-pub struct AAwaiterNodeStorage {
+pub struct AwaiterNodeStorage {
     node: UnsafeCell<AwaiterNode>,
     registered: bool,
     _pinned: PhantomPinned,
 }
 
-impl AAwaiterNodeStorage {
+impl AwaiterNodeStorage {
     /// Creates a new slot with an unlinked, unregistered node.
     #[must_use]
     pub fn new() -> Self {
@@ -201,29 +201,29 @@ impl AAwaiterNodeStorage {
     }
 }
 
-impl Default for AAwaiterNodeStorage {
+impl Default for AwaiterNodeStorage {
     fn default() -> Self {
         Self::new()
     }
 }
 
-// SAFETY: AAwaiterNodeStorage is used in futures that are `Send`. The raw
+// SAFETY: AwaiterNodeStorage is used in futures that are `Send`. The raw
 // pointers inside AwaiterNode are only dereferenced while the caller
 // holds a lock, so sending across threads is safe.
-unsafe impl Send for AAwaiterNodeStorage {}
+unsafe impl Send for AwaiterNodeStorage {}
 
-// AAwaiterNodeStorage is !Sync because it contains UnsafeCell and raw pointers.
+// AwaiterNodeStorage is !Sync because it contains UnsafeCell and raw pointers.
 // The UnsafeCell<AwaiterNode> already makes the type !Sync via auto
 // trait rules, so no explicit marker is needed.
 
 // The slot contains no interior mutability visible to callers (all
 // mutation requires unsafe + exclusive access). Observing inconsistent
 // state during unwind is not possible.
-impl UnwindSafe for AAwaiterNodeStorage {}
-impl RefUnwindSafe for AAwaiterNodeStorage {}
+impl UnwindSafe for AwaiterNodeStorage {}
+impl RefUnwindSafe for AwaiterNodeStorage {}
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl fmt::Debug for AAwaiterNodeStorage {
+impl fmt::Debug for AwaiterNodeStorage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(std::any::type_name::<Self>())
             .field("registered", &self.registered)
@@ -239,24 +239,24 @@ mod tests {
 
     use super::*;
 
-    assert_impl_all!(AAwaiterNodeStorage: Send, UnwindSafe, RefUnwindSafe);
-    assert_not_impl_any!(AAwaiterNodeStorage: Sync);
+    assert_impl_all!(AwaiterNodeStorage: Send, UnwindSafe, RefUnwindSafe);
+    assert_not_impl_any!(AwaiterNodeStorage: Sync);
 
     #[test]
     fn new_slot_is_unregistered() {
-        let slot = AAwaiterNodeStorage::new();
+        let slot = AwaiterNodeStorage::new();
         assert!(!slot.is_registered());
     }
 
     #[test]
     fn default_slot_is_unregistered() {
-        let slot = AAwaiterNodeStorage::default();
+        let slot = AwaiterNodeStorage::default();
         assert!(!slot.is_registered());
     }
 
     #[test]
     fn node_ptr_is_stable() {
-        let slot = AAwaiterNodeStorage::new();
+        let slot = AwaiterNodeStorage::new();
         let p1 = slot.node_ptr();
         let p2 = slot.node_ptr();
         assert_eq!(p1, p2);
@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn register_sets_registered_flag() {
-        let mut slot = AAwaiterNodeStorage::new();
+        let mut slot = AwaiterNodeStorage::new();
         let mut list = AwaiterSet::new();
 
         // SAFETY: Test has exclusive access.
@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn register_idempotent_on_second_call() {
-        let mut slot = AAwaiterNodeStorage::new();
+        let mut slot = AwaiterNodeStorage::new();
         let mut list = AwaiterSet::new();
 
         // SAFETY: Test has exclusive access.
@@ -302,7 +302,7 @@ mod tests {
 
     #[test]
     fn register_with_data_stores_user_data() {
-        let mut slot = AAwaiterNodeStorage::new();
+        let mut slot = AwaiterNodeStorage::new();
         let mut list = AwaiterSet::new();
 
         // SAFETY: Test has exclusive access.
@@ -318,7 +318,7 @@ mod tests {
 
     #[test]
     fn unregister_removes_from_list() {
-        let mut slot = AAwaiterNodeStorage::new();
+        let mut slot = AwaiterNodeStorage::new();
         let mut list = AwaiterSet::new();
 
         // SAFETY: Test has exclusive access.
@@ -337,7 +337,7 @@ mod tests {
 
     #[test]
     fn unregister_when_not_registered_is_noop() {
-        let mut slot = AAwaiterNodeStorage::new();
+        let mut slot = AwaiterNodeStorage::new();
         let mut list = AwaiterSet::new();
 
         // SAFETY: Test has exclusive access.
@@ -349,7 +349,7 @@ mod tests {
 
     #[test]
     fn take_notification_returns_false_when_not_notified() {
-        let mut slot = AAwaiterNodeStorage::new();
+        let mut slot = AwaiterNodeStorage::new();
 
         // SAFETY: Test has exclusive access.
         let notified = unsafe { slot.take_notification() };
@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn take_notification_returns_true_and_clears_registered() {
-        let mut slot = AAwaiterNodeStorage::new();
+        let mut slot = AwaiterNodeStorage::new();
         let mut list = AwaiterSet::new();
 
         // SAFETY: Test has exclusive access.
@@ -386,7 +386,7 @@ mod tests {
 
     #[test]
     fn is_notified_does_not_change_registered() {
-        let mut slot = AAwaiterNodeStorage::new();
+        let mut slot = AwaiterNodeStorage::new();
         let mut list = AwaiterSet::new();
 
         // SAFETY: Test has exclusive access.
@@ -409,7 +409,7 @@ mod tests {
 
     #[test]
     fn full_lifecycle_register_notify_take() {
-        let mut slot = AAwaiterNodeStorage::new();
+        let mut slot = AwaiterNodeStorage::new();
         let mut list = AwaiterSet::new();
 
         // Register.
@@ -436,7 +436,7 @@ mod tests {
 
     #[test]
     fn full_lifecycle_register_unregister() {
-        let mut slot = AAwaiterNodeStorage::new();
+        let mut slot = AwaiterNodeStorage::new();
         let mut list = AwaiterSet::new();
 
         // Register.

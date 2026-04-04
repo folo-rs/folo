@@ -7,7 +7,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::task::{self, Poll, Waker};
 
-use awaiter_set::{AAwaiterNodeStorage, AwaiterSet};
+use awaiter_set::{AwaiterNodeStorage, AwaiterSet};
 
 /// Single-threaded async semaphore.
 ///
@@ -173,7 +173,7 @@ impl Inner {
     ///   semaphore.
     unsafe fn poll_acquire(
         &self,
-        slot: Pin<&mut AAwaiterNodeStorage>,
+        slot: Pin<&mut AwaiterNodeStorage>,
         permits: usize,
         waker: Waker,
     ) -> Poll<()> {
@@ -207,7 +207,7 @@ impl Inner {
     /// # Safety
     ///
     /// Same requirements as [`poll_acquire`][Self::poll_acquire].
-    unsafe fn drop_acquire_wait(&self, slot: Pin<&mut AAwaiterNodeStorage>, permits: usize) {
+    unsafe fn drop_acquire_wait(&self, slot: Pin<&mut AwaiterNodeStorage>, permits: usize) {
         // SAFETY: We do not move the slot.
         let slot = unsafe { slot.get_unchecked_mut() };
         let node_ptr = slot.node_ptr();
@@ -338,7 +338,7 @@ impl LocalSemaphore {
         LocalSemaphoreAcquireFuture {
             inner: &self.inner,
             permits,
-            slot: AAwaiterNodeStorage::new(),
+            slot: AwaiterNodeStorage::new(),
         }
     }
 
@@ -408,7 +408,7 @@ pub struct LocalSemaphoreAcquireFuture<'a> {
     inner: &'a Inner,
     permits: usize,
 
-    slot: AAwaiterNodeStorage,
+    slot: AwaiterNodeStorage,
 }
 
 impl<'a> Future for LocalSemaphoreAcquireFuture<'a> {
@@ -564,7 +564,7 @@ impl EmbeddedLocalSemaphoreRef {
         EmbeddedLocalSemaphoreAcquireFuture {
             inner: self.inner,
             permits,
-            slot: AAwaiterNodeStorage::new(),
+            slot: AwaiterNodeStorage::new(),
         }
     }
 
@@ -622,7 +622,7 @@ pub struct EmbeddedLocalSemaphoreAcquireFuture {
     inner: NonNull<Inner>,
     permits: usize,
 
-    slot: AAwaiterNodeStorage,
+    slot: AwaiterNodeStorage,
 }
 
 impl Future for EmbeddedLocalSemaphoreAcquireFuture {

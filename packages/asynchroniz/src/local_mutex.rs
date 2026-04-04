@@ -8,7 +8,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::task::{self, Poll, Waker};
 
-use awaiter_set::{AAwaiterNodeStorage, AwaiterSet};
+use awaiter_set::{AwaiterNodeStorage, AwaiterSet};
 
 /// Single-threaded async mutex.
 ///
@@ -128,7 +128,7 @@ impl<T> Inner<T> {
     ///
     /// * The `slot` must belong to a future created from the same
     ///   mutex.
-    unsafe fn poll_lock(&self, slot: Pin<&mut AAwaiterNodeStorage>, waker: Waker) -> Poll<()> {
+    unsafe fn poll_lock(&self, slot: Pin<&mut AwaiterNodeStorage>, waker: Waker) -> Poll<()> {
         // SAFETY: We do not move the slot.
         let slot = unsafe { slot.get_unchecked_mut() };
 
@@ -160,7 +160,7 @@ impl<T> Inner<T> {
     /// # Safety
     ///
     /// Same requirements as [`poll_lock`][Self::poll_lock].
-    unsafe fn drop_lock_wait(&self, slot: Pin<&mut AAwaiterNodeStorage>) {
+    unsafe fn drop_lock_wait(&self, slot: Pin<&mut AwaiterNodeStorage>) {
         // SAFETY: We do not move the slot.
         let slot = unsafe { slot.get_unchecked_mut() };
         let node_ptr = slot.node_ptr();
@@ -289,7 +289,7 @@ impl<T> LocalMutex<T> {
     pub fn lock(&self) -> LocalMutexLockFuture<'_, T> {
         LocalMutexLockFuture {
             inner: &self.inner,
-            slot: AAwaiterNodeStorage::new(),
+            slot: AwaiterNodeStorage::new(),
         }
     }
 
@@ -363,7 +363,7 @@ impl<T> Drop for LocalMutexGuard<'_, T> {
 pub struct LocalMutexLockFuture<'a, T> {
     inner: &'a Inner<T>,
 
-    slot: AAwaiterNodeStorage,
+    slot: AwaiterNodeStorage,
 }
 
 impl<'a, T> Future for LocalMutexLockFuture<'a, T> {
@@ -512,7 +512,7 @@ impl<T> EmbeddedLocalMutexRef<T> {
     pub fn lock(&self) -> EmbeddedLocalMutexLockFuture<T> {
         EmbeddedLocalMutexLockFuture {
             inner: self.inner,
-            slot: AAwaiterNodeStorage::new(),
+            slot: AwaiterNodeStorage::new(),
         }
     }
 
@@ -579,7 +579,7 @@ impl<T> Drop for EmbeddedLocalMutexGuard<T> {
 pub struct EmbeddedLocalMutexLockFuture<T> {
     inner: NonNull<Inner<T>>,
 
-    slot: AAwaiterNodeStorage,
+    slot: AwaiterNodeStorage,
 }
 
 impl<T> Future for EmbeddedLocalMutexLockFuture<T> {

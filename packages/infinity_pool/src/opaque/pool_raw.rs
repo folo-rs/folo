@@ -652,7 +652,6 @@ impl<'p> IntoIterator for &'p RawOpaquePool {
 mod tests {
     use std::alloc::Layout;
     use std::mem::MaybeUninit;
-
     use std::panic::{RefUnwindSafe, UnwindSafe};
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};

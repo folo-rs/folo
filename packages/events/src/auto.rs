@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{self, Poll, Waker};
 use std::{fmt, mem};
 
-use awaiter_set::{AAwaiterNodeStorage, AwaiterSet};
+use awaiter_set::{AwaiterNodeStorage, AwaiterSet};
 
 use crate::NEVER_POISONED;
 
@@ -123,7 +123,7 @@ fn try_wait(mutex: &Mutex<State>) -> bool {
 ///   be) registered with.
 unsafe fn poll_wait(
     mutex: &Mutex<State>,
-    slot: Pin<&mut AAwaiterNodeStorage>,
+    slot: Pin<&mut AwaiterNodeStorage>,
     waker: Waker,
 ) -> Poll<()> {
     // SAFETY: We do not move the slot.
@@ -163,7 +163,7 @@ unsafe fn poll_wait(
 /// # Safety
 ///
 /// Same requirements as [`poll_wait`].
-unsafe fn drop_wait(mutex: &Mutex<State>, slot: Pin<&mut AAwaiterNodeStorage>) {
+unsafe fn drop_wait(mutex: &Mutex<State>, slot: Pin<&mut AwaiterNodeStorage>) {
     // SAFETY: We do not move the slot.
     let slot = unsafe { slot.get_unchecked_mut() };
 
@@ -384,7 +384,7 @@ impl AutoResetEvent {
     pub fn wait(&self) -> AutoResetWaitFuture {
         AutoResetWaitFuture {
             state: Arc::clone(&self.state),
-            slot: AAwaiterNodeStorage::new(),
+            slot: AwaiterNodeStorage::new(),
         }
     }
 }
@@ -394,15 +394,15 @@ impl AutoResetEvent {
 /// Completes with `()` when the event signal is acquired.
 pub struct AutoResetWaitFuture {
     state: Arc<Mutex<State>>,
-    slot: AAwaiterNodeStorage,
+    slot: AwaiterNodeStorage,
 }
 
 // Marker trait impl.
-// SAFETY: AAwaiterNodeStorage is Send. All slot access is protected by the event's
+// SAFETY: AwaiterNodeStorage is Send. All slot access is protected by the event's
 // Mutex. The Arc<Mutex<State>> is Send + Sync.
 unsafe impl Send for AutoResetWaitFuture {}
 
-// AAwaiterNodeStorage is UnwindSafe and RefUnwindSafe.
+// AwaiterNodeStorage is UnwindSafe and RefUnwindSafe.
 // Marker trait impl.
 impl UnwindSafe for AutoResetWaitFuture {}
 // Marker trait impl.
@@ -567,7 +567,7 @@ impl RawAutoResetEvent {
     pub fn wait(&self) -> RawAutoResetWaitFuture {
         RawAutoResetWaitFuture {
             state: self.state,
-            slot: AAwaiterNodeStorage::new(),
+            slot: AwaiterNodeStorage::new(),
         }
     }
 }
@@ -575,11 +575,11 @@ impl RawAutoResetEvent {
 /// Future returned by [`RawAutoResetEvent::wait()`].
 pub struct RawAutoResetWaitFuture {
     state: NonNull<Mutex<State>>,
-    slot: AAwaiterNodeStorage,
+    slot: AwaiterNodeStorage,
 }
 
 // Marker trait impl.
-// SAFETY: AAwaiterNodeStorage is Send. All slot access is protected by the event's
+// SAFETY: AwaiterNodeStorage is Send. All slot access is protected by the event's
 // Mutex.
 unsafe impl Send for RawAutoResetWaitFuture {}
 
