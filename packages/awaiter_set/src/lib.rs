@@ -37,11 +37,14 @@
 //!
 //! # Re-entrancy
 //!
-//! [`Waker::wake()`][std::task::Waker::wake] may be re-entrant: the
-//! waker's executor can immediately poll the woken future, which may
-//! attempt to access the same set. Callers must release locks before
-//! calling `wake()` and rescan afterward, because the set may have
-//! changed during the unlock window.
+//! Synchronization primitives that use this crate must be aware that
+//! calling [`Waker::wake()`][std::task::Waker::wake] on an awaiter's
+//! stored waker may cause the executor to immediately re-poll the
+//! woken future, which may in turn attempt to register a new awaiter
+//! in the same set. To prevent aliased mutable access, the primitive
+//! must release its lock before calling `wake()` and re-acquire it
+//! afterward, since the set may have changed during the unlock
+//! window.
 
 pub(crate) mod awaiter;
 mod set;

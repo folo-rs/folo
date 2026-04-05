@@ -7,38 +7,69 @@ use std::task::Waker;
 
 use crate::AwaiterSet;
 
-// The data that AwaiterSet accesses through stored raw pointers.
-// Wrapped in UnsafeCell because the set stores *mut Awaiter pointers
-// and later creates &mut references from them (via take_one/peek/
-// for_each), bypassing the borrow checker. Without UnsafeCell,
-// Miri's Stacked Borrows would flag these re-created references.
+// Interior data accessed by both the owning future (via &mut self
+// methods) and by AwaiterSet (via stored raw pointers that are later
+// turned into &mut Awaiter references). The UnsafeCell is required
+// because the set bypasses the borrow checker by reconstructing
+// references from raw pointers.
+//
+// Lifecycle of an Awaiter:
+//
+// 1. Idle: just created, no waker, not in any set.
+// 2. Waiting: registered in a set via register(), waker stored.
+//    The future's poll() calls register() on each poll to keep
+//    the waker up to date (the executor may provide a different
+//    waker on subsequent polls).
+// 3. Notified: the synchronization primitive called take_one() on
+//    the set, obtaining &mut Awaiter, then called set_notified()
+//    and take_waker() to signal the future. The awaiter is no
+//    longer in the set.
+// 4. Back to Idle: the future's next poll observes the notification
+//    via take_notification() and completes with Ready.
+//
+// Alternatively, the future may be dropped while in the Waiting
+// state. The drop handler calls unregister() to remove the awaiter
+// from the set, or (if already notified) forwards the resource
+// to the next awaiter.
 struct Inner {
+    // The waker provided by the executor. Set during register(),
+    // consumed by take_waker() after the primitive notifies us.
+    // None when idle or after the waker has been taken.
     waker: Option<Waker>,
+
+    // Set to true by the synchronization primitive (via
+    // set_notified()) after taking this awaiter from the set.
+    // Checked by the future's poll via take_notification().
     notified: bool,
+
+    // Caller-defined metadata. Semaphores store the requested
+    // permit count here; other primitives leave it at 0.
     user_data: usize,
+
+    // Intrusive linked-set pointers, managed by AwaiterSet.
     next: *mut Awaiter,
     prev: *mut Awaiter,
 }
 
-/// A single awaiter that can be registered in an [`AwaiterSet`].
+/// An awaiter that can be registered in an [`AwaiterSet`].
 ///
 /// Embed an `Awaiter` in your async future to park it until a
-/// synchronization event occurs. The awaiter stores a [`Waker`] for
-/// notification, a boolean notification flag, and a `usize` of
-/// caller-defined data.
+/// synchronization primitive signals it. When parked, the awaiter
+/// holds a [`Waker`] that the primitive uses to wake the future.
 ///
-/// Once registered in a set, the awaiter must remain at a stable
-/// pinned address until it is removed.
+/// An awaiter is removed from the set either by the primitive
+/// (when it grants a resource like a lock or permit) or by the
+/// future's drop handler (if the future is cancelled).
 ///
 /// # Safety model
 ///
-/// Methods that interact with the awaiter's internal state are
-/// `unsafe` because the caller must guarantee exclusive access —
-/// either by holding a mutex or by confining all access to a single
-/// thread.
-///
-/// [`is_registered()`][Self::is_registered] is safe because it reads
-/// a plain `bool` owned by the awaiter.
+/// The `register`, `unregister`, `take_notification`, and
+/// `is_notified` methods are `unsafe` because the awaiter's
+/// internal state is shared with the [`AwaiterSet`] that manages
+/// it. The caller must ensure that all access to the awaiter and
+/// its set is serialized — for thread-safe primitives this means
+/// holding the lock that protects the set; for single-threaded
+/// primitives this is guaranteed by the `!Send` constraint.
 pub struct Awaiter {
     inner: UnsafeCell<Inner>,
     registered: bool,
@@ -62,33 +93,33 @@ impl Awaiter {
         }
     }
 
-    /// Returns `true` if the awaiter is currently registered in an
+    /// Returns `true` if the awaiter is currently in an
     /// [`AwaiterSet`].
     #[must_use]
     pub fn is_registered(&self) -> bool {
         self.registered
     }
 
-    /// Stores a waker and registers the awaiter in `set` if not
-    /// already registered.
+    /// Registers this awaiter in `set` with the given waker.
     ///
-    /// On the first call this inserts the awaiter into the set and
-    /// marks it as registered. On subsequent calls it only updates
-    /// the stored waker.
+    /// On the first poll, this inserts the awaiter into the set. On
+    /// subsequent polls it updates the stored waker (the executor
+    /// may provide a different waker on each poll).
     ///
     /// # Safety
     ///
-    /// * The caller must have exclusive access to both the awaiter
-    ///   and the set (e.g. by holding a lock).
-    /// * The awaiter must be at a pinned, stable address.
-    /// * The awaiter must remain valid until removed from the set.
+    /// The awaiter and the set must be protected by the same lock
+    /// (or confined to a single thread). The awaiter must be pinned
+    /// and must remain valid until it is removed from the set — either
+    /// by the primitive calling [`AwaiterSet::take_one()`] or by the
+    /// future's drop handler calling [`unregister()`][Self::unregister].
     pub unsafe fn register(&mut self, set: &mut AwaiterSet, waker: Waker) {
-        // SAFETY: The caller guarantees exclusive access to the awaiter.
+        // SAFETY: Access is serialized by the caller's lock.
         let inner = unsafe { &mut *self.inner.get() };
         inner.waker = Some(waker);
         if !self.registered {
-            // Clear any stale notification from a previous lifecycle.
             inner.notified = false;
+            inner.user_data = 0;
             // SAFETY: Caller guarantees the awaiter is pinned and
             // will remain valid until removed.
             unsafe {
@@ -98,18 +129,20 @@ impl Awaiter {
         }
     }
 
-    /// Stores a waker with caller-defined data and registers the
-    /// awaiter in `set` if not already registered.
+    /// Registers this awaiter in `set` with a waker and
+    /// caller-defined data.
     ///
-    /// Behaves like [`register()`][Self::register] but also sets the
-    /// [`user_data`][Self::user_data] (e.g. the number of permits a
-    /// semaphore awaiter requests).
+    /// Behaves like [`register()`][Self::register] but also sets
+    /// the [`user_data`][Self::user_data] value (e.g. the number
+    /// of permits a semaphore awaiter requests).
     ///
     /// # Safety
     ///
-    /// Same requirements as [`register()`][Self::register].
+    /// The awaiter and the set must be protected by the same lock
+    /// (or confined to a single thread). The awaiter must be pinned
+    /// and must remain valid until it is removed from the set.
     pub unsafe fn register_with_data(&mut self, set: &mut AwaiterSet, waker: Waker, data: usize) {
-        // SAFETY: The caller guarantees exclusive access to the awaiter.
+        // SAFETY: Access is serialized by the caller's lock.
         let inner = unsafe { &mut *self.inner.get() };
         inner.waker = Some(waker);
         inner.user_data = data;
@@ -123,13 +156,15 @@ impl Awaiter {
         }
     }
 
-    /// Removes the awaiter from `set` if it is currently registered.
+    /// Removes the awaiter from `set`.
+    ///
+    /// This is a no-op if the awaiter is not currently registered.
     ///
     /// # Safety
     ///
-    /// * The caller must have exclusive access to both the awaiter
-    ///   and the set.
-    /// * The awaiter must be in `set` (not some other set).
+    /// The awaiter and the set must be protected by the same lock
+    /// (or confined to a single thread). If registered, the awaiter
+    /// must be in `set` (not in a different set).
     pub unsafe fn unregister(&mut self, set: &mut AwaiterSet) {
         if self.registered {
             // SAFETY: The awaiter is in this set per the caller's
@@ -141,19 +176,24 @@ impl Awaiter {
         }
     }
 
-    /// Checks whether the awaiter was notified and, if so, clears
-    /// the registration flag.
+    /// Checks whether the synchronization primitive has notified
+    /// this awaiter, and if so, marks the awaiter as unregistered.
     ///
-    /// Returns `true` if the awaiter has been notified, meaning the
-    /// synchronization primitive has taken this awaiter from the set
-    /// and transferred ownership of some resource (a lock, a permit,
-    /// or a signal) to it.
+    /// Returns `true` if the primitive has called
+    /// [`set_notified()`][Self::set_notified] on this awaiter
+    /// (after taking it from the set via
+    /// [`AwaiterSet::take_one()`]). The future should then complete
+    /// with `Ready`.
+    ///
+    /// This is typically the first check in a future's `poll()`
+    /// method.
     ///
     /// # Safety
     ///
-    /// The caller must have exclusive access to the awaiter.
+    /// The awaiter must be protected by the same lock as the set
+    /// (or confined to a single thread).
     pub unsafe fn take_notification(&mut self) -> bool {
-        // SAFETY: The caller guarantees exclusive access to the awaiter.
+        // SAFETY: Access is serialized by the caller's lock.
         let inner = unsafe { &*self.inner.get() };
         if inner.notified {
             self.registered = false;
@@ -163,17 +203,21 @@ impl Awaiter {
         }
     }
 
-    /// Checks whether the awaiter was notified, without changing
-    /// registration state.
+    /// Checks whether this awaiter has been notified, without
+    /// changing its registration state.
     ///
-    /// Use this in drop handlers to decide whether to forward a
-    /// resource to the next awaiter.
+    /// Used in the future's [`Drop`] implementation to determine
+    /// whether the primitive granted a resource (lock, permit,
+    /// signal) to this awaiter. If so, the drop handler must
+    /// forward the resource to the next awaiter rather than
+    /// silently discarding it.
     ///
     /// # Safety
     ///
-    /// The caller must have exclusive access to the awaiter.
+    /// The awaiter must be protected by the same lock as the set
+    /// (or confined to a single thread).
     pub unsafe fn is_notified(&self) -> bool {
-        // SAFETY: The caller guarantees exclusive access to the awaiter.
+        // SAFETY: Access is serialized by the caller's lock.
         let inner = unsafe { &*self.inner.get() };
         inner.notified
     }
@@ -181,32 +225,34 @@ impl Awaiter {
     /// Marks this awaiter as notified.
     ///
     /// Called by synchronization primitives after taking the awaiter
-    /// from the set, signaling the owning future to complete on its
-    /// next poll.
+    /// from the set via [`AwaiterSet::take_one()`], signaling the
+    /// owning future to complete on its next poll.
     pub fn set_notified(&mut self) {
-        // SAFETY: We have &mut self — exclusive access.
+        // SAFETY: &mut self guarantees exclusive access.
         let inner = unsafe { &mut *self.inner.get() };
         inner.notified = true;
     }
 
     /// Extracts and returns the stored waker, if any.
     ///
-    /// Called by the synchronization primitive after taking this
-    /// awaiter from the set and setting the notified flag. The caller
-    /// must invoke [`Waker::wake()`] outside any lock scope to avoid
+    /// Called by the synchronization primitive after
+    /// [`set_notified()`][Self::set_notified]. The caller must
+    /// invoke [`Waker::wake()`] outside any lock scope to avoid
     /// re-entrancy issues.
     pub fn take_waker(&mut self) -> Option<Waker> {
-        // SAFETY: We have &mut self — exclusive access.
+        // SAFETY: &mut self guarantees exclusive access.
         let inner = unsafe { &mut *self.inner.get() };
         inner.waker.take()
     }
 
     /// Returns the caller-defined user data.
     ///
-    /// Defaults to `0` if never set.
+    /// Defaults to `0` if never set via
+    /// [`register_with_data()`][Self::register_with_data].
     #[must_use]
     pub fn user_data(&self) -> usize {
-        // SAFETY: We have &self — shared access is fine for reading.
+        // SAFETY: &self is sufficient for reading through UnsafeCell
+        // because the caller serializes all writes.
         let inner = unsafe { &*self.inner.get() };
         inner.user_data
     }
