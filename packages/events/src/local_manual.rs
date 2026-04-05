@@ -620,8 +620,6 @@ mod tests {
         });
     }
 
-    // --- embedded variant tests ---
-
     #[test]
     fn embedded_set_and_wait() {
         futures::executor::block_on(async {
@@ -673,8 +671,6 @@ mod tests {
             event.wait().await;
         });
     }
-
-    // --- manual-poll tests (cover register→wake→ready cycle) ---
 
     #[test]
     fn wait_registers_then_completes() {
@@ -764,8 +760,6 @@ mod tests {
         assert!(f2.as_mut().poll(&mut cx).is_ready());
         assert!(f3.as_mut().poll(&mut cx).is_ready());
     }
-
-    // --- re-entrancy tests (prove wake() is called outside awaiter set borrow) ---
     //
     // These tests use a custom waker that re-entrantly accesses the same event
     // when woken. If wake() were called while a &AwaiterSet borrow from
@@ -969,8 +963,6 @@ mod tests {
         event.set();
         assert!(event.try_wait());
     }
-
-    // --- livelock regression test ---
 
     /// Verifies that `set()` terminates even if `reset()` is called
     /// re-entrantly while the wake loop is in progress.

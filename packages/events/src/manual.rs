@@ -142,9 +142,9 @@ fn try_wait(mutex: &Mutex<State>) -> bool {
 /// * The `mutex` must protect the awaiter set that this awaiter is (or will
 ///   be) registered with.
 unsafe fn poll_wait(mutex: &Mutex<State>, awaiter: Pin<&mut Awaiter>, waker: Waker) -> Poll<()> {
+    let mut state = mutex.lock().expect(NEVER_POISONED);
     // SAFETY: We do not move the awaiter.
     let awaiter = unsafe { awaiter.get_unchecked_mut() };
-    let mut state = mutex.lock().expect(NEVER_POISONED);
 
     if state.is_set {
         if awaiter.is_registered() {

@@ -644,8 +644,6 @@ mod tests {
         });
     }
 
-    // --- embedded variant tests ---
-
     #[test]
     fn embedded_set_and_wait() {
         futures::executor::block_on(async {
@@ -694,8 +692,6 @@ mod tests {
             event.wait().await;
         });
     }
-
-    // --- manual-poll tests (cover register→wake→ready cycle) ---
 
     #[test]
     fn wait_registers_then_completes() {
@@ -828,8 +824,6 @@ mod tests {
 
         assert!(future2.as_mut().poll(&mut cx).is_ready());
     }
-
-    // --- re-entrancy tests (prove wake() is called outside &mut AwaiterSet borrow) ---
     //
     // These tests use a custom waker that re-entrantly accesses the same event
     // when woken. If wake() were called while an &mut AwaiterSet borrow from

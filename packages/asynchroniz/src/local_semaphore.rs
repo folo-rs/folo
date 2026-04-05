@@ -177,7 +177,7 @@ impl Inner {
         // SAFETY: Single-threaded access.
         let state = unsafe { &mut *self.state.get() };
 
-        if !awaiter.is_registered() && state.available >= permits {
+        if !awaiter.is_registered() && state.waiters.is_empty() && state.available >= permits {
             state.available = state
                 .available
                 .checked_sub(permits)

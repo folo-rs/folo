@@ -192,9 +192,10 @@ unsafe fn poll_acquire(
     permits: usize,
     waker: Waker,
 ) -> Poll<()> {
-    // SAFETY: We do not move the awaiter.
-    let awaiter = unsafe { awaiter.get_unchecked_mut() };
     let mut state = state_mutex.lock().expect(NEVER_POISONED);
+    // SAFETY: We do not move the awaiter. Projection is done after
+    // acquiring the lock so all &mut Awaiter access is serialized.
+    let awaiter = unsafe { awaiter.get_unchecked_mut() };
 
     // Check if we were directly notified by release_permits()
     // (it popped us from the set and reserved our permits).
@@ -203,9 +204,9 @@ unsafe fn poll_acquire(
         return Poll::Ready(());
     }
 
-    if !awaiter.is_registered() && state.available >= permits {
-        // Permits are available and we are not yet registered
-        // (first poll fast path).
+    if !awaiter.is_registered() && state.waiters.is_empty() && state.available >= permits {
+        // Permits are available and the queue is empty — take them
+        // immediately without registering.
         state.available = state
             .available
             .checked_sub(permits)
@@ -232,9 +233,9 @@ unsafe fn drop_acquire_wait(
     awaiter: Pin<&mut Awaiter>,
     permits: usize,
 ) {
+    let mut state = state_mutex.lock().expect(NEVER_POISONED);
     // SAFETY: We do not move the awaiter.
     let awaiter = unsafe { awaiter.get_unchecked_mut() };
-    let mut state = state_mutex.lock().expect(NEVER_POISONED);
 
     // SAFETY: We hold the lock.
     if unsafe { awaiter.is_notified() } {

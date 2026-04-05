@@ -50,12 +50,4 @@ pub use local_semaphore::*;
 pub use mutex::*;
 pub use semaphore::*;
 
-/// Future types returned by `lock()` and `acquire()` methods.
-pub mod futures {
-    pub use crate::local_mutex::{EmbeddedLocalMutexLockFuture, LocalMutexLockFuture};
-    pub use crate::local_semaphore::{
-        EmbeddedLocalSemaphoreAcquireFuture, LocalSemaphoreAcquireFuture,
-    };
-    pub use crate::mutex::{EmbeddedMutexLockFuture, MutexLockFuture};
-    pub use crate::semaphore::{EmbeddedSemaphoreAcquireFuture, SemaphoreAcquireFuture};
-}
+pub mod futures;

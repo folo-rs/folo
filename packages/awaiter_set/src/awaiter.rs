@@ -87,6 +87,8 @@ impl Awaiter {
         let inner = unsafe { &mut *self.inner.get() };
         inner.waker = Some(waker);
         if !self.registered {
+            // Clear any stale notification from a previous lifecycle.
+            inner.notified = false;
             // SAFETY: Caller guarantees the awaiter is pinned and
             // will remain valid until removed.
             unsafe {
@@ -112,6 +114,7 @@ impl Awaiter {
         inner.waker = Some(waker);
         inner.user_data = data;
         if !self.registered {
+            inner.notified = false;
             // SAFETY: Same as register().
             unsafe {
                 set.insert(ptr::from_mut(self));
@@ -208,7 +211,7 @@ impl Awaiter {
         inner.user_data
     }
 
-    // Crate-internal accessors for AwaiterSet linked-list management.
+    // Crate-internal accessors for AwaiterSet linked-set management.
 
     pub(crate) fn next(&self) -> *mut Self {
         // SAFETY: Only called while holding exclusive access to the set.

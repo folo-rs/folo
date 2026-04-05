@@ -34,23 +34,22 @@ impl AwaiterSet {
         }
     }
 
-    /// Returns `true` if the set contains no nodes.
+    /// Returns `true` if the set contains no awaiters.
     #[must_use]
-    pub fn is_empty(&mut self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.head.is_null()
     }
 
-    /// Returns a shared reference to the next node to be taken.
+    /// Returns a shared reference to the next awaiter to be taken.
     ///
     /// Returns `None` if the set is empty.
     #[must_use]
-    pub fn peek(&mut self) -> Option<&Awaiter> {
+    pub fn peek(&self) -> Option<&Awaiter> {
         if self.head.is_null() {
             None
         } else {
             // SAFETY: All pointers in the set are valid and pinned,
-            // an invariant established by `insert`. The `&mut self`
-            // borrow prevents concurrent mutation.
+            // an invariant established by `insert`.
             Some(unsafe { &*self.head })
         }
     }
@@ -217,14 +216,14 @@ mod tests {
 
     #[test]
     fn new_list_is_empty() {
-        let mut list = AwaiterSet::new();
+        let list = AwaiterSet::new();
         assert!(list.is_empty());
         assert!(list.peek().is_none());
     }
 
     #[test]
     fn default_list_is_empty() {
-        let mut list = AwaiterSet::default();
+        let list = AwaiterSet::default();
         assert!(list.is_empty());
     }
 

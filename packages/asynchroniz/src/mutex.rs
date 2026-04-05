@@ -156,10 +156,10 @@ unsafe fn poll_lock(
     awaiter: Pin<&mut Awaiter>,
     waker: Waker,
 ) -> Poll<()> {
-    // SAFETY: We do not move the awaiter; Pin enforces the address
-    // stability that the awaiter set requires.
-    let awaiter = unsafe { awaiter.get_unchecked_mut() };
     let mut state = lock_state.lock().expect(NEVER_POISONED);
+    // SAFETY: We do not move the awaiter. Projection is done after
+    // acquiring the lock so all &mut Awaiter access is serialized.
+    let awaiter = unsafe { awaiter.get_unchecked_mut() };
 
     // Check if we were directly notified by unlock() (it popped us
     // from the set and set our notified flag, transferring lock
@@ -194,9 +194,9 @@ unsafe fn poll_lock(
 ///
 /// Same requirements as [`poll_lock`].
 unsafe fn drop_lock_wait(lock_state: &StdMutex<LockState>, awaiter: Pin<&mut Awaiter>) {
+    let mut state = lock_state.lock().expect(NEVER_POISONED);
     // SAFETY: We do not move the awaiter.
     let awaiter = unsafe { awaiter.get_unchecked_mut() };
-    let mut state = lock_state.lock().expect(NEVER_POISONED);
 
     // SAFETY: We hold the lock.
     if unsafe { awaiter.is_notified() } {
