@@ -8,7 +8,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::task::{self, Poll, Waker};
 
-use awaiter_set::{AwaiterNodeStorage, AwaiterSet};
+use awaiter_set::{Awaiter, AwaiterSet};
 
 /// Single-threaded async manual-reset event.
 ///
@@ -144,29 +144,29 @@ impl Inner {
 
     /// # Safety
     ///
-    /// * The `slot` must belong to a future created from the same event.
-    unsafe fn poll_wait(&self, slot: Pin<&mut AwaiterNodeStorage>, waker: Waker) -> Poll<()> {
-        // SAFETY: We do not move the slot.
-        let slot = unsafe { slot.get_unchecked_mut() };
+    /// * The `awaiter` must belong to a future created from the same event.
+    unsafe fn poll_wait(&self, awaiter: Pin<&mut Awaiter>, waker: Waker) -> Poll<()> {
+        // SAFETY: We do not move the awaiter.
+        let awaiter = unsafe { awaiter.get_unchecked_mut() };
         if self.is_set.get() {
-            if slot.is_registered() {
-                // SAFETY: Single-threaded, slot is registered in this
+            if awaiter.is_registered() {
+                // SAFETY: Single-threaded, awaiter is registered in this
                 // list.
                 let waiters = unsafe { &mut *self.waiters.get() };
                 // SAFETY: Single-threaded.
                 unsafe {
-                    slot.unregister(waiters);
+                    awaiter.unregister(waiters);
                 }
             }
             return Poll::Ready(());
         }
 
-        // SAFETY: Single-threaded, slot is pinned and lives as long
+        // SAFETY: Single-threaded, awaiter is pinned and lives as long
         // as the future.
         let waiters = unsafe { &mut *self.waiters.get() };
         // SAFETY: Single-threaded.
         unsafe {
-            slot.register(waiters, waker);
+            awaiter.register(waiters, waker);
         }
 
         Poll::Pending
@@ -175,16 +175,16 @@ impl Inner {
     /// # Safety
     ///
     /// Same requirements as [`poll_wait`][Self::poll_wait].
-    unsafe fn drop_wait(&self, slot: Pin<&mut AwaiterNodeStorage>) {
-        // SAFETY: We do not move the slot.
-        let slot = unsafe { slot.get_unchecked_mut() };
-        if slot.is_registered() {
-            // SAFETY: Single-threaded, slot is registered in this
+    unsafe fn drop_wait(&self, awaiter: Pin<&mut Awaiter>) {
+        // SAFETY: We do not move the awaiter.
+        let awaiter = unsafe { awaiter.get_unchecked_mut() };
+        if awaiter.is_registered() {
+            // SAFETY: Single-threaded, awaiter is registered in this
             // list.
             let waiters = unsafe { &mut *self.waiters.get() };
             // SAFETY: Single-threaded.
             unsafe {
-                slot.unregister(waiters);
+                awaiter.unregister(waiters);
             }
         }
     }
@@ -287,7 +287,7 @@ impl LocalManualResetEvent {
     pub fn wait(&self) -> LocalManualResetWaitFuture {
         LocalManualResetWaitFuture {
             inner: Rc::clone(&self.inner),
-            slot: AwaiterNodeStorage::new(),
+            awaiter: Awaiter::new(),
         }
     }
 }
@@ -295,7 +295,7 @@ impl LocalManualResetEvent {
 /// Future returned by [`LocalManualResetEvent::wait()`].
 pub struct LocalManualResetWaitFuture {
     inner: Rc<Inner>,
-    slot: AwaiterNodeStorage,
+    awaiter: Awaiter,
 }
 
 // Marker trait impls have no executable code.
@@ -310,20 +310,20 @@ impl Future for LocalManualResetWaitFuture {
 
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
-        // SAFETY: The slot is pinned inside this future and not moved.
-        let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
-        // SAFETY: The slot belongs to this event's awaiter set.
-        unsafe { this.inner.poll_wait(slot, waker) }
+        // SAFETY: The awaiter is pinned inside this future and not moved.
+        let awaiter = unsafe { Pin::new_unchecked(&mut this.awaiter) };
+        // SAFETY: The awaiter belongs to this event's awaiter set.
+        unsafe { this.inner.poll_wait(awaiter, waker) }
     }
 }
 
 impl Drop for LocalManualResetWaitFuture {
     fn drop(&mut self) {
-        // SAFETY: The slot is pinned inside this future and not moved.
-        let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
-        // SAFETY: The slot belongs to this event's awaiter set.
+        // SAFETY: The awaiter is pinned inside this future and not moved.
+        let awaiter = unsafe { Pin::new_unchecked(&mut self.awaiter) };
+        // SAFETY: The awaiter belongs to this event's awaiter set.
         unsafe {
-            self.inner.drop_wait(slot);
+            self.inner.drop_wait(awaiter);
         }
     }
 }
@@ -341,7 +341,7 @@ impl fmt::Debug for LocalManualResetEvent {
 impl fmt::Debug for LocalManualResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalManualResetWaitFuture")
-            .field("registered", &self.slot.is_registered())
+            .field("registered", &self.awaiter.is_registered())
             .finish_non_exhaustive()
     }
 }
@@ -466,7 +466,7 @@ impl RawLocalManualResetEvent {
     pub fn wait(&self) -> RawLocalManualResetWaitFuture {
         RawLocalManualResetWaitFuture {
             inner: self.inner,
-            slot: AwaiterNodeStorage::new(),
+            awaiter: Awaiter::new(),
         }
     }
 }
@@ -474,7 +474,7 @@ impl RawLocalManualResetEvent {
 /// Future returned by [`RawLocalManualResetEvent::wait()`].
 pub struct RawLocalManualResetWaitFuture {
     inner: NonNull<Inner>,
-    slot: AwaiterNodeStorage,
+    awaiter: Awaiter,
 }
 
 // NonNull makes this !Send and !Sync by default, which is correct for local
@@ -495,10 +495,10 @@ impl Future for RawLocalManualResetWaitFuture {
         // SAFETY: The container outlives this future per the embedded()
         // contract.
         let inner = unsafe { this.inner.as_ref() };
-        // SAFETY: The slot is pinned inside this future and not moved.
-        let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
-        // SAFETY: The slot belongs to this event's awaiter set.
-        unsafe { inner.poll_wait(slot, waker) }
+        // SAFETY: The awaiter is pinned inside this future and not moved.
+        let awaiter = unsafe { Pin::new_unchecked(&mut this.awaiter) };
+        // SAFETY: The awaiter belongs to this event's awaiter set.
+        unsafe { inner.poll_wait(awaiter, waker) }
     }
 }
 
@@ -507,11 +507,11 @@ impl Drop for RawLocalManualResetWaitFuture {
         // SAFETY: The container outlives this future per the embedded()
         // contract.
         let inner = unsafe { self.inner.as_ref() };
-        // SAFETY: The slot is pinned inside this future and not moved.
-        let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
-        // SAFETY: The slot belongs to this event's awaiter set.
+        // SAFETY: The awaiter is pinned inside this future and not moved.
+        let awaiter = unsafe { Pin::new_unchecked(&mut self.awaiter) };
+        // SAFETY: The awaiter belongs to this event's awaiter set.
         unsafe {
-            inner.drop_wait(slot);
+            inner.drop_wait(awaiter);
         }
     }
 }
@@ -538,7 +538,7 @@ impl fmt::Debug for RawLocalManualResetEvent {
 impl fmt::Debug for RawLocalManualResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RawLocalManualResetWaitFuture")
-            .field("registered", &self.slot.is_registered())
+            .field("registered", &self.awaiter.is_registered())
             .finish_non_exhaustive()
     }
 }

@@ -7,7 +7,7 @@
 //! When building async locks, semaphores, or events, futures that
 //! cannot complete immediately need to be parked and later woken.
 //! This crate provides the underlying set for that purpose: each
-//! node lives inside the awaiting future itself, so no heap
+//! awaiter lives inside the awaiting future itself, so no heap
 //! allocation is needed to register or remove awaiters.
 //!
 //! # When to use this crate
@@ -22,19 +22,18 @@
 //!
 //! # Core types
 //!
-//! * [`AwaiterSet`] — the set of registered awaiters.
-//! * [`AwaiterNode`] — a single entry, embedded inside a future.
-//! * [`AwaiterNodeStorage`] — a convenience wrapper that bundles a
-//!   node with its registration state and a pinning marker, reducing
-//!   boilerplate in future implementations.
+//! * [`AwaiterSet`] — the set of registered awaiters, managed by the
+//!   synchronization primitive.
+//! * [`Awaiter`] — a single awaiter, embedded inside a future.
+//!
 #![doc = simple_mermaid::mermaid!("../docs/diagrams/list_structure.mermaid")]
 //!
 //! # Synchronization
 //!
 //! The set has no internal synchronization. Callers must ensure
 //! exclusive access for all operations — for example, by protecting
-//! all node and set access with a [`Mutex`][std::sync::Mutex] or
-//! equivalent, or by confining the containing type to a single thread.
+//! all access with a [`Mutex`][std::sync::Mutex] or equivalent, or by
+//! confining the containing type to a single thread.
 //!
 //! # Re-entrancy
 //!
@@ -44,10 +43,8 @@
 //! calling `wake()` and rescan afterward, because the set may have
 //! changed during the unlock window.
 
-mod awaiter_node_storage;
-mod node;
+pub(crate) mod awaiter;
 mod set;
 
-pub use awaiter_node_storage::*;
-pub use node::*;
-pub use set::*;
+pub use awaiter::Awaiter;
+pub use set::AwaiterSet;

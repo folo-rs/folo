@@ -1,10 +1,9 @@
 use std::panic::{RefUnwindSafe, UnwindSafe};
-use std::pin::Pin;
 use std::ptr;
 
-use crate::AwaiterNode;
+use crate::awaiter::Awaiter;
 
-/// A set of pinned [`AwaiterNode`]s awaiting notification.
+/// A set of pinned [`Awaiter`]s awaiting notification.
 ///
 /// The set does not own its nodes. Nodes are embedded in async futures
 /// and linked/unlinked as awaiters register and complete.
@@ -12,8 +11,8 @@ use crate::AwaiterNode;
 /// The set is `Send` but not `Sync` — it can be moved between threads
 /// but all access must be serialized by the caller.
 pub struct AwaiterSet {
-    head: *mut AwaiterNode,
-    tail: *mut AwaiterNode,
+    head: *mut Awaiter,
+    tail: *mut Awaiter,
 }
 
 impl AwaiterSet {
@@ -45,7 +44,7 @@ impl AwaiterSet {
     ///
     /// Returns `None` if the set is empty.
     #[must_use]
-    pub fn peek(&mut self) -> Option<&AwaiterNode> {
+    pub fn peek(&mut self) -> Option<&Awaiter> {
         if self.head.is_null() {
             None
         } else {
@@ -56,139 +55,114 @@ impl AwaiterSet {
         }
     }
 
-    /// Inserts a node into the set.
+    /// Inserts an awaiter into the set.
     ///
     /// # Safety
     ///
-    /// The node must remain valid and pinned at its current address
-    /// until it is removed from the set (via [`take_one()`][Self::take_one]
-    /// or [`remove()`][Self::remove]).
-    pub unsafe fn insert(&mut self, mut node: Pin<&mut AwaiterNode>) {
-        // SAFETY: We do not move the node; we only store the pointer.
-        let ptr: *mut AwaiterNode = unsafe { node.as_mut().get_unchecked_mut() };
-
-        // SAFETY: We just obtained this pointer from a valid Pin.
-        unsafe {
-            (*ptr).next = ptr::null_mut();
-        }
-
-        // SAFETY: Same pointer.
-        unsafe {
-            (*ptr).prev = self.tail;
-        }
+    /// `ptr` must point to a valid, pinned [`Awaiter`] that will
+    /// remain valid until removed from the set.
+    pub(crate) unsafe fn insert(&mut self, ptr: *mut Awaiter) {
+        // SAFETY: Caller guarantees `ptr` is valid.
+        let node = unsafe { &mut *ptr };
+        node.set_next(ptr::null_mut());
+        node.set_prev(self.tail);
 
         if self.tail.is_null() {
             self.head = ptr;
         } else {
             // SAFETY: `tail` is non-null and valid (set invariant).
             unsafe {
-                (*self.tail).next = ptr;
+                (*self.tail).set_next(ptr);
             }
         }
 
         self.tail = ptr;
     }
 
-    /// Removes a specific node from the set.
-    ///
-    /// After removal, the node's internal pointers are cleared.
+    /// Removes a specific awaiter from the set.
     ///
     /// # Safety
     ///
-    /// The node must currently be in this set (not in a different set
-    /// or unregistered).
-    pub unsafe fn remove(&mut self, mut node: Pin<&mut AwaiterNode>) {
-        // SAFETY: We do not move the node.
-        let ptr: *mut AwaiterNode = unsafe { node.as_mut().get_unchecked_mut() };
-        // SAFETY: We have Pin<&mut> proving the node is valid.
-        let prev = unsafe { (*ptr).prev };
-        // SAFETY: Same pointer.
-        let next = unsafe { (*ptr).next };
+    /// `ptr` must point to a valid [`Awaiter`] currently in this set.
+    pub(crate) unsafe fn remove(&mut self, ptr: *mut Awaiter) {
+        // SAFETY: Caller guarantees `ptr` is valid and in the set.
+        let node = unsafe { &*ptr };
+        let prev = node.prev();
+        let next = node.next();
 
         if prev.is_null() {
             self.head = next;
         } else {
-            // SAFETY: `prev` is a valid node in the set.
+            // SAFETY: `prev` is a valid awaiter in the set.
             unsafe {
-                (*prev).next = next;
+                (*prev).set_next(next);
             }
         }
 
         if next.is_null() {
             self.tail = prev;
         } else {
-            // SAFETY: `next` is a valid node in the set.
+            // SAFETY: `next` is a valid awaiter in the set.
             unsafe {
-                (*next).prev = prev;
+                (*next).set_prev(prev);
             }
         }
 
         // Clear the removed node's links.
-        // SAFETY: The node is valid (we hold Pin<&mut>).
-        unsafe {
-            (*ptr).next = ptr::null_mut();
-        }
-        // SAFETY: Same pointer.
-        unsafe {
-            (*ptr).prev = ptr::null_mut();
-        }
+        // SAFETY: `ptr` is valid (caller contract).
+        let node = unsafe { &mut *ptr };
+        node.set_next(ptr::null_mut());
+        node.set_prev(ptr::null_mut());
     }
 
-    /// Removes and returns one node from the set.
+    /// Removes and returns one awaiter from the set.
     ///
     /// Returns `None` if the set is empty.
-    pub fn take_one(&mut self) -> Option<&mut AwaiterNode> {
+    pub fn take_one(&mut self) -> Option<&mut Awaiter> {
         if self.head.is_null() {
             return None;
         }
 
-        let node = self.head;
+        let ptr = self.head;
 
-        // SAFETY: `head` is non-null, so it is a valid node.
-        let next = unsafe { (*node).next };
+        // SAFETY: `head` is non-null, so it is a valid awaiter.
+        let next = unsafe { (*ptr).next() };
 
         self.head = next;
 
         if next.is_null() {
             self.tail = ptr::null_mut();
         } else {
-            // SAFETY: `next` is a valid node in the set.
+            // SAFETY: `next` is a valid awaiter in the set.
             unsafe {
-                (*next).prev = ptr::null_mut();
+                (*next).set_prev(ptr::null_mut());
             }
         }
 
-        // Clear the removed node's links.
-        // SAFETY: `node` is valid (we just read from it above).
-        unsafe {
-            (*node).next = ptr::null_mut();
-        }
-        // SAFETY: `node` is valid.
-        unsafe {
-            (*node).prev = ptr::null_mut();
-        }
+        // Clear the removed awaiter's links.
+        // SAFETY: `ptr` is valid (we just read from it above).
+        let node = unsafe { &mut *ptr };
+        node.set_next(ptr::null_mut());
+        node.set_prev(ptr::null_mut());
 
-        // SAFETY: The node is valid (inserted via `insert` which
-        // requires the node to remain valid until removal). We just
-        // removed it, so no other reference exists in the set. The
-        // `&mut self` borrow prevents concurrent set operations.
-        Some(unsafe { &mut *node })
+        // We just removed it, so no other reference exists in the
+        // set. The `&mut self` borrow prevents concurrent operations.
+        Some(node)
     }
 
-    /// Iterates over all nodes, calling `f` for each.
+    /// Iterates over all awaiters, calling `f` for each.
     ///
-    /// The callback receives an exclusive reference to each node and
-    /// may modify the node's waker or flags. However, it must not
+    /// The callback receives an exclusive reference to each awaiter
+    /// and may modify its waker or flags. However, it must not
     /// insert into or remove from the set.
-    pub fn for_each(&mut self, mut f: impl FnMut(&mut AwaiterNode)) {
+    pub fn for_each(&mut self, mut f: impl FnMut(&mut Awaiter)) {
         let mut current = self.head;
         while !current.is_null() {
             // Read next before calling `f` so the callback cannot
             // invalidate our traversal pointer.
             // SAFETY: `current` is non-null and in the set.
-            let next = unsafe { (*current).next };
-            // SAFETY: The node is valid (set invariant from insert).
-            // The `&mut self` borrow prevents concurrent set mutation.
+            let next = unsafe { (*current).next() };
+            // SAFETY: The awaiter is valid (set invariant).
             f(unsafe { &mut *current });
             current = next;
         }
@@ -230,20 +204,15 @@ impl std::fmt::Debug for AwaiterSet {
     reason = "test code with trivial safety invariants"
 )]
 mod tests {
-    use std::task::{RawWaker, RawWakerVTable, Waker};
+    use std::task::Waker;
 
     use super::*;
 
     static_assertions::assert_impl_all!(AwaiterSet: Send, UnwindSafe, RefUnwindSafe);
     static_assertions::assert_not_impl_any!(AwaiterSet: Sync);
 
-    fn noop_waker() -> Waker {
-        fn clone(data: *const ()) -> RawWaker {
-            RawWaker::new(data, &VTABLE)
-        }
-        fn noop(_: *const ()) {}
-        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, noop, noop, noop);
-        unsafe { Waker::from_raw(RawWaker::new(ptr::null(), &VTABLE)) }
+    fn waker() -> Waker {
+        Waker::noop().clone()
     }
 
     #[test]
@@ -268,11 +237,10 @@ mod tests {
     #[test]
     fn push_and_pop_single_element() {
         let mut list = AwaiterSet::new();
-        let mut a = AwaiterNode::new();
-        a.set_user_data(1);
+        let mut a = Awaiter::new();
 
         unsafe {
-            list.insert(Pin::new_unchecked(&mut a));
+            a.register_with_data(&mut list, waker(), 1);
         }
         assert!(!list.is_empty());
         assert_eq!(list.peek().unwrap().user_data(), 1);
@@ -285,18 +253,14 @@ mod tests {
     #[test]
     fn fifo_ordering() {
         let mut list = AwaiterSet::new();
-        let mut a = AwaiterNode::new();
-        let mut b = AwaiterNode::new();
-        let mut c = AwaiterNode::new();
-
-        a.set_user_data(1);
-        b.set_user_data(2);
-        c.set_user_data(3);
+        let mut a = Awaiter::new();
+        let mut b = Awaiter::new();
+        let mut c = Awaiter::new();
 
         unsafe {
-            list.insert(Pin::new_unchecked(&mut a));
-            list.insert(Pin::new_unchecked(&mut b));
-            list.insert(Pin::new_unchecked(&mut c));
+            a.register_with_data(&mut list, waker(), 1);
+            b.register_with_data(&mut list, waker(), 2);
+            c.register_with_data(&mut list, waker(), 3);
         }
 
         assert!(!list.is_empty());
@@ -312,16 +276,13 @@ mod tests {
     #[test]
     fn remove_head_node() {
         let mut list = AwaiterSet::new();
-        let mut a = AwaiterNode::new();
-        let mut b = AwaiterNode::new();
-
-        a.set_user_data(1);
-        b.set_user_data(2);
+        let mut a = Awaiter::new();
+        let mut b = Awaiter::new();
 
         unsafe {
-            list.insert(Pin::new_unchecked(&mut a));
-            list.insert(Pin::new_unchecked(&mut b));
-            list.remove(Pin::new_unchecked(&mut a));
+            a.register_with_data(&mut list, waker(), 1);
+            b.register_with_data(&mut list, waker(), 2);
+            a.unregister(&mut list);
         }
 
         assert_eq!(list.take_one().unwrap().user_data(), 2);
@@ -331,16 +292,13 @@ mod tests {
     #[test]
     fn remove_tail_node() {
         let mut list = AwaiterSet::new();
-        let mut a = AwaiterNode::new();
-        let mut b = AwaiterNode::new();
-
-        a.set_user_data(1);
-        b.set_user_data(2);
+        let mut a = Awaiter::new();
+        let mut b = Awaiter::new();
 
         unsafe {
-            list.insert(Pin::new_unchecked(&mut a));
-            list.insert(Pin::new_unchecked(&mut b));
-            list.remove(Pin::new_unchecked(&mut b));
+            a.register_with_data(&mut list, waker(), 1);
+            b.register_with_data(&mut list, waker(), 2);
+            b.unregister(&mut list);
         }
 
         assert_eq!(list.take_one().unwrap().user_data(), 1);
@@ -350,19 +308,15 @@ mod tests {
     #[test]
     fn remove_middle_node() {
         let mut list = AwaiterSet::new();
-        let mut a = AwaiterNode::new();
-        let mut b = AwaiterNode::new();
-        let mut c = AwaiterNode::new();
-
-        a.set_user_data(1);
-        b.set_user_data(2);
-        c.set_user_data(3);
+        let mut a = Awaiter::new();
+        let mut b = Awaiter::new();
+        let mut c = Awaiter::new();
 
         unsafe {
-            list.insert(Pin::new_unchecked(&mut a));
-            list.insert(Pin::new_unchecked(&mut b));
-            list.insert(Pin::new_unchecked(&mut c));
-            list.remove(Pin::new_unchecked(&mut b));
+            a.register_with_data(&mut list, waker(), 1);
+            b.register_with_data(&mut list, waker(), 2);
+            c.register_with_data(&mut list, waker(), 3);
+            b.unregister(&mut list);
         }
 
         assert_eq!(list.take_one().unwrap().user_data(), 1);
@@ -373,11 +327,11 @@ mod tests {
     #[test]
     fn remove_only_node() {
         let mut list = AwaiterSet::new();
-        let mut a = AwaiterNode::new();
+        let mut a = Awaiter::new();
 
         unsafe {
-            list.insert(Pin::new_unchecked(&mut a));
-            list.remove(Pin::new_unchecked(&mut a));
+            a.register(&mut list, waker());
+            a.unregister(&mut list);
         }
 
         assert!(list.is_empty());
@@ -386,30 +340,28 @@ mod tests {
     #[test]
     fn remove_clears_node_links() {
         let mut list = AwaiterSet::new();
-        let mut a = AwaiterNode::new();
-        let mut b = AwaiterNode::new();
+        let mut a = Awaiter::new();
+        let mut b = Awaiter::new();
 
         unsafe {
-            list.insert(Pin::new_unchecked(&mut a));
-            list.insert(Pin::new_unchecked(&mut b));
-            list.remove(Pin::new_unchecked(&mut a));
+            a.register(&mut list, waker());
+            b.register(&mut list, waker());
+            a.unregister(&mut list);
         }
 
-        assert!(a.next_in_set().is_null());
+        assert!(a.next().is_null());
     }
 
     #[test]
     fn reuse_after_removal() {
         let mut list = AwaiterSet::new();
-        let mut a = AwaiterNode::new();
-        let mut b = AwaiterNode::new();
-
-        b.set_user_data(2);
+        let mut a = Awaiter::new();
+        let mut b = Awaiter::new();
 
         unsafe {
-            list.insert(Pin::new_unchecked(&mut a));
-            list.remove(Pin::new_unchecked(&mut a));
-            list.insert(Pin::new_unchecked(&mut b));
+            a.register(&mut list, waker());
+            a.unregister(&mut list);
+            b.register_with_data(&mut list, waker(), 2);
         }
 
         assert_eq!(list.take_one().unwrap().user_data(), 2);
@@ -419,23 +371,19 @@ mod tests {
     #[test]
     fn interleaved_push_and_pop() {
         let mut list = AwaiterSet::new();
-        let mut a = AwaiterNode::new();
-        let mut b = AwaiterNode::new();
-        let mut c = AwaiterNode::new();
-
-        a.set_user_data(1);
-        b.set_user_data(2);
-        c.set_user_data(3);
+        let mut a = Awaiter::new();
+        let mut b = Awaiter::new();
+        let mut c = Awaiter::new();
 
         unsafe {
-            list.insert(Pin::new_unchecked(&mut a));
-            list.insert(Pin::new_unchecked(&mut b));
+            a.register_with_data(&mut list, waker(), 1);
+            b.register_with_data(&mut list, waker(), 2);
         }
 
         assert_eq!(list.take_one().unwrap().user_data(), 1);
 
         unsafe {
-            list.insert(Pin::new_unchecked(&mut c));
+            c.register_with_data(&mut list, waker(), 3);
         }
 
         assert_eq!(list.take_one().unwrap().user_data(), 2);
@@ -444,49 +392,42 @@ mod tests {
     }
 
     #[test]
-    fn traversal_via_next_in_set() {
+    fn traversal_via_next() {
         let mut list = AwaiterSet::new();
-        let mut a = AwaiterNode::new();
-        let mut b = AwaiterNode::new();
-        let mut c = AwaiterNode::new();
-
-        a.set_user_data(1);
-        b.set_user_data(2);
-        c.set_user_data(3);
+        let mut a = Awaiter::new();
+        let mut b = Awaiter::new();
+        let mut c = Awaiter::new();
 
         unsafe {
-            list.insert(Pin::new_unchecked(&mut a));
-            list.insert(Pin::new_unchecked(&mut b));
-            list.insert(Pin::new_unchecked(&mut c));
+            a.register_with_data(&mut list, waker(), 1);
+            b.register_with_data(&mut list, waker(), 2);
+            c.register_with_data(&mut list, waker(), 3);
         }
 
         let head = list.peek().unwrap();
         assert_eq!(head.user_data(), 1);
 
-        let second = head.next_in_set();
+        let second = head.next();
         assert!(!second.is_null());
         assert_eq!(unsafe { (*second).user_data() }, 2);
 
-        let third = unsafe { (*second).next_in_set() };
+        let third = unsafe { (*second).next() };
         assert!(!third.is_null());
         assert_eq!(unsafe { (*third).user_data() }, 3);
 
-        let end = unsafe { (*third).next_in_set() };
+        let end = unsafe { (*third).next() };
         assert!(end.is_null());
     }
 
     #[test]
     fn for_each_visits_all_nodes_in_order() {
         let mut list = AwaiterSet::new();
-        let mut a = AwaiterNode::new();
-        let mut b = AwaiterNode::new();
-
-        a.set_user_data(1);
-        b.set_user_data(2);
+        let mut a = Awaiter::new();
+        let mut b = Awaiter::new();
 
         unsafe {
-            list.insert(Pin::new_unchecked(&mut a));
-            list.insert(Pin::new_unchecked(&mut b));
+            a.register_with_data(&mut list, waker(), 1);
+            b.register_with_data(&mut list, waker(), 2);
         }
 
         let mut visited = Vec::new();
@@ -506,13 +447,10 @@ mod tests {
     #[test]
     fn wakers_survive_list_operations() {
         let mut list = AwaiterSet::new();
-        let mut a = AwaiterNode::new();
-
-        let waker = noop_waker();
-        a.store_waker(waker);
+        let mut a = Awaiter::new();
 
         unsafe {
-            list.insert(Pin::new_unchecked(&mut a));
+            a.register(&mut list, waker());
         }
 
         let popped = list.take_one().unwrap();
@@ -523,11 +461,10 @@ mod tests {
     #[test]
     fn user_data_survives_list_operations() {
         let mut list = AwaiterSet::new();
-        let mut a = AwaiterNode::new();
+        let mut a = Awaiter::new();
 
-        a.set_user_data(7);
         unsafe {
-            list.insert(Pin::new_unchecked(&mut a));
+            a.register_with_data(&mut list, waker(), 7);
         }
 
         let popped = list.take_one().unwrap();
@@ -537,30 +474,25 @@ mod tests {
     #[test]
     fn notified_flag_survives_list_operations() {
         let mut list = AwaiterSet::new();
-        let mut a = AwaiterNode::new();
+        let mut a = Awaiter::new();
 
         unsafe {
-            list.insert(Pin::new_unchecked(&mut a));
+            a.register(&mut list, waker());
         }
 
         let popped = list.take_one().unwrap();
         popped.set_notified();
-        assert!(popped.is_notified());
+        assert!(unsafe { popped.is_notified() });
     }
 
     #[test]
     fn ten_elements_maintain_fifo() {
         let mut list = AwaiterSet::new();
-        let mut nodes: Vec<AwaiterNode> =
-            std::iter::repeat_with(AwaiterNode::new).take(10).collect();
+        let mut nodes: Vec<Awaiter> = std::iter::repeat_with(Awaiter::new).take(10).collect();
 
         for (i, node) in nodes.iter_mut().enumerate() {
-            node.set_user_data(i);
-        }
-
-        for node in &mut nodes {
             unsafe {
-                list.insert(Pin::new_unchecked(node));
+                node.register_with_data(&mut list, waker(), i);
             }
         }
 

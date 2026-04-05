@@ -7,7 +7,7 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 use std::task::{self, Poll, Waker};
 
-use awaiter_set::{AwaiterNodeStorage, AwaiterSet};
+use awaiter_set::{Awaiter, AwaiterSet};
 
 use crate::NEVER_POISONED;
 
@@ -139,32 +139,28 @@ fn try_wait(mutex: &Mutex<State>) -> bool {
 
 /// # Safety
 ///
-/// * The `mutex` must protect the awaiter set that this slot is (or will
+/// * The `mutex` must protect the awaiter set that this awaiter is (or will
 ///   be) registered with.
-unsafe fn poll_wait(
-    mutex: &Mutex<State>,
-    slot: Pin<&mut AwaiterNodeStorage>,
-    waker: Waker,
-) -> Poll<()> {
-    // SAFETY: We do not move the slot.
-    let slot = unsafe { slot.get_unchecked_mut() };
+unsafe fn poll_wait(mutex: &Mutex<State>, awaiter: Pin<&mut Awaiter>, waker: Waker) -> Poll<()> {
+    // SAFETY: We do not move the awaiter.
+    let awaiter = unsafe { awaiter.get_unchecked_mut() };
     let mut state = mutex.lock().expect(NEVER_POISONED);
 
     if state.is_set {
-        if slot.is_registered() {
-            // SAFETY: We hold the lock and the slot is registered in
+        if awaiter.is_registered() {
+            // SAFETY: We hold the lock and the awaiter is registered in
             // this set.
             unsafe {
-                slot.unregister(&mut state.waiters);
+                awaiter.unregister(&mut state.waiters);
             }
         }
         return Poll::Ready(());
     }
 
-    // SAFETY: We hold the lock, slot is pinned and lives as long as
+    // SAFETY: We hold the lock, awaiter is pinned and lives as long as
     // the future.
     unsafe {
-        slot.register(&mut state.waiters, waker);
+        awaiter.register(&mut state.waiters, waker);
     }
 
     Poll::Pending
@@ -173,15 +169,15 @@ unsafe fn poll_wait(
 /// # Safety
 ///
 /// Same requirements as [`poll_wait`].
-unsafe fn drop_wait(mutex: &Mutex<State>, slot: Pin<&mut AwaiterNodeStorage>) {
-    // SAFETY: We do not move the slot.
-    let slot = unsafe { slot.get_unchecked_mut() };
-    if slot.is_registered() {
+unsafe fn drop_wait(mutex: &Mutex<State>, awaiter: Pin<&mut Awaiter>) {
+    // SAFETY: We do not move the awaiter.
+    let awaiter = unsafe { awaiter.get_unchecked_mut() };
+    if awaiter.is_registered() {
         let mut state = mutex.lock().expect(NEVER_POISONED);
-        // SAFETY: We hold the lock and the slot is registered in this
+        // SAFETY: We hold the lock and the awaiter is registered in this
         // list.
         unsafe {
-            slot.unregister(&mut state.waiters);
+            awaiter.unregister(&mut state.waiters);
         }
     }
 }
@@ -347,7 +343,7 @@ impl ManualResetEvent {
     pub fn wait(&self) -> ManualResetWaitFuture {
         ManualResetWaitFuture {
             state: Arc::clone(&self.state),
-            slot: AwaiterNodeStorage::new(),
+            awaiter: Awaiter::new(),
         }
     }
 }
@@ -358,15 +354,15 @@ impl ManualResetEvent {
 /// polling.
 pub struct ManualResetWaitFuture {
     state: Arc<Mutex<State>>,
-    slot: AwaiterNodeStorage,
+    awaiter: Awaiter,
 }
 
 // Marker trait impl.
-// SAFETY: AwaiterNodeStorage is Send. All slot access is protected by the event's
+// SAFETY: Awaiter is Send. All awaiter access is protected by the event's
 // Mutex. The Arc<Mutex<State>> is Send + Sync.
 unsafe impl Send for ManualResetWaitFuture {}
 
-// AwaiterNodeStorage is UnwindSafe and RefUnwindSafe.
+// Awaiter is UnwindSafe and RefUnwindSafe.
 // Marker trait impl.
 impl UnwindSafe for ManualResetWaitFuture {}
 // Marker trait impl.
@@ -379,21 +375,21 @@ impl Future for ManualResetWaitFuture {
         let waker = cx.waker().clone();
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
-        // SAFETY: The slot is pinned inside this future and not moved.
-        let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
-        // SAFETY: The state field is the mutex this slot registers
+        // SAFETY: The awaiter is pinned inside this future and not moved.
+        let awaiter = unsafe { Pin::new_unchecked(&mut this.awaiter) };
+        // SAFETY: The state field is the mutex this awaiter registers
         // with.
-        unsafe { poll_wait(&this.state, slot, waker) }
+        unsafe { poll_wait(&this.state, awaiter, waker) }
     }
 }
 
 impl Drop for ManualResetWaitFuture {
     fn drop(&mut self) {
-        // SAFETY: The slot is pinned inside this future and not moved.
-        let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
-        // SAFETY: The state field is the mutex this slot was
+        // SAFETY: The awaiter is pinned inside this future and not moved.
+        let awaiter = unsafe { Pin::new_unchecked(&mut self.awaiter) };
+        // SAFETY: The state field is the mutex this awaiter was
         // registered with.
-        unsafe { drop_wait(&self.state, slot) }
+        unsafe { drop_wait(&self.state, awaiter) }
     }
 }
 
@@ -411,7 +407,7 @@ impl fmt::Debug for ManualResetEvent {
 impl fmt::Debug for ManualResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ManualResetWaitFuture")
-            .field("registered", &self.slot.is_registered())
+            .field("registered", &self.awaiter.is_registered())
             .finish_non_exhaustive()
     }
 }
@@ -537,7 +533,7 @@ impl RawManualResetEvent {
     pub fn wait(&self) -> RawManualResetWaitFuture {
         RawManualResetWaitFuture {
             state: self.state,
-            slot: AwaiterNodeStorage::new(),
+            awaiter: Awaiter::new(),
         }
     }
 }
@@ -545,11 +541,11 @@ impl RawManualResetEvent {
 /// Future returned by [`RawManualResetEvent::wait()`].
 pub struct RawManualResetWaitFuture {
     state: NonNull<Mutex<State>>,
-    slot: AwaiterNodeStorage,
+    awaiter: Awaiter,
 }
 
 // Marker trait impl.
-// SAFETY: AwaiterNodeStorage is Send. All slot access is protected by the event's
+// SAFETY: Awaiter is Send. All awaiter access is protected by the event's
 // Mutex.
 unsafe impl Send for RawManualResetWaitFuture {}
 
@@ -568,10 +564,10 @@ impl Future for RawManualResetWaitFuture {
         // SAFETY: The container outlives this future per the embedded()
         // contract.
         let state = unsafe { this.state.as_ref() };
-        // SAFETY: The slot is pinned inside this future and not moved.
-        let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
-        // SAFETY: The state is the mutex this slot registers with.
-        unsafe { poll_wait(state, slot, waker) }
+        // SAFETY: The awaiter is pinned inside this future and not moved.
+        let awaiter = unsafe { Pin::new_unchecked(&mut this.awaiter) };
+        // SAFETY: The state is the mutex this awaiter registers with.
+        unsafe { poll_wait(state, awaiter, waker) }
     }
 }
 
@@ -580,11 +576,11 @@ impl Drop for RawManualResetWaitFuture {
         // SAFETY: The container outlives this future per the embedded()
         // contract.
         let state = unsafe { self.state.as_ref() };
-        // SAFETY: The slot is pinned inside this future and not moved.
-        let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
-        // SAFETY: The state is the mutex this slot was registered
+        // SAFETY: The awaiter is pinned inside this future and not moved.
+        let awaiter = unsafe { Pin::new_unchecked(&mut self.awaiter) };
+        // SAFETY: The state is the mutex this awaiter was registered
         // with.
-        unsafe { drop_wait(state, slot) }
+        unsafe { drop_wait(state, awaiter) }
     }
 }
 
@@ -610,7 +606,7 @@ impl fmt::Debug for RawManualResetEvent {
 impl fmt::Debug for RawManualResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RawManualResetWaitFuture")
-            .field("registered", &self.slot.is_registered())
+            .field("registered", &self.awaiter.is_registered())
             .finish_non_exhaustive()
     }
 }

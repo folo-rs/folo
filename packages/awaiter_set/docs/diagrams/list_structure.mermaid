@@ -7,17 +7,13 @@ graph TB
     end
 
     subgraph FutureA["Lock/Acquire future A"]
-        STORAGE_A["AwaiterNodeStorage"]
-        NODE_A["AwaiterNode"]
-        STORAGE_A --> NODE_A
+        AWAITER_A["Awaiter"]
     end
 
     subgraph FutureB["Lock/Acquire future B"]
-        STORAGE_B["AwaiterNodeStorage"]
-        NODE_B["AwaiterNode"]
-        STORAGE_B --> NODE_B
+        AWAITER_B["Awaiter"]
     end
 
-    STATE -- "registered" --> NODE_A
-    NODE_A -- "next" --> NODE_B
-    NODE_B -- "prev" --> NODE_A
+    STATE -- "registered" --> AWAITER_A
+    AWAITER_A -- "next" --> AWAITER_B
+    AWAITER_B -- "prev" --> AWAITER_A

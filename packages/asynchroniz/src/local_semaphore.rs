@@ -7,7 +7,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::task::{self, Poll, Waker};
 
-use awaiter_set::{AwaiterNodeStorage, AwaiterSet};
+use awaiter_set::{Awaiter, AwaiterSet};
 
 /// Single-threaded async semaphore.
 ///
@@ -158,36 +158,36 @@ impl Inner {
 
     /// # Safety
     ///
-    /// * The `slot` must belong to a future created from the same
+    /// * The `awaiter` must belong to a future created from the same
     ///   semaphore.
     unsafe fn poll_acquire(
         &self,
-        slot: Pin<&mut AwaiterNodeStorage>,
+        awaiter: Pin<&mut Awaiter>,
         permits: usize,
         waker: Waker,
     ) -> Poll<()> {
-        // SAFETY: We do not move the slot.
-        let slot = unsafe { slot.get_unchecked_mut() };
+        // SAFETY: We do not move the awaiter.
+        let awaiter = unsafe { awaiter.get_unchecked_mut() };
 
         // SAFETY: Single-threaded access.
-        if unsafe { slot.take_notification() } {
+        if unsafe { awaiter.take_notification() } {
             return Poll::Ready(());
         }
 
         // SAFETY: Single-threaded access.
         let state = unsafe { &mut *self.state.get() };
 
-        if !slot.is_registered() && state.available >= permits {
+        if !awaiter.is_registered() && state.available >= permits {
             state.available = state
                 .available
                 .checked_sub(permits)
                 .expect("available >= permits was just checked");
             Poll::Ready(())
         } else {
-            // SAFETY: Single-threaded, slot is pinned and not yet
+            // SAFETY: Single-threaded, awaiter is pinned and not yet
             // in the set (or already registered with a stale waker).
             unsafe {
-                slot.register_with_data(&mut state.waiters, waker, permits);
+                awaiter.register_with_data(&mut state.waiters, waker, permits);
             }
             Poll::Pending
         }
@@ -196,11 +196,11 @@ impl Inner {
     /// # Safety
     ///
     /// Same requirements as [`poll_acquire`][Self::poll_acquire].
-    unsafe fn drop_acquire_wait(&self, slot: Pin<&mut AwaiterNodeStorage>, permits: usize) {
-        // SAFETY: We do not move the slot.
-        let slot = unsafe { slot.get_unchecked_mut() };
+    unsafe fn drop_acquire_wait(&self, awaiter: Pin<&mut Awaiter>, permits: usize) {
+        // SAFETY: We do not move the awaiter.
+        let awaiter = unsafe { awaiter.get_unchecked_mut() };
         // SAFETY: Single-threaded access.
-        if unsafe { slot.is_notified() } {
+        if unsafe { awaiter.is_notified() } {
             // We were given permits but the future was cancelled.
             // Return the permits and try to wake the head waiter in
             // the same access scope.
@@ -223,7 +223,7 @@ impl Inner {
             let state = unsafe { &mut *self.state.get() };
             // SAFETY: Single-threaded, node is in the set.
             unsafe {
-                slot.unregister(&mut state.waiters);
+                awaiter.unregister(&mut state.waiters);
             }
         }
     }
@@ -325,7 +325,7 @@ impl LocalSemaphore {
         LocalSemaphoreAcquireFuture {
             inner: &self.inner,
             permits,
-            slot: AwaiterNodeStorage::new(),
+            awaiter: Awaiter::new(),
         }
     }
 
@@ -395,7 +395,7 @@ pub struct LocalSemaphoreAcquireFuture<'a> {
     inner: &'a Inner,
     permits: usize,
 
-    slot: AwaiterNodeStorage,
+    awaiter: Awaiter,
 }
 
 impl<'a> Future for LocalSemaphoreAcquireFuture<'a> {
@@ -407,11 +407,11 @@ impl<'a> Future for LocalSemaphoreAcquireFuture<'a> {
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
-        // SAFETY: The slot is pinned inside this future and not moved.
-        let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
-        // SAFETY: The state field is the semaphore state this slot registers
+        // SAFETY: The awaiter is pinned inside this future and not moved.
+        let awaiter = unsafe { Pin::new_unchecked(&mut this.awaiter) };
+        // SAFETY: The state field is the semaphore state this awaiter registers
         // with.
-        match unsafe { this.inner.poll_acquire(slot, this.permits, waker) } {
+        match unsafe { this.inner.poll_acquire(awaiter, this.permits, waker) } {
             Poll::Ready(()) => Poll::Ready(LocalSemaphorePermit {
                 inner: this.inner,
                 permits: this.permits,
@@ -423,19 +423,19 @@ impl<'a> Future for LocalSemaphoreAcquireFuture<'a> {
 
 impl Drop for LocalSemaphoreAcquireFuture<'_> {
     // Inverting the is_registered() guard causes the Drop to hang
-    // because it runs cleanup on an unregistered slot.
+    // because it runs cleanup on an unregistered awaiter.
     #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
-        if !self.slot.is_registered() {
+        if !self.awaiter.is_registered() {
             return;
         }
 
-        // SAFETY: The slot is pinned inside this future and not moved.
-        let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
-        // SAFETY: The state is the lock this slot was registered
+        // SAFETY: The awaiter is pinned inside this future and not moved.
+        let awaiter = unsafe { Pin::new_unchecked(&mut self.awaiter) };
+        // SAFETY: The state is the lock this awaiter was registered
         // with.
         unsafe {
-            self.inner.drop_acquire_wait(slot, self.permits);
+            self.inner.drop_acquire_wait(awaiter, self.permits);
         }
     }
 }
@@ -461,7 +461,7 @@ impl fmt::Debug for LocalSemaphoreAcquireFuture<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalSemaphoreAcquireFuture")
             .field("permits", &self.permits)
-            .field("registered", &self.slot.is_registered())
+            .field("registered", &self.awaiter.is_registered())
             .finish_non_exhaustive()
     }
 }
@@ -551,7 +551,7 @@ impl EmbeddedLocalSemaphoreRef {
         EmbeddedLocalSemaphoreAcquireFuture {
             inner: self.inner,
             permits,
-            slot: AwaiterNodeStorage::new(),
+            awaiter: Awaiter::new(),
         }
     }
 
@@ -609,7 +609,7 @@ pub struct EmbeddedLocalSemaphoreAcquireFuture {
     inner: NonNull<Inner>,
     permits: usize,
 
-    slot: AwaiterNodeStorage,
+    awaiter: Awaiter,
 }
 
 impl Future for EmbeddedLocalSemaphoreAcquireFuture {
@@ -627,11 +627,11 @@ impl Future for EmbeddedLocalSemaphoreAcquireFuture {
         // SAFETY: The container outlives this future per the
         // embedded() contract.
         let inner = unsafe { this.inner.as_ref() };
-        // SAFETY: The slot is pinned inside this future and not moved.
-        let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
+        // SAFETY: The awaiter is pinned inside this future and not moved.
+        let awaiter = unsafe { Pin::new_unchecked(&mut this.awaiter) };
         // SAFETY: poll_acquire requires single-threaded access,
         // which LocalSemaphore guarantees (!Send).
-        match unsafe { inner.poll_acquire(slot, this.permits, waker) } {
+        match unsafe { inner.poll_acquire(awaiter, this.permits, waker) } {
             Poll::Ready(()) => Poll::Ready(EmbeddedLocalSemaphorePermit {
                 inner: this.inner,
                 permits: this.permits,
@@ -643,22 +643,22 @@ impl Future for EmbeddedLocalSemaphoreAcquireFuture {
 
 impl Drop for EmbeddedLocalSemaphoreAcquireFuture {
     // Inverting the is_registered() guard causes the Drop to hang
-    // because it runs cleanup on an unregistered slot.
+    // because it runs cleanup on an unregistered awaiter.
     #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
-        if !self.slot.is_registered() {
+        if !self.awaiter.is_registered() {
             return;
         }
 
         // SAFETY: The container outlives this future per the
         // embedded() contract.
         let inner = unsafe { self.inner.as_ref() };
-        // SAFETY: The slot is pinned inside this future and not moved.
-        let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
+        // SAFETY: The awaiter is pinned inside this future and not moved.
+        let awaiter = unsafe { Pin::new_unchecked(&mut self.awaiter) };
         // SAFETY: drop_acquire_wait requires single-threaded access,
         // which LocalSemaphore guarantees (!Send).
         unsafe {
-            inner.drop_acquire_wait(slot, self.permits);
+            inner.drop_acquire_wait(awaiter, self.permits);
         }
     }
 }
@@ -693,7 +693,7 @@ impl fmt::Debug for EmbeddedLocalSemaphoreAcquireFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EmbeddedLocalSemaphoreAcquireFuture")
             .field("permits", &self.permits)
-            .field("registered", &self.slot.is_registered())
+            .field("registered", &self.awaiter.is_registered())
             .finish_non_exhaustive()
     }
 }

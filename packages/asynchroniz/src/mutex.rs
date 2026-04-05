@@ -8,7 +8,7 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::task::{self, Poll, Waker};
 
-use awaiter_set::{AwaiterNodeStorage, AwaiterSet};
+use awaiter_set::{Awaiter, AwaiterSet};
 
 use crate::constants::NEVER_POISONED;
 
@@ -149,40 +149,40 @@ fn try_lock_inner(lock_state: &StdMutex<LockState>) -> bool {
 ///
 /// # Safety
 ///
-/// * The `lock_state` must protect the awaiter set that this slot is
+/// * The `lock_state` must protect the awaiter set that this awaiter is
 ///   (or will be) registered with.
 unsafe fn poll_lock(
     lock_state: &StdMutex<LockState>,
-    slot: Pin<&mut AwaiterNodeStorage>,
+    awaiter: Pin<&mut Awaiter>,
     waker: Waker,
 ) -> Poll<()> {
-    // SAFETY: We do not move the slot; Pin enforces the address
+    // SAFETY: We do not move the awaiter; Pin enforces the address
     // stability that the awaiter set requires.
-    let slot = unsafe { slot.get_unchecked_mut() };
+    let awaiter = unsafe { awaiter.get_unchecked_mut() };
     let mut state = lock_state.lock().expect(NEVER_POISONED);
 
     // Check if we were directly notified by unlock() (it popped us
     // from the set and set our notified flag, transferring lock
     // ownership to us).
     // SAFETY: We hold the lock.
-    if unsafe { slot.take_notification() } {
+    if unsafe { awaiter.take_notification() } {
         return Poll::Ready(());
     }
 
     if !state.locked {
         // Lock is free — acquire it.
         debug_assert!(
-            !slot.is_registered(),
+            !awaiter.is_registered(),
             "unlocked state is exclusive with registered waiters"
         );
         state.locked = true;
         Poll::Ready(())
     } else {
         // Lock is held — register as a waiter.
-        // SAFETY: We hold the lock, slot is pinned and not yet
+        // SAFETY: We hold the lock, awaiter is pinned and not yet
         // in the set (or already registered with a stale waker).
         unsafe {
-            slot.register(&mut state.waiters, waker);
+            awaiter.register(&mut state.waiters, waker);
         }
         Poll::Pending
     }
@@ -193,13 +193,13 @@ unsafe fn poll_lock(
 /// # Safety
 ///
 /// Same requirements as [`poll_lock`].
-unsafe fn drop_lock_wait(lock_state: &StdMutex<LockState>, slot: Pin<&mut AwaiterNodeStorage>) {
-    // SAFETY: We do not move the slot.
-    let slot = unsafe { slot.get_unchecked_mut() };
+unsafe fn drop_lock_wait(lock_state: &StdMutex<LockState>, awaiter: Pin<&mut Awaiter>) {
+    // SAFETY: We do not move the awaiter.
+    let awaiter = unsafe { awaiter.get_unchecked_mut() };
     let mut state = lock_state.lock().expect(NEVER_POISONED);
 
     // SAFETY: We hold the lock.
-    if unsafe { slot.is_notified() } {
+    if unsafe { awaiter.is_notified() } {
         // We were chosen as the next lock holder but the future was
         // cancelled. Forward the lock to the next waiter.
         if let Some(next_node) = state.waiters.take_one() {
@@ -218,7 +218,7 @@ unsafe fn drop_lock_wait(lock_state: &StdMutex<LockState>, slot: Pin<&mut Awaite
         // Not notified — just remove from the awaiter set.
         // SAFETY: We hold the lock and the node is in the set.
         unsafe {
-            slot.unregister(&mut state.waiters);
+            awaiter.unregister(&mut state.waiters);
         }
     }
 }
@@ -330,7 +330,7 @@ impl<T> Mutex<T> {
         MutexLockFuture {
             lock_state: &self.inner.lock_state,
             data: &self.inner.data,
-            slot: AwaiterNodeStorage::new(),
+            awaiter: Awaiter::new(),
         }
     }
 
@@ -420,11 +420,11 @@ pub struct MutexLockFuture<'a, T> {
     lock_state: &'a StdMutex<LockState>,
     data: &'a UnsafeCell<T>,
 
-    slot: AwaiterNodeStorage,
+    awaiter: Awaiter,
 }
 
 // Marker trait impl.
-// SAFETY: All AwaiterNodeStorage fields are accessed exclusively under the
+// SAFETY: All Awaiter fields are accessed exclusively under the
 // mutex's internal lock. The references point to data behind an Arc
 // that is Send + Sync when T: Send.
 unsafe impl<T: Send> Send for MutexLockFuture<'_, T> {}
@@ -440,11 +440,11 @@ impl<'a, T> Future for MutexLockFuture<'a, T> {
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
-        // SAFETY: The slot is pinned inside this future and not moved.
-        let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
-        // SAFETY: The lock_state field is the lock this slot
+        // SAFETY: The awaiter is pinned inside this future and not moved.
+        let awaiter = unsafe { Pin::new_unchecked(&mut this.awaiter) };
+        // SAFETY: The lock_state field is the lock this awaiter
         // registers with.
-        match unsafe { poll_lock(this.lock_state, slot, waker) } {
+        match unsafe { poll_lock(this.lock_state, awaiter, waker) } {
             Poll::Ready(()) => Poll::Ready(MutexGuard {
                 lock_state: this.lock_state,
                 data: this.data,
@@ -456,18 +456,18 @@ impl<'a, T> Future for MutexLockFuture<'a, T> {
 
 impl<T> Drop for MutexLockFuture<'_, T> {
     // Inverting the is_registered() guard causes the Drop to hang
-    // because it runs cleanup on an unregistered slot.
+    // because it runs cleanup on an unregistered awaiter.
     #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
-        if !self.slot.is_registered() {
+        if !self.awaiter.is_registered() {
             return;
         }
 
-        // SAFETY: The slot is pinned inside this future and not moved.
-        let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
-        // SAFETY: The lock_state field is the lock this slot was
+        // SAFETY: The awaiter is pinned inside this future and not moved.
+        let awaiter = unsafe { Pin::new_unchecked(&mut self.awaiter) };
+        // SAFETY: The lock_state field is the lock this awaiter was
         // registered with.
-        unsafe { drop_lock_wait(self.lock_state, slot) }
+        unsafe { drop_lock_wait(self.lock_state, awaiter) }
     }
 }
 
@@ -489,7 +489,7 @@ impl<T> fmt::Debug for MutexGuard<'_, T> {
 impl<T> fmt::Debug for MutexLockFuture<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MutexLockFuture")
-            .field("registered", &self.slot.is_registered())
+            .field("registered", &self.awaiter.is_registered())
             .finish_non_exhaustive()
     }
 }
@@ -582,7 +582,7 @@ impl<T> EmbeddedMutexRef<T> {
     pub fn lock(&self) -> EmbeddedMutexLockFuture<T> {
         EmbeddedMutexLockFuture {
             inner: self.inner,
-            slot: AwaiterNodeStorage::new(),
+            awaiter: Awaiter::new(),
         }
     }
 
@@ -659,11 +659,11 @@ impl<T> Drop for EmbeddedMutexGuard<T> {
 pub struct EmbeddedMutexLockFuture<T> {
     inner: NonNull<MutexInner<T>>,
 
-    slot: AwaiterNodeStorage,
+    awaiter: Awaiter,
 }
 
 // Marker trait impl.
-// SAFETY: Same reasoning as MutexLockFuture — all slot access is
+// SAFETY: Same reasoning as MutexLockFuture — all awaiter access is
 // protected by the internal lock.
 unsafe impl<T: Send> Send for EmbeddedMutexLockFuture<T> {}
 
@@ -681,10 +681,10 @@ impl<T> Future for EmbeddedMutexLockFuture<T> {
         // SAFETY: The container outlives this future per the
         // embedded() contract.
         let inner = unsafe { this.inner.as_ref() };
-        // SAFETY: The slot is pinned inside this future and not moved.
-        let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
-        // SAFETY: The lock_state is the lock this slot registers with.
-        match unsafe { poll_lock(&inner.lock_state, slot, waker) } {
+        // SAFETY: The awaiter is pinned inside this future and not moved.
+        let awaiter = unsafe { Pin::new_unchecked(&mut this.awaiter) };
+        // SAFETY: The lock_state is the lock this awaiter registers with.
+        match unsafe { poll_lock(&inner.lock_state, awaiter, waker) } {
             Poll::Ready(()) => Poll::Ready(EmbeddedMutexGuard { inner: this.inner }),
             Poll::Pending => Poll::Pending,
         }
@@ -693,21 +693,21 @@ impl<T> Future for EmbeddedMutexLockFuture<T> {
 
 impl<T> Drop for EmbeddedMutexLockFuture<T> {
     // Inverting the is_registered() guard causes the Drop to hang
-    // because it runs cleanup on an unregistered slot.
+    // because it runs cleanup on an unregistered awaiter.
     #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
-        if !self.slot.is_registered() {
+        if !self.awaiter.is_registered() {
             return;
         }
 
         // SAFETY: The container outlives this future per the
         // embedded() contract.
         let inner = unsafe { self.inner.as_ref() };
-        // SAFETY: The slot is pinned inside this future and not moved.
-        let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
-        // SAFETY: The lock_state is the lock this slot was registered
+        // SAFETY: The awaiter is pinned inside this future and not moved.
+        let awaiter = unsafe { Pin::new_unchecked(&mut self.awaiter) };
+        // SAFETY: The lock_state is the lock this awaiter was registered
         // with.
-        unsafe { drop_lock_wait(&inner.lock_state, slot) }
+        unsafe { drop_lock_wait(&inner.lock_state, awaiter) }
     }
 }
 
@@ -736,7 +736,7 @@ impl<T> fmt::Debug for EmbeddedMutexGuard<T> {
 impl<T> fmt::Debug for EmbeddedMutexLockFuture<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EmbeddedMutexLockFuture")
-            .field("registered", &self.slot.is_registered())
+            .field("registered", &self.awaiter.is_registered())
             .finish_non_exhaustive()
     }
 }

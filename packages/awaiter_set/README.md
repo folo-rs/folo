@@ -2,39 +2,43 @@
 
 Zero-allocation awaiter tracking for async synchronization primitives.
 
-This crate provides `AwaiterSet`, `AwaiterNode`, and `AwaiterNodeStorage`
-for parking and waking async futures that await on synchronization events.
-Each node is embedded directly inside the awaiting future rather than being
-heap-allocated, making registration and removal zero-allocation.
+This crate provides two types:
+
+- `AwaiterSet` — the set of registered awaiters, managed by the
+  synchronization primitive.
+- `Awaiter` — a single awaiter, embedded inside a future.
+
+Each awaiter lives directly inside the awaiting future rather than
+being heap-allocated, making registration and removal zero-allocation.
 
 ## Quick start
 
 ```rust
-use std::pin::Pin;
-
-use awaiter_set::{AwaiterSet, AwaiterNode};
+use awaiter_set::{Awaiter, AwaiterSet};
 
 let mut set = AwaiterSet::new();
-let mut node_a = AwaiterNode::new();
-let mut node_b = AwaiterNode::new();
+let mut a = Awaiter::new();
+let mut b = Awaiter::new();
 
-// SAFETY: Nodes remain valid and pinned while in the set.
+// SAFETY: Awaiters remain valid and pinned while in the set.
 unsafe {
-    set.insert(Pin::new_unchecked(&mut node_a));
-    set.insert(Pin::new_unchecked(&mut node_b));
+    a.register(&mut set, std::task::Waker::noop().clone());
+    b.register(&mut set, std::task::Waker::noop().clone());
 }
 
 assert!(!set.is_empty());
 
-let first = set.take_one();
-assert!(first.is_some());
+if let Some(awaiter) = set.take_one() {
+    awaiter.set_notified();
+    let _waker = awaiter.take_waker();
+}
 ```
 
 ## Design
 
-The set does not own its nodes — each node's lifetime is tied to the
-future that contains it. Nodes must remain at a stable pinned address
-from insertion until removal.
+The set does not own its awaiters — each awaiter's lifetime is tied
+to the future that contains it. Awaiters must remain at a stable
+pinned address from registration until removal.
 
 ## Thread safety
 

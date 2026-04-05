@@ -6,7 +6,7 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 use std::task::{self, Poll, Waker};
 
-use awaiter_set::{AwaiterNode, AwaiterNodeStorage, AwaiterSet};
+use awaiter_set::{Awaiter, AwaiterSet};
 
 use crate::constants::NEVER_POISONED;
 
@@ -97,7 +97,7 @@ fn release_permits(state_mutex: &Mutex<SemaphoreState>, count: usize) {
             .available
             .checked_add(count)
             .expect("permit count overflow is unreachable");
-        let head_requested = state.waiters.peek().map(AwaiterNode::user_data);
+        let head_requested = state.waiters.peek().map(Awaiter::user_data);
         let satisfiable = head_requested.is_some_and(|req| state.available >= req);
         (try_wake_head(&mut state), satisfiable)
     };
@@ -184,26 +184,26 @@ fn try_acquire_inner(state_mutex: &Mutex<SemaphoreState>, permits: usize) -> boo
 ///
 /// # Safety
 ///
-/// * The `state_mutex` must protect the awaiter set that this slot
+/// * The `state_mutex` must protect the awaiter set that this awaiter
 ///   is (or will be) registered with.
 unsafe fn poll_acquire(
     state_mutex: &Mutex<SemaphoreState>,
-    slot: Pin<&mut AwaiterNodeStorage>,
+    awaiter: Pin<&mut Awaiter>,
     permits: usize,
     waker: Waker,
 ) -> Poll<()> {
-    // SAFETY: We do not move the slot.
-    let slot = unsafe { slot.get_unchecked_mut() };
+    // SAFETY: We do not move the awaiter.
+    let awaiter = unsafe { awaiter.get_unchecked_mut() };
     let mut state = state_mutex.lock().expect(NEVER_POISONED);
 
     // Check if we were directly notified by release_permits()
     // (it popped us from the set and reserved our permits).
     // SAFETY: We hold the lock.
-    if unsafe { slot.take_notification() } {
+    if unsafe { awaiter.take_notification() } {
         return Poll::Ready(());
     }
 
-    if !slot.is_registered() && state.available >= permits {
+    if !awaiter.is_registered() && state.available >= permits {
         // Permits are available and we are not yet registered
         // (first poll fast path).
         state.available = state
@@ -213,10 +213,10 @@ unsafe fn poll_acquire(
         Poll::Ready(())
     } else {
         // Not enough permits or already registered — wait.
-        // SAFETY: We hold the lock, slot is pinned and not yet
+        // SAFETY: We hold the lock, awaiter is pinned and not yet
         // in the set (or already registered with a stale waker).
         unsafe {
-            slot.register_with_data(&mut state.waiters, waker, permits);
+            awaiter.register_with_data(&mut state.waiters, waker, permits);
         }
         Poll::Pending
     }
@@ -229,15 +229,15 @@ unsafe fn poll_acquire(
 /// Same requirements as [`poll_acquire`].
 unsafe fn drop_acquire_wait(
     state_mutex: &Mutex<SemaphoreState>,
-    slot: Pin<&mut AwaiterNodeStorage>,
+    awaiter: Pin<&mut Awaiter>,
     permits: usize,
 ) {
-    // SAFETY: We do not move the slot.
-    let slot = unsafe { slot.get_unchecked_mut() };
+    // SAFETY: We do not move the awaiter.
+    let awaiter = unsafe { awaiter.get_unchecked_mut() };
     let mut state = state_mutex.lock().expect(NEVER_POISONED);
 
     // SAFETY: We hold the lock.
-    if unsafe { slot.is_notified() } {
+    if unsafe { awaiter.is_notified() } {
         // We were given permits but the future was cancelled.
         // Return the permits and try to wake other waiters, all
         // within the same lock scope.
@@ -255,7 +255,7 @@ unsafe fn drop_acquire_wait(
         // Not notified — just remove from the awaiter set.
         // SAFETY: We hold the lock and the node is in the set.
         unsafe {
-            slot.unregister(&mut state.waiters);
+            awaiter.unregister(&mut state.waiters);
         }
     }
 }
@@ -379,7 +379,7 @@ impl Semaphore {
         SemaphoreAcquireFuture {
             state: &self.inner.state,
             permits,
-            slot: AwaiterNodeStorage::new(),
+            awaiter: Awaiter::new(),
         }
     }
 
@@ -470,11 +470,11 @@ pub struct SemaphoreAcquireFuture<'a> {
     state: &'a Mutex<SemaphoreState>,
     permits: usize,
 
-    slot: AwaiterNodeStorage,
+    awaiter: Awaiter,
 }
 
 // Marker trait impl.
-// SAFETY: All AwaiterNodeStorage fields are accessed exclusively under the
+// SAFETY: All Awaiter fields are accessed exclusively under the
 // semaphore's internal Mutex. The reference points to data behind an
 // Arc that is Send + Sync.
 unsafe impl Send for SemaphoreAcquireFuture<'_> {}
@@ -490,11 +490,11 @@ impl<'a> Future for SemaphoreAcquireFuture<'a> {
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
-        // SAFETY: The slot is pinned inside this future and not moved.
-        let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
-        // SAFETY: The state field is the semaphore state this slot registers
+        // SAFETY: The awaiter is pinned inside this future and not moved.
+        let awaiter = unsafe { Pin::new_unchecked(&mut this.awaiter) };
+        // SAFETY: The state field is the semaphore state this awaiter registers
         // with.
-        match unsafe { poll_acquire(this.state, slot, this.permits, waker) } {
+        match unsafe { poll_acquire(this.state, awaiter, this.permits, waker) } {
             Poll::Ready(()) => Poll::Ready(SemaphorePermit {
                 state: this.state,
                 permits: this.permits,
@@ -506,18 +506,18 @@ impl<'a> Future for SemaphoreAcquireFuture<'a> {
 
 impl Drop for SemaphoreAcquireFuture<'_> {
     // Inverting the is_registered() guard causes the Drop to hang
-    // because it runs cleanup on an unregistered slot.
+    // because it runs cleanup on an unregistered awaiter.
     #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
-        if !self.slot.is_registered() {
+        if !self.awaiter.is_registered() {
             return;
         }
 
-        // SAFETY: The slot is pinned inside this future and not moved.
-        let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
-        // SAFETY: The state field is the mutex this slot was
+        // SAFETY: The awaiter is pinned inside this future and not moved.
+        let awaiter = unsafe { Pin::new_unchecked(&mut self.awaiter) };
+        // SAFETY: The state field is the mutex this awaiter was
         // registered with.
-        unsafe { drop_acquire_wait(self.state, slot, self.permits) }
+        unsafe { drop_acquire_wait(self.state, awaiter, self.permits) }
     }
 }
 
@@ -542,7 +542,7 @@ impl fmt::Debug for SemaphoreAcquireFuture<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SemaphoreAcquireFuture")
             .field("permits", &self.permits)
-            .field("registered", &self.slot.is_registered())
+            .field("registered", &self.awaiter.is_registered())
             .finish_non_exhaustive()
     }
 }
@@ -641,7 +641,7 @@ impl EmbeddedSemaphoreRef {
         EmbeddedSemaphoreAcquireFuture {
             inner: self.inner,
             permits,
-            slot: AwaiterNodeStorage::new(),
+            awaiter: Awaiter::new(),
         }
     }
 
@@ -713,11 +713,11 @@ pub struct EmbeddedSemaphoreAcquireFuture {
     inner: NonNull<SemaphoreInner>,
     permits: usize,
 
-    slot: AwaiterNodeStorage,
+    awaiter: Awaiter,
 }
 
 // Marker trait impl.
-// SAFETY: Same reasoning as SemaphoreAcquireFuture — all slot access
+// SAFETY: Same reasoning as SemaphoreAcquireFuture — all awaiter access
 // is protected by the internal Mutex.
 unsafe impl Send for EmbeddedSemaphoreAcquireFuture {}
 
@@ -735,10 +735,10 @@ impl Future for EmbeddedSemaphoreAcquireFuture {
         // SAFETY: The container outlives this future per the
         // embedded() contract.
         let inner = unsafe { this.inner.as_ref() };
-        // SAFETY: The slot is pinned inside this future and not moved.
-        let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
-        // SAFETY: The state is the mutex this slot registers with.
-        match unsafe { poll_acquire(&inner.state, slot, this.permits, waker) } {
+        // SAFETY: The awaiter is pinned inside this future and not moved.
+        let awaiter = unsafe { Pin::new_unchecked(&mut this.awaiter) };
+        // SAFETY: The state is the mutex this awaiter registers with.
+        match unsafe { poll_acquire(&inner.state, awaiter, this.permits, waker) } {
             Poll::Ready(()) => Poll::Ready(EmbeddedSemaphorePermit {
                 inner: this.inner,
                 permits: this.permits,
@@ -750,21 +750,21 @@ impl Future for EmbeddedSemaphoreAcquireFuture {
 
 impl Drop for EmbeddedSemaphoreAcquireFuture {
     // Inverting the is_registered() guard causes the Drop to hang
-    // because it runs cleanup on an unregistered slot.
+    // because it runs cleanup on an unregistered awaiter.
     #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
-        if !self.slot.is_registered() {
+        if !self.awaiter.is_registered() {
             return;
         }
 
         // SAFETY: The container outlives this future per the
         // embedded() contract.
         let inner = unsafe { self.inner.as_ref() };
-        // SAFETY: The slot is pinned inside this future and not moved.
-        let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
-        // SAFETY: The state is the mutex this slot was registered
+        // SAFETY: The awaiter is pinned inside this future and not moved.
+        let awaiter = unsafe { Pin::new_unchecked(&mut self.awaiter) };
+        // SAFETY: The state is the mutex this awaiter was registered
         // with.
-        unsafe { drop_acquire_wait(&inner.state, slot, self.permits) }
+        unsafe { drop_acquire_wait(&inner.state, awaiter, self.permits) }
     }
 }
 
@@ -797,7 +797,7 @@ impl fmt::Debug for EmbeddedSemaphoreAcquireFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EmbeddedSemaphoreAcquireFuture")
             .field("permits", &self.permits)
-            .field("registered", &self.slot.is_registered())
+            .field("registered", &self.awaiter.is_registered())
             .finish_non_exhaustive()
     }
 }
