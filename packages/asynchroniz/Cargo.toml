@@ -1,8 +1,8 @@
 [package]
-name = "events"
-description = "Async manual-reset and auto-reset event primitives"
+name = "asynchroniz"
+description = "Async mutex and semaphore primitives"
 publish = true
-version = "0.6.0"
+version = "0.1.0"
 
 authors.workspace = true
 edition.workspace = true
@@ -16,10 +16,9 @@ all-features = true
 [package.metadata.cargo-udeps.ignore]
 development = [
     "alloc_tracker",
+    "async-lock",
     "criterion",
-    "event-listener",
     "futures",
-    "rsevents",
     "tokio",
 ]
 
@@ -28,17 +27,16 @@ awaiter_set = { workspace = true }
 
 [dev-dependencies]
 alloc_tracker = { path = "../alloc_tracker" }
+async-lock = { workspace = true }
 criterion = { workspace = true }
-event-listener = { workspace = true }
 futures = { workspace = true }
 mutants = { workspace = true }
-rsevents = { workspace = true }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync"] }
 
 [[bench]]
-name = "events_bench"
+name = "asynchroniz_bench"
 harness = false
 
 [lints]

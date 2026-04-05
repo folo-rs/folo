@@ -143,11 +143,13 @@ query tens of thousands of times per second.
 
 Auxiliary packages developed and published by this project:
 
+* [`asynchroniz`][asynchroniz] - async mutex and semaphore primitives.
 * `cargo-detect-package` - cargo subcommand to detect which package is used based on a provided path and to run another subcommand on that package.
 * `cpulist` - utilities for parsing and emitting Linux cpulist strings, used by `many_cpus`.
 * [`events`][events] - async manual-reset and auto-reset events for multi-use signaling.
 * [`future_deque`][future_deque] - pool-backed deque collections for managing groups of futures with precise control over polling order and result retrieval.
 * `new_zealand` - [utilities for working with non-zero integers][nonzero].
+* [`awaiter_set`][awaiter_set] - zero-allocation awaiter tracking for async synchronization primitives.
 
 Packages present in the repo but not relevant to a general audience:
 
@@ -160,6 +162,7 @@ Packages present in the repo but not relevant to a general audience:
 * `ui_tests` - compile-time UI tests for workspace packages; not published.
 
 [all_the_time]: packages/all_the_time/README.md
+[asynchroniz]: packages/asynchroniz/README.md
 [alloc_tracker]: packages/alloc_tracker/README.md
 [criterion]: https://bheisler.github.io/criterion.rs/book/criterion_rs.html
 [events]: packages/events/README.md
@@ -179,6 +182,7 @@ Packages present in the repo but not relevant to a general audience:
 [region_local]: packages/region_local/README.md
 [structural_changes]: https://sander.saares.eu/2025/03/31/structural-changes-for-48-throughput-in-a-rust-web-service/
 [vicinal]: packages/vicinal/README.md
+[awaiter_set]: packages/awaiter_set/README.md
 
 # Development environment setup
 

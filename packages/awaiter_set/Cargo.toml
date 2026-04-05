@@ -1,0 +1,25 @@
+[package]
+name = "awaiter_set"
+description = "Zero-allocation awaiter tracking for async synchronization primitives"
+publish = true
+version = "0.1.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+
+simple-mermaid = { workspace = true }
+
+[dev-dependencies]
+mutants = { workspace = true }
+static_assertions = { workspace = true }
+
+[lints]
+workspace = true

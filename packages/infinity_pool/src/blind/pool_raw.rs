@@ -325,7 +325,6 @@ impl Default for RawBlindPool {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::mem::MaybeUninit;
-
     use std::panic::{RefUnwindSafe, UnwindSafe};
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};

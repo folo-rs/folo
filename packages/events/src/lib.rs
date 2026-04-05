@@ -1,9 +1,9 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-//! Async manual-reset and auto-reset events for multi-use signaling.
+//! Async manual-reset and auto-reset event primitives.
 //!
-//! This crate provides two families of event primitives:
+//! This crate provides async event primitives:
 //!
 //! * **Manual-reset events** ([`ManualResetEvent`], [`LocalManualResetEvent`]) — a gate
 //!   that, once set, releases all current and future awaiters until explicitly
@@ -69,7 +69,6 @@ mod auto;
 mod local_auto;
 mod local_manual;
 mod manual;
-mod waiter_list;
 
 #[cfg(test)]
 mod test_helpers;

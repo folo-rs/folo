@@ -409,8 +409,7 @@ mod tests {
         drop(span);
     }
 
-    use std::panic::RefUnwindSafe;
-    use std::panic::UnwindSafe;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
 
     // Static assertions for thread safety.
     // ThreadSpan should NOT be Send or Sync due to PhantomData<*const ()>.

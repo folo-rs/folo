@@ -8,7 +8,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::task::{self, Poll, Waker};
 
-use crate::waiter_list::{WaiterList, WaiterNode};
+use awaiter_set::{AwaiterNodeStorage, AwaiterSet};
 
 /// Single-threaded async manual-reset event.
 ///
@@ -63,9 +63,9 @@ struct Inner {
     /// one-by-one in a loop.
     is_set: Cell<bool>,
 
-    // UnsafeCell because we mutate the list through shared references (Rc).
+    // UnsafeCell because we mutate the set through shared references (Rc).
     // All access is single-threaded, guaranteed by the !Send marker.
-    waiters: UnsafeCell<WaiterList>,
+    waiters: UnsafeCell<AwaiterSet>,
 
     // Prevent Send and Sync.
     _not_send: PhantomData<*const ()>,
@@ -99,28 +99,21 @@ impl Inner {
 
         // Wake all waiters using the rescan-from-head pattern.
         // We complete the wake call before rescanning because
-        // re-entrant wakers may modify the list. By rescanning
+        // re-entrant wakers may modify the set. By rescanning
         // from the head after each wake, we avoid holding any node
         // pointer across a wake call.
         let waiters_ptr = self.waiters.get();
         loop {
             let waker = {
                 // SAFETY: Single-threaded — no concurrent access.
-                let mut cursor = unsafe { (*waiters_ptr).head() };
-                loop {
-                    if cursor.is_null() {
-                        break None;
+                let waiters = unsafe { &mut *waiters_ptr };
+                let mut found = None;
+                waiters.for_each(|node| {
+                    if found.is_none() {
+                        found = node.take_waker();
                     }
-                    // SAFETY: Single-threaded — no concurrent
-                    // access.
-                    let w = unsafe { (*cursor).waker.take() };
-                    if w.is_some() {
-                        break w;
-                    }
-                    // SAFETY: Single-threaded — no concurrent
-                    // access.
-                    cursor = unsafe { (*cursor).next };
-                }
+                });
+                found
             };
 
             let Some(w) = waker else { break };
@@ -151,44 +144,29 @@ impl Inner {
 
     /// # Safety
     ///
-    /// * The `node` must be pinned and must remain at the same memory
-    ///   address for the lifetime of the wait future.
-    /// * The `node` must belong to a future created from the same event.
-    unsafe fn poll_wait(
-        &self,
-        node: &UnsafeCell<WaiterNode>,
-        registered: &mut bool,
-        waker: Waker,
-    ) -> Poll<()> {
-        let node_ptr = node.get();
-
+    /// * The `slot` must belong to a future created from the same event.
+    unsafe fn poll_wait(&self, slot: Pin<&mut AwaiterNodeStorage>, waker: Waker) -> Poll<()> {
+        // SAFETY: We do not move the slot.
+        let slot = unsafe { slot.get_unchecked_mut() };
         if self.is_set.get() {
-            if *registered {
-                // SAFETY: Single-threaded, node is in the list.
+            if slot.is_registered() {
+                // SAFETY: Single-threaded, slot is registered in this
+                // list.
                 let waiters = unsafe { &mut *self.waiters.get() };
                 // SAFETY: Single-threaded.
                 unsafe {
-                    waiters.remove(node_ptr);
+                    slot.unregister(waiters);
                 }
-                *registered = false;
             }
             return Poll::Ready(());
         }
 
-        // SAFETY: Single-threaded access.
+        // SAFETY: Single-threaded, slot is pinned and lives as long
+        // as the future.
+        let waiters = unsafe { &mut *self.waiters.get() };
+        // SAFETY: Single-threaded.
         unsafe {
-            (*node_ptr).waker = Some(waker);
-        }
-
-        if !*registered {
-            // SAFETY: Single-threaded, node is pinned and not in
-            // any list.
-            let waiters = unsafe { &mut *self.waiters.get() };
-            // SAFETY: Single-threaded.
-            unsafe {
-                waiters.push_back(node_ptr);
-            }
-            *registered = true;
+            slot.register(waiters, waker);
         }
 
         Poll::Pending
@@ -197,13 +175,16 @@ impl Inner {
     /// # Safety
     ///
     /// Same requirements as [`poll_wait`][Self::poll_wait].
-    unsafe fn drop_wait(&self, node: &UnsafeCell<WaiterNode>, registered: bool) {
-        if registered {
-            // SAFETY: Single-threaded, node is in the list.
+    unsafe fn drop_wait(&self, slot: Pin<&mut AwaiterNodeStorage>) {
+        // SAFETY: We do not move the slot.
+        let slot = unsafe { slot.get_unchecked_mut() };
+        if slot.is_registered() {
+            // SAFETY: Single-threaded, slot is registered in this
+            // list.
             let waiters = unsafe { &mut *self.waiters.get() };
             // SAFETY: Single-threaded.
             unsafe {
-                waiters.remove(node.get());
+                slot.unregister(waiters);
             }
         }
     }
@@ -232,7 +213,7 @@ impl LocalManualResetEvent {
         Self {
             inner: Rc::new(Inner {
                 is_set: Cell::new(false),
-                waiters: UnsafeCell::new(WaiterList::new()),
+                waiters: UnsafeCell::new(AwaiterSet::new()),
                 _not_send: PhantomData,
             }),
         }
@@ -306,9 +287,7 @@ impl LocalManualResetEvent {
     pub fn wait(&self) -> LocalManualResetWaitFuture {
         LocalManualResetWaitFuture {
             inner: Rc::clone(&self.inner),
-            node: UnsafeCell::new(WaiterNode::new()),
-            registered: false,
-            _pinned: PhantomPinned,
+            slot: AwaiterNodeStorage::new(),
         }
     }
 }
@@ -316,17 +295,7 @@ impl LocalManualResetEvent {
 /// Future returned by [`LocalManualResetEvent::wait()`].
 pub struct LocalManualResetWaitFuture {
     inner: Rc<Inner>,
-
-    // Behind UnsafeCell so that raw pointers from the event's waiter list can
-    // coexist with the &mut Self we obtain in poll() via get_unchecked_mut().
-    // UnsafeCell opts out of the noalias guarantee for its contents.
-    node: UnsafeCell<WaiterNode>,
-
-    // Whether this future's node is currently in the event's waiter list.
-    // Only accessed through &mut Self in poll()/drop(), never through the list.
-    registered: bool,
-
-    _pinned: PhantomPinned,
+    slot: AwaiterNodeStorage,
 }
 
 // Marker trait impls have no executable code.
@@ -337,23 +306,24 @@ impl Future for LocalManualResetWaitFuture {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<()> {
+        let waker = cx.waker().clone();
+
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
-        // SAFETY: The node is pinned (PhantomPinned) and belongs to
-        // this event's waiter list.
-        unsafe {
-            this.inner
-                .poll_wait(&this.node, &mut this.registered, cx.waker().clone())
-        }
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
+        // SAFETY: The slot belongs to this event's awaiter set.
+        unsafe { this.inner.poll_wait(slot, waker) }
     }
 }
 
 impl Drop for LocalManualResetWaitFuture {
     fn drop(&mut self) {
-        // SAFETY: The node is pinned (PhantomPinned) and belongs to
-        // this event's waiter list.
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
+        // SAFETY: The slot belongs to this event's awaiter set.
         unsafe {
-            self.inner.drop_wait(&self.node, self.registered);
+            self.inner.drop_wait(slot);
         }
     }
 }
@@ -371,7 +341,7 @@ impl fmt::Debug for LocalManualResetEvent {
 impl fmt::Debug for LocalManualResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalManualResetWaitFuture")
-            .field("registered", &self.registered)
+            .field("registered", &self.slot.is_registered())
             .finish_non_exhaustive()
     }
 }
@@ -421,7 +391,7 @@ impl EmbeddedLocalManualResetEvent {
         Self {
             inner: Inner {
                 is_set: Cell::new(false),
-                waiters: UnsafeCell::new(WaiterList::new()),
+                waiters: UnsafeCell::new(AwaiterSet::new()),
                 _not_send: PhantomData,
             },
             _pinned: PhantomPinned,
@@ -496,9 +466,7 @@ impl RawLocalManualResetEvent {
     pub fn wait(&self) -> RawLocalManualResetWaitFuture {
         RawLocalManualResetWaitFuture {
             inner: self.inner,
-            node: UnsafeCell::new(WaiterNode::new()),
-            registered: false,
-            _pinned: PhantomPinned,
+            slot: AwaiterNodeStorage::new(),
         }
     }
 }
@@ -506,16 +474,11 @@ impl RawLocalManualResetEvent {
 /// Future returned by [`RawLocalManualResetEvent::wait()`].
 pub struct RawLocalManualResetWaitFuture {
     inner: NonNull<Inner>,
-
-    // See LocalManualResetWaitFuture for field documentation.
-    node: UnsafeCell<WaiterNode>,
-    registered: bool,
-
-    _pinned: PhantomPinned,
+    slot: AwaiterNodeStorage,
 }
 
-// NonNull and UnsafeCell make this !Send and !Sync by default, which is
-// correct for local types.
+// NonNull makes this !Send and !Sync by default, which is correct for local
+// types.
 
 // Marker trait impls have no executable code.
 impl UnwindSafe for RawLocalManualResetWaitFuture {}
@@ -525,26 +488,30 @@ impl Future for RawLocalManualResetWaitFuture {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<()> {
+        let waker = cx.waker().clone();
+
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
-        // SAFETY: The container outlives this future. Node is pinned
-        // via PhantomPinned and belongs to this event's waiter list.
+        // SAFETY: The container outlives this future per the embedded()
+        // contract.
         let inner = unsafe { this.inner.as_ref() };
-        // SAFETY: The node is pinned (PhantomPinned) and belongs to
-        // this event's waiter list.
-        unsafe { inner.poll_wait(&this.node, &mut this.registered, cx.waker().clone()) }
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
+        // SAFETY: The slot belongs to this event's awaiter set.
+        unsafe { inner.poll_wait(slot, waker) }
     }
 }
 
 impl Drop for RawLocalManualResetWaitFuture {
     fn drop(&mut self) {
-        // SAFETY: The container outlives this future. Node is pinned
-        // via PhantomPinned and belongs to this event's waiter list.
+        // SAFETY: The container outlives this future per the embedded()
+        // contract.
         let inner = unsafe { self.inner.as_ref() };
-        // SAFETY: The node is pinned (PhantomPinned) and belongs to
-        // this event's waiter list.
+        // SAFETY: The slot is pinned inside this future and not moved.
+        let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
+        // SAFETY: The slot belongs to this event's awaiter set.
         unsafe {
-            inner.drop_wait(&self.node, self.registered);
+            inner.drop_wait(slot);
         }
     }
 }
@@ -571,7 +538,7 @@ impl fmt::Debug for RawLocalManualResetEvent {
 impl fmt::Debug for RawLocalManualResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RawLocalManualResetWaitFuture")
-            .field("registered", &self.registered)
+            .field("registered", &self.slot.is_registered())
             .finish_non_exhaustive()
     }
 }
@@ -716,7 +683,7 @@ mod tests {
         let waker = Waker::noop();
         let mut cx = task::Context::from_waker(waker);
 
-        // First poll — not set, registers in waiter list.
+        // First poll — not set, registers in awaiter set.
         assert!(future.as_mut().poll(&mut cx).is_pending());
 
         // Set the event — wakes the registered waiter.
@@ -798,10 +765,10 @@ mod tests {
         assert!(f3.as_mut().poll(&mut cx).is_ready());
     }
 
-    // --- re-entrancy tests (prove wake() is called outside waiter list borrow) ---
+    // --- re-entrancy tests (prove wake() is called outside awaiter set borrow) ---
     //
     // These tests use a custom waker that re-entrantly accesses the same event
-    // when woken. If wake() were called while a &WaiterList borrow from
+    // when woken. If wake() were called while a &AwaiterSet borrow from
     // UnsafeCell is still active, the re-entrant mutable access would create
     // aliased references and Miri would flag the UB.
 
@@ -814,7 +781,7 @@ mod tests {
 
         let waker_data = ReentrantWakerData::new(move || {
             // Re-entrantly call reset() + poll a new wait() future, which
-            // accesses the waiter list to register a new node.
+            // accesses the awaiter set to register a new node.
             event_clone.reset();
             let mut new_future = Box::pin(event_clone.wait());
             let noop = Waker::noop();
@@ -828,9 +795,9 @@ mod tests {
         let mut future = Box::pin(event.wait());
         assert!(future.as_mut().poll(&mut cx).is_pending());
 
-        // set() collects the waker from the list, releases the borrow, then
+        // set() collects the waker from the set, releases the borrow, then
         // calls wake(). The re-entrant waker resets the event and polls a new
-        // future that registers in the waiter list.
+        // future that registers in the awaiter set.
         event.set();
 
         assert!(waker_data.was_woken());
@@ -936,7 +903,7 @@ mod tests {
         let mut future2 = Box::pin(event.wait());
         assert!(future2.as_mut().poll(&mut cx2).is_pending());
 
-        // Drop future1 — its node must be removed from the list.
+        // Drop future1 — its node must be removed from the set.
         drop(future1);
 
         event.set();

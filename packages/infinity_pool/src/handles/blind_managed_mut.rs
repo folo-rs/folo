@@ -300,9 +300,8 @@ impl<T: ?Sized> Drop for BlindPooledMut<T> {
 mod tests {
     use std::borrow::{Borrow, BorrowMut};
     use std::cell::Cell;
-    use std::thread;
-
     use std::panic::{RefUnwindSafe, UnwindSafe};
+    use std::thread;
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 

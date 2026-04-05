@@ -215,9 +215,8 @@ impl<T: ?Sized> fmt::Debug for RawBlindPooledMut<T> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::cell::Cell;
-    use std::thread;
-
     use std::panic::{RefUnwindSafe, UnwindSafe};
+    use std::thread;
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
