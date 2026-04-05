@@ -139,7 +139,7 @@ fn try_wait(mutex: &Mutex<State>) -> bool {
 
 /// # Safety
 ///
-/// * The `mutex` must protect the waiter list that this slot is (or will
+/// * The `mutex` must protect the awaiter set that this slot is (or will
 ///   be) registered with.
 unsafe fn poll_wait(
     mutex: &Mutex<State>,
@@ -153,7 +153,7 @@ unsafe fn poll_wait(
     if state.is_set {
         if slot.is_registered() {
             // SAFETY: We hold the lock and the slot is registered in
-            // this list.
+            // this set.
             unsafe {
                 slot.unregister(&mut state.waiters);
             }
@@ -734,7 +734,7 @@ mod tests {
         let waker = Waker::noop();
         let mut cx = task::Context::from_waker(waker);
 
-        // Poll once to register in the waiter list.
+        // Poll once to register in the awaiter set.
         assert!(future.as_mut().poll(&mut cx).is_pending());
 
         // Drop the registered future — should unlink cleanly.
@@ -952,7 +952,7 @@ mod tests {
         let waker = Waker::noop();
         let mut cx = task::Context::from_waker(waker);
 
-        // First poll — not set, registers in waiter list.
+        // First poll — not set, registers in awaiter set.
         assert!(future.as_mut().poll(&mut cx).is_pending());
 
         // Set the event — wakes the registered waiter.
@@ -1076,7 +1076,7 @@ mod tests {
         let mut future2 = Box::pin(event.wait());
         assert!(future2.as_mut().poll(&mut cx2).is_pending());
 
-        // Drop future1 — its node must be removed from the list.
+        // Drop future1 — its node must be removed from the set.
         drop(future1);
 
         event.set();

@@ -185,7 +185,7 @@ impl Inner {
             Poll::Ready(())
         } else {
             // SAFETY: Single-threaded, slot is pinned and not yet
-            // in the list (or already registered with a stale waker).
+            // in the set (or already registered with a stale waker).
             unsafe {
                 slot.register_with_data(&mut state.waiters, waker, permits);
             }
@@ -218,10 +218,10 @@ impl Inner {
                 self.wake_waiters();
             }
         } else {
-            // Not notified — just remove from the list.
+            // Not notified — just remove from the set.
             // SAFETY: Single-threaded access.
             let state = unsafe { &mut *self.state.get() };
-            // SAFETY: Single-threaded, node is in the list.
+            // SAFETY: Single-threaded, node is in the set.
             unsafe {
                 slot.unregister(&mut state.waiters);
             }

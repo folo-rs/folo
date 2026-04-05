@@ -53,11 +53,11 @@ pub struct LocalAutoResetEvent {
     inner: Rc<Inner>,
 }
 
-// The signal flag and waiter list are mutually exclusive: if the event is set
+// The signal flag and awaiter set are mutually exclusive: if the event is set
 // there are no waiters, and if there are waiters the event is not set. This
 // enum encodes that invariant at the type level.
 enum InnerState {
-    /// Not signaled. The waiter list may be empty or non-empty.
+    /// Not signaled. The awaiter set may be empty or non-empty.
     Unset(AwaiterSet),
     /// Signal stored (will be consumed by the next wait or `try_wait`).
     Set,
@@ -171,7 +171,7 @@ impl Inner {
                     if let Some(next_node) = waiters.take_one() {
                         next_node.set_notified();
                         let waker = next_node.take_waker();
-                        // Restore the waiter list.
+                        // Restore the awaiter set.
                         // SAFETY: Single-threaded.
                         unsafe {
                             *state_ptr = InnerState::Unset(waiters);
@@ -200,20 +200,20 @@ impl Inner {
                 w.wake();
             }
         } else {
-            // Not notified — just remove from the list.
+            // Not notified — just remove from the set.
             // SAFETY: Single-threaded access.
             let state = unsafe { &mut *self.state.get() };
             match state {
                 InnerState::Unset(waiters) => {
                     // SAFETY: Single-threaded, slot is registered in
-                    // this list.
+                    // this set.
                     unsafe {
                         slot.unregister(waiters);
                     }
                 }
                 InnerState::Set => {
                     // Not notified + registered ⟹ node is in a
-                    // waiter list ⟹ state must be Unset.
+                    // awaiter set ⟹ state must be Unset.
                     debug_assert!(false, "registered non-notified node requires Unset state");
                 }
             }
@@ -342,7 +342,7 @@ impl Future for LocalAutoResetWaitFuture {
         let this = unsafe { self.get_unchecked_mut() };
         // SAFETY: The slot is pinned inside this future and not moved.
         let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
-        // SAFETY: The slot belongs to this event's waiter list.
+        // SAFETY: The slot belongs to this event's awaiter set.
         unsafe { this.inner.poll_wait(slot, waker) }
     }
 }
@@ -351,7 +351,7 @@ impl Drop for LocalAutoResetWaitFuture {
     fn drop(&mut self) {
         // SAFETY: The slot is pinned inside this future and not moved.
         let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
-        // SAFETY: The slot belongs to this event's waiter list.
+        // SAFETY: The slot belongs to this event's awaiter set.
         unsafe { self.inner.drop_wait(slot) }
     }
 }
@@ -524,7 +524,7 @@ impl Future for RawLocalAutoResetWaitFuture {
         let inner = unsafe { this.inner.as_ref() };
         // SAFETY: The slot is pinned inside this future and not moved.
         let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
-        // SAFETY: The slot belongs to this event's waiter list.
+        // SAFETY: The slot belongs to this event's awaiter set.
         unsafe { inner.poll_wait(slot, waker) }
     }
 }
@@ -536,7 +536,7 @@ impl Drop for RawLocalAutoResetWaitFuture {
         let inner = unsafe { self.inner.as_ref() };
         // SAFETY: The slot is pinned inside this future and not moved.
         let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
-        // SAFETY: The slot belongs to this event's waiter list.
+        // SAFETY: The slot belongs to this event's awaiter set.
         unsafe { inner.drop_wait(slot) }
     }
 }
@@ -704,7 +704,7 @@ mod tests {
         let waker = Waker::noop();
         let mut cx = task::Context::from_waker(waker);
 
-        // First poll — not set, registers in waiter list.
+        // First poll — not set, registers in awaiter set.
         assert!(future.as_mut().poll(&mut cx).is_pending());
 
         // set() pops the waiter and marks it notified.
@@ -844,7 +844,7 @@ mod tests {
         let event_clone = event.clone();
 
         let waker_data = ReentrantWakerData::new(move || {
-            // Re-entrantly call set(), which accesses the waiter list.
+            // Re-entrantly call set(), which accesses the awaiter set.
             event_clone.set();
         });
         // SAFETY: Data outlives waker, single-threaded test.
@@ -854,7 +854,7 @@ mod tests {
         let mut future = Box::pin(event.wait());
         assert!(future.as_mut().poll(&mut cx).is_pending());
 
-        // Outer set() pops the waiter, releases the waiter list borrow,
+        // Outer set() pops the waiter, releases the awaiter set borrow,
         // then calls wake(). The re-entrant set() safely obtains its own
         // &mut AwaiterSet.
         event.set();
@@ -889,7 +889,7 @@ mod tests {
         event.set();
 
         // Drop future1 — it was notified, so it forwards to future2,
-        // calling the re-entrant waker which accesses the waiter list.
+        // calling the re-entrant waker which accesses the awaiter set.
         drop(future1);
 
         assert!(waker_data.was_woken());

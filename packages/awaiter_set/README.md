@@ -10,27 +10,24 @@ heap-allocated, making registration and removal zero-allocation.
 ## Quick start
 
 ```rust
+use std::pin::Pin;
+
 use awaiter_set::{AwaiterSet, AwaiterNode};
 
 let mut set = AwaiterSet::new();
 let mut node_a = AwaiterNode::new();
 let mut node_b = AwaiterNode::new();
 
-let pa: *mut AwaiterNode = &raw mut node_a;
-let pb: *mut AwaiterNode = &raw mut node_b;
-
-// SAFETY: Nodes are valid and not in any set.
+// SAFETY: Nodes remain valid and pinned while in the set.
 unsafe {
-    set.insert(pa);
-    set.insert(pb);
+    set.insert(Pin::new_unchecked(&mut node_a));
+    set.insert(Pin::new_unchecked(&mut node_b));
 }
 
-// SAFETY: We have exclusive access.
-assert!(!unsafe { set.is_empty() });
+assert!(!set.is_empty());
 
-// SAFETY: We have exclusive access.
-let first = unsafe { set.take_one() };
-assert!(std::ptr::eq(first.unwrap(), pa));
+let first = set.take_one();
+assert!(first.is_some());
 ```
 
 ## Design

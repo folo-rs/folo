@@ -89,7 +89,7 @@ struct LockState {
 
 // SAFETY: All access to the `UnsafeCell<T>` goes through the lock,
 // ensuring mutual exclusion. The `StdMutex<LockState>` handles
-// thread-safe access to the waiter list. `T: Send` is required
+// thread-safe access to the awaiter set. `T: Send` is required
 // because the mutex can transfer `T` access from one thread to
 // another.
 // Marker trait impl.
@@ -149,7 +149,7 @@ fn try_lock_inner(lock_state: &StdMutex<LockState>) -> bool {
 ///
 /// # Safety
 ///
-/// * The `lock_state` must protect the waiter list that this slot is
+/// * The `lock_state` must protect the awaiter set that this slot is
 ///   (or will be) registered with.
 unsafe fn poll_lock(
     lock_state: &StdMutex<LockState>,
@@ -157,12 +157,12 @@ unsafe fn poll_lock(
     waker: Waker,
 ) -> Poll<()> {
     // SAFETY: We do not move the slot; Pin enforces the address
-    // stability that the waiter list requires.
+    // stability that the awaiter set requires.
     let slot = unsafe { slot.get_unchecked_mut() };
     let mut state = lock_state.lock().expect(NEVER_POISONED);
 
     // Check if we were directly notified by unlock() (it popped us
-    // from the list and set our notified flag, transferring lock
+    // from the set and set our notified flag, transferring lock
     // ownership to us).
     // SAFETY: We hold the lock.
     if unsafe { slot.take_notification() } {
@@ -180,7 +180,7 @@ unsafe fn poll_lock(
     } else {
         // Lock is held — register as a waiter.
         // SAFETY: We hold the lock, slot is pinned and not yet
-        // in the list (or already registered with a stale waker).
+        // in the set (or already registered with a stale waker).
         unsafe {
             slot.register(&mut state.waiters, waker);
         }
@@ -215,8 +215,8 @@ unsafe fn drop_lock_wait(lock_state: &StdMutex<LockState>, slot: Pin<&mut Awaite
             state.locked = false;
         }
     } else {
-        // Not notified — just remove from the waiter list.
-        // SAFETY: We hold the lock and the node is in the list.
+        // Not notified — just remove from the awaiter set.
+        // SAFETY: We hold the lock and the node is in the set.
         unsafe {
             slot.unregister(&mut state.waiters);
         }

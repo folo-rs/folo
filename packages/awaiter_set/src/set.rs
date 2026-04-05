@@ -395,7 +395,7 @@ mod tests {
             list.remove(Pin::new_unchecked(&mut a));
         }
 
-        assert!(a.next_in_list().is_null());
+        assert!(a.next_in_set().is_null());
     }
 
     #[test]
@@ -444,7 +444,7 @@ mod tests {
     }
 
     #[test]
-    fn traversal_via_next_in_list() {
+    fn traversal_via_next_in_set() {
         let mut list = AwaiterSet::new();
         let mut a = AwaiterNode::new();
         let mut b = AwaiterNode::new();
@@ -463,15 +463,15 @@ mod tests {
         let head = list.peek().unwrap();
         assert_eq!(head.user_data(), 1);
 
-        let second = head.next_in_list();
+        let second = head.next_in_set();
         assert!(!second.is_null());
         assert_eq!(unsafe { (*second).user_data() }, 2);
 
-        let third = unsafe { (*second).next_in_list() };
+        let third = unsafe { (*second).next_in_set() };
         assert!(!third.is_null());
         assert_eq!(unsafe { (*third).user_data() }, 3);
 
-        let end = unsafe { (*third).next_in_list() };
+        let end = unsafe { (*third).next_in_set() };
         assert!(end.is_null());
     }
 

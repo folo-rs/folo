@@ -63,7 +63,7 @@ struct Inner {
     /// one-by-one in a loop.
     is_set: Cell<bool>,
 
-    // UnsafeCell because we mutate the list through shared references (Rc).
+    // UnsafeCell because we mutate the set through shared references (Rc).
     // All access is single-threaded, guaranteed by the !Send marker.
     waiters: UnsafeCell<AwaiterSet>,
 
@@ -99,7 +99,7 @@ impl Inner {
 
         // Wake all waiters using the rescan-from-head pattern.
         // We complete the wake call before rescanning because
-        // re-entrant wakers may modify the list. By rescanning
+        // re-entrant wakers may modify the set. By rescanning
         // from the head after each wake, we avoid holding any node
         // pointer across a wake call.
         let waiters_ptr = self.waiters.get();
@@ -312,7 +312,7 @@ impl Future for LocalManualResetWaitFuture {
         let this = unsafe { self.get_unchecked_mut() };
         // SAFETY: The slot is pinned inside this future and not moved.
         let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
-        // SAFETY: The slot belongs to this event's waiter list.
+        // SAFETY: The slot belongs to this event's awaiter set.
         unsafe { this.inner.poll_wait(slot, waker) }
     }
 }
@@ -321,7 +321,7 @@ impl Drop for LocalManualResetWaitFuture {
     fn drop(&mut self) {
         // SAFETY: The slot is pinned inside this future and not moved.
         let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
-        // SAFETY: The slot belongs to this event's waiter list.
+        // SAFETY: The slot belongs to this event's awaiter set.
         unsafe {
             self.inner.drop_wait(slot);
         }
@@ -497,7 +497,7 @@ impl Future for RawLocalManualResetWaitFuture {
         let inner = unsafe { this.inner.as_ref() };
         // SAFETY: The slot is pinned inside this future and not moved.
         let slot = unsafe { Pin::new_unchecked(&mut this.slot) };
-        // SAFETY: The slot belongs to this event's waiter list.
+        // SAFETY: The slot belongs to this event's awaiter set.
         unsafe { inner.poll_wait(slot, waker) }
     }
 }
@@ -509,7 +509,7 @@ impl Drop for RawLocalManualResetWaitFuture {
         let inner = unsafe { self.inner.as_ref() };
         // SAFETY: The slot is pinned inside this future and not moved.
         let slot = unsafe { Pin::new_unchecked(&mut self.slot) };
-        // SAFETY: The slot belongs to this event's waiter list.
+        // SAFETY: The slot belongs to this event's awaiter set.
         unsafe {
             inner.drop_wait(slot);
         }
@@ -683,7 +683,7 @@ mod tests {
         let waker = Waker::noop();
         let mut cx = task::Context::from_waker(waker);
 
-        // First poll — not set, registers in waiter list.
+        // First poll — not set, registers in awaiter set.
         assert!(future.as_mut().poll(&mut cx).is_pending());
 
         // Set the event — wakes the registered waiter.
@@ -765,7 +765,7 @@ mod tests {
         assert!(f3.as_mut().poll(&mut cx).is_ready());
     }
 
-    // --- re-entrancy tests (prove wake() is called outside waiter list borrow) ---
+    // --- re-entrancy tests (prove wake() is called outside awaiter set borrow) ---
     //
     // These tests use a custom waker that re-entrantly accesses the same event
     // when woken. If wake() were called while a &AwaiterSet borrow from
@@ -781,7 +781,7 @@ mod tests {
 
         let waker_data = ReentrantWakerData::new(move || {
             // Re-entrantly call reset() + poll a new wait() future, which
-            // accesses the waiter list to register a new node.
+            // accesses the awaiter set to register a new node.
             event_clone.reset();
             let mut new_future = Box::pin(event_clone.wait());
             let noop = Waker::noop();
@@ -795,9 +795,9 @@ mod tests {
         let mut future = Box::pin(event.wait());
         assert!(future.as_mut().poll(&mut cx).is_pending());
 
-        // set() collects the waker from the list, releases the borrow, then
+        // set() collects the waker from the set, releases the borrow, then
         // calls wake(). The re-entrant waker resets the event and polls a new
-        // future that registers in the waiter list.
+        // future that registers in the awaiter set.
         event.set();
 
         assert!(waker_data.was_woken());
@@ -903,7 +903,7 @@ mod tests {
         let mut future2 = Box::pin(event.wait());
         assert!(future2.as_mut().poll(&mut cx2).is_pending());
 
-        // Drop future1 — its node must be removed from the list.
+        // Drop future1 — its node must be removed from the set.
         drop(future1);
 
         event.set();

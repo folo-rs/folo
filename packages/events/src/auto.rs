@@ -50,11 +50,11 @@ pub struct AutoResetEvent {
     state: Arc<Mutex<State>>,
 }
 
-// The signal flag and waiter list are mutually exclusive: if the event is set
+// The signal flag and awaiter set are mutually exclusive: if the event is set
 // there are no waiters, and if there are waiters the event is not set. This
 // enum encodes that invariant at the type level.
 enum State {
-    /// Not signaled. The waiter list may be empty or non-empty.
+    /// Not signaled. The awaiter set may be empty or non-empty.
     Unset(AwaiterSet),
     /// Signal stored (will be consumed by the next wait or `try_wait`).
     Set,
@@ -112,7 +112,7 @@ fn try_wait(mutex: &Mutex<State>) -> bool {
 ///
 /// # Safety
 ///
-/// * The `mutex` must protect the waiter list that this slot is (or will
+/// * The `mutex` must protect the awaiter set that this slot is (or will
 ///   be) registered with.
 unsafe fn poll_wait(
     mutex: &Mutex<State>,
@@ -124,8 +124,8 @@ unsafe fn poll_wait(
     let mut state = mutex.lock().expect(NEVER_POISONED);
 
     // Check if we were directly notified by set() (it popped us
-    // from the list and set our notified flag).
-    // SAFETY: We hold the lock that protects the waiter list and node.
+    // from the set and set our notified flag).
+    // SAFETY: We hold the lock that protects the awaiter set and node.
     if unsafe { slot.take_notification() } {
         return Poll::Ready(());
     }
@@ -167,7 +167,7 @@ unsafe fn drop_wait(mutex: &Mutex<State>, slot: Pin<&mut AwaiterNodeStorage>) {
 
     let mut state = mutex.lock().expect(NEVER_POISONED);
 
-    // SAFETY: We hold the lock that protects the waiter list and node.
+    // SAFETY: We hold the lock that protects the awaiter set and node.
     if unsafe { slot.is_notified() } {
         // We were notified but the future was cancelled before it
         // could complete. Forward the notification to the next
@@ -178,7 +178,7 @@ unsafe fn drop_wait(mutex: &Mutex<State>, slot: Pin<&mut AwaiterNodeStorage>) {
                 if let Some(next_node) = waiters.take_one() {
                     next_node.set_notified();
                     let waker = next_node.take_waker();
-                    // Restore the waiter list.
+                    // Restore the awaiter set.
                     *state = State::Unset(waiters);
                     drop(state);
 
@@ -197,11 +197,11 @@ unsafe fn drop_wait(mutex: &Mutex<State>, slot: Pin<&mut AwaiterNodeStorage>) {
             }
         }
     } else {
-        // Not notified — just remove from the list.
+        // Not notified — just remove from the set.
         match &mut *state {
             State::Unset(waiters) => {
                 // SAFETY: We hold the lock and the slot is registered
-                // in this list.
+                // in this set.
                 unsafe {
                     slot.unregister(waiters);
                 }
@@ -1041,7 +1041,7 @@ mod tests {
         let waker = Waker::noop();
         let mut cx = task::Context::from_waker(waker);
 
-        // First poll — not set, registers in waiter list.
+        // First poll — not set, registers in awaiter set.
         assert!(future.as_mut().poll(&mut cx).is_pending());
 
         // set() pops and notifies the waiter.
@@ -1132,7 +1132,7 @@ mod tests {
 
     // This tests a defense-in-depth branch in poll() that unregisters
     // a waiter when is_set is observed while still registered. In normal
-    // usage, set() pops a waiter rather than setting is_set when the list
+    // usage, set() pops a waiter rather than setting is_set when the set
     // is non-empty, so this state cannot arise through the public API.
     // We force it by directly manipulating the guarded state.
     //

@@ -184,7 +184,7 @@ fn try_acquire_inner(state_mutex: &Mutex<SemaphoreState>, permits: usize) -> boo
 ///
 /// # Safety
 ///
-/// * The `state_mutex` must protect the waiter list that this slot
+/// * The `state_mutex` must protect the awaiter set that this slot
 ///   is (or will be) registered with.
 unsafe fn poll_acquire(
     state_mutex: &Mutex<SemaphoreState>,
@@ -197,7 +197,7 @@ unsafe fn poll_acquire(
     let mut state = state_mutex.lock().expect(NEVER_POISONED);
 
     // Check if we were directly notified by release_permits()
-    // (it popped us from the list and reserved our permits).
+    // (it popped us from the set and reserved our permits).
     // SAFETY: We hold the lock.
     if unsafe { slot.take_notification() } {
         return Poll::Ready(());
@@ -214,7 +214,7 @@ unsafe fn poll_acquire(
     } else {
         // Not enough permits or already registered — wait.
         // SAFETY: We hold the lock, slot is pinned and not yet
-        // in the list (or already registered with a stale waker).
+        // in the set (or already registered with a stale waker).
         unsafe {
             slot.register_with_data(&mut state.waiters, waker, permits);
         }
@@ -252,8 +252,8 @@ unsafe fn drop_acquire_wait(
             wake_waiters(state_mutex);
         }
     } else {
-        // Not notified — just remove from the waiter list.
-        // SAFETY: We hold the lock and the node is in the list.
+        // Not notified — just remove from the awaiter set.
+        // SAFETY: We hold the lock and the node is in the set.
         unsafe {
             slot.unregister(&mut state.waiters);
         }

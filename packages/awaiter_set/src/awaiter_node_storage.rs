@@ -75,9 +75,9 @@ impl AwaiterNodeStorage {
     /// Stores a waker and registers the node in `list` if not already
     /// registered.
     ///
-    /// On the first call this pushes the node into the list and marks
+    /// On the first call this pushes the node into the set and marks
     /// the slot as registered. On subsequent calls it only updates the
-    /// stored waker (the node is already in the list).
+    /// stored waker (the node is already in the set).
     ///
     /// Takes ownership of the waker so no cloning happens while the
     /// caller holds a lock. Clone the waker before acquiring locks.
@@ -85,7 +85,7 @@ impl AwaiterNodeStorage {
     /// # Safety
     ///
     /// * The caller must have exclusive access to both the node and
-    ///   the list (e.g. by holding a lock).
+    ///   the set (e.g. by holding a lock).
     /// * The slot must be at a pinned, stable address.
     pub unsafe fn register(&mut self, set: &mut AwaiterSet, waker: Waker) {
         let node_ptr = self.node.get();

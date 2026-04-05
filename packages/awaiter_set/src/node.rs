@@ -10,12 +10,12 @@ use std::task::Waker;
 /// future until a synchronization event occurs.
 ///
 /// Once registered, a node must remain at a stable memory address until it
-/// is removed from the list.
+/// is removed from the set.
 pub struct AwaiterNode {
     /// The waker to call when this waiter is selected for notification.
     waker: Option<Waker>,
 
-    /// Set to `true` after this node is popped from the list by the
+    /// Set to `true` after this node is popped from the set by the
     /// synchronization primitive. The owning future checks this flag
     /// on the next poll to complete with `Ready`.
     notified: bool,
@@ -75,7 +75,7 @@ impl AwaiterNode {
     /// Extracts and returns the stored waker, if any.
     ///
     /// Called by the synchronization primitive after popping this node
-    /// from the list and setting the notified flag. The caller must
+    /// from the set and setting the notified flag. The caller must
     /// invoke [`Waker::wake()`] outside any lock scope to avoid
     /// re-entrancy issues.
     pub fn take_waker(&mut self) -> Option<Waker> {
@@ -91,7 +91,7 @@ impl AwaiterNode {
     /// Marks this node as notified.
     ///
     /// Synchronization primitives call this after popping the node from
-    /// the list, signaling the owning future to complete on its next poll.
+    /// the set, signaling the owning future to complete on its next poll.
     pub fn set_notified(&mut self) {
         self.notified = true;
     }
@@ -112,13 +112,13 @@ impl AwaiterNode {
         self.user_data = data;
     }
 
-    /// Returns a raw pointer to the next node in the list.
+    /// Returns a raw pointer to the next node in the set.
     ///
     /// Returns a null pointer if this is the last node or the node is
-    /// not currently in a list. The returned pointer is valid only as
-    /// long as the caller maintains exclusive access to the list.
+    /// not currently in a set. The returned pointer is valid only as
+    /// long as the caller maintains exclusive access to the set.
     #[must_use]
-    pub fn next_in_list(&self) -> *mut Self {
+    pub fn next_in_set(&self) -> *mut Self {
         self.next
     }
 }
@@ -130,7 +130,7 @@ impl Default for AwaiterNode {
 }
 
 // AwaiterNode contains raw pointers (*mut Self) which make it !Send and !Sync
-// by default. This is correct: once registered in a list, nodes must remain
+// by default. This is correct: once registered in a set, nodes must remain
 // at a stable pinned address. Consumers wrap nodes in UnsafeCell and handle
 // Send via their own unsafe impls on the containing future type.
 
@@ -181,7 +181,7 @@ mod tests {
         let mut node = AwaiterNode::new();
         assert!(!node.is_notified());
         assert_eq!(node.user_data(), 0);
-        assert!(node.next_in_list().is_null());
+        assert!(node.next_in_set().is_null());
         assert!(node.take_waker().is_none());
     }
 
