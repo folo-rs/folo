@@ -210,13 +210,20 @@ unsafe fn poll_acquire(
             .expect("available >= permits was just checked");
         Poll::Ready(())
     } else {
-        // Not enough permits or already registered — wait.
-        // SAFETY: We hold the lock, awaiter is pinned and not yet
-        // in the set (or already registered with a stale waker).
-        unsafe {
-            awaiter
-                .as_mut()
-                .register_with_data(&mut state.waiters, waker, permits);
+        // Not enough permits — register or update the waker.
+        if awaiter.is_registered() {
+            // SAFETY: We hold the lock.
+            unsafe {
+                awaiter.as_mut().update_waker(waker);
+            }
+        } else {
+            // SAFETY: We hold the lock, awaiter is pinned and not yet
+            // in the set.
+            unsafe {
+                awaiter
+                    .as_mut()
+                    .register_with_data(&mut state.waiters, waker, permits);
+            }
         }
         Poll::Pending
     }

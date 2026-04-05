@@ -103,9 +103,13 @@ impl Awaiter {
 
     /// Registers this awaiter in `set` with the given waker.
     ///
-    /// On the first poll, this inserts the awaiter into the set. On
-    /// subsequent polls it updates the stored waker (the executor
-    /// may provide a different waker on each poll).
+    /// Inserts the awaiter into the set and stores the waker. This
+    /// must only be called once — use [`update_waker()`][Self::update_waker]
+    /// on subsequent polls to refresh the waker.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the awaiter is already registered.
     ///
     /// # Safety
     ///
@@ -117,19 +121,18 @@ impl Awaiter {
     pub unsafe fn register(self: Pin<&mut Self>, set: &mut AwaiterSet, waker: Waker) {
         // SAFETY: We do not move self. Pin guarantees address stability.
         let this = unsafe { self.get_unchecked_mut() };
+        assert!(!this.registered, "awaiter is already registered in a set");
         // SAFETY: Access is serialized by the caller's lock.
         let inner = unsafe { &mut *this.inner.get() };
         inner.waker = Some(waker);
-        if !this.registered {
-            inner.notified = false;
-            inner.user_data = 0;
-            // SAFETY: Pin guarantees the awaiter is at a stable
-            // address and will remain valid until removed.
-            unsafe {
-                set.insert(ptr::from_mut(this));
-            }
-            this.registered = true;
+        inner.notified = false;
+        inner.user_data = 0;
+        // SAFETY: Pin guarantees the awaiter is at a stable
+        // address and will remain valid until removed.
+        unsafe {
+            set.insert(ptr::from_mut(this));
         }
+        this.registered = true;
     }
 
     /// Registers this awaiter in `set` with a waker and
@@ -138,6 +141,10 @@ impl Awaiter {
     /// Behaves like [`register()`][Self::register] but also sets
     /// the [`user_data`][Self::user_data] value (e.g. the number
     /// of permits a semaphore awaiter requests).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the awaiter is already registered.
     ///
     /// # Safety
     ///
@@ -152,18 +159,39 @@ impl Awaiter {
     ) {
         // SAFETY: We do not move self.
         let this = unsafe { self.get_unchecked_mut() };
+        assert!(!this.registered, "awaiter is already registered in a set");
         // SAFETY: Access is serialized by the caller's lock.
         let inner = unsafe { &mut *this.inner.get() };
         inner.waker = Some(waker);
         inner.user_data = data;
-        if !this.registered {
-            inner.notified = false;
-            // SAFETY: Same as register().
-            unsafe {
-                set.insert(ptr::from_mut(this));
-            }
-            this.registered = true;
+        inner.notified = false;
+        // SAFETY: Same as register().
+        unsafe {
+            set.insert(ptr::from_mut(this));
         }
+        this.registered = true;
+    }
+
+    /// Updates the stored waker for a registered awaiter.
+    ///
+    /// Called on subsequent polls after the initial
+    /// [`register()`][Self::register] to keep the waker current
+    /// (the executor may provide a different waker on each poll).
+    ///
+    /// # Safety
+    ///
+    /// The awaiter must be protected by the same lock as its set
+    /// (or confined to a single thread).
+    pub unsafe fn update_waker(self: Pin<&mut Self>, waker: Waker) {
+        // SAFETY: We do not move self.
+        let this = unsafe { self.get_unchecked_mut() };
+        debug_assert!(
+            this.registered,
+            "update_waker called on unregistered awaiter"
+        );
+        // SAFETY: Access is serialized by the caller's lock.
+        let inner = unsafe { &mut *this.inner.get() };
+        inner.waker = Some(waker);
     }
 
     /// Removes the awaiter from `set`.
@@ -370,7 +398,7 @@ mod tests {
     }
 
     #[test]
-    fn register_idempotent_on_second_call() {
+    fn update_waker_after_register() {
         let mut a = Awaiter::new();
         let mut set = AwaiterSet::new();
 
@@ -380,7 +408,7 @@ mod tests {
         }
         // SAFETY: Test has exclusive access. The awaiter is not moved.
         unsafe {
-            Pin::new_unchecked(&mut a).register(&mut set, Waker::noop().clone());
+            Pin::new_unchecked(&mut a).update_waker(Waker::noop().clone());
         }
 
         assert!(a.is_registered());

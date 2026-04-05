@@ -159,10 +159,18 @@ unsafe fn poll_wait(
         return Poll::Ready(());
     }
 
-    // SAFETY: We hold the lock, awaiter is pinned and lives as long as
-    // the future.
-    unsafe {
-        awaiter.as_mut().register(&mut state.waiters, waker);
+    // Register or update the waker.
+    if awaiter.is_registered() {
+        // SAFETY: We hold the lock.
+        unsafe {
+            awaiter.as_mut().update_waker(waker);
+        }
+    } else {
+        // SAFETY: We hold the lock, awaiter is pinned and lives as
+        // long as the future.
+        unsafe {
+            awaiter.as_mut().register(&mut state.waiters, waker);
+        }
     }
 
     Poll::Pending

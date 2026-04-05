@@ -181,12 +181,20 @@ impl Inner {
                 .expect("available >= permits was just checked");
             Poll::Ready(())
         } else {
-            // SAFETY: Single-threaded, awaiter is pinned and not yet
-            // in the set (or already registered with a stale waker).
-            unsafe {
-                awaiter
-                    .as_mut()
-                    .register_with_data(&mut state.waiters, waker, permits);
+            // Register or update the waker.
+            if awaiter.is_registered() {
+                // SAFETY: Single-threaded, awaiter is already registered.
+                unsafe {
+                    awaiter.as_mut().update_waker(waker);
+                }
+            } else {
+                // SAFETY: Single-threaded, awaiter is pinned and not yet
+                // in the set.
+                unsafe {
+                    awaiter
+                        .as_mut()
+                        .register_with_data(&mut state.waiters, waker, permits);
+                }
             }
             Poll::Pending
         }

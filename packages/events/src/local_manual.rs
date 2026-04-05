@@ -159,12 +159,20 @@ impl Inner {
             return Poll::Ready(());
         }
 
-        // SAFETY: Single-threaded, awaiter is pinned and lives as long
-        // as the future.
-        let waiters = unsafe { &mut *self.waiters.get() };
-        // SAFETY: Single-threaded.
-        unsafe {
-            awaiter.as_mut().register(waiters, waker);
+        // Register or update the waker.
+        if awaiter.is_registered() {
+            // SAFETY: Single-threaded, awaiter is already registered.
+            unsafe {
+                awaiter.as_mut().update_waker(waker);
+            }
+        } else {
+            // SAFETY: Single-threaded, awaiter is pinned and lives as
+            // long as the future.
+            let waiters = unsafe { &mut *self.waiters.get() };
+            // SAFETY: Single-threaded.
+            unsafe {
+                awaiter.as_mut().register(waiters, waker);
+            }
         }
 
         Poll::Pending

@@ -139,10 +139,18 @@ impl<T> Inner<T> {
             state.locked = true;
             Poll::Ready(())
         } else {
-            // SAFETY: Single-threaded, awaiter is pinned and not yet
-            // in the set (or already registered with a stale waker).
-            unsafe {
-                awaiter.as_mut().register(&mut state.waiters, waker);
+            // Register or update the waker.
+            if awaiter.is_registered() {
+                // SAFETY: Single-threaded, awaiter is already registered.
+                unsafe {
+                    awaiter.as_mut().update_waker(waker);
+                }
+            } else {
+                // SAFETY: Single-threaded, awaiter is pinned and not yet
+                // in the set.
+                unsafe {
+                    awaiter.as_mut().register(&mut state.waiters, waker);
+                }
             }
             Poll::Pending
         }

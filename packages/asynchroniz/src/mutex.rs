@@ -175,11 +175,18 @@ unsafe fn poll_lock(
         state.locked = true;
         Poll::Ready(())
     } else {
-        // Lock is held — register as a waiter.
-        // SAFETY: We hold the lock that protects the awaiter and
-        // its set.
-        unsafe {
-            awaiter.as_mut().register(&mut state.waiters, waker);
+        // Lock is held — register or update the waker.
+        if awaiter.is_registered() {
+            // SAFETY: We hold the lock.
+            unsafe {
+                awaiter.as_mut().update_waker(waker);
+            }
+        } else {
+            // SAFETY: We hold the lock that protects the awaiter and
+            // its set.
+            unsafe {
+                awaiter.as_mut().register(&mut state.waiters, waker);
+            }
         }
         Poll::Pending
     }
