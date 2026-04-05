@@ -188,19 +188,16 @@ fn try_acquire_inner(state_mutex: &Mutex<SemaphoreState>, permits: usize) -> boo
 ///   is (or will be) registered with.
 unsafe fn poll_acquire(
     state_mutex: &Mutex<SemaphoreState>,
-    awaiter: Pin<&mut Awaiter>,
+    mut awaiter: Pin<&mut Awaiter>,
     permits: usize,
     waker: Waker,
 ) -> Poll<()> {
     let mut state = state_mutex.lock().expect(NEVER_POISONED);
-    // SAFETY: We do not move the awaiter. Projection is done after
-    // acquiring the lock so all &mut Awaiter access is serialized.
-    let awaiter = unsafe { awaiter.get_unchecked_mut() };
 
     // Check if we were directly notified by release_permits()
     // (it popped us from the set and reserved our permits).
     // SAFETY: We hold the lock.
-    if unsafe { awaiter.take_notification() } {
+    if unsafe { awaiter.as_mut().take_notification() } {
         return Poll::Ready(());
     }
 
@@ -217,7 +214,9 @@ unsafe fn poll_acquire(
         // SAFETY: We hold the lock, awaiter is pinned and not yet
         // in the set (or already registered with a stale waker).
         unsafe {
-            awaiter.register_with_data(&mut state.waiters, waker, permits);
+            awaiter
+                .as_mut()
+                .register_with_data(&mut state.waiters, waker, permits);
         }
         Poll::Pending
     }
@@ -230,15 +229,13 @@ unsafe fn poll_acquire(
 /// Same requirements as [`poll_acquire`].
 unsafe fn drop_acquire_wait(
     state_mutex: &Mutex<SemaphoreState>,
-    awaiter: Pin<&mut Awaiter>,
+    mut awaiter: Pin<&mut Awaiter>,
     permits: usize,
 ) {
     let mut state = state_mutex.lock().expect(NEVER_POISONED);
-    // SAFETY: We do not move the awaiter.
-    let awaiter = unsafe { awaiter.get_unchecked_mut() };
 
     // SAFETY: We hold the lock.
-    if unsafe { awaiter.is_notified() } {
+    if unsafe { awaiter.as_ref().is_notified() } {
         // We were given permits but the future was cancelled.
         // Return the permits and try to wake other waiters, all
         // within the same lock scope.
@@ -256,7 +253,7 @@ unsafe fn drop_acquire_wait(
         // Not notified — just remove from the awaiter set.
         // SAFETY: We hold the lock and the node is in the set.
         unsafe {
-            awaiter.unregister(&mut state.waiters);
+            awaiter.as_mut().unregister(&mut state.waiters);
         }
     }
 }

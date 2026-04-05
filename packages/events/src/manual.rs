@@ -141,17 +141,19 @@ fn try_wait(mutex: &Mutex<State>) -> bool {
 ///
 /// * The `mutex` must protect the awaiter set that this awaiter is (or will
 ///   be) registered with.
-unsafe fn poll_wait(mutex: &Mutex<State>, awaiter: Pin<&mut Awaiter>, waker: Waker) -> Poll<()> {
+unsafe fn poll_wait(
+    mutex: &Mutex<State>,
+    mut awaiter: Pin<&mut Awaiter>,
+    waker: Waker,
+) -> Poll<()> {
     let mut state = mutex.lock().expect(NEVER_POISONED);
-    // SAFETY: We do not move the awaiter.
-    let awaiter = unsafe { awaiter.get_unchecked_mut() };
 
     if state.is_set {
         if awaiter.is_registered() {
             // SAFETY: We hold the lock and the awaiter is registered in
             // this set.
             unsafe {
-                awaiter.unregister(&mut state.waiters);
+                awaiter.as_mut().unregister(&mut state.waiters);
             }
         }
         return Poll::Ready(());
@@ -160,7 +162,7 @@ unsafe fn poll_wait(mutex: &Mutex<State>, awaiter: Pin<&mut Awaiter>, waker: Wak
     // SAFETY: We hold the lock, awaiter is pinned and lives as long as
     // the future.
     unsafe {
-        awaiter.register(&mut state.waiters, waker);
+        awaiter.as_mut().register(&mut state.waiters, waker);
     }
 
     Poll::Pending
@@ -169,15 +171,13 @@ unsafe fn poll_wait(mutex: &Mutex<State>, awaiter: Pin<&mut Awaiter>, waker: Wak
 /// # Safety
 ///
 /// Same requirements as [`poll_wait`].
-unsafe fn drop_wait(mutex: &Mutex<State>, awaiter: Pin<&mut Awaiter>) {
-    // SAFETY: We do not move the awaiter.
-    let awaiter = unsafe { awaiter.get_unchecked_mut() };
+unsafe fn drop_wait(mutex: &Mutex<State>, mut awaiter: Pin<&mut Awaiter>) {
     if awaiter.is_registered() {
         let mut state = mutex.lock().expect(NEVER_POISONED);
         // SAFETY: We hold the lock and the awaiter is registered in this
         // list.
         unsafe {
-            awaiter.unregister(&mut state.waiters);
+            awaiter.as_mut().unregister(&mut state.waiters);
         }
     }
 }

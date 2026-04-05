@@ -118,12 +118,9 @@ impl Inner {
     /// # Safety
     ///
     /// * The `awaiter` must belong to a future created from the same event.
-    unsafe fn poll_wait(&self, awaiter: Pin<&mut Awaiter>, waker: Waker) -> Poll<()> {
-        // SAFETY: We do not move the awaiter.
-        let awaiter = unsafe { awaiter.get_unchecked_mut() };
-
+    unsafe fn poll_wait(&self, mut awaiter: Pin<&mut Awaiter>, waker: Waker) -> Poll<()> {
         // SAFETY: Single-threaded access.
-        if unsafe { awaiter.take_notification() } {
+        if unsafe { awaiter.as_mut().take_notification() } {
             return Poll::Ready(());
         }
 
@@ -143,7 +140,7 @@ impl Inner {
                 // SAFETY: Single-threaded, awaiter is pinned and lives
                 // as long as the future.
                 unsafe {
-                    awaiter.register(waiters, waker);
+                    awaiter.as_mut().register(waiters, waker);
                 }
                 Poll::Pending
             }
@@ -153,15 +150,13 @@ impl Inner {
     /// # Safety
     ///
     /// Same requirements as [`poll_wait`][Self::poll_wait].
-    unsafe fn drop_wait(&self, awaiter: Pin<&mut Awaiter>) {
-        // SAFETY: We do not move the awaiter.
-        let awaiter = unsafe { awaiter.get_unchecked_mut() };
+    unsafe fn drop_wait(&self, mut awaiter: Pin<&mut Awaiter>) {
         if !awaiter.is_registered() {
             return;
         }
 
         // SAFETY: Single-threaded access.
-        if unsafe { awaiter.is_notified() } {
+        if unsafe { awaiter.as_ref().is_notified() } {
             let state_ptr = self.state.get();
             // SAFETY: Single-threaded access.
             let old_state =
@@ -208,7 +203,7 @@ impl Inner {
                     // SAFETY: Single-threaded, awaiter is registered in
                     // this set.
                     unsafe {
-                        awaiter.unregister(waiters);
+                        awaiter.as_mut().unregister(waiters);
                     }
                 }
                 InnerState::Set => {

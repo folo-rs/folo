@@ -162,15 +162,12 @@ impl Inner {
     ///   semaphore.
     unsafe fn poll_acquire(
         &self,
-        awaiter: Pin<&mut Awaiter>,
+        mut awaiter: Pin<&mut Awaiter>,
         permits: usize,
         waker: Waker,
     ) -> Poll<()> {
-        // SAFETY: We do not move the awaiter.
-        let awaiter = unsafe { awaiter.get_unchecked_mut() };
-
         // SAFETY: Single-threaded access.
-        if unsafe { awaiter.take_notification() } {
+        if unsafe { awaiter.as_mut().take_notification() } {
             return Poll::Ready(());
         }
 
@@ -187,7 +184,9 @@ impl Inner {
             // SAFETY: Single-threaded, awaiter is pinned and not yet
             // in the set (or already registered with a stale waker).
             unsafe {
-                awaiter.register_with_data(&mut state.waiters, waker, permits);
+                awaiter
+                    .as_mut()
+                    .register_with_data(&mut state.waiters, waker, permits);
             }
             Poll::Pending
         }
@@ -196,11 +195,9 @@ impl Inner {
     /// # Safety
     ///
     /// Same requirements as [`poll_acquire`][Self::poll_acquire].
-    unsafe fn drop_acquire_wait(&self, awaiter: Pin<&mut Awaiter>, permits: usize) {
-        // SAFETY: We do not move the awaiter.
-        let awaiter = unsafe { awaiter.get_unchecked_mut() };
+    unsafe fn drop_acquire_wait(&self, mut awaiter: Pin<&mut Awaiter>, permits: usize) {
         // SAFETY: Single-threaded access.
-        if unsafe { awaiter.is_notified() } {
+        if unsafe { awaiter.as_ref().is_notified() } {
             // We were given permits but the future was cancelled.
             // Return the permits and try to wake the head waiter in
             // the same access scope.
@@ -223,7 +220,7 @@ impl Inner {
             let state = unsafe { &mut *self.state.get() };
             // SAFETY: Single-threaded, node is in the set.
             unsafe {
-                awaiter.unregister(&mut state.waiters);
+                awaiter.as_mut().unregister(&mut state.waiters);
             }
         }
     }

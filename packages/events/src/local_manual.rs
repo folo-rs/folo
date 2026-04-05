@@ -145,9 +145,7 @@ impl Inner {
     /// # Safety
     ///
     /// * The `awaiter` must belong to a future created from the same event.
-    unsafe fn poll_wait(&self, awaiter: Pin<&mut Awaiter>, waker: Waker) -> Poll<()> {
-        // SAFETY: We do not move the awaiter.
-        let awaiter = unsafe { awaiter.get_unchecked_mut() };
+    unsafe fn poll_wait(&self, mut awaiter: Pin<&mut Awaiter>, waker: Waker) -> Poll<()> {
         if self.is_set.get() {
             if awaiter.is_registered() {
                 // SAFETY: Single-threaded, awaiter is registered in this
@@ -155,7 +153,7 @@ impl Inner {
                 let waiters = unsafe { &mut *self.waiters.get() };
                 // SAFETY: Single-threaded.
                 unsafe {
-                    awaiter.unregister(waiters);
+                    awaiter.as_mut().unregister(waiters);
                 }
             }
             return Poll::Ready(());
@@ -166,7 +164,7 @@ impl Inner {
         let waiters = unsafe { &mut *self.waiters.get() };
         // SAFETY: Single-threaded.
         unsafe {
-            awaiter.register(waiters, waker);
+            awaiter.as_mut().register(waiters, waker);
         }
 
         Poll::Pending
@@ -175,16 +173,14 @@ impl Inner {
     /// # Safety
     ///
     /// Same requirements as [`poll_wait`][Self::poll_wait].
-    unsafe fn drop_wait(&self, awaiter: Pin<&mut Awaiter>) {
-        // SAFETY: We do not move the awaiter.
-        let awaiter = unsafe { awaiter.get_unchecked_mut() };
+    unsafe fn drop_wait(&self, mut awaiter: Pin<&mut Awaiter>) {
         if awaiter.is_registered() {
             // SAFETY: Single-threaded, awaiter is registered in this
             // list.
             let waiters = unsafe { &mut *self.waiters.get() };
             // SAFETY: Single-threaded.
             unsafe {
-                awaiter.unregister(waiters);
+                awaiter.as_mut().unregister(waiters);
             }
         }
     }

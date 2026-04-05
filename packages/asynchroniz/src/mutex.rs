@@ -153,19 +153,16 @@ fn try_lock_inner(lock_state: &StdMutex<LockState>) -> bool {
 ///   (or will be) registered with.
 unsafe fn poll_lock(
     lock_state: &StdMutex<LockState>,
-    awaiter: Pin<&mut Awaiter>,
+    mut awaiter: Pin<&mut Awaiter>,
     waker: Waker,
 ) -> Poll<()> {
     let mut state = lock_state.lock().expect(NEVER_POISONED);
-    // SAFETY: We do not move the awaiter. Projection is done after
-    // acquiring the lock so all &mut Awaiter access is serialized.
-    let awaiter = unsafe { awaiter.get_unchecked_mut() };
 
     // Check if we were directly notified by unlock() (it popped us
     // from the set and set our notified flag, transferring lock
     // ownership to us).
-    // SAFETY: We hold the lock.
-    if unsafe { awaiter.take_notification() } {
+    // SAFETY: We hold the lock that protects the awaiter and its set.
+    if unsafe { awaiter.as_mut().take_notification() } {
         return Poll::Ready(());
     }
 
@@ -179,10 +176,10 @@ unsafe fn poll_lock(
         Poll::Ready(())
     } else {
         // Lock is held — register as a waiter.
-        // SAFETY: We hold the lock, awaiter is pinned and not yet
-        // in the set (or already registered with a stale waker).
+        // SAFETY: We hold the lock that protects the awaiter and
+        // its set.
         unsafe {
-            awaiter.register(&mut state.waiters, waker);
+            awaiter.as_mut().register(&mut state.waiters, waker);
         }
         Poll::Pending
     }
@@ -193,13 +190,11 @@ unsafe fn poll_lock(
 /// # Safety
 ///
 /// Same requirements as [`poll_lock`].
-unsafe fn drop_lock_wait(lock_state: &StdMutex<LockState>, awaiter: Pin<&mut Awaiter>) {
+unsafe fn drop_lock_wait(lock_state: &StdMutex<LockState>, mut awaiter: Pin<&mut Awaiter>) {
     let mut state = lock_state.lock().expect(NEVER_POISONED);
-    // SAFETY: We do not move the awaiter.
-    let awaiter = unsafe { awaiter.get_unchecked_mut() };
 
     // SAFETY: We hold the lock.
-    if unsafe { awaiter.is_notified() } {
+    if unsafe { awaiter.as_ref().is_notified() } {
         // We were chosen as the next lock holder but the future was
         // cancelled. Forward the lock to the next waiter.
         if let Some(next_node) = state.waiters.take_one() {
@@ -218,7 +213,7 @@ unsafe fn drop_lock_wait(lock_state: &StdMutex<LockState>, awaiter: Pin<&mut Awa
         // Not notified — just remove from the awaiter set.
         // SAFETY: We hold the lock and the node is in the set.
         unsafe {
-            awaiter.unregister(&mut state.waiters);
+            awaiter.as_mut().unregister(&mut state.waiters);
         }
     }
 }

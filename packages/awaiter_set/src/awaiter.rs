@@ -2,6 +2,7 @@ use std::cell::UnsafeCell;
 use std::fmt;
 use std::marker::PhantomPinned;
 use std::panic::{RefUnwindSafe, UnwindSafe};
+use std::pin::Pin;
 use std::ptr;
 use std::task::Waker;
 
@@ -109,23 +110,25 @@ impl Awaiter {
     /// # Safety
     ///
     /// The awaiter and the set must be protected by the same lock
-    /// (or confined to a single thread). The awaiter must be pinned
-    /// and must remain valid until it is removed from the set — either
-    /// by the primitive calling [`AwaiterSet::take_one()`] or by the
+    /// (or confined to a single thread). The awaiter must remain
+    /// valid until it is removed from the set — either by the
+    /// primitive calling [`AwaiterSet::take_one()`] or by the
     /// future's drop handler calling [`unregister()`][Self::unregister].
-    pub unsafe fn register(&mut self, set: &mut AwaiterSet, waker: Waker) {
+    pub unsafe fn register(self: Pin<&mut Self>, set: &mut AwaiterSet, waker: Waker) {
+        // SAFETY: We do not move self. Pin guarantees address stability.
+        let this = unsafe { self.get_unchecked_mut() };
         // SAFETY: Access is serialized by the caller's lock.
-        let inner = unsafe { &mut *self.inner.get() };
+        let inner = unsafe { &mut *this.inner.get() };
         inner.waker = Some(waker);
-        if !self.registered {
+        if !this.registered {
             inner.notified = false;
             inner.user_data = 0;
-            // SAFETY: Caller guarantees the awaiter is pinned and
-            // will remain valid until removed.
+            // SAFETY: Pin guarantees the awaiter is at a stable
+            // address and will remain valid until removed.
             unsafe {
-                set.insert(ptr::from_mut(self));
+                set.insert(ptr::from_mut(this));
             }
-            self.registered = true;
+            this.registered = true;
         }
     }
 
@@ -139,20 +142,27 @@ impl Awaiter {
     /// # Safety
     ///
     /// The awaiter and the set must be protected by the same lock
-    /// (or confined to a single thread). The awaiter must be pinned
-    /// and must remain valid until it is removed from the set.
-    pub unsafe fn register_with_data(&mut self, set: &mut AwaiterSet, waker: Waker, data: usize) {
+    /// (or confined to a single thread). The awaiter must remain
+    /// valid until it is removed from the set.
+    pub unsafe fn register_with_data(
+        self: Pin<&mut Self>,
+        set: &mut AwaiterSet,
+        waker: Waker,
+        data: usize,
+    ) {
+        // SAFETY: We do not move self.
+        let this = unsafe { self.get_unchecked_mut() };
         // SAFETY: Access is serialized by the caller's lock.
-        let inner = unsafe { &mut *self.inner.get() };
+        let inner = unsafe { &mut *this.inner.get() };
         inner.waker = Some(waker);
         inner.user_data = data;
-        if !self.registered {
+        if !this.registered {
             inner.notified = false;
             // SAFETY: Same as register().
             unsafe {
-                set.insert(ptr::from_mut(self));
+                set.insert(ptr::from_mut(this));
             }
-            self.registered = true;
+            this.registered = true;
         }
     }
 
@@ -165,14 +175,16 @@ impl Awaiter {
     /// The awaiter and the set must be protected by the same lock
     /// (or confined to a single thread). If registered, the awaiter
     /// must be in `set` (not in a different set).
-    pub unsafe fn unregister(&mut self, set: &mut AwaiterSet) {
-        if self.registered {
+    pub unsafe fn unregister(self: Pin<&mut Self>, set: &mut AwaiterSet) {
+        // SAFETY: We do not move self.
+        let this = unsafe { self.get_unchecked_mut() };
+        if this.registered {
             // SAFETY: The awaiter is in this set per the caller's
             // contract.
             unsafe {
-                set.remove(ptr::from_mut(self));
+                set.remove(ptr::from_mut(this));
             }
-            self.registered = false;
+            this.registered = false;
         }
     }
 
@@ -192,11 +204,14 @@ impl Awaiter {
     ///
     /// The awaiter must be protected by the same lock as the set
     /// (or confined to a single thread).
-    pub unsafe fn take_notification(&mut self) -> bool {
+    #[must_use]
+    pub unsafe fn take_notification(self: Pin<&mut Self>) -> bool {
+        // SAFETY: We do not move self.
+        let this = unsafe { self.get_unchecked_mut() };
         // SAFETY: Access is serialized by the caller's lock.
-        let inner = unsafe { &*self.inner.get() };
+        let inner = unsafe { &*this.inner.get() };
         if inner.notified {
-            self.registered = false;
+            this.registered = false;
             true
         } else {
             false
@@ -216,7 +231,8 @@ impl Awaiter {
     ///
     /// The awaiter must be protected by the same lock as the set
     /// (or confined to a single thread).
-    pub unsafe fn is_notified(&self) -> bool {
+    #[must_use]
+    pub unsafe fn is_notified(self: Pin<&Self>) -> bool {
         // SAFETY: Access is serialized by the caller's lock.
         let inner = unsafe { &*self.inner.get() };
         inner.notified
@@ -313,6 +329,10 @@ impl fmt::Debug for Awaiter {
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
+#[allow(
+    clippy::multiple_unsafe_ops_per_block,
+    reason = "test code with trivial safety invariants"
+)]
 mod tests {
     use std::task::Waker;
 
@@ -340,8 +360,9 @@ mod tests {
         let mut a = Awaiter::new();
         let mut set = AwaiterSet::new();
 
-        // SAFETY: Test has exclusive access.
+        // SAFETY: Test has exclusive access. The awaiter is not moved.
         unsafe {
+            let a = Pin::new_unchecked(&mut a);
             a.register(&mut set, Waker::noop().clone());
         }
         assert!(a.is_registered());
@@ -353,13 +374,13 @@ mod tests {
         let mut a = Awaiter::new();
         let mut set = AwaiterSet::new();
 
-        // SAFETY: Test has exclusive access.
+        // SAFETY: Test has exclusive access. The awaiter is not moved.
         unsafe {
-            a.register(&mut set, Waker::noop().clone());
+            Pin::new_unchecked(&mut a).register(&mut set, Waker::noop().clone());
         }
-        // SAFETY: Test has exclusive access.
+        // SAFETY: Test has exclusive access. The awaiter is not moved.
         unsafe {
-            a.register(&mut set, Waker::noop().clone());
+            Pin::new_unchecked(&mut a).register(&mut set, Waker::noop().clone());
         }
 
         assert!(a.is_registered());
@@ -373,9 +394,9 @@ mod tests {
         let mut a = Awaiter::new();
         let mut set = AwaiterSet::new();
 
-        // SAFETY: Test has exclusive access.
+        // SAFETY: Test has exclusive access. The awaiter is not moved.
         unsafe {
-            a.register_with_data(&mut set, Waker::noop().clone(), 42);
+            Pin::new_unchecked(&mut a).register_with_data(&mut set, Waker::noop().clone(), 42);
         }
         assert!(a.is_registered());
         assert_eq!(a.user_data(), 42);
@@ -386,13 +407,13 @@ mod tests {
         let mut a = Awaiter::new();
         let mut set = AwaiterSet::new();
 
-        // SAFETY: Test has exclusive access.
+        // SAFETY: Test has exclusive access. The awaiter is not moved.
         unsafe {
-            a.register(&mut set, Waker::noop().clone());
+            Pin::new_unchecked(&mut a).register(&mut set, Waker::noop().clone());
         }
-        // SAFETY: Test has exclusive access.
+        // SAFETY: Test has exclusive access. The awaiter is not moved.
         unsafe {
-            a.unregister(&mut set);
+            Pin::new_unchecked(&mut a).unregister(&mut set);
         }
 
         assert!(!a.is_registered());
@@ -404,9 +425,9 @@ mod tests {
         let mut a = Awaiter::new();
         let mut set = AwaiterSet::new();
 
-        // SAFETY: Test has exclusive access.
+        // SAFETY: Test has exclusive access. The awaiter is not moved.
         unsafe {
-            a.unregister(&mut set);
+            Pin::new_unchecked(&mut a).unregister(&mut set);
         }
         assert!(!a.is_registered());
     }
@@ -415,8 +436,8 @@ mod tests {
     fn take_notification_returns_false_when_not_notified() {
         let mut a = Awaiter::new();
 
-        // SAFETY: Test has exclusive access.
-        let notified = unsafe { a.take_notification() };
+        // SAFETY: Test has exclusive access. The awaiter is not moved.
+        let notified = unsafe { Pin::new_unchecked(&mut a).take_notification() };
         assert!(!notified);
     }
 
@@ -425,17 +446,17 @@ mod tests {
         let mut a = Awaiter::new();
         let mut set = AwaiterSet::new();
 
-        // SAFETY: Test has exclusive access.
+        // SAFETY: Test has exclusive access. The awaiter is not moved.
         unsafe {
-            a.register(&mut set, Waker::noop().clone());
+            Pin::new_unchecked(&mut a).register(&mut set, Waker::noop().clone());
         }
 
         let node = set.take_one().unwrap();
         node.set_notified();
 
         assert!(a.is_registered());
-        // SAFETY: Test has exclusive access.
-        let notified = unsafe { a.take_notification() };
+        // SAFETY: Test has exclusive access. The awaiter is not moved.
+        let notified = unsafe { Pin::new_unchecked(&mut a).take_notification() };
         assert!(notified);
         assert!(!a.is_registered());
     }
@@ -445,15 +466,15 @@ mod tests {
         let mut a = Awaiter::new();
         let mut set = AwaiterSet::new();
 
-        // SAFETY: Test has exclusive access.
+        // SAFETY: Test has exclusive access. The awaiter is not moved.
         unsafe {
-            a.register(&mut set, Waker::noop().clone());
+            Pin::new_unchecked(&mut a).register(&mut set, Waker::noop().clone());
         }
         let node = set.take_one().unwrap();
         node.set_notified();
 
-        // SAFETY: Test has exclusive access.
-        let notified = unsafe { a.is_notified() };
+        // SAFETY: Test has exclusive access. The awaiter is not moved.
+        let notified = unsafe { Pin::new_unchecked(&a).is_notified() };
         assert!(notified);
         assert!(a.is_registered());
     }
@@ -463,9 +484,9 @@ mod tests {
         let mut a = Awaiter::new();
         let mut set = AwaiterSet::new();
 
-        // SAFETY: Test has exclusive access.
+        // SAFETY: Test has exclusive access. The awaiter is not moved.
         unsafe {
-            a.register(&mut set, Waker::noop().clone());
+            Pin::new_unchecked(&mut a).register(&mut set, Waker::noop().clone());
         }
 
         let node = set.take_one().unwrap();
@@ -483,17 +504,17 @@ mod tests {
         let mut a = Awaiter::new();
         let mut set = AwaiterSet::new();
 
-        // SAFETY: Test has exclusive access.
+        // SAFETY: Test has exclusive access. The awaiter is not moved.
         unsafe {
-            a.register(&mut set, Waker::noop().clone());
+            Pin::new_unchecked(&mut a).register(&mut set, Waker::noop().clone());
         }
         assert!(a.is_registered());
 
         let node = set.take_one().unwrap();
         node.set_notified();
 
-        // SAFETY: Test has exclusive access.
-        let notified = unsafe { a.take_notification() };
+        // SAFETY: Test has exclusive access. The awaiter is not moved.
+        let notified = unsafe { Pin::new_unchecked(&mut a).take_notification() };
         assert!(notified);
         assert!(!a.is_registered());
     }
@@ -503,15 +524,15 @@ mod tests {
         let mut a = Awaiter::new();
         let mut set = AwaiterSet::new();
 
-        // SAFETY: Test has exclusive access.
+        // SAFETY: Test has exclusive access. The awaiter is not moved.
         unsafe {
-            a.register(&mut set, Waker::noop().clone());
+            Pin::new_unchecked(&mut a).register(&mut set, Waker::noop().clone());
         }
         assert!(a.is_registered());
 
-        // SAFETY: Test has exclusive access.
+        // SAFETY: Test has exclusive access. The awaiter is not moved.
         unsafe {
-            a.unregister(&mut set);
+            Pin::new_unchecked(&mut a).unregister(&mut set);
         }
         assert!(!a.is_registered());
         assert!(set.is_empty());

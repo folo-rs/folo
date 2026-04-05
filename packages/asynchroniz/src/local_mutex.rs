@@ -122,12 +122,9 @@ impl<T> Inner<T> {
     ///
     /// * The `awaiter` must belong to a future created from the same
     ///   mutex.
-    unsafe fn poll_lock(&self, awaiter: Pin<&mut Awaiter>, waker: Waker) -> Poll<()> {
-        // SAFETY: We do not move the awaiter.
-        let awaiter = unsafe { awaiter.get_unchecked_mut() };
-
+    unsafe fn poll_lock(&self, mut awaiter: Pin<&mut Awaiter>, waker: Waker) -> Poll<()> {
         // SAFETY: Single-threaded access.
-        if unsafe { awaiter.take_notification() } {
+        if unsafe { awaiter.as_mut().take_notification() } {
             return Poll::Ready(());
         }
 
@@ -145,7 +142,7 @@ impl<T> Inner<T> {
             // SAFETY: Single-threaded, awaiter is pinned and not yet
             // in the set (or already registered with a stale waker).
             unsafe {
-                awaiter.register(&mut state.waiters, waker);
+                awaiter.as_mut().register(&mut state.waiters, waker);
             }
             Poll::Pending
         }
@@ -154,11 +151,9 @@ impl<T> Inner<T> {
     /// # Safety
     ///
     /// Same requirements as [`poll_lock`][Self::poll_lock].
-    unsafe fn drop_lock_wait(&self, awaiter: Pin<&mut Awaiter>) {
-        // SAFETY: We do not move the awaiter.
-        let awaiter = unsafe { awaiter.get_unchecked_mut() };
+    unsafe fn drop_lock_wait(&self, mut awaiter: Pin<&mut Awaiter>) {
         // SAFETY: Single-threaded access.
-        if unsafe { awaiter.is_notified() } {
+        if unsafe { awaiter.as_ref().is_notified() } {
             // Capture the waker while borrowing the state, then wake
             // after the borrow ends to avoid aliased mutable access
             // if the waker is re-entrant.
@@ -185,7 +180,7 @@ impl<T> Inner<T> {
             let state = unsafe { &mut *self.lock_state.get() };
             // SAFETY: Single-threaded, node is in the set.
             unsafe {
-                awaiter.unregister(&mut state.waiters);
+                awaiter.as_mut().unregister(&mut state.waiters);
             }
         }
     }

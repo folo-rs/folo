@@ -203,6 +203,7 @@ impl std::fmt::Debug for AwaiterSet {
     reason = "test code with trivial safety invariants"
 )]
 mod tests {
+    use std::pin::Pin;
     use std::task::Waker;
 
     use super::*;
@@ -239,7 +240,7 @@ mod tests {
         let mut a = Awaiter::new();
 
         unsafe {
-            a.register_with_data(&mut list, waker(), 1);
+            Pin::new_unchecked(&mut a).register_with_data(&mut list, waker(), 1);
         }
         assert!(!list.is_empty());
         assert_eq!(list.peek().unwrap().user_data(), 1);
@@ -257,9 +258,9 @@ mod tests {
         let mut c = Awaiter::new();
 
         unsafe {
-            a.register_with_data(&mut list, waker(), 1);
-            b.register_with_data(&mut list, waker(), 2);
-            c.register_with_data(&mut list, waker(), 3);
+            Pin::new_unchecked(&mut a).register_with_data(&mut list, waker(), 1);
+            Pin::new_unchecked(&mut b).register_with_data(&mut list, waker(), 2);
+            Pin::new_unchecked(&mut c).register_with_data(&mut list, waker(), 3);
         }
 
         assert!(!list.is_empty());
@@ -279,9 +280,9 @@ mod tests {
         let mut b = Awaiter::new();
 
         unsafe {
-            a.register_with_data(&mut list, waker(), 1);
-            b.register_with_data(&mut list, waker(), 2);
-            a.unregister(&mut list);
+            Pin::new_unchecked(&mut a).register_with_data(&mut list, waker(), 1);
+            Pin::new_unchecked(&mut b).register_with_data(&mut list, waker(), 2);
+            Pin::new_unchecked(&mut a).unregister(&mut list);
         }
 
         assert_eq!(list.take_one().unwrap().user_data(), 2);
@@ -295,9 +296,9 @@ mod tests {
         let mut b = Awaiter::new();
 
         unsafe {
-            a.register_with_data(&mut list, waker(), 1);
-            b.register_with_data(&mut list, waker(), 2);
-            b.unregister(&mut list);
+            Pin::new_unchecked(&mut a).register_with_data(&mut list, waker(), 1);
+            Pin::new_unchecked(&mut b).register_with_data(&mut list, waker(), 2);
+            Pin::new_unchecked(&mut b).unregister(&mut list);
         }
 
         assert_eq!(list.take_one().unwrap().user_data(), 1);
@@ -312,10 +313,10 @@ mod tests {
         let mut c = Awaiter::new();
 
         unsafe {
-            a.register_with_data(&mut list, waker(), 1);
-            b.register_with_data(&mut list, waker(), 2);
-            c.register_with_data(&mut list, waker(), 3);
-            b.unregister(&mut list);
+            Pin::new_unchecked(&mut a).register_with_data(&mut list, waker(), 1);
+            Pin::new_unchecked(&mut b).register_with_data(&mut list, waker(), 2);
+            Pin::new_unchecked(&mut c).register_with_data(&mut list, waker(), 3);
+            Pin::new_unchecked(&mut b).unregister(&mut list);
         }
 
         assert_eq!(list.take_one().unwrap().user_data(), 1);
@@ -329,8 +330,8 @@ mod tests {
         let mut a = Awaiter::new();
 
         unsafe {
-            a.register(&mut list, waker());
-            a.unregister(&mut list);
+            Pin::new_unchecked(&mut a).register(&mut list, waker());
+            Pin::new_unchecked(&mut a).unregister(&mut list);
         }
 
         assert!(list.is_empty());
@@ -343,9 +344,9 @@ mod tests {
         let mut b = Awaiter::new();
 
         unsafe {
-            a.register(&mut list, waker());
-            b.register(&mut list, waker());
-            a.unregister(&mut list);
+            Pin::new_unchecked(&mut a).register(&mut list, waker());
+            Pin::new_unchecked(&mut b).register(&mut list, waker());
+            Pin::new_unchecked(&mut a).unregister(&mut list);
         }
 
         assert!(a.next().is_null());
@@ -358,9 +359,9 @@ mod tests {
         let mut b = Awaiter::new();
 
         unsafe {
-            a.register(&mut list, waker());
-            a.unregister(&mut list);
-            b.register_with_data(&mut list, waker(), 2);
+            Pin::new_unchecked(&mut a).register(&mut list, waker());
+            Pin::new_unchecked(&mut a).unregister(&mut list);
+            Pin::new_unchecked(&mut b).register_with_data(&mut list, waker(), 2);
         }
 
         assert_eq!(list.take_one().unwrap().user_data(), 2);
@@ -375,14 +376,14 @@ mod tests {
         let mut c = Awaiter::new();
 
         unsafe {
-            a.register_with_data(&mut list, waker(), 1);
-            b.register_with_data(&mut list, waker(), 2);
+            Pin::new_unchecked(&mut a).register_with_data(&mut list, waker(), 1);
+            Pin::new_unchecked(&mut b).register_with_data(&mut list, waker(), 2);
         }
 
         assert_eq!(list.take_one().unwrap().user_data(), 1);
 
         unsafe {
-            c.register_with_data(&mut list, waker(), 3);
+            Pin::new_unchecked(&mut c).register_with_data(&mut list, waker(), 3);
         }
 
         assert_eq!(list.take_one().unwrap().user_data(), 2);
@@ -398,9 +399,9 @@ mod tests {
         let mut c = Awaiter::new();
 
         unsafe {
-            a.register_with_data(&mut list, waker(), 1);
-            b.register_with_data(&mut list, waker(), 2);
-            c.register_with_data(&mut list, waker(), 3);
+            Pin::new_unchecked(&mut a).register_with_data(&mut list, waker(), 1);
+            Pin::new_unchecked(&mut b).register_with_data(&mut list, waker(), 2);
+            Pin::new_unchecked(&mut c).register_with_data(&mut list, waker(), 3);
         }
 
         let head = list.peek().unwrap();
@@ -425,8 +426,8 @@ mod tests {
         let mut b = Awaiter::new();
 
         unsafe {
-            a.register_with_data(&mut list, waker(), 1);
-            b.register_with_data(&mut list, waker(), 2);
+            Pin::new_unchecked(&mut a).register_with_data(&mut list, waker(), 1);
+            Pin::new_unchecked(&mut b).register_with_data(&mut list, waker(), 2);
         }
 
         let mut visited = Vec::new();
@@ -449,7 +450,7 @@ mod tests {
         let mut a = Awaiter::new();
 
         unsafe {
-            a.register(&mut list, waker());
+            Pin::new_unchecked(&mut a).register(&mut list, waker());
         }
 
         let popped = list.take_one().unwrap();
@@ -463,7 +464,7 @@ mod tests {
         let mut a = Awaiter::new();
 
         unsafe {
-            a.register_with_data(&mut list, waker(), 7);
+            Pin::new_unchecked(&mut a).register_with_data(&mut list, waker(), 7);
         }
 
         let popped = list.take_one().unwrap();
@@ -476,12 +477,13 @@ mod tests {
         let mut a = Awaiter::new();
 
         unsafe {
-            a.register(&mut list, waker());
+            Pin::new_unchecked(&mut a).register(&mut list, waker());
         }
 
         let popped = list.take_one().unwrap();
         popped.set_notified();
-        assert!(unsafe { popped.is_notified() });
+        // SAFETY: The awaiter is not moved.
+        assert!(unsafe { Pin::new_unchecked(&*popped).is_notified() });
     }
 
     #[test]
@@ -491,7 +493,7 @@ mod tests {
 
         for (i, node) in nodes.iter_mut().enumerate() {
             unsafe {
-                node.register_with_data(&mut list, waker(), i);
+                Pin::new_unchecked(node).register_with_data(&mut list, waker(), i);
             }
         }
 

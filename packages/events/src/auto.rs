@@ -114,15 +114,17 @@ fn try_wait(mutex: &Mutex<State>) -> bool {
 ///
 /// * The `mutex` must protect the awaiter set that this awaiter is (or will
 ///   be) registered with.
-unsafe fn poll_wait(mutex: &Mutex<State>, awaiter: Pin<&mut Awaiter>, waker: Waker) -> Poll<()> {
+unsafe fn poll_wait(
+    mutex: &Mutex<State>,
+    mut awaiter: Pin<&mut Awaiter>,
+    waker: Waker,
+) -> Poll<()> {
     let mut state = mutex.lock().expect(NEVER_POISONED);
-    // SAFETY: We do not move the awaiter.
-    let awaiter = unsafe { awaiter.get_unchecked_mut() };
 
     // Check if we were directly notified by set() (it popped us
     // from the set and set our notified flag).
     // SAFETY: We hold the lock that protects the awaiter set and node.
-    if unsafe { awaiter.take_notification() } {
+    if unsafe { awaiter.as_mut().take_notification() } {
         return Poll::Ready(());
     }
 
@@ -140,7 +142,7 @@ unsafe fn poll_wait(mutex: &Mutex<State>, awaiter: Pin<&mut Awaiter>, waker: Wak
             // SAFETY: We hold the lock, awaiter is pinned and lives as
             // long as the future.
             unsafe {
-                awaiter.register(waiters, waker);
+                awaiter.as_mut().register(waiters, waker);
             }
             Poll::Pending
         }
@@ -152,10 +154,7 @@ unsafe fn poll_wait(mutex: &Mutex<State>, awaiter: Pin<&mut Awaiter>, waker: Wak
 /// # Safety
 ///
 /// Same requirements as [`poll_wait`].
-unsafe fn drop_wait(mutex: &Mutex<State>, awaiter: Pin<&mut Awaiter>) {
-    // SAFETY: We do not move the awaiter.
-    let awaiter = unsafe { awaiter.get_unchecked_mut() };
-
+unsafe fn drop_wait(mutex: &Mutex<State>, mut awaiter: Pin<&mut Awaiter>) {
     // The caller must only call this when the awaiter is registered. Both
     // AutoResetWaitFuture::drop and RawAutoResetWaitFuture::drop guard
     // on `awaiter.is_registered()` before calling, so this should always hold.
@@ -164,7 +163,7 @@ unsafe fn drop_wait(mutex: &Mutex<State>, awaiter: Pin<&mut Awaiter>) {
     let mut state = mutex.lock().expect(NEVER_POISONED);
 
     // SAFETY: We hold the lock that protects the awaiter set and node.
-    if unsafe { awaiter.is_notified() } {
+    if unsafe { awaiter.as_ref().is_notified() } {
         // We were notified but the future was cancelled before it
         // could complete. Forward the notification to the next
         // waiter so that no signal is lost.
@@ -199,7 +198,7 @@ unsafe fn drop_wait(mutex: &Mutex<State>, awaiter: Pin<&mut Awaiter>) {
                 // SAFETY: We hold the lock and the awaiter is registered
                 // in this set.
                 unsafe {
-                    awaiter.unregister(waiters);
+                    awaiter.as_mut().unregister(waiters);
                 }
             }
             State::Set => {
