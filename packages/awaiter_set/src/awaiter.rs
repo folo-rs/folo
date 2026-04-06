@@ -1,10 +1,9 @@
 use std::cell::UnsafeCell;
-use std::fmt;
 use std::marker::PhantomPinned;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
-use std::ptr;
 use std::task::Waker;
+use std::{fmt, ptr};
 
 use crate::AwaiterSet;
 
@@ -105,27 +104,8 @@ impl Awaiter {
     /// primitive calling [`AwaiterSet::take_one()`] or by the
     /// future's drop handler calling [`unregister()`][Self::unregister].
     pub unsafe fn register(self: Pin<&mut Self>, set: &mut AwaiterSet, waker: Waker) {
-        // SAFETY: We do not move self. Pin guarantees address stability.
-        let this = unsafe { self.get_unchecked_mut() };
-        // SAFETY: Access is serialized by the caller's lock.
-        assert!(
-            // SAFETY: Access is serialized by the caller's lock.
-            matches!(unsafe { &*this.state.get() }, State::Idle),
-            "register called on non-idle awaiter"
-        );
-        // SAFETY: Access is serialized by the caller's lock.
-        unsafe {
-            *this.state.get() = State::Waiting {
-                waker: Some(waker),
-                user_data: 0,
-                next: ptr::null_mut(),
-                prev: ptr::null_mut(),
-            };
-        }
-        // SAFETY: Pin guarantees the awaiter is at a stable address.
-        unsafe {
-            set.insert(ptr::from_mut(this));
-        }
+        // SAFETY: Caller ensures the same safety requirements.
+        unsafe { self.register_with_data(set, waker, 0) }
     }
 
     /// Registers this awaiter in `set` with a waker and

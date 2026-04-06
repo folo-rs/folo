@@ -253,13 +253,13 @@ impl LocalAutoResetEvent {
     ///
     /// Calling this multiple times on the same container is safe and
     /// returns handles that all operate on the same shared state, just
-    /// like copying or cloning a [`RawLocalAutoResetEvent`].
+    /// like copying or cloning a [`EmbeddedLocalAutoResetEventRef`].
     ///
     /// # Safety
     ///
     /// The caller must ensure that the [`EmbeddedLocalAutoResetEvent`]
     /// outlives all returned handles and any
-    /// [`RawLocalAutoResetWaitFuture`]s created from them.
+    /// [`EmbeddedLocalAutoResetWaitFuture`]s created from them.
     ///
     /// # Examples
     ///
@@ -280,9 +280,11 @@ impl LocalAutoResetEvent {
     /// # });
     /// ```
     #[must_use]
-    pub unsafe fn embedded(place: Pin<&EmbeddedLocalAutoResetEvent>) -> RawLocalAutoResetEvent {
+    pub unsafe fn embedded(
+        place: Pin<&EmbeddedLocalAutoResetEvent>,
+    ) -> EmbeddedLocalAutoResetEventRef {
         let inner = NonNull::from(&place.get_ref().inner);
-        RawLocalAutoResetEvent { inner }
+        EmbeddedLocalAutoResetEventRef { inner }
     }
 
     /// Signals the event, releasing exactly one waiter.
@@ -385,7 +387,7 @@ impl fmt::Debug for LocalAutoResetWaitFuture {
 /// that [`LocalAutoResetEvent::boxed()`] requires. Create the container
 /// with [`new()`][Self::new], pin it, then call
 /// [`LocalAutoResetEvent::embedded()`] to obtain a
-/// [`RawLocalAutoResetEvent`] handle.
+/// [`EmbeddedLocalAutoResetEventRef`] handle.
 ///
 /// # Examples
 ///
@@ -444,17 +446,17 @@ impl RefUnwindSafe for EmbeddedLocalAutoResetEvent {}
 ///
 /// The API is identical to [`LocalAutoResetEvent`].
 #[derive(Clone, Copy)]
-pub struct RawLocalAutoResetEvent {
+pub struct EmbeddedLocalAutoResetEventRef {
     inner: NonNull<Inner>,
 }
 
 // NonNull is !Send and !Sync by default, which is correct for local types.
 
 // Marker trait impls have no executable code.
-impl UnwindSafe for RawLocalAutoResetEvent {}
-impl RefUnwindSafe for RawLocalAutoResetEvent {}
+impl UnwindSafe for EmbeddedLocalAutoResetEventRef {}
+impl RefUnwindSafe for EmbeddedLocalAutoResetEventRef {}
 
-impl RawLocalAutoResetEvent {
+impl EmbeddedLocalAutoResetEventRef {
     fn inner(&self) -> &Inner {
         // SAFETY: The caller of `embedded()` guarantees the container
         // outlives this handle.
@@ -492,16 +494,16 @@ impl RawLocalAutoResetEvent {
     /// If a notified future is dropped before completion, the notification is
     /// forwarded to the next waiter (or the event is re-set).
     #[must_use]
-    pub fn wait(&self) -> RawLocalAutoResetWaitFuture {
-        RawLocalAutoResetWaitFuture {
+    pub fn wait(&self) -> EmbeddedLocalAutoResetWaitFuture {
+        EmbeddedLocalAutoResetWaitFuture {
             inner: self.inner,
             awaiter: Awaiter::new(),
         }
     }
 }
 
-/// Future returned by [`RawLocalAutoResetEvent::wait()`].
-pub struct RawLocalAutoResetWaitFuture {
+/// Future returned by [`EmbeddedLocalAutoResetEventRef::wait()`].
+pub struct EmbeddedLocalAutoResetWaitFuture {
     inner: NonNull<Inner>,
     awaiter: Awaiter,
 }
@@ -510,10 +512,10 @@ pub struct RawLocalAutoResetWaitFuture {
 // types.
 
 // Marker trait impls have no executable code.
-impl UnwindSafe for RawLocalAutoResetWaitFuture {}
-impl RefUnwindSafe for RawLocalAutoResetWaitFuture {}
+impl UnwindSafe for EmbeddedLocalAutoResetWaitFuture {}
+impl RefUnwindSafe for EmbeddedLocalAutoResetWaitFuture {}
 
-impl Future for RawLocalAutoResetWaitFuture {
+impl Future for EmbeddedLocalAutoResetWaitFuture {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<()> {
@@ -531,7 +533,7 @@ impl Future for RawLocalAutoResetWaitFuture {
     }
 }
 
-impl Drop for RawLocalAutoResetWaitFuture {
+impl Drop for EmbeddedLocalAutoResetWaitFuture {
     fn drop(&mut self) {
         // SAFETY: The container outlives this future per the embedded()
         // contract.
@@ -552,17 +554,17 @@ impl fmt::Debug for EmbeddedLocalAutoResetEvent {
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl fmt::Debug for RawLocalAutoResetEvent {
+impl fmt::Debug for EmbeddedLocalAutoResetEventRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawLocalAutoResetEvent")
+        f.debug_struct("EmbeddedLocalAutoResetEventRef")
             .finish_non_exhaustive()
     }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl fmt::Debug for RawLocalAutoResetWaitFuture {
+impl fmt::Debug for EmbeddedLocalAutoResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawLocalAutoResetWaitFuture")
+        f.debug_struct("EmbeddedLocalAutoResetWaitFuture")
             .field("registered", &self.awaiter.is_registered())
             .finish_non_exhaustive()
     }
@@ -585,10 +587,10 @@ mod tests {
 
     assert_impl_all!(EmbeddedLocalAutoResetEvent: UnwindSafe, RefUnwindSafe);
     assert_not_impl_any!(EmbeddedLocalAutoResetEvent: Send, Sync, Unpin);
-    assert_impl_all!(RawLocalAutoResetEvent: Clone, Copy, UnwindSafe, RefUnwindSafe);
-    assert_not_impl_any!(RawLocalAutoResetEvent: Send, Sync);
-    assert_impl_all!(RawLocalAutoResetWaitFuture: UnwindSafe, RefUnwindSafe);
-    assert_not_impl_any!(RawLocalAutoResetWaitFuture: Send, Sync, Unpin);
+    assert_impl_all!(EmbeddedLocalAutoResetEventRef: Clone, Copy, UnwindSafe, RefUnwindSafe);
+    assert_not_impl_any!(EmbeddedLocalAutoResetEventRef: Send, Sync);
+    assert_impl_all!(EmbeddedLocalAutoResetWaitFuture: UnwindSafe, RefUnwindSafe);
+    assert_not_impl_any!(EmbeddedLocalAutoResetWaitFuture: Send, Sync, Unpin);
 
     #[test]
     fn starts_unset() {

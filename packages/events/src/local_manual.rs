@@ -228,13 +228,13 @@ impl LocalManualResetEvent {
     ///
     /// Calling this multiple times on the same container is safe and
     /// returns handles that all operate on the same shared state, just
-    /// like copying or cloning a [`RawLocalManualResetEvent`].
+    /// like copying or cloning a [`EmbeddedLocalManualResetEventRef`].
     ///
     /// # Safety
     ///
     /// The caller must ensure that the [`EmbeddedLocalManualResetEvent`]
     /// outlives all returned handles and any
-    /// [`RawLocalManualResetWaitFuture`]s created from them.
+    /// [`EmbeddedLocalManualResetWaitFuture`]s created from them.
     ///
     /// # Examples
     ///
@@ -255,9 +255,11 @@ impl LocalManualResetEvent {
     /// # });
     /// ```
     #[must_use]
-    pub unsafe fn embedded(place: Pin<&EmbeddedLocalManualResetEvent>) -> RawLocalManualResetEvent {
+    pub unsafe fn embedded(
+        place: Pin<&EmbeddedLocalManualResetEvent>,
+    ) -> EmbeddedLocalManualResetEventRef {
         let inner = NonNull::from(&place.get_ref().inner);
-        RawLocalManualResetEvent { inner }
+        EmbeddedLocalManualResetEventRef { inner }
     }
 
     /// Opens the gate, releasing all current awaiters and allowing future
@@ -360,7 +362,7 @@ impl fmt::Debug for LocalManualResetWaitFuture {
 /// that [`LocalManualResetEvent::boxed()`] requires. Create the container
 /// with [`new()`][Self::new], pin it, then call
 /// [`LocalManualResetEvent::embedded()`] to obtain a
-/// [`RawLocalManualResetEvent`] handle.
+/// [`EmbeddedLocalManualResetEventRef`] handle.
 ///
 /// # Examples
 ///
@@ -423,17 +425,17 @@ impl RefUnwindSafe for EmbeddedLocalManualResetEvent {}
 ///
 /// The API is identical to [`LocalManualResetEvent`].
 #[derive(Clone, Copy)]
-pub struct RawLocalManualResetEvent {
+pub struct EmbeddedLocalManualResetEventRef {
     inner: NonNull<Inner>,
 }
 
 // NonNull is !Send and !Sync by default, which is correct for local types.
 
 // Marker trait impls have no executable code.
-impl UnwindSafe for RawLocalManualResetEvent {}
-impl RefUnwindSafe for RawLocalManualResetEvent {}
+impl UnwindSafe for EmbeddedLocalManualResetEventRef {}
+impl RefUnwindSafe for EmbeddedLocalManualResetEventRef {}
 
-impl RawLocalManualResetEvent {
+impl EmbeddedLocalManualResetEventRef {
     fn inner(&self) -> &Inner {
         // SAFETY: The caller of `embedded()` guarantees the container
         // outlives this handle.
@@ -467,16 +469,16 @@ impl RawLocalManualResetEvent {
 
     /// Returns a future that completes when the event is set.
     #[must_use]
-    pub fn wait(&self) -> RawLocalManualResetWaitFuture {
-        RawLocalManualResetWaitFuture {
+    pub fn wait(&self) -> EmbeddedLocalManualResetWaitFuture {
+        EmbeddedLocalManualResetWaitFuture {
             inner: self.inner,
             awaiter: Awaiter::new(),
         }
     }
 }
 
-/// Future returned by [`RawLocalManualResetEvent::wait()`].
-pub struct RawLocalManualResetWaitFuture {
+/// Future returned by [`EmbeddedLocalManualResetEventRef::wait()`].
+pub struct EmbeddedLocalManualResetWaitFuture {
     inner: NonNull<Inner>,
     awaiter: Awaiter,
 }
@@ -485,10 +487,10 @@ pub struct RawLocalManualResetWaitFuture {
 // types.
 
 // Marker trait impls have no executable code.
-impl UnwindSafe for RawLocalManualResetWaitFuture {}
-impl RefUnwindSafe for RawLocalManualResetWaitFuture {}
+impl UnwindSafe for EmbeddedLocalManualResetWaitFuture {}
+impl RefUnwindSafe for EmbeddedLocalManualResetWaitFuture {}
 
-impl Future for RawLocalManualResetWaitFuture {
+impl Future for EmbeddedLocalManualResetWaitFuture {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<()> {
@@ -506,7 +508,7 @@ impl Future for RawLocalManualResetWaitFuture {
     }
 }
 
-impl Drop for RawLocalManualResetWaitFuture {
+impl Drop for EmbeddedLocalManualResetWaitFuture {
     fn drop(&mut self) {
         // SAFETY: The container outlives this future per the embedded()
         // contract.
@@ -529,19 +531,19 @@ impl fmt::Debug for EmbeddedLocalManualResetEvent {
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl fmt::Debug for RawLocalManualResetEvent {
+impl fmt::Debug for EmbeddedLocalManualResetEventRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let is_set = self.try_wait();
-        f.debug_struct("RawLocalManualResetEvent")
+        f.debug_struct("EmbeddedLocalManualResetEventRef")
             .field("is_set", &is_set)
             .finish()
     }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl fmt::Debug for RawLocalManualResetWaitFuture {
+impl fmt::Debug for EmbeddedLocalManualResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawLocalManualResetWaitFuture")
+        f.debug_struct("EmbeddedLocalManualResetWaitFuture")
             .field("registered", &self.awaiter.is_registered())
             .finish_non_exhaustive()
     }
@@ -563,10 +565,10 @@ mod tests {
 
     assert_impl_all!(EmbeddedLocalManualResetEvent: UnwindSafe, RefUnwindSafe);
     assert_not_impl_any!(EmbeddedLocalManualResetEvent: Send, Sync, Unpin);
-    assert_impl_all!(RawLocalManualResetEvent: Clone, Copy, UnwindSafe, RefUnwindSafe);
-    assert_not_impl_any!(RawLocalManualResetEvent: Send, Sync);
-    assert_impl_all!(RawLocalManualResetWaitFuture: UnwindSafe, RefUnwindSafe);
-    assert_not_impl_any!(RawLocalManualResetWaitFuture: Send, Sync, Unpin);
+    assert_impl_all!(EmbeddedLocalManualResetEventRef: Clone, Copy, UnwindSafe, RefUnwindSafe);
+    assert_not_impl_any!(EmbeddedLocalManualResetEventRef: Send, Sync);
+    assert_impl_all!(EmbeddedLocalManualResetWaitFuture: UnwindSafe, RefUnwindSafe);
+    assert_not_impl_any!(EmbeddedLocalManualResetWaitFuture: Send, Sync, Unpin);
 
     #[test]
     fn starts_unset() {

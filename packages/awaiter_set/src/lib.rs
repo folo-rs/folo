@@ -25,7 +25,6 @@
 //! * [`AwaiterSet`] — the set of registered awaiters, managed by the
 //!   synchronization primitive.
 //! * [`Awaiter`] — a single awaiter, embedded inside a future.
-//!
 #![doc = simple_mermaid::mermaid!("../docs/diagrams/list_structure.mermaid")]
 //!
 //! # Synchronization

@@ -224,12 +224,12 @@ impl ManualResetEvent {
     ///
     /// Calling this multiple times on the same container is safe and
     /// returns handles that all operate on the same shared state, just
-    /// like copying or cloning a [`RawManualResetEvent`].
+    /// like copying or cloning a [`EmbeddedManualResetEventRef`].
     ///
     /// # Safety
     ///
     /// The caller must ensure that the [`EmbeddedManualResetEvent`] outlives
-    /// all returned handles and any [`RawManualResetWaitFuture`]s created
+    /// all returned handles and any [`EmbeddedManualResetWaitFuture`]s created
     /// from them.
     ///
     /// # Examples
@@ -251,9 +251,9 @@ impl ManualResetEvent {
     /// # });
     /// ```
     #[must_use]
-    pub unsafe fn embedded(place: Pin<&EmbeddedManualResetEvent>) -> RawManualResetEvent {
+    pub unsafe fn embedded(place: Pin<&EmbeddedManualResetEvent>) -> EmbeddedManualResetEventRef {
         let state = NonNull::from(&place.get_ref().state);
-        RawManualResetEvent { state }
+        EmbeddedManualResetEventRef { state }
     }
 
     /// Opens the gate, releasing all current awaiters and allowing future
@@ -429,7 +429,7 @@ impl fmt::Debug for ManualResetWaitFuture {
 /// Stores the event state inline in a struct, avoiding the heap allocation
 /// that [`ManualResetEvent::boxed()`] requires. Create the container with
 /// [`new()`][Self::new], pin it, then call [`ManualResetEvent::embedded()`]
-/// to obtain a [`RawManualResetEvent`] handle.
+/// to obtain a [`EmbeddedManualResetEventRef`] handle.
 ///
 /// # Examples
 ///
@@ -486,25 +486,25 @@ impl Default for EmbeddedManualResetEvent {
 ///
 /// The API is identical to [`ManualResetEvent`].
 #[derive(Clone, Copy)]
-pub struct RawManualResetEvent {
+pub struct EmbeddedManualResetEventRef {
     state: NonNull<Mutex<State>>,
 }
 
 // Marker trait impl.
 // SAFETY: Mutex<State> is Send + Sync. The raw pointer is only dereferenced to
 // obtain &Mutex<State>, which is safe to share across threads.
-unsafe impl Send for RawManualResetEvent {}
+unsafe impl Send for EmbeddedManualResetEventRef {}
 
 // Marker trait impl.
 // SAFETY: Same as Send — all mutable access is mediated by the Mutex.
-unsafe impl Sync for RawManualResetEvent {}
+unsafe impl Sync for EmbeddedManualResetEventRef {}
 
 // Marker trait impl.
-impl UnwindSafe for RawManualResetEvent {}
+impl UnwindSafe for EmbeddedManualResetEventRef {}
 // Marker trait impl.
-impl RefUnwindSafe for RawManualResetEvent {}
+impl RefUnwindSafe for EmbeddedManualResetEventRef {}
 
-impl RawManualResetEvent {
+impl EmbeddedManualResetEventRef {
     fn state(&self) -> &Mutex<State> {
         // SAFETY: The caller of `embedded()` guarantees the container
         // outlives this handle.
@@ -538,16 +538,16 @@ impl RawManualResetEvent {
 
     /// Returns a future that completes when the event is set.
     #[must_use]
-    pub fn wait(&self) -> RawManualResetWaitFuture {
-        RawManualResetWaitFuture {
+    pub fn wait(&self) -> EmbeddedManualResetWaitFuture {
+        EmbeddedManualResetWaitFuture {
             state: self.state,
             awaiter: Awaiter::new(),
         }
     }
 }
 
-/// Future returned by [`RawManualResetEvent::wait()`].
-pub struct RawManualResetWaitFuture {
+/// Future returned by [`EmbeddedManualResetEventRef::wait()`].
+pub struct EmbeddedManualResetWaitFuture {
     state: NonNull<Mutex<State>>,
     awaiter: Awaiter,
 }
@@ -555,14 +555,14 @@ pub struct RawManualResetWaitFuture {
 // Marker trait impl.
 // SAFETY: Awaiter is Send. All awaiter access is protected by the event's
 // Mutex.
-unsafe impl Send for RawManualResetWaitFuture {}
+unsafe impl Send for EmbeddedManualResetWaitFuture {}
 
 // Marker trait impl.
-impl UnwindSafe for RawManualResetWaitFuture {}
+impl UnwindSafe for EmbeddedManualResetWaitFuture {}
 // Marker trait impl.
-impl RefUnwindSafe for RawManualResetWaitFuture {}
+impl RefUnwindSafe for EmbeddedManualResetWaitFuture {}
 
-impl Future for RawManualResetWaitFuture {
+impl Future for EmbeddedManualResetWaitFuture {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<()> {
@@ -579,7 +579,7 @@ impl Future for RawManualResetWaitFuture {
     }
 }
 
-impl Drop for RawManualResetWaitFuture {
+impl Drop for EmbeddedManualResetWaitFuture {
     fn drop(&mut self) {
         // SAFETY: The container outlives this future per the embedded()
         // contract.
@@ -601,19 +601,19 @@ impl fmt::Debug for EmbeddedManualResetEvent {
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl fmt::Debug for RawManualResetEvent {
+impl fmt::Debug for EmbeddedManualResetEventRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let is_set = self.try_wait();
-        f.debug_struct("RawManualResetEvent")
+        f.debug_struct("EmbeddedManualResetEventRef")
             .field("is_set", &is_set)
             .finish()
     }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl fmt::Debug for RawManualResetWaitFuture {
+impl fmt::Debug for EmbeddedManualResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawManualResetWaitFuture")
+        f.debug_struct("EmbeddedManualResetWaitFuture")
             .field("registered", &self.awaiter.is_registered())
             .finish_non_exhaustive()
     }
@@ -638,9 +638,11 @@ mod tests {
 
     assert_impl_all!(EmbeddedManualResetEvent: Send, Sync, UnwindSafe, RefUnwindSafe);
     assert_not_impl_any!(EmbeddedManualResetEvent: Unpin);
-    assert_impl_all!(RawManualResetEvent: Send, Sync, Clone, Copy, UnwindSafe, RefUnwindSafe);
-    assert_impl_all!(RawManualResetWaitFuture: Send, UnwindSafe, RefUnwindSafe);
-    assert_not_impl_any!(RawManualResetWaitFuture: Sync, Unpin);
+    assert_impl_all!(
+        EmbeddedManualResetEventRef: Send, Sync, Clone, Copy, UnwindSafe, RefUnwindSafe
+    );
+    assert_impl_all!(EmbeddedManualResetWaitFuture: Send, UnwindSafe, RefUnwindSafe);
+    assert_not_impl_any!(EmbeddedManualResetWaitFuture: Sync, Unpin);
 
     // --- basic functionality ---
 

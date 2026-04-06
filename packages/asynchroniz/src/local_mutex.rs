@@ -655,20 +655,32 @@ impl<T> fmt::Debug for EmbeddedLocalMutexLockFuture<T> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
 
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
 
     assert_impl_all!(LocalMutex<u32>: Clone);
-    assert_not_impl_any!(LocalMutex<u32>: Send, Sync);
-    assert_not_impl_any!(LocalMutexGuard<'static, u32>: Send, Sync, Clone);
-    assert_not_impl_any!(LocalMutexLockFuture<'static, u32>: Send, Sync, Unpin);
+    assert_not_impl_any!(LocalMutex<u32>: Send, Sync, UnwindSafe, RefUnwindSafe);
+    assert_not_impl_any!(
+        LocalMutexGuard<'static, u32>: Send, Sync, Clone, UnwindSafe, RefUnwindSafe
+    );
+    assert_not_impl_any!(
+        LocalMutexLockFuture<'static, u32>: Send, Sync, Unpin, UnwindSafe, RefUnwindSafe
+    );
 
-    assert_not_impl_any!(EmbeddedLocalMutex<u32>: Send, Sync, Unpin);
+    // EmbeddedLocalMutex owns its UnsafeCell directly, so it is UnwindSafe by auto-trait.
+    // Only RefUnwindSafe is absent (UnsafeCell is never RefUnwindSafe).
+    assert_not_impl_any!(EmbeddedLocalMutex<u32>: Send, Sync, Unpin, RefUnwindSafe);
     assert_impl_all!(EmbeddedLocalMutexRef<u32>: Clone, Copy);
-    assert_not_impl_any!(EmbeddedLocalMutexRef<u32>: Send, Sync);
-    assert_not_impl_any!(EmbeddedLocalMutexGuard<u32>: Send, Sync, Clone);
-    assert_not_impl_any!(EmbeddedLocalMutexLockFuture<u32>: Send, Sync, Unpin);
+    assert_not_impl_any!(EmbeddedLocalMutexRef<u32>: Send, Sync, UnwindSafe, RefUnwindSafe);
+    assert_not_impl_any!(
+        EmbeddedLocalMutexGuard<u32>: Send, Sync, Clone, UnwindSafe, RefUnwindSafe
+    );
+    assert_not_impl_any!(
+        EmbeddedLocalMutexLockFuture<u32>: Send, Sync, Unpin, UnwindSafe, RefUnwindSafe
+    );
 
     #[test]
     fn starts_unlocked() {

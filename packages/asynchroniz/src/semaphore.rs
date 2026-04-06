@@ -1,6 +1,8 @@
 use std::fmt;
 use std::future::Future;
 use std::marker::PhantomPinned;
+use std::num::NonZero;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
@@ -8,7 +10,7 @@ use std::task::{self, Poll, Waker};
 
 use awaiter_set::{Awaiter, AwaiterSet};
 
-use crate::constants::NEVER_POISONED;
+use crate::constants::{NEVER_POISONED, ONE_PERMIT};
 
 /// Thread-safe async semaphore.
 ///
@@ -352,37 +354,33 @@ impl Semaphore {
     /// ```
     #[must_use]
     pub fn acquire(&self) -> SemaphoreAcquireFuture<'_> {
-        self.acquire_many(1)
+        self.acquire_many(ONE_PERMIT)
     }
 
     /// Returns a future that resolves to a [`SemaphorePermit`]
     /// holding `permits` permits.
     ///
-    /// # Panics
-    ///
-    /// Panics if `permits` is zero.
-    ///
     /// # Examples
     ///
     /// ```
+    /// use std::num::NonZero;
+    ///
     /// use asynchroniz::Semaphore;
     ///
     /// # futures::executor::block_on(async {
     /// let sem = Semaphore::boxed(5);
-    /// let permit = sem.acquire_many(3).await;
+    /// let permit = sem.acquire_many(NonZero::new(3).unwrap()).await;
     ///
     /// // Only 2 permits remain.
-    /// assert!(sem.try_acquire_many(3).is_none());
-    /// assert!(sem.try_acquire_many(2).is_some());
+    /// assert!(sem.try_acquire_many(NonZero::new(3).unwrap()).is_none());
+    /// assert!(sem.try_acquire_many(NonZero::new(2).unwrap()).is_some());
     /// # });
     /// ```
     #[must_use]
-    pub fn acquire_many(&self, permits: usize) -> SemaphoreAcquireFuture<'_> {
-        assert!(permits > 0, "cannot acquire zero permits");
-
+    pub fn acquire_many(&self, permits: NonZero<usize>) -> SemaphoreAcquireFuture<'_> {
         SemaphoreAcquireFuture {
             state: &self.inner.state,
-            permits,
+            permits: permits.get(),
             awaiter: Awaiter::new(),
         }
     }
@@ -407,7 +405,7 @@ impl Semaphore {
     // Mutating try_acquire to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
     pub fn try_acquire(&self) -> Option<SemaphorePermit<'_>> {
-        self.try_acquire_many(1)
+        self.try_acquire_many(ONE_PERMIT)
     }
 
     /// Attempts to acquire `permits` permits without blocking.
@@ -415,27 +413,25 @@ impl Semaphore {
     /// Returns [`Some(SemaphorePermit)`][SemaphorePermit] if enough
     /// permits were available, or [`None`] otherwise.
     ///
-    /// # Panics
-    ///
-    /// Panics if `permits` is zero.
-    ///
     /// # Examples
     ///
     /// ```
+    /// use std::num::NonZero;
+    ///
     /// use asynchroniz::Semaphore;
     ///
     /// let sem = Semaphore::boxed(5);
-    /// let permit = sem.try_acquire_many(3).unwrap();
+    /// let permit = sem.try_acquire_many(NonZero::new(3).unwrap()).unwrap();
     ///
     /// // Only 2 remain.
-    /// assert!(sem.try_acquire_many(3).is_none());
-    /// assert!(sem.try_acquire_many(2).is_some());
+    /// assert!(sem.try_acquire_many(NonZero::new(3).unwrap()).is_none());
+    /// assert!(sem.try_acquire_many(NonZero::new(2).unwrap()).is_some());
     /// ```
     #[must_use]
     // Mutating try_acquire_many to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
-    pub fn try_acquire_many(&self, permits: usize) -> Option<SemaphorePermit<'_>> {
-        assert!(permits > 0, "cannot acquire zero permits");
+    pub fn try_acquire_many(&self, permits: NonZero<usize>) -> Option<SemaphorePermit<'_>> {
+        let permits = permits.get();
 
         if try_acquire_inner(&self.inner.state, permits) {
             Some(SemaphorePermit {
@@ -465,6 +461,11 @@ impl Drop for SemaphorePermit<'_> {
     }
 }
 
+// All state access is serialized by the internal Mutex. No
+// inconsistent state can be observed during unwind.
+impl UnwindSafe for SemaphorePermit<'_> {}
+impl RefUnwindSafe for SemaphorePermit<'_> {}
+
 /// Future returned by [`Semaphore::acquire()`] and
 /// [`Semaphore::acquire_many()`].
 ///
@@ -482,6 +483,11 @@ pub struct SemaphoreAcquireFuture<'a> {
 // semaphore's internal Mutex. The reference points to data behind an
 // Arc that is Send + Sync.
 unsafe impl Send for SemaphoreAcquireFuture<'_> {}
+
+// All state access is serialized by the internal Mutex. No
+// inconsistent state can be observed during unwind.
+impl UnwindSafe for SemaphoreAcquireFuture<'_> {}
+impl RefUnwindSafe for SemaphoreAcquireFuture<'_> {}
 
 impl<'a> Future for SemaphoreAcquireFuture<'a> {
     type Output = SemaphorePermit<'a>;
@@ -618,6 +624,11 @@ unsafe impl Send for EmbeddedSemaphoreRef {}
 // internal lock.
 unsafe impl Sync for EmbeddedSemaphoreRef {}
 
+// The NonNull pointer is only dereferenced while the internal Mutex is
+// held. No inconsistent state can be observed during unwind.
+impl UnwindSafe for EmbeddedSemaphoreRef {}
+impl RefUnwindSafe for EmbeddedSemaphoreRef {}
+
 impl EmbeddedSemaphoreRef {
     fn inner(&self) -> &SemaphoreInner {
         // SAFETY: The caller of `embedded()` guarantees the
@@ -629,22 +640,16 @@ impl EmbeddedSemaphoreRef {
     /// when a single permit is available.
     #[must_use]
     pub fn acquire(&self) -> EmbeddedSemaphoreAcquireFuture {
-        self.acquire_many(1)
+        self.acquire_many(ONE_PERMIT)
     }
 
     /// Returns a future that resolves to a [`EmbeddedSemaphorePermit`]
     /// holding `permits` permits.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `permits` is zero.
     #[must_use]
-    pub fn acquire_many(&self, permits: usize) -> EmbeddedSemaphoreAcquireFuture {
-        assert!(permits > 0, "cannot acquire zero permits");
-
+    pub fn acquire_many(&self, permits: NonZero<usize>) -> EmbeddedSemaphoreAcquireFuture {
         EmbeddedSemaphoreAcquireFuture {
             inner: self.inner,
-            permits,
+            permits: permits.get(),
             awaiter: Awaiter::new(),
         }
     }
@@ -654,19 +659,15 @@ impl EmbeddedSemaphoreRef {
     // Mutating try_acquire to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
     pub fn try_acquire(&self) -> Option<EmbeddedSemaphorePermit> {
-        self.try_acquire_many(1)
+        self.try_acquire_many(ONE_PERMIT)
     }
 
     /// Attempts to acquire `permits` permits without blocking.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `permits` is zero.
     #[must_use]
     // Mutating try_acquire_many to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
-    pub fn try_acquire_many(&self, permits: usize) -> Option<EmbeddedSemaphorePermit> {
-        assert!(permits > 0, "cannot acquire zero permits");
+    pub fn try_acquire_many(&self, permits: NonZero<usize>) -> Option<EmbeddedSemaphorePermit> {
+        let permits = permits.get();
 
         if try_acquire_inner(&self.inner().state, permits) {
             Some(EmbeddedSemaphorePermit {
@@ -697,6 +698,11 @@ unsafe impl Send for EmbeddedSemaphorePermit {}
 // SAFETY: Sharing &EmbeddedSemaphorePermit gives no mutable access.
 unsafe impl Sync for EmbeddedSemaphorePermit {}
 
+// The NonNull pointer is only dereferenced while the internal Mutex is
+// held. No inconsistent state can be observed during unwind.
+impl UnwindSafe for EmbeddedSemaphorePermit {}
+impl RefUnwindSafe for EmbeddedSemaphorePermit {}
+
 impl Drop for EmbeddedSemaphorePermit {
     // Mutating drop to a no-op causes permits to leak.
     #[cfg_attr(test, mutants::skip)]
@@ -724,6 +730,11 @@ pub struct EmbeddedSemaphoreAcquireFuture {
 // SAFETY: Same reasoning as SemaphoreAcquireFuture — all awaiter access
 // is protected by the internal Mutex.
 unsafe impl Send for EmbeddedSemaphoreAcquireFuture {}
+
+// The NonNull pointer is only dereferenced while the internal Mutex is
+// held. No inconsistent state can be observed during unwind.
+impl UnwindSafe for EmbeddedSemaphoreAcquireFuture {}
+impl RefUnwindSafe for EmbeddedSemaphoreAcquireFuture {}
 
 impl Future for EmbeddedSemaphoreAcquireFuture {
     type Output = EmbeddedSemaphorePermit;
@@ -809,6 +820,7 @@ impl fmt::Debug for EmbeddedSemaphoreAcquireFuture {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::num::NonZero;
     use std::sync::Barrier;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::{iter, thread};
@@ -817,18 +829,18 @@ mod tests {
 
     use super::*;
 
-    assert_impl_all!(Semaphore: Send, Sync, Clone);
-    assert_impl_all!(SemaphorePermit<'static>: Send, Sync);
+    assert_impl_all!(Semaphore: Send, Sync, Clone, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(SemaphorePermit<'static>: Send, Sync, UnwindSafe, RefUnwindSafe);
     assert_not_impl_any!(SemaphorePermit<'static>: Clone);
-    assert_impl_all!(SemaphoreAcquireFuture<'static>: Send);
+    assert_impl_all!(SemaphoreAcquireFuture<'static>: Send, UnwindSafe, RefUnwindSafe);
     assert_not_impl_any!(SemaphoreAcquireFuture<'static>: Sync, Unpin);
 
-    assert_impl_all!(EmbeddedSemaphore: Send, Sync);
+    assert_impl_all!(EmbeddedSemaphore: Send, Sync, UnwindSafe, RefUnwindSafe);
     assert_not_impl_any!(EmbeddedSemaphore: Unpin);
-    assert_impl_all!(EmbeddedSemaphoreRef: Send, Sync, Clone, Copy);
-    assert_impl_all!(EmbeddedSemaphorePermit: Send, Sync);
+    assert_impl_all!(EmbeddedSemaphoreRef: Send, Sync, Clone, Copy, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(EmbeddedSemaphorePermit: Send, Sync, UnwindSafe, RefUnwindSafe);
     assert_not_impl_any!(EmbeddedSemaphorePermit: Clone);
-    assert_impl_all!(EmbeddedSemaphoreAcquireFuture: Send);
+    assert_impl_all!(EmbeddedSemaphoreAcquireFuture: Send, UnwindSafe, RefUnwindSafe);
     assert_not_impl_any!(EmbeddedSemaphoreAcquireFuture: Sync, Unpin);
 
     #[test]
@@ -856,9 +868,9 @@ mod tests {
     #[test]
     fn try_acquire_many() {
         let sem = Semaphore::boxed(5);
-        let permit = sem.try_acquire_many(3).unwrap();
-        assert!(sem.try_acquire_many(3).is_none());
-        assert!(sem.try_acquire_many(2).is_some());
+        let permit = sem.try_acquire_many(NonZero::new(3).unwrap()).unwrap();
+        assert!(sem.try_acquire_many(NonZero::new(3).unwrap()).is_none());
+        assert!(sem.try_acquire_many(NonZero::new(2).unwrap()).is_some());
         drop(permit);
     }
 
@@ -870,20 +882,6 @@ mod tests {
         assert!(b.try_acquire().is_none());
         drop(permit);
         assert!(b.try_acquire().is_some());
-    }
-
-    #[test]
-    #[should_panic]
-    fn acquire_zero_panics() {
-        let sem = Semaphore::boxed(1);
-        let _future = sem.acquire_many(0);
-    }
-
-    #[test]
-    #[should_panic]
-    fn try_acquire_zero_panics() {
-        let sem = Semaphore::boxed(1);
-        let _permit = sem.try_acquire_many(0);
     }
 
     #[test]
@@ -939,7 +937,7 @@ mod tests {
         let _p2 = sem.try_acquire().unwrap();
 
         // f1 wants 2 permits, f2 wants 1.
-        let mut f1 = Box::pin(sem.acquire_many(2));
+        let mut f1 = Box::pin(sem.acquire_many(NonZero::new(2).unwrap()));
         let mut f2 = Box::pin(sem.acquire());
         let waker = Waker::noop();
         let mut cx = task::Context::from_waker(waker);
@@ -1049,7 +1047,7 @@ mod tests {
     #[test]
     fn try_acquire_many_exact_max() {
         let sem = Semaphore::boxed(5);
-        let permit = sem.try_acquire_many(5).unwrap();
+        let permit = sem.try_acquire_many(NonZero::new(5).unwrap()).unwrap();
         assert!(sem.try_acquire().is_none());
         drop(permit);
         assert!(sem.try_acquire().is_some());
@@ -1058,19 +1056,19 @@ mod tests {
     #[test]
     fn try_acquire_many_exceeds_max() {
         let sem = Semaphore::boxed(3);
-        assert!(sem.try_acquire_many(4).is_none());
+        assert!(sem.try_acquire_many(NonZero::new(4).unwrap()).is_none());
         // Semaphore is untouched — still has 3 available.
-        assert!(sem.try_acquire_many(3).is_some());
+        assert!(sem.try_acquire_many(NonZero::new(3).unwrap()).is_some());
     }
 
     #[test]
     fn acquire_many_all_at_once() {
         futures::executor::block_on(async {
             let sem = Semaphore::boxed(5);
-            let permit = sem.acquire_many(5).await;
+            let permit = sem.acquire_many(NonZero::new(5).unwrap()).await;
             assert!(sem.try_acquire().is_none());
             drop(permit);
-            assert!(sem.try_acquire_many(5).is_some());
+            assert!(sem.try_acquire_many(NonZero::new(5).unwrap()).is_some());
         });
     }
 
@@ -1082,7 +1080,7 @@ mod tests {
         // 1 permit available, 2 held.
 
         // Register a waiter wanting 2 permits (more than available).
-        let mut f1 = Box::pin(sem.acquire_many(2));
+        let mut f1 = Box::pin(sem.acquire_many(NonZero::new(2).unwrap()));
         let waker = Waker::noop();
         let mut cx = task::Context::from_waker(waker);
 
@@ -1312,7 +1310,7 @@ mod tests {
         // Releasing a multi-permit hold should wake multiple
         // single-permit waiters via the wake_waiters loop.
         let sem = Semaphore::boxed(2);
-        let big_permit = sem.try_acquire_many(2).unwrap();
+        let big_permit = sem.try_acquire_many(NonZero::new(2).unwrap()).unwrap();
 
         let mut f1 = Box::pin(sem.acquire());
         let mut f2 = Box::pin(sem.acquire());

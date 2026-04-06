@@ -107,7 +107,7 @@ fn try_wait(mutex: &Mutex<State>) -> bool {
 }
 
 /// Shared poll logic for both `AutoResetWaitFuture` and
-/// `RawAutoResetWaitFuture`.
+/// `EmbeddedAutoResetWaitFuture`.
 ///
 /// # Safety
 ///
@@ -163,7 +163,7 @@ unsafe fn poll_wait(
 /// Same requirements as [`poll_wait`].
 unsafe fn drop_wait(mutex: &Mutex<State>, mut awaiter: Pin<&mut Awaiter>) {
     // The caller must only call this when the awaiter is registered. Both
-    // AutoResetWaitFuture::drop and RawAutoResetWaitFuture::drop guard
+    // AutoResetWaitFuture::drop and EmbeddedAutoResetWaitFuture::drop guard
     // on `awaiter.is_registered()` before calling, so this should always hold.
     debug_assert!(awaiter.is_registered());
 
@@ -247,12 +247,12 @@ impl AutoResetEvent {
     ///
     /// Calling this multiple times on the same container is safe and
     /// returns handles that all operate on the same shared state, just
-    /// like copying or cloning a [`RawAutoResetEvent`].
+    /// like copying or cloning a [`EmbeddedAutoResetEventRef`].
     ///
     /// # Safety
     ///
     /// The caller must ensure that the [`EmbeddedAutoResetEvent`] outlives
-    /// all returned handles and any [`RawAutoResetWaitFuture`]s created
+    /// all returned handles and any [`EmbeddedAutoResetWaitFuture`]s created
     /// from them.
     ///
     /// # Examples
@@ -274,9 +274,9 @@ impl AutoResetEvent {
     /// # });
     /// ```
     #[must_use]
-    pub unsafe fn embedded(place: Pin<&EmbeddedAutoResetEvent>) -> RawAutoResetEvent {
+    pub unsafe fn embedded(place: Pin<&EmbeddedAutoResetEvent>) -> EmbeddedAutoResetEventRef {
         let state = NonNull::from(&place.get_ref().state);
-        RawAutoResetEvent { state }
+        EmbeddedAutoResetEventRef { state }
     }
 
     /// Signals the event, releasing exactly one waiter.
@@ -454,7 +454,7 @@ impl fmt::Debug for AutoResetWaitFuture {
 /// Stores the event state inline in a struct, avoiding the heap allocation
 /// that [`AutoResetEvent::boxed()`] requires. Create the container with
 /// [`new()`][Self::new], pin it, then call [`AutoResetEvent::embedded()`]
-/// to obtain a [`RawAutoResetEvent`] handle.
+/// to obtain a [`EmbeddedAutoResetEventRef`] handle.
 ///
 /// # Examples
 ///
@@ -505,25 +505,25 @@ impl Default for EmbeddedAutoResetEvent {
 ///
 /// The API is identical to [`AutoResetEvent`].
 #[derive(Clone, Copy)]
-pub struct RawAutoResetEvent {
+pub struct EmbeddedAutoResetEventRef {
     state: NonNull<Mutex<State>>,
 }
 
 // Marker trait impl.
 // SAFETY: Mutex<State> is Send + Sync. The raw pointer is only dereferenced
 // to obtain &Mutex<State>, which is safe to share across threads.
-unsafe impl Send for RawAutoResetEvent {}
+unsafe impl Send for EmbeddedAutoResetEventRef {}
 
 // Marker trait impl.
 // SAFETY: Same as Send — all mutable access is mediated by the Mutex.
-unsafe impl Sync for RawAutoResetEvent {}
+unsafe impl Sync for EmbeddedAutoResetEventRef {}
 
 // Marker trait impl.
-impl UnwindSafe for RawAutoResetEvent {}
+impl UnwindSafe for EmbeddedAutoResetEventRef {}
 // Marker trait impl.
-impl RefUnwindSafe for RawAutoResetEvent {}
+impl RefUnwindSafe for EmbeddedAutoResetEventRef {}
 
-impl RawAutoResetEvent {
+impl EmbeddedAutoResetEventRef {
     fn state(&self) -> &Mutex<State> {
         // SAFETY: The caller of `embedded()` guarantees the container
         // outlives this handle.
@@ -552,16 +552,16 @@ impl RawAutoResetEvent {
 
     /// Returns a future that completes when the event is signaled.
     #[must_use]
-    pub fn wait(&self) -> RawAutoResetWaitFuture {
-        RawAutoResetWaitFuture {
+    pub fn wait(&self) -> EmbeddedAutoResetWaitFuture {
+        EmbeddedAutoResetWaitFuture {
             state: self.state,
             awaiter: Awaiter::new(),
         }
     }
 }
 
-/// Future returned by [`RawAutoResetEvent::wait()`].
-pub struct RawAutoResetWaitFuture {
+/// Future returned by [`EmbeddedAutoResetEventRef::wait()`].
+pub struct EmbeddedAutoResetWaitFuture {
     state: NonNull<Mutex<State>>,
     awaiter: Awaiter,
 }
@@ -569,14 +569,14 @@ pub struct RawAutoResetWaitFuture {
 // Marker trait impl.
 // SAFETY: Awaiter is Send. All awaiter access is protected by the event's
 // Mutex.
-unsafe impl Send for RawAutoResetWaitFuture {}
+unsafe impl Send for EmbeddedAutoResetWaitFuture {}
 
 // Marker trait impl.
-impl UnwindSafe for RawAutoResetWaitFuture {}
+impl UnwindSafe for EmbeddedAutoResetWaitFuture {}
 // Marker trait impl.
-impl RefUnwindSafe for RawAutoResetWaitFuture {}
+impl RefUnwindSafe for EmbeddedAutoResetWaitFuture {}
 
-impl Future for RawAutoResetWaitFuture {
+impl Future for EmbeddedAutoResetWaitFuture {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<()> {
@@ -597,7 +597,7 @@ impl Future for RawAutoResetWaitFuture {
     }
 }
 
-impl Drop for RawAutoResetWaitFuture {
+impl Drop for EmbeddedAutoResetWaitFuture {
     fn drop(&mut self) {
         if !self.awaiter.is_registered() {
             return;
@@ -623,16 +623,17 @@ impl fmt::Debug for EmbeddedAutoResetEvent {
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl fmt::Debug for RawAutoResetEvent {
+impl fmt::Debug for EmbeddedAutoResetEventRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawAutoResetEvent").finish_non_exhaustive()
+        f.debug_struct("EmbeddedAutoResetEventRef")
+            .finish_non_exhaustive()
     }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl fmt::Debug for RawAutoResetWaitFuture {
+impl fmt::Debug for EmbeddedAutoResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawAutoResetWaitFuture")
+        f.debug_struct("EmbeddedAutoResetWaitFuture")
             .field("registered", &self.awaiter.is_registered())
             .finish_non_exhaustive()
     }
@@ -657,9 +658,9 @@ mod tests {
 
     assert_impl_all!(EmbeddedAutoResetEvent: Send, Sync, UnwindSafe, RefUnwindSafe);
     assert_not_impl_any!(EmbeddedAutoResetEvent: Unpin);
-    assert_impl_all!(RawAutoResetEvent: Send, Sync, Clone, Copy, UnwindSafe, RefUnwindSafe);
-    assert_impl_all!(RawAutoResetWaitFuture: Send, UnwindSafe, RefUnwindSafe);
-    assert_not_impl_any!(RawAutoResetWaitFuture: Sync, Unpin);
+    assert_impl_all!(EmbeddedAutoResetEventRef: Send, Sync, Clone, Copy, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(EmbeddedAutoResetWaitFuture: Send, UnwindSafe, RefUnwindSafe);
+    assert_not_impl_any!(EmbeddedAutoResetWaitFuture: Sync, Unpin);
 
     // --- basic functionality ---
 

@@ -2,12 +2,16 @@ use std::cell::UnsafeCell;
 use std::fmt;
 use std::future::Future;
 use std::marker::{PhantomData, PhantomPinned};
+use std::num::NonZero;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::rc::Rc;
 use std::task::{self, Poll, Waker};
 
 use awaiter_set::{Awaiter, AwaiterSet};
+
+use crate::constants::ONE_PERMIT;
 
 /// Single-threaded async semaphore.
 ///
@@ -233,6 +237,13 @@ impl Inner {
     }
 }
 
+// All state access is confined to a single thread (!Send). The
+// UnsafeCell contents are only accessed through methods with
+// serialized-access contracts. No inconsistent state can be observed
+// during unwind.
+impl UnwindSafe for LocalSemaphore {}
+impl RefUnwindSafe for LocalSemaphore {}
+
 impl LocalSemaphore {
     /// Creates a new semaphore with the given number of permits.
     ///
@@ -313,22 +324,16 @@ impl LocalSemaphore {
     /// ```
     #[must_use]
     pub fn acquire(&self) -> LocalSemaphoreAcquireFuture<'_> {
-        self.acquire_many(1)
+        self.acquire_many(ONE_PERMIT)
     }
 
     /// Returns a future that resolves to a [`LocalSemaphorePermit`]
     /// holding `permits` permits.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `permits` is zero.
     #[must_use]
-    pub fn acquire_many(&self, permits: usize) -> LocalSemaphoreAcquireFuture<'_> {
-        assert!(permits > 0, "cannot acquire zero permits");
-
+    pub fn acquire_many(&self, permits: NonZero<usize>) -> LocalSemaphoreAcquireFuture<'_> {
         LocalSemaphoreAcquireFuture {
             inner: &self.inner,
-            permits,
+            permits: permits.get(),
             awaiter: Awaiter::new(),
         }
     }
@@ -348,19 +353,15 @@ impl LocalSemaphore {
     // Mutating try_acquire to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
     pub fn try_acquire(&self) -> Option<LocalSemaphorePermit<'_>> {
-        self.try_acquire_many(1)
+        self.try_acquire_many(ONE_PERMIT)
     }
 
     /// Attempts to acquire `permits` permits without blocking.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `permits` is zero.
     #[must_use]
     // Mutating try_acquire_many to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
-    pub fn try_acquire_many(&self, permits: usize) -> Option<LocalSemaphorePermit<'_>> {
-        assert!(permits > 0, "cannot acquire zero permits");
+    pub fn try_acquire_many(&self, permits: NonZero<usize>) -> Option<LocalSemaphorePermit<'_>> {
+        let permits = permits.get();
 
         if self.inner.try_acquire(permits) {
             Some(LocalSemaphorePermit {
@@ -390,6 +391,13 @@ impl Drop for LocalSemaphorePermit<'_> {
     }
 }
 
+// All state access is confined to a single thread (!Send). The
+// UnsafeCell contents are only accessed through methods with
+// serialized-access contracts. No inconsistent state can be observed
+// during unwind.
+impl UnwindSafe for LocalSemaphorePermit<'_> {}
+impl RefUnwindSafe for LocalSemaphorePermit<'_> {}
+
 /// Future returned by [`LocalSemaphore::acquire()`] and
 /// [`LocalSemaphore::acquire_many()`].
 ///
@@ -401,6 +409,13 @@ pub struct LocalSemaphoreAcquireFuture<'a> {
 
     awaiter: Awaiter,
 }
+
+// All state access is confined to a single thread (!Send). The
+// UnsafeCell contents are only accessed through methods with
+// serialized-access contracts. No inconsistent state can be observed
+// during unwind.
+impl UnwindSafe for LocalSemaphoreAcquireFuture<'_> {}
+impl RefUnwindSafe for LocalSemaphoreAcquireFuture<'_> {}
 
 impl<'a> Future for LocalSemaphoreAcquireFuture<'a> {
     type Output = LocalSemaphorePermit<'a>;
@@ -498,6 +513,13 @@ pub struct EmbeddedLocalSemaphore {
     _pinned: PhantomPinned,
 }
 
+// All state access is confined to a single thread (!Send). The
+// UnsafeCell contents are only accessed through methods with
+// serialized-access contracts. No inconsistent state can be observed
+// during unwind.
+impl UnwindSafe for EmbeddedLocalSemaphore {}
+impl RefUnwindSafe for EmbeddedLocalSemaphore {}
+
 impl EmbeddedLocalSemaphore {
     /// Creates a new embedded semaphore container with the given
     /// number of permits.
@@ -528,6 +550,12 @@ pub struct EmbeddedLocalSemaphoreRef {
     inner: NonNull<Inner>,
 }
 
+// The NonNull pointer is only dereferenced on the owning thread.
+// All state access is confined to a single thread (!Send). No
+// inconsistent state can be observed during unwind.
+impl UnwindSafe for EmbeddedLocalSemaphoreRef {}
+impl RefUnwindSafe for EmbeddedLocalSemaphoreRef {}
+
 impl EmbeddedLocalSemaphoreRef {
     fn inner(&self) -> &Inner {
         // SAFETY: The caller of `embedded()` guarantees the
@@ -539,22 +567,16 @@ impl EmbeddedLocalSemaphoreRef {
     /// [`EmbeddedLocalSemaphorePermit`] when a single permit is available.
     #[must_use]
     pub fn acquire(&self) -> EmbeddedLocalSemaphoreAcquireFuture {
-        self.acquire_many(1)
+        self.acquire_many(ONE_PERMIT)
     }
 
     /// Returns a future that resolves to a
     /// [`EmbeddedLocalSemaphorePermit`] holding `permits` permits.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `permits` is zero.
     #[must_use]
-    pub fn acquire_many(&self, permits: usize) -> EmbeddedLocalSemaphoreAcquireFuture {
-        assert!(permits > 0, "cannot acquire zero permits");
-
+    pub fn acquire_many(&self, permits: NonZero<usize>) -> EmbeddedLocalSemaphoreAcquireFuture {
         EmbeddedLocalSemaphoreAcquireFuture {
             inner: self.inner,
-            permits,
+            permits: permits.get(),
             awaiter: Awaiter::new(),
         }
     }
@@ -564,19 +586,18 @@ impl EmbeddedLocalSemaphoreRef {
     // Mutating try_acquire to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
     pub fn try_acquire(&self) -> Option<EmbeddedLocalSemaphorePermit> {
-        self.try_acquire_many(1)
+        self.try_acquire_many(ONE_PERMIT)
     }
 
     /// Attempts to acquire `permits` permits without blocking.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `permits` is zero.
     #[must_use]
     // Mutating try_acquire_many to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
-    pub fn try_acquire_many(&self, permits: usize) -> Option<EmbeddedLocalSemaphorePermit> {
-        assert!(permits > 0, "cannot acquire zero permits");
+    pub fn try_acquire_many(
+        &self,
+        permits: NonZero<usize>,
+    ) -> Option<EmbeddedLocalSemaphorePermit> {
+        let permits = permits.get();
 
         if self.inner().try_acquire(permits) {
             Some(EmbeddedLocalSemaphorePermit {
@@ -595,6 +616,12 @@ pub struct EmbeddedLocalSemaphorePermit {
     inner: NonNull<Inner>,
     permits: usize,
 }
+
+// The NonNull pointer is only dereferenced on the owning thread.
+// All state access is confined to a single thread (!Send). No
+// inconsistent state can be observed during unwind.
+impl UnwindSafe for EmbeddedLocalSemaphorePermit {}
+impl RefUnwindSafe for EmbeddedLocalSemaphorePermit {}
 
 impl Drop for EmbeddedLocalSemaphorePermit {
     // Mutating drop to a no-op causes permits to leak.
@@ -615,6 +642,12 @@ pub struct EmbeddedLocalSemaphoreAcquireFuture {
 
     awaiter: Awaiter,
 }
+
+// The NonNull pointer is only dereferenced on the owning thread.
+// All state access is confined to a single thread (!Send). No
+// inconsistent state can be observed during unwind.
+impl UnwindSafe for EmbeddedLocalSemaphoreAcquireFuture {}
+impl RefUnwindSafe for EmbeddedLocalSemaphoreAcquireFuture {}
 
 impl Future for EmbeddedLocalSemaphoreAcquireFuture {
     type Output = EmbeddedLocalSemaphorePermit;
@@ -705,20 +738,26 @@ impl fmt::Debug for EmbeddedLocalSemaphoreAcquireFuture {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::num::NonZero;
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
 
-    assert_impl_all!(LocalSemaphore: Clone);
+    assert_impl_all!(LocalSemaphore: Clone, UnwindSafe, RefUnwindSafe);
     assert_not_impl_any!(LocalSemaphore: Send, Sync);
+    assert_impl_all!(LocalSemaphorePermit<'static>: UnwindSafe, RefUnwindSafe);
     assert_not_impl_any!(LocalSemaphorePermit<'static>: Send, Sync, Clone);
+    assert_impl_all!(LocalSemaphoreAcquireFuture<'static>: UnwindSafe, RefUnwindSafe);
     assert_not_impl_any!(LocalSemaphoreAcquireFuture<'static>: Send, Sync, Unpin);
 
+    assert_impl_all!(EmbeddedLocalSemaphore: UnwindSafe, RefUnwindSafe);
     assert_not_impl_any!(EmbeddedLocalSemaphore: Send, Sync, Unpin);
-    assert_impl_all!(EmbeddedLocalSemaphoreRef: Clone, Copy);
+    assert_impl_all!(EmbeddedLocalSemaphoreRef: Clone, Copy, UnwindSafe, RefUnwindSafe);
     assert_not_impl_any!(EmbeddedLocalSemaphoreRef: Send, Sync);
+    assert_impl_all!(EmbeddedLocalSemaphorePermit: UnwindSafe, RefUnwindSafe);
     assert_not_impl_any!(EmbeddedLocalSemaphorePermit: Send, Sync, Clone);
+    assert_impl_all!(EmbeddedLocalSemaphoreAcquireFuture: UnwindSafe, RefUnwindSafe);
     assert_not_impl_any!(EmbeddedLocalSemaphoreAcquireFuture: Send, Sync, Unpin);
 
     #[test]
@@ -746,9 +785,9 @@ mod tests {
     #[test]
     fn try_acquire_many() {
         let sem = LocalSemaphore::boxed(5);
-        let permit = sem.try_acquire_many(3).unwrap();
-        assert!(sem.try_acquire_many(3).is_none());
-        assert!(sem.try_acquire_many(2).is_some());
+        let permit = sem.try_acquire_many(NonZero::new(3).unwrap()).unwrap();
+        assert!(sem.try_acquire_many(NonZero::new(3).unwrap()).is_none());
+        assert!(sem.try_acquire_many(NonZero::new(2).unwrap()).is_some());
         drop(permit);
     }
 
@@ -760,20 +799,6 @@ mod tests {
         assert!(b.try_acquire().is_none());
         drop(permit);
         assert!(b.try_acquire().is_some());
-    }
-
-    #[test]
-    #[should_panic]
-    fn acquire_zero_panics() {
-        let sem = LocalSemaphore::boxed(1);
-        let _future = sem.acquire_many(0);
-    }
-
-    #[test]
-    #[should_panic]
-    fn try_acquire_zero_panics() {
-        let sem = LocalSemaphore::boxed(1);
-        let _permit = sem.try_acquire_many(0);
     }
 
     #[test]
@@ -828,7 +853,7 @@ mod tests {
         let _p1 = sem.try_acquire().unwrap();
         let _p2 = sem.try_acquire().unwrap();
 
-        let mut f1 = Box::pin(sem.acquire_many(2));
+        let mut f1 = Box::pin(sem.acquire_many(NonZero::new(2).unwrap()));
         let mut f2 = Box::pin(sem.acquire());
         let waker = Waker::noop();
         let mut cx = task::Context::from_waker(waker);
@@ -903,7 +928,7 @@ mod tests {
     #[test]
     fn try_acquire_many_exact_max() {
         let sem = LocalSemaphore::boxed(5);
-        let permit = sem.try_acquire_many(5).unwrap();
+        let permit = sem.try_acquire_many(NonZero::new(5).unwrap()).unwrap();
         assert!(sem.try_acquire().is_none());
         drop(permit);
         assert!(sem.try_acquire().is_some());
@@ -912,19 +937,19 @@ mod tests {
     #[test]
     fn try_acquire_many_exceeds_max() {
         let sem = LocalSemaphore::boxed(3);
-        assert!(sem.try_acquire_many(4).is_none());
+        assert!(sem.try_acquire_many(NonZero::new(4).unwrap()).is_none());
         // Semaphore is untouched — still has 3 available.
-        assert!(sem.try_acquire_many(3).is_some());
+        assert!(sem.try_acquire_many(NonZero::new(3).unwrap()).is_some());
     }
 
     #[test]
     fn acquire_many_all_at_once() {
         futures::executor::block_on(async {
             let sem = LocalSemaphore::boxed(5);
-            let permit = sem.acquire_many(5).await;
+            let permit = sem.acquire_many(NonZero::new(5).unwrap()).await;
             assert!(sem.try_acquire().is_none());
             drop(permit);
-            assert!(sem.try_acquire_many(5).is_some());
+            assert!(sem.try_acquire_many(NonZero::new(5).unwrap()).is_some());
         });
     }
 
@@ -936,7 +961,7 @@ mod tests {
         // 1 permit available, 2 held.
 
         // Register a waiter wanting 2 permits (more than available).
-        let mut f1 = Box::pin(sem.acquire_many(2));
+        let mut f1 = Box::pin(sem.acquire_many(NonZero::new(2).unwrap()));
         let waker = Waker::noop();
         let mut cx = task::Context::from_waker(waker);
 
@@ -1106,7 +1131,7 @@ mod tests {
         // Releasing a multi-permit hold should wake multiple
         // single-permit waiters via the wake_waiters loop.
         let sem = LocalSemaphore::boxed(2);
-        let big_permit = sem.try_acquire_many(2).unwrap();
+        let big_permit = sem.try_acquire_many(NonZero::new(2).unwrap()).unwrap();
 
         let mut f1 = Box::pin(sem.acquire());
         let mut f2 = Box::pin(sem.acquire());
