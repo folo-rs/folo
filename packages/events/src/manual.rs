@@ -87,23 +87,15 @@ fn set(mutex: &Mutex<State>) {
     }
     state.is_set = true;
 
-    // Wake all waiters using the rescan-from-head pattern.
+    // Wake all waiters using notify_one in a loop.
     // We drop the lock before waking each waiter to prevent deadlocks
     // from re-entrant wakers. After waking, we re-acquire the lock and
-    // start scanning from the head again because nodes may have been
-    // removed during the unlock window.
+    // call notify_one again because nodes may have been removed during
+    // the unlock window.
     loop {
-        let waker = {
-            let mut found = None;
-            state.waiters.for_each(|node| {
-                if found.is_none() {
-                    found = node.take_waker();
-                }
-            });
-            found
+        let Some(w) = state.waiters.notify_one() else {
+            break;
         };
-
-        let Some(w) = waker else { break };
         drop(state);
         w.wake();
 
@@ -148,14 +140,14 @@ unsafe fn poll_wait(
 ) -> Poll<()> {
     let mut state = mutex.lock().expect(NEVER_POISONED);
 
+    // Check if we were directly notified by set() (it removed us
+    // from the set and set our notified flag).
+    // SAFETY: We hold the lock that protects the awaiter set and node.
+    if unsafe { awaiter.as_mut().take_notification() } {
+        return Poll::Ready(());
+    }
+
     if state.is_set {
-        if awaiter.is_registered() {
-            // SAFETY: We hold the lock and the awaiter is registered in
-            // this set.
-            unsafe {
-                awaiter.as_mut().unregister(&mut state.waiters);
-            }
-        }
         return Poll::Ready(());
     }
 

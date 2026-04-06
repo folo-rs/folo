@@ -87,8 +87,8 @@ impl Inner {
             match state {
                 InnerState::Set => None,
                 InnerState::Unset(waiters) => {
-                    if let Some(node) = waiters.take_one() {
-                        node.notify()
+                    if let Some(w) = waiters.notify_one() {
+                        Some(w)
                     } else {
                         // No waiters — store the signal.
                         *state = InnerState::Set;
@@ -171,14 +171,13 @@ impl Inner {
                 unsafe { mem::replace(&mut *state_ptr, InnerState::Unset(AwaiterSet::new())) };
             let waker = match old_state {
                 InnerState::Unset(mut waiters) => {
-                    if let Some(next_node) = waiters.take_one() {
-                        let waker = next_node.notify();
+                    if let Some(waker) = waiters.notify_one() {
                         // Restore the awaiter set.
                         // SAFETY: Single-threaded.
                         unsafe {
                             *state_ptr = InnerState::Unset(waiters);
                         }
-                        waker
+                        Some(waker)
                     } else {
                         // No more waiters — restore the signal so
                         // it is not lost.

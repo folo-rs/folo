@@ -256,7 +256,7 @@ impl Awaiter {
     /// awaiter from Waiting to Notified and returns the stored waker
     /// so the primitive can call [`Waker::wake()`] outside any lock
     /// scope to avoid re-entrancy issues.
-    pub fn notify(&mut self) -> Option<Waker> {
+    pub(crate) fn notify(&mut self) -> Option<Waker> {
         // SAFETY: &mut self guarantees exclusive access.
         let state = unsafe { &mut *self.state.get() };
         match std::mem::replace(state, State::Idle) {
@@ -275,11 +275,8 @@ impl Awaiter {
     }
 
     /// Extracts the waker without changing the notification state.
-    ///
-    /// Used by manual-reset events which wake all awaiters without
-    /// marking them as notified (awaiters re-check the event state
-    /// on the next poll instead).
-    pub fn take_waker(&mut self) -> Option<Waker> {
+    #[cfg(test)]
+    pub(crate) fn take_waker(&mut self) -> Option<Waker> {
         // SAFETY: &mut self guarantees exclusive access.
         let state = unsafe { &mut *self.state.get() };
         if let State::Waiting { waker, .. } = state {
@@ -416,8 +413,8 @@ mod tests {
         }
 
         assert!(a.is_registered());
-        let popped = set.take_one();
-        assert!(popped.is_some());
+        let waker = set.notify_one();
+        assert!(waker.is_some());
         assert!(set.is_empty());
     }
 
@@ -480,9 +477,8 @@ mod tests {
             Pin::new_unchecked(&mut a).register(&mut set, Waker::noop().clone());
         }
 
-        let node = set.take_one().unwrap();
-        let waker = node.notify();
-        assert!(waker.is_some());
+        let node = set.notify_one();
+        assert!(node.is_some());
 
         // SAFETY: Test has exclusive access.
         assert!(unsafe { Pin::new_unchecked(&a).is_notified() });
@@ -498,8 +494,7 @@ mod tests {
             Pin::new_unchecked(&mut a).register(&mut set, Waker::noop().clone());
         }
 
-        let node = set.take_one().unwrap();
-        drop(node.notify());
+        drop(set.notify_one());
 
         // SAFETY: Test has exclusive access.
         let notified = unsafe { Pin::new_unchecked(&mut a).take_notification() };
@@ -516,8 +511,7 @@ mod tests {
         unsafe {
             Pin::new_unchecked(&mut a).register(&mut set, Waker::noop().clone());
         }
-        let node = set.take_one().unwrap();
-        drop(node.notify());
+        drop(set.notify_one());
 
         // SAFETY: Test has exclusive access.
         assert!(unsafe { Pin::new_unchecked(&a).is_notified() });
@@ -536,8 +530,7 @@ mod tests {
             Pin::new_unchecked(&mut a).register(&mut set, Waker::noop().clone());
         }
 
-        let node = set.take_one().unwrap();
-        let waker = node.take_waker();
+        let waker = a.take_waker();
         assert!(waker.is_some());
         // Not notified — take_waker does not set notified.
         // SAFETY: Test has exclusive access.
@@ -555,8 +548,7 @@ mod tests {
         }
         assert!(a.is_registered());
 
-        let node = set.take_one().unwrap();
-        drop(node.notify());
+        drop(set.notify_one());
 
         // SAFETY: Test has exclusive access.
         assert!(unsafe { Pin::new_unchecked(&mut a).take_notification() });

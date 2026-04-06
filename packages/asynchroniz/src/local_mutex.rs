@@ -89,10 +89,10 @@ impl<T> Inner<T> {
             // SAFETY: Single-threaded access guaranteed by !Send.
             let state = unsafe { &mut *self.lock_state.get() };
 
-            if let Some(node) = state.waiters.take_one() {
+            if let Some(w) = state.waiters.notify_one() {
                 // Transfer lock ownership to the next waiter. The
                 // lock stays held.
-                node.notify()
+                Some(w)
             } else {
                 state.locked = false;
                 None
@@ -169,8 +169,8 @@ impl<T> Inner<T> {
                 // SAFETY: Single-threaded access.
                 let state = unsafe { &mut *state_ptr };
 
-                if let Some(next_node) = state.waiters.take_one() {
-                    next_node.notify()
+                if let Some(w) = state.waiters.notify_one() {
+                    Some(w)
                 } else {
                     state.locked = false;
                     None

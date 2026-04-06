@@ -97,26 +97,14 @@ impl Inner {
         }
         self.is_set.set(true);
 
-        // Wake all waiters using the rescan-from-head pattern.
-        // We complete the wake call before rescanning because
-        // re-entrant wakers may modify the set. By rescanning
-        // from the head after each wake, we avoid holding any node
-        // pointer across a wake call.
+        // Wake all waiters using notify_one in a loop.
+        // We complete the wake call before calling notify_one again
+        // because re-entrant wakers may modify the set.
         let waiters_ptr = self.waiters.get();
         loop {
-            let waker = {
-                // SAFETY: Single-threaded — no concurrent access.
-                let waiters = unsafe { &mut *waiters_ptr };
-                let mut found = None;
-                waiters.for_each(|node| {
-                    if found.is_none() {
-                        found = node.take_waker();
-                    }
-                });
-                found
-            };
-
-            let Some(w) = waker else { break };
+            // SAFETY: Single-threaded — no concurrent access.
+            let waiters = unsafe { &mut *waiters_ptr };
+            let Some(w) = waiters.notify_one() else { break };
             w.wake();
 
             #[cfg(test)]
@@ -146,16 +134,14 @@ impl Inner {
     ///
     /// * The `awaiter` must belong to a future created from the same event.
     unsafe fn poll_wait(&self, mut awaiter: Pin<&mut Awaiter>, waker: Waker) -> Poll<()> {
+        // Check if we were directly notified by set() (it removed us
+        // from the set and set our notified flag).
+        // SAFETY: Single-threaded access.
+        if unsafe { awaiter.as_mut().take_notification() } {
+            return Poll::Ready(());
+        }
+
         if self.is_set.get() {
-            if awaiter.is_registered() {
-                // SAFETY: Single-threaded, awaiter is registered in this
-                // list.
-                let waiters = unsafe { &mut *self.waiters.get() };
-                // SAFETY: Single-threaded.
-                unsafe {
-                    awaiter.as_mut().unregister(waiters);
-                }
-            }
             return Poll::Ready(());
         }
 

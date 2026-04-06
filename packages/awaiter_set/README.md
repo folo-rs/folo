@@ -28,8 +28,9 @@ unsafe {
 
 assert!(!set.is_empty());
 
-if let Some(awaiter) = set.take_one() {
-    let _waker = awaiter.notify();
+if let Some(waker) = set.notify_one() {
+    // Wake the awaiter outside the lock scope.
+    drop(waker);
 }
 ```
 

@@ -78,8 +78,8 @@ fn set(mutex: &Mutex<State>) {
                 waker = None;
             }
             State::Unset(waiters) => {
-                if let Some(node) = waiters.take_one() {
-                    waker = node.notify();
+                if let Some(w) = waiters.notify_one() {
+                    waker = Some(w);
                 } else {
                     // No waiters — store the signal.
                     *state = State::Set;
@@ -177,15 +177,12 @@ unsafe fn drop_wait(mutex: &Mutex<State>, mut awaiter: Pin<&mut Awaiter>) {
         let old_state = mem::replace(&mut *state, State::Unset(AwaiterSet::new()));
         match old_state {
             State::Unset(mut waiters) => {
-                if let Some(next_node) = waiters.take_one() {
-                    let waker = next_node.notify();
+                if let Some(waker) = waiters.notify_one() {
                     // Restore the awaiter set.
                     *state = State::Unset(waiters);
                     drop(state);
 
-                    if let Some(w) = waker {
-                        w.wake();
-                    }
+                    waker.wake();
                 } else {
                     // No more waiters — restore the signal so it
                     // is not lost.

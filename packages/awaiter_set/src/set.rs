@@ -1,5 +1,6 @@
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::ptr;
+use std::task::Waker;
 
 use crate::awaiter::Awaiter;
 
@@ -114,10 +115,21 @@ impl AwaiterSet {
         node.set_prev(ptr::null_mut());
     }
 
-    /// Removes and returns one awaiter from the set.
+    /// Removes one awaiter from the set and notifies it.
+    ///
+    /// Transitions the awaiter from Waiting to Notified and returns
+    /// its stored waker. The caller should invoke
+    /// [`Waker::wake()`] outside any lock scope to avoid re-entrancy
+    /// issues.
     ///
     /// Returns `None` if the set is empty.
-    pub fn take_one(&mut self) -> Option<&mut Awaiter> {
+    pub fn notify_one(&mut self) -> Option<Waker> {
+        let awaiter = self.take_one()?;
+        awaiter.notify()
+    }
+
+    // Removes and returns one awaiter from the set.
+    fn take_one(&mut self) -> Option<&mut Awaiter> {
         if self.head.is_null() {
             return None;
         }
@@ -147,24 +159,6 @@ impl AwaiterSet {
         // We just removed it, so no other reference exists in the
         // set. The `&mut self` borrow prevents concurrent operations.
         Some(node)
-    }
-
-    /// Iterates over all awaiters, calling `f` for each.
-    ///
-    /// The callback receives an exclusive reference to each awaiter
-    /// and may modify its waker or flags. However, it must not
-    /// insert into or remove from the set.
-    pub fn for_each(&mut self, mut f: impl FnMut(&mut Awaiter)) {
-        let mut current = self.head;
-        while !current.is_null() {
-            // Read next before calling `f` so the callback cannot
-            // invalidate our traversal pointer.
-            // SAFETY: `current` is non-null and in the set.
-            let next = unsafe { (*current).next() };
-            // SAFETY: The awaiter is valid (set invariant).
-            f(unsafe { &mut *current });
-            current = next;
-        }
     }
 }
 
@@ -420,31 +414,6 @@ mod tests {
     }
 
     #[test]
-    fn for_each_visits_all_nodes_in_order() {
-        let mut list = AwaiterSet::new();
-        let mut a = Awaiter::new();
-        let mut b = Awaiter::new();
-
-        unsafe {
-            Pin::new_unchecked(&mut a).register_with_data(&mut list, waker(), 1);
-            Pin::new_unchecked(&mut b).register_with_data(&mut list, waker(), 2);
-        }
-
-        let mut visited = Vec::new();
-        list.for_each(|node| visited.push(node.user_data()));
-
-        assert_eq!(visited, [1, 2]);
-    }
-
-    #[test]
-    fn for_each_on_empty_list_does_nothing() {
-        let mut list = AwaiterSet::new();
-        let mut count = 0_usize;
-        list.for_each(|_| count = count.checked_add(1).unwrap());
-        assert_eq!(count, 0);
-    }
-
-    #[test]
     fn wakers_survive_list_operations() {
         let mut list = AwaiterSet::new();
         let mut a = Awaiter::new();
@@ -480,10 +449,9 @@ mod tests {
             Pin::new_unchecked(&mut a).register(&mut list, waker());
         }
 
-        let popped = list.take_one().unwrap();
-        popped.notify();
+        drop(list.notify_one());
         // SAFETY: The awaiter is not moved.
-        assert!(unsafe { Pin::new_unchecked(&*popped).is_notified() });
+        assert!(unsafe { Pin::new_unchecked(&a).is_notified() });
     }
 
     #[test]

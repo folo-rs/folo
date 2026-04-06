@@ -131,11 +131,7 @@ fn try_wake_head(state: &mut SemaphoreState) -> Option<Waker> {
             .checked_sub(requested)
             .expect("available >= requested was just checked");
 
-        let node = state
-            .waiters
-            .take_one()
-            .expect("head was non-null so pop cannot fail");
-        node.notify()
+        state.waiters.notify_one()
     } else {
         // Head-of-line blocking: not enough permits for the head
         // waiter.
