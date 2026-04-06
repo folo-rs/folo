@@ -146,19 +146,12 @@ impl Inner {
         }
 
         // Register or update the waker.
-        if awaiter.is_registered() {
-            // SAFETY: Single-threaded, awaiter is already registered.
-            unsafe {
-                awaiter.as_mut().update_waker(waker);
-            }
-        } else {
-            // SAFETY: Single-threaded, awaiter is pinned and lives as
-            // long as the future.
-            let waiters = unsafe { &mut *self.waiters.get() };
-            // SAFETY: Single-threaded.
-            unsafe {
-                awaiter.as_mut().register(waiters, waker);
-            }
+        // SAFETY: Single-threaded, awaiter is pinned and lives as
+        // long as the future.
+        let waiters = unsafe { &mut *self.waiters.get() };
+        // SAFETY: Single-threaded.
+        unsafe {
+            waiters.register(awaiter.as_mut(), waker);
         }
 
         Poll::Pending
@@ -174,7 +167,7 @@ impl Inner {
             let waiters = unsafe { &mut *self.waiters.get() };
             // SAFETY: Single-threaded.
             unsafe {
-                awaiter.as_mut().unregister(waiters);
+                waiters.unregister(awaiter.as_mut());
             }
         }
     }

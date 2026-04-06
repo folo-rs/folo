@@ -208,19 +208,12 @@ unsafe fn poll_acquire(
         Poll::Ready(())
     } else {
         // Not enough permits — register or update the waker.
-        if awaiter.is_registered() {
-            // SAFETY: We hold the lock.
-            unsafe {
-                awaiter.as_mut().update_waker(waker);
-            }
-        } else {
-            // SAFETY: We hold the lock, awaiter is pinned and not yet
-            // in the set.
-            unsafe {
-                awaiter
-                    .as_mut()
-                    .register_with_data(&mut state.waiters, waker, permits);
-            }
+        // SAFETY: We hold the lock, awaiter is pinned and not yet
+        // in the set (or already registered for waker update).
+        unsafe {
+            state
+                .waiters
+                .register_with_data(awaiter.as_mut(), waker, permits);
         }
         Poll::Pending
     }
@@ -257,7 +250,7 @@ unsafe fn drop_acquire_wait(
         // Not notified — just remove from the awaiter set.
         // SAFETY: We hold the lock and the node is in the set.
         unsafe {
-            awaiter.as_mut().unregister(&mut state.waiters);
+            state.waiters.unregister(awaiter.as_mut());
         }
     }
 }

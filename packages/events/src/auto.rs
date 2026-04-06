@@ -139,17 +139,10 @@ unsafe fn poll_wait(
         }
         State::Unset(waiters) => {
             // Register or update the waker.
-            if awaiter.is_registered() {
-                // SAFETY: We hold the lock.
-                unsafe {
-                    awaiter.as_mut().update_waker(waker);
-                }
-            } else {
-                // SAFETY: We hold the lock, awaiter is pinned and lives
-                // as long as the future.
-                unsafe {
-                    awaiter.as_mut().register(waiters, waker);
-                }
+            // SAFETY: We hold the lock, awaiter is pinned and lives
+            // as long as the future.
+            unsafe {
+                waiters.register(awaiter.as_mut(), waker);
             }
             Poll::Pending
         }
@@ -201,7 +194,7 @@ unsafe fn drop_wait(mutex: &Mutex<State>, mut awaiter: Pin<&mut Awaiter>) {
                 // SAFETY: We hold the lock and the awaiter is registered
                 // in this set.
                 unsafe {
-                    awaiter.as_mut().unregister(waiters);
+                    waiters.unregister(awaiter.as_mut());
                 }
             }
             State::Set => {

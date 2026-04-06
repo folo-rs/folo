@@ -22,8 +22,8 @@ let mut b = Awaiter::new();
 
 // SAFETY: Awaiters remain valid and pinned while in the set.
 unsafe {
-    a.register(&mut set, std::task::Waker::noop().clone());
-    b.register(&mut set, std::task::Waker::noop().clone());
+    set.register(std::pin::Pin::new_unchecked(&mut a), std::task::Waker::noop().clone());
+    set.register(std::pin::Pin::new_unchecked(&mut b), std::task::Waker::noop().clone());
 }
 
 assert!(!set.is_empty());
