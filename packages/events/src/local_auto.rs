@@ -88,8 +88,7 @@ impl Inner {
                 InnerState::Set => None,
                 InnerState::Unset(waiters) => {
                     if let Some(node) = waiters.take_one() {
-                        node.set_notified();
-                        node.take_waker()
+                        node.notify()
                     } else {
                         // No waiters — store the signal.
                         *state = InnerState::Set;
@@ -173,8 +172,7 @@ impl Inner {
             let waker = match old_state {
                 InnerState::Unset(mut waiters) => {
                     if let Some(next_node) = waiters.take_one() {
-                        next_node.set_notified();
-                        let waker = next_node.take_waker();
+                        let waker = next_node.notify();
                         // Restore the awaiter set.
                         // SAFETY: Single-threaded.
                         unsafe {

@@ -481,7 +481,7 @@ mod tests {
         }
 
         let popped = list.take_one().unwrap();
-        popped.set_notified();
+        popped.notify();
         // SAFETY: The awaiter is not moved.
         assert!(unsafe { Pin::new_unchecked(&*popped).is_notified() });
     }

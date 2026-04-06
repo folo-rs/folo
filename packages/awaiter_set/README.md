@@ -29,8 +29,7 @@ unsafe {
 assert!(!set.is_empty());
 
 if let Some(awaiter) = set.take_one() {
-    awaiter.set_notified();
-    let _waker = awaiter.take_waker();
+    let _waker = awaiter.notify();
 }
 ```
 

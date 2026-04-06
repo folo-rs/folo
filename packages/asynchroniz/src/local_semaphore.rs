@@ -113,8 +113,7 @@ impl Inner {
                 .waiters
                 .take_one()
                 .expect("head was non-null so pop cannot fail");
-            node.set_notified();
-            node.take_waker()
+            node.notify()
         } else {
             // Head-of-line blocking.
             None

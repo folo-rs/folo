@@ -92,8 +92,7 @@ impl<T> Inner<T> {
             if let Some(node) = state.waiters.take_one() {
                 // Transfer lock ownership to the next waiter. The
                 // lock stays held.
-                node.set_notified();
-                node.take_waker()
+                node.notify()
             } else {
                 state.locked = false;
                 None
@@ -171,8 +170,7 @@ impl<T> Inner<T> {
                 let state = unsafe { &mut *state_ptr };
 
                 if let Some(next_node) = state.waiters.take_one() {
-                    next_node.set_notified();
-                    next_node.take_waker()
+                    next_node.notify()
                 } else {
                     state.locked = false;
                     None

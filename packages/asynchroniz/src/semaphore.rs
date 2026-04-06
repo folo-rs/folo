@@ -133,8 +133,7 @@ fn try_wake_head(state: &mut SemaphoreState) -> Option<Waker> {
             .waiters
             .take_one()
             .expect("head was non-null so pop cannot fail");
-        node.set_notified();
-        node.take_waker()
+        node.notify()
     } else {
         // Head-of-line blocking: not enough permits for the head
         // waiter.
