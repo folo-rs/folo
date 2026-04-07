@@ -62,7 +62,7 @@
 //!
 //! Use [`PublisherBuilder`] to configure the publisher:
 //!
-//! - `interval()` - how often to collect and export metrics (default: 5 seconds)
+//! - `interval()` - how often to collect and export metrics (default: 60 seconds)
 //! - `meter_name()` - OpenTelemetry meter name (default: "nm")
 //! - `provider()` - any [`MeterProvider`][opentelemetry::metrics::MeterProvider] implementation
 //!
