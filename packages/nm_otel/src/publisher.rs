@@ -57,8 +57,8 @@ impl fmt::Debug for PublisherBuilder {
     }
 }
 
-// PublisherBuilder wraps OpenTelemetry SDK types that use trait objects internally.
-// The trait objects are not auto-RefUnwindSafe but are used only for metrics export
+// PublisherBuilder stores an OpenTelemetry MeterProvider trait object.
+// The trait object is not auto-RefUnwindSafe but is used only for metrics export
 // configuration. Inconsistent state after a caught panic cannot affect safety.
 impl UnwindSafe for PublisherBuilder {}
 impl RefUnwindSafe for PublisherBuilder {}
