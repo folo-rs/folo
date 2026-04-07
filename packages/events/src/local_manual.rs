@@ -81,13 +81,6 @@ impl RefUnwindSafe for Inner {}
 // Test hook that fires after each wake() call in Inner::set(). This allows
 // tests to inject re-entrant operations (e.g. calling reset() and re-polling
 // a future) between wake iterations, reproducing scenarios that would
-// otherwise require specific executor behavior.
-#[cfg(test)]
-thread_local! {
-    static HOOK_SET_AFTER_WAKE: std::cell::RefCell<Option<Box<dyn Fn()>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
 impl Inner {
     // Mutating set() to a no-op causes wait futures to hang.
     #[cfg_attr(test, mutants::skip)]
@@ -97,28 +90,16 @@ impl Inner {
         }
         self.is_set.set(true);
 
-        // Wake all waiters using notify_one in a loop.
-        // We complete the wake call before calling notify_one again
-        // because re-entrant wakers may modify the set.
-        let waiters_ptr = self.waiters.get();
-        loop {
-            // SAFETY: Single-threaded — no concurrent access.
-            let waiters = unsafe { &mut *waiters_ptr };
-            let Some(w) = waiters.notify_one() else { break };
+        // Take all current awaiters out of the set. New awaiters
+        // registered by re-entrant wakers go into the original
+        // (now empty) set and are not affected by this set() call.
+        // SAFETY: Single-threaded — no concurrent access.
+        let mut snapshot = std::mem::take(unsafe { &mut *self.waiters.get() });
+
+        // Notify all awaiters from the snapshot. Re-entrant
+        // operations (reset, new wait, etc.) work normally.
+        while let Some(w) = snapshot.notify_one() {
             w.wake();
-
-            #[cfg(test)]
-            HOOK_SET_AFTER_WAKE.with(|hook| {
-                if let Some(f) = hook.borrow().as_ref() {
-                    f();
-                }
-            });
-
-            // If someone called reset() during wake (possibly re-entrantly),
-            // stop waking — the gate has been closed.
-            if !self.is_set.get() {
-                break;
-            }
         }
     }
 
@@ -949,51 +930,83 @@ mod tests {
         assert!(event.try_wait());
     }
 
-    /// Verifies that `set()` terminates even if `reset()` is called
-    /// re-entrantly while the wake loop is in progress.
-    ///
-    /// Without the `is_set` re-check after each wake, `set()` would loop
-    /// forever: it wakes a waiter, the hook resets the event and re-polls
-    /// the future (re-storing a waker), and `set()` rescans from head —
-    /// finding the fresh waker and repeating indefinitely.
     #[test]
-    fn set_terminates_when_reset_called_during_wake_loop() {
-        use std::cell::RefCell;
-        use std::rc::Rc;
+    fn drop_forwarding_with_reentrant_waker_does_not_alias() {
+        use crate::test_helpers::ReentrantWakerData;
 
-        testing::with_watchdog(|| {
-            let event = LocalManualResetEvent::boxed();
-            let future = Box::pin(event.wait());
+        let event = LocalManualResetEvent::boxed();
+        let event_clone = event.clone();
 
-            // First poll: register as a waiter with a noop waker.
-            let waker = Waker::noop();
-            let mut cx = task::Context::from_waker(waker);
-            let future_cell: Rc<RefCell<Pin<Box<LocalManualResetWaitFuture>>>> =
-                Rc::new(RefCell::new(future));
-            assert!(future_cell.borrow_mut().as_mut().poll(&mut cx).is_pending());
+        // future1 uses a noop waker.
+        let mut future1 = Box::pin(event.wait());
+        let noop_waker = Waker::noop();
+        let mut noop_cx = task::Context::from_waker(noop_waker);
+        assert!(future1.as_mut().poll(&mut noop_cx).is_pending());
 
-            // Install hook: after each wake(), reset the event and re-poll
-            // the future so it re-stores a waker. This simulates a
-            // re-entrant waker that resets the event and immediately
-            // re-polls.
-            let event_for_hook = event.clone();
-            let future_for_hook = Rc::clone(&future_cell);
-
-            HOOK_SET_AFTER_WAKE.with(|hook| {
-                *hook.borrow_mut() = Some(Box::new(move || {
-                    event_for_hook.reset();
-                    let w = Waker::noop();
-                    let mut cx = task::Context::from_waker(w);
-                    let _poll = future_for_hook.borrow_mut().as_mut().poll(&mut cx);
-                }));
-            });
-
-            event.set();
-
-            // Cleanup.
-            HOOK_SET_AFTER_WAKE.with(|hook| {
-                *hook.borrow_mut() = None;
-            });
+        // future2 uses a re-entrant waker that calls set().
+        let waker_data = ReentrantWakerData::new(move || {
+            event_clone.set();
         });
+        // SAFETY: Data outlives waker, single-threaded test.
+        let waker = unsafe { waker_data.waker() };
+        let mut reentrant_cx = task::Context::from_waker(&waker);
+        let mut future2 = Box::pin(event.wait());
+        assert!(future2.as_mut().poll(&mut reentrant_cx).is_pending());
+
+        // set() wakes both futures. future2's re-entrant waker
+        // calls set() again, accessing the awaiter set.
+        event.set();
+
+        // Drop future1 after notification — unlinks from list.
+        drop(future1);
+
+        assert!(waker_data.was_woken());
+    }
+
+    #[test]
+    fn reentrant_reset_does_not_skip_awaiters() {
+        use crate::test_helpers::ReentrantWakerData;
+
+        // Register two awaiters A (with re-entrant waker) and B (noop).
+        // A's waker calls reset() + registers a new future C.
+        // Verify: both A and B are notified, C is NOT notified.
+        let event = LocalManualResetEvent::boxed();
+        let event_for_waker = event.clone();
+
+        let waker_data_a = ReentrantWakerData::new(move || {
+            // Re-entrantly reset and register a new awaiter.
+            event_for_waker.reset();
+            let mut new_future = Box::pin(event_for_waker.wait());
+            let noop = Waker::noop();
+            let mut cx = task::Context::from_waker(noop);
+            // C should be pending — the event was just reset.
+            assert!(new_future.as_mut().poll(&mut cx).is_pending());
+            // Intentionally leak the future so C stays registered.
+            std::mem::forget(new_future);
+        });
+        // SAFETY: Data outlives waker, single-threaded test.
+        let waker_a = unsafe { waker_data_a.waker() };
+        let mut cx_a = task::Context::from_waker(&waker_a);
+
+        let noop = Waker::noop();
+        let mut cx_b = task::Context::from_waker(noop);
+
+        // Register A and B.
+        let mut future_a = Box::pin(event.wait());
+        assert!(future_a.as_mut().poll(&mut cx_a).is_pending());
+
+        let mut future_b = Box::pin(event.wait());
+        assert!(future_b.as_mut().poll(&mut cx_b).is_pending());
+
+        // set() should notify BOTH A and B (they were registered
+        // when set was called). C should NOT be notified.
+        event.set();
+
+        // A was woken by the re-entrant waker.
+        assert!(waker_data_a.was_woken());
+
+        // B should also have been notified despite the re-entrant
+        // reset(). Poll B to confirm.
+        assert!(future_b.as_mut().poll(&mut cx_b).is_ready());
     }
 }

@@ -71,49 +71,26 @@ unsafe impl Send for State {}
 // Test hook that fires after each wake() call in set(). This allows tests to
 // inject operations (e.g. calling reset() and re-polling a future) between
 // the wake and the re-acquisition of the lock, reproducing race conditions
-// that would otherwise require precise multi-thread timing.
-#[cfg(test)]
-type SetHookFn = dyn Fn() + Send + Sync;
-
-#[cfg(test)]
-static HOOK_SET_AFTER_WAKE: Mutex<Option<Arc<SetHookFn>>> = Mutex::new(None);
-
 // Mutating set() to a no-op causes wait futures to hang.
 #[cfg_attr(test, mutants::skip)]
 fn set(mutex: &Mutex<State>) {
-    let mut state = mutex.lock().expect(NEVER_POISONED);
-    if state.is_set {
-        return;
-    }
-    state.is_set = true;
+    let mut snapshot = {
+        let mut state = mutex.lock().expect(NEVER_POISONED);
+        if state.is_set {
+            return;
+        }
+        state.is_set = true;
 
-    // Wake all waiters using notify_one in a loop.
-    // We drop the lock before waking each waiter to prevent deadlocks
-    // from re-entrant wakers. After waking, we re-acquire the lock and
-    // call notify_one again because nodes may have been removed during
-    // the unlock window.
-    loop {
-        let Some(w) = state.waiters.notify_one() else {
-            break;
-        };
-        drop(state);
+        // Take all current awaiters out of the set. New awaiters
+        // registered by re-entrant wakers go into the original
+        // (now empty) set and are not affected by this set() call.
+        std::mem::take(&mut state.waiters)
+    };
+
+    // Notify all awaiters from the snapshot. The lock is not held,
+    // so re-entrant operations (reset, new wait, etc.) work normally.
+    while let Some(w) = snapshot.notify_one() {
         w.wake();
-
-        #[cfg(test)]
-        {
-            let hook = HOOK_SET_AFTER_WAKE.lock().expect(NEVER_POISONED).clone();
-            if let Some(hook) = hook {
-                hook();
-            }
-        }
-
-        state = mutex.lock().expect(NEVER_POISONED);
-
-        // If someone called reset() while the lock was released, stop
-        // waking — the gate has been closed.
-        if !state.is_set {
-            break;
-        }
     }
 }
 
@@ -1134,46 +1111,37 @@ mod tests {
         assert!(event.try_wait());
     }
 
-    // --- livelock regression test ---
-
-    /// Verifies that `set()` terminates even if `reset()` is called while
-    /// the wake loop is in progress.
-    ///
-    /// Without the `is_set` re-check after re-acquiring the lock, `set()`
-    /// would loop forever: it wakes a waiter, the hook resets the event
-    /// and re-polls the future (re-storing a waker), and `set()` rescans
-    /// from head — finding the fresh waker and repeating indefinitely.
     #[test]
-    fn set_terminates_when_reset_called_during_wake_loop() {
-        testing::with_watchdog(|| {
-            let event = ManualResetEvent::boxed();
-            let mut future = Box::pin(event.wait());
+    fn reentrant_reset_does_not_skip_awaiters() {
+        use testing::ReentrantWakerData;
 
-            // First poll: register as a waiter with a noop waker.
-            let waker = Waker::noop();
-            let mut cx = task::Context::from_waker(waker);
-            assert!(future.as_mut().poll(&mut cx).is_pending());
+        let event = ManualResetEvent::boxed();
+        let event_for_waker = event.clone();
 
-            // Install hook: after each wake(), reset the event and re-poll
-            // the future so it re-stores a waker. This simulates a scenario
-            // where another thread calls reset() and the executor re-polls
-            // the woken future between set()'s lock drops.
-            let event_for_hook = event.clone();
-            let future_shared: Arc<Mutex<Pin<Box<ManualResetWaitFuture>>>> =
-                Arc::new(Mutex::new(future));
-            let future_for_hook = Arc::clone(&future_shared);
-
-            *HOOK_SET_AFTER_WAKE.lock().unwrap() = Some(Arc::new(move || {
-                event_for_hook.reset();
-                let w = Waker::noop();
-                let mut cx = task::Context::from_waker(w);
-                let _poll = future_for_hook.lock().unwrap().as_mut().poll(&mut cx);
-            }));
-
-            event.set();
-
-            // Cleanup.
-            *HOOK_SET_AFTER_WAKE.lock().unwrap() = None;
+        let waker_data_a = ReentrantWakerData::new(move || {
+            event_for_waker.reset();
+            let mut new_future = Box::pin(event_for_waker.wait());
+            let noop = Waker::noop();
+            let mut cx = task::Context::from_waker(noop);
+            assert!(new_future.as_mut().poll(&mut cx).is_pending());
+            std::mem::forget(new_future);
         });
+        // SAFETY: Data outlives waker, single-threaded test.
+        let waker_a = unsafe { waker_data_a.waker() };
+        let mut cx_a = task::Context::from_waker(&waker_a);
+
+        let noop = Waker::noop();
+        let mut cx_b = task::Context::from_waker(noop);
+
+        let mut future_a = Box::pin(event.wait());
+        assert!(future_a.as_mut().poll(&mut cx_a).is_pending());
+
+        let mut future_b = Box::pin(event.wait());
+        assert!(future_b.as_mut().poll(&mut cx_b).is_pending());
+
+        event.set();
+
+        assert!(waker_data_a.was_woken());
+        assert!(future_b.as_mut().poll(&mut cx_b).is_ready());
     }
 }

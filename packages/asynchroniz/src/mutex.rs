@@ -1169,4 +1169,32 @@ mod tests {
             t.join().unwrap();
         });
     }
+
+    #[test]
+    fn reentrant_waker_does_not_alias() {
+        use testing::ReentrantWakerData;
+
+        let mutex = Mutex::boxed(0_u32);
+        let mutex_for_waker = mutex.clone();
+
+        let waker_data = ReentrantWakerData::new(move || {
+            // Re-entrantly try to lock the same mutex.
+            // The lock was just transferred, so try_lock
+            // returns None.
+            drop(mutex_for_waker.try_lock());
+        });
+        // SAFETY: Data outlives waker, single-threaded test.
+        let waker = unsafe { waker_data.waker() };
+        let mut cx = task::Context::from_waker(&waker);
+
+        let guard = mutex.try_lock().unwrap();
+        let mut future = Box::pin(mutex.lock());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+
+        // Drop the guard — transfers lock to the future,
+        // calling the re-entrant waker which calls try_lock().
+        drop(guard);
+
+        assert!(waker_data.was_woken());
+    }
 }

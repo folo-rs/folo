@@ -1316,4 +1316,31 @@ mod tests {
         assert!(f1.as_mut().poll(&mut cx).is_ready());
         assert!(f2.as_mut().poll(&mut cx).is_ready());
     }
+
+    #[test]
+    fn reentrant_waker_does_not_alias() {
+        use testing::ReentrantWakerData;
+
+        let sem = Semaphore::boxed(1);
+        let sem_for_waker = sem.clone();
+
+        let waker_data = ReentrantWakerData::new(move || {
+            // Re-entrantly try to acquire from the same
+            // semaphore.
+            drop(sem_for_waker.try_acquire());
+        });
+        // SAFETY: Data outlives waker, single-threaded test.
+        let waker = unsafe { waker_data.waker() };
+        let mut cx = task::Context::from_waker(&waker);
+
+        let permit = sem.try_acquire().unwrap();
+        let mut future = Box::pin(sem.acquire());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+
+        // Drop the permit — wakes the future via the
+        // re-entrant waker which calls try_acquire().
+        drop(permit);
+
+        assert!(waker_data.was_woken());
+    }
 }
