@@ -89,7 +89,7 @@ async fn main() {
 
     // Create the nm-to-OpenTelemetry publisher.
     let mut nm_publisher = Publisher::builder()
-        .provider(provider.clone())
+        .provider(provider)
         .clock(clock)
         .interval(Duration::from_secs(2))
         .build();
