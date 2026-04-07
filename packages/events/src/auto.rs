@@ -1194,4 +1194,32 @@ mod tests {
         assert!(event.try_wait());
         assert!(!event.try_wait());
     }
+
+    #[test]
+    fn set_with_reentrant_waker_does_not_deadlock() {
+        use testing::ReentrantWakerData;
+
+        let event = AutoResetEvent::boxed();
+        let event_for_waker = event.clone();
+
+        let waker_data = ReentrantWakerData::new(move || {
+            // Re-entrantly call set() on the same event.
+            event_for_waker.set();
+        });
+        // SAFETY: Data outlives waker, test is single-threaded.
+        let waker = unsafe { waker_data.waker() };
+        let mut cx = task::Context::from_waker(&waker);
+
+        let mut future = Box::pin(event.wait());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+
+        // set() notifies the future, calling the re-entrant waker
+        // which calls set() again. The second set() should store
+        // the signal (no waiters left).
+        event.set();
+
+        assert!(waker_data.was_woken());
+        // The re-entrant set() stored a signal.
+        assert!(event.try_wait());
+    }
 }

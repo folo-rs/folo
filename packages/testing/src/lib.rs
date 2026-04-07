@@ -4,9 +4,13 @@
 
 //! Private helpers for testing and examples in Folo packages.
 
+mod reentrant_waker;
+
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+
+pub use reentrant_waker::ReentrantWakerData;
 
 #[cfg(windows)]
 mod windows;
