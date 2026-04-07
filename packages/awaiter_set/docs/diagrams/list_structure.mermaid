@@ -2,9 +2,9 @@
 title: Awaiter lifecycle
 ---
 stateDiagram-v2
-    [*] --> Idle: Awaiter::new()
-    Idle --> Waiting: AwaiterSet::register()
-    Waiting --> Waiting: AwaiterSet::register() (updates waker)
-    Waiting --> Notified: AwaiterSet::notify_one()
-    Waiting --> Idle: AwaiterSet::unregister()
-    Notified --> Idle: Awaiter::take_notification()
+    [*] --> Idle : new
+    Idle --> Waiting : register
+    Waiting --> Waiting : register again updates waker
+    Waiting --> Notified : notify_one
+    Waiting --> Idle : unregister
+    Notified --> Idle : take_notification
