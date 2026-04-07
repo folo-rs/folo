@@ -42,25 +42,28 @@ pub(crate) enum State {
     Notified { user_data: usize },
 }
 
-/// An awaiter that can be registered in an [`AwaiterSet`].
+/// Represents a single waiting future in an [`AwaiterSet`][crate::AwaiterSet].
 ///
-/// Embed an `Awaiter` in your async future to park it until a
-/// synchronization primitive signals it. When parked, the awaiter
-/// holds a [`Waker`] that the primitive uses to wake the future.
+/// Embed an `Awaiter` in each async future that may need to wait for
+/// a synchronization primitive. The primitive registers the awaiter
+/// via [`AwaiterSet::register()`][crate::AwaiterSet::register] and later wakes it via
+/// [`AwaiterSet::notify_one()`][crate::AwaiterSet::notify_one].
 ///
-/// An awaiter is removed from the set either by the primitive
-/// (when it grants a resource like a lock or permit) or by the
-/// future's drop handler (if the future is cancelled).
+/// # Lifecycle
+///
+/// An awaiter goes through three states:
+///
+/// 1. **Idle** — just created or after notification was consumed.
+/// 2. **Waiting** — registered in a set, holding a waker.
+/// 3. **Notified** — removed from the set by the primitive; the
+///    owning future should complete with `Ready` on its next poll.
 ///
 /// # Safety model
 ///
-/// The `register`, `unregister`, `take_notification`, and
-/// `is_notified` methods are `unsafe` because the awaiter's
-/// internal state is shared with the [`AwaiterSet`] that manages
-/// it. The caller must ensure that all access to the awaiter and
-/// its set is serialized — for thread-safe primitives this means
-/// holding the lock that protects the set; for single-threaded
-/// primitives this is guaranteed by the `!Send` constraint.
+/// The `take_notification` and `is_notified` methods are `unsafe`
+/// because the awaiter's state is shared with its [`AwaiterSet`][crate::AwaiterSet].
+/// The caller must hold the same lock that protects the set (or
+/// confine access to a single thread).
 pub struct Awaiter {
     pub(crate) state: UnsafeCell<State>,
     _pinned: PhantomPinned,
@@ -76,9 +79,11 @@ impl Awaiter {
         }
     }
 
-    /// Returns `true` if the awaiter is in an active lifecycle
-    /// (Waiting or Notified). Drop handlers use this to decide
-    /// whether cleanup (unregistering or forwarding) is needed.
+    /// Returns `true` if the awaiter is currently registered in a
+    /// set or has been notified but not yet consumed.
+    ///
+    /// A future's [`Drop`] handler uses this to decide whether
+    /// cleanup (unregistering or forwarding a resource) is needed.
     #[must_use]
     pub fn is_registered(&self) -> bool {
         // SAFETY: Reading the discriminant does not race because
@@ -86,16 +91,15 @@ impl Awaiter {
         !matches!(unsafe { &*self.state.get() }, State::Idle)
     }
 
-    /// Checks whether the synchronization primitive has notified
-    /// this awaiter, and if so, transitions back to Idle.
+    /// Consumes a pending notification, returning `true` if one
+    /// was present.
     ///
-    /// Returns `true` if the awaiter is in the Notified state
-    /// (meaning the primitive took it from the set and called
-    /// [`notify()`][Self::notify]). The future should then complete
-    /// with `Ready`.
+    /// If the primitive has notified this awaiter (via
+    /// [`AwaiterSet::notify_one()`][crate::AwaiterSet::notify_one]), this method returns `true`
+    /// and resets the awaiter to the Idle state. The future should
+    /// then complete with `Poll::Ready`.
     ///
-    /// This is typically the first check in a future's `poll()`
-    /// method.
+    /// This is typically the first check in a future's `poll()`.
     ///
     /// # Safety
     ///
@@ -117,14 +121,13 @@ impl Awaiter {
         }
     }
 
-    /// Checks whether this awaiter has been notified, without
-    /// changing its state.
+    /// Returns `true` if this awaiter has been notified.
     ///
-    /// Used in the future's [`Drop`] implementation to determine
-    /// whether the primitive granted a resource (lock, permit,
-    /// signal) to this awaiter. If so, the drop handler must
-    /// forward the resource to the next awaiter rather than
-    /// silently discarding it.
+    /// Unlike [`take_notification()`][Self::take_notification], this
+    /// does not consume the notification. Used in a future's
+    /// [`Drop`] handler to decide whether the primitive granted a
+    /// resource (lock, permit, signal) that must be forwarded to
+    /// another awaiter instead of being silently discarded.
     ///
     /// # Safety
     ///

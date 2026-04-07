@@ -1,49 +1,39 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-//! Zero-allocation awaiter tracking for async synchronization
-//! primitives.
+//! Awaiter tracking for async synchronization primitives.
 //!
-//! When building async locks, semaphores, or events, futures that
-//! cannot complete immediately need to be parked and later woken.
-//! This crate provides the underlying set for that purpose: each
-//! awaiter lives inside the awaiting future itself, so no heap
-//! allocation is needed to register or remove awaiters.
+//! Async synchronization primitives (mutexes, semaphores, events)
+//! need a way to track which futures are waiting and wake them when
+//! a resource becomes available. This crate provides that mechanism.
 //!
-//! # When to use this crate
+//! # Overview
 //!
-//! Use `awaiter_set` when you are implementing a new synchronization
-//! primitive and need an efficient, allocation-free mechanism to track
-//! pending futures. The [`asynchroniz`] and [`events`] crates are
-//! built on top of this crate.
+//! A synchronization primitive owns an [`AwaiterSet`]. Each future
+//! that cannot complete immediately embeds an [`Awaiter`] and
+//! registers it with the set. When the primitive wants to wake one
+//! future (e.g. on unlock or permit release), it calls
+//! [`AwaiterSet::notify_one()`], which removes an awaiter from the
+//! set and returns its waker.
 //!
-//! [`asynchroniz`]: https://docs.rs/asynchroniz
-//! [`events`]: https://docs.rs/events
-//!
-//! # Core types
-//!
-//! * [`AwaiterSet`] — the set of registered awaiters, managed by the
-//!   synchronization primitive.
-//! * [`Awaiter`] — a single awaiter, embedded inside a future.
 #![doc = simple_mermaid::mermaid!("../docs/diagrams/list_structure.mermaid")]
 //!
 //! # Synchronization
 //!
-//! The set has no internal synchronization. Callers must ensure
-//! exclusive access for all operations — for example, by protecting
-//! all access with a [`Mutex`][std::sync::Mutex] or equivalent, or by
-//! confining the containing type to a single thread.
+//! Neither `AwaiterSet` nor `Awaiter` has internal synchronization.
+//! The synchronization primitive must protect all access to both the
+//! set and its registered awaiters with a single lock (or confine
+//! them to a single thread). This is because the primitive typically
+//! needs to atomically update its own state (e.g. a `locked` flag)
+//! together with the set.
 //!
 //! # Re-entrancy
 //!
-//! Synchronization primitives that use this crate must be aware that
-//! calling [`Waker::wake()`][std::task::Waker::wake] on an awaiter's
-//! stored waker may cause the executor to immediately re-poll the
-//! woken future, which may in turn attempt to register a new awaiter
-//! in the same set. To prevent aliased mutable access, the primitive
-//! must release its lock before calling `wake()` and re-acquire it
-//! afterward, since the set may have changed during the unlock
-//! window.
+//! Calling [`Waker::wake()`][std::task::Waker::wake] may cause the
+//! executor to immediately re-poll the woken future, which may try
+//! to register a new awaiter in the same set. To prevent this from
+//! racing with the current operation, the primitive must release its
+//! lock before calling `wake()`.
 
 pub(crate) mod awaiter;
 mod set;

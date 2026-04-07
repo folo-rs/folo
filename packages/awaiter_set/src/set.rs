@@ -5,13 +5,17 @@ use std::task::Waker;
 
 use crate::awaiter::{Awaiter, State};
 
-/// A set of pinned [`Awaiter`]s awaiting notification.
+/// Tracks awaiters for a synchronization primitive.
 ///
-/// The set does not own its nodes. Nodes are embedded in async futures
-/// and linked/unlinked as awaiters register and complete.
+/// Owned by the primitive (e.g. a mutex or event). Futures that
+/// cannot complete immediately [`register()`][Self::register] an
+/// [`Awaiter`] with this set. When the primitive grants a resource,
+/// it calls [`notify_one()`][Self::notify_one] to remove an awaiter,
+/// mark it as notified, and return its [`Waker`].
 ///
-/// The set is `Send` but not `Sync` — it can be moved between threads
-/// but all access must be serialized by the caller.
+/// The set is `Send` but not `Sync`. The primitive must serialize
+/// all access — see the [crate-level documentation](crate) for
+/// details.
 pub struct AwaiterSet {
     head: *mut Awaiter,
     tail: *mut Awaiter,
@@ -42,9 +46,11 @@ impl AwaiterSet {
         self.head.is_null()
     }
 
-    /// Returns a shared reference to the next awaiter to be taken.
+    /// Returns a shared reference to an awaiter in the set.
     ///
-    /// Returns `None` if the set is empty.
+    /// Useful for inspecting awaiter metadata (e.g. checking
+    /// [`user_data()`][Awaiter::user_data] before deciding whether
+    /// to notify). Returns `None` if the set is empty.
     #[must_use]
     pub fn peek(&self) -> Option<&Awaiter> {
         if self.head.is_null() {
@@ -116,12 +122,14 @@ impl AwaiterSet {
         node.set_prev(ptr::null_mut());
     }
 
-    /// Removes one awaiter from the set and notifies it.
+    /// Removes one awaiter and returns its waker.
     ///
-    /// Transitions the awaiter from Waiting to Notified and returns
-    /// its stored waker. The caller should invoke
-    /// [`Waker::wake()`] outside any lock scope to avoid re-entrancy
-    /// issues.
+    /// The awaiter transitions to the Notified state. The future
+    /// that owns it will observe this on its next poll via
+    /// [`Awaiter::take_notification()`] and complete with `Ready`.
+    ///
+    /// The caller should invoke [`Waker::wake()`] outside any lock
+    /// scope to prevent re-entrancy deadlocks.
     ///
     /// Returns `None` if the set is empty.
     pub fn notify_one(&mut self) -> Option<Waker> {
@@ -129,17 +137,17 @@ impl AwaiterSet {
         awaiter.notify()
     }
 
-    /// Registers an awaiter in this set with the given waker.
+    /// Registers an awaiter with the given waker.
     ///
-    /// If the awaiter is idle, it is inserted into the set. If it is
-    /// already registered (subsequent poll), only the waker is
-    /// updated.
+    /// If the awaiter is idle (first poll), it is inserted into the
+    /// set. If it is already registered (subsequent poll), only the
+    /// stored waker is updated.
     ///
     /// # Safety
     ///
     /// The awaiter and the set must be protected by the same lock
     /// (or confined to a single thread). The awaiter must remain
-    /// valid until it is removed from the set.
+    /// pinned and valid until it is removed from the set.
     pub unsafe fn register(&mut self, awaiter: Pin<&mut Awaiter>, waker: Waker) {
         // SAFETY: Caller guarantees the same requirements.
         unsafe {
@@ -147,18 +155,17 @@ impl AwaiterSet {
         }
     }
 
-    /// Registers an awaiter in this set with a waker and
-    /// caller-defined data.
+    /// Registers an awaiter with a waker and caller-defined data.
     ///
     /// Behaves like [`register()`][Self::register] but also sets the
-    /// [`user_data`][Awaiter::user_data] value (e.g. the number of
-    /// permits a semaphore awaiter requests).
+    /// awaiter's [`user_data`][Awaiter::user_data] (e.g. the number
+    /// of permits a semaphore awaiter requests).
     ///
     /// # Safety
     ///
     /// The awaiter and the set must be protected by the same lock
     /// (or confined to a single thread). The awaiter must remain
-    /// valid until it is removed from the set.
+    /// pinned and valid until it is removed from the set.
     pub unsafe fn register_with_data(
         &mut self,
         awaiter: Pin<&mut Awaiter>,
@@ -197,14 +204,16 @@ impl AwaiterSet {
         }
     }
 
-    /// Removes an awaiter from this set if it is currently
-    /// registered. No-op if the awaiter is idle or notified.
+    /// Removes an awaiter from the set, returning it to the Idle
+    /// state. No-op if the awaiter is not currently registered.
+    ///
+    /// Called by a future's drop handler when the future is cancelled
+    /// before being notified.
     ///
     /// # Safety
     ///
     /// The awaiter and the set must be protected by the same lock
-    /// (or confined to a single thread). If registered, the awaiter
-    /// must be in this set (not in a different set).
+    /// (or confined to a single thread).
     pub unsafe fn unregister(&mut self, awaiter: Pin<&mut Awaiter>) {
         // SAFETY: We do not move the awaiter.
         let aw = unsafe { awaiter.get_unchecked_mut() };

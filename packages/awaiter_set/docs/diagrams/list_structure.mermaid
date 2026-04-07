@@ -1,19 +1,10 @@
 ---
-title: Awaiter set architecture
+title: Awaiter lifecycle
 ---
-graph TB
-    subgraph Primitive["Synchronization primitive (e.g. Mutex)"]
-        STATE["state + AwaiterSet"]
-    end
-
-    subgraph FutureA["Lock/Acquire future A"]
-        AWAITER_A["Awaiter"]
-    end
-
-    subgraph FutureB["Lock/Acquire future B"]
-        AWAITER_B["Awaiter"]
-    end
-
-    STATE -- "registered" --> AWAITER_A
-    AWAITER_A -- "next" --> AWAITER_B
-    AWAITER_B -- "prev" --> AWAITER_A
+stateDiagram-v2
+    [*] --> Idle: Awaiter::new()
+    Idle --> Waiting: AwaiterSet::register()
+    Waiting --> Waiting: AwaiterSet::register() (updates waker)
+    Waiting --> Notified: AwaiterSet::notify_one()
+    Waiting --> Idle: AwaiterSet::unregister()
+    Notified --> Idle: Awaiter::take_notification()
