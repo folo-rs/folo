@@ -349,4 +349,14 @@ mod tests {
 
         // If this completes without panic, state tracking is working.
     }
+
+    #[test]
+    fn builder_debug_formatting() {
+        let (provider, _exporter) = create_test_provider();
+
+        let builder = Publisher::builder().provider(provider);
+        let debug = format!("{builder:?}");
+
+        assert!(debug.contains("PublisherBuilder"));
+    }
 }
