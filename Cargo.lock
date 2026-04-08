@@ -179,7 +179,7 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
 name = "cargo-detect-package"
-version = "1.0.15"
+version = "1.0.16"
 dependencies = [
  "argh",
  "mockall",
@@ -1061,7 +1061,7 @@ dependencies = [
 
 [[package]]
 name = "nm_otel"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "foldhash 0.2.0",
  "futures",
