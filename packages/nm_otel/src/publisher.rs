@@ -1,12 +1,12 @@
 //! Publisher for exporting nm metrics to OpenTelemetry.
 
+use std::fmt;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::time::Duration;
 
 use futures::StreamExt;
 use nm::Report;
-use opentelemetry::metrics::{Meter, MeterProvider as _};
-use opentelemetry_sdk::metrics::SdkMeterProvider;
+use opentelemetry::metrics::{Meter, MeterProvider};
 use tick::{Clock, PeriodicTimer};
 
 use crate::mapping::{InstrumentRegistry, export_report};
@@ -37,16 +37,28 @@ const DEFAULT_METER_NAME: &str = "nm";
 ///     .interval(Duration::from_secs(5))
 ///     .build();
 /// ```
-#[derive(Debug)]
 pub struct PublisherBuilder {
-    provider: Option<SdkMeterProvider>,
+    provider: Option<Box<dyn MeterProvider>>,
     clock: Option<Clock>,
     interval: Duration,
     meter_name: &'static str,
 }
 
-// PublisherBuilder wraps OpenTelemetry SDK types that use trait objects internally.
-// The trait objects are not auto-RefUnwindSafe but are used only for metrics export
+// dyn MeterProvider does not implement Debug, so we provide a manual implementation
+// that omits the provider field.
+impl fmt::Debug for PublisherBuilder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PublisherBuilder")
+            .field("provider", &self.provider.as_ref().map(|_| ".."))
+            .field("clock", &self.clock)
+            .field("interval", &self.interval)
+            .field("meter_name", &self.meter_name)
+            .finish()
+    }
+}
+
+// PublisherBuilder stores an OpenTelemetry MeterProvider trait object.
+// The trait object is not auto-RefUnwindSafe but is used only for metrics export
 // configuration. Inconsistent state after a caught panic cannot affect safety.
 impl UnwindSafe for PublisherBuilder {}
 impl RefUnwindSafe for PublisherBuilder {}
@@ -63,10 +75,11 @@ impl PublisherBuilder {
 
     /// Sets the OpenTelemetry meter provider.
     ///
+    /// Accepts any [`MeterProvider`] implementation.
     /// This is required - the builder will panic if not set.
     #[must_use]
-    pub fn provider(mut self, provider: SdkMeterProvider) -> Self {
-        self.provider = Some(provider);
+    pub fn provider(mut self, provider: impl MeterProvider + 'static) -> Self {
+        self.provider = Some(Box::new(provider));
         self
     }
 
@@ -141,7 +154,10 @@ impl PublisherBuilder {
 /// # let exporter = InMemoryMetricExporter::default();
 /// # let reader = PeriodicReader::builder(exporter).build();
 /// # let provider = SdkMeterProvider::builder().with_reader(reader).build();
-/// # let mut publisher = Publisher::builder().provider(provider).clock(Clock::new_frozen()).build();
+/// # let mut publisher = Publisher::builder()
+/// #     .provider(provider)
+/// #     .clock(Clock::new_frozen())
+/// #     .build();
 /// # async fn example(mut publisher: nm_otel::Publisher) {
 /// // Spawn as a background task in your async runtime.
 /// publisher.publish_forever().await;
@@ -192,7 +208,8 @@ impl Publisher {
 
     /// Runs the publisher forever, collecting and exporting metrics at each interval.
     ///
-    /// This method never returns under normal operation. Drop the future to cancel the publishing.
+    /// This method never returns under normal operation. Drop the future to cancel
+    /// the publishing.
     pub async fn publish_forever(&mut self) {
         let mut timer = PeriodicTimer::new(&self.clock, self.interval);
 
@@ -227,7 +244,7 @@ impl Publisher {
 mod tests {
     use std::panic::{RefUnwindSafe, UnwindSafe};
 
-    use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader};
+    use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
     use static_assertions::assert_impl_all;
 
     use super::*;
@@ -331,5 +348,15 @@ mod tests {
         publisher.run_one_iteration();
 
         // If this completes without panic, state tracking is working.
+    }
+
+    #[test]
+    fn builder_debug_formatting() {
+        let (provider, _exporter) = create_test_provider();
+
+        let builder = Publisher::builder().provider(provider);
+        let debug = format!("{builder:?}");
+
+        assert!(debug.contains("PublisherBuilder"));
     }
 }
