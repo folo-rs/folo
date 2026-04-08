@@ -174,8 +174,10 @@ impl Scheduler {
                 .expect(NEVER_POISONED)
                 .push_back(dyn_task);
             trace!(
+                pool_name = self.inner.pool_name.as_str(),
                 pool_id = self.inner.pool_id,
-                processor_id, "spawned urgent task"
+                processor_id,
+                "spawned urgent task"
             );
         } else {
             state
@@ -184,8 +186,10 @@ impl Scheduler {
                 .expect(NEVER_POISONED)
                 .push_back(dyn_task);
             trace!(
+                pool_name = self.inner.pool_name.as_str(),
                 pool_id = self.inner.pool_id,
-                processor_id, "spawned regular task"
+                processor_id,
+                "spawned regular task"
             );
         }
 
@@ -230,8 +234,10 @@ impl Scheduler {
                 .expect(NEVER_POISONED)
                 .push_back(dyn_task);
             trace!(
+                pool_name = self.inner.pool_name.as_str(),
                 pool_id = self.inner.pool_id,
-                processor_id, "spawned urgent fire-and-forget task"
+                processor_id,
+                "spawned urgent fire-and-forget task"
             );
         } else {
             state
@@ -240,8 +246,10 @@ impl Scheduler {
                 .expect(NEVER_POISONED)
                 .push_back(dyn_task);
             trace!(
+                pool_name = self.inner.pool_name.as_str(),
                 pool_id = self.inner.pool_id,
-                processor_id, "spawned fire-and-forget task"
+                processor_id,
+                "spawned fire-and-forget task"
             );
         }
 

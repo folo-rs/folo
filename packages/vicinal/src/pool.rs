@@ -42,6 +42,7 @@ thread_local! {
 
 pub(crate) struct PoolInner {
     pub(crate) pool_id: u64,
+    pub(crate) pool_name: String,
     pub(crate) hardware: SystemHardware,
     pub(crate) registry: ProcessorRegistry,
     pub(crate) workers_per_processor: NonZero<u32>,
@@ -56,6 +57,7 @@ impl fmt::Debug for PoolInner {
 
         f.debug_struct(type_name::<Self>())
             .field("pool_id", &self.pool_id)
+            .field("pool_name", &self.pool_name)
             .field("workers_per_processor", &self.workers_per_processor)
             .field("worker_count", &handle_count)
             .finish_non_exhaustive()
@@ -92,8 +94,8 @@ impl PoolInner {
             let inner_clone = Arc::clone(self);
             let handle = thread::Builder::new()
                 .name(format!(
-                    "vicinal-{}-{}-{}",
-                    inner_clone.pool_id, processor_id, worker_index
+                    "{}-{}-{}",
+                    inner_clone.pool_name, processor_id, worker_index
                 ))
                 .spawn(move || {
                     // Pin worker thread to the target processor for cache locality.
@@ -108,13 +110,19 @@ impl PoolInner {
                     }
 
                     debug!(
+                        pool_name = inner_clone.pool_name.as_str(),
                         pool_id = inner_clone.pool_id,
-                        processor_id, worker_index, "worker thread started"
+                        processor_id,
+                        worker_index,
+                        "worker thread started"
                     );
                     worker_loop(&inner_clone, processor_id, worker_index);
                     debug!(
+                        pool_name = inner_clone.pool_name.as_str(),
                         pool_id = inner_clone.pool_id,
-                        processor_id, worker_index, "worker thread exiting"
+                        processor_id,
+                        worker_index,
+                        "worker thread exiting"
                     );
                 })
                 .expect("failed to spawn worker thread: thread spawning failure is not supported");
@@ -194,14 +202,20 @@ fn worker_loop(inner: &PoolInner, processor_id: ProcessorId, worker_index: u32) 
         match core.run_one_iteration() {
             IterationResult::ExecutedUrgent => {
                 trace!(
+                    pool_name = inner.pool_name.as_str(),
                     pool_id = inner.pool_id,
-                    processor_id, worker_index, "executed urgent task"
+                    processor_id,
+                    worker_index,
+                    "executed urgent task"
                 );
             }
             IterationResult::ExecutedRegular => {
                 trace!(
+                    pool_name = inner.pool_name.as_str(),
                     pool_id = inner.pool_id,
-                    processor_id, worker_index, "executed regular task"
+                    processor_id,
+                    worker_index,
+                    "executed regular task"
                 );
             }
             IterationResult::Shutdown => {
@@ -298,6 +312,7 @@ impl Drop for Pool {
 /// Builder for configuring a [`Pool`].
 #[derive(Debug)]
 pub struct PoolBuilder {
+    name: Option<String>,
     workers_per_processor: NonZero<u32>,
     hardware: Option<SystemHardware>,
 }
@@ -305,9 +320,24 @@ pub struct PoolBuilder {
 impl PoolBuilder {
     fn new() -> Self {
         Self {
+            name: None,
             workers_per_processor: DEFAULT_WORKERS_PER_PROCESSOR,
             hardware: None,
         }
+    }
+
+    /// Sets the name of the pool, used as a prefix in worker thread names.
+    ///
+    /// Thread names follow the pattern `{name}-{processor_id}-{worker_index}`. For example,
+    /// a pool named `"my_pool"` with two workers on processor 33 will have threads named
+    /// `my_pool-33-0` and `my_pool-33-1`.
+    ///
+    /// When no name is specified, the default is `vicinal-{N}` where `N` is an
+    /// auto-incrementing counter (e.g. `vicinal-0`, `vicinal-1`).
+    #[must_use]
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
     }
 
     /// Sets the number of worker threads per processor.
@@ -335,8 +365,12 @@ impl PoolBuilder {
             .hardware
             .unwrap_or_else(|| SystemHardware::current().clone());
 
+        let pool_id = NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed);
+        let pool_name = self.name.unwrap_or_else(|| format!("vicinal-{pool_id}"));
+
         let inner = Arc::new(PoolInner {
-            pool_id: NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed),
+            pool_id,
+            pool_name,
             registry: ProcessorRegistry::new(&hardware),
             hardware,
             workers_per_processor: self.workers_per_processor,
@@ -406,8 +440,10 @@ mod tests {
         let hardware =
             SystemHardware::fake(HardwareBuilder::from_counts(nz!(2_usize), nz!(1_usize)));
 
+        let pool_id = super::NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed);
         let inner = Arc::new(super::PoolInner {
-            pool_id: super::NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed),
+            pool_id,
+            pool_name: format!("vicinal-{pool_id}"),
             registry: super::ProcessorRegistry::new(&hardware),
             hardware,
             workers_per_processor: nz!(1_u32),
@@ -492,8 +528,10 @@ mod tests {
                 let hardware =
                     SystemHardware::fake(HardwareBuilder::from_counts(nz!(2_usize), nz!(1_usize)));
 
+                let pool_id = super::NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed);
                 let inner = Arc::new(super::PoolInner {
-                    pool_id: super::NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed),
+                    pool_id,
+                    pool_name: format!("vicinal-{pool_id}"),
                     registry: super::ProcessorRegistry::new(&hardware),
                     hardware,
                     workers_per_processor: nz!(1_u32),
@@ -527,6 +565,67 @@ mod tests {
                 // All handles should have been joined (none leaked).
                 assert!(inner.worker_handles.lock().unwrap().is_empty());
             });
+        });
+    }
+
+    #[test]
+    fn pool_builder_accepts_custom_name() {
+        let pool = Pool::builder().name("my_pool").build();
+        assert_eq!(pool.inner.pool_name, "my_pool");
+    }
+
+    #[test]
+    fn pool_default_name_uses_vicinal_prefix() {
+        let pool = Pool::new();
+        assert!(pool.inner.pool_name.starts_with("vicinal-"));
+    }
+
+    #[test]
+    fn worker_threads_use_custom_pool_name() {
+        testing::with_watchdog(|| {
+            let hardware =
+                SystemHardware::fake(HardwareBuilder::from_counts(nz!(1_usize), nz!(1_usize)));
+
+            let pool = Pool::builder()
+                .name("test_pool")
+                .hardware(hardware)
+                .workers_per_processor(nz!(1_u32))
+                .build();
+
+            let scheduler = pool.scheduler();
+
+            let thread_name = futures::executor::block_on(
+                scheduler.spawn(|| thread::current().name().unwrap().to_owned()),
+            );
+
+            assert!(
+                thread_name.starts_with("test_pool-"),
+                "expected thread name to start with 'test_pool-', got: {thread_name}"
+            );
+        });
+    }
+
+    #[test]
+    fn worker_threads_use_default_name_when_none_specified() {
+        testing::with_watchdog(|| {
+            let hardware =
+                SystemHardware::fake(HardwareBuilder::from_counts(nz!(1_usize), nz!(1_usize)));
+
+            let pool = Pool::builder()
+                .hardware(hardware)
+                .workers_per_processor(nz!(1_u32))
+                .build();
+
+            let scheduler = pool.scheduler();
+
+            let thread_name = futures::executor::block_on(
+                scheduler.spawn(|| thread::current().name().unwrap().to_owned()),
+            );
+
+            assert!(
+                thread_name.starts_with("vicinal-"),
+                "expected thread name to start with 'vicinal-', got: {thread_name}"
+            );
         });
     }
 }
