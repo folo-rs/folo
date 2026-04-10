@@ -123,6 +123,9 @@ fn release_permits(state_mutex: &Mutex<SemaphoreState>, count: usize) {
 /// successful.
 ///
 /// Must be called while holding the state mutex.
+// Mutating try_wake_head to return None causes acquire futures
+// to hang because waiters are never woken despite available permits.
+#[cfg_attr(test, mutants::skip)]
 fn try_wake_head(state: &mut SemaphoreState) -> Option<Waker> {
     // SAFETY: Caller holds the lock.
     let head = unsafe { state.waiters.peek() }?;

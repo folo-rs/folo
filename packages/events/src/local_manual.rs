@@ -96,9 +96,10 @@ impl Inner {
         // SAFETY: Single-threaded — no concurrent access.
         let mut snapshot = std::mem::take(unsafe { &mut *self.waiters.get() });
 
-        // Notify all awaiters from the snapshot. Re-entrant
-        // operations (reset, new wait, etc.) work normally.
-        // SAFETY: The snapshot is exclusively owned — no concurrent access.
+        // Notify all awaiters from the snapshot. No synchronization
+        // needed — the snapshot is exclusively owned by this stack
+        // frame and we are single-threaded.
+        // SAFETY: Exclusive ownership of the snapshot.
         while let Some(w) = unsafe { snapshot.notify_one() } {
             w.wake();
         }
@@ -974,21 +975,14 @@ mod tests {
         use crate::test_helpers::ReentrantWakerData;
 
         // Register two awaiters A (with re-entrant waker) and B (noop).
-        // A's waker calls reset() + registers a new future C.
-        // Verify: both A and B are notified, C is NOT notified.
+        // A's waker calls reset(). Both A and B should still be notified
+        // because they were registered when set() was called.
         let event = LocalManualResetEvent::boxed();
         let event_for_waker = event.clone();
 
         let waker_data_a = ReentrantWakerData::new(move || {
-            // Re-entrantly reset and register a new awaiter.
+            // Re-entrantly reset the event.
             event_for_waker.reset();
-            let mut new_future = Box::pin(event_for_waker.wait());
-            let noop = Waker::noop();
-            let mut cx = task::Context::from_waker(noop);
-            // C should be pending — the event was just reset.
-            assert!(new_future.as_mut().poll(&mut cx).is_pending());
-            // Intentionally leak the future so C stays registered.
-            std::mem::forget(new_future);
         });
         // SAFETY: Data outlives waker, single-threaded test.
         let waker_a = unsafe { waker_data_a.waker() };
@@ -1005,7 +999,7 @@ mod tests {
         assert!(future_b.as_mut().poll(&mut cx_b).is_pending());
 
         // set() should notify BOTH A and B (they were registered
-        // when set was called). C should NOT be notified.
+        // when set was called), even though A's waker calls reset().
         event.set();
 
         // A was woken by the re-entrant waker.

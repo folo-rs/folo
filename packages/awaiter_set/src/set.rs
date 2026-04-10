@@ -7,15 +7,20 @@ use crate::awaiter::{Awaiter, State};
 
 /// Tracks awaiters for a synchronization primitive.
 ///
-/// Owned by the primitive (e.g. a mutex or event). Futures that
-/// cannot complete immediately [`register()`][Self::register] an
-/// [`Awaiter`] with this set. When the primitive grants a resource,
-/// it calls [`notify_one()`][Self::notify_one] to remove an awaiter,
-/// mark it as notified, and return its [`Waker`].
+/// Owned by the primitive (e.g. a mutex or event). Asynchronous
+/// futures that cannot complete immediately
+/// [`register()`][Self::register] an [`Awaiter`] with this set.
+/// When the primitive grants a resource, it calls
+/// [`notify_one()`][Self::notify_one] to remove an awaiter and
+/// return its [`Waker`].
 ///
-/// The set is `Send` but not `Sync`. The primitive must serialize
-/// all access — see the [crate-level documentation](crate) for
-/// details.
+/// # Synchronization
+///
+/// The set has no internal synchronization. The primitive must
+/// serialize all access to both the set and every [`Awaiter`]
+/// registered with it — for example, by protecting them with a
+/// single [`Mutex`][std::sync::Mutex] or by confining the
+/// containing type to a single thread.
 pub struct AwaiterSet {
     head: *mut Awaiter,
     tail: *mut Awaiter,

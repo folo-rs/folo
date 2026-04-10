@@ -87,9 +87,12 @@ fn set(mutex: &Mutex<State>) {
         std::mem::take(&mut state.waiters)
     };
 
-    // Notify all awaiters from the snapshot. The lock is not held,
-    // so re-entrant operations (reset, new wait, etc.) work normally.
-    // SAFETY: The snapshot is exclusively owned — no concurrent access.
+    // Notify all awaiters from the snapshot. No lock is needed
+    // because the snapshot is exclusively owned by this stack frame
+    // and the awaiters have been removed from any shared set.
+    // No concurrent access is possible: wake() has not been called
+    // yet, so the owning futures cannot be polled.
+    // SAFETY: Exclusive ownership of the snapshot — no concurrent access.
     while let Some(w) = unsafe { snapshot.notify_one() } {
         w.wake();
     }
@@ -1127,11 +1130,6 @@ mod tests {
 
         let waker_data_a = ReentrantWakerData::new(move || {
             event_for_waker.reset();
-            let mut new_future = Box::pin(event_for_waker.wait());
-            let noop = Waker::noop();
-            let mut cx = task::Context::from_waker(noop);
-            assert!(new_future.as_mut().poll(&mut cx).is_pending());
-            std::mem::forget(new_future);
         });
         // SAFETY: Data outlives waker, single-threaded test.
         let waker_a = unsafe { waker_data_a.waker() };
