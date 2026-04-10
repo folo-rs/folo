@@ -547,7 +547,6 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
             for _ in 0..iters {
                 let container = pin!(EmbeddedManualResetEvent::new());
                 let event = unsafe { ManualResetEvent::embedded(container.as_ref()) };
-                futures.clear();
                 futures.extend(iter::repeat_with(|| event.wait()).take(MANY_WAITER_COUNT));
                 for f in &mut futures {
                     let _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
@@ -556,6 +555,8 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
                 for f in &mut futures {
                     let _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
                 }
+                // Clear before the container goes out of scope.
+                futures.clear();
             }
             start.elapsed()
         });
@@ -571,7 +572,6 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
             for _ in 0..iters {
                 let container = pin!(EmbeddedLocalManualResetEvent::new());
                 let event = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
-                futures.clear();
                 futures.extend(iter::repeat_with(|| event.wait()).take(MANY_WAITER_COUNT));
                 for f in &mut futures {
                     let _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
@@ -580,6 +580,7 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
                 for f in &mut futures {
                     let _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
                 }
+                futures.clear();
             }
             start.elapsed()
         });
@@ -595,7 +596,6 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
             for _ in 0..iters {
                 let container = pin!(EmbeddedAutoResetEvent::new());
                 let event = unsafe { AutoResetEvent::embedded(container.as_ref()) };
-                futures.clear();
                 futures.extend(iter::repeat_with(|| event.wait()).take(MANY_WAITER_COUNT));
                 for f in &mut futures {
                     let _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
@@ -604,6 +604,7 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
                     event.set();
                     let _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
                 }
+                futures.clear();
             }
             start.elapsed()
         });
@@ -619,7 +620,6 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
             for _ in 0..iters {
                 let container = pin!(EmbeddedLocalAutoResetEvent::new());
                 let event = unsafe { LocalAutoResetEvent::embedded(container.as_ref()) };
-                futures.clear();
                 futures.extend(iter::repeat_with(|| event.wait()).take(MANY_WAITER_COUNT));
                 for f in &mut futures {
                     let _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
@@ -628,6 +628,7 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
                     event.set();
                     let _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
                 }
+                futures.clear();
             }
             start.elapsed()
         });
