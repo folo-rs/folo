@@ -84,10 +84,14 @@ impl Awaiter {
     ///
     /// A future's [`Drop`] handler uses this to decide whether
     /// cleanup (unregistering or forwarding a resource) is needed.
+    ///
+    /// # Safety
+    ///
+    /// The awaiter and its set must be protected by the same lock
+    /// (or confined to a single thread).
     #[must_use]
-    pub fn is_registered(&self) -> bool {
-        // SAFETY: Reading the discriminant does not race because
-        // the owning future holds &self.
+    pub unsafe fn is_registered(&self) -> bool {
+        // SAFETY: Caller guarantees serialized access.
         !matches!(unsafe { &*self.state.get() }, State::Idle)
     }
 
@@ -179,8 +183,13 @@ impl Awaiter {
     /// Returns the caller-defined user data.
     ///
     /// Returns `0` for awaiters in the Idle state.
+    ///
+    /// # Safety
+    ///
+    /// The awaiter and its set must be protected by the same lock
+    /// (or confined to a single thread).
     #[must_use]
-    pub fn user_data(&self) -> usize {
+    pub unsafe fn user_data(&self) -> usize {
         // SAFETY: &self is sufficient for reading.
         match unsafe { &*self.state.get() } {
             State::Idle => 0,
@@ -245,7 +254,9 @@ impl RefUnwindSafe for Awaiter {}
 impl fmt::Debug for Awaiter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(std::any::type_name::<Self>())
-            .field("registered", &self.is_registered())
+            // SAFETY: Debug output is best-effort; no concurrent
+            // mutation during formatting.
+            .field("registered", &unsafe { self.is_registered() })
             .finish_non_exhaustive()
     }
 }
@@ -253,6 +264,7 @@ impl fmt::Debug for Awaiter {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[allow(
+    clippy::undocumented_unsafe_blocks,
     clippy::multiple_unsafe_ops_per_block,
     reason = "Pin::new_unchecked + unsafe method calls are idiomatic in tests"
 )]
@@ -270,13 +282,13 @@ mod tests {
     #[test]
     fn new_awaiter_is_idle() {
         let a = Awaiter::new();
-        assert!(!a.is_registered());
+        assert!(!unsafe { a.is_registered() });
     }
 
     #[test]
     fn default_awaiter_is_idle() {
         let a = Awaiter::default();
-        assert!(!a.is_registered());
+        assert!(!unsafe { a.is_registered() });
     }
 
     #[test]
@@ -288,8 +300,8 @@ mod tests {
         unsafe {
             set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
         }
-        assert!(a.is_registered());
-        assert!(!set.is_empty());
+        assert!(unsafe { a.is_registered() });
+        assert!(!unsafe { set.is_empty() });
     }
 
     #[test]
@@ -303,10 +315,10 @@ mod tests {
             set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
         }
 
-        assert!(a.is_registered());
-        let waker = set.notify_one();
+        assert!(unsafe { a.is_registered() });
+        let waker = unsafe { set.notify_one() };
         assert!(waker.is_some());
-        assert!(set.is_empty());
+        assert!(unsafe { set.is_empty() });
     }
 
     #[test]
@@ -318,8 +330,8 @@ mod tests {
         unsafe {
             set.register_with_data(Pin::new_unchecked(&mut a), Waker::noop().clone(), 42);
         }
-        assert!(a.is_registered());
-        assert_eq!(a.user_data(), 42);
+        assert!(unsafe { a.is_registered() });
+        assert_eq!(unsafe { a.user_data() }, 42);
     }
 
     #[test]
@@ -333,8 +345,8 @@ mod tests {
             set.unregister(Pin::new_unchecked(&mut a));
         }
 
-        assert!(!a.is_registered());
-        assert!(set.is_empty());
+        assert!(!unsafe { a.is_registered() });
+        assert!(unsafe { set.is_empty() });
     }
 
     #[test]
@@ -346,7 +358,7 @@ mod tests {
         unsafe {
             set.unregister(Pin::new_unchecked(&mut a));
         }
-        assert!(!a.is_registered());
+        assert!(!unsafe { a.is_registered() });
     }
 
     #[test]
@@ -368,7 +380,7 @@ mod tests {
             set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
         }
 
-        let node = set.notify_one();
+        let node = unsafe { set.notify_one() };
         assert!(node.is_some());
 
         // SAFETY: Test has exclusive access.
@@ -385,12 +397,12 @@ mod tests {
             set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
         }
 
-        drop(set.notify_one());
+        drop(unsafe { set.notify_one() });
 
         // SAFETY: Test has exclusive access.
         let notified = unsafe { Pin::new_unchecked(&mut a).take_notification() };
         assert!(notified);
-        assert!(!a.is_registered());
+        assert!(!unsafe { a.is_registered() });
     }
 
     #[test]
@@ -402,7 +414,7 @@ mod tests {
         unsafe {
             set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
         }
-        drop(set.notify_one());
+        drop(unsafe { set.notify_one() });
 
         // SAFETY: Test has exclusive access.
         assert!(unsafe { Pin::new_unchecked(&a).is_notified() });
@@ -437,13 +449,13 @@ mod tests {
         unsafe {
             set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
         }
-        assert!(a.is_registered());
+        assert!(unsafe { a.is_registered() });
 
-        drop(set.notify_one());
+        drop(unsafe { set.notify_one() });
 
         // SAFETY: Test has exclusive access.
         assert!(unsafe { Pin::new_unchecked(&mut a).take_notification() });
-        assert!(!a.is_registered());
+        assert!(!unsafe { a.is_registered() });
     }
 
     #[test]
@@ -455,13 +467,13 @@ mod tests {
         unsafe {
             set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
         }
-        assert!(a.is_registered());
+        assert!(unsafe { a.is_registered() });
 
         // SAFETY: Test has exclusive access.
         unsafe {
             set.unregister(Pin::new_unchecked(&mut a));
         }
-        assert!(!a.is_registered());
-        assert!(set.is_empty());
+        assert!(!unsafe { a.is_registered() });
+        assert!(unsafe { set.is_empty() });
     }
 }

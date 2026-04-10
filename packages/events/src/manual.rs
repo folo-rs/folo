@@ -89,7 +89,8 @@ fn set(mutex: &Mutex<State>) {
 
     // Notify all awaiters from the snapshot. The lock is not held,
     // so re-entrant operations (reset, new wait, etc.) work normally.
-    while let Some(w) = snapshot.notify_one() {
+    // SAFETY: The snapshot is exclusively owned — no concurrent access.
+    while let Some(w) = unsafe { snapshot.notify_one() } {
         w.wake();
     }
 }
@@ -142,8 +143,10 @@ unsafe fn poll_wait(
 ///
 /// Same requirements as [`poll_wait`].
 unsafe fn drop_wait(mutex: &Mutex<State>, mut awaiter: Pin<&mut Awaiter>) {
-    if awaiter.is_registered() {
-        let mut state = mutex.lock().expect(NEVER_POISONED);
+    let mut state = mutex.lock().expect(NEVER_POISONED);
+
+    // SAFETY: We hold the lock.
+    if unsafe { awaiter.is_registered() } {
         // SAFETY: We hold the lock and the awaiter is registered in this
         // list.
         unsafe {
@@ -377,7 +380,9 @@ impl fmt::Debug for ManualResetEvent {
 impl fmt::Debug for ManualResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ManualResetWaitFuture")
-            .field("registered", &self.awaiter.is_registered())
+            // SAFETY: Debug output is best-effort; no concurrent
+            // mutation during formatting.
+            .field("registered", &unsafe { self.awaiter.is_registered() })
             .finish_non_exhaustive()
     }
 }
@@ -576,7 +581,9 @@ impl fmt::Debug for EmbeddedManualResetEventRef {
 impl fmt::Debug for EmbeddedManualResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EmbeddedManualResetWaitFuture")
-            .field("registered", &self.awaiter.is_registered())
+            // SAFETY: Debug output is best-effort; no concurrent
+            // mutation during formatting.
+            .field("registered", &unsafe { self.awaiter.is_registered() })
             .finish_non_exhaustive()
     }
 }

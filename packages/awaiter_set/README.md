@@ -26,9 +26,10 @@ unsafe {
     set.register(std::pin::Pin::new_unchecked(&mut b), std::task::Waker::noop().clone());
 }
 
-assert!(!set.is_empty());
+// SAFETY: No concurrent access in this example.
+assert!(!unsafe { set.is_empty() });
 
-if let Some(waker) = set.notify_one() {
+if let Some(waker) = unsafe { set.notify_one() } {
     // Wake the awaiter outside the lock scope.
     drop(waker);
 }

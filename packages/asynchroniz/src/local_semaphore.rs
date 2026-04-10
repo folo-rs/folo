@@ -105,7 +105,10 @@ impl Inner {
     /// Tries to satisfy the head waiter, returning its waker if
     /// successful.
     fn try_wake_head(state: &mut SemaphoreState) -> Option<Waker> {
-        let requested = state.waiters.peek()?.user_data();
+        // SAFETY: Single-threaded access.
+        let head = unsafe { state.waiters.peek() }?;
+        // SAFETY: Single-threaded access.
+        let requested = unsafe { head.user_data() };
 
         if state.available >= requested {
             state.available = state
@@ -113,7 +116,8 @@ impl Inner {
                 .checked_sub(requested)
                 .expect("available >= requested was just checked");
 
-            state.waiters.notify_one()
+            // SAFETY: Single-threaded access.
+            unsafe { state.waiters.notify_one() }
         } else {
             // Head-of-line blocking.
             None
@@ -173,7 +177,12 @@ impl Inner {
         // SAFETY: Single-threaded access.
         let state = unsafe { &mut *self.state.get() };
 
-        if !awaiter.is_registered() && state.waiters.is_empty() && state.available >= permits {
+        // SAFETY: Single-threaded access.
+        if !unsafe { awaiter.is_registered() }
+            // SAFETY: Single-threaded access.
+            && unsafe { state.waiters.is_empty() }
+            && state.available >= permits
+        {
             state.available = state
                 .available
                 .checked_sub(permits)
@@ -196,6 +205,11 @@ impl Inner {
     ///
     /// Same requirements as [`poll_acquire`][Self::poll_acquire].
     unsafe fn drop_acquire_wait(&self, mut awaiter: Pin<&mut Awaiter>, permits: usize) {
+        // SAFETY: Single-threaded access.
+        if !unsafe { awaiter.is_registered() } {
+            return;
+        }
+
         // SAFETY: Single-threaded access.
         if unsafe { awaiter.as_ref().is_notified() } {
             // We were given permits but the future was cancelled.
@@ -434,10 +448,6 @@ impl Drop for LocalSemaphoreAcquireFuture<'_> {
     // because it runs cleanup on an unregistered awaiter.
     #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
-        if !self.awaiter.is_registered() {
-            return;
-        }
-
         // SAFETY: The awaiter is pinned inside this future and not moved.
         let awaiter = unsafe { Pin::new_unchecked(&mut self.awaiter) };
         // SAFETY: The state is the lock this awaiter was registered
@@ -469,7 +479,9 @@ impl fmt::Debug for LocalSemaphoreAcquireFuture<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalSemaphoreAcquireFuture")
             .field("permits", &self.permits)
-            .field("registered", &self.awaiter.is_registered())
+            // SAFETY: Debug output is best-effort; no concurrent
+            // mutation during formatting.
+            .field("registered", &unsafe { self.awaiter.is_registered() })
             .finish_non_exhaustive()
     }
 }
@@ -672,10 +684,6 @@ impl Drop for EmbeddedLocalSemaphoreAcquireFuture {
     // because it runs cleanup on an unregistered awaiter.
     #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
-        if !self.awaiter.is_registered() {
-            return;
-        }
-
         // SAFETY: The container outlives this future per the
         // embedded() contract.
         let inner = unsafe { self.inner.as_ref() };
@@ -719,7 +727,9 @@ impl fmt::Debug for EmbeddedLocalSemaphoreAcquireFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EmbeddedLocalSemaphoreAcquireFuture")
             .field("permits", &self.permits)
-            .field("registered", &self.awaiter.is_registered())
+            // SAFETY: Debug output is best-effort; no concurrent
+            // mutation during formatting.
+            .field("registered", &unsafe { self.awaiter.is_registered() })
             .finish_non_exhaustive()
     }
 }

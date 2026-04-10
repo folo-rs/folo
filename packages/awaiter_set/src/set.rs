@@ -29,8 +29,9 @@ impl AwaiterSet {
     /// ```
     /// use awaiter_set::AwaiterSet;
     ///
-    /// let mut set = AwaiterSet::new();
-    /// assert!(set.is_empty());
+    /// let set = AwaiterSet::new();
+    /// // SAFETY: No concurrent access in this example.
+    /// assert!(unsafe { set.is_empty() });
     /// ```
     #[must_use]
     pub fn new() -> Self {
@@ -41,8 +42,13 @@ impl AwaiterSet {
     }
 
     /// Returns `true` if the set contains no awaiters.
+    ///
+    /// # Safety
+    ///
+    /// The set and all its awaiters must be protected by the same
+    /// lock (or confined to a single thread).
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub unsafe fn is_empty(&self) -> bool {
         self.head.is_null()
     }
 
@@ -51,8 +57,13 @@ impl AwaiterSet {
     /// Useful for inspecting awaiter metadata (e.g. checking
     /// [`user_data()`][Awaiter::user_data] before deciding whether
     /// to notify). Returns `None` if the set is empty.
+    ///
+    /// # Safety
+    ///
+    /// The set and all its awaiters must be protected by the same
+    /// lock (or confined to a single thread).
     #[must_use]
-    pub fn peek(&self) -> Option<&Awaiter> {
+    pub unsafe fn peek(&self) -> Option<&Awaiter> {
         if self.head.is_null() {
             None
         } else {
@@ -132,7 +143,12 @@ impl AwaiterSet {
     /// scope to prevent re-entrancy deadlocks.
     ///
     /// Returns `None` if the set is empty.
-    pub fn notify_one(&mut self) -> Option<Waker> {
+    ///
+    /// # Safety
+    ///
+    /// The set and all its awaiters must be protected by the same
+    /// lock (or confined to a single thread).
+    pub unsafe fn notify_one(&mut self) -> Option<Waker> {
         let awaiter = self.take_one()?;
         awaiter.notify()
     }
@@ -315,14 +331,14 @@ mod tests {
     #[test]
     fn new_list_is_empty() {
         let list = AwaiterSet::new();
-        assert!(list.is_empty());
-        assert!(list.peek().is_none());
+        assert!(unsafe { list.is_empty() });
+        assert!(unsafe { list.peek() }.is_none());
     }
 
     #[test]
     fn default_list_is_empty() {
         let list = AwaiterSet::default();
-        assert!(list.is_empty());
+        assert!(unsafe { list.is_empty() });
     }
 
     #[test]
@@ -339,12 +355,12 @@ mod tests {
         unsafe {
             list.register_with_data(Pin::new_unchecked(&mut a), waker(), 1);
         }
-        assert!(!list.is_empty());
-        assert_eq!(list.peek().unwrap().user_data(), 1);
+        assert!(!unsafe { list.is_empty() });
+        assert_eq!(unsafe { list.peek().unwrap().user_data() }, 1);
 
         let popped = list.take_one();
-        assert_eq!(popped.unwrap().user_data(), 1);
-        assert!(list.is_empty());
+        assert_eq!(unsafe { popped.unwrap().user_data() }, 1);
+        assert!(unsafe { list.is_empty() });
     }
 
     #[test]
@@ -360,13 +376,13 @@ mod tests {
             list.register_with_data(Pin::new_unchecked(&mut c), waker(), 3);
         }
 
-        assert!(!list.is_empty());
+        assert!(!unsafe { list.is_empty() });
 
-        assert_eq!(list.take_one().unwrap().user_data(), 1);
-        assert_eq!(list.take_one().unwrap().user_data(), 2);
-        assert_eq!(list.take_one().unwrap().user_data(), 3);
+        assert_eq!(unsafe { list.take_one().unwrap().user_data() }, 1);
+        assert_eq!(unsafe { list.take_one().unwrap().user_data() }, 2);
+        assert_eq!(unsafe { list.take_one().unwrap().user_data() }, 3);
 
-        assert!(list.is_empty());
+        assert!(unsafe { list.is_empty() });
         assert!(list.take_one().is_none());
     }
 
@@ -382,8 +398,8 @@ mod tests {
             list.unregister(Pin::new_unchecked(&mut a));
         }
 
-        assert_eq!(list.take_one().unwrap().user_data(), 2);
-        assert!(list.is_empty());
+        assert_eq!(unsafe { list.take_one().unwrap().user_data() }, 2);
+        assert!(unsafe { list.is_empty() });
     }
 
     #[test]
@@ -398,8 +414,8 @@ mod tests {
             list.unregister(Pin::new_unchecked(&mut b));
         }
 
-        assert_eq!(list.take_one().unwrap().user_data(), 1);
-        assert!(list.is_empty());
+        assert_eq!(unsafe { list.take_one().unwrap().user_data() }, 1);
+        assert!(unsafe { list.is_empty() });
     }
 
     #[test]
@@ -416,9 +432,9 @@ mod tests {
             list.unregister(Pin::new_unchecked(&mut b));
         }
 
-        assert_eq!(list.take_one().unwrap().user_data(), 1);
-        assert_eq!(list.take_one().unwrap().user_data(), 3);
-        assert!(list.is_empty());
+        assert_eq!(unsafe { list.take_one().unwrap().user_data() }, 1);
+        assert_eq!(unsafe { list.take_one().unwrap().user_data() }, 3);
+        assert!(unsafe { list.is_empty() });
     }
 
     #[test]
@@ -431,7 +447,7 @@ mod tests {
             list.unregister(Pin::new_unchecked(&mut a));
         }
 
-        assert!(list.is_empty());
+        assert!(unsafe { list.is_empty() });
     }
 
     #[test]
@@ -461,8 +477,8 @@ mod tests {
             list.register_with_data(Pin::new_unchecked(&mut b), waker(), 2);
         }
 
-        assert_eq!(list.take_one().unwrap().user_data(), 2);
-        assert!(list.is_empty());
+        assert_eq!(unsafe { list.take_one().unwrap().user_data() }, 2);
+        assert!(unsafe { list.is_empty() });
     }
 
     #[test]
@@ -477,15 +493,15 @@ mod tests {
             list.register_with_data(Pin::new_unchecked(&mut b), waker(), 2);
         }
 
-        assert_eq!(list.take_one().unwrap().user_data(), 1);
+        assert_eq!(unsafe { list.take_one().unwrap().user_data() }, 1);
 
         unsafe {
             list.register_with_data(Pin::new_unchecked(&mut c), waker(), 3);
         }
 
-        assert_eq!(list.take_one().unwrap().user_data(), 2);
-        assert_eq!(list.take_one().unwrap().user_data(), 3);
-        assert!(list.is_empty());
+        assert_eq!(unsafe { list.take_one().unwrap().user_data() }, 2);
+        assert_eq!(unsafe { list.take_one().unwrap().user_data() }, 3);
+        assert!(unsafe { list.is_empty() });
     }
 
     #[test]
@@ -501,8 +517,8 @@ mod tests {
             list.register_with_data(Pin::new_unchecked(&mut c), waker(), 3);
         }
 
-        let head = list.peek().unwrap();
-        assert_eq!(head.user_data(), 1);
+        let head = unsafe { list.peek() }.unwrap();
+        assert_eq!(unsafe { head.user_data() }, 1);
 
         let second = head.next();
         assert!(!second.is_null());
@@ -540,7 +556,7 @@ mod tests {
         }
 
         let popped = list.take_one().unwrap();
-        assert_eq!(popped.user_data(), 7);
+        assert_eq!(unsafe { popped.user_data() }, 7);
     }
 
     #[test]
@@ -552,7 +568,7 @@ mod tests {
             list.register(Pin::new_unchecked(&mut a), waker());
         }
 
-        drop(list.notify_one());
+        drop(unsafe { list.notify_one() });
         // SAFETY: The awaiter is not moved.
         assert!(unsafe { Pin::new_unchecked(&a).is_notified() });
     }
@@ -569,10 +585,10 @@ mod tests {
         }
 
         for i in 0..10 {
-            assert_eq!(list.take_one().unwrap().user_data(), i);
+            assert_eq!(unsafe { list.take_one().unwrap().user_data() }, i);
         }
 
-        assert!(list.is_empty());
+        assert!(unsafe { list.is_empty() });
     }
 
     #[test]

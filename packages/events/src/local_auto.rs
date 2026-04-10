@@ -87,7 +87,8 @@ impl Inner {
             match state {
                 InnerState::Set => None,
                 InnerState::Unset(waiters) => {
-                    if let Some(w) = waiters.notify_one() {
+                    // SAFETY: Single-threaded access.
+                    if let Some(w) = unsafe { waiters.notify_one() } {
                         Some(w)
                     } else {
                         // No waiters — store the signal.
@@ -129,7 +130,8 @@ impl Inner {
         match state {
             InnerState::Set => {
                 debug_assert!(
-                    !awaiter.is_registered(),
+                    // SAFETY: Single-threaded access.
+                    !unsafe { awaiter.is_registered() },
                     "Set state is exclusive with registered waiters"
                 );
                 *state = InnerState::Unset(AwaiterSet::new());
@@ -151,7 +153,8 @@ impl Inner {
     ///
     /// Same requirements as [`poll_wait`][Self::poll_wait].
     unsafe fn drop_wait(&self, mut awaiter: Pin<&mut Awaiter>) {
-        if !awaiter.is_registered() {
+        // SAFETY: Single-threaded access.
+        if !unsafe { awaiter.is_registered() } {
             return;
         }
 
@@ -163,7 +166,8 @@ impl Inner {
                 unsafe { mem::replace(&mut *state_ptr, InnerState::Unset(AwaiterSet::new())) };
             let waker = match old_state {
                 InnerState::Unset(mut waiters) => {
-                    if let Some(waker) = waiters.notify_one() {
+                    // SAFETY: Single-threaded access.
+                    if let Some(waker) = unsafe { waiters.notify_one() } {
                         // Restore the awaiter set.
                         // SAFETY: Single-threaded.
                         unsafe {
@@ -363,7 +367,9 @@ impl fmt::Debug for LocalAutoResetEvent {
 impl fmt::Debug for LocalAutoResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalAutoResetWaitFuture")
-            .field("registered", &self.awaiter.is_registered())
+            // SAFETY: Debug output is best-effort; no concurrent
+            // mutation during formatting.
+            .field("registered", &unsafe { self.awaiter.is_registered() })
             .finish_non_exhaustive()
     }
 }
@@ -556,7 +562,9 @@ impl fmt::Debug for EmbeddedLocalAutoResetEventRef {
 impl fmt::Debug for EmbeddedLocalAutoResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EmbeddedLocalAutoResetWaitFuture")
-            .field("registered", &self.awaiter.is_registered())
+            // SAFETY: Debug output is best-effort; no concurrent
+            // mutation during formatting.
+            .field("registered", &unsafe { self.awaiter.is_registered() })
             .finish_non_exhaustive()
     }
 }

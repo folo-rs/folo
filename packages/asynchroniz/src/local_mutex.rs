@@ -89,9 +89,8 @@ impl<T> Inner<T> {
             // SAFETY: Single-threaded access guaranteed by !Send.
             let state = unsafe { &mut *self.lock_state.get() };
 
-            if let Some(w) = state.waiters.notify_one() {
-                // Transfer lock ownership to the next waiter. The
-                // lock stays held.
+            // SAFETY: Single-threaded access.
+            if let Some(w) = unsafe { state.waiters.notify_one() } {
                 Some(w)
             } else {
                 state.locked = false;
@@ -132,7 +131,8 @@ impl<T> Inner<T> {
 
         if !state.locked {
             debug_assert!(
-                !awaiter.is_registered(),
+                // SAFETY: Single-threaded access.
+                !unsafe { awaiter.is_registered() },
                 "unlocked state is exclusive with registered waiters"
             );
             state.locked = true;
@@ -153,6 +153,11 @@ impl<T> Inner<T> {
     /// Same requirements as [`poll_lock`][Self::poll_lock].
     unsafe fn drop_lock_wait(&self, mut awaiter: Pin<&mut Awaiter>) {
         // SAFETY: Single-threaded access.
+        if !unsafe { awaiter.is_registered() } {
+            return;
+        }
+
+        // SAFETY: Single-threaded access.
         if unsafe { awaiter.as_ref().is_notified() } {
             // Capture the waker while borrowing the state, then wake
             // after the borrow ends to avoid aliased mutable access
@@ -162,7 +167,8 @@ impl<T> Inner<T> {
                 // SAFETY: Single-threaded access.
                 let state = unsafe { &mut *state_ptr };
 
-                if let Some(w) = state.waiters.notify_one() {
+                // SAFETY: Single-threaded access.
+                if let Some(w) = unsafe { state.waiters.notify_one() } {
                     Some(w)
                 } else {
                     state.locked = false;
@@ -377,10 +383,6 @@ impl<T> Drop for LocalMutexLockFuture<'_, T> {
     // because it runs cleanup on an unregistered awaiter.
     #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
-        if !self.awaiter.is_registered() {
-            return;
-        }
-
         // SAFETY: The awaiter is pinned inside this future and not moved.
         let awaiter = unsafe { Pin::new_unchecked(&mut self.awaiter) };
         // SAFETY: The lock_state is the lock this awaiter was
@@ -409,7 +411,9 @@ impl<T> fmt::Debug for LocalMutexGuard<'_, T> {
 impl<T> fmt::Debug for LocalMutexLockFuture<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalMutexLockFuture")
-            .field("registered", &self.awaiter.is_registered())
+            // SAFETY: Debug output is best-effort; no concurrent
+            // mutation during formatting.
+            .field("registered", &unsafe { self.awaiter.is_registered() })
             .finish_non_exhaustive()
     }
 }
@@ -595,10 +599,6 @@ impl<T> Drop for EmbeddedLocalMutexLockFuture<T> {
     // because it runs cleanup on an unregistered awaiter.
     #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
-        if !self.awaiter.is_registered() {
-            return;
-        }
-
         // SAFETY: The container outlives this future per the
         // embedded() contract.
         let inner = unsafe { self.inner.as_ref() };
@@ -639,7 +639,9 @@ impl<T> fmt::Debug for EmbeddedLocalMutexGuard<T> {
 impl<T> fmt::Debug for EmbeddedLocalMutexLockFuture<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EmbeddedLocalMutexLockFuture")
-            .field("registered", &self.awaiter.is_registered())
+            // SAFETY: Debug output is best-effort; no concurrent
+            // mutation during formatting.
+            .field("registered", &unsafe { self.awaiter.is_registered() })
             .finish_non_exhaustive()
     }
 }

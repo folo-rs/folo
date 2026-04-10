@@ -98,7 +98,8 @@ impl Inner {
 
         // Notify all awaiters from the snapshot. Re-entrant
         // operations (reset, new wait, etc.) work normally.
-        while let Some(w) = snapshot.notify_one() {
+        // SAFETY: The snapshot is exclusively owned — no concurrent access.
+        while let Some(w) = unsafe { snapshot.notify_one() } {
             w.wake();
         }
     }
@@ -142,7 +143,8 @@ impl Inner {
     ///
     /// Same requirements as [`poll_wait`][Self::poll_wait].
     unsafe fn drop_wait(&self, mut awaiter: Pin<&mut Awaiter>) {
-        if awaiter.is_registered() {
+        // SAFETY: Single-threaded access.
+        if unsafe { awaiter.is_registered() } {
             // SAFETY: Single-threaded, awaiter is registered in this
             // list.
             let waiters = unsafe { &mut *self.waiters.get() };
@@ -307,7 +309,9 @@ impl fmt::Debug for LocalManualResetEvent {
 impl fmt::Debug for LocalManualResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalManualResetWaitFuture")
-            .field("registered", &self.awaiter.is_registered())
+            // SAFETY: Debug output is best-effort; no concurrent
+            // mutation during formatting.
+            .field("registered", &unsafe { self.awaiter.is_registered() })
             .finish_non_exhaustive()
     }
 }
@@ -504,7 +508,9 @@ impl fmt::Debug for EmbeddedLocalManualResetEventRef {
 impl fmt::Debug for EmbeddedLocalManualResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EmbeddedLocalManualResetWaitFuture")
-            .field("registered", &self.awaiter.is_registered())
+            // SAFETY: Debug output is best-effort; no concurrent
+            // mutation during formatting.
+            .field("registered", &unsafe { self.awaiter.is_registered() })
             .finish_non_exhaustive()
     }
 }

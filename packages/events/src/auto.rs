@@ -78,7 +78,8 @@ fn set(mutex: &Mutex<State>) {
                 waker = None;
             }
             State::Unset(waiters) => {
-                if let Some(w) = waiters.notify_one() {
+                // SAFETY: We hold the lock.
+                if let Some(w) = unsafe { waiters.notify_one() } {
                     waker = Some(w);
                 } else {
                     // No waiters — store the signal.
@@ -131,7 +132,8 @@ unsafe fn poll_wait(
         State::Set => {
             // Signal available — consume it.
             debug_assert!(
-                !awaiter.is_registered(),
+                // SAFETY: We hold the lock.
+                !unsafe { awaiter.is_registered() },
                 "Set state is exclusive with registered waiters"
             );
             *state = State::Unset(AwaiterSet::new());
@@ -155,12 +157,12 @@ unsafe fn poll_wait(
 ///
 /// Same requirements as [`poll_wait`].
 unsafe fn drop_wait(mutex: &Mutex<State>, mut awaiter: Pin<&mut Awaiter>) {
-    // The caller must only call this when the awaiter is registered. Both
-    // AutoResetWaitFuture::drop and EmbeddedAutoResetWaitFuture::drop guard
-    // on `awaiter.is_registered()` before calling, so this should always hold.
-    debug_assert!(awaiter.is_registered());
-
     let mut state = mutex.lock().expect(NEVER_POISONED);
+
+    // SAFETY: We hold the lock.
+    if !unsafe { awaiter.is_registered() } {
+        return;
+    }
 
     // SAFETY: We hold the lock that protects the awaiter set and node.
     if unsafe { awaiter.as_ref().is_notified() } {
@@ -170,7 +172,8 @@ unsafe fn drop_wait(mutex: &Mutex<State>, mut awaiter: Pin<&mut Awaiter>) {
         let old_state = mem::replace(&mut *state, State::Unset(AwaiterSet::new()));
         match old_state {
             State::Unset(mut waiters) => {
-                if let Some(waker) = waiters.notify_one() {
+                // SAFETY: We hold the lock.
+                if let Some(waker) = unsafe { waiters.notify_one() } {
                     // Restore the awaiter set.
                     *state = State::Unset(waiters);
                     drop(state);
@@ -407,10 +410,6 @@ impl Future for AutoResetWaitFuture {
 
 impl Drop for AutoResetWaitFuture {
     fn drop(&mut self) {
-        if !self.awaiter.is_registered() {
-            return;
-        }
-
         // SAFETY: The awaiter is pinned inside this future and not moved.
         let awaiter = unsafe { Pin::new_unchecked(&mut self.awaiter) };
         // SAFETY: The state field is the mutex this awaiter was
@@ -430,7 +429,9 @@ impl fmt::Debug for AutoResetEvent {
 impl fmt::Debug for AutoResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AutoResetWaitFuture")
-            .field("registered", &self.awaiter.is_registered())
+            // SAFETY: Debug output is best-effort; no concurrent
+            // mutation during formatting.
+            .field("registered", &unsafe { self.awaiter.is_registered() })
             .finish_non_exhaustive()
     }
 }
@@ -589,10 +590,6 @@ impl Future for EmbeddedAutoResetWaitFuture {
 
 impl Drop for EmbeddedAutoResetWaitFuture {
     fn drop(&mut self) {
-        if !self.awaiter.is_registered() {
-            return;
-        }
-
         // SAFETY: The container outlives this future per the embedded()
         // contract.
         let state = unsafe { self.state.as_ref() };
@@ -624,7 +621,9 @@ impl fmt::Debug for EmbeddedAutoResetEventRef {
 impl fmt::Debug for EmbeddedAutoResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EmbeddedAutoResetWaitFuture")
-            .field("registered", &self.awaiter.is_registered())
+            // SAFETY: Debug output is best-effort; no concurrent
+            // mutation during formatting.
+            .field("registered", &unsafe { self.awaiter.is_registered() })
             .finish_non_exhaustive()
     }
 }

@@ -99,7 +99,8 @@ fn release_permits(state_mutex: &Mutex<SemaphoreState>, count: usize) {
             .available
             .checked_add(count)
             .expect("permit count overflow is unreachable");
-        let head_requested = state.waiters.peek().map(Awaiter::user_data);
+        // SAFETY: We hold the lock.
+        let head_requested = unsafe { state.waiters.peek() }.map(|a| unsafe { a.user_data() });
         let satisfiable = head_requested.is_some_and(|req| state.available >= req);
         (try_wake_head(&mut state), satisfiable)
     };
@@ -123,7 +124,10 @@ fn release_permits(state_mutex: &Mutex<SemaphoreState>, count: usize) {
 ///
 /// Must be called while holding the state mutex.
 fn try_wake_head(state: &mut SemaphoreState) -> Option<Waker> {
-    let requested = state.waiters.peek()?.user_data();
+    // SAFETY: Caller holds the lock.
+    let head = unsafe { state.waiters.peek() }?;
+    // SAFETY: Caller holds the lock.
+    let requested = unsafe { head.user_data() };
 
     if state.available >= requested {
         state.available = state
@@ -131,7 +135,8 @@ fn try_wake_head(state: &mut SemaphoreState) -> Option<Waker> {
             .checked_sub(requested)
             .expect("available >= requested was just checked");
 
-        state.waiters.notify_one()
+        // SAFETY: Caller holds the lock.
+        unsafe { state.waiters.notify_one() }
     } else {
         // Head-of-line blocking: not enough permits for the head
         // waiter.
@@ -198,7 +203,12 @@ unsafe fn poll_acquire(
         return Poll::Ready(());
     }
 
-    if !awaiter.is_registered() && state.waiters.is_empty() && state.available >= permits {
+    // SAFETY: We hold the lock.
+    if !unsafe { awaiter.is_registered() }
+        // SAFETY: We hold the lock.
+        && unsafe { state.waiters.is_empty() }
+        && state.available >= permits
+    {
         // Permits are available and the queue is empty — take them
         // immediately without registering.
         state.available = state
@@ -230,6 +240,11 @@ unsafe fn drop_acquire_wait(
     permits: usize,
 ) {
     let mut state = state_mutex.lock().expect(NEVER_POISONED);
+
+    // SAFETY: We hold the lock.
+    if !unsafe { awaiter.is_registered() } {
+        return;
+    }
 
     // SAFETY: We hold the lock.
     if unsafe { awaiter.as_ref().is_notified() } {
@@ -508,10 +523,6 @@ impl Drop for SemaphoreAcquireFuture<'_> {
     // because it runs cleanup on an unregistered awaiter.
     #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
-        if !self.awaiter.is_registered() {
-            return;
-        }
-
         // SAFETY: The awaiter is pinned inside this future and not moved.
         let awaiter = unsafe { Pin::new_unchecked(&mut self.awaiter) };
         // SAFETY: The state field is the mutex this awaiter was
@@ -541,7 +552,9 @@ impl fmt::Debug for SemaphoreAcquireFuture<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SemaphoreAcquireFuture")
             .field("permits", &self.permits)
-            .field("registered", &self.awaiter.is_registered())
+            // SAFETY: Debug output is best-effort; no concurrent
+            // mutation during formatting.
+            .field("registered", &unsafe { self.awaiter.is_registered() })
             .finish_non_exhaustive()
     }
 }
@@ -757,10 +770,6 @@ impl Drop for EmbeddedSemaphoreAcquireFuture {
     // because it runs cleanup on an unregistered awaiter.
     #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
-        if !self.awaiter.is_registered() {
-            return;
-        }
-
         // SAFETY: The container outlives this future per the
         // embedded() contract.
         let inner = unsafe { self.inner.as_ref() };
@@ -801,7 +810,9 @@ impl fmt::Debug for EmbeddedSemaphoreAcquireFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EmbeddedSemaphoreAcquireFuture")
             .field("permits", &self.permits)
-            .field("registered", &self.awaiter.is_registered())
+            // SAFETY: Debug output is best-effort; no concurrent
+            // mutation during formatting.
+            .field("registered", &unsafe { self.awaiter.is_registered() })
             .finish_non_exhaustive()
     }
 }
