@@ -256,7 +256,6 @@ impl fmt::Debug for Awaiter {
         f.debug_struct(std::any::type_name::<Self>())
             // SAFETY: Debug output is best-effort; no concurrent
             // mutation during formatting.
-            .field("registered", &unsafe { self.is_registered() })
             .finish_non_exhaustive()
     }
 }

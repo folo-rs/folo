@@ -481,7 +481,6 @@ impl fmt::Debug for LocalSemaphoreAcquireFuture<'_> {
             .field("permits", &self.permits)
             // SAFETY: Debug output is best-effort; no concurrent
             // mutation during formatting.
-            .field("registered", &unsafe { self.awaiter.is_registered() })
             .finish_non_exhaustive()
     }
 }
@@ -729,7 +728,6 @@ impl fmt::Debug for EmbeddedLocalSemaphoreAcquireFuture {
             .field("permits", &self.permits)
             // SAFETY: Debug output is best-effort; no concurrent
             // mutation during formatting.
-            .field("registered", &unsafe { self.awaiter.is_registered() })
             .finish_non_exhaustive()
     }
 }

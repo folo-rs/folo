@@ -12,9 +12,10 @@ use std::fmt;
 ///
 /// # Thread safety
 ///
-/// This type is `!Send` — it must only be used with single-threaded
-/// (`Local`) primitive types. The backing state uses [`Cell`] which
-/// is not thread-safe.
+/// This type is `!Send`. The waker and its backing data must stay
+/// on a single thread. It can be used with both single-threaded
+/// (`Local`) and thread-safe primitive types, as long as all
+/// operations happen on one thread.
 pub struct ReentrantWakerData {
     action: Box<dyn Fn()>,
     was_woken: Cell<bool>,

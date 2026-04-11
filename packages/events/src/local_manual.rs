@@ -312,7 +312,6 @@ impl fmt::Debug for LocalManualResetWaitFuture {
         f.debug_struct("LocalManualResetWaitFuture")
             // SAFETY: Debug output is best-effort; no concurrent
             // mutation during formatting.
-            .field("registered", &unsafe { self.awaiter.is_registered() })
             .finish_non_exhaustive()
     }
 }
@@ -511,7 +510,6 @@ impl fmt::Debug for EmbeddedLocalManualResetWaitFuture {
         f.debug_struct("EmbeddedLocalManualResetWaitFuture")
             // SAFETY: Debug output is best-effort; no concurrent
             // mutation during formatting.
-            .field("registered", &unsafe { self.awaiter.is_registered() })
             .finish_non_exhaustive()
     }
 }

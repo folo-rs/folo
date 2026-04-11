@@ -196,31 +196,43 @@ impl AwaiterSet {
         // SAFETY: We do not move the awaiter. Pin guarantees
         // address stability.
         let aw = unsafe { awaiter.get_unchecked_mut() };
-        // SAFETY: Access is serialized by the caller's lock.
-        let state = unsafe { &mut *aw.state.get() };
-        match state {
-            State::Idle => {
-                *state = State::Waiting {
-                    waker: Some(waker),
-                    user_data: data,
-                    next: ptr::null_mut(),
-                    prev: ptr::null_mut(),
-                };
-                // SAFETY: Pin guarantees stable address.
-                unsafe {
-                    self.insert(ptr::from_mut(aw));
+
+        // Check current state and transition if idle. The &mut State
+        // borrow is confined to this block so it does not overlap
+        // with insert() below.
+        let needs_insert = {
+            // SAFETY: Access is serialized by the caller's lock.
+            let state = unsafe { &mut *aw.state.get() };
+            match state {
+                State::Idle => {
+                    *state = State::Waiting {
+                        waker: Some(waker),
+                        user_data: data,
+                        next: ptr::null_mut(),
+                        prev: ptr::null_mut(),
+                    };
+                    true
+                }
+                State::Waiting {
+                    waker: w,
+                    user_data: ud,
+                    ..
+                } => {
+                    *w = Some(waker);
+                    *ud = data;
+                    false
+                }
+                State::Notified { .. } => {
+                    debug_assert!(false, "register called on notified awaiter");
+                    false
                 }
             }
-            State::Waiting {
-                waker: w,
-                user_data: ud,
-                ..
-            } => {
-                *w = Some(waker);
-                *ud = data;
-            }
-            State::Notified { .. } => {
-                debug_assert!(false, "register called on notified awaiter");
+        };
+
+        if needs_insert {
+            // SAFETY: Pin guarantees stable address.
+            unsafe {
+                self.insert(ptr::from_mut(aw));
             }
         }
     }

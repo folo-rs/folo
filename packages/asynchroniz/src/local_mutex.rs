@@ -413,7 +413,6 @@ impl<T> fmt::Debug for LocalMutexLockFuture<'_, T> {
         f.debug_struct("LocalMutexLockFuture")
             // SAFETY: Debug output is best-effort; no concurrent
             // mutation during formatting.
-            .field("registered", &unsafe { self.awaiter.is_registered() })
             .finish_non_exhaustive()
     }
 }
@@ -641,7 +640,6 @@ impl<T> fmt::Debug for EmbeddedLocalMutexLockFuture<T> {
         f.debug_struct("EmbeddedLocalMutexLockFuture")
             // SAFETY: Debug output is best-effort; no concurrent
             // mutation during formatting.
-            .field("registered", &unsafe { self.awaiter.is_registered() })
             .finish_non_exhaustive()
     }
 }
