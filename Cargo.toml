@@ -25,7 +25,7 @@ derive_more = { version = "2.0", default-features = false }
 event-listener = { version = "5.4", default-features = false, features = [
     "std",
 ] }
-events = { version = "0.7.0", path = "packages/events", default-features = false }
+events = { version = "0.6.0", path = "packages/events", default-features = false }
 events_once = { version = "0.5.19", path = "packages/events_once", default-features = false }
 fake_headers = { version = "0.0", default-features = false }
 fast_time = { version = "0.1.17", path = "packages/fast_time", default-features = false }
