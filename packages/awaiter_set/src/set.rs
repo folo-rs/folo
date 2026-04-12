@@ -97,8 +97,7 @@ impl AwaiterSet {
         // SAFETY: ptr is valid (we just derived it from Pin).
         let node = unsafe { &mut *ptr };
 
-        node.set_next(ptr::null_mut());
-        node.set_prev(self.tail);
+        node.set_neighbors(ptr::null_mut(), self.tail);
 
         if self.tail.is_null() {
             self.head = ptr;
