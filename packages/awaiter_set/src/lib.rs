@@ -23,17 +23,19 @@
 //! Neither `AwaiterSet` nor `Awaiter` has internal synchronization.
 //! The synchronization primitive must protect all access to both the
 //! set and its registered awaiters with a single lock (or confine
-//! them to a single thread). This is because the primitive typically
-//! needs to atomically update its own state (e.g. a `locked` flag)
-//! together with the set.
+//! them to a single thread).
+//!
+//! The synchronization must be external to the awaiter set because the
+//! primitive typically needs to atomically update its own state
+//! (e.g. a `locked` flag) together with the set.
 //!
 //! # Re-entrancy
 //!
 //! Calling [`Waker::wake()`][std::task::Waker::wake] may cause the
 //! executor to immediately re-poll the woken future, which may try
 //! to register a new awaiter in the same set. To prevent this from
-//! racing with the current operation, the primitive must release its
-//! lock before calling `wake()`.
+//! racing with the current operation (potentially deadlocking),
+//! the primitive must release its lock before calling `wake()`.
 
 pub(crate) mod awaiter;
 mod set;

@@ -7,20 +7,21 @@ use crate::awaiter::{Awaiter, State};
 
 /// Tracks awaiters for a synchronization primitive.
 ///
-/// Owned by the primitive (e.g. a mutex or event). Asynchronous
-/// futures that cannot complete immediately
+/// Owned by an asynchronous synchronization primitive (e.g. a mutex or event).
+/// Asynchronous futures that cannot complete immediately
 /// [`register()`][Self::register] an [`Awaiter`] with this set.
 /// When the primitive grants a resource, it calls
-/// [`notify_one()`][Self::notify_one] to remove an awaiter and
-/// return its [`Waker`].
+/// [`notify_one()`][Self::notify_one] to remove an awaiter, set
+/// it into a notified state and return its [`Waker`] so the primitive
+/// can wake the corresponding future.
 ///
 /// # Synchronization
 ///
 /// The set has no internal synchronization. The primitive must
 /// serialize all access to both the set and every [`Awaiter`]
 /// registered with it — for example, by protecting them with a
-/// single [`Mutex`][std::sync::Mutex] or by confining the
-/// containing type to a single thread.
+/// single synchronous [`Mutex`][std::sync::Mutex] or by confining the
+/// synchronization primitive and all its futures to a single thread.
 pub struct AwaiterSet {
     head: *mut Awaiter,
     tail: *mut Awaiter,
@@ -613,5 +614,107 @@ mod tests {
         let list = AwaiterSet::new();
         let debug = format!("{list:?}");
         assert!(debug.contains("AwaiterSet"));
+    }
+
+    #[test]
+    fn notify_one_single_element() {
+        let mut set = AwaiterSet::new();
+        let mut a = Awaiter::new();
+
+        unsafe {
+            set.register(Pin::new_unchecked(&mut a), waker());
+        }
+        assert!(!unsafe { set.is_empty() });
+
+        let w = unsafe { set.notify_one() };
+        assert!(w.is_some());
+        assert!(unsafe { set.is_empty() });
+        assert!(unsafe { Pin::new_unchecked(&a).is_notified() });
+    }
+
+    #[test]
+    fn peek_updates_after_notify_one() {
+        let mut set = AwaiterSet::new();
+        let mut a = Awaiter::new();
+        let mut b = Awaiter::new();
+        let mut c = Awaiter::new();
+
+        unsafe {
+            set.register_with_data(Pin::new_unchecked(&mut a), waker(), 1);
+            set.register_with_data(Pin::new_unchecked(&mut b), waker(), 2);
+            set.register_with_data(Pin::new_unchecked(&mut c), waker(), 3);
+        }
+
+        assert_eq!(unsafe { set.peek().unwrap().user_data() }, 1);
+
+        // Remove first — peek should now return second.
+        drop(unsafe { set.notify_one() });
+        assert_eq!(unsafe { set.peek().unwrap().user_data() }, 2);
+
+        // Remove second — peek should now return third.
+        drop(unsafe { set.notify_one() });
+        assert_eq!(unsafe { set.peek().unwrap().user_data() }, 3);
+
+        // Remove third — set is empty.
+        drop(unsafe { set.notify_one() });
+        assert!(unsafe { set.peek() }.is_none());
+    }
+
+    #[test]
+    fn multithreaded_register_notify() {
+        use std::sync::{Arc, Barrier, Mutex};
+        use std::thread;
+
+        // Shared state: Mutex<AwaiterSet> + a flag.
+        struct Shared {
+            set: AwaiterSet,
+            notified: bool,
+        }
+
+        let shared = Arc::new(Mutex::new(Shared {
+            set: AwaiterSet::new(),
+            notified: false,
+        }));
+        let barrier = Arc::new(Barrier::new(2));
+
+        // Thread 1: register an awaiter, wait for notification.
+        let shared1 = Arc::clone(&shared);
+        let barrier1 = Arc::clone(&barrier);
+        let handle = thread::spawn(move || {
+            let mut awaiter = Awaiter::new();
+
+            {
+                let mut guard = shared1.lock().unwrap();
+                // SAFETY: We hold the lock.
+                unsafe {
+                    guard
+                        .set
+                        .register(Pin::new_unchecked(&mut awaiter), Waker::noop().clone());
+                }
+            }
+
+            // Signal that we are registered.
+            barrier1.wait();
+            // Wait for thread 2 to notify.
+            barrier1.wait();
+
+            let guard = shared1.lock().unwrap();
+            assert!(guard.notified);
+            // SAFETY: We hold the lock.
+            assert!(unsafe { Pin::new_unchecked(&awaiter).is_notified() });
+        });
+
+        // Thread 2: wait for registration, then notify.
+        barrier.wait();
+        {
+            let mut guard = shared.lock().unwrap();
+            // SAFETY: We hold the lock.
+            let waker = unsafe { guard.set.notify_one() };
+            assert!(waker.is_some());
+            guard.notified = true;
+        }
+        barrier.wait();
+
+        handle.join().unwrap();
     }
 }

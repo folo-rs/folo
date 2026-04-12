@@ -796,3 +796,7 @@ and use `--body-file path/to/file.md`.
 
 When addressing PR review comments, reply to each comment thread with the disposition (what you
 did to address it) and mark the thread as resolved after pushing the commit that addresses it.
+
+# Version bumps
+
+Do not bump crate versions in feature branches. Version bumps are handled by the release process.

@@ -475,4 +475,70 @@ mod tests {
         assert!(!unsafe { a.is_registered() });
         assert!(unsafe { set.is_empty() });
     }
+
+    #[test]
+    fn unregister_on_notified_is_noop() {
+        let mut a = Awaiter::new();
+        let mut set = AwaiterSet::new();
+
+        // SAFETY: Test has exclusive access.
+        unsafe {
+            set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
+        }
+
+        // Notify (removes from set, transitions to Notified).
+        drop(unsafe { set.notify_one() });
+        assert!(unsafe { Pin::new_unchecked(&a).is_notified() });
+
+        // Unregister on a Notified awaiter should be a no-op.
+        // SAFETY: Test has exclusive access.
+        unsafe {
+            set.unregister(Pin::new_unchecked(&mut a));
+        }
+        // Still notified — unregister did not change state.
+        assert!(unsafe { Pin::new_unchecked(&a).is_notified() });
+    }
+
+    #[test]
+    fn re_registration_after_notification() {
+        let mut a = Awaiter::new();
+        let mut set = AwaiterSet::new();
+
+        // First cycle: register → notify → take_notification.
+        // SAFETY: Test has exclusive access.
+        unsafe {
+            set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
+        }
+        drop(unsafe { set.notify_one() });
+        assert!(unsafe { Pin::new_unchecked(&mut a).take_notification() });
+        assert!(!unsafe { a.is_registered() });
+
+        // Second cycle: register again on the same awaiter.
+        // SAFETY: Test has exclusive access.
+        unsafe {
+            set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
+        }
+        assert!(unsafe { a.is_registered() });
+        assert!(!unsafe { set.is_empty() });
+
+        // Clean up.
+        drop(unsafe { set.notify_one() });
+    }
+
+    #[test]
+    fn take_notification_returns_false_for_waiting() {
+        let mut a = Awaiter::new();
+        let mut set = AwaiterSet::new();
+
+        // SAFETY: Test has exclusive access.
+        unsafe {
+            set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
+        }
+
+        // Registered but not notified — take_notification returns false.
+        // SAFETY: Test has exclusive access.
+        assert!(!unsafe { Pin::new_unchecked(&mut a).take_notification() });
+        // Still registered.
+        assert!(unsafe { a.is_registered() });
+    }
 }
