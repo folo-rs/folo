@@ -1,3 +1,5 @@
+use std::any::type_name;
+use std::fmt;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr;
@@ -311,9 +313,9 @@ unsafe impl Send for AwaiterSet {}
 impl UnwindSafe for AwaiterSet {}
 impl RefUnwindSafe for AwaiterSet {}
 
-impl std::fmt::Debug for AwaiterSet {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct(std::any::type_name::<Self>())
+impl fmt::Debug for AwaiterSet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct(type_name::<Self>())
             .field("is_empty", &self.head.is_null())
             .finish_non_exhaustive()
     }
@@ -328,6 +330,7 @@ impl std::fmt::Debug for AwaiterSet {
     reason = "test code with trivial safety invariants"
 )]
 mod tests {
+    use std::iter;
     use std::pin::Pin;
     use std::task::Waker;
 
@@ -588,8 +591,11 @@ mod tests {
 
     #[test]
     fn ten_elements_maintain_fifo() {
+        const ELEMENT_COUNT: usize = 10;
         let mut list = AwaiterSet::new();
-        let mut nodes: Vec<Awaiter> = std::iter::repeat_with(Awaiter::new).take(10).collect();
+        let mut nodes: Vec<Awaiter> = iter::repeat_with(Awaiter::new)
+            .take(ELEMENT_COUNT)
+            .collect();
 
         for (i, node) in nodes.iter_mut().enumerate() {
             unsafe {
@@ -597,7 +603,7 @@ mod tests {
             }
         }
 
-        for i in 0..10 {
+        for i in 0..ELEMENT_COUNT {
             assert_eq!(unsafe { list.take_one().unwrap().user_data() }, i);
         }
 

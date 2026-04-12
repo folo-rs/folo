@@ -1,8 +1,11 @@
+use std::any::type_name;
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::marker::PhantomPinned;
+use std::mem;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
+use std::ptr;
 use std::task::Waker;
 
 // Interior state accessed by both the owning future (via Pin<&mut Self>
@@ -154,7 +157,7 @@ impl Awaiter {
     pub(crate) fn notify(&mut self) -> Option<Waker> {
         // SAFETY: &mut self guarantees exclusive access.
         let state = unsafe { &mut *self.state.get() };
-        match std::mem::replace(state, State::Idle) {
+        match mem::replace(state, State::Idle) {
             State::Waiting {
                 waker, user_data, ..
             } => {
@@ -302,7 +305,7 @@ impl Awaiter {
     ///
     /// Panics if the awaiter is not in the Waiting state.
     pub(crate) fn clear_neighbors(&mut self) {
-        self.set_neighbors(std::ptr::null_mut(), std::ptr::null_mut());
+        self.set_neighbors(ptr::null_mut(), ptr::null_mut());
     }
 
     /// Sets both linked pointers at once.
@@ -344,7 +347,7 @@ impl RefUnwindSafe for Awaiter {}
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for Awaiter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct(std::any::type_name::<Self>())
+        f.debug_struct(type_name::<Self>())
             // SAFETY: Debug output is best-effort; no concurrent
             // mutation during formatting.
             .finish_non_exhaustive()
