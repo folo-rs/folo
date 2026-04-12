@@ -156,7 +156,7 @@ impl AwaiterSet {
     /// [`Awaiter::take_notification()`] and complete with `Ready`.
     ///
     /// The caller should invoke [`Waker::wake()`] outside any lock
-    /// scope to prevent re-entrancy deadlocks.
+    /// scope to prevent reentrancy deadlocks.
     ///
     /// Returns `None` if the set is empty.
     ///
