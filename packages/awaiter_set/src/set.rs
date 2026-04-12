@@ -23,6 +23,9 @@ use crate::awaiter::{Awaiter, State};
 /// single synchronous [`Mutex`][std::sync::Mutex] or by confining the
 /// synchronization primitive and all its futures to a single thread.
 pub struct AwaiterSet {
+    // Both are null if the set is empty. We add new entries at the tail,
+    // though as the API contract is that of a set, there is no specific
+    // constraint on ordering - we can change this if we want to in the future.
     head: *mut Awaiter,
     tail: *mut Awaiter,
 }
@@ -36,7 +39,8 @@ impl AwaiterSet {
     /// use awaiter_set::AwaiterSet;
     ///
     /// let set = AwaiterSet::new();
-    /// // SAFETY: No concurrent access in this example.
+    ///
+    /// // SAFETY: Single-threaded example requires no synchronization.
     /// assert!(unsafe { set.is_empty() });
     /// ```
     #[must_use]
@@ -83,10 +87,13 @@ impl AwaiterSet {
     ///
     /// # Safety
     ///
-    /// `ptr` must point to a valid, pinned [`Awaiter`] that will
-    /// remain valid until removed from the set.
-    pub(crate) unsafe fn insert(&mut self, ptr: *mut Awaiter) {
-        // SAFETY: Caller guarantees `ptr` is valid.
+    /// The awaiter must remain valid and pinned until removed from
+    /// the set.
+    pub(crate) unsafe fn insert(&mut self, awaiter: Pin<&mut Awaiter>) {
+        // SAFETY: We do not move the awaiter. We only store the
+        // pointer for the linked structure.
+        let ptr = unsafe { ptr::from_mut(awaiter.get_unchecked_mut()) };
+        // SAFETY: ptr is valid (we just derived it from Pin).
         let node = unsafe { &mut *ptr };
         node.set_next(ptr::null_mut());
         node.set_prev(self.tail);
@@ -107,9 +114,11 @@ impl AwaiterSet {
     ///
     /// # Safety
     ///
-    /// `ptr` must point to a valid [`Awaiter`] currently in this set.
-    pub(crate) unsafe fn remove(&mut self, ptr: *mut Awaiter) {
-        // SAFETY: Caller guarantees `ptr` is valid and in the set.
+    /// The awaiter must currently be in this set.
+    pub(crate) unsafe fn remove(&mut self, awaiter: Pin<&mut Awaiter>) {
+        // SAFETY: We do not move the awaiter.
+        let ptr = unsafe { ptr::from_mut(awaiter.get_unchecked_mut()) };
+        // SAFETY: ptr is valid.
         let node = unsafe { &*ptr };
         let prev = node.prev();
         let next = node.next();
@@ -231,9 +240,12 @@ impl AwaiterSet {
         };
 
         if needs_insert {
-            // SAFETY: Pin guarantees stable address.
+            // SAFETY: The awaiter was originally pinned and has not
+            // been moved.
+            let pin = unsafe { Pin::new_unchecked(aw) };
+            // SAFETY: The awaiter will remain valid until removed.
             unsafe {
-                self.insert(ptr::from_mut(aw));
+                self.insert(pin);
             }
         }
     }
@@ -253,14 +265,17 @@ impl AwaiterSet {
         let aw = unsafe { awaiter.get_unchecked_mut() };
         // SAFETY: Access is serialized by the caller's lock.
         if matches!(unsafe { &*aw.state.get() }, State::Waiting { .. }) {
-            // SAFETY: The awaiter is in this set per the caller's
-            // contract.
+            let state_ptr = aw.state.get();
+            // SAFETY: The awaiter was originally pinned and has not
+            // been moved.
+            let pin = unsafe { Pin::new_unchecked(aw) };
+            // SAFETY: The awaiter is in this set.
             unsafe {
-                self.remove(ptr::from_mut(aw));
+                self.remove(pin);
             }
             // SAFETY: Access is serialized by the caller's lock.
             unsafe {
-                *aw.state.get() = State::Idle;
+                *state_ptr = State::Idle;
             }
         }
     }
