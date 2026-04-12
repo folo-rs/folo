@@ -295,6 +295,26 @@ impl Awaiter {
             _ => panic!("set_prev called on non-waiting awaiter"),
         }
     }
+
+    /// Clears both linked pointers to null.
+    ///
+    /// Called after removing an awaiter from the set to prevent
+    /// dangling references.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the awaiter is not in the Waiting state.
+    pub(crate) fn clear_neighbors(&mut self) {
+        // SAFETY: &mut self guarantees exclusive access.
+        let state = unsafe { &mut *self.state.get() };
+        match state {
+            State::Waiting { next, prev, .. } => {
+                *next = std::ptr::null_mut();
+                *prev = std::ptr::null_mut();
+            }
+            _ => panic!("clear_neighbors called on non-waiting awaiter"),
+        }
+    }
 }
 
 impl Default for Awaiter {

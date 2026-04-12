@@ -143,10 +143,9 @@ impl AwaiterSet {
         }
 
         // Clear the removed node's links.
-        // SAFETY: `ptr` is valid (caller contract).
+        // SAFETY: ptr is valid.
         let node = unsafe { &mut *ptr };
-        node.set_next(ptr::null_mut());
-        node.set_prev(ptr::null_mut());
+        node.clear_neighbors();
     }
 
     /// Removes one awaiter and returns its waker.
@@ -287,8 +286,7 @@ impl AwaiterSet {
         // Clear the removed awaiter's links.
         // SAFETY: `ptr` is valid (we just read from it above).
         let node = unsafe { &mut *ptr };
-        node.set_next(ptr::null_mut());
-        node.set_prev(ptr::null_mut());
+        node.clear_neighbors();
 
         // We just removed it, so no other reference exists in the
         // set. The `&mut self` borrow prevents concurrent operations.
