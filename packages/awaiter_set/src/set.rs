@@ -93,8 +93,10 @@ impl AwaiterSet {
         // SAFETY: We do not move the awaiter. We only store the
         // pointer for the linked structure.
         let ptr = unsafe { ptr::from_mut(awaiter.get_unchecked_mut()) };
+
         // SAFETY: ptr is valid (we just derived it from Pin).
         let node = unsafe { &mut *ptr };
+
         node.set_next(ptr::null_mut());
         node.set_prev(self.tail);
 
@@ -120,8 +122,7 @@ impl AwaiterSet {
         let ptr = unsafe { ptr::from_mut(awaiter.get_unchecked_mut()) };
         // SAFETY: ptr is valid.
         let node = unsafe { &*ptr };
-        let prev = node.prev();
-        let next = node.next();
+        let (next, prev) = node.neighbors();
 
         if prev.is_null() {
             self.head = next;
@@ -207,36 +208,16 @@ impl AwaiterSet {
         // address stability.
         let aw = unsafe { awaiter.get_unchecked_mut() };
 
-        // Check current state and transition if idle. The &mut State
-        // borrow is confined to this block so it does not overlap
-        // with insert() below.
-        let needs_insert = {
-            // SAFETY: Access is serialized by the caller's lock.
-            let state = unsafe { &mut *aw.state.get() };
-            match state {
-                State::Idle => {
-                    *state = State::Waiting {
-                        waker: Some(waker),
-                        user_data: data,
-                        next: ptr::null_mut(),
-                        prev: ptr::null_mut(),
-                    };
-                    true
-                }
-                State::Waiting {
-                    waker: w,
-                    user_data: ud,
-                    ..
-                } => {
-                    *w = Some(waker);
-                    *ud = data;
-                    false
-                }
-                State::Notified { .. } => {
-                    debug_assert!(false, "register called on notified awaiter");
-                    false
-                }
-            }
+        // Check current state and transition if idle. The state
+        // mutation is confined to begin_waiting/update_waiting so
+        // no &mut State borrow overlaps with insert() below.
+        // SAFETY: Access is serialized by the caller's lock.
+        let needs_insert = if unsafe { aw.is_registered() } {
+            aw.update_waiting(waker, data);
+            false
+        } else {
+            aw.begin_waiting(waker, data, ptr::null_mut(), ptr::null_mut());
+            true
         };
 
         if needs_insert {
@@ -264,19 +245,20 @@ impl AwaiterSet {
         // SAFETY: We do not move the awaiter.
         let aw = unsafe { awaiter.get_unchecked_mut() };
         // SAFETY: Access is serialized by the caller's lock.
-        if matches!(unsafe { &*aw.state.get() }, State::Waiting { .. }) {
-            let state_ptr = aw.state.get();
-            // SAFETY: The awaiter was originally pinned and has not
-            // been moved.
-            let pin = unsafe { Pin::new_unchecked(aw) };
-            // SAFETY: The awaiter is in this set.
-            unsafe {
-                self.remove(pin);
-            }
-            // SAFETY: Access is serialized by the caller's lock.
-            unsafe {
-                *state_ptr = State::Idle;
-            }
+        if !matches!(unsafe { &*aw.state.get() }, State::Waiting { .. }) {
+            return;
+        }
+        let raw = ptr::from_mut(aw);
+        // SAFETY: The awaiter was originally pinned.
+        let pin = unsafe { Pin::new_unchecked(aw) };
+        // SAFETY: The awaiter is in this set.
+        unsafe {
+            self.remove(pin);
+        }
+        // SAFETY: The awaiter is still valid at the same address.
+        // remove() cleared its pointers but did not move it.
+        unsafe {
+            (*raw).cancel();
         }
     }
 
@@ -289,7 +271,7 @@ impl AwaiterSet {
         let ptr = self.head;
 
         // SAFETY: `head` is non-null, so it is a valid awaiter.
-        let next = unsafe { (*ptr).next() };
+        let (next, _) = unsafe { (*ptr).neighbors() };
 
         self.head = next;
 
@@ -495,7 +477,7 @@ mod tests {
             list.unregister(Pin::new_unchecked(&mut a));
         }
 
-        assert!(a.next().is_null());
+        assert!(a.neighbors().0.is_null());
     }
 
     #[test]
@@ -553,15 +535,15 @@ mod tests {
         let head = unsafe { list.peek() }.unwrap();
         assert_eq!(unsafe { head.user_data() }, 1);
 
-        let second = head.next();
+        let second = head.neighbors().0;
         assert!(!second.is_null());
         assert_eq!(unsafe { (*second).user_data() }, 2);
 
-        let third = unsafe { (*second).next() };
+        let third = unsafe { (*second).neighbors().0 };
         assert!(!third.is_null());
         assert_eq!(unsafe { (*third).user_data() }, 3);
 
-        let end = unsafe { (*third).next() };
+        let end = unsafe { (*third).neighbors().0 };
         assert!(end.is_null());
     }
 

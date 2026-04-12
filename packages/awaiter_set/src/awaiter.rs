@@ -197,24 +197,70 @@ impl Awaiter {
         }
     }
 
-    // Crate-internal accessors for AwaiterSet linked-set management.
+    // Crate-internal state transition methods for AwaiterSet.
 
-    pub(crate) fn next(&self) -> *mut Self {
-        // SAFETY: Only called on awaiters in the Waiting state.
-        match unsafe { &*self.state.get() } {
-            State::Waiting { next, .. } => *next,
-            _ => ptr::null_mut(),
+    /// Transitions from Idle to Waiting with the given waker, data,
+    /// and linked pointers.
+    pub(crate) fn begin_waiting(
+        &mut self,
+        waker: Waker,
+        data: usize,
+        next: *mut Self,
+        prev: *mut Self,
+    ) {
+        // SAFETY: &mut self guarantees exclusive access.
+        let state = unsafe { &mut *self.state.get() };
+        debug_assert!(
+            matches!(state, State::Idle),
+            "begin_waiting called on non-idle awaiter"
+        );
+        *state = State::Waiting {
+            waker: Some(waker),
+            user_data: data,
+            next,
+            prev,
+        };
+    }
+
+    /// Updates the waker and data of a Waiting awaiter without
+    /// changing its position in the set.
+    pub(crate) fn update_waiting(&mut self, new_waker: Waker, data: usize) {
+        // SAFETY: &mut self guarantees exclusive access.
+        let state = unsafe { &mut *self.state.get() };
+        if let State::Waiting {
+            waker, user_data, ..
+        } = state
+        {
+            *waker = Some(new_waker);
+            *user_data = data;
+        } else {
+            debug_assert!(false, "update_waiting called on non-waiting awaiter");
         }
     }
 
-    pub(crate) fn prev(&self) -> *mut Self {
-        // SAFETY: Only called on awaiters in the Waiting state.
+    /// Transitions from Waiting to Idle (cancellation without
+    /// notification).
+    pub(crate) fn cancel(&mut self) {
+        // SAFETY: &mut self guarantees exclusive access.
+        let state = unsafe { &mut *self.state.get() };
+        debug_assert!(
+            matches!(state, State::Waiting { .. }),
+            "cancel called on non-waiting awaiter"
+        );
+        *state = State::Idle;
+    }
+
+    /// Returns the linked pointers (next, prev) of a Waiting
+    /// awaiter.
+    pub(crate) fn neighbors(&self) -> (*mut Self, *mut Self) {
+        // SAFETY: Caller serializes access via the external lock.
         match unsafe { &*self.state.get() } {
-            State::Waiting { prev, .. } => *prev,
-            _ => ptr::null_mut(),
+            State::Waiting { next, prev, .. } => (*next, *prev),
+            _ => (ptr::null_mut(), ptr::null_mut()),
         }
     }
 
+    /// Updates the next pointer of a Waiting awaiter.
     pub(crate) fn set_next(&mut self, new_next: *mut Self) {
         // SAFETY: Only called on awaiters in the Waiting state.
         let state = unsafe { &mut *self.state.get() };
