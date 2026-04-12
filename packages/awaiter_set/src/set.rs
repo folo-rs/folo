@@ -466,7 +466,7 @@ mod tests {
     }
 
     #[test]
-    fn remove_clears_node_links() {
+    fn unregister_returns_to_idle() {
         let mut list = AwaiterSet::new();
         let mut a = Awaiter::new();
         let mut b = Awaiter::new();
@@ -477,7 +477,8 @@ mod tests {
             list.unregister(Pin::new_unchecked(&mut a));
         }
 
-        assert!(a.neighbors().0.is_null());
+        // After unregister, the awaiter is back in Idle state.
+        assert!(!unsafe { a.is_registered() });
     }
 
     #[test]

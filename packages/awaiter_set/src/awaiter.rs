@@ -1,9 +1,9 @@
 use std::cell::UnsafeCell;
+use std::fmt;
 use std::marker::PhantomPinned;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::task::Waker;
-use std::{fmt, ptr};
 
 // Interior state accessed by both the owning future (via Pin<&mut Self>
 // methods) and by AwaiterSet (via stored raw pointers that are later
@@ -145,11 +145,12 @@ impl Awaiter {
 
     /// Notifies this awaiter, consuming its waker.
     ///
-    /// Called by synchronization primitives after taking the awaiter
-    /// from the set via [`AwaiterSet::take_one()`]. Transitions the
-    /// awaiter from Waiting to Notified and returns the stored waker
-    /// so the primitive can call [`Waker::wake()`] outside any lock
-    /// scope to avoid re-entrancy issues.
+    /// Transitions from Waiting to Notified. Returns the stored
+    /// waker.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the awaiter is not in the Waiting state.
     pub(crate) fn notify(&mut self) -> Option<Waker> {
         // SAFETY: &mut self guarantees exclusive access.
         let state = unsafe { &mut *self.state.get() };
@@ -161,9 +162,8 @@ impl Awaiter {
                 waker
             }
             other => {
-                // Not in Waiting state — restore and return None.
                 *state = other;
-                None
+                panic!("notify called on non-waiting awaiter");
             }
         }
     }
@@ -224,17 +224,21 @@ impl Awaiter {
 
     /// Updates the waker and data of a Waiting awaiter without
     /// changing its position in the set.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the awaiter is not in the Waiting state.
     pub(crate) fn update_waiting(&mut self, new_waker: Waker, data: usize) {
         // SAFETY: &mut self guarantees exclusive access.
         let state = unsafe { &mut *self.state.get() };
-        if let State::Waiting {
-            waker, user_data, ..
-        } = state
-        {
-            *waker = Some(new_waker);
-            *user_data = data;
-        } else {
-            debug_assert!(false, "update_waiting called on non-waiting awaiter");
+        match state {
+            State::Waiting {
+                waker, user_data, ..
+            } => {
+                *waker = Some(new_waker);
+                *user_data = data;
+            }
+            _ => panic!("update_waiting called on non-waiting awaiter"),
         }
     }
 
@@ -252,28 +256,43 @@ impl Awaiter {
 
     /// Returns the linked pointers (next, prev) of a Waiting
     /// awaiter.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the awaiter is not in the Waiting state.
     pub(crate) fn neighbors(&self) -> (*mut Self, *mut Self) {
         // SAFETY: Caller serializes access via the external lock.
         match unsafe { &*self.state.get() } {
             State::Waiting { next, prev, .. } => (*next, *prev),
-            _ => (ptr::null_mut(), ptr::null_mut()),
+            _ => panic!("neighbors called on non-waiting awaiter"),
         }
     }
 
     /// Updates the next pointer of a Waiting awaiter.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the awaiter is not in the Waiting state.
     pub(crate) fn set_next(&mut self, new_next: *mut Self) {
-        // SAFETY: Only called on awaiters in the Waiting state.
+        // SAFETY: &mut self guarantees exclusive access.
         let state = unsafe { &mut *self.state.get() };
-        if let State::Waiting { next, .. } = state {
-            *next = new_next;
+        match state {
+            State::Waiting { next, .. } => *next = new_next,
+            _ => panic!("set_next called on non-waiting awaiter"),
         }
     }
 
+    /// Updates the prev pointer of a Waiting awaiter.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the awaiter is not in the Waiting state.
     pub(crate) fn set_prev(&mut self, new_prev: *mut Self) {
-        // SAFETY: Only called on awaiters in the Waiting state.
+        // SAFETY: &mut self guarantees exclusive access.
         let state = unsafe { &mut *self.state.get() };
-        if let State::Waiting { prev, .. } = state {
-            *prev = new_prev;
+        match state {
+            State::Waiting { prev, .. } => *prev = new_prev,
+            _ => panic!("set_prev called on non-waiting awaiter"),
         }
     }
 }
