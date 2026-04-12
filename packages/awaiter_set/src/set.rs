@@ -172,9 +172,8 @@ impl AwaiterSet {
     /// Registers an awaiter with the given waker.
     ///
     /// If the awaiter is idle, it is inserted into the set and the
-    /// waker is stored. If the awaiter is already registered, the
-    /// stored waker is replaced with the new one (the awaiter's
-    /// position in the set is unchanged).
+    /// waker is stored. If the awaiter is already registered, only
+    /// the stored waker is replaced.
     ///
     /// # Safety
     ///
