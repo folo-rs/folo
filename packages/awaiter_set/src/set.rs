@@ -46,32 +46,32 @@ use crate::awaiter::{Awaiter, State};
 /// // brief moment. It acquires the lock, calls notify_one,
 /// // then releases the lock before waking to avoid
 /// // reentrancy deadlocks.
-/// let notifier_set = Arc::clone(&set);
-/// thread::spawn(move || {
-///     let waker = {
-///         let mut guard = notifier_set.lock().unwrap();
-///         // SAFETY: We hold the lock that protects the set.
-///         loop {
-///             match unsafe { guard.notify_one() } {
-///                 Some(w) => break w,
-///                 None => {
-///                     drop(guard);
-///                     thread::yield_now();
-///                     guard = notifier_set.lock().unwrap();
+/// thread::spawn({
+///     let set = Arc::clone(&set);
+///     move || {
+///         let waker = {
+///             let mut guard = set.lock().unwrap();
+///             // SAFETY: We hold the lock that protects the set.
+///             loop {
+///                 match unsafe { guard.notify_one() } {
+///                     Some(w) => break w,
+///                     None => {
+///                         drop(guard);
+///                         thread::yield_now();
+///                         guard = set.lock().unwrap();
+///                     }
 ///                 }
 ///             }
-///         }
-///     };
-///     // Wake outside the lock to prevent deadlocks.
-///     waker.wake();
+///         };
+///         // Wake outside the lock to prevent deadlocks.
+///         waker.wake();
+///     }
 /// });
 ///
 /// // On the main thread, run an async task that registers an
 /// // awaiter and waits to be notified.
 /// # block_on(async {
-/// let awaiter = Box::pin(Awaiter::new());
-/// // Rebind as a named local so poll_fn can capture it.
-/// let mut awaiter = awaiter;
+/// let mut awaiter = Box::pin(Awaiter::new());
 ///
 /// poll_fn(|cx| {
 ///     let mut guard = set.lock().unwrap();
@@ -776,30 +776,32 @@ mod tests {
         let barrier = Arc::new(Barrier::new(2));
 
         // Thread 1: register an awaiter, wait for notification.
-        let shared1 = Arc::clone(&shared);
-        let barrier1 = Arc::clone(&barrier);
-        let handle = thread::spawn(move || {
-            let mut awaiter = Awaiter::new();
+        let handle = thread::spawn({
+            let shared = Arc::clone(&shared);
+            let barrier = Arc::clone(&barrier);
+            move || {
+                let mut awaiter = Awaiter::new();
 
-            {
-                let mut guard = shared1.lock().unwrap();
-                // SAFETY: We hold the lock.
-                unsafe {
-                    guard
-                        .set
-                        .register(Pin::new_unchecked(&mut awaiter), Waker::noop().clone());
+                {
+                    let mut guard = shared.lock().unwrap();
+                    // SAFETY: We hold the lock.
+                    unsafe {
+                        guard
+                            .set
+                            .register(Pin::new_unchecked(&mut awaiter), Waker::noop().clone());
+                    }
                 }
+
+                // Signal that we are registered.
+                barrier.wait();
+                // Wait for thread 2 to notify.
+                barrier.wait();
+
+                let guard = shared.lock().unwrap();
+                assert!(guard.notified);
+                // SAFETY: We hold the lock.
+                assert!(unsafe { Pin::new_unchecked(&awaiter).is_notified() });
             }
-
-            // Signal that we are registered.
-            barrier1.wait();
-            // Wait for thread 2 to notify.
-            barrier1.wait();
-
-            let guard = shared1.lock().unwrap();
-            assert!(guard.notified);
-            // SAFETY: We hold the lock.
-            assert!(unsafe { Pin::new_unchecked(&awaiter).is_notified() });
         });
 
         // Thread 2: wait for registration, then notify.
@@ -828,17 +830,19 @@ mod tests {
 
         let set = Arc::new(Mutex::new(AwaiterSet::new()));
 
-        let notifier_set = Arc::clone(&set);
-        thread::spawn(move || {
-            let waker = loop {
-                let mut guard = notifier_set.lock().unwrap();
-                if let Some(w) = unsafe { guard.notify_one() } {
-                    break w;
-                }
-                drop(guard);
-                thread::yield_now();
-            };
-            waker.wake();
+        thread::spawn({
+            let set = Arc::clone(&set);
+            move || {
+                let waker = loop {
+                    let mut guard = set.lock().unwrap();
+                    if let Some(w) = unsafe { guard.notify_one() } {
+                        break w;
+                    }
+                    drop(guard);
+                    thread::yield_now();
+                };
+                waker.wake();
+            }
         });
 
         block_on(async {
