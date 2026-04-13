@@ -104,7 +104,8 @@ value that has a destructor.
 # Cloning into closures
 
 When cloning a variable to move it into a closure, create a separate scope for the clone instead
-of polluting the parent scope with renamed variables.
+of polluting the parent scope with renamed variables. This applies to all closure types: async
+blocks, thread spawns, and regular closures.
 
 Bad:
 
@@ -120,6 +121,17 @@ spawn({
     let mutex = mutex.clone();
     async move {
         mutex.something();
+    }
+});
+```
+
+The same pattern applies to thread spawning:
+
+```rust
+thread::spawn({
+    let set = Arc::clone(&set);
+    move || {
+        set.do_work();
     }
 });
 ```
