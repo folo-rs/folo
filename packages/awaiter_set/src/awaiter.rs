@@ -2,7 +2,6 @@ use std::any::type_name;
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::marker::PhantomPinned;
-use std::mem;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr;
@@ -10,39 +9,37 @@ use std::task::Waker;
 
 // Interior state accessed by both the owning future (via Pin<&mut Self>
 // methods) and by AwaiterSet (via stored raw pointers that are later
-// turned into &mut Awaiter references). The UnsafeCell is required
+// turned into &mut Inner references). The UnsafeCell is required
 // because the set bypasses the borrow checker by reconstructing
 // references from raw pointers.
 //
-// Lifecycle: Idle -> Waiting -> Notified -> Idle.
+// Lifecycle: idle -> registered (waiting) -> notified -> idle.
 //
-// The Waiting state holds the waker, linked-set pointers, and
-// optional user data. After the primitive takes the awaiter from
-// the set via take_one(), it transitions to Notified (which
-// preserves user_data for the drop handler). The future's next
-// poll observes the notification and returns Ready.
-#[expect(
-    variant_size_differences,
-    reason = "Waiting is the hot path; boxing would add overhead"
-)]
-pub(crate) enum State {
-    /// Just created or returned to idle after notification was
-    /// consumed. Not in any set.
-    Idle,
+// When registered, the awaiter holds the waker, linked-set pointers,
+// and optional user data. After the primitive notifies the awaiter
+// (via notify_one), it becomes notified (preserving user_data for
+// the drop handler). The future's next poll observes the notification
+// and returns Ready.
+pub(crate) struct Inner {
+    pub(crate) waker: Option<Waker>,
+    pub(crate) user_data: usize,
+    pub(crate) next: *mut Awaiter,
+    pub(crate) prev: *mut Awaiter,
+    pub(crate) registered: bool,
+    pub(crate) notified: bool,
+}
 
-    /// Registered in a set. Holds the waker for async notification
-    /// and the intrusive linked-set pointers.
-    Waiting {
-        waker: Option<Waker>,
-        user_data: usize,
-        next: *mut Awaiter,
-        prev: *mut Awaiter,
-    },
-
-    /// Taken from the set by the synchronization primitive.
-    /// The owning future will observe this on the next poll and
-    /// complete with Ready.
-    Notified { user_data: usize },
+impl Inner {
+    pub(crate) fn idle() -> Self {
+        Self {
+            waker: None,
+            user_data: 0,
+            next: ptr::null_mut(),
+            prev: ptr::null_mut(),
+            registered: false,
+            notified: false,
+        }
+    }
 }
 
 /// Represents a single waiting future in an [`AwaiterSet`][crate::AwaiterSet].
@@ -68,16 +65,16 @@ pub(crate) enum State {
 /// The caller must hold the same lock that protects the set (or
 /// confine access to a single thread).
 pub struct Awaiter {
-    pub(crate) state: UnsafeCell<State>,
+    pub(crate) inner: UnsafeCell<Inner>,
     _pinned: PhantomPinned,
 }
 
 impl Awaiter {
-    /// Creates a new awaiter in the Idle state.
+    /// Creates a new awaiter in the idle state.
     #[must_use]
     pub fn new() -> Self {
         Self {
-            state: UnsafeCell::new(State::Idle),
+            inner: UnsafeCell::new(Inner::idle()),
             _pinned: PhantomPinned,
         }
     }
@@ -95,7 +92,7 @@ impl Awaiter {
     #[must_use]
     pub unsafe fn is_registered(&self) -> bool {
         // SAFETY: Caller guarantees serialized access.
-        !matches!(unsafe { &*self.state.get() }, State::Idle)
+        unsafe { (*self.inner.get()).registered }
     }
 
     /// Consumes a pending notification, returning `true` if one
@@ -103,7 +100,7 @@ impl Awaiter {
     ///
     /// If the primitive has notified this awaiter (via
     /// [`AwaiterSet::notify_one()`][crate::AwaiterSet::notify_one]), this method returns `true`
-    /// and resets the awaiter to the Idle state. The future should
+    /// and resets the awaiter to the idle state. The future should
     /// then complete with `Poll::Ready`.
     ///
     /// This is typically the first check in a future's `poll()`.
@@ -117,11 +114,9 @@ impl Awaiter {
         // SAFETY: We do not move self.
         let this = unsafe { self.get_unchecked_mut() };
         // SAFETY: Access is serialized by the caller's lock.
-        if matches!(unsafe { &*this.state.get() }, State::Notified { .. }) {
-            // SAFETY: Access is serialized by the caller's lock.
-            unsafe {
-                *this.state.get() = State::Idle;
-            }
+        let inner = unsafe { &mut *this.inner.get() };
+        if inner.notified {
+            *inner = Inner::idle();
             true
         } else {
             false
@@ -143,49 +138,12 @@ impl Awaiter {
     #[must_use]
     pub unsafe fn is_notified(self: Pin<&Self>) -> bool {
         // SAFETY: Access is serialized by the caller's lock.
-        matches!(unsafe { &*self.state.get() }, State::Notified { .. })
-    }
-
-    /// Notifies this awaiter, consuming its waker.
-    ///
-    /// Transitions from Waiting to Notified. Returns the stored
-    /// waker.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the awaiter is not in the Waiting state.
-    pub(crate) fn notify(&mut self) -> Option<Waker> {
-        // SAFETY: &mut self guarantees exclusive access.
-        let state = unsafe { &mut *self.state.get() };
-        match mem::replace(state, State::Idle) {
-            State::Waiting {
-                waker, user_data, ..
-            } => {
-                *state = State::Notified { user_data };
-                waker
-            }
-            other => {
-                *state = other;
-                panic!("notify called on non-waiting awaiter");
-            }
-        }
-    }
-
-    /// Extracts the waker without changing the notification state.
-    #[cfg(test)]
-    pub(crate) fn take_waker(&mut self) -> Option<Waker> {
-        // SAFETY: &mut self guarantees exclusive access.
-        let state = unsafe { &mut *self.state.get() };
-        if let State::Waiting { waker, .. } = state {
-            waker.take()
-        } else {
-            None
-        }
+        unsafe { (*self.inner.get()).notified }
     }
 
     /// Returns the caller-defined user data.
     ///
-    /// Returns `0` for awaiters in the Idle state.
+    /// Returns `0` for awaiters in the idle state.
     ///
     /// # Safety
     ///
@@ -193,136 +151,8 @@ impl Awaiter {
     /// (or confined to a single thread).
     #[must_use]
     pub unsafe fn user_data(&self) -> usize {
-        // SAFETY: &self is sufficient for reading.
-        match unsafe { &*self.state.get() } {
-            State::Idle => 0,
-            State::Waiting { user_data, .. } | State::Notified { user_data } => *user_data,
-        }
-    }
-
-    // Crate-internal state transition methods for AwaiterSet.
-
-    /// Transitions from Idle to Waiting with the given waker, data,
-    /// and linked pointers.
-    pub(crate) fn begin_waiting(
-        &mut self,
-        waker: Waker,
-        data: usize,
-        next: *mut Self,
-        prev: *mut Self,
-    ) {
-        // SAFETY: &mut self guarantees exclusive access.
-        let state = unsafe { &mut *self.state.get() };
-        debug_assert!(
-            matches!(state, State::Idle),
-            "begin_waiting called on non-idle awaiter"
-        );
-        *state = State::Waiting {
-            waker: Some(waker),
-            user_data: data,
-            next,
-            prev,
-        };
-    }
-
-    /// Updates the waker and data of a Waiting awaiter without
-    /// changing its position in the set.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the awaiter is not in the Waiting state.
-    pub(crate) fn update_waiting(&mut self, new_waker: Waker, data: usize) {
-        // SAFETY: &mut self guarantees exclusive access.
-        let state = unsafe { &mut *self.state.get() };
-        match state {
-            State::Waiting {
-                waker, user_data, ..
-            } => {
-                *waker = Some(new_waker);
-                *user_data = data;
-            }
-            _ => panic!("update_waiting called on non-waiting awaiter"),
-        }
-    }
-
-    /// Transitions from Waiting to Idle (cancellation without
-    /// notification).
-    pub(crate) fn cancel(&mut self) {
-        // SAFETY: &mut self guarantees exclusive access.
-        let state = unsafe { &mut *self.state.get() };
-        debug_assert!(
-            matches!(state, State::Waiting { .. }),
-            "cancel called on non-waiting awaiter"
-        );
-        *state = State::Idle;
-    }
-
-    /// Returns the linked pointers (next, prev) of a Waiting
-    /// awaiter.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the awaiter is not in the Waiting state.
-    pub(crate) fn neighbors(&self) -> (*mut Self, *mut Self) {
-        // SAFETY: Caller serializes access via the external lock.
-        match unsafe { &*self.state.get() } {
-            State::Waiting { next, prev, .. } => (*next, *prev),
-            _ => panic!("neighbors called on non-waiting awaiter"),
-        }
-    }
-
-    /// Updates the next pointer of a Waiting awaiter.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the awaiter is not in the Waiting state.
-    pub(crate) fn set_next(&mut self, new_next: *mut Self) {
-        // SAFETY: &mut self guarantees exclusive access.
-        let state = unsafe { &mut *self.state.get() };
-        match state {
-            State::Waiting { next, .. } => *next = new_next,
-            _ => panic!("set_next called on non-waiting awaiter"),
-        }
-    }
-
-    /// Updates the prev pointer of a Waiting awaiter.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the awaiter is not in the Waiting state.
-    pub(crate) fn set_prev(&mut self, new_prev: *mut Self) {
-        // SAFETY: &mut self guarantees exclusive access.
-        let state = unsafe { &mut *self.state.get() };
-        match state {
-            State::Waiting { prev, .. } => *prev = new_prev,
-            _ => panic!("set_prev called on non-waiting awaiter"),
-        }
-    }
-
-    /// Clears both linked pointers to null.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the awaiter is not in the Waiting state.
-    pub(crate) fn clear_neighbors(&mut self) {
-        self.set_neighbors(ptr::null_mut(), ptr::null_mut());
-    }
-
-    /// Sets both linked pointers at once.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the awaiter is not in the Waiting state.
-    pub(crate) fn set_neighbors(&mut self, new_next: *mut Self, new_prev: *mut Self) {
-        // SAFETY: &mut self guarantees exclusive access.
-        let state = unsafe { &mut *self.state.get() };
-        match state {
-            State::Waiting { next, prev, .. } => {
-                *next = new_next;
-                *prev = new_prev;
-            }
-            _ => panic!("set_neighbors called on non-waiting awaiter"),
-        }
+        // SAFETY: Access is serialized by the caller's lock.
+        unsafe { (*self.inner.get()).user_data }
     }
 }
 
@@ -347,10 +177,7 @@ impl RefUnwindSafe for Awaiter {}
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for Awaiter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct(type_name::<Self>())
-            // SAFETY: Debug output is best-effort; no concurrent
-            // mutation during formatting.
-            .finish_non_exhaustive()
+        f.debug_struct(type_name::<Self>()).finish_non_exhaustive()
     }
 }
 
@@ -517,23 +344,6 @@ mod tests {
     }
 
     #[test]
-    fn take_waker_without_notify() {
-        let mut a = Awaiter::new();
-        let mut set = AwaiterSet::new();
-
-        // SAFETY: Test has exclusive access.
-        unsafe {
-            set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
-        }
-
-        let waker = a.take_waker();
-        assert!(waker.is_some());
-        // Not notified — take_waker does not set notified.
-        // SAFETY: Test has exclusive access.
-        assert!(!unsafe { Pin::new_unchecked(&a).is_notified() });
-    }
-
-    #[test]
     fn full_lifecycle_register_notify_take() {
         let mut a = Awaiter::new();
         let mut set = AwaiterSet::new();
@@ -598,7 +408,7 @@ mod tests {
         let mut a = Awaiter::new();
         let mut set = AwaiterSet::new();
 
-        // First cycle: register → notify → take_notification.
+        // First cycle: register -> notify -> take_notification.
         // SAFETY: Test has exclusive access.
         unsafe {
             set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());

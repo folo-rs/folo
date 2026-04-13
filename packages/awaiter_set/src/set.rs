@@ -5,7 +5,36 @@ use std::pin::Pin;
 use std::ptr;
 use std::task::Waker;
 
-use crate::awaiter::{Awaiter, State};
+use crate::awaiter::{Awaiter, Inner};
+
+/// Obtains a mutable reference to the inner state of an awaiter
+/// through a raw pointer.
+///
+/// # Safety
+///
+/// `ptr` must point to a valid, pinned `Awaiter`. Access to the inner
+/// state must be serialized by the caller (via a lock or single-thread
+/// confinement).
+unsafe fn inner_mut(ptr: *mut Awaiter) -> &'static mut Inner {
+    // SAFETY: Caller guarantees ptr is valid.
+    let cell = unsafe { &(*ptr).inner };
+    // SAFETY: Caller guarantees serialized access.
+    unsafe { &mut *cell.get() }
+}
+
+/// Obtains a shared reference to the inner state of an awaiter
+/// through a raw pointer.
+///
+/// # Safety
+///
+/// `ptr` must point to a valid, pinned `Awaiter`. Access to the inner
+/// state must be serialized by the caller.
+unsafe fn inner_ref(ptr: *const Awaiter) -> &'static Inner {
+    // SAFETY: Caller guarantees ptr is valid.
+    let cell = unsafe { &(*ptr).inner };
+    // SAFETY: Caller guarantees serialized access.
+    unsafe { &*cell.get() }
+}
 
 /// Tracks awaiters for a synchronization primitive.
 ///
@@ -91,23 +120,21 @@ impl AwaiterSet {
     ///
     /// The awaiter must remain valid and pinned until removed from
     /// the set.
-    pub(crate) unsafe fn insert(&mut self, awaiter: Pin<&mut Awaiter>) {
+    unsafe fn insert(&mut self, awaiter: Pin<&mut Awaiter>) {
         // SAFETY: We do not move the awaiter. We only store the
         // pointer for the linked structure.
         let ptr = unsafe { ptr::from_mut(awaiter.get_unchecked_mut()) };
 
         // SAFETY: ptr is valid (we just derived it from Pin).
-        let node = unsafe { &mut *ptr };
-
-        node.set_neighbors(ptr::null_mut(), self.tail);
+        let inner = unsafe { inner_mut(ptr) };
+        inner.next = ptr::null_mut();
+        inner.prev = self.tail;
 
         if self.tail.is_null() {
             self.head = ptr;
         } else {
             // SAFETY: `tail` is non-null and valid (set invariant).
-            unsafe {
-                (*self.tail).set_next(ptr);
-            }
+            unsafe { inner_mut(self.tail) }.next = ptr;
         }
 
         self.tail = ptr;
@@ -118,40 +145,38 @@ impl AwaiterSet {
     /// # Safety
     ///
     /// The awaiter must currently be in this set.
-    pub(crate) unsafe fn remove(&mut self, awaiter: Pin<&mut Awaiter>) {
+    unsafe fn remove(&mut self, awaiter: Pin<&mut Awaiter>) {
         // SAFETY: We do not move the awaiter.
         let ptr = unsafe { ptr::from_mut(awaiter.get_unchecked_mut()) };
         // SAFETY: ptr is valid.
-        let node = unsafe { &*ptr };
-        let (next, prev) = node.neighbors();
+        let inner = unsafe { inner_ref(ptr) };
+        let next = inner.next;
+        let prev = inner.prev;
 
         if prev.is_null() {
             self.head = next;
         } else {
             // SAFETY: `prev` is a valid awaiter in the set.
-            unsafe {
-                (*prev).set_next(next);
-            }
+            unsafe { inner_mut(prev) }.next = next;
         }
 
         if next.is_null() {
             self.tail = prev;
         } else {
             // SAFETY: `next` is a valid awaiter in the set.
-            unsafe {
-                (*next).set_prev(prev);
-            }
+            unsafe { inner_mut(next) }.prev = prev;
         }
 
         // Clear the removed node's links.
         // SAFETY: ptr is valid.
-        let node = unsafe { &mut *ptr };
-        node.clear_neighbors();
+        let inner = unsafe { inner_mut(ptr) };
+        inner.next = ptr::null_mut();
+        inner.prev = ptr::null_mut();
     }
 
     /// Removes one awaiter and returns its waker.
     ///
-    /// The awaiter transitions to the Notified state. The future
+    /// The awaiter transitions to the notified state. The future
     /// that owns it will observe this on its next poll via
     /// [`Awaiter::take_notification()`] and complete with `Ready`.
     ///
@@ -165,8 +190,30 @@ impl AwaiterSet {
     /// The set and all its awaiters must be protected by the same
     /// lock (or confined to a single thread).
     pub unsafe fn notify_one(&mut self) -> Option<Waker> {
-        let awaiter = self.take_one()?;
-        awaiter.notify()
+        if self.head.is_null() {
+            return None;
+        }
+
+        let ptr = self.head;
+
+        // SAFETY: `head` is non-null, so it is a valid awaiter.
+        let inner = unsafe { inner_mut(ptr) };
+        let next = inner.next;
+
+        self.head = next;
+
+        if next.is_null() {
+            self.tail = ptr::null_mut();
+        } else {
+            // SAFETY: `next` is a valid awaiter in the set.
+            unsafe { inner_mut(next) }.prev = ptr::null_mut();
+        }
+
+        // Transition the removed awaiter to notified.
+        inner.next = ptr::null_mut();
+        inner.prev = ptr::null_mut();
+        inner.notified = true;
+        inner.waker.take()
     }
 
     /// Registers an awaiter with the given waker.
@@ -208,19 +255,24 @@ impl AwaiterSet {
         // address stability.
         let aw = unsafe { awaiter.get_unchecked_mut() };
 
-        // Check current state and transition if idle. The state
-        // mutation is confined to begin_waiting/update_waiting so
-        // no &mut State borrow overlaps with insert() below.
         // SAFETY: Access is serialized by the caller's lock.
-        let needs_insert = if unsafe { aw.is_registered() } {
-            aw.update_waiting(waker, data);
-            false
-        } else {
-            aw.begin_waiting(waker, data, ptr::null_mut(), ptr::null_mut());
-            true
-        };
+        let inner = unsafe { &mut *aw.inner.get() };
 
-        if needs_insert {
+        if inner.registered {
+            // Already registered — update waker and data in place.
+            inner.waker = Some(waker);
+            inner.user_data = data;
+        } else {
+            // New registration — initialize fields and insert.
+            *inner = Inner {
+                waker: Some(waker),
+                user_data: data,
+                next: ptr::null_mut(),
+                prev: ptr::null_mut(),
+                registered: true,
+                notified: false,
+            };
+
             // SAFETY: The awaiter was originally pinned and has not
             // been moved.
             let pin = unsafe { Pin::new_unchecked(aw) };
@@ -231,8 +283,9 @@ impl AwaiterSet {
         }
     }
 
-    /// Removes an awaiter from the set, returning it to the Idle
-    /// state. No-op if the awaiter is not currently registered.
+    /// Removes an awaiter from the set, returning it to the idle
+    /// state. No-op if the awaiter is not currently registered
+    /// in the waiting state.
     ///
     /// Called by a future's drop handler when the future is cancelled
     /// before being notified.
@@ -245,53 +298,30 @@ impl AwaiterSet {
         // SAFETY: We do not move the awaiter.
         let aw = unsafe { awaiter.get_unchecked_mut() };
         // SAFETY: Access is serialized by the caller's lock.
-        if !matches!(unsafe { &*aw.state.get() }, State::Waiting { .. }) {
+        let inner = unsafe { &*aw.inner.get() };
+
+        // Only remove awaiters that are waiting (registered but not
+        // yet notified). Idle and notified awaiters are not in the
+        // set.
+        if !inner.registered || inner.notified {
             return;
         }
+
         let raw = ptr::from_mut(aw);
+
+        // SAFETY: raw is valid (derived from aw above).
+        let aw_ref = unsafe { &mut *raw };
         // SAFETY: The awaiter was originally pinned.
-        let pin = unsafe { Pin::new_unchecked(aw) };
+        let pin = unsafe { Pin::new_unchecked(aw_ref) };
         // SAFETY: The awaiter is in this set.
         unsafe {
             self.remove(pin);
         }
+
         // SAFETY: The awaiter is still valid at the same address.
         // remove() cleared its pointers but did not move it.
-        unsafe {
-            (*raw).cancel();
-        }
-    }
-
-    // Removes and returns one awaiter from the set.
-    fn take_one(&mut self) -> Option<&mut Awaiter> {
-        if self.head.is_null() {
-            return None;
-        }
-
-        let ptr = self.head;
-
-        // SAFETY: `head` is non-null, so it is a valid awaiter.
-        let (next, _) = unsafe { (*ptr).neighbors() };
-
-        self.head = next;
-
-        if next.is_null() {
-            self.tail = ptr::null_mut();
-        } else {
-            // SAFETY: `next` is a valid awaiter in the set.
-            unsafe {
-                (*next).set_prev(ptr::null_mut());
-            }
-        }
-
-        // Clear the removed awaiter's links.
-        // SAFETY: `ptr` is valid (we just read from it above).
-        let node = unsafe { &mut *ptr };
-        node.clear_neighbors();
-
-        // We just removed it, so no other reference exists in the
-        // set. The `&mut self` borrow prevents concurrent operations.
-        Some(node)
+        let inner = unsafe { inner_mut(raw) };
+        *inner = Inner::idle();
     }
 }
 
@@ -357,13 +387,13 @@ mod tests {
     }
 
     #[test]
-    fn take_one_on_empty_returns_none() {
+    fn notify_one_on_empty_returns_none() {
         let mut list = AwaiterSet::new();
-        assert!(list.take_one().is_none());
+        assert!(unsafe { list.notify_one() }.is_none());
     }
 
     #[test]
-    fn push_and_pop_single_element() {
+    fn register_and_notify_single_element() {
         let mut list = AwaiterSet::new();
         let mut a = Awaiter::new();
 
@@ -373,8 +403,9 @@ mod tests {
         assert!(!unsafe { list.is_empty() });
         assert_eq!(unsafe { list.peek().unwrap().user_data() }, 1);
 
-        let popped = list.take_one();
-        assert_eq!(unsafe { popped.unwrap().user_data() }, 1);
+        let waker = unsafe { list.notify_one() };
+        assert!(waker.is_some());
+        assert_eq!(unsafe { a.user_data() }, 1);
         assert!(unsafe { list.is_empty() });
     }
 
@@ -393,12 +424,15 @@ mod tests {
 
         assert!(!unsafe { list.is_empty() });
 
-        assert_eq!(unsafe { list.take_one().unwrap().user_data() }, 1);
-        assert_eq!(unsafe { list.take_one().unwrap().user_data() }, 2);
-        assert_eq!(unsafe { list.take_one().unwrap().user_data() }, 3);
+        drop(unsafe { list.notify_one() });
+        assert_eq!(unsafe { a.user_data() }, 1);
+        drop(unsafe { list.notify_one() });
+        assert_eq!(unsafe { b.user_data() }, 2);
+        drop(unsafe { list.notify_one() });
+        assert_eq!(unsafe { c.user_data() }, 3);
 
         assert!(unsafe { list.is_empty() });
-        assert!(list.take_one().is_none());
+        assert!(unsafe { list.notify_one() }.is_none());
     }
 
     #[test]
@@ -413,7 +447,8 @@ mod tests {
             list.unregister(Pin::new_unchecked(&mut a));
         }
 
-        assert_eq!(unsafe { list.take_one().unwrap().user_data() }, 2);
+        drop(unsafe { list.notify_one() });
+        assert_eq!(unsafe { b.user_data() }, 2);
         assert!(unsafe { list.is_empty() });
     }
 
@@ -429,7 +464,8 @@ mod tests {
             list.unregister(Pin::new_unchecked(&mut b));
         }
 
-        assert_eq!(unsafe { list.take_one().unwrap().user_data() }, 1);
+        drop(unsafe { list.notify_one() });
+        assert_eq!(unsafe { a.user_data() }, 1);
         assert!(unsafe { list.is_empty() });
     }
 
@@ -447,8 +483,10 @@ mod tests {
             list.unregister(Pin::new_unchecked(&mut b));
         }
 
-        assert_eq!(unsafe { list.take_one().unwrap().user_data() }, 1);
-        assert_eq!(unsafe { list.take_one().unwrap().user_data() }, 3);
+        drop(unsafe { list.notify_one() });
+        assert_eq!(unsafe { a.user_data() }, 1);
+        drop(unsafe { list.notify_one() });
+        assert_eq!(unsafe { c.user_data() }, 3);
         assert!(unsafe { list.is_empty() });
     }
 
@@ -493,7 +531,8 @@ mod tests {
             list.register_with_data(Pin::new_unchecked(&mut b), waker(), 2);
         }
 
-        assert_eq!(unsafe { list.take_one().unwrap().user_data() }, 2);
+        drop(unsafe { list.notify_one() });
+        assert_eq!(unsafe { b.user_data() }, 2);
         assert!(unsafe { list.is_empty() });
     }
 
@@ -509,14 +548,17 @@ mod tests {
             list.register_with_data(Pin::new_unchecked(&mut b), waker(), 2);
         }
 
-        assert_eq!(unsafe { list.take_one().unwrap().user_data() }, 1);
+        drop(unsafe { list.notify_one() });
+        assert_eq!(unsafe { a.user_data() }, 1);
 
         unsafe {
             list.register_with_data(Pin::new_unchecked(&mut c), waker(), 3);
         }
 
-        assert_eq!(unsafe { list.take_one().unwrap().user_data() }, 2);
-        assert_eq!(unsafe { list.take_one().unwrap().user_data() }, 3);
+        drop(unsafe { list.notify_one() });
+        assert_eq!(unsafe { b.user_data() }, 2);
+        drop(unsafe { list.notify_one() });
+        assert_eq!(unsafe { c.user_data() }, 3);
         assert!(unsafe { list.is_empty() });
     }
 
@@ -536,20 +578,20 @@ mod tests {
         let head = unsafe { list.peek() }.unwrap();
         assert_eq!(unsafe { head.user_data() }, 1);
 
-        let second = head.neighbors().0;
+        let second = unsafe { (*head.inner.get()).next };
         assert!(!second.is_null());
         assert_eq!(unsafe { (*second).user_data() }, 2);
 
-        let third = unsafe { (*second).neighbors().0 };
+        let third = unsafe { (*(*second).inner.get()).next };
         assert!(!third.is_null());
         assert_eq!(unsafe { (*third).user_data() }, 3);
 
-        let end = unsafe { (*third).neighbors().0 };
+        let end = unsafe { (*(*third).inner.get()).next };
         assert!(end.is_null());
     }
 
     #[test]
-    fn wakers_survive_list_operations() {
+    fn wakers_survive_notify() {
         let mut list = AwaiterSet::new();
         let mut a = Awaiter::new();
 
@@ -557,13 +599,12 @@ mod tests {
             list.register(Pin::new_unchecked(&mut a), waker());
         }
 
-        let popped = list.take_one().unwrap();
-        let recovered = popped.take_waker();
+        let recovered = unsafe { list.notify_one() };
         assert!(recovered.is_some());
     }
 
     #[test]
-    fn user_data_survives_list_operations() {
+    fn user_data_survives_notify() {
         let mut list = AwaiterSet::new();
         let mut a = Awaiter::new();
 
@@ -571,8 +612,8 @@ mod tests {
             list.register_with_data(Pin::new_unchecked(&mut a), waker(), 7);
         }
 
-        let popped = list.take_one().unwrap();
-        assert_eq!(unsafe { popped.user_data() }, 7);
+        drop(unsafe { list.notify_one() });
+        assert_eq!(unsafe { a.user_data() }, 7);
     }
 
     #[test]
@@ -603,8 +644,9 @@ mod tests {
             }
         }
 
-        for i in 0..ELEMENT_COUNT {
-            assert_eq!(unsafe { list.take_one().unwrap().user_data() }, i);
+        for (i, node) in nodes.iter().enumerate() {
+            drop(unsafe { list.notify_one() });
+            assert_eq!(unsafe { node.user_data() }, i);
         }
 
         assert!(unsafe { list.is_empty() });
