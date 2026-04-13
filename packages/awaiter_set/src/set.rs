@@ -53,6 +53,74 @@ unsafe fn inner_ref(ptr: *const Awaiter) -> &'static Inner {
 /// registered with it — for example, by protecting them with a
 /// single synchronous [`Mutex`][std::sync::Mutex] or by confining the
 /// synchronization primitive and all its futures to a single thread.
+///
+/// # Examples
+///
+/// An awaiter set shared between an async future and a notifying
+/// thread, synchronized via a [`Mutex`][std::sync::Mutex].
+///
+/// ```
+/// use std::future::poll_fn;
+/// use std::pin::Pin;
+/// use std::sync::{Arc, Mutex};
+/// use std::task::Poll;
+/// use std::thread;
+///
+/// use awaiter_set::{Awaiter, AwaiterSet};
+/// # use futures::executor::block_on;
+///
+/// let set = Arc::new(Mutex::new(AwaiterSet::new()));
+///
+/// // Spawn a thread that will notify one awaiter after a
+/// // brief moment. It acquires the lock, calls notify_one,
+/// // then releases the lock before waking to avoid
+/// // reentrancy deadlocks.
+/// let notifier_set = Arc::clone(&set);
+/// thread::spawn(move || {
+///     let waker = {
+///         let mut guard = notifier_set.lock().unwrap();
+///         // SAFETY: We hold the lock that protects the set.
+///         loop {
+///             match unsafe { guard.notify_one() } {
+///                 Some(w) => break w,
+///                 None => {
+///                     drop(guard);
+///                     thread::yield_now();
+///                     guard = notifier_set.lock().unwrap();
+///                 }
+///             }
+///         }
+///     };
+///     // Wake outside the lock to prevent deadlocks.
+///     waker.wake();
+/// });
+///
+/// // On the main thread, run an async task that registers an
+/// // awaiter and waits to be notified.
+/// # block_on(async {
+/// let awaiter = Box::pin(Awaiter::new());
+/// // Rebind as a named local so poll_fn can capture it.
+/// let mut awaiter = awaiter;
+///
+/// poll_fn(|cx| {
+///     let mut guard = set.lock().unwrap();
+///
+///     // SAFETY: We hold the lock that protects the set.
+///     if unsafe { awaiter.as_mut().take_notification() } {
+///         return Poll::Ready(());
+///     }
+///
+///     // SAFETY: We hold the lock. The awaiter remains pinned
+///     // and valid until removed from the set.
+///     unsafe {
+///         guard.register(awaiter.as_mut(), cx.waker().clone());
+///     }
+///
+///     Poll::Pending
+/// })
+/// .await;
+/// # });
+/// ```
 pub struct AwaiterSet {
     // Both are null if the set is empty. We add new entries at the tail,
     // though as the API contract is that of a set, there is no specific
@@ -759,5 +827,50 @@ mod tests {
         barrier.wait();
 
         handle.join().unwrap();
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn async_register_notify_across_threads() {
+        use std::future::poll_fn;
+        use std::sync::{Arc, Mutex};
+        use std::task::Poll;
+        use std::thread;
+
+        use futures::executor::block_on;
+
+        let set = Arc::new(Mutex::new(AwaiterSet::new()));
+
+        let notifier_set = Arc::clone(&set);
+        thread::spawn(move || {
+            let waker = loop {
+                let mut guard = notifier_set.lock().unwrap();
+                if let Some(w) = unsafe { guard.notify_one() } {
+                    break w;
+                }
+                drop(guard);
+                thread::yield_now();
+            };
+            waker.wake();
+        });
+
+        block_on(async {
+            let mut awaiter = Box::pin(Awaiter::new());
+
+            poll_fn(|cx| {
+                let mut guard = set.lock().unwrap();
+
+                if unsafe { awaiter.as_mut().take_notification() } {
+                    return Poll::Ready(());
+                }
+
+                unsafe {
+                    guard.register(awaiter.as_mut(), cx.waker().clone());
+                }
+
+                Poll::Pending
+            })
+            .await;
+        });
     }
 }
