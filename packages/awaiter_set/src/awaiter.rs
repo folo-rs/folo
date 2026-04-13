@@ -9,7 +9,7 @@ use std::task::Waker;
 
 // Interior state accessed by both the owning future (via Pin<&mut Self>
 // methods) and by AwaiterSet (via stored raw pointers that are later
-// turned into &mut Inner references). The UnsafeCell is required
+// turned into &mut State references). The UnsafeCell is required
 // because the set bypasses the borrow checker by reconstructing
 // references from raw pointers.
 //
@@ -20,7 +20,7 @@ use std::task::Waker;
 // (via notify_one), it becomes notified (preserving user_data for
 // the drop handler). The future's next poll observes the notification
 // and returns Ready.
-pub(crate) struct Inner {
+pub(crate) struct State {
     pub(crate) waker: Option<Waker>,
     pub(crate) user_data: usize,
     pub(crate) next: *mut Awaiter,
@@ -29,7 +29,7 @@ pub(crate) struct Inner {
     pub(crate) notified: bool,
 }
 
-impl Inner {
+impl State {
     pub(crate) fn idle() -> Self {
         Self {
             waker: None,
@@ -65,7 +65,7 @@ impl Inner {
 /// The caller must hold the same lock that protects the set (or
 /// confine access to a single thread).
 pub struct Awaiter {
-    pub(crate) inner: UnsafeCell<Inner>,
+    pub(crate) state: UnsafeCell<State>,
     _pinned: PhantomPinned,
 }
 
@@ -74,7 +74,7 @@ impl Awaiter {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            inner: UnsafeCell::new(Inner::idle()),
+            state: UnsafeCell::new(State::idle()),
             _pinned: PhantomPinned,
         }
     }
@@ -92,7 +92,7 @@ impl Awaiter {
     #[must_use]
     pub unsafe fn is_registered(&self) -> bool {
         // SAFETY: Caller guarantees serialized access.
-        unsafe { (*self.inner.get()).registered }
+        unsafe { (*self.state.get()).registered }
     }
 
     /// Consumes a pending notification, returning `true` if one
@@ -114,9 +114,9 @@ impl Awaiter {
         // SAFETY: We do not move self.
         let this = unsafe { self.get_unchecked_mut() };
         // SAFETY: Access is serialized by the caller's lock.
-        let inner = unsafe { &mut *this.inner.get() };
+        let inner = unsafe { &mut *this.state.get() };
         if inner.notified {
-            *inner = Inner::idle();
+            *inner = State::idle();
             true
         } else {
             false
@@ -138,7 +138,7 @@ impl Awaiter {
     #[must_use]
     pub unsafe fn is_notified(self: Pin<&Self>) -> bool {
         // SAFETY: Access is serialized by the caller's lock.
-        unsafe { (*self.inner.get()).notified }
+        unsafe { (*self.state.get()).notified }
     }
 
     /// Returns the caller-defined user data.
@@ -152,7 +152,7 @@ impl Awaiter {
     #[must_use]
     pub unsafe fn user_data(&self) -> usize {
         // SAFETY: Access is serialized by the caller's lock.
-        unsafe { (*self.inner.get()).user_data }
+        unsafe { (*self.state.get()).user_data }
     }
 }
 

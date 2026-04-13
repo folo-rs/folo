@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::ptr;
 use std::task::Waker;
 
-use crate::awaiter::{Awaiter, Inner};
+use crate::awaiter::{Awaiter, State};
 
 /// Obtains a mutable reference to the inner state of an awaiter
 /// through a raw pointer.
@@ -15,9 +15,9 @@ use crate::awaiter::{Awaiter, Inner};
 /// `ptr` must point to a valid, pinned `Awaiter`. Access to the inner
 /// state must be serialized by the caller (via a lock or single-thread
 /// confinement).
-unsafe fn inner_mut(ptr: *mut Awaiter) -> &'static mut Inner {
+unsafe fn inner_mut(ptr: *mut Awaiter) -> &'static mut State {
     // SAFETY: Caller guarantees ptr is valid.
-    let cell = unsafe { &(*ptr).inner };
+    let cell = unsafe { &(*ptr).state };
     // SAFETY: Caller guarantees serialized access.
     unsafe { &mut *cell.get() }
 }
@@ -29,9 +29,9 @@ unsafe fn inner_mut(ptr: *mut Awaiter) -> &'static mut Inner {
 ///
 /// `ptr` must point to a valid, pinned `Awaiter`. Access to the inner
 /// state must be serialized by the caller.
-unsafe fn inner_ref(ptr: *const Awaiter) -> &'static Inner {
+unsafe fn inner_ref(ptr: *const Awaiter) -> &'static State {
     // SAFETY: Caller guarantees ptr is valid.
-    let cell = unsafe { &(*ptr).inner };
+    let cell = unsafe { &(*ptr).state };
     // SAFETY: Caller guarantees serialized access.
     unsafe { &*cell.get() }
 }
@@ -324,7 +324,7 @@ impl AwaiterSet {
         let aw = unsafe { awaiter.get_unchecked_mut() };
 
         // SAFETY: Access is serialized by the caller's lock.
-        let inner = unsafe { &mut *aw.inner.get() };
+        let inner = unsafe { &mut *aw.state.get() };
 
         if inner.registered {
             // Already registered — update waker and data in place.
@@ -332,7 +332,7 @@ impl AwaiterSet {
             inner.user_data = data;
         } else {
             // New registration — initialize fields and insert.
-            *inner = Inner {
+            *inner = State {
                 waker: Some(waker),
                 user_data: data,
                 next: ptr::null_mut(),
@@ -366,7 +366,7 @@ impl AwaiterSet {
         // SAFETY: We do not move the awaiter.
         let aw = unsafe { awaiter.get_unchecked_mut() };
         // SAFETY: Access is serialized by the caller's lock.
-        let inner = unsafe { &*aw.inner.get() };
+        let inner = unsafe { &*aw.state.get() };
 
         // Only remove awaiters that are waiting (registered but not
         // yet notified). Idle and notified awaiters are not in the
@@ -389,7 +389,7 @@ impl AwaiterSet {
         // SAFETY: The awaiter is still valid at the same address.
         // remove() cleared its pointers but did not move it.
         let inner = unsafe { inner_mut(raw) };
-        *inner = Inner::idle();
+        *inner = State::idle();
     }
 }
 
@@ -646,15 +646,15 @@ mod tests {
         let head = unsafe { list.peek() }.unwrap();
         assert_eq!(unsafe { head.user_data() }, 1);
 
-        let second = unsafe { (*head.inner.get()).next };
+        let second = unsafe { (*head.state.get()).next };
         assert!(!second.is_null());
         assert_eq!(unsafe { (*second).user_data() }, 2);
 
-        let third = unsafe { (*(*second).inner.get()).next };
+        let third = unsafe { (*(*second).state.get()).next };
         assert!(!third.is_null());
         assert_eq!(unsafe { (*third).user_data() }, 3);
 
-        let end = unsafe { (*(*third).inner.get()).next };
+        let end = unsafe { (*(*third).state.get()).next };
         assert!(end.is_null());
     }
 
