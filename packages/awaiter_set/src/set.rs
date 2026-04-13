@@ -102,17 +102,6 @@ pub struct AwaiterSet {
 
 impl AwaiterSet {
     /// Creates a new empty set.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use awaiter_set::AwaiterSet;
-    ///
-    /// let set = AwaiterSet::new();
-    ///
-    /// // SAFETY: Single-threaded example requires no synchronization.
-    /// assert!(unsafe { set.is_empty() });
-    /// ```
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -162,25 +151,25 @@ impl AwaiterSet {
     unsafe fn insert(&mut self, awaiter: Pin<&mut Awaiter>) {
         // SAFETY: We do not move the awaiter. We only store the
         // pointer for the linked structure.
-        let ptr = unsafe { ptr::from_mut(awaiter.get_unchecked_mut()) };
+        let awaiter = unsafe { ptr::from_mut(awaiter.get_unchecked_mut()) };
 
-        // SAFETY: ptr is valid (we just derived it from Pin).
-        let aw = unsafe { &*ptr };
+        // SAFETY: awaiter pointer is valid (derived from Pin).
+        let awaiter_ref = unsafe { &*awaiter };
         // SAFETY: Access is serialized by the caller's lock.
-        let state = unsafe { aw.state_mut() };
+        let state = unsafe { awaiter_ref.state_mut() };
         state.next = ptr::null_mut();
         state.prev = self.tail;
 
         if self.tail.is_null() {
-            self.head = ptr;
+            self.head = awaiter;
         } else {
             // SAFETY: `tail` is non-null and valid (set invariant).
             let tail = unsafe { &*self.tail };
             // SAFETY: Access is serialized by the caller's lock.
-            unsafe { tail.state_mut() }.next = ptr;
+            unsafe { tail.state_mut() }.next = awaiter;
         }
 
-        self.tail = ptr;
+        self.tail = awaiter;
     }
 
     /// Removes a specific awaiter from the set.
@@ -190,11 +179,11 @@ impl AwaiterSet {
     /// The awaiter must currently be in this set.
     unsafe fn remove(&mut self, awaiter: Pin<&mut Awaiter>) {
         // SAFETY: We do not move the awaiter.
-        let ptr = unsafe { ptr::from_mut(awaiter.get_unchecked_mut()) };
-        // SAFETY: ptr is valid.
-        let aw = unsafe { &*ptr };
+        let awaiter = unsafe { ptr::from_mut(awaiter.get_unchecked_mut()) };
+        // SAFETY: awaiter pointer is valid.
+        let awaiter_ref = unsafe { &*awaiter };
         // SAFETY: Access is serialized by the caller's lock.
-        let state = unsafe { aw.state_ref() };
+        let state = unsafe { awaiter_ref.state_ref() };
         let next = state.next;
         let prev = state.prev;
 
@@ -202,23 +191,23 @@ impl AwaiterSet {
             self.head = next;
         } else {
             // SAFETY: `prev` is a valid awaiter in the set.
-            let prev_aw = unsafe { &*prev };
+            let prev = unsafe { &*prev };
             // SAFETY: Access is serialized by the caller's lock.
-            unsafe { prev_aw.state_mut() }.next = next;
+            unsafe { prev.state_mut() }.next = next;
         }
 
         if next.is_null() {
             self.tail = prev;
         } else {
             // SAFETY: `next` is a valid awaiter in the set.
-            let next_aw = unsafe { &*next };
+            let next = unsafe { &*next };
             // SAFETY: Access is serialized by the caller's lock.
-            unsafe { next_aw.state_mut() }.prev = prev;
+            unsafe { next.state_mut() }.prev = prev;
         }
 
         // Clear the removed node's links.
         // SAFETY: Access is serialized by the caller's lock.
-        let state = unsafe { aw.state_mut() };
+        let state = unsafe { awaiter_ref.state_mut() };
         state.next = ptr::null_mut();
         state.prev = ptr::null_mut();
     }
@@ -243,12 +232,12 @@ impl AwaiterSet {
             return None;
         }
 
-        let ptr = self.head;
+        let head = self.head;
 
         // SAFETY: `head` is non-null, so it is a valid awaiter.
-        let aw = unsafe { &*ptr };
+        let head_ref = unsafe { &*head };
         // SAFETY: Access is serialized by the caller's lock.
-        let state = unsafe { aw.state_mut() };
+        let state = unsafe { head_ref.state_mut() };
         let next = state.next;
 
         self.head = next;
@@ -257,9 +246,9 @@ impl AwaiterSet {
             self.tail = ptr::null_mut();
         } else {
             // SAFETY: `next` is a valid awaiter in the set.
-            let next_aw = unsafe { &*next };
+            let next = unsafe { &*next };
             // SAFETY: Access is serialized by the caller's lock.
-            unsafe { next_aw.state_mut() }.prev = ptr::null_mut();
+            unsafe { next.state_mut() }.prev = ptr::null_mut();
         }
 
         // Transition the removed awaiter to notified.
@@ -306,10 +295,10 @@ impl AwaiterSet {
     ) {
         // SAFETY: We do not move the awaiter. Pin guarantees
         // address stability.
-        let aw = unsafe { awaiter.get_unchecked_mut() };
+        let awaiter = unsafe { awaiter.get_unchecked_mut() };
 
         // SAFETY: Access is serialized by the caller's lock.
-        let state = unsafe { aw.state_mut() };
+        let state = unsafe { awaiter.state_mut() };
 
         if state.registered {
             // Already registered — update waker and data in place.
@@ -328,10 +317,10 @@ impl AwaiterSet {
 
             // SAFETY: The awaiter was originally pinned and has not
             // been moved.
-            let pin = unsafe { Pin::new_unchecked(aw) };
+            let awaiter = unsafe { Pin::new_unchecked(awaiter) };
             // SAFETY: The awaiter will remain valid until removed.
             unsafe {
-                self.insert(pin);
+                self.insert(awaiter);
             }
         }
     }
@@ -349,9 +338,9 @@ impl AwaiterSet {
     /// (or confined to a single thread).
     pub unsafe fn unregister(&mut self, awaiter: Pin<&mut Awaiter>) {
         // SAFETY: We do not move the awaiter.
-        let aw = unsafe { awaiter.get_unchecked_mut() };
+        let awaiter = unsafe { awaiter.get_unchecked_mut() };
         // SAFETY: Access is serialized by the caller's lock.
-        let state = unsafe { aw.state_ref() };
+        let state = unsafe { awaiter.state_ref() };
 
         // Only remove awaiters that are waiting (registered but not
         // yet notified). Idle and notified awaiters are not in the
@@ -360,22 +349,22 @@ impl AwaiterSet {
             return;
         }
 
-        let raw = ptr::from_mut(aw);
+        let awaiter = ptr::from_mut(awaiter);
 
-        // SAFETY: raw is valid (derived from aw above).
-        let aw_ref = unsafe { &mut *raw };
+        // SAFETY: awaiter pointer is valid.
+        let awaiter_mut = unsafe { &mut *awaiter };
         // SAFETY: The awaiter was originally pinned.
-        let pin = unsafe { Pin::new_unchecked(aw_ref) };
+        let awaiter_pin = unsafe { Pin::new_unchecked(awaiter_mut) };
         // SAFETY: The awaiter is in this set.
         unsafe {
-            self.remove(pin);
+            self.remove(awaiter_pin);
         }
 
         // SAFETY: The awaiter is still valid at the same address.
         // remove() cleared its pointers but did not move it.
-        let aw = unsafe { &*raw };
+        let awaiter = unsafe { &*awaiter };
         // SAFETY: Access is serialized by the caller's lock.
-        let state = unsafe { aw.state_mut() };
+        let state = unsafe { awaiter.state_mut() };
         *state = State::idle();
     }
 }

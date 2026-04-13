@@ -136,6 +136,31 @@ thread::spawn({
 });
 ```
 
+# Variable shadowing for type conversions
+
+When converting a variable to a different form (e.g. removing a `Pin` wrapper, dereferencing a
+pointer to a reference, or re-pinning a reference), prefer shadowing the original variable name
+instead of inventing a new abbreviated name. This keeps the code readable and avoids cryptic
+short names like `aw`, `aw_ref`, or `raw`.
+
+Good:
+
+```rust
+let awaiter = unsafe { awaiter.get_unchecked_mut() };
+let awaiter = ptr::from_mut(awaiter);
+let awaiter = unsafe { &*awaiter };
+```
+
+Bad:
+
+```rust
+let aw = unsafe { awaiter.get_unchecked_mut() };
+let raw = ptr::from_mut(aw);
+let aw_ref = unsafe { &*raw };
+```
+
+Only use a different name when both forms are needed simultaneously in the same scope.
+
 # Language
 
 Use proper English grammar, spelling and punctuation.
