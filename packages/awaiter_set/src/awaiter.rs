@@ -65,7 +65,7 @@ impl State {
 /// The caller must hold the same lock that protects the set (or
 /// confine access to a single thread).
 pub struct Awaiter {
-    pub(crate) state: UnsafeCell<State>,
+    state: UnsafeCell<State>,
     _pinned: PhantomPinned,
 }
 
@@ -153,6 +153,33 @@ impl Awaiter {
     pub unsafe fn user_data(&self) -> usize {
         // SAFETY: Access is serialized by the caller's lock.
         unsafe { (*self.state.get()).user_data }
+    }
+
+    /// Returns a mutable reference to the internal state.
+    ///
+    /// # Safety
+    ///
+    /// Access must be serialized by the caller (via a lock or
+    /// single-thread confinement).
+    #[expect(
+        clippy::mut_from_ref,
+        reason = "interior mutability via UnsafeCell is the \
+                  intended pattern; caller serializes access"
+    )]
+    pub(crate) unsafe fn state_mut(&self) -> &mut State {
+        // SAFETY: Caller guarantees serialized access.
+        unsafe { &mut *self.state.get() }
+    }
+
+    /// Returns a shared reference to the internal state.
+    ///
+    /// # Safety
+    ///
+    /// Access must be serialized by the caller (via a lock or
+    /// single-thread confinement).
+    pub(crate) unsafe fn state_ref(&self) -> &State {
+        // SAFETY: Caller guarantees serialized access.
+        unsafe { &*self.state.get() }
     }
 }
 
