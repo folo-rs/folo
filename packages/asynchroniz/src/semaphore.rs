@@ -28,10 +28,11 @@ use crate::constants::{NEVER_POISONED, ONE_PERMIT};
 ///
 /// # Fairness
 ///
-/// Waiters are served in FIFO order with head-of-line blocking: if
-/// the first waiter requests more permits than are currently
-/// available, later waiters also wait even if they could be satisfied.
-/// This prevents starvation of multi-permit acquires.
+/// The order in which waiters are served is unspecified. When
+/// permits are released, the first waiter whose requested permit
+/// count can be satisfied is woken. This avoids head-of-line
+/// blocking: a waiter requesting many permits does not prevent
+/// smaller requests from being satisfied.
 ///
 /// # Cancellation safety
 ///

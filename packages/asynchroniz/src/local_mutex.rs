@@ -25,9 +25,10 @@ use awaiter_set::{Awaiter, AwaiterSet};
 ///
 /// # Fairness
 ///
-/// Waiters are served in FIFO order. When a lock holder unlocks while
-/// waiters are queued, the lock is transferred directly to the
-/// longest-waiting future, preventing starvation.
+/// The order in which waiters are served is unspecified. When a
+/// lock holder unlocks while waiters are queued, the lock is
+/// transferred directly to one of the waiting futures (which one
+/// is an implementation detail).
 ///
 /// # Cancellation safety
 ///
