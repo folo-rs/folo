@@ -153,6 +153,54 @@ impl AwaiterSet {
     /// The set and all its awaiters must be protected by the same
     /// lock (or confined to a single thread). The predicate must
     /// not modify any shared state or call methods on the set.
+    ///
+    /// # Examples
+    ///
+    /// Notify the first awaiter whose requested permit count
+    /// (stored as user data) fits within the available budget.
+    ///
+    /// ```
+    /// use std::pin::Pin;
+    /// use std::task::Waker;
+    ///
+    /// use awaiter_set::{Awaiter, AwaiterSet};
+    ///
+    /// let mut set = AwaiterSet::new();
+    /// let mut small = Awaiter::new();
+    /// let mut big = Awaiter::new();
+    ///
+    /// // SAFETY: Single-threaded example.
+    /// unsafe {
+    ///     // Register two awaiters with different permit counts.
+    ///     set.register_with_data(
+    ///         Pin::new_unchecked(&mut big),
+    ///         Waker::noop().clone(),
+    ///         5,
+    ///     );
+    ///     set.register_with_data(
+    ///         Pin::new_unchecked(&mut small),
+    ///         Waker::noop().clone(),
+    ///         2,
+    ///     );
+    /// }
+    ///
+    /// let available = 3;
+    ///
+    /// // Only wake an awaiter that needs at most 3 permits.
+    /// // SAFETY: Single-threaded example.
+    /// let waker = unsafe {
+    ///     set.notify_one_if(|awaiter| {
+    ///         awaiter.user_data() <= available
+    ///     })
+    /// };
+    ///
+    /// assert!(waker.is_some());
+    /// // The small awaiter (requesting 2) was notified.
+    /// // SAFETY: Single-threaded example.
+    /// assert!(unsafe { Pin::new_unchecked(&small).is_notified() });
+    /// // The big awaiter (requesting 5) is still waiting.
+    /// assert!(!unsafe { Pin::new_unchecked(&big).is_notified() });
+    /// ```
     pub unsafe fn notify_one_if(
         &mut self,
         mut predicate: impl FnMut(&Awaiter) -> bool,
@@ -773,10 +821,7 @@ mod tests {
         assert!(unsafe { list.is_empty() });
 
         // All awaiters received their original user_data.
-        let mut data: Vec<_> = nodes
-            .iter()
-            .map(|n| unsafe { n.user_data() })
-            .collect();
+        let mut data: Vec<_> = nodes.iter().map(|n| unsafe { n.user_data() }).collect();
         data.sort_unstable();
         assert_eq!(data, (0..ELEMENT_COUNT).collect::<Vec<_>>());
     }
@@ -802,9 +847,7 @@ mod tests {
         }
 
         // Only notify awaiters with user_data <= 4.
-        let w = unsafe {
-            set.notify_one_if(|aw| aw.user_data() <= 4)
-        };
+        let w = unsafe { set.notify_one_if(|aw| aw.user_data() <= 4) };
         assert!(w.is_some());
 
         // The awaiter with user_data 3 should have been notified.
@@ -823,9 +866,7 @@ mod tests {
         }
 
         // No awaiter with user_data <= 4.
-        let w = unsafe {
-            set.notify_one_if(|aw| aw.user_data() <= 4)
-        };
+        let w = unsafe { set.notify_one_if(|aw| aw.user_data() <= 4) };
         assert!(w.is_none());
 
         // The awaiter should still be registered.

@@ -949,8 +949,7 @@ mod tests {
 
         // Poll both until both have acquired (order is unspecified).
         let mut acquired = 0_u32;
-        let mut futures: [Pin<Box<dyn Future<Output = _>>>; 2] =
-            [f_big, f_small];
+        let mut futures: [Pin<Box<dyn Future<Output = _>>>; 2] = [f_big, f_small];
         while acquired < 2 {
             for f in &mut futures {
                 if let Poll::Ready(p) = f.as_mut().poll(&mut cx) {
