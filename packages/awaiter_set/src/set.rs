@@ -134,25 +134,40 @@ impl AwaiterSet {
         self.head.is_null()
     }
 
-    /// Returns a shared reference to an awaiter in the set.
+    /// Removes one awaiter matching a condition and returns its waker.
     ///
-    /// Useful for inspecting awaiter metadata (e.g. checking
-    /// [`user_data()`][Awaiter::user_data] before deciding whether
-    /// to notify). Returns `None` if the set is empty.
+    /// Walks the set and calls `predicate` on each awaiter. The first
+    /// awaiter for which the predicate returns `true` is removed,
+    /// transitioned to the notified state, and its waker is returned.
+    /// This allows callers to skip awaiters that cannot be satisfied
+    /// (e.g. a semaphore awaiter requesting more permits than are
+    /// available).
+    ///
+    /// The caller should invoke [`Waker::wake()`] outside any lock
+    /// scope to prevent reentrancy deadlocks.
+    ///
+    /// Returns `None` if the set is empty or no awaiter matches.
     ///
     /// # Safety
     ///
     /// The set and all its awaiters must be protected by the same
-    /// lock (or confined to a single thread).
-    #[must_use]
-    pub unsafe fn peek(&self) -> Option<&Awaiter> {
-        if self.head.is_null() {
-            None
-        } else {
-            // SAFETY: All pointers in the set are valid and pinned,
-            // an invariant established by `insert`.
-            Some(unsafe { &*self.pick_one() })
+    /// lock (or confined to a single thread). The predicate must
+    /// not modify any shared state or call methods on the set.
+    pub unsafe fn notify_one_if(
+        &mut self,
+        mut predicate: impl FnMut(&Awaiter) -> bool,
+    ) -> Option<Waker> {
+        let mut current = self.head;
+        while !current.is_null() {
+            // SAFETY: All pointers in the set are valid (set invariant).
+            let awaiter = unsafe { &*current };
+            if predicate(awaiter) {
+                return self.remove_and_notify(current);
+            }
+            // SAFETY: Access is serialized by the caller's lock.
+            current = unsafe { awaiter.state_ref() }.next;
         }
+        None
     }
 
     /// Inserts an awaiter into the set.
@@ -245,16 +260,20 @@ impl AwaiterSet {
             return None;
         }
 
-        let chosen = self.pick_one();
+        self.remove_and_notify(self.pick_one())
+    }
 
-        // SAFETY: `chosen` is a valid awaiter in the set.
-        let chosen_ref = unsafe { &*chosen };
+    // Removes a specific awaiter from the set by pointer and
+    // transitions it to the notified state. Returns the stored waker.
+    fn remove_and_notify(&mut self, ptr: *mut Awaiter) -> Option<Waker> {
+        // SAFETY: ptr is a valid awaiter in the set (caller invariant).
+        let awaiter = unsafe { &*ptr };
         // SAFETY: Access is serialized by the caller's lock.
-        let state = unsafe { chosen_ref.state_ref() };
+        let state = unsafe { awaiter.state_ref() };
         let next = state.next;
         let prev = state.prev;
 
-        // Unlink the chosen awaiter from the doubly-linked list.
+        // Unlink the awaiter from the doubly-linked list.
         if prev.is_null() {
             self.head = next;
         } else {
@@ -275,7 +294,7 @@ impl AwaiterSet {
 
         // Transition the removed awaiter to notified.
         // SAFETY: Access is serialized by the caller's lock.
-        let state = unsafe { chosen_ref.state_mut() };
+        let state = unsafe { awaiter.state_mut() };
         state.next = ptr::null_mut();
         state.prev = ptr::null_mut();
         state.notified = true;
@@ -466,7 +485,6 @@ mod tests {
     fn new_list_is_empty() {
         let list = AwaiterSet::new();
         assert!(unsafe { list.is_empty() });
-        assert!(unsafe { list.peek() }.is_none());
     }
 
     #[test]
@@ -490,7 +508,6 @@ mod tests {
             list.register_with_data(Pin::new_unchecked(&mut a), waker(), 1);
         }
         assert!(!unsafe { list.is_empty() });
-        assert_eq!(unsafe { list.peek().unwrap().user_data() }, 1);
 
         let waker = unsafe { list.notify_one() };
         assert!(waker.is_some());
@@ -772,6 +789,58 @@ mod tests {
     }
 
     #[test]
+    fn notify_one_if_skips_non_matching() {
+        let mut set = AwaiterSet::new();
+        let mut a = Awaiter::new();
+        let mut b = Awaiter::new();
+        let mut c = Awaiter::new();
+
+        unsafe {
+            set.register_with_data(Pin::new_unchecked(&mut a), waker(), 10);
+            set.register_with_data(Pin::new_unchecked(&mut b), waker(), 5);
+            set.register_with_data(Pin::new_unchecked(&mut c), waker(), 3);
+        }
+
+        // Only notify awaiters with user_data <= 4.
+        let w = unsafe {
+            set.notify_one_if(|aw| aw.user_data() <= 4)
+        };
+        assert!(w.is_some());
+
+        // The awaiter with user_data 3 should have been notified.
+        assert!(unsafe { Pin::new_unchecked(&c).is_notified() });
+        assert!(!unsafe { Pin::new_unchecked(&a).is_notified() });
+        assert!(!unsafe { Pin::new_unchecked(&b).is_notified() });
+    }
+
+    #[test]
+    fn notify_one_if_returns_none_when_no_match() {
+        let mut set = AwaiterSet::new();
+        let mut a = Awaiter::new();
+
+        unsafe {
+            set.register_with_data(Pin::new_unchecked(&mut a), waker(), 10);
+        }
+
+        // No awaiter with user_data <= 4.
+        let w = unsafe {
+            set.notify_one_if(|aw| aw.user_data() <= 4)
+        };
+        assert!(w.is_none());
+
+        // The awaiter should still be registered.
+        assert!(unsafe { a.is_registered() });
+        assert!(!unsafe { set.is_empty() });
+    }
+
+    #[test]
+    fn notify_one_if_on_empty_returns_none() {
+        let mut set = AwaiterSet::new();
+        let w = unsafe { set.notify_one_if(|_| true) };
+        assert!(w.is_none());
+    }
+
+    #[test]
     fn notify_one_single_element() {
         let mut set = AwaiterSet::new();
         let mut a = Awaiter::new();
@@ -785,34 +854,6 @@ mod tests {
         assert!(w.is_some());
         assert!(unsafe { set.is_empty() });
         assert!(unsafe { Pin::new_unchecked(&a).is_notified() });
-    }
-
-    #[test]
-    fn peek_updates_after_notify_one() {
-        let mut set = AwaiterSet::new();
-        let mut a = Awaiter::new();
-        let mut b = Awaiter::new();
-        let mut c = Awaiter::new();
-
-        unsafe {
-            set.register_with_data(Pin::new_unchecked(&mut a), waker(), 1);
-            set.register_with_data(Pin::new_unchecked(&mut b), waker(), 2);
-            set.register_with_data(Pin::new_unchecked(&mut c), waker(), 3);
-        }
-
-        // Peek returns some awaiter from the set.
-        assert!(unsafe { set.peek() }.is_some());
-
-        // After each notify_one, one fewer awaiter remains.
-        drop(unsafe { set.notify_one() });
-        assert!(unsafe { set.peek() }.is_some());
-
-        drop(unsafe { set.notify_one() });
-        assert!(unsafe { set.peek() }.is_some());
-
-        // After removing the last, peek returns None.
-        drop(unsafe { set.notify_one() });
-        assert!(unsafe { set.peek() }.is_none());
     }
 
     #[test]

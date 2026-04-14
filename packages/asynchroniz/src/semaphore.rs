@@ -90,26 +90,14 @@ unsafe impl Send for SemaphoreState {}
 // Mutating release_permits to a no-op causes acquire futures to hang.
 #[cfg_attr(test, mutants::skip)]
 fn release_permits(state_mutex: &Mutex<SemaphoreState>, count: usize) {
-    // Combine the permit addition and the first waiter check into a
-    // single lock scope, avoiding a second lock acquisition when no
-    // waiters are queued (the common uncontended case).
-    let (waker, head_satisfiable) = {
+    let waker = {
         let mut state = state_mutex.lock().expect(NEVER_POISONED);
         state.available = state
             .available
             .checked_add(count)
             .expect("permit count overflow is unreachable");
-        // SAFETY: We hold the lock.
-        let head_requested = unsafe { state.waiters.peek() }.map(|a| unsafe { a.user_data() });
-        let satisfiable = head_requested.is_some_and(|req| state.available >= req);
-        (try_wake_head(&mut state), satisfiable)
+        try_wake_one(&mut state)
     };
-    // If the head waiter was satisfiable, try_wake_head must have
-    // returned a waker.
-    debug_assert!(
-        !head_satisfiable || waker.is_some(),
-        "head waiter was satisfiable but try_wake_head returned None"
-    );
 
     if let Some(w) = waker {
         w.wake();
@@ -119,46 +107,43 @@ fn release_permits(state_mutex: &Mutex<SemaphoreState>, count: usize) {
     }
 }
 
-/// Tries to satisfy the head waiter, returning its waker if
-/// successful.
+/// Finds the first waiter whose permit request can be satisfied,
+/// deducts the permits, removes it from the set and returns its waker.
 ///
 /// Must be called while holding the state mutex.
-// Mutating try_wake_head to return None causes acquire futures
+// Mutating try_wake_one to return None causes acquire futures
 // to hang because waiters are never woken despite available permits.
 #[cfg_attr(test, mutants::skip)]
-fn try_wake_head(state: &mut SemaphoreState) -> Option<Waker> {
-    // SAFETY: Caller holds the lock.
-    let head = unsafe { state.waiters.peek() }?;
-    // SAFETY: Caller holds the lock.
-    let requested = unsafe { head.user_data() };
-
-    if state.available >= requested {
-        state.available = state
-            .available
-            .checked_sub(requested)
-            .expect("available >= requested was just checked");
-
+fn try_wake_one(state: &mut SemaphoreState) -> Option<Waker> {
+    let available = &mut state.available;
+    let predicate = |awaiter: &Awaiter| {
         // SAFETY: Caller holds the lock.
-        unsafe { state.waiters.notify_one() }
-    } else {
-        // Head-of-line blocking: not enough permits for the head
-        // waiter.
-        None
-    }
+        let requested = unsafe { awaiter.user_data() };
+        if requested <= *available {
+            *available = available
+                .checked_sub(requested)
+                .expect("available >= requested was just checked");
+            true
+        } else {
+            false
+        }
+    };
+    // SAFETY: Caller holds the lock.
+    unsafe { state.waiters.notify_one_if(predicate) }
 }
 
-/// Wakes queued waiters whose permit requests can now be satisfied.
+/// Wakes queued waiters whose permit requests can be satisfied.
 ///
-/// Uses head-of-line blocking: only the head waiter is considered. If
-/// the head waiter cannot be satisfied, no subsequent waiters are
-/// tried even if they request fewer permits.
+/// Scans all waiters and wakes the first one whose requested permit
+/// count can be satisfied from available permits. Repeats until no
+/// more waiters can be satisfied.
 // Mutating wake_waiters to a no-op causes acquire futures to hang.
 #[cfg_attr(test, mutants::skip)]
 fn wake_waiters(state_mutex: &Mutex<SemaphoreState>) {
     loop {
         let waker = {
             let mut state = state_mutex.lock().expect(NEVER_POISONED);
-            try_wake_head(&mut state)
+            try_wake_one(&mut state)
         };
 
         if let Some(w) = waker {
@@ -258,7 +243,7 @@ unsafe fn drop_acquire_wait(
             .available
             .checked_add(permits)
             .expect("permit count overflow is unreachable");
-        let waker = try_wake_head(&mut state);
+        let waker = try_wake_one(&mut state);
         drop(state);
         if let Some(w) = waker {
             w.wake();
@@ -1333,7 +1318,7 @@ mod tests {
         assert!(f1.as_mut().poll(&mut cx).is_pending());
         assert!(f2.as_mut().poll(&mut cx).is_pending());
 
-        // Release 2 permits at once — try_wake_head handles the
+        // Release 2 permits at once — try_wake_one handles the
         // first waiter, wake_waiters must find the second.
         drop(big_permit);
 

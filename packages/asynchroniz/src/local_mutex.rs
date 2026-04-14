@@ -648,6 +648,7 @@ impl<T> fmt::Debug for EmbeddedLocalMutexLockFuture<T> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
 
+    use std::iter;
     use std::panic::{RefUnwindSafe, UnwindSafe};
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
@@ -756,7 +757,9 @@ mod tests {
         let mutex = LocalMutex::boxed(0_u32);
         let guard = mutex.try_lock().unwrap();
 
-        let mut futures: Vec<_> = (0..3).map(|_| Box::pin(mutex.lock())).collect();
+        let mut futures: Vec<_> = iter::repeat_with(|| Box::pin(mutex.lock()))
+            .take(3)
+            .collect();
         let waker = Waker::noop();
         let mut cx = task::Context::from_waker(waker);
 

@@ -93,7 +93,7 @@ impl Inner {
                 .available
                 .checked_add(count)
                 .expect("permit count overflow is unreachable");
-            Self::try_wake_head(state)
+            Self::try_wake_one(state)
         };
 
         if let Some(w) = waker {
@@ -102,28 +102,28 @@ impl Inner {
         }
     }
 
-    /// Tries to satisfy the head waiter, returning its waker if
-    /// successful.
-    fn try_wake_head(state: &mut SemaphoreState) -> Option<Waker> {
-        // SAFETY: Single-threaded access.
-        let head = unsafe { state.waiters.peek() }?;
-        // SAFETY: Single-threaded access.
-        let requested = unsafe { head.user_data() };
-
-        if state.available >= requested {
-            state.available = state
-                .available
-                .checked_sub(requested)
-                .expect("available >= requested was just checked");
-
+    /// Finds the first waiter whose permit request can be satisfied,
+    /// deducts the permits, removes it from the set and returns its
+    /// waker.
+    fn try_wake_one(state: &mut SemaphoreState) -> Option<Waker> {
+        let available = &mut state.available;
+        let predicate = |awaiter: &Awaiter| {
             // SAFETY: Single-threaded access.
-            unsafe { state.waiters.notify_one() }
-        } else {
-            // Head-of-line blocking.
-            None
-        }
+            let requested = unsafe { awaiter.user_data() };
+            if requested <= *available {
+                *available = available
+                    .checked_sub(requested)
+                    .expect("available >= requested was just checked");
+                true
+            } else {
+                false
+            }
+        };
+        // SAFETY: Single-threaded access.
+        unsafe { state.waiters.notify_one_if(predicate) }
     }
 
+    /// Wakes queued waiters whose permit requests can be satisfied.
     // Mutating wake_waiters to a no-op causes acquire futures to
     // hang.
     #[cfg_attr(test, mutants::skip)]
@@ -132,7 +132,7 @@ impl Inner {
             let waker = {
                 // SAFETY: Single-threaded access.
                 let state = unsafe { &mut *self.state.get() };
-                Self::try_wake_head(state)
+                Self::try_wake_one(state)
             };
 
             if let Some(w) = waker {
@@ -222,7 +222,7 @@ impl Inner {
                     .available
                     .checked_add(permits)
                     .expect("permit count overflow is unreachable");
-                Self::try_wake_head(state)
+                Self::try_wake_one(state)
             };
             if let Some(w) = waker {
                 w.wake();
@@ -1148,7 +1148,7 @@ mod tests {
         assert!(f1.as_mut().poll(&mut cx).is_pending());
         assert!(f2.as_mut().poll(&mut cx).is_pending());
 
-        // Release 2 permits at once — try_wake_head handles the
+        // Release 2 permits at once — try_wake_one handles the
         // first waiter, wake_waiters must find the second.
         drop(big_permit);
 

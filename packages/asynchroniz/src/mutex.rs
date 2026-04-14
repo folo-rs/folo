@@ -844,12 +844,13 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn all_waiters_eventually_acquire() {
         let mutex = Mutex::boxed(0_u32);
         let guard = mutex.try_lock().unwrap();
 
-        let mut futures: Vec<_> = (0..3).map(|_| Box::pin(mutex.lock())).collect();
+        let mut futures: Vec<_> = iter::repeat_with(|| Box::pin(mutex.lock()))
+            .take(3)
+            .collect();
         let waker = Waker::noop();
         let mut cx = task::Context::from_waker(waker);
 
