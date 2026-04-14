@@ -985,9 +985,13 @@ mod tests {
             assert!(f.as_mut().poll(&mut cx).is_pending());
         }
 
-        // Each set() releases exactly one waiter.
-        for f in &mut futures {
+        // Signal once for each waiter.
+        for _ in 0..WAITER_COUNT {
             event.set();
+        }
+
+        // All waiters should now be ready (order is unspecified).
+        for f in &mut futures {
             assert!(f.as_mut().poll(&mut cx).is_ready());
         }
 
@@ -1011,8 +1015,11 @@ mod tests {
             assert!(f.as_mut().poll(&mut cx).is_pending());
         }
 
-        for f in &mut futures {
+        for _ in 0..WAITER_COUNT {
             event.set();
+        }
+
+        for f in &mut futures {
             assert!(f.as_mut().poll(&mut cx).is_ready());
         }
 

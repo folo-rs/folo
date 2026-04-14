@@ -726,16 +726,23 @@ mod tests {
 
         // Signal once — exactly one waiter should complete.
         event.set();
-        assert!(f1.as_mut().poll(&mut cx).is_ready());
-        assert!(f2.as_mut().poll(&mut cx).is_pending());
-        assert!(f3.as_mut().poll(&mut cx).is_pending());
+        let mut ready_count = 0_u32;
+        for f in [f1.as_mut(), f2.as_mut(), f3.as_mut()] {
+            if f.poll(&mut cx).is_ready() {
+                ready_count = ready_count.checked_add(1).unwrap();
+            }
+        }
+        assert_eq!(ready_count, 1);
 
         // Signal twice more to release the remaining two.
         event.set();
-        assert!(f2.as_mut().poll(&mut cx).is_ready());
-
         event.set();
-        assert!(f3.as_mut().poll(&mut cx).is_ready());
+        for f in [f1.as_mut(), f2.as_mut(), f3.as_mut()] {
+            if f.poll(&mut cx).is_ready() {
+                ready_count = ready_count.checked_add(1).unwrap();
+            }
+        }
+        assert_eq!(ready_count, 3);
     }
 
     #[test]
@@ -1169,9 +1176,13 @@ mod tests {
             assert!(f.as_mut().poll(&mut cx).is_pending());
         }
 
-        // Each set() releases exactly one waiter.
-        for f in &mut futures {
+        // Signal once for each waiter.
+        for _ in 0..WAITER_COUNT {
             event.set();
+        }
+
+        // All waiters should now be ready (order is unspecified).
+        for f in &mut futures {
             assert!(f.as_mut().poll(&mut cx).is_ready());
         }
 
@@ -1195,8 +1206,11 @@ mod tests {
             assert!(f.as_mut().poll(&mut cx).is_pending());
         }
 
-        for f in &mut futures {
+        for _ in 0..WAITER_COUNT {
             event.set();
+        }
+
+        for f in &mut futures {
             assert!(f.as_mut().poll(&mut cx).is_ready());
         }
 

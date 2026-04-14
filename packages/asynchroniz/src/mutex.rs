@@ -844,38 +844,35 @@ mod tests {
     }
 
     #[test]
-    fn fifo_ordering() {
+    #[test]
+    fn all_waiters_eventually_acquire() {
         let mutex = Mutex::boxed(0_u32);
         let guard = mutex.try_lock().unwrap();
 
-        let mut f1 = Box::pin(mutex.lock());
-        let mut f2 = Box::pin(mutex.lock());
-        let mut f3 = Box::pin(mutex.lock());
+        let mut futures: Vec<_> = (0..3).map(|_| Box::pin(mutex.lock())).collect();
         let waker = Waker::noop();
         let mut cx = task::Context::from_waker(waker);
 
-        // All register.
-        assert!(f1.as_mut().poll(&mut cx).is_pending());
-        assert!(f2.as_mut().poll(&mut cx).is_pending());
-        assert!(f3.as_mut().poll(&mut cx).is_pending());
+        // All register as pending.
+        for f in &mut futures {
+            assert!(f.as_mut().poll(&mut cx).is_pending());
+        }
 
-        // Drop the original guard — f1 should be next (FIFO).
+        // Release the lock. One waiter should become ready.
         drop(guard);
-        let Poll::Ready(g1) = f1.as_mut().poll(&mut cx) else {
-            panic!("expected Ready for f1")
-        };
-        assert!(f2.as_mut().poll(&mut cx).is_pending());
-        assert!(f3.as_mut().poll(&mut cx).is_pending());
 
-        // Drop f1's guard to release f2.
-        drop(g1);
-        let Poll::Ready(g2) = f2.as_mut().poll(&mut cx) else {
-            panic!("expected Ready for f2")
-        };
-        assert!(f3.as_mut().poll(&mut cx).is_pending());
-
-        drop(g2);
-        assert!(f3.as_mut().poll(&mut cx).is_ready());
+        // Poll all futures repeatedly until all have acquired
+        // the lock. Each ready future is dropped (releasing the
+        // lock) before polling the next round.
+        let mut acquired = 0_u32;
+        while acquired < 3 {
+            for f in &mut futures {
+                if let Poll::Ready(guard) = f.as_mut().poll(&mut cx) {
+                    acquired = acquired.checked_add(1).unwrap();
+                    drop(guard);
+                }
+            }
+        }
     }
 
     #[test]

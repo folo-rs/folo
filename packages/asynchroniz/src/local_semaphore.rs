@@ -822,7 +822,7 @@ mod tests {
     }
 
     #[test]
-    fn fifo_ordering() {
+    fn all_waiters_eventually_acquire() {
         let sem = LocalSemaphore::boxed(1);
         let permit = sem.try_acquire().unwrap();
 
@@ -835,13 +835,19 @@ mod tests {
         assert!(f2.as_mut().poll(&mut cx).is_pending());
 
         drop(permit);
-        let Poll::Ready(p1) = f1.as_mut().poll(&mut cx) else {
-            panic!("expected Ready for f1")
-        };
-        assert!(f2.as_mut().poll(&mut cx).is_pending());
 
-        drop(p1);
-        assert!(f2.as_mut().poll(&mut cx).is_ready());
+        // Poll both until both have acquired (order is unspecified).
+        let mut acquired = 0_u32;
+        while acquired < 2 {
+            if let Poll::Ready(p) = f1.as_mut().poll(&mut cx) {
+                acquired = acquired.checked_add(1).unwrap();
+                drop(p);
+            }
+            if let Poll::Ready(p) = f2.as_mut().poll(&mut cx) {
+                acquired = acquired.checked_add(1).unwrap();
+                drop(p);
+            }
+        }
     }
 
     #[test]
@@ -850,26 +856,30 @@ mod tests {
         let _p1 = sem.try_acquire().unwrap();
         let _p2 = sem.try_acquire().unwrap();
 
-        let mut f1 = Box::pin(sem.acquire_many(NonZero::new(2).unwrap()));
-        let mut f2 = Box::pin(sem.acquire());
+        let mut f_big = Box::pin(sem.acquire_many(NonZero::new(2).unwrap()));
+        let mut f_small = Box::pin(sem.acquire());
         let waker = Waker::noop();
         let mut cx = task::Context::from_waker(waker);
 
-        assert!(f1.as_mut().poll(&mut cx).is_pending());
-        assert!(f2.as_mut().poll(&mut cx).is_pending());
+        assert!(f_big.as_mut().poll(&mut cx).is_pending());
+        assert!(f_small.as_mut().poll(&mut cx).is_pending());
 
+        // Release both permits.
         drop(_p1);
-        assert!(f1.as_mut().poll(&mut cx).is_pending());
-        assert!(f2.as_mut().poll(&mut cx).is_pending());
-
         drop(_p2);
-        let Poll::Ready(p_f1) = f1.as_mut().poll(&mut cx) else {
-            panic!("expected Ready for f1")
-        };
-        assert!(f2.as_mut().poll(&mut cx).is_pending());
 
-        drop(p_f1);
-        assert!(f2.as_mut().poll(&mut cx).is_ready());
+        // Poll both until both have acquired (order is unspecified).
+        let mut acquired = 0_u32;
+        while acquired < 2 {
+            if let Poll::Ready(p) = f_big.as_mut().poll(&mut cx) {
+                acquired = acquired.checked_add(1).unwrap();
+                drop(p);
+            }
+            if let Poll::Ready(p) = f_small.as_mut().poll(&mut cx) {
+                acquired = acquired.checked_add(1).unwrap();
+                drop(p);
+            }
+        }
     }
 
     #[test]

@@ -95,10 +95,9 @@ use crate::awaiter::{Awaiter, State};
 /// ```
 pub struct AwaiterSet {
     // Both are null if the set is empty. New entries are appended at
-    // the tail and notify_one() removes from the head, so the current
-    // implementation notifies in FIFO order. This is not an API
-    // guarantee but tests do verify FIFO behavior — update them if
-    // the ordering ever changes.
+    // the tail. In release builds, notify_one() removes from the head
+    // (FIFO). In debug builds, it alternates between head and tail
+    // based on pointer address to catch code that depends on ordering.
     head: *mut Awaiter,
     tail: *mut Awaiter,
 }
@@ -152,7 +151,7 @@ impl AwaiterSet {
         } else {
             // SAFETY: All pointers in the set are valid and pinned,
             // an invariant established by `insert`.
-            Some(unsafe { &*self.head })
+            Some(unsafe { &*self.pick_one() })
         }
     }
 
@@ -246,30 +245,62 @@ impl AwaiterSet {
             return None;
         }
 
-        let head = self.head;
+        let chosen = self.pick_one();
 
-        // SAFETY: `head` is non-null, so it is a valid awaiter.
-        let head_ref = unsafe { &*head };
+        // SAFETY: `chosen` is a valid awaiter in the set.
+        let chosen_ref = unsafe { &*chosen };
         // SAFETY: Access is serialized by the caller's lock.
-        let state = unsafe { head_ref.state_mut() };
+        let state = unsafe { chosen_ref.state_ref() };
         let next = state.next;
+        let prev = state.prev;
 
-        self.head = next;
+        // Unlink the chosen awaiter from the doubly-linked list.
+        if prev.is_null() {
+            self.head = next;
+        } else {
+            // SAFETY: `prev` is a valid awaiter in the set.
+            let prev_ref = unsafe { &*prev };
+            // SAFETY: Access is serialized by the caller's lock.
+            unsafe { prev_ref.state_mut() }.next = next;
+        }
 
         if next.is_null() {
-            self.tail = ptr::null_mut();
+            self.tail = prev;
         } else {
             // SAFETY: `next` is a valid awaiter in the set.
-            let next = unsafe { &*next };
+            let next_ref = unsafe { &*next };
             // SAFETY: Access is serialized by the caller's lock.
-            unsafe { next.state_mut() }.prev = ptr::null_mut();
+            unsafe { next_ref.state_mut() }.prev = prev;
         }
 
         // Transition the removed awaiter to notified.
+        // SAFETY: Access is serialized by the caller's lock.
+        let state = unsafe { chosen_ref.state_mut() };
         state.next = ptr::null_mut();
         state.prev = ptr::null_mut();
         state.notified = true;
         state.waker.take()
+    }
+
+    // In debug builds, pick head or tail based on pointer address to
+    // flush out tests that depend on notification order. In release
+    // builds, always pick head (FIFO).
+    fn pick_one(&self) -> *mut Awaiter {
+        #[cfg(debug_assertions)]
+        {
+            if self.head == self.tail {
+                return self.head;
+            }
+            if (self.head as usize) > (self.tail as usize) {
+                self.head
+            } else {
+                self.tail
+            }
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            self.head
+        }
     }
 
     /// Registers an awaiter with the given waker.
@@ -468,7 +499,7 @@ mod tests {
     }
 
     #[test]
-    fn fifo_ordering() {
+    fn all_registered_awaiters_are_notified() {
         let mut list = AwaiterSet::new();
         let mut a = Awaiter::new();
         let mut b = Awaiter::new();
@@ -482,12 +513,16 @@ mod tests {
 
         assert!(!unsafe { list.is_empty() });
 
-        drop(unsafe { list.notify_one() });
-        assert_eq!(unsafe { a.user_data() }, 1);
-        drop(unsafe { list.notify_one() });
-        assert_eq!(unsafe { b.user_data() }, 2);
-        drop(unsafe { list.notify_one() });
-        assert_eq!(unsafe { c.user_data() }, 3);
+        let mut notified = Vec::new();
+        while let Some(w) = unsafe { list.notify_one() } {
+            drop(w);
+        }
+        for aw in [&a, &b, &c] {
+            notified.push(unsafe { aw.user_data() });
+        }
+
+        notified.sort_unstable();
+        assert_eq!(notified, [1, 2, 3]);
 
         assert!(unsafe { list.is_empty() });
         assert!(unsafe { list.notify_one() }.is_none());
@@ -505,8 +540,10 @@ mod tests {
             list.unregister(Pin::new_unchecked(&mut a));
         }
 
-        drop(unsafe { list.notify_one() });
-        assert_eq!(unsafe { b.user_data() }, 2);
+        assert!(!unsafe { a.is_registered() });
+        let w = unsafe { list.notify_one() };
+        assert!(w.is_some());
+        assert!(unsafe { b.is_registered() });
         assert!(unsafe { list.is_empty() });
     }
 
@@ -522,8 +559,10 @@ mod tests {
             list.unregister(Pin::new_unchecked(&mut b));
         }
 
-        drop(unsafe { list.notify_one() });
-        assert_eq!(unsafe { a.user_data() }, 1);
+        assert!(!unsafe { b.is_registered() });
+        let w = unsafe { list.notify_one() };
+        assert!(w.is_some());
+        assert!(unsafe { a.is_registered() });
         assert!(unsafe { list.is_empty() });
     }
 
@@ -541,10 +580,12 @@ mod tests {
             list.unregister(Pin::new_unchecked(&mut b));
         }
 
+        assert!(!unsafe { b.is_registered() });
+        // Both remaining awaiters should be notified.
         drop(unsafe { list.notify_one() });
-        assert_eq!(unsafe { a.user_data() }, 1);
         drop(unsafe { list.notify_one() });
-        assert_eq!(unsafe { c.user_data() }, 3);
+        assert!(unsafe { a.is_registered() });
+        assert!(unsafe { c.is_registered() });
         assert!(unsafe { list.is_empty() });
     }
 
@@ -595,7 +636,7 @@ mod tests {
     }
 
     #[test]
-    fn interleaved_push_and_pop() {
+    fn interleaved_register_and_notify() {
         let mut list = AwaiterSet::new();
         let mut a = Awaiter::new();
         let mut b = Awaiter::new();
@@ -606,22 +647,30 @@ mod tests {
             list.register_with_data(Pin::new_unchecked(&mut b), waker(), 2);
         }
 
+        // Notify one of the two registered awaiters.
         drop(unsafe { list.notify_one() });
-        assert_eq!(unsafe { a.user_data() }, 1);
 
+        // Register a third while one is still in the set.
         unsafe {
             list.register_with_data(Pin::new_unchecked(&mut c), waker(), 3);
         }
 
+        // Drain remaining.
         drop(unsafe { list.notify_one() });
-        assert_eq!(unsafe { b.user_data() }, 2);
         drop(unsafe { list.notify_one() });
-        assert_eq!(unsafe { c.user_data() }, 3);
         assert!(unsafe { list.is_empty() });
+
+        // All three must have been notified (order is unspecified).
+        let mut notified: Vec<_> = [&a, &b, &c]
+            .iter()
+            .map(|aw| unsafe { aw.user_data() })
+            .collect();
+        notified.sort_unstable();
+        assert_eq!(notified, [1, 2, 3]);
     }
 
     #[test]
-    fn traversal_via_next() {
+    fn all_elements_reachable_via_traversal() {
         let mut list = AwaiterSet::new();
         let mut a = Awaiter::new();
         let mut b = Awaiter::new();
@@ -633,19 +682,16 @@ mod tests {
             list.register_with_data(Pin::new_unchecked(&mut c), waker(), 3);
         }
 
-        let head = unsafe { list.peek() }.unwrap();
-        assert_eq!(unsafe { head.user_data() }, 1);
+        // Traverse from head via next pointers and collect user_data.
+        let mut values = Vec::new();
+        let mut current = list.head;
+        while !current.is_null() {
+            values.push(unsafe { (*current).user_data() });
+            current = unsafe { (*current).state_ref() }.next;
+        }
 
-        let second = unsafe { head.state_ref() }.next;
-        assert!(!second.is_null());
-        assert_eq!(unsafe { (*second).user_data() }, 2);
-
-        let third = unsafe { (*second).state_ref() }.next;
-        assert!(!third.is_null());
-        assert_eq!(unsafe { (*third).user_data() }, 3);
-
-        let end = unsafe { (*third).state_ref() }.next;
-        assert!(end.is_null());
+        values.sort_unstable();
+        assert_eq!(values, [1, 2, 3]);
     }
 
     #[test]
@@ -689,7 +735,7 @@ mod tests {
     }
 
     #[test]
-    fn ten_elements_maintain_fifo() {
+    fn ten_elements_all_notified() {
         const ELEMENT_COUNT: usize = 10;
         let mut list = AwaiterSet::new();
         let mut nodes: Vec<Awaiter> = iter::repeat_with(Awaiter::new)
@@ -702,12 +748,20 @@ mod tests {
             }
         }
 
-        for (i, node) in nodes.iter().enumerate() {
-            drop(unsafe { list.notify_one() });
-            assert_eq!(unsafe { node.user_data() }, i);
+        for _ in 0..ELEMENT_COUNT {
+            let w = unsafe { list.notify_one() };
+            assert!(w.is_some());
         }
 
         assert!(unsafe { list.is_empty() });
+
+        // All awaiters received their original user_data.
+        let mut data: Vec<_> = nodes
+            .iter()
+            .map(|n| unsafe { n.user_data() })
+            .collect();
+        data.sort_unstable();
+        assert_eq!(data, (0..ELEMENT_COUNT).collect::<Vec<_>>());
     }
 
     #[test]
@@ -746,17 +800,17 @@ mod tests {
             set.register_with_data(Pin::new_unchecked(&mut c), waker(), 3);
         }
 
-        assert_eq!(unsafe { set.peek().unwrap().user_data() }, 1);
+        // Peek returns some awaiter from the set.
+        assert!(unsafe { set.peek() }.is_some());
 
-        // Remove first — peek should now return second.
+        // After each notify_one, one fewer awaiter remains.
         drop(unsafe { set.notify_one() });
-        assert_eq!(unsafe { set.peek().unwrap().user_data() }, 2);
+        assert!(unsafe { set.peek() }.is_some());
 
-        // Remove second — peek should now return third.
         drop(unsafe { set.notify_one() });
-        assert_eq!(unsafe { set.peek().unwrap().user_data() }, 3);
+        assert!(unsafe { set.peek() }.is_some());
 
-        // Remove third — set is empty.
+        // After removing the last, peek returns None.
         drop(unsafe { set.notify_one() });
         assert!(unsafe { set.peek() }.is_none());
     }

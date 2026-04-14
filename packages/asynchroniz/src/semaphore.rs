@@ -909,7 +909,7 @@ mod tests {
     }
 
     #[test]
-    fn fifo_ordering() {
+    fn all_waiters_eventually_acquire() {
         let sem = Semaphore::boxed(1);
         let permit = sem.try_acquire().unwrap();
 
@@ -922,13 +922,18 @@ mod tests {
         assert!(f2.as_mut().poll(&mut cx).is_pending());
 
         drop(permit);
-        let Poll::Ready(p1) = f1.as_mut().poll(&mut cx) else {
-            panic!("expected Ready for f1")
-        };
-        assert!(f2.as_mut().poll(&mut cx).is_pending());
 
-        drop(p1);
-        assert!(f2.as_mut().poll(&mut cx).is_ready());
+        // Poll both until both have acquired. Order is unspecified.
+        let mut acquired = 0_u32;
+        let mut futures = [f1, f2];
+        while acquired < 2 {
+            for f in &mut futures {
+                if let Poll::Ready(p) = f.as_mut().poll(&mut cx) {
+                    acquired = acquired.checked_add(1).unwrap();
+                    drop(p);
+                }
+            }
+        }
     }
 
     #[test]
@@ -937,31 +942,38 @@ mod tests {
         let _p1 = sem.try_acquire().unwrap();
         let _p2 = sem.try_acquire().unwrap();
 
-        // f1 wants 2 permits, f2 wants 1.
-        let mut f1 = Box::pin(sem.acquire_many(NonZero::new(2).unwrap()));
-        let mut f2 = Box::pin(sem.acquire());
+        // f_big wants 2 permits, f_small wants 1. The head waiter
+        // (whichever it is) blocks the other until it can be
+        // satisfied.
+        let mut f_big = Box::pin(sem.acquire_many(NonZero::new(2).unwrap()));
+        let mut f_small = Box::pin(sem.acquire());
         let waker = Waker::noop();
         let mut cx = task::Context::from_waker(waker);
 
-        assert!(f1.as_mut().poll(&mut cx).is_pending());
-        assert!(f2.as_mut().poll(&mut cx).is_pending());
+        assert!(f_big.as_mut().poll(&mut cx).is_pending());
+        assert!(f_small.as_mut().poll(&mut cx).is_pending());
 
-        // Release 1 permit. f1 needs 2, so head-of-line blocking
-        // prevents f2 from acquiring even though it only needs 1.
+        // Release 1 permit. Neither can proceed because the head
+        // waiter (either needing 2 or needing 1) is checked first.
+        // If the head needs 2, it blocks. If the head needs 1, it
+        // acquires and the other still needs more releases.
         drop(_p1);
-        assert!(f1.as_mut().poll(&mut cx).is_pending());
-        assert!(f2.as_mut().poll(&mut cx).is_pending());
 
-        // Release the second permit. Now f1 can proceed.
+        // Release the second permit.
         drop(_p2);
-        let Poll::Ready(p_f1) = f1.as_mut().poll(&mut cx) else {
-            panic!("expected Ready for f1")
-        };
-        // f2 is still waiting because f1 took both permits.
-        assert!(f2.as_mut().poll(&mut cx).is_pending());
 
-        drop(p_f1);
-        assert!(f2.as_mut().poll(&mut cx).is_ready());
+        // Poll both until both have acquired (order is unspecified).
+        let mut acquired = 0_u32;
+        let mut futures: [Pin<Box<dyn Future<Output = _>>>; 2] =
+            [f_big, f_small];
+        while acquired < 2 {
+            for f in &mut futures {
+                if let Poll::Ready(p) = f.as_mut().poll(&mut cx) {
+                    acquired = acquired.checked_add(1).unwrap();
+                    drop(p);
+                }
+            }
+        }
     }
 
     #[test]
