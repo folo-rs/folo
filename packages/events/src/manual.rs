@@ -87,11 +87,23 @@ fn set(mutex: &Mutex<State>) {
         std::mem::take(&mut state.waiters)
     };
 
-    // Notify all awaiters from the snapshot. No lock is needed
-    // because the snapshot is exclusively owned by this stack frame
-    // and the awaiters have been removed from any shared set.
-    // No concurrent access is possible: wake() has not been called
-    // yet, so the owning futures cannot be polled.
+    // Notify all awaiters from the snapshot. The snapshot is
+    // exclusively owned by this stack frame — the awaiters have been
+    // removed from the shared set, so no other thread can reach them
+    // through the set.
+    //
+    // Each `notify_one()` mutates a single awaiter's state (setting
+    // `notified = true`, clearing pointers, taking the waker) without
+    // holding the mutex. This is safe because:
+    //
+    // 1. The awaiter is no longer in the shared set, so `poll()` and
+    //    `Drop` on other threads cannot reach it through the set.
+    // 2. `wake()` has not been called yet for this awaiter, so no
+    //    executor can re-poll or drop the owning future concurrently.
+    // 3. After `wake()` is called, the Waker contract guarantees a
+    //    happens-before edge: the woken thread sees all prior writes
+    //    (including the state mutations from `notify_one()`).
+    //
     // SAFETY: Exclusive ownership of the snapshot — no concurrent access.
     while let Some(w) = unsafe { snapshot.notify_one() } {
         w.wake();

@@ -74,6 +74,7 @@ use crate::awaiter::{Awaiter, State};
 /// let mut awaiter = Box::pin(Awaiter::new());
 ///
 /// poll_fn(|cx| {
+///     let waker = cx.waker().clone();
 ///     let mut guard = set.lock().unwrap();
 ///
 ///     // SAFETY: We hold the lock that protects the set.
@@ -84,7 +85,7 @@ use crate::awaiter::{Awaiter, State};
 ///     // SAFETY: We hold the lock. The awaiter remains pinned
 ///     // and valid until removed from the set.
 ///     unsafe {
-///         guard.register(awaiter.as_mut(), cx.waker().clone());
+///         guard.register(awaiter.as_mut(), waker);
 ///     }
 ///
 ///     Poll::Pending
@@ -93,15 +94,28 @@ use crate::awaiter::{Awaiter, State};
 /// # });
 /// ```
 pub struct AwaiterSet {
-    // Both are null if the set is empty. We add new entries at the tail,
-    // though as the API contract is that of a set, there is no specific
-    // constraint on ordering - we can change this if we want to in the future.
+    // Both are null if the set is empty. New entries are appended at
+    // the tail and notify_one() removes from the head, so the current
+    // implementation notifies in FIFO order. This is not an API
+    // guarantee but tests do verify FIFO behavior — update them if
+    // the ordering ever changes.
     head: *mut Awaiter,
     tail: *mut Awaiter,
 }
 
 impl AwaiterSet {
     /// Creates a new empty set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use awaiter_set::AwaiterSet;
+    ///
+    /// let set = AwaiterSet::new();
+    ///
+    /// // SAFETY: Single-threaded example requires no synchronization.
+    /// assert!(unsafe { set.is_empty() });
+    /// ```
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -838,6 +852,7 @@ mod tests {
             let mut awaiter = Box::pin(Awaiter::new());
 
             poll_fn(|cx| {
+                let waker = cx.waker().clone();
                 let mut guard = set.lock().unwrap();
 
                 if unsafe { awaiter.as_mut().take_notification() } {
@@ -845,7 +860,7 @@ mod tests {
                 }
 
                 unsafe {
-                    guard.register(awaiter.as_mut(), cx.waker().clone());
+                    guard.register(awaiter.as_mut(), waker);
                 }
 
                 Poll::Pending
