@@ -12,11 +12,12 @@ use awaiter_set::{Awaiter, AwaiterSet};
 
 /// Single-threaded async auto-reset event.
 ///
-/// Releases exactly one awaiter per [`set()`][Self::set] call.
+/// Each [`set()`][Self::set] call releases at most one awaiter.
 ///
 /// This is the `!Send` counterpart of [`AutoResetEvent`][crate::AutoResetEvent].
 /// It avoids atomic operations and locking, making it more efficient on
-/// single-threaded executors.
+/// single-threaded executors. See [`AutoResetEvent`][crate::AutoResetEvent]
+/// for detailed signal rules.
 ///
 /// The event is a lightweight cloneable handle. All clones derived from the
 /// same [`boxed()`][Self::boxed] call share the same underlying state.

@@ -8,9 +8,10 @@
 //! * **Manual-reset events** ([`ManualResetEvent`], [`LocalManualResetEvent`]) — a gate
 //!   that, once set, releases all current and future awaiters until explicitly
 //!   reset via [`reset()`][ManualResetEvent::reset].
-//! * **Auto-reset events** ([`AutoResetEvent`], [`LocalAutoResetEvent`]) — a token
-//!   dispenser that releases exactly one awaiter per
-//!   [`set()`][AutoResetEvent::set] call.
+//! * **Auto-reset events** ([`AutoResetEvent`], [`LocalAutoResetEvent`]) — a signal
+//!   that releases at most one awaiter per
+//!   [`set()`][AutoResetEvent::set] call, automatically consuming the
+//!   signal when an awaiter is released.
 //!
 //! Each family comes in a thread-safe variant (`Send + Sync`) and a
 //! single-threaded `Local` variant for improved efficiency when thread safety

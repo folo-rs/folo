@@ -13,12 +13,18 @@ use crate::NEVER_POISONED;
 
 /// Thread-safe async auto-reset event.
 ///
-/// Releases exactly one awaiter per [`set()`][Self::set] call.
+/// Each [`set()`][Self::set] call releases at most one awaiter.
 ///
-/// If no one is waiting when `set()` is called, the event remembers the signal
-/// so that the next [`wait()`][Self::wait] completes immediately (consuming the
-/// signal). If one or more tasks are waiting, a single waiter is released and
-/// the event stays unset.
+/// # Signal rules
+///
+/// * If one or more tasks are waiting, `set()` releases exactly one
+///   waiter and the event stays unset.
+/// * If no one is waiting, `set()` stores the signal so that the next
+///   [`wait()`][Self::wait] completes immediately (consuming the
+///   signal).
+/// * Multiple `set()` calls while no one is waiting are coalesced
+///   into a single stored signal — only one future waiter is
+///   released, not one per `set()` call.
 ///
 /// The event is a lightweight cloneable handle. All clones derived from the
 /// same [`boxed()`][Self::boxed] call share the same underlying state.
