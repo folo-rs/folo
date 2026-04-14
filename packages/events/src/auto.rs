@@ -979,6 +979,30 @@ mod tests {
     }
 
     #[test]
+    fn notified_then_dropped_while_set_preserves_signal() {
+        let event = AutoResetEvent::boxed();
+        let mut future = Box::pin(event.wait());
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        // Poll to register.
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+
+        // First set() pops the waiter and marks it notified.
+        event.set();
+
+        // Second set() transitions the event back to Set (no
+        // waiters remain in the set).
+        event.set();
+
+        // Drop the notified future. The state is already Set, so
+        // drop_wait must preserve the signal.
+        drop(future);
+
+        assert!(event.try_wait());
+    }
+
+    #[test]
     fn notified_then_dropped_forwards_to_next() {
         let event = AutoResetEvent::boxed();
         let mut future1 = Box::pin(event.wait());
