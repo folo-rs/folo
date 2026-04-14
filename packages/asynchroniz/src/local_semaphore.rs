@@ -105,6 +105,10 @@ impl Inner {
     /// Finds the first waiter whose permit request can be satisfied,
     /// deducts the permits, removes it from the set and returns its
     /// waker.
+    // Mutating try_wake_one to return None causes acquire futures
+    // to hang because waiters are never woken despite available
+    // permits.
+    #[cfg_attr(test, mutants::skip)]
     fn try_wake_one(state: &mut SemaphoreState) -> Option<Waker> {
         let available = &mut state.available;
         let predicate = |awaiter: &Awaiter| {

@@ -352,6 +352,10 @@ impl AwaiterSet {
     // In debug builds, pick head or tail based on pointer address to
     // flush out tests that depend on notification order. In release
     // builds, always pick head (FIFO).
+    //
+    // The exact comparison logic is a testing aid and has no
+    // correctness implications — any choice is valid.
+    #[cfg_attr(test, mutants::skip)]
     fn pick_one(&self) -> *mut Awaiter {
         #[cfg(debug_assertions)]
         {
