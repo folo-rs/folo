@@ -684,6 +684,16 @@ mod tests {
     }
 
     #[test]
+    fn embedded_default_uses_value_default() {
+        let container = Box::pin(EmbeddedLocalMutex::<u32>::default());
+        // SAFETY: The container outlives all handles.
+        let mutex = unsafe { LocalMutex::embedded(container.as_ref()) };
+        let guard = mutex.try_lock();
+        assert!(guard.is_some());
+        assert_eq!(*guard.unwrap(), 0);
+    }
+
+    #[test]
     fn try_lock_when_locked_returns_none() {
         let mutex = LocalMutex::boxed(42_u32);
         let _guard = mutex.try_lock().unwrap();
