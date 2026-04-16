@@ -16,9 +16,26 @@ use awaiter_set::{Awaiter, AwaiterSet};
 ///
 /// This is the `!Send` counterpart of [`AutoResetEvent`][crate::AutoResetEvent].
 /// It avoids atomic operations and locking, making it more efficient on
-/// single-threaded executors. See [`AutoResetEvent`][crate::AutoResetEvent]
-/// for detailed signal rules and the [crate-level documentation](crate)
-/// for guidance on boxed vs embedded storage.
+/// single-threaded executors.
+///
+/// # Signal rules
+///
+/// * If one or more tasks are waiting, `set()` releases exactly one
+///   waiter and the event stays unset.
+/// * If no one is waiting, `set()` stores the signal so that the next
+///   [`wait()`][Self::wait] completes immediately (consuming the
+///   signal).
+/// * Multiple `set()` calls while no one is waiting are coalesced
+///   into a single stored signal — only one future waiter is
+///   released, not one per `set()` call.
+///
+/// # Storage
+///
+/// Use [`boxed()`][Self::boxed] for heap-allocated state (simple,
+/// `Clone`-able handles) or [`embedded()`][Self::embedded] to borrow
+/// caller-provided storage and avoid the allocation. See the
+/// [crate-level documentation](crate) for guidance on when to use
+/// each.
 ///
 /// The event is a lightweight cloneable handle. All clones derived
 /// from the same origin share the same underlying state.

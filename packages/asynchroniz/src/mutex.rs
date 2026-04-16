@@ -23,6 +23,8 @@ use crate::constants::NEVER_POISONED;
 /// thread. Instead, it parks the calling future and wakes it when the
 /// lock becomes available, making it suitable for use in async contexts.
 ///
+/// # Storage
+///
 /// The mutex is a lightweight cloneable handle. All clones derived from
 /// the same [`boxed()`][Self::boxed] call share the same underlying
 /// state.

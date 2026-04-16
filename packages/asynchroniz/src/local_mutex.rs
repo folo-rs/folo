@@ -12,9 +12,17 @@ use awaiter_set::{Awaiter, AwaiterSet};
 
 /// Single-threaded async mutex.
 ///
+/// Provides mutual exclusion for a shared value of type `T`. The
+/// [`lock()`][Self::lock] method returns a future that resolves to a
+/// [`LocalMutexGuard`] providing [`Deref`][std::ops::Deref] and
+/// [`DerefMut`][std::ops::DerefMut] access to the protected value.
+/// The guard releases the lock when dropped.
+///
 /// This is the `!Send` counterpart of [`Mutex`][crate::Mutex]. It
 /// avoids atomic operations and locking, making it more efficient on
 /// single-threaded executors.
+///
+/// # Storage
 ///
 /// The mutex is a lightweight cloneable handle. All clones derived
 /// from the same [`boxed()`][Self::boxed] call share the same

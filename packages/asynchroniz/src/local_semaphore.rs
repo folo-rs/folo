@@ -15,9 +15,16 @@ use crate::constants::ONE_PERMIT;
 
 /// Single-threaded async semaphore.
 ///
+/// Controls access to a shared resource by maintaining a pool of
+/// permits. The [`acquire()`][Self::acquire] method returns a future
+/// that resolves to a [`LocalSemaphorePermit`] when a permit is
+/// available. The permit is returned to the pool when dropped.
+///
 /// This is the `!Send` counterpart of
 /// [`Semaphore`][crate::Semaphore]. It avoids atomic operations and
 /// locking, making it more efficient on single-threaded executors.
+///
+/// # Storage
 ///
 /// The semaphore is a lightweight cloneable handle. All clones
 /// derived from the same [`boxed()`][Self::boxed] call share the same

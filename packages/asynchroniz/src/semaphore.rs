@@ -19,6 +19,8 @@ use crate::constants::{NEVER_POISONED, ONE_PERMIT};
 /// that resolves to a [`SemaphorePermit`] when a permit is available.
 /// The permit is returned to the pool when dropped.
 ///
+/// # Storage
+///
 /// The semaphore is a lightweight cloneable handle. All clones derived
 /// from the same [`boxed()`][Self::boxed] call share the same
 /// underlying state.
