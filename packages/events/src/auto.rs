@@ -26,8 +26,16 @@ use crate::NEVER_POISONED;
 ///   into a single stored signal — only one future waiter is
 ///   released, not one per `set()` call.
 ///
-/// The event is a lightweight cloneable handle. All clones derived from the
-/// same [`boxed()`][Self::boxed] call share the same underlying state.
+/// # Storage
+///
+/// Use [`boxed()`][Self::boxed] for heap-allocated state (simple,
+/// `Clone`-able handles) or [`embedded()`][Self::embedded] to borrow
+/// caller-provided storage and avoid the allocation. See the
+/// [crate-level documentation](crate) for guidance on when to use
+/// each.
+///
+/// The event is a lightweight cloneable handle. All clones derived
+/// from the same origin share the same underlying state.
 ///
 /// # Examples
 ///

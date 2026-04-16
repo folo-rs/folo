@@ -16,10 +16,11 @@ use awaiter_set::{Awaiter, AwaiterSet};
 ///
 /// This is the `!Send` counterpart of [`ManualResetEvent`][crate::ManualResetEvent].
 /// It avoids atomic operations and locking, making it more efficient on
-/// single-threaded executors.
+/// single-threaded executors. See the [crate-level documentation](crate)
+/// for guidance on boxed vs embedded storage.
 ///
-/// The event is a lightweight cloneable handle. All clones derived from the
-/// same [`boxed()`][Self::boxed] call share the same underlying state.
+/// The event is a lightweight cloneable handle. All clones derived
+/// from the same origin share the same underlying state.
 ///
 /// # Examples
 ///
