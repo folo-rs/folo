@@ -39,13 +39,6 @@ use crate::constants::NEVER_POISONED;
 /// transferred directly to one of the waiting futures (which one
 /// is an implementation detail).
 ///
-/// # Cancellation safety
-///
-/// If a lock future that has been notified is dropped before it is
-/// polled to completion, the lock is forwarded to the next waiter (or
-/// released if no waiters remain). No lock acquisition is lost due to
-/// cancellation.
-///
 /// # Examples
 ///
 /// ```
@@ -297,13 +290,6 @@ impl<T> Mutex<T> {
     /// If the mutex is currently unlocked, the returned future
     /// completes immediately on first poll. Otherwise it parks until
     /// the current holder (and any earlier waiters) release the lock.
-    ///
-    /// # Cancellation safety
-    ///
-    /// If a future that has been notified is dropped before it is
-    /// polled to completion, the lock is forwarded to the next waiter
-    /// (or released if no waiters remain). No lock acquisition is lost
-    /// due to cancellation.
     ///
     /// # Examples
     ///

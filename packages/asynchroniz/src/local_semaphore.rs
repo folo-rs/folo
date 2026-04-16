@@ -41,13 +41,6 @@ use crate::constants::ONE_PERMIT;
 /// blocking: a waiter requesting many permits does not prevent
 /// smaller requests from being satisfied.
 ///
-/// # Cancellation safety
-///
-/// If an acquire future that has been notified is dropped before it
-/// is polled to completion, the permits are returned and any newly
-/// satisfiable waiters are woken. No permits are lost due to
-/// cancellation.
-///
 /// # Examples
 ///
 /// ```
@@ -324,12 +317,6 @@ impl LocalSemaphore {
 
     /// Returns a future that resolves to a [`LocalSemaphorePermit`]
     /// when a single permit is available.
-    ///
-    /// # Cancellation safety
-    ///
-    /// If a future that has been notified is dropped before it is
-    /// polled to completion, the permit is returned and any newly
-    /// satisfiable waiters are woken.
     ///
     /// # Examples
     ///

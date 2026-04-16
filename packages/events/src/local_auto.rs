@@ -20,14 +20,18 @@ use awaiter_set::{Awaiter, AwaiterSet};
 ///
 /// # Signal rules
 ///
-/// * If one or more tasks are waiting, `set()` releases exactly one
-///   waiter and the event stays unset.
+/// * If one or more waiters are registered, `set()` releases exactly
+///   one waiter and the event stays unset.
 /// * If no one is waiting, `set()` stores the signal so that the next
 ///   [`wait()`][Self::wait] completes immediately (consuming the
 ///   signal).
 /// * Multiple `set()` calls while no one is waiting are coalesced
 ///   into a single stored signal — only one future waiter is
 ///   released, not one per `set()` call.
+///
+/// # Fairness
+///
+/// The order in which waiters are released is unspecified.
 ///
 /// # Storage
 ///
@@ -301,11 +305,11 @@ impl LocalAutoResetEvent {
         EmbeddedLocalAutoResetEventRef { inner }
     }
 
-    /// Signals the event, releasing exactly one waiter.
+    /// Signals the event, releasing at most one waiter.
     ///
-    /// If one or more tasks are waiting, a single waiter is released and
-    /// the event remains unset. If no task is waiting, the event transitions
-    /// to the set state.
+    /// If one or more waiters are registered, a single waiter is
+    /// released and the event remains unset. If no one is waiting,
+    /// the event transitions to the set state.
     // Mutating set() to a no-op causes wait futures to hang.
     #[cfg_attr(test, mutants::skip)]
     // Trivial forwarder.
@@ -326,11 +330,6 @@ impl LocalAutoResetEvent {
     }
 
     /// Returns a future that completes when the event is signaled.
-    ///
-    /// # Cancellation safety
-    ///
-    /// If a notified future is dropped before completion, the notification is
-    /// forwarded to the next waiter (or the event is re-set).
     #[must_use]
     pub fn wait(&self) -> LocalAutoResetWaitFuture {
         LocalAutoResetWaitFuture {
@@ -478,11 +477,11 @@ impl EmbeddedLocalAutoResetEventRef {
         unsafe { self.inner.as_ref() }
     }
 
-    /// Signals the event, releasing exactly one waiter.
+    /// Signals the event, releasing at most one waiter.
     ///
-    /// If one or more tasks are waiting, a single waiter is released and
-    /// the event remains unset. If no task is waiting, the event transitions
-    /// to the set state.
+    /// If one or more waiters are registered, a single waiter is
+    /// released and the event remains unset. If no one is waiting,
+    /// the event transitions to the set state.
     // Mutating set() to a no-op causes wait futures to hang.
     #[cfg_attr(test, mutants::skip)]
     // Trivial forwarder.
@@ -503,11 +502,6 @@ impl EmbeddedLocalAutoResetEventRef {
     }
 
     /// Returns a future that completes when the event is signaled.
-    ///
-    /// # Cancellation safety
-    ///
-    /// If a notified future is dropped before completion, the notification is
-    /// forwarded to the next waiter (or the event is re-set).
     #[must_use]
     pub fn wait(&self) -> EmbeddedLocalAutoResetWaitFuture {
         EmbeddedLocalAutoResetWaitFuture {

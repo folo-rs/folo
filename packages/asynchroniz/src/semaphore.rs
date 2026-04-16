@@ -36,13 +36,6 @@ use crate::constants::{NEVER_POISONED, ONE_PERMIT};
 /// blocking: a waiter requesting many permits does not prevent
 /// smaller requests from being satisfied.
 ///
-/// # Cancellation safety
-///
-/// If an acquire future that has been notified is dropped before it
-/// is polled to completion, the permits are returned and any newly
-/// satisfiable waiters are woken. No permits are lost due to
-/// cancellation.
-///
 /// # Examples
 ///
 /// ```
@@ -60,7 +53,7 @@ use crate::constants::{NEVER_POISONED, ONE_PERMIT};
 ///     });
 ///
 ///     let _permit = sem.acquire().await;
-///     // At most 2 tasks can hold permits simultaneously.
+///     // At most 2 futures can hold permits simultaneously.
 /// }
 /// ```
 pub struct Semaphore {
@@ -327,12 +320,6 @@ impl Semaphore {
 
     /// Returns a future that resolves to a [`SemaphorePermit`] when
     /// a single permit is available.
-    ///
-    /// # Cancellation safety
-    ///
-    /// If a future that has been notified is dropped before it is
-    /// polled to completion, the permit is returned and any newly
-    /// satisfiable waiters are woken.
     ///
     /// # Examples
     ///

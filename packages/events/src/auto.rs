@@ -17,14 +17,18 @@ use crate::NEVER_POISONED;
 ///
 /// # Signal rules
 ///
-/// * If one or more tasks are waiting, `set()` releases exactly one
-///   waiter and the event stays unset.
+/// * If one or more waiters are registered, `set()` releases exactly
+///   one waiter and the event stays unset.
 /// * If no one is waiting, `set()` stores the signal so that the next
 ///   [`wait()`][Self::wait] completes immediately (consuming the
 ///   signal).
 /// * Multiple `set()` calls while no one is waiting are coalesced
 ///   into a single stored signal — only one future waiter is
 ///   released, not one per `set()` call.
+///
+/// # Fairness
+///
+/// The order in which waiters are released is unspecified.
 ///
 /// # Storage
 ///
@@ -286,13 +290,13 @@ impl AutoResetEvent {
         EmbeddedAutoResetEventRef { state }
     }
 
-    /// Signals the event, releasing exactly one waiter.
+    /// Signals the event, releasing at most one waiter.
     ///
-    /// * If one or more tasks are waiting, a single waiter is released and
-    ///   the event remains unset.
-    /// * If no task is waiting, the event transitions to the set state so that
-    ///   the next [`wait()`][Self::wait] or [`try_wait()`][Self::try_wait]
-    ///   completes immediately.
+    /// * If one or more waiters are registered, a single waiter is
+    ///   released and the event remains unset.
+    /// * If no one is waiting, the event transitions to the set state
+    ///   so that the next [`wait()`][Self::wait] or
+    ///   [`try_wait()`][Self::try_wait] completes immediately.
     ///
     /// # Examples
     ///
@@ -350,13 +354,6 @@ impl AutoResetEvent {
     /// When [`set()`][Self::set] is called, a single waiting future is
     /// released. If the event is already set (no prior waiter consumed it),
     /// the future completes immediately and consumes the signal.
-    ///
-    /// # Cancellation safety
-    ///
-    /// If a future that has been notified is dropped before it is polled to
-    /// completion, the notification is forwarded to the next waiter (or the
-    /// event is re-set if no waiters remain). No signals are lost due to
-    /// cancellation.
     ///
     /// # Examples
     ///

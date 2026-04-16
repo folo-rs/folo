@@ -23,8 +23,12 @@ use awaiter_set::{Awaiter, AwaiterSet};
 /// It avoids atomic operations and locking, making it more efficient on
 /// single-threaded executors.
 ///
-/// # Storage
+/// # Fairness
 ///
+/// When `set()` is called, all currently registered waiters are
+/// released. The order in which they are woken is unspecified.
+///
+/// # Storage///
 /// Use [`boxed()`][Self::boxed] for heap-allocated state (simple,
 /// `Clone`-able handles) or [`embedded()`][Self::embedded] to borrow
 /// caller-provided storage and avoid the allocation. See the

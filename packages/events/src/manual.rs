@@ -20,6 +20,11 @@ use crate::NEVER_POISONED;
 /// closes the gate so that subsequent awaiters block until the next
 /// [`set()`][Self::set].
 ///
+/// # Fairness
+///
+/// When `set()` is called, all currently registered waiters are
+/// released. The order in which they are woken is unspecified.
+///
 /// # Storage
 ///
 /// Use [`boxed()`][Self::boxed] for heap-allocated state (simple,
@@ -306,8 +311,8 @@ impl ManualResetEvent {
     /// completes immediately. If the event is reset between being woken and
     /// being re-polled, the future goes back to pending.
     ///
-    /// The returned future is `Send` and can be passed to other tasks
-    /// freely.
+    /// The returned future is `Send` and can be awaited on any
+    /// thread.
     ///
     /// # Examples
     ///
