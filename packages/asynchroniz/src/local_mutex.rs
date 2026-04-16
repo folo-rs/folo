@@ -1016,4 +1016,20 @@ mod tests {
 
         assert!(waker_data.was_woken());
     }
+
+    #[test]
+    fn async_lock_and_unlock() {
+        use futures::executor::block_on;
+
+        block_on(async {
+            let mutex = LocalMutex::boxed(42_u32);
+            {
+                let mut guard = mutex.lock().await;
+                assert_eq!(*guard, 42);
+                *guard = 99;
+            }
+            let guard = mutex.lock().await;
+            assert_eq!(*guard, 99);
+        });
+    }
 }

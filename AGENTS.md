@@ -813,6 +813,10 @@ In some circumstances, we may need to mark parts of code as intentionally not co
 To exclude code from coverage measurement, mark it with `#[cfg_attr(coverage_nightly, coverage(off))]`. This
 also requires `#![cfg_attr(coverage_nightly, feature(coverage_attribute))]` on the crate level.
 
+Note that `coverage(off)` applies to entire functions, not to individual branches. Defensive branches inside
+a function (e.g. `debug_assert!(false)` for structurally unreachable states) cannot be excluded from coverage
+measurement. Accept these as known gaps rather than trying to restructure the code to work around them.
+
 When excluding code for any other reason than "it is test code", leave a comment to explain why.
 
 # Keep names simple and unadorned

@@ -1008,4 +1008,34 @@ mod tests {
         // reset(). Poll B to confirm.
         assert!(future_b.as_mut().poll(&mut cx_b).is_ready());
     }
+
+    #[test]
+    fn reset_while_waiters_registered() {
+        let event = LocalManualResetEvent::boxed();
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        let mut future = Box::pin(event.wait());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+
+        // Reset while a waiter is registered (gate was never open).
+        event.reset();
+
+        // The waiter is still pending.
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+
+        // Now set — the waiter should be released.
+        event.set();
+        assert!(future.as_mut().poll(&mut cx).is_ready());
+    }
+
+    #[test]
+    fn embedded_default_creates_unset_event() {
+        let container = Box::pin(EmbeddedLocalManualResetEvent::default());
+        // SAFETY: The container outlives the handle.
+        let event = unsafe {
+            LocalManualResetEvent::embedded(container.as_ref())
+        };
+        assert!(!event.try_wait());
+    }
 }

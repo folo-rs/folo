@@ -503,6 +503,7 @@ unsafe impl Send for AwaiterSet {}
 impl UnwindSafe for AwaiterSet {}
 impl RefUnwindSafe for AwaiterSet {}
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for AwaiterSet {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
@@ -899,6 +900,27 @@ mod tests {
         assert!(w.is_some());
         assert!(unsafe { set.is_empty() });
         assert!(unsafe { Pin::new_unchecked(&a).is_notified() });
+    }
+
+    #[test]
+    fn re_register_updates_user_data() {
+        let mut set = AwaiterSet::new();
+        let mut a = Awaiter::new();
+
+        unsafe {
+            set.register_with_data(Pin::new_unchecked(&mut a), waker(), 42);
+        }
+        assert_eq!(unsafe { a.user_data() }, 42);
+
+        // Re-register with different user_data.
+        unsafe {
+            set.register_with_data(Pin::new_unchecked(&mut a), waker(), 99);
+        }
+        assert_eq!(unsafe { a.user_data() }, 99);
+
+        // Notify and verify updated data persists.
+        drop(unsafe { set.notify_one() });
+        assert_eq!(unsafe { a.user_data() }, 99);
     }
 
     #[test]

@@ -1271,4 +1271,12 @@ mod tests {
         // The re-entrant set() stored a signal.
         assert!(event.try_wait());
     }
+
+    #[test]
+    fn embedded_default_creates_unset_event() {
+        let container = Box::pin(EmbeddedAutoResetEvent::default());
+        // SAFETY: The container outlives the handle.
+        let event = unsafe { AutoResetEvent::embedded(container.as_ref()) };
+        assert!(!event.try_wait());
+    }
 }

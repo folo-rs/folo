@@ -1186,4 +1186,16 @@ mod tests {
 
         assert!(waker_data.was_woken());
     }
+
+    #[test]
+    fn async_acquire_and_release() {
+        use futures::executor::block_on;
+
+        block_on(async {
+            let sem = LocalSemaphore::boxed(2);
+            let _p1 = sem.acquire().await;
+            let _p2 = sem.acquire().await;
+            assert!(sem.try_acquire().is_none());
+        });
+    }
 }
