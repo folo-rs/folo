@@ -35,11 +35,9 @@ use crate::constants::ONE_PERMIT;
 ///
 /// # Fairness
 ///
-/// The order in which waiters are served is unspecified. When
-/// permits are released, the first waiter whose requested permit
-/// count can be satisfied is woken. This avoids head-of-line
-/// blocking: a waiter requesting many permits does not prevent
-/// smaller requests from being satisfied.
+/// The order in which waiters are served is unspecified. There is
+/// no head-of-line blocking: a waiter requesting many permits does
+/// not prevent smaller requests from being satisfied.
 ///
 /// # Examples
 ///

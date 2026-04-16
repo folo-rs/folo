@@ -36,8 +36,7 @@ use crate::constants::NEVER_POISONED;
 ///
 /// The order in which waiters are served is unspecified. When a
 /// lock holder unlocks while waiters are queued, the lock is
-/// transferred directly to one of the waiting futures (which one
-/// is an implementation detail).
+/// transferred directly to one of the waiting futures.
 ///
 /// # Examples
 ///
