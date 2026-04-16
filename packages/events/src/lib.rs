@@ -21,15 +21,15 @@
 //!
 //! Every event type can be created in two ways:
 //!
-//! * **[`boxed()`][AutoResetEvent::boxed]** — heap-allocates the state
-//!   behind an `Arc`. Simple to use: the returned handle is `Clone` and
-//!   can be shared freely. Best for most use cases.
+//! * **[`boxed()`][AutoResetEvent::boxed]** — allocates and owns the
+//!   event state internally. Simple to use: the returned handle is
+//!   `Clone` and can be shared freely. Best for most use cases.
 //! * **[`embedded()`][AutoResetEvent::embedded]** — borrows
 //!   caller-provided storage (`Embedded*` types) instead of
-//!   heap-allocating. This eliminates one allocation per event,
-//!   which matters when events are created on a hot path or
-//!   embedded inside other data structures. The caller must ensure
-//!   the storage outlives all handles and wait futures, and the
+//!   allocating. This eliminates one allocation per event, which
+//!   matters when events are created on a hot path or embedded
+//!   inside other data structures. The caller must ensure the
+//!   storage outlives all handles and wait futures, and the
 //!   `embedded()` call is `unsafe` to reflect this contract.
 //!
 //! Events are lightweight cloneable handles. All clones from the same
