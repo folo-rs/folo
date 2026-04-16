@@ -16,6 +16,9 @@ a single benchmark iteration to validate they are still working.
 We generally prefer using Just commands over raw Cargo commands if there is a suitable Just command
 defined in one of the *.just files.
 
+We generally prefer using Just commands over raw Cargo commands if there is a suitable Just command
+defined in one of the *.just files.
+
 Do not execute `just release` - this is a critical tool reserved for human use.
 
 Do not use VS Code tasks, relying instead on `just` and, if necessary, `cargo` commands.

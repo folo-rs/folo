@@ -313,6 +313,10 @@ impl AwaiterSet {
 
     // Removes a specific awaiter from the set by pointer and
     // transitions it to the notified state. Returns the stored waker.
+    //
+    // Mutating to return None causes all notification paths to hang
+    // because waiters are never woken.
+    #[cfg_attr(test, mutants::skip)]
     fn remove_and_notify(&mut self, ptr: *mut Awaiter) -> Option<Waker> {
         // SAFETY: ptr is a valid awaiter in the set (caller invariant).
         let awaiter = unsafe { &*ptr };
