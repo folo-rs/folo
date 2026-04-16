@@ -90,12 +90,6 @@ struct LockState {
 // Marker trait impl.
 unsafe impl<T: Send> Sync for MutexInner<T> {}
 
-// SAFETY: `LockState` contains raw pointers (via `AwaiterSet`) which
-// are `!Send` by default. Sending is safe because the pointers are
-// only dereferenced while the `StdMutex` is held.
-// Marker trait impl.
-unsafe impl Send for LockState {}
-
 // The `UnsafeCell<T>` causes auto-trait inference to mark `MutexInner`
 // as `!UnwindSafe` and `!RefUnwindSafe`. This is correct: user code
 // can panic while holding the lock, potentially leaving the guarded

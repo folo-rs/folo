@@ -78,11 +78,6 @@ enum State {
     Set,
 }
 
-// Marker trait impl.
-// SAFETY: The raw pointers inside AwaiterSet are only dereferenced while the
-// Mutex is held, ensuring exclusive access.
-unsafe impl Send for State {}
-
 // Mutating set() to a no-op causes wait futures to hang.
 #[cfg_attr(test, mutants::skip)]
 fn set(mutex: &Mutex<State>) {

@@ -75,12 +75,6 @@ struct SemaphoreState {
     waiters: AwaiterSet,
 }
 
-// SAFETY: `SemaphoreState` contains raw pointers (via `AwaiterSet`)
-// which are `!Send` by default. Sending is safe because the pointers
-// are only dereferenced while the `Mutex` is held.
-// Marker trait impl.
-unsafe impl Send for SemaphoreState {}
-
 // Mutating release_permits to a no-op causes acquire futures to hang.
 #[cfg_attr(test, mutants::skip)]
 fn release_permits(state_mutex: &Mutex<SemaphoreState>, count: usize) {

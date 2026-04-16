@@ -76,11 +76,6 @@ struct State {
     waiters: AwaiterSet,
 }
 
-// Marker trait impl.
-// SAFETY: The raw pointers inside AwaiterSet are only dereferenced while the
-// Mutex is held, ensuring exclusive access.
-unsafe impl Send for State {}
-
 // Test hook that fires after each wake() call in set(). This allows tests to
 // inject operations (e.g. calling reset() and re-polling a future) between
 // the wake and the re-acquisition of the lock, reproducing race conditions
