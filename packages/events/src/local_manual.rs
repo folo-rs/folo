@@ -1033,9 +1033,7 @@ mod tests {
     fn embedded_default_creates_unset_event() {
         let container = Box::pin(EmbeddedLocalManualResetEvent::default());
         // SAFETY: The container outlives the handle.
-        let event = unsafe {
-            LocalManualResetEvent::embedded(container.as_ref())
-        };
+        let event = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
         assert!(!event.try_wait());
     }
 }
