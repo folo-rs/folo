@@ -21,9 +21,9 @@
 //!
 //! Every event type can be created in two ways:
 //!
-//! * **[`boxed()`][AutoResetEvent::boxed]** — allocates and owns the
-//!   event state internally. Simple to use: the returned handle is
-//!   `Clone` and can be shared freely. Best for most use cases.
+//! * **[`boxed()`][AutoResetEvent::boxed]** — the event manages its
+//!   own storage. Simple to use: the returned handle is `Clone` and
+//!   can be shared freely. Best for most use cases.
 //! * **[`embedded()`][AutoResetEvent::embedded]** — borrows
 //!   caller-provided storage (`Embedded*` types) instead of
 //!   allocating. This eliminates one allocation per event, which
