@@ -318,6 +318,12 @@ impl LocalSemaphore {
     /// Returns a future that resolves to a [`LocalSemaphorePermit`]
     /// when a single permit is available.
     ///
+    /// # Cancellation safety
+    ///
+    /// If a future that has been notified is dropped before it is
+    /// polled to completion, the permit is returned and any newly
+    /// satisfiable waiters are woken.
+    ///
     /// # Examples
     ///
     /// ```

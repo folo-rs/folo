@@ -14,6 +14,11 @@ use awaiter_set::{Awaiter, AwaiterSet};
 ///
 /// Once set, releases all current and future awaiters until explicitly reset.
 ///
+/// A `LocalManualResetEvent` acts as a gate: while set, every call to
+/// [`wait()`][Self::wait] completes immediately. Calling
+/// [`reset()`][Self::reset] closes the gate so that subsequent
+/// awaiters block until the next [`set()`][Self::set].
+///
 /// This is the `!Send` counterpart of [`ManualResetEvent`][crate::ManualResetEvent].
 /// It avoids atomic operations and locking, making it more efficient on
 /// single-threaded executors. See the [crate-level documentation](crate)
