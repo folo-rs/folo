@@ -114,10 +114,11 @@ impl Inner {
         // SAFETY: Single-threaded — no concurrent access.
         let mut snapshot = std::mem::take(unsafe { &mut *self.waiters.get() });
 
-        // Notify all awaiters from the snapshot. No synchronization
-        // needed — the snapshot is exclusively owned by this stack
-        // frame and we are single-threaded.
-        // SAFETY: Exclusive ownership of the snapshot.
+        // Notify all awaiters from the snapshot. The snapshot is
+        // exclusively owned by this stack frame. Re-entrant wakers
+        // may call set()/reset() but those operate on the original
+        // (now empty) set, not on this snapshot.
+        // SAFETY: Single-threaded — confined to one thread.
         while let Some(w) = unsafe { snapshot.notify_one() } {
             w.wake();
         }

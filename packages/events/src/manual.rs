@@ -82,38 +82,30 @@ struct State {
 // Mutating set() to a no-op causes wait futures to hang.
 #[cfg_attr(test, mutants::skip)]
 fn set(mutex: &Mutex<State>) {
-    let mut snapshot = {
+    // Collect all wakers while holding the lock, then wake them
+    // after releasing it to avoid reentrancy deadlocks.
+    let wakers = {
         let mut state = mutex.lock().expect(NEVER_POISONED);
         if state.is_set {
             return;
         }
         state.is_set = true;
 
-        // Take all current awaiters out of the set. New awaiters
-        // registered by re-entrant wakers go into the original
-        // (now empty) set and are not affected by this set() call.
-        std::mem::take(&mut state.waiters)
+        // Drain all awaiters under the lock. Each notify_one()
+        // transitions the awaiter to the notified state and extracts
+        // its waker. New awaiters registered by re-entrant code after
+        // we release the lock will see is_set == true and complete
+        // immediately.
+        let mut wakers = Vec::new();
+        // SAFETY: We hold the lock that protects the set and its
+        // awaiters.
+        while let Some(w) = unsafe { state.waiters.notify_one() } {
+            wakers.push(w);
+        }
+        wakers
     };
 
-    // Notify all awaiters from the snapshot. The snapshot is
-    // exclusively owned by this stack frame — the awaiters have been
-    // removed from the shared set, so no other thread can reach them
-    // through the set.
-    //
-    // Each `notify_one()` mutates a single awaiter's state (setting
-    // `notified = true`, clearing pointers, taking the waker) without
-    // holding the mutex. This is safe because:
-    //
-    // 1. The awaiter is no longer in the shared set, so `poll()` and
-    //    `Drop` on other threads cannot reach it through the set.
-    // 2. `wake()` has not been called yet for this awaiter, so no
-    //    executor can re-poll or drop the owning future concurrently.
-    // 3. After `wake()` is called, the Waker contract guarantees a
-    //    happens-before edge: the woken thread sees all prior writes
-    //    (including the state mutations from `notify_one()`).
-    //
-    // SAFETY: Exclusive ownership of the snapshot — no concurrent access.
-    while let Some(w) = unsafe { snapshot.notify_one() } {
+    for w in wakers {
         w.wake();
     }
 }
