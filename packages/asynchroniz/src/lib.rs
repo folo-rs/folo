@@ -25,17 +25,17 @@
 //!
 //! | Benchmark | `Mutex` | `LocalMutex` | tokio | async-lock |
 //! |---|---|---|---|---|
-//! | Round trip | **25 ns** | **1.6 ns** | 26 ns | 45 ns |
-//! | Async poll ready | **28 ns** | **4.5 ns** | 40 ns | 44 ns |
-//! | Many waiters (×100) | **5.2 µs** | **1.6 µs** | 10.5 µs | 23.6 µs |
+//! | Round trip | **28 ns** | **2.3 ns** | 29 ns | 47 ns |
+//! | Async poll ready | **45 ns** | **6.4 ns** | 45 ns | 46 ns |
+//! | Many waiters (×100) | **7.0 µs** | **2.5 µs** | 11.0 µs | 25.0 µs |
 //!
 //! ## Semaphore
 //!
 //! | Benchmark | `Semaphore` | `LocalSemaphore` | tokio | async-lock |
 //! |---|---|---|---|---|
-//! | Round trip | **27 ns** | **5.0 ns** | 32 ns | 44 ns |
-//! | Async poll ready | **31 ns** | **9.0 ns** | 37 ns | 48 ns |
-//! | Many waiters (×100) | **7.3 µs** | **2.4 µs** | 10.4 µs | 21.5 µs |
+//! | Round trip | **28 ns** | **5.5 ns** | 35 ns | 52 ns |
+//! | Async poll ready | **45 ns** | **12 ns** | 40 ns | 52 ns |
+//! | Many waiters (×100) | **12.7 µs** | **8.2 µs** | 10.3 µs | 22.9 µs |
 //!
 //! Run `cargo bench -p asynchroniz` to reproduce.
 
