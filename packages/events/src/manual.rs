@@ -82,31 +82,31 @@ struct State {
 // Mutating set() to a no-op causes wait futures to hang.
 #[cfg_attr(test, mutants::skip)]
 fn set(mutex: &Mutex<State>) {
-    // Collect all wakers while holding the lock, then wake them
-    // after releasing it to avoid reentrancy deadlocks.
-    let wakers = {
+    {
         let mut state = mutex.lock().expect(NEVER_POISONED);
         if state.is_set {
             return;
         }
         state.is_set = true;
+    }
 
-        // Drain all awaiters under the lock. Each notify_one()
-        // transitions the awaiter to the notified state and extracts
-        // its waker. New awaiters registered by re-entrant code after
-        // we release the lock will see is_set == true and complete
-        // immediately.
-        let mut wakers = Vec::new();
-        // SAFETY: We hold the lock that protects the set and its
-        // awaiters.
-        while let Some(w) = unsafe { state.waiters.notify_one() } {
-            wakers.push(w);
+    // Wake waiters one at a time: lock → notify → unlock → wake.
+    // Each iteration re-acquires the lock to satisfy the safety
+    // requirement, then releases it before calling wake() to avoid
+    // reentrancy deadlocks.
+    loop {
+        let waker = {
+            let mut state = mutex.lock().expect(NEVER_POISONED);
+            // SAFETY: We hold the lock that protects the set and
+            // its awaiters.
+            unsafe { state.waiters.notify_one() }
+        };
+
+        if let Some(w) = waker {
+            w.wake();
+        } else {
+            break;
         }
-        wakers
-    };
-
-    for w in wakers {
-        w.wake();
     }
 }
 
