@@ -297,7 +297,8 @@ mod tests {
     }
 
     #[test]
-    fn unregister_when_idle_is_noop() {
+    #[should_panic]
+    fn unregister_when_idle_panics() {
         let mut a = Awaiter::new();
         let mut set = AwaiterSet::new();
 
@@ -305,7 +306,6 @@ mod tests {
         unsafe {
             set.unregister(Pin::new_unchecked(&mut a));
         }
-        assert!(!unsafe { a.is_registered() });
     }
 
     #[test]

@@ -446,11 +446,17 @@ impl AwaiterSet {
     }
 
     /// Removes an awaiter from the set, returning it to the idle
-    /// state. No-op if the awaiter is not currently registered
-    /// in the waiting state.
+    /// state.
     ///
-    /// Called by a future's drop handler when the future is cancelled
-    /// before being notified.
+    /// If the awaiter has been notified (removed from the set by
+    /// [`notify_one()`][Self::notify_one]), this is a no-op because
+    /// the awaiter is no longer in the set.
+    ///
+    /// # Panics
+    ///
+    /// Panics (in debug builds) if the awaiter is idle — calling
+    /// unregister on an awaiter that was never registered is a logic
+    /// error.
     ///
     /// # Safety
     ///
@@ -462,10 +468,20 @@ impl AwaiterSet {
         // SAFETY: Access is serialized by the caller's lock.
         let state = unsafe { awaiter.state_ref() };
 
-        // Only remove awaiters that are waiting (registered but not
-        // yet notified). Idle and notified awaiters are not in the
-        // set.
-        if !state.registered || state.notified {
+        debug_assert!(
+            state.registered,
+            "unregister called on an idle awaiter"
+        );
+
+        // Notified awaiters have already been removed from the set
+        // by notify_one(). Nothing to do.
+        if state.notified {
+            return;
+        }
+
+        // The awaiter is still registered — guard against idle
+        // callers in release builds.
+        if !state.registered {
             return;
         }
 
