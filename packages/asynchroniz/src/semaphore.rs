@@ -453,9 +453,9 @@ pub struct SemaphoreAcquireFuture<'a> {
 }
 
 // Marker trait impl.
-// SAFETY: All Awaiter fields are accessed exclusively under the
-// semaphore's internal Mutex. The reference points to data behind an
-// Arc that is Send + Sync.
+// SAFETY: Awaiter is Send. All access to the awaiter is serialized
+// by the semaphore's internal Mutex. The reference points to data
+// behind an Arc that is Send + Sync.
 unsafe impl Send for SemaphoreAcquireFuture<'_> {}
 
 // All state access is serialized by the internal Mutex. No

@@ -404,9 +404,9 @@ pub struct MutexLockFuture<'a, T> {
 }
 
 // Marker trait impl.
-// SAFETY: All Awaiter fields are accessed exclusively under the
-// mutex's internal lock. The references point to data behind an Arc
-// that is Send + Sync when T: Send.
+// SAFETY: Awaiter is Send. All access to the awaiter is serialized
+// by the mutex's internal lock. The references point to data behind
+// an Arc that is Send + Sync when T: Send.
 unsafe impl<T: Send> Send for MutexLockFuture<'_, T> {}
 
 impl<'a, T> Future for MutexLockFuture<'a, T> {
