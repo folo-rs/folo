@@ -297,8 +297,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    fn unregister_when_idle_panics() {
+    #[cfg_attr(debug_assertions, should_panic)]
+    fn unregister_when_idle_panics_in_debug() {
         let mut a = Awaiter::new();
         let mut set = AwaiterSet::new();
 
