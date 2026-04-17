@@ -468,10 +468,7 @@ impl AwaiterSet {
         // SAFETY: Access is serialized by the caller's lock.
         let state = unsafe { awaiter.state_ref() };
 
-        debug_assert!(
-            state.registered,
-            "unregister called on an idle awaiter"
-        );
+        debug_assert!(state.registered, "unregister called on an idle awaiter");
 
         // Notified awaiters have already been removed from the set
         // by notify_one(). Nothing to do.

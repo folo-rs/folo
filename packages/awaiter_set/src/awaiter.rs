@@ -21,11 +21,25 @@ use std::task::Waker;
 // the drop handler). The future's next poll observes the notification
 // and returns Ready.
 pub(crate) struct State {
+    // Idle: None. Waiting: Some(waker). Notified: None (taken by
+    // notify_one).
     pub(crate) waker: Option<Waker>,
+
+    // Idle: 0. Waiting: caller-defined value (e.g. permit count).
+    // Notified: preserved from the waiting state so the drop handler
+    // can inspect it.
     pub(crate) user_data: usize,
+
+    // Idle/Notified: null. Waiting: linked-set pointers maintained
+    // by AwaiterSet.
     pub(crate) next: *mut Awaiter,
     pub(crate) prev: *mut Awaiter,
+
+    // Idle: false. Waiting: true. Notified: true (the awaiter was
+    // registered and has not yet returned to idle).
     pub(crate) registered: bool,
+
+    // Idle: false. Waiting: false. Notified: true.
     pub(crate) notified: bool,
 }
 
