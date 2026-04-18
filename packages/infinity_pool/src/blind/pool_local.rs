@@ -277,9 +277,8 @@ fn ensure_inner_pool<'a, T: 'static>(
 mod tests {
     use std::cell::RefCell;
     use std::mem::MaybeUninit;
-    use std::rc::Rc;
-
     use std::panic::{RefUnwindSafe, UnwindSafe};
+    use std::rc::Rc;
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 

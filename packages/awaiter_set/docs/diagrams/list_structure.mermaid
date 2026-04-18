@@ -1,0 +1,10 @@
+---
+title: Awaiter lifecycle
+---
+stateDiagram-v2
+    [*] --> Idle : new
+    Idle --> Waiting : register
+    Waiting --> Waiting : register again updates waker
+    Waiting --> Notified : notify_one
+    Waiting --> Idle : unregister
+    Notified --> Idle : take_notification

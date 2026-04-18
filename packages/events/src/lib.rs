@@ -1,23 +1,41 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-//! Async manual-reset and auto-reset events for multi-use signaling.
+//! Async manual-reset and auto-reset event primitives.
 //!
-//! This crate provides two families of event primitives:
+//! This crate provides async event primitives:
 //!
 //! * **Manual-reset events** ([`ManualResetEvent`], [`LocalManualResetEvent`]) — a gate
 //!   that, once set, releases all current and future awaiters until explicitly
 //!   reset via [`reset()`][ManualResetEvent::reset].
-//! * **Auto-reset events** ([`AutoResetEvent`], [`LocalAutoResetEvent`]) — a token
-//!   dispenser that releases exactly one awaiter per
-//!   [`set()`][AutoResetEvent::set] call.
+//! * **Auto-reset events** ([`AutoResetEvent`], [`LocalAutoResetEvent`]) — a signal
+//!   that releases at most one awaiter per
+//!   [`set()`][AutoResetEvent::set] call, automatically consuming the
+//!   signal when an awaiter is released.
 //!
 //! Each family comes in a thread-safe variant (`Send + Sync`) and a
 //! single-threaded `Local` variant for improved efficiency when thread safety
 //! is not required.
 //!
-//! Events are lightweight cloneable handles. All clones from the same family
-//! share the same underlying state.
+//! # Boxed vs embedded storage
+//!
+//! Every event type can be created in two ways:
+//!
+//! * **[`boxed()`][AutoResetEvent::boxed]** — the event manages its
+//!   own storage. Simple to use: the returned handle is `Clone` and
+//!   can be shared freely. Best for most use cases.
+//! * **[`embedded()`][AutoResetEvent::embedded]** — borrows
+//!   caller-provided storage (`Embedded*` types) instead of
+//!   allocating. This eliminates one allocation per event, which
+//!   matters when events are created on a hot path or embedded
+//!   inside other data structures. The caller must ensure the
+//!   storage outlives all handles and wait futures, and the
+//!   `embedded()` call is `unsafe` to reflect this contract.
+//!
+//! Events are lightweight cloneable handles. All clones from the same
+//! [`boxed()`][AutoResetEvent::boxed] or
+//! [`embedded()`][AutoResetEvent::embedded] origin share the same
+//! underlying state.
 //!
 //! # Manual-reset example
 //!
@@ -69,26 +87,27 @@ mod auto;
 mod local_auto;
 mod local_manual;
 mod manual;
-mod waiter_list;
 
 #[cfg(test)]
 mod test_helpers;
 
 pub(crate) const NEVER_POISONED: &str = "we never panic while holding this lock";
 
-pub use auto::{AutoResetEvent, EmbeddedAutoResetEvent, RawAutoResetEvent};
-pub use local_auto::{EmbeddedLocalAutoResetEvent, LocalAutoResetEvent, RawLocalAutoResetEvent};
-pub use local_manual::{
-    EmbeddedLocalManualResetEvent, LocalManualResetEvent, RawLocalManualResetEvent,
+pub use auto::{AutoResetEvent, EmbeddedAutoResetEvent, EmbeddedAutoResetEventRef};
+pub use local_auto::{
+    EmbeddedLocalAutoResetEvent, EmbeddedLocalAutoResetEventRef, LocalAutoResetEvent,
 };
-pub use manual::{EmbeddedManualResetEvent, ManualResetEvent, RawManualResetEvent};
+pub use local_manual::{
+    EmbeddedLocalManualResetEvent, EmbeddedLocalManualResetEventRef, LocalManualResetEvent,
+};
+pub use manual::{EmbeddedManualResetEvent, EmbeddedManualResetEventRef, ManualResetEvent};
 
 /// Future types returned by event `wait()` methods.
 ///
 /// These futures are `!Unpin` and must be pinned before polling.
 pub mod futures {
-    pub use crate::auto::{AutoResetWaitFuture, RawAutoResetWaitFuture};
-    pub use crate::local_auto::{LocalAutoResetWaitFuture, RawLocalAutoResetWaitFuture};
-    pub use crate::local_manual::{LocalManualResetWaitFuture, RawLocalManualResetWaitFuture};
-    pub use crate::manual::{ManualResetWaitFuture, RawManualResetWaitFuture};
+    pub use crate::auto::{AutoResetWaitFuture, EmbeddedAutoResetWaitFuture};
+    pub use crate::local_auto::{EmbeddedLocalAutoResetWaitFuture, LocalAutoResetWaitFuture};
+    pub use crate::local_manual::{EmbeddedLocalManualResetWaitFuture, LocalManualResetWaitFuture};
+    pub use crate::manual::{EmbeddedManualResetWaitFuture, ManualResetWaitFuture};
 }

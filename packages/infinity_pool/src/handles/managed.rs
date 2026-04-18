@@ -228,7 +228,6 @@ unsafe impl Sync for Remover {}
 mod tests {
     use std::borrow::Borrow;
     use std::marker::PhantomPinned;
-
     use std::panic::{RefUnwindSafe, UnwindSafe};
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};

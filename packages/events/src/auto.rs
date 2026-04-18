@@ -1,28 +1,46 @@
-use std::cell::UnsafeCell;
 use std::fmt;
 use std::future::Future;
 use std::marker::PhantomPinned;
-use std::mem;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{self, Poll, Waker};
 
+use awaiter_set::{Awaiter, AwaiterSet};
+
 use crate::NEVER_POISONED;
-use crate::waiter_list::{WaiterList, WaiterNode};
 
 /// Thread-safe async auto-reset event.
 ///
-/// Releases exactly one awaiter per [`set()`][Self::set] call.
+/// Each [`set()`][Self::set] call releases at most one awaiter.
 ///
-/// If no one is waiting when `set()` is called, the event remembers the signal
-/// so that the next [`wait()`][Self::wait] completes immediately (consuming the
-/// signal). If one or more tasks are waiting, a single waiter is released and
-/// the event stays unset.
+/// # Signal rules
 ///
-/// The event is a lightweight cloneable handle. All clones derived from the
-/// same [`boxed()`][Self::boxed] call share the same underlying state.
+/// * If one or more waiters are registered, `set()` releases exactly
+///   one waiter and the event stays unset.
+/// * If no one is waiting, `set()` stores the signal so that the next
+///   [`wait()`][Self::wait] completes immediately (consuming the
+///   signal).
+/// * Multiple `set()` calls while no one is waiting are coalesced
+///   into a single stored signal — only one future waiter is
+///   released, not one per `set()` call.
+///
+/// # Fairness
+///
+/// The order in which waiters are released is unspecified.
+///
+/// # Storage
+///
+/// Use [`boxed()`][Self::boxed] for heap-allocated state (simple,
+/// `Clone`-able handles) or [`embedded()`][Self::embedded] to borrow
+/// caller-provided storage and avoid the allocation. See the
+/// [crate-level documentation](crate) for guidance on when to use
+/// each.
+///
+/// The event is a lightweight cloneable handle. All clones derived
+/// from the same origin share the same underlying state.
 ///
 /// # Examples
 ///
@@ -48,53 +66,50 @@ use crate::waiter_list::{WaiterList, WaiterNode};
 /// ```
 #[derive(Clone)]
 pub struct AutoResetEvent {
-    state: Arc<Mutex<State>>,
+    inner: Arc<EventInner>,
 }
 
-// The signal flag and waiter list are mutually exclusive: if the event is set
-// there are no waiters, and if there are waiters the event is not set. This
-// enum encodes that invariant at the type level.
-enum State {
-    /// Not signaled. The waiter list may be empty or non-empty.
-    Unset(WaiterList),
-    /// Signal stored (will be consumed by the next wait or `try_wait`).
-    Set,
-}
+const SIGNAL: u8 = 0x1;
+const HAS_WAITERS: u8 = 0x2;
 
-// Marker trait impl.
-// SAFETY: The raw pointers inside WaiterList are only dereferenced while the
-// Mutex is held, ensuring exclusive access.
-unsafe impl Send for State {}
+struct EventInner {
+    state: AtomicU8,
+    slow: Mutex<AwaiterSet>,
+}
 
 // Mutating set() to a no-op causes wait futures to hang.
 #[cfg_attr(test, mutants::skip)]
-fn set(mutex: &Mutex<State>) {
-    let waker: Option<Waker>;
-
+fn set(inner: &EventInner) {
+    // Fast path: no waiters — set the signal atomically.
+    if inner
+        .state
+        .compare_exchange(0, SIGNAL, Ordering::Release, Ordering::Relaxed)
+        .is_ok()
     {
-        let mut state = mutex.lock().expect(NEVER_POISONED);
+        return;
+    }
 
-        match &mut *state {
-            State::Set => {
-                waker = None;
-            }
-            State::Unset(waiters) => {
-                // SAFETY: We hold the lock.
-                if let Some(node_ptr) = unsafe { waiters.pop_front() } {
-                    // SAFETY: We hold the lock and just popped this
-                    // node.
-                    unsafe {
-                        (*node_ptr).notified = true;
-                    }
+    // If already set, nothing to do.
+    let prev = inner.state.load(Ordering::Relaxed);
+    if prev & SIGNAL != 0 {
+        return;
+    }
 
-                    // SAFETY: Same node, we hold the lock.
-                    waker = unsafe { (*node_ptr).waker.take() };
-                } else {
-                    // No waiters — store the signal.
-                    *state = State::Set;
-                    waker = None;
-                }
+    // Slow path: waiters exist — notify one under the mutex.
+    let waker: Option<Waker>;
+    {
+        let mut waiters = inner.slow.lock().expect(NEVER_POISONED);
+
+        // SAFETY: We hold the mutex.
+        if let Some(w) = unsafe { waiters.notify_one() } {
+            if unsafe { waiters.is_empty() } {
+                inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
             }
+            waker = Some(w);
+        } else {
+            // No waiters despite HAS_WAITERS — set signal.
+            inner.state.store(SIGNAL, Ordering::Release);
+            waker = None;
         }
     }
 
@@ -105,135 +120,77 @@ fn set(mutex: &Mutex<State>) {
 
 // Mutating try_wait() to return false causes spin-loop tests to hang.
 #[cfg_attr(test, mutants::skip)]
-fn try_wait(mutex: &Mutex<State>) -> bool {
-    let mut state = mutex.lock().expect(NEVER_POISONED);
-    if matches!(*state, State::Set) {
-        *state = State::Unset(WaiterList::new());
-        true
-    } else {
-        false
-    }
+fn try_wait(inner: &EventInner) -> bool {
+    // Atomic CAS: consume the signal.
+    inner
+        .state
+        .compare_exchange(SIGNAL, 0, Ordering::Acquire, Ordering::Relaxed)
+        .is_ok()
 }
 
-/// Shared poll logic for both `AutoResetWaitFuture` and
-/// `RawAutoResetWaitFuture`.
-///
-/// # Safety
-///
-/// * The `node` must be pinned and must remain at the same memory address
-///   for the lifetime of the wait future.
-/// * The `mutex` must protect the waiter list that this node is (or will
-///   be) registered with.
-unsafe fn poll_wait(
-    mutex: &Mutex<State>,
-    node: &UnsafeCell<WaiterNode>,
-    registered: &mut bool,
-    waker: Waker,
-) -> Poll<()> {
-    let node_ptr = node.get();
-
-    let mut state = mutex.lock().expect(NEVER_POISONED);
-
-    // Check if we were directly notified by set() (it popped us
-    // from the list and set our notified flag).
-    // SAFETY: We hold the lock.
-    if unsafe { (*node_ptr).notified } {
-        *registered = false;
+unsafe fn poll_wait(inner: &EventInner, mut awaiter: Pin<&mut Awaiter>, waker: Waker) -> Poll<()> {
+    // Fast path: try to consume the signal atomically.
+    if inner
+        .state
+        .compare_exchange(SIGNAL, 0, Ordering::Acquire, Ordering::Relaxed)
+        .is_ok()
+    {
         return Poll::Ready(());
     }
 
-    match &mut *state {
-        State::Set => {
-            // Signal available — consume it.
-            debug_assert!(
-                !*registered,
-                "Set state is exclusive with registered waiters"
-            );
-            *state = State::Unset(WaiterList::new());
-            Poll::Ready(())
-        }
-        State::Unset(waiters) => {
-            // SAFETY: We hold the lock.
-            unsafe {
-                (*node_ptr).waker = Some(waker);
-            }
-            if !*registered {
-                // SAFETY: We hold the lock, node is pinned and not
-                // in any list.
-                unsafe {
-                    waiters.push_back(node_ptr);
-                }
-                *registered = true;
-            }
-            Poll::Pending
-        }
+    // Slow path: acquire the mutex.
+    let mut waiters = inner.slow.lock().expect(NEVER_POISONED);
+
+    // SAFETY: We hold the mutex.
+    if unsafe { awaiter.as_mut().take_notification() } {
+        return Poll::Ready(());
     }
+
+    // Re-check signal under the mutex.
+    if try_wait(inner) {
+        return Poll::Ready(());
+    }
+
+    // Register or update the waker.
+    inner.state.fetch_or(HAS_WAITERS, Ordering::Relaxed);
+    // SAFETY: We hold the mutex, awaiter is pinned.
+    unsafe {
+        waiters.register(awaiter.as_mut(), waker);
+    }
+    Poll::Pending
 }
 
-/// Shared drop logic for both wait future types.
-///
-/// # Safety
-///
-/// Same requirements as [`poll_wait`].
-unsafe fn drop_wait(mutex: &Mutex<State>, node: &UnsafeCell<WaiterNode>, registered: bool) {
-    // The caller must only call this when the node is registered. Both
-    // AutoResetWaitFuture::drop and RawAutoResetWaitFuture::drop guard
-    // on `self.registered` before calling, so this should always hold.
-    debug_assert!(registered);
+unsafe fn drop_wait(inner: &EventInner, mut awaiter: Pin<&mut Awaiter>) {
+    let mut waiters = inner.slow.lock().expect(NEVER_POISONED);
 
-    let node_ptr = node.get();
-    let mut state = mutex.lock().expect(NEVER_POISONED);
+    // SAFETY: We hold the mutex.
+    if !unsafe { awaiter.is_registered() } {
+        return;
+    }
 
-    // SAFETY: We hold the lock.
-    if unsafe { (*node_ptr).notified } {
-        // We were notified but the future was cancelled before it
-        // could complete. Forward the notification to the next
-        // waiter so that no signal is lost.
-        let old_state = mem::replace(&mut *state, State::Unset(WaiterList::new()));
-        match old_state {
-            State::Unset(mut waiters) => {
-                // SAFETY: We hold the lock.
-                if let Some(next_node) = unsafe { waiters.pop_front() } {
-                    // SAFETY: We hold the lock and just popped
-                    // this node.
-                    unsafe {
-                        (*next_node).notified = true;
-                    }
-                    // SAFETY: Same node, we hold the lock.
-                    let waker = unsafe { (*next_node).waker.take() };
-                    // Restore the waiter list.
-                    *state = State::Unset(waiters);
-                    drop(state);
-
-                    if let Some(w) = waker {
-                        w.wake();
-                    }
-                } else {
-                    // No more waiters — restore the signal so it
-                    // is not lost.
-                    *state = State::Set;
-                }
+    // SAFETY: We hold the mutex.
+    if unsafe { awaiter.as_ref().is_notified() } {
+        // We were notified but the future was cancelled. Forward
+        // the notification to the next waiter.
+        // SAFETY: We hold the mutex.
+        if let Some(waker) = unsafe { waiters.notify_one() } {
+            if unsafe { waiters.is_empty() } {
+                inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
             }
-            State::Set => {
-                // Already set — restore.
-                *state = State::Set;
-            }
+            drop(waiters);
+            waker.wake();
+        } else {
+            // No more waiters — restore the signal.
+            inner.state.store(SIGNAL, Ordering::Release);
         }
     } else {
-        // Not notified — just remove from the list.
-        match &mut *state {
-            State::Unset(waiters) => {
-                // SAFETY: We hold the lock and the node is in the
-                // list.
-                unsafe {
-                    waiters.remove(node_ptr);
-                }
-            }
-            State::Set => {
-                // Not notified + registered ⟹ node is in a waiter
-                // list ⟹ state must be Unset.
-                debug_assert!(false, "registered non-notified node requires Unset state");
-            }
+        // Not notified — just remove from the set.
+        // SAFETY: We hold the mutex.
+        unsafe {
+            waiters.unregister(awaiter.as_mut());
+        }
+        if unsafe { waiters.is_empty() } {
+            inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
         }
     }
 }
@@ -260,7 +217,10 @@ impl AutoResetEvent {
     #[must_use]
     pub fn boxed() -> Self {
         Self {
-            state: Arc::new(Mutex::new(State::Unset(WaiterList::new()))),
+            inner: Arc::new(EventInner {
+                state: AtomicU8::new(0),
+                slow: Mutex::new(AwaiterSet::new()),
+            }),
         }
     }
 
@@ -269,12 +229,12 @@ impl AutoResetEvent {
     ///
     /// Calling this multiple times on the same container is safe and
     /// returns handles that all operate on the same shared state, just
-    /// like copying or cloning a [`RawAutoResetEvent`].
+    /// like copying or cloning a [`EmbeddedAutoResetEventRef`].
     ///
     /// # Safety
     ///
     /// The caller must ensure that the [`EmbeddedAutoResetEvent`] outlives
-    /// all returned handles and any [`RawAutoResetWaitFuture`]s created
+    /// all returned handles and any [`EmbeddedAutoResetWaitFuture`]s created
     /// from them.
     ///
     /// # Examples
@@ -296,18 +256,18 @@ impl AutoResetEvent {
     /// # });
     /// ```
     #[must_use]
-    pub unsafe fn embedded(place: Pin<&EmbeddedAutoResetEvent>) -> RawAutoResetEvent {
-        let state = NonNull::from(&place.get_ref().state);
-        RawAutoResetEvent { state }
+    pub unsafe fn embedded(place: Pin<&EmbeddedAutoResetEvent>) -> EmbeddedAutoResetEventRef {
+        let inner = NonNull::from(&place.get_ref().inner);
+        EmbeddedAutoResetEventRef { inner }
     }
 
-    /// Signals the event, releasing exactly one waiter.
+    /// Signals the event, releasing at most one waiter.
     ///
-    /// * If one or more tasks are waiting, a single waiter is released and
-    ///   the event remains unset.
-    /// * If no task is waiting, the event transitions to the set state so that
-    ///   the next [`wait()`][Self::wait] or [`try_wait()`][Self::try_wait]
-    ///   completes immediately.
+    /// * If one or more waiters are registered, a single waiter is
+    ///   released and the event remains unset.
+    /// * If no one is waiting, the event transitions to the set state
+    ///   so that the next [`wait()`][Self::wait] or
+    ///   [`try_wait()`][Self::try_wait] completes immediately.
     ///
     /// # Examples
     ///
@@ -330,7 +290,7 @@ impl AutoResetEvent {
     #[cfg_attr(test, mutants::skip)]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn set(&self) {
-        set(&self.state);
+        set(&self.inner);
     }
 
     /// Attempts to consume the signal without blocking.
@@ -357,7 +317,7 @@ impl AutoResetEvent {
     #[cfg_attr(test, mutants::skip)]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_wait(&self) -> bool {
-        try_wait(&self.state)
+        try_wait(&self.inner)
     }
 
     /// Returns a future that completes when the event is signaled.
@@ -365,13 +325,6 @@ impl AutoResetEvent {
     /// When [`set()`][Self::set] is called, a single waiting future is
     /// released. If the event is already set (no prior waiter consumed it),
     /// the future completes immediately and consumes the signal.
-    ///
-    /// # Cancellation safety
-    ///
-    /// If a future that has been notified is dropped before it is polled to
-    /// completion, the notification is forwarded to the next waiter (or the
-    /// event is re-set if no waiters remain). No signals are lost due to
-    /// cancellation.
     ///
     /// # Examples
     ///
@@ -393,10 +346,8 @@ impl AutoResetEvent {
     #[must_use]
     pub fn wait(&self) -> AutoResetWaitFuture {
         AutoResetWaitFuture {
-            state: Arc::clone(&self.state),
-            node: UnsafeCell::new(WaiterNode::new()),
-            registered: false,
-            _pinned: PhantomPinned,
+            inner: Arc::clone(&self.inner),
+            awaiter: Awaiter::new(),
         }
     }
 }
@@ -405,29 +356,16 @@ impl AutoResetEvent {
 ///
 /// Completes with `()` when the event signal is acquired.
 pub struct AutoResetWaitFuture {
-    state: Arc<Mutex<State>>,
-
-    // Behind UnsafeCell so that raw pointers from the event's waiter list can
-    // coexist with the &mut Self we obtain in poll() via get_unchecked_mut().
-    // UnsafeCell opts out of the noalias guarantee for its contents.
-    node: UnsafeCell<WaiterNode>,
-
-    // Whether this future's node is currently in the event's waiter list.
-    // Only accessed through &mut Self in poll()/drop(), never through the list.
-    registered: bool,
-
-    _pinned: PhantomPinned,
+    inner: Arc<EventInner>,
+    awaiter: Awaiter,
 }
 
 // Marker trait impl.
-// SAFETY: All UnsafeCell<WaiterNode> fields are accessed exclusively under the
-// event's Mutex. The Arc<Mutex<State>> is Send + Sync. The raw pointers inside
-// WaiterNode are only dereferenced under the Mutex.
+// SAFETY: Awaiter is Send. All awaiter access is protected by the event's
+// Mutex. The Arc<EventInner> is Send + Sync.
 unsafe impl Send for AutoResetWaitFuture {}
 
-// The UnsafeCell<WaiterNode> field causes auto-trait inference to mark the
-// future as !UnwindSafe and !RefUnwindSafe. However, all mutable access to
-// the node goes through the Mutex, preventing inconsistent state observation.
+// Awaiter is UnwindSafe and RefUnwindSafe.
 // Marker trait impl.
 impl UnwindSafe for AutoResetWaitFuture {}
 // Marker trait impl.
@@ -444,21 +382,21 @@ impl Future for AutoResetWaitFuture {
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
 
-        // SAFETY: The node is pinned (PhantomPinned) and the state
-        // field is the mutex this node registers with.
-        unsafe { poll_wait(&this.state, &this.node, &mut this.registered, waker) }
+        // SAFETY: The awaiter is pinned inside this future and not moved.
+        let awaiter = unsafe { Pin::new_unchecked(&mut this.awaiter) };
+        // SAFETY: The state field is the mutex this awaiter registers
+        // with.
+        unsafe { poll_wait(&this.inner, awaiter, waker) }
     }
 }
 
 impl Drop for AutoResetWaitFuture {
     fn drop(&mut self) {
-        if !self.registered {
-            return;
-        }
-
-        // SAFETY: The node is pinned (PhantomPinned) and the state
-        // field is the mutex this node was registered with.
-        unsafe { drop_wait(&self.state, &self.node, self.registered) }
+        // SAFETY: The awaiter is pinned inside this future and not moved.
+        let awaiter = unsafe { Pin::new_unchecked(&mut self.awaiter) };
+        // SAFETY: The state field is the mutex this awaiter was
+        // registered with.
+        unsafe { drop_wait(&self.inner, awaiter) }
     }
 }
 
@@ -473,7 +411,8 @@ impl fmt::Debug for AutoResetEvent {
 impl fmt::Debug for AutoResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AutoResetWaitFuture")
-            .field("registered", &self.registered)
+            // SAFETY: Debug output is best-effort; no concurrent
+            // mutation during formatting.
             .finish_non_exhaustive()
     }
 }
@@ -487,7 +426,7 @@ impl fmt::Debug for AutoResetWaitFuture {
 /// Stores the event state inline in a struct, avoiding the heap allocation
 /// that [`AutoResetEvent::boxed()`] requires. Create the container with
 /// [`new()`][Self::new], pin it, then call [`AutoResetEvent::embedded()`]
-/// to obtain a [`RawAutoResetEvent`] handle.
+/// to obtain a [`EmbeddedAutoResetEventRef`] handle.
 ///
 /// # Examples
 ///
@@ -508,7 +447,7 @@ impl fmt::Debug for AutoResetWaitFuture {
 /// # });
 /// ```
 pub struct EmbeddedAutoResetEvent {
-    state: Mutex<State>,
+    inner: EventInner,
     _pinned: PhantomPinned,
 }
 
@@ -517,7 +456,10 @@ impl EmbeddedAutoResetEvent {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            state: Mutex::new(State::Unset(WaiterList::new())),
+            inner: EventInner {
+                state: AtomicU8::new(0),
+                slow: Mutex::new(AwaiterSet::new()),
+            },
             _pinned: PhantomPinned,
         }
     }
@@ -538,29 +480,29 @@ impl Default for EmbeddedAutoResetEvent {
 ///
 /// The API is identical to [`AutoResetEvent`].
 #[derive(Clone, Copy)]
-pub struct RawAutoResetEvent {
-    state: NonNull<Mutex<State>>,
+pub struct EmbeddedAutoResetEventRef {
+    inner: NonNull<EventInner>,
 }
 
 // Marker trait impl.
-// SAFETY: Mutex<State> is Send + Sync. The raw pointer is only dereferenced
-// to obtain &Mutex<State>, which is safe to share across threads.
-unsafe impl Send for RawAutoResetEvent {}
+// SAFETY: EventInner is Send + Sync. The raw pointer is only dereferenced
+// to obtain &EventInner, which is safe to share across threads.
+unsafe impl Send for EmbeddedAutoResetEventRef {}
 
 // Marker trait impl.
 // SAFETY: Same as Send — all mutable access is mediated by the Mutex.
-unsafe impl Sync for RawAutoResetEvent {}
+unsafe impl Sync for EmbeddedAutoResetEventRef {}
 
 // Marker trait impl.
-impl UnwindSafe for RawAutoResetEvent {}
+impl UnwindSafe for EmbeddedAutoResetEventRef {}
 // Marker trait impl.
-impl RefUnwindSafe for RawAutoResetEvent {}
+impl RefUnwindSafe for EmbeddedAutoResetEventRef {}
 
-impl RawAutoResetEvent {
-    fn state(&self) -> &Mutex<State> {
+impl EmbeddedAutoResetEventRef {
+    fn inner(&self) -> &EventInner {
         // SAFETY: The caller of `embedded()` guarantees the container
         // outlives this handle.
-        unsafe { self.state.as_ref() }
+        unsafe { self.inner.as_ref() }
     }
 
     /// Signals the event, releasing exactly one waiter.
@@ -568,7 +510,7 @@ impl RawAutoResetEvent {
     #[cfg_attr(test, mutants::skip)]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn set(&self) {
-        set(self.state());
+        set(self.inner());
     }
 
     /// Attempts to consume the signal without blocking.
@@ -580,43 +522,36 @@ impl RawAutoResetEvent {
     #[cfg_attr(test, mutants::skip)]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_wait(&self) -> bool {
-        try_wait(self.state())
+        try_wait(self.inner())
     }
 
     /// Returns a future that completes when the event is signaled.
     #[must_use]
-    pub fn wait(&self) -> RawAutoResetWaitFuture {
-        RawAutoResetWaitFuture {
-            state: self.state,
-            node: UnsafeCell::new(WaiterNode::new()),
-            registered: false,
-            _pinned: PhantomPinned,
+    pub fn wait(&self) -> EmbeddedAutoResetWaitFuture {
+        EmbeddedAutoResetWaitFuture {
+            inner: self.inner,
+            awaiter: Awaiter::new(),
         }
     }
 }
 
-/// Future returned by [`RawAutoResetEvent::wait()`].
-pub struct RawAutoResetWaitFuture {
-    state: NonNull<Mutex<State>>,
-
-    // See AutoResetWaitFuture for field documentation.
-    node: UnsafeCell<WaiterNode>,
-    registered: bool,
-
-    _pinned: PhantomPinned,
+/// Future returned by [`EmbeddedAutoResetEventRef::wait()`].
+pub struct EmbeddedAutoResetWaitFuture {
+    inner: NonNull<EventInner>,
+    awaiter: Awaiter,
 }
 
 // Marker trait impl.
-// SAFETY: Same reasoning as AutoResetWaitFuture — all node access is
-// protected by the Mutex.
-unsafe impl Send for RawAutoResetWaitFuture {}
+// SAFETY: Awaiter is Send. All awaiter access is protected by the event's
+// Mutex.
+unsafe impl Send for EmbeddedAutoResetWaitFuture {}
 
 // Marker trait impl.
-impl UnwindSafe for RawAutoResetWaitFuture {}
+impl UnwindSafe for EmbeddedAutoResetWaitFuture {}
 // Marker trait impl.
-impl RefUnwindSafe for RawAutoResetWaitFuture {}
+impl RefUnwindSafe for EmbeddedAutoResetWaitFuture {}
 
-impl Future for RawAutoResetWaitFuture {
+impl Future for EmbeddedAutoResetWaitFuture {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<()> {
@@ -629,25 +564,24 @@ impl Future for RawAutoResetWaitFuture {
 
         // SAFETY: The container outlives this future per the embedded()
         // contract.
-        let state = unsafe { this.state.as_ref() };
-        // SAFETY: The node is pinned (PhantomPinned) and the state
-        // is the mutex this node registers with.
-        unsafe { poll_wait(state, &this.node, &mut this.registered, waker) }
+        let inner = unsafe { this.inner.as_ref() };
+        // SAFETY: The awaiter is pinned inside this future and not moved.
+        let awaiter = unsafe { Pin::new_unchecked(&mut this.awaiter) };
+        // SAFETY: The state is the mutex this awaiter registers with.
+        unsafe { poll_wait(inner, awaiter, waker) }
     }
 }
 
-impl Drop for RawAutoResetWaitFuture {
+impl Drop for EmbeddedAutoResetWaitFuture {
     fn drop(&mut self) {
-        if !self.registered {
-            return;
-        }
-
         // SAFETY: The container outlives this future per the embedded()
         // contract.
-        let state = unsafe { self.state.as_ref() };
-        // SAFETY: The node is pinned (PhantomPinned) and the state
-        // is the mutex this node was registered with.
-        unsafe { drop_wait(state, &self.node, self.registered) }
+        let inner = unsafe { self.inner.as_ref() };
+        // SAFETY: The awaiter is pinned inside this future and not moved.
+        let awaiter = unsafe { Pin::new_unchecked(&mut self.awaiter) };
+        // SAFETY: The state is the mutex this awaiter was registered
+        // with.
+        unsafe { drop_wait(inner, awaiter) }
     }
 }
 
@@ -660,17 +594,19 @@ impl fmt::Debug for EmbeddedAutoResetEvent {
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl fmt::Debug for RawAutoResetEvent {
+impl fmt::Debug for EmbeddedAutoResetEventRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawAutoResetEvent").finish_non_exhaustive()
+        f.debug_struct("EmbeddedAutoResetEventRef")
+            .finish_non_exhaustive()
     }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-impl fmt::Debug for RawAutoResetWaitFuture {
+impl fmt::Debug for EmbeddedAutoResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawAutoResetWaitFuture")
-            .field("registered", &self.registered)
+        f.debug_struct("EmbeddedAutoResetWaitFuture")
+            // SAFETY: Debug output is best-effort; no concurrent
+            // mutation during formatting.
             .finish_non_exhaustive()
     }
 }
@@ -694,9 +630,9 @@ mod tests {
 
     assert_impl_all!(EmbeddedAutoResetEvent: Send, Sync, UnwindSafe, RefUnwindSafe);
     assert_not_impl_any!(EmbeddedAutoResetEvent: Unpin);
-    assert_impl_all!(RawAutoResetEvent: Send, Sync, Clone, Copy, UnwindSafe, RefUnwindSafe);
-    assert_impl_all!(RawAutoResetWaitFuture: Send, UnwindSafe, RefUnwindSafe);
-    assert_not_impl_any!(RawAutoResetWaitFuture: Sync, Unpin);
+    assert_impl_all!(EmbeddedAutoResetEventRef: Send, Sync, Clone, Copy, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(EmbeddedAutoResetWaitFuture: Send, UnwindSafe, RefUnwindSafe);
+    assert_not_impl_any!(EmbeddedAutoResetWaitFuture: Sync, Unpin);
 
     // --- basic functionality ---
 
@@ -775,16 +711,23 @@ mod tests {
 
         // Signal once — exactly one waiter should complete.
         event.set();
-        assert!(f1.as_mut().poll(&mut cx).is_ready());
-        assert!(f2.as_mut().poll(&mut cx).is_pending());
-        assert!(f3.as_mut().poll(&mut cx).is_pending());
+        let mut ready_count = 0_u32;
+        for f in [f1.as_mut(), f2.as_mut(), f3.as_mut()] {
+            if f.poll(&mut cx).is_ready() {
+                ready_count = ready_count.checked_add(1).unwrap();
+            }
+        }
+        assert_eq!(ready_count, 1);
 
         // Signal twice more to release the remaining two.
         event.set();
-        assert!(f2.as_mut().poll(&mut cx).is_ready());
-
         event.set();
-        assert!(f3.as_mut().poll(&mut cx).is_ready());
+        for f in [f1.as_mut(), f2.as_mut(), f3.as_mut()] {
+            if f.poll(&mut cx).is_ready() {
+                ready_count = ready_count.checked_add(1).unwrap();
+            }
+        }
+        assert_eq!(ready_count, 3);
     }
 
     #[test]
@@ -1028,6 +971,30 @@ mod tests {
     }
 
     #[test]
+    fn notified_then_dropped_while_set_preserves_signal() {
+        let event = AutoResetEvent::boxed();
+        let mut future = Box::pin(event.wait());
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        // Poll to register.
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+
+        // First set() pops the waiter and marks it notified.
+        event.set();
+
+        // Second set() transitions the event back to Set (no
+        // waiters remain in the set).
+        event.set();
+
+        // Drop the notified future. The state is already Set, so
+        // drop_wait must preserve the signal.
+        drop(future);
+
+        assert!(event.try_wait());
+    }
+
+    #[test]
     fn notified_then_dropped_forwards_to_next() {
         let event = AutoResetEvent::boxed();
         let mut future1 = Box::pin(event.wait());
@@ -1079,7 +1046,7 @@ mod tests {
         let waker = Waker::noop();
         let mut cx = task::Context::from_waker(waker);
 
-        // First poll — not set, registers in waiter list.
+        // First poll — not set, registers in awaiter set.
         assert!(future.as_mut().poll(&mut cx).is_pending());
 
         // set() pops and notifies the waiter.
@@ -1170,7 +1137,7 @@ mod tests {
 
     // This tests a defense-in-depth branch in poll() that unregisters
     // a waiter when is_set is observed while still registered. In normal
-    // usage, set() pops a waiter rather than setting is_set when the list
+    // usage, set() pops a waiter rather than setting is_set when the set
     // is non-empty, so this state cannot arise through the public API.
     // We force it by directly manipulating the guarded state.
     //
@@ -1194,9 +1161,13 @@ mod tests {
             assert!(f.as_mut().poll(&mut cx).is_pending());
         }
 
-        // Each set() releases exactly one waiter.
-        for f in &mut futures {
+        // Signal once for each waiter.
+        for _ in 0..WAITER_COUNT {
             event.set();
+        }
+
+        // All waiters should now be ready (order is unspecified).
+        for f in &mut futures {
             assert!(f.as_mut().poll(&mut cx).is_ready());
         }
 
@@ -1220,8 +1191,11 @@ mod tests {
             assert!(f.as_mut().poll(&mut cx).is_pending());
         }
 
-        for f in &mut futures {
+        for _ in 0..WAITER_COUNT {
             event.set();
+        }
+
+        for f in &mut futures {
             assert!(f.as_mut().poll(&mut cx).is_ready());
         }
 
@@ -1238,6 +1212,42 @@ mod tests {
 
         // Only one signal should be latched.
         assert!(event.try_wait());
+        assert!(!event.try_wait());
+    }
+
+    #[test]
+    fn set_with_reentrant_waker_does_not_deadlock() {
+        use testing::ReentrantWakerData;
+
+        let event = AutoResetEvent::boxed();
+        let event_for_waker = event.clone();
+
+        let waker_data = ReentrantWakerData::new(move || {
+            // Re-entrantly call set() on the same event.
+            event_for_waker.set();
+        });
+        // SAFETY: Data outlives waker, test is single-threaded.
+        let waker = unsafe { waker_data.waker() };
+        let mut cx = task::Context::from_waker(&waker);
+
+        let mut future = Box::pin(event.wait());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+
+        // set() notifies the future, calling the re-entrant waker
+        // which calls set() again. The second set() should store
+        // the signal (no waiters left).
+        event.set();
+
+        assert!(waker_data.was_woken());
+        // The re-entrant set() stored a signal.
+        assert!(event.try_wait());
+    }
+
+    #[test]
+    fn embedded_default_creates_unset_event() {
+        let container = Box::pin(EmbeddedAutoResetEvent::default());
+        // SAFETY: The container outlives the handle.
+        let event = unsafe { AutoResetEvent::embedded(container.as_ref()) };
         assert!(!event.try_wait());
     }
 }
