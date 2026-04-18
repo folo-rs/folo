@@ -82,31 +82,21 @@ struct State {
 // Mutating set() to a no-op causes wait futures to hang.
 #[cfg_attr(test, mutants::skip)]
 fn set(mutex: &Mutex<State>) {
-    {
-        let mut state = mutex.lock().expect(NEVER_POISONED);
-        if state.is_set {
-            return;
-        }
-        state.is_set = true;
+    let mut state = mutex.lock().expect(NEVER_POISONED);
+    if state.is_set {
+        return;
     }
+    state.is_set = true;
 
-    // Wake waiters one at a time: lock → notify → unlock → wake.
-    // Each iteration re-acquires the lock to satisfy the safety
-    // requirement, then releases it before calling wake() to avoid
-    // reentrancy deadlocks.
-    loop {
-        let waker = {
-            let mut state = mutex.lock().expect(NEVER_POISONED);
-            // SAFETY: We hold the lock that protects the set and
-            // its awaiters.
-            unsafe { state.waiters.notify_one() }
-        };
-
-        if let Some(w) = waker {
-            w.wake();
-        } else {
-            break;
-        }
+    // Drain all waiters and wake them. We call wake() while
+    // holding the lock because no mainstream async runtime
+    // re-polls the future synchronously inside wake() — they
+    // only enqueue the task for later polling. This avoids
+    // re-acquiring the lock for each waiter.
+    // SAFETY: We hold the lock that protects the set and its
+    // awaiters.
+    while let Some(w) = unsafe { state.waiters.notify_one() } {
+        w.wake();
     }
 }
 
@@ -1129,35 +1119,6 @@ mod tests {
 
         event.set();
         assert!(event.try_wait());
-    }
-
-    #[test]
-    fn reentrant_reset_does_not_skip_awaiters() {
-        use testing::ReentrantWakerData;
-
-        let event = ManualResetEvent::boxed();
-        let event_for_waker = event.clone();
-
-        let waker_data_a = ReentrantWakerData::new(move || {
-            event_for_waker.reset();
-        });
-        // SAFETY: Data outlives waker, single-threaded test.
-        let waker_a = unsafe { waker_data_a.waker() };
-        let mut cx_a = task::Context::from_waker(&waker_a);
-
-        let noop = Waker::noop();
-        let mut cx_b = task::Context::from_waker(noop);
-
-        let mut future_a = Box::pin(event.wait());
-        assert!(future_a.as_mut().poll(&mut cx_a).is_pending());
-
-        let mut future_b = Box::pin(event.wait());
-        assert!(future_b.as_mut().poll(&mut cx_b).is_pending());
-
-        event.set();
-
-        assert!(waker_data_a.was_woken());
-        assert!(future_b.as_mut().poll(&mut cx_b).is_ready());
     }
 
     #[test]

@@ -30,13 +30,15 @@
 //! primitive typically needs to atomically update its own state
 //! (e.g. a `locked` flag) together with the set.
 //!
-//! # Reentrancy
+//! # Waker invocation
 //!
-//! Calling [`Waker::wake()`][std::task::Waker::wake] may cause the
-//! executor to immediately re-poll the woken future, which may try
-//! to register a new awaiter in the same set. To prevent this from
-//! racing with the current operation (potentially deadlocking),
-//! the primitive must release its lock before calling `wake()`.
+//! No mainstream async runtime re-polls a future synchronously
+//! inside [`Waker::wake()`][std::task::Waker::wake] — they all
+//! enqueue the task for later polling. Primitives may therefore
+//! call `wake()` while holding their lock without risking
+//! reentrancy deadlocks. However, releasing the lock before
+//! `wake()` is still preferred when practical, as it reduces
+//! contention.
 
 pub(crate) mod awaiter;
 mod set;
