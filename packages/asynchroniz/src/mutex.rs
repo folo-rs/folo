@@ -5,6 +5,7 @@ use std::marker::PhantomPinned;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::task::{self, Poll, Waker};
 
@@ -73,20 +74,27 @@ impl<T> Clone for Mutex<T> {
 }
 
 struct MutexInner<T> {
-    lock_state: StdMutex<LockState>,
+    // Atomic state for the fast path. Bits:
+    // - LOCKED (0x1): whether the lock is held.
+    // - HAS_WAITERS (0x2): whether any futures are registered in the
+    //   awaiter set. When this bit is clear, unlock() can release
+    //   the lock with a single atomic store, skipping the mutex.
+    state: AtomicU8,
+    slow: StdMutex<SlowState>,
     data: UnsafeCell<T>,
 }
 
-struct LockState {
-    locked: bool,
+const LOCKED: u8 = 0x1;
+const HAS_WAITERS: u8 = 0x2;
+
+struct SlowState {
     waiters: AwaiterSet,
 }
 
-// SAFETY: All access to the `UnsafeCell<T>` goes through the lock,
-// ensuring mutual exclusion. The `StdMutex<LockState>` handles
-// thread-safe access to the awaiter set. `T: Send` is required
-// because the mutex can transfer `T` access from one thread to
-// another.
+// SAFETY: All access to the `UnsafeCell<T>` goes through the lock
+// (atomic fast path or mutex slow path), ensuring mutual exclusion.
+// `T: Send` is required because the mutex can transfer `T` access
+// from one thread to another.
 // Marker trait impl.
 unsafe impl<T: Send> Sync for MutexInner<T> {}
 
@@ -97,21 +105,36 @@ unsafe impl<T: Send> Sync for MutexInner<T> {}
 
 // Mutating unlock() to a no-op causes lock futures to hang.
 #[cfg_attr(test, mutants::skip)]
-fn unlock(lock_state: &StdMutex<LockState>) {
+fn unlock<T>(inner: &MutexInner<T>) {
+    // Fast path: if no waiters are registered, release the lock
+    // with a single atomic CAS (LOCKED → 0).
+    if inner
+        .state
+        .compare_exchange(LOCKED, 0, Ordering::Release, Ordering::Relaxed)
+        .is_ok()
+    {
+        return;
+    }
+
+    // Slow path: HAS_WAITERS is set — acquire the mutex and notify.
     let waker: Option<Waker>;
 
     {
-        let mut state = lock_state.lock().expect(NEVER_POISONED);
+        let mut slow = inner.slow.lock().expect(NEVER_POISONED);
 
-        // SAFETY: We hold the lock.
-        if let Some(w) = unsafe { state.waiters.notify_one() } {
-            // Transfer lock ownership to the next waiter. The lock
-            // stays held — the new owner will create its guard on the
-            // next poll.
+        // SAFETY: We hold the mutex that protects the awaiter set.
+        if let Some(w) = unsafe { slow.waiters.notify_one() } {
+            // Transfer lock ownership to the next waiter.
+            // Clear HAS_WAITERS if the set is now empty.
+            // SAFETY: We hold the mutex.
+            if unsafe { slow.waiters.is_empty() } {
+                inner.state.store(LOCKED, Ordering::Relaxed);
+            }
+
             waker = Some(w);
         } else {
-            // No waiters — release the lock.
-            state.locked = false;
+            // No waiters despite HAS_WAITERS bit — release lock.
+            inner.state.store(0, Ordering::Release);
             waker = None;
         }
     }
@@ -123,14 +146,12 @@ fn unlock(lock_state: &StdMutex<LockState>) {
 
 // Mutating try_lock_inner to always return false breaks tests.
 #[cfg_attr(test, mutants::skip)]
-fn try_lock_inner(lock_state: &StdMutex<LockState>) -> bool {
-    let mut state = lock_state.lock().expect(NEVER_POISONED);
-    if !state.locked {
-        state.locked = true;
-        true
-    } else {
-        false
-    }
+fn try_lock_inner<T>(inner: &MutexInner<T>) -> bool {
+    // Atomic CAS: try to set the LOCKED bit from 0.
+    inner
+        .state
+        .compare_exchange(0, LOCKED, Ordering::Acquire, Ordering::Relaxed)
+        .is_ok()
 }
 
 /// Shared poll logic for both `MutexLockFuture` and
@@ -138,41 +159,49 @@ fn try_lock_inner(lock_state: &StdMutex<LockState>) -> bool {
 ///
 /// # Safety
 ///
-/// * The `lock_state` must protect the awaiter set that this awaiter is
-///   (or will be) registered with.
-unsafe fn poll_lock(
-    lock_state: &StdMutex<LockState>,
+/// * The awaiter must belong to a future created from this mutex.
+unsafe fn poll_lock<T>(
+    inner: &MutexInner<T>,
     mut awaiter: Pin<&mut Awaiter>,
     waker: Waker,
 ) -> Poll<()> {
-    let mut state = lock_state.lock().expect(NEVER_POISONED);
+    // Fast path: try atomic CAS before touching the mutex.
+    if inner
+        .state
+        .compare_exchange(0, LOCKED, Ordering::Acquire, Ordering::Relaxed)
+        .is_ok()
+    {
+        return Poll::Ready(());
+    }
+
+    // Slow path: lock is held or has waiters — acquire the mutex.
+    let mut slow = inner.slow.lock().expect(NEVER_POISONED);
 
     // Check if we were directly notified by unlock() (it popped us
     // from the set and set our notified flag, transferring lock
     // ownership to us).
-    // SAFETY: We hold the lock that protects the awaiter and its set.
+    // SAFETY: We hold the mutex that protects the awaiter and its set.
     if unsafe { awaiter.as_mut().take_notification() } {
         return Poll::Ready(());
     }
 
-    if !state.locked {
+    // Re-check the atomic state under the mutex — the lock may have
+    // been released between our CAS attempt and acquiring the mutex.
+    let current = inner.state.load(Ordering::Acquire);
+    if current & LOCKED == 0 {
         // Lock is free — acquire it.
-        debug_assert!(
-            // SAFETY: We hold the lock.
-            !unsafe { awaiter.is_registered() },
-            "unlocked state is exclusive with registered waiters"
-        );
-        state.locked = true;
-        Poll::Ready(())
-    } else {
-        // Lock is held — register or update the waker.
-        // SAFETY: We hold the lock that protects the awaiter and
-        // its set.
-        unsafe {
-            state.waiters.register(awaiter.as_mut(), waker);
-        }
-        Poll::Pending
+        inner.state.store(current | LOCKED, Ordering::Relaxed);
+        return Poll::Ready(());
     }
+
+    // Lock is held — register or update the waker.
+    inner.state.fetch_or(HAS_WAITERS, Ordering::Relaxed);
+    // SAFETY: We hold the mutex that protects the awaiter and
+    // its set.
+    unsafe {
+        slow.waiters.register(awaiter.as_mut(), waker);
+    }
+    Poll::Pending
 }
 
 /// Shared drop logic for both lock future types.
@@ -180,32 +209,39 @@ unsafe fn poll_lock(
 /// # Safety
 ///
 /// Same requirements as [`poll_lock`].
-unsafe fn drop_lock_wait(lock_state: &StdMutex<LockState>, mut awaiter: Pin<&mut Awaiter>) {
-    let mut state = lock_state.lock().expect(NEVER_POISONED);
+unsafe fn drop_lock_wait<T>(inner: &MutexInner<T>, mut awaiter: Pin<&mut Awaiter>) {
+    let mut slow = inner.slow.lock().expect(NEVER_POISONED);
 
-    // SAFETY: We hold the lock.
+    // SAFETY: We hold the mutex.
     if !unsafe { awaiter.is_registered() } {
         return;
     }
 
-    // SAFETY: We hold the lock.
+    // SAFETY: We hold the mutex.
     if unsafe { awaiter.as_ref().is_notified() } {
         // We were chosen as the next lock holder but the future was
         // cancelled. Forward the lock to the next waiter.
-        // SAFETY: We hold the lock.
-        if let Some(waker) = unsafe { state.waiters.notify_one() } {
-            drop(state);
-
+        // SAFETY: We hold the mutex.
+        if let Some(waker) = unsafe { slow.waiters.notify_one() } {
+            // Clear HAS_WAITERS if set is now empty.
+            if unsafe { slow.waiters.is_empty() } {
+                inner.state.store(LOCKED, Ordering::Relaxed);
+            }
+            drop(slow);
             waker.wake();
         } else {
             // No more waiters — release the lock.
-            state.locked = false;
+            inner.state.store(0, Ordering::Release);
         }
     } else {
         // Not notified — just remove from the awaiter set.
-        // SAFETY: We hold the lock and the node is in the set.
+        // SAFETY: We hold the mutex and the node is in the set.
         unsafe {
-            state.waiters.unregister(awaiter.as_mut());
+            slow.waiters.unregister(awaiter.as_mut());
+        }
+        // Clear HAS_WAITERS if set is now empty.
+        if unsafe { slow.waiters.is_empty() } {
+            inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
         }
     }
 }
@@ -232,8 +268,8 @@ impl<T> Mutex<T> {
     pub fn boxed(value: T) -> Self {
         Self {
             inner: Arc::new(MutexInner {
-                lock_state: StdMutex::new(LockState {
-                    locked: false,
+                state: AtomicU8::new(0),
+                slow: StdMutex::new(SlowState {
                     waiters: AwaiterSet::new(),
                 }),
                 data: UnsafeCell::new(value),
@@ -308,8 +344,7 @@ impl<T> Mutex<T> {
     #[must_use]
     pub fn lock(&self) -> MutexLockFuture<'_, T> {
         MutexLockFuture {
-            lock_state: &self.inner.lock_state,
-            data: &self.inner.data,
+            inner: &self.inner,
             awaiter: Awaiter::new(),
         }
     }
@@ -336,11 +371,8 @@ impl<T> Mutex<T> {
     // Mutating try_lock to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
     pub fn try_lock(&self) -> Option<MutexGuard<'_, T>> {
-        if try_lock_inner(&self.inner.lock_state) {
-            Some(MutexGuard {
-                lock_state: &self.inner.lock_state,
-                data: &self.inner.data,
-            })
+        if try_lock_inner(&self.inner) {
+            Some(MutexGuard { inner: &self.inner })
         } else {
             None
         }
@@ -352,8 +384,7 @@ impl<T> Mutex<T> {
 /// Provides [`Deref`] and [`DerefMut`] access to the mutex-protected
 /// value. The lock is released when the guard is dropped.
 pub struct MutexGuard<'a, T> {
-    lock_state: &'a StdMutex<LockState>,
-    data: &'a UnsafeCell<T>,
+    inner: &'a MutexInner<T>,
 }
 
 // SAFETY: A `MutexGuard` can be sent to another thread when `T: Send`
@@ -373,7 +404,7 @@ impl<T> Deref for MutexGuard<'_, T> {
         // SAFETY: We hold the lock, guaranteeing exclusive access to
         // the data. No other guard can access the UnsafeCell while
         // this guard exists.
-        unsafe { &*self.data.get() }
+        unsafe { &*self.inner.data.get() }
     }
 }
 
@@ -381,7 +412,7 @@ impl<T> DerefMut for MutexGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
         // SAFETY: We hold the lock and have &mut self, guaranteeing
         // exclusive mutable access.
-        unsafe { &mut *self.data.get() }
+        unsafe { &mut *self.inner.data.get() }
     }
 }
 
@@ -389,7 +420,7 @@ impl<T> Drop for MutexGuard<'_, T> {
     // Mutating drop to a no-op would cause the lock to never release.
     #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
-        unlock(self.lock_state);
+        unlock(self.inner);
     }
 }
 
@@ -397,9 +428,7 @@ impl<T> Drop for MutexGuard<'_, T> {
 ///
 /// Completes with a [`MutexGuard`] when the lock is acquired.
 pub struct MutexLockFuture<'a, T> {
-    lock_state: &'a StdMutex<LockState>,
-    data: &'a UnsafeCell<T>,
-
+    inner: &'a MutexInner<T>,
     awaiter: Awaiter,
 }
 
@@ -413,8 +442,6 @@ impl<'a, T> Future for MutexLockFuture<'a, T> {
     type Output = MutexGuard<'a, T>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<MutexGuard<'a, T>> {
-        // Clone the waker before acquiring the lock so a panicking
-        // clone cannot poison the mutex.
         let waker = cx.waker().clone();
 
         // SAFETY: We only access fields, we do not move self.
@@ -422,28 +449,21 @@ impl<'a, T> Future for MutexLockFuture<'a, T> {
 
         // SAFETY: The awaiter is pinned inside this future and not moved.
         let awaiter = unsafe { Pin::new_unchecked(&mut this.awaiter) };
-        // SAFETY: The lock_state field is the lock this awaiter
-        // registers with.
-        match unsafe { poll_lock(this.lock_state, awaiter, waker) } {
-            Poll::Ready(()) => Poll::Ready(MutexGuard {
-                lock_state: this.lock_state,
-                data: this.data,
-            }),
+        // SAFETY: The awaiter belongs to this mutex.
+        match unsafe { poll_lock(this.inner, awaiter, waker) } {
+            Poll::Ready(()) => Poll::Ready(MutexGuard { inner: this.inner }),
             Poll::Pending => Poll::Pending,
         }
     }
 }
 
 impl<T> Drop for MutexLockFuture<'_, T> {
-    // Inverting the is_registered() guard causes the Drop to hang
-    // because it runs cleanup on an unregistered awaiter.
     #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
         // SAFETY: The awaiter is pinned inside this future and not moved.
         let awaiter = unsafe { Pin::new_unchecked(&mut self.awaiter) };
-        // SAFETY: The lock_state field is the lock this awaiter was
-        // registered with.
-        unsafe { drop_lock_wait(self.lock_state, awaiter) }
+        // SAFETY: The awaiter belongs to this mutex.
+        unsafe { drop_lock_wait(self.inner, awaiter) }
     }
 }
 
@@ -504,8 +524,8 @@ impl<T> EmbeddedMutex<T> {
     pub fn new(value: T) -> Self {
         Self {
             inner: MutexInner {
-                lock_state: StdMutex::new(LockState {
-                    locked: false,
+                state: AtomicU8::new(0),
+                slow: StdMutex::new(SlowState {
                     waiters: AwaiterSet::new(),
                 }),
                 data: UnsafeCell::new(value),
@@ -568,7 +588,7 @@ impl<T> EmbeddedMutexRef<T> {
     // Mutating try_lock to always return None breaks tests.
     #[cfg_attr(test, mutants::skip)]
     pub fn try_lock(&self) -> Option<EmbeddedMutexGuard<T>> {
-        if try_lock_inner(&self.inner().lock_state) {
+        if try_lock_inner(self.inner()) {
             Some(EmbeddedMutexGuard { inner: self.inner })
         } else {
             None
@@ -626,7 +646,7 @@ impl<T> Drop for EmbeddedMutexGuard<T> {
         // SAFETY: The embedded() contract guarantees the container
         // outlives this guard.
         let inner = unsafe { self.inner.as_ref() };
-        unlock(&inner.lock_state);
+        unlock(inner);
     }
 }
 
@@ -661,7 +681,7 @@ impl<T> Future for EmbeddedMutexLockFuture<T> {
         // SAFETY: The awaiter is pinned inside this future and not moved.
         let awaiter = unsafe { Pin::new_unchecked(&mut this.awaiter) };
         // SAFETY: The lock_state is the lock this awaiter registers with.
-        match unsafe { poll_lock(&inner.lock_state, awaiter, waker) } {
+        match unsafe { poll_lock(inner, awaiter, waker) } {
             Poll::Ready(()) => Poll::Ready(EmbeddedMutexGuard { inner: this.inner }),
             Poll::Pending => Poll::Pending,
         }
@@ -680,7 +700,7 @@ impl<T> Drop for EmbeddedMutexLockFuture<T> {
         let awaiter = unsafe { Pin::new_unchecked(&mut self.awaiter) };
         // SAFETY: The lock_state is the lock this awaiter was registered
         // with.
-        unsafe { drop_lock_wait(&inner.lock_state, awaiter) }
+        unsafe { drop_lock_wait(inner, awaiter) }
     }
 }
 

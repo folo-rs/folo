@@ -5,6 +5,7 @@ use std::num::NonZero;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{self, Poll, Waker};
 
@@ -67,74 +68,74 @@ impl Clone for Semaphore {
 }
 
 struct SemaphoreInner {
-    state: Mutex<SemaphoreState>,
+    // Atomic permit count for fast-path try_acquire/release.
+    available: AtomicUsize,
+    // Whether any futures are registered in the waiter set. When
+    // false, release() can skip the mutex entirely.
+    has_waiters: AtomicBool,
+    slow: Mutex<SlowState>,
 }
 
-struct SemaphoreState {
-    available: usize,
+struct SlowState {
     waiters: AwaiterSet,
 }
 
 // Mutating release_permits to a no-op causes acquire futures to hang.
 #[cfg_attr(test, mutants::skip)]
-fn release_permits(state_mutex: &Mutex<SemaphoreState>, count: usize) {
-    let waker = {
-        let mut state = state_mutex.lock().expect(NEVER_POISONED);
-        state.available = state
-            .available
-            .checked_add(count)
-            .expect("permit count overflow is unreachable");
-        try_wake_one(&mut state)
-    };
+fn release_permits(inner: &SemaphoreInner, count: usize) {
+    // Add permits atomically.
+    inner.available.fetch_add(count, Ordering::Release);
 
-    if let Some(w) = waker {
-        w.wake();
-        // We satisfied one waiter. If the release added more permits
-        // than that waiter needed, more waiters may be satisfiable.
-        wake_waiters(state_mutex);
+    // Fast path: no waiters → nothing to wake.
+    if !inner.has_waiters.load(Ordering::Acquire) {
+        return;
     }
-}
 
-/// Finds the first waiter whose permit request can be satisfied,
-/// deducts the permits, removes it from the set and returns its waker.
-///
-/// Must be called while holding the state mutex.
-// Mutating try_wake_one to return None causes acquire futures
-// to hang because waiters are never woken despite available permits.
-#[cfg_attr(test, mutants::skip)]
-fn try_wake_one(state: &mut SemaphoreState) -> Option<Waker> {
-    let available = &mut state.available;
-    let predicate = |awaiter: &Awaiter| {
-        // SAFETY: Caller holds the lock.
-        let requested = unsafe { awaiter.user_data() };
-        if requested <= *available {
-            *available = available
-                .checked_sub(requested)
-                .expect("available >= requested was just checked");
-            true
-        } else {
-            false
-        }
-    };
-    // SAFETY: Caller holds the lock.
-    unsafe { state.waiters.notify_one_if(predicate) }
-}
-
-/// Wakes queued waiters whose permit requests can be satisfied.
-///
-/// Scans all waiters and wakes the first one whose requested permit
-/// count can be satisfied from available permits. Repeats until no
-/// more waiters can be satisfied.
-// Mutating wake_waiters to a no-op causes acquire futures to hang.
-#[cfg_attr(test, mutants::skip)]
-fn wake_waiters(state_mutex: &Mutex<SemaphoreState>) {
+    // Slow path: wake satisfiable waiters under the mutex.
+    let mut slow = inner.slow.lock().expect(NEVER_POISONED);
     loop {
-        let waker = {
-            let mut state = state_mutex.lock().expect(NEVER_POISONED);
-            try_wake_one(&mut state)
+        let available = &inner.available;
+        let predicate = |awaiter: &Awaiter| {
+            // SAFETY: We hold the mutex.
+            let requested = unsafe { awaiter.user_data() };
+            let current = available.load(Ordering::Relaxed);
+            if requested <= current {
+                // Deduct permits atomically. We are under the mutex
+                // so no other thread is modifying the waiter set,
+                // but another thread may do a concurrent try_acquire
+                // on the atomic. Use a CAS loop.
+                let mut cur = current;
+                loop {
+                    match available.compare_exchange_weak(
+                        cur,
+                        cur.wrapping_sub(requested),
+                        Ordering::AcqRel,
+                        Ordering::Relaxed,
+                    ) {
+                        Ok(_) => return true,
+                        Err(actual) => {
+                            if actual < requested {
+                                return false;
+                            }
+                            cur = actual;
+                        }
+                    }
+                }
+            } else {
+                false
+            }
         };
+        // SAFETY: We hold the mutex.
+        let waker = unsafe { slow.waiters.notify_one_if(predicate) };
 
         if let Some(w) = waker {
+            // Update has_waiters if the set is now empty.
+            // SAFETY: We hold the mutex.
+            if unsafe { slow.waiters.is_empty() } {
+                inner.has_waiters.store(false, Ordering::Release);
+            }
+            // Wake outside the critical loop but inside the mutex
+            // (no mainstream runtime re-enters on wake).
             w.wake();
         } else {
             break;
@@ -144,16 +145,22 @@ fn wake_waiters(state_mutex: &Mutex<SemaphoreState>) {
 
 // Mutating try_acquire_inner to always return false breaks tests.
 #[cfg_attr(test, mutants::skip)]
-fn try_acquire_inner(state_mutex: &Mutex<SemaphoreState>, permits: usize) -> bool {
-    let mut state = state_mutex.lock().expect(NEVER_POISONED);
-    if state.available >= permits {
-        state.available = state
-            .available
-            .checked_sub(permits)
-            .expect("available >= permits was just checked");
-        true
-    } else {
-        false
+fn try_acquire_inner(inner: &SemaphoreInner, permits: usize) -> bool {
+    // Atomic CAS loop — no mutex needed.
+    let mut current = inner.available.load(Ordering::Acquire);
+    loop {
+        if current < permits {
+            return false;
+        }
+        match inner.available.compare_exchange_weak(
+            current,
+            current.wrapping_sub(permits),
+            Ordering::AcqRel,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return true,
+            Err(actual) => current = actual,
+        }
     }
 }
 
@@ -162,47 +169,49 @@ fn try_acquire_inner(state_mutex: &Mutex<SemaphoreState>, permits: usize) -> boo
 ///
 /// # Safety
 ///
-/// * The `state_mutex` must protect the awaiter set that this awaiter
-///   is (or will be) registered with.
+/// * The awaiter must belong to a future created from this semaphore.
 unsafe fn poll_acquire(
-    state_mutex: &Mutex<SemaphoreState>,
+    inner: &SemaphoreInner,
     mut awaiter: Pin<&mut Awaiter>,
     permits: usize,
     waker: Waker,
 ) -> Poll<()> {
-    let mut state = state_mutex.lock().expect(NEVER_POISONED);
+    // Fast path: try atomic CAS before touching the mutex.
+    if try_acquire_inner(inner, permits) {
+        return Poll::Ready(());
+    }
 
-    // Check if we were directly notified by release_permits()
-    // (it popped us from the set and reserved our permits).
-    // SAFETY: We hold the lock.
+    // Slow path: not enough permits — acquire the mutex.
+    let mut slow = inner.slow.lock().expect(NEVER_POISONED);
+
+    // Check if we were directly notified by release_permits().
+    // SAFETY: We hold the mutex.
     if unsafe { awaiter.as_mut().take_notification() } {
         return Poll::Ready(());
     }
 
-    // SAFETY: We hold the lock.
+    // Re-check permits under the mutex — they may have been
+    // released between our CAS attempt and acquiring the mutex.
+    // Only take permits if no other waiter is already queued
+    // (to avoid starvation).
+    // SAFETY: We hold the mutex.
     if !unsafe { awaiter.is_registered() }
-        // SAFETY: We hold the lock.
-        && unsafe { state.waiters.is_empty() }
-        && state.available >= permits
+        // SAFETY: We hold the mutex.
+        && unsafe { slow.waiters.is_empty() }
     {
-        // Permits are available and the queue is empty — take them
-        // immediately without registering.
-        state.available = state
-            .available
-            .checked_sub(permits)
-            .expect("available >= permits was just checked");
-        Poll::Ready(())
-    } else {
-        // Not enough permits — register or update the waker.
-        // SAFETY: We hold the lock, awaiter is pinned and not yet
-        // in the set (or already registered for waker update).
-        unsafe {
-            state
-                .waiters
-                .register_with_data(awaiter.as_mut(), waker, permits);
+        if try_acquire_inner(inner, permits) {
+            return Poll::Ready(());
         }
-        Poll::Pending
     }
+
+    // Register or update the waker.
+    inner.has_waiters.store(true, Ordering::Release);
+    // SAFETY: We hold the mutex, awaiter is pinned.
+    unsafe {
+        slow.waiters
+            .register_with_data(awaiter.as_mut(), waker, permits);
+    }
+    Poll::Pending
 }
 
 /// Shared drop logic for both acquire future types.
@@ -211,37 +220,67 @@ unsafe fn poll_acquire(
 ///
 /// Same requirements as [`poll_acquire`].
 unsafe fn drop_acquire_wait(
-    state_mutex: &Mutex<SemaphoreState>,
+    inner: &SemaphoreInner,
     mut awaiter: Pin<&mut Awaiter>,
     permits: usize,
 ) {
-    let mut state = state_mutex.lock().expect(NEVER_POISONED);
+    let mut slow = inner.slow.lock().expect(NEVER_POISONED);
 
-    // SAFETY: We hold the lock.
+    // SAFETY: We hold the mutex.
     if !unsafe { awaiter.is_registered() } {
         return;
     }
 
-    // SAFETY: We hold the lock.
+    // SAFETY: We hold the mutex.
     if unsafe { awaiter.as_ref().is_notified() } {
         // We were given permits but the future was cancelled.
-        // Return the permits and try to wake other waiters, all
-        // within the same lock scope.
-        state.available = state
-            .available
-            .checked_add(permits)
-            .expect("permit count overflow is unreachable");
-        let waker = try_wake_one(&mut state);
-        drop(state);
+        // Return the permits and try to wake other waiters.
+        inner.available.fetch_add(permits, Ordering::Release);
+
+        // Try to wake waiters with the returned permits.
+        let available = &inner.available;
+        let predicate = |aw: &Awaiter| {
+            let requested = unsafe { aw.user_data() };
+            let cur = available.load(Ordering::Relaxed);
+            if requested <= cur {
+                let mut c = cur;
+                loop {
+                    match available.compare_exchange_weak(
+                        c,
+                        c.wrapping_sub(requested),
+                        Ordering::AcqRel,
+                        Ordering::Relaxed,
+                    ) {
+                        Ok(_) => return true,
+                        Err(actual) => {
+                            if actual < requested {
+                                return false;
+                            }
+                            c = actual;
+                        }
+                    }
+                }
+            } else {
+                false
+            }
+        };
+        // SAFETY: We hold the mutex.
+        let waker = unsafe { slow.waiters.notify_one_if(predicate) };
+        if unsafe { slow.waiters.is_empty() } {
+            inner.has_waiters.store(false, Ordering::Release);
+        }
+        drop(slow);
         if let Some(w) = waker {
             w.wake();
-            wake_waiters(state_mutex);
         }
     } else {
         // Not notified — just remove from the awaiter set.
-        // SAFETY: We hold the lock and the node is in the set.
+        // SAFETY: We hold the mutex and the node is in the set.
         unsafe {
-            state.waiters.unregister(awaiter.as_mut());
+            slow.waiters.unregister(awaiter.as_mut());
+        }
+        if unsafe { slow.waiters.is_empty() } {
+            inner.has_waiters.store(false, Ordering::Release);
         }
     }
 }
@@ -265,8 +304,9 @@ impl Semaphore {
     pub fn boxed(permits: usize) -> Self {
         Self {
             inner: Arc::new(SemaphoreInner {
-                state: Mutex::new(SemaphoreState {
-                    available: permits,
+                available: AtomicUsize::new(permits),
+                has_waiters: AtomicBool::new(false),
+                slow: Mutex::new(SlowState {
                     waiters: AwaiterSet::new(),
                 }),
             }),
@@ -353,7 +393,7 @@ impl Semaphore {
     #[must_use]
     pub fn acquire_many(&self, permits: NonZero<usize>) -> SemaphoreAcquireFuture<'_> {
         SemaphoreAcquireFuture {
-            state: &self.inner.state,
+            inner: &self.inner,
             permits: permits.get(),
             awaiter: Awaiter::new(),
         }
@@ -407,9 +447,9 @@ impl Semaphore {
     pub fn try_acquire_many(&self, permits: NonZero<usize>) -> Option<SemaphorePermit<'_>> {
         let permits = permits.get();
 
-        if try_acquire_inner(&self.inner.state, permits) {
+        if try_acquire_inner(&self.inner, permits) {
             Some(SemaphorePermit {
-                state: &self.inner.state,
+                inner: &self.inner,
                 permits,
             })
         } else {
@@ -423,7 +463,7 @@ impl Semaphore {
 ///
 /// The permit is returned to the semaphore when dropped.
 pub struct SemaphorePermit<'a> {
-    state: &'a Mutex<SemaphoreState>,
+    inner: &'a SemaphoreInner,
     permits: usize,
 }
 
@@ -431,7 +471,7 @@ impl Drop for SemaphorePermit<'_> {
     // Mutating drop to a no-op causes the permits to leak.
     #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
-        release_permits(self.state, self.permits);
+        release_permits(self.inner, self.permits);
     }
 }
 
@@ -446,7 +486,7 @@ impl RefUnwindSafe for SemaphorePermit<'_> {}
 /// Completes with a [`SemaphorePermit`] when enough permits are
 /// available.
 pub struct SemaphoreAcquireFuture<'a> {
-    state: &'a Mutex<SemaphoreState>,
+    inner: &'a SemaphoreInner,
     permits: usize,
 
     awaiter: Awaiter,
@@ -478,9 +518,9 @@ impl<'a> Future for SemaphoreAcquireFuture<'a> {
         let awaiter = unsafe { Pin::new_unchecked(&mut this.awaiter) };
         // SAFETY: The state field is the semaphore state this awaiter registers
         // with.
-        match unsafe { poll_acquire(this.state, awaiter, this.permits, waker) } {
+        match unsafe { poll_acquire(this.inner, awaiter, this.permits, waker) } {
             Poll::Ready(()) => Poll::Ready(SemaphorePermit {
-                state: this.state,
+                inner: this.inner,
                 permits: this.permits,
             }),
             Poll::Pending => Poll::Pending,
@@ -497,7 +537,7 @@ impl Drop for SemaphoreAcquireFuture<'_> {
         let awaiter = unsafe { Pin::new_unchecked(&mut self.awaiter) };
         // SAFETY: The state field is the mutex this awaiter was
         // registered with.
-        unsafe { drop_acquire_wait(self.state, awaiter, self.permits) }
+        unsafe { drop_acquire_wait(self.inner, awaiter, self.permits) }
     }
 }
 
@@ -563,8 +603,9 @@ impl EmbeddedSemaphore {
     pub fn new(permits: usize) -> Self {
         Self {
             inner: SemaphoreInner {
-                state: Mutex::new(SemaphoreState {
-                    available: permits,
+                available: AtomicUsize::new(permits),
+                has_waiters: AtomicBool::new(false),
+                slow: Mutex::new(SlowState {
                     waiters: AwaiterSet::new(),
                 }),
             },
@@ -640,7 +681,7 @@ impl EmbeddedSemaphoreRef {
     pub fn try_acquire_many(&self, permits: NonZero<usize>) -> Option<EmbeddedSemaphorePermit> {
         let permits = permits.get();
 
-        if try_acquire_inner(&self.inner().state, permits) {
+        if try_acquire_inner(self.inner(), permits) {
             Some(EmbeddedSemaphorePermit {
                 inner: self.inner,
                 permits,
@@ -681,7 +722,7 @@ impl Drop for EmbeddedSemaphorePermit {
         // SAFETY: The embedded() contract guarantees the container
         // outlives this permit.
         let inner = unsafe { self.inner.as_ref() };
-        release_permits(&inner.state, self.permits);
+        release_permits(inner, self.permits);
     }
 }
 
@@ -724,7 +765,7 @@ impl Future for EmbeddedSemaphoreAcquireFuture {
         // SAFETY: The awaiter is pinned inside this future and not moved.
         let awaiter = unsafe { Pin::new_unchecked(&mut this.awaiter) };
         // SAFETY: The state is the mutex this awaiter registers with.
-        match unsafe { poll_acquire(&inner.state, awaiter, this.permits, waker) } {
+        match unsafe { poll_acquire(inner, awaiter, this.permits, waker) } {
             Poll::Ready(()) => Poll::Ready(EmbeddedSemaphorePermit {
                 inner: this.inner,
                 permits: this.permits,
@@ -746,7 +787,7 @@ impl Drop for EmbeddedSemaphoreAcquireFuture {
         let awaiter = unsafe { Pin::new_unchecked(&mut self.awaiter) };
         // SAFETY: The state is the mutex this awaiter was registered
         // with.
-        unsafe { drop_acquire_wait(&inner.state, awaiter, self.permits) }
+        unsafe { drop_acquire_wait(inner, awaiter, self.permits) }
     }
 }
 
