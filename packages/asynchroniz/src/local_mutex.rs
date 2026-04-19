@@ -122,8 +122,7 @@ impl<T> Inner<T> {
     /// * The `awaiter` must belong to a future created from the same
     ///   mutex.
     unsafe fn poll_lock(&self, mut awaiter: Pin<&mut Awaiter>, waker: Waker) -> Poll<()> {
-        // SAFETY: Single-threaded access.
-        if unsafe { awaiter.as_mut().take_notification() } {
+        if awaiter.as_ref().take_notification() {
             return Poll::Ready(());
         }
 
@@ -132,8 +131,7 @@ impl<T> Inner<T> {
 
         if !state.locked {
             debug_assert!(
-                // SAFETY: Single-threaded access.
-                !unsafe { awaiter.is_registered() },
+                !awaiter.is_registered(),
                 "unlocked state is exclusive with registered waiters"
             );
             state.locked = true;
@@ -153,13 +151,11 @@ impl<T> Inner<T> {
     ///
     /// Same requirements as [`poll_lock`][Self::poll_lock].
     unsafe fn drop_lock_wait(&self, mut awaiter: Pin<&mut Awaiter>) {
-        // SAFETY: Single-threaded access.
-        if !unsafe { awaiter.is_registered() } {
+        if !awaiter.is_registered() {
             return;
         }
 
-        // SAFETY: Single-threaded access.
-        if unsafe { awaiter.as_ref().is_notified() } {
+        if awaiter.as_ref().is_notified() {
             // Capture the waker while borrowing the state, then wake
             // after the borrow ends to avoid aliased mutable access
             // if the waker is re-entrant.

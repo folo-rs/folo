@@ -1,5 +1,6 @@
 use std::fmt;
 use std::future::Future;
+use std::hint;
 use std::marker::PhantomPinned;
 use std::num::NonZero;
 use std::panic::{RefUnwindSafe, UnwindSafe};
@@ -181,12 +182,21 @@ unsafe fn poll_acquire(
         return Poll::Ready(());
     }
 
-    // Slow path: not enough permits — acquire the mutex.
+    // Check notification atomically — no mutex needed.
+    if awaiter.as_ref().take_notification() {
+        return Poll::Ready(());
+    }
+
+    // Give the permit releaser a chance before acquiring the mutex.
+    hint::spin_loop();
+    if try_acquire_inner(inner, permits) {
+        return Poll::Ready(());
+    }
+
     let mut slow = inner.slow.lock().expect(NEVER_POISONED);
 
-    // Check if we were directly notified by release_permits().
-    // SAFETY: We hold the mutex.
-    if unsafe { awaiter.as_mut().take_notification() } {
+    // Re-check notification under the mutex.
+    if awaiter.as_ref().take_notification() {
         return Poll::Ready(());
     }
 
@@ -194,14 +204,12 @@ unsafe fn poll_acquire(
     // released between our CAS attempt and acquiring the mutex.
     // Only take permits if no other waiter is already queued
     // (to avoid starvation).
-    // SAFETY: We hold the mutex.
-    if !unsafe { awaiter.is_registered() }
+    if !awaiter.is_registered()
         // SAFETY: We hold the mutex.
         && unsafe { slow.waiters.is_empty() }
+        && try_acquire_inner(inner, permits)
     {
-        if try_acquire_inner(inner, permits) {
-            return Poll::Ready(());
-        }
+        return Poll::Ready(());
     }
 
     // Register or update the waker.
@@ -224,15 +232,13 @@ unsafe fn drop_acquire_wait(
     mut awaiter: Pin<&mut Awaiter>,
     permits: usize,
 ) {
-    let mut slow = inner.slow.lock().expect(NEVER_POISONED);
-
-    // SAFETY: We hold the mutex.
-    if !unsafe { awaiter.is_registered() } {
+    if !awaiter.is_registered() {
         return;
     }
 
-    // SAFETY: We hold the mutex.
-    if unsafe { awaiter.as_ref().is_notified() } {
+    let mut slow = inner.slow.lock().expect(NEVER_POISONED);
+
+    if awaiter.as_ref().is_notified() {
         // We were given permits but the future was cancelled.
         // Return the permits and try to wake other waiters.
         inner.available.fetch_add(permits, Ordering::Release);
@@ -240,6 +246,7 @@ unsafe fn drop_acquire_wait(
         // Try to wake waiters with the returned permits.
         let available = &inner.available;
         let predicate = |aw: &Awaiter| {
+            // SAFETY: We hold the mutex protecting the awaiter set.
             let requested = unsafe { aw.user_data() };
             let cur = available.load(Ordering::Relaxed);
             if requested <= cur {
@@ -266,6 +273,7 @@ unsafe fn drop_acquire_wait(
         };
         // SAFETY: We hold the mutex.
         let waker = unsafe { slow.waiters.notify_one_if(predicate) };
+        // SAFETY: We hold the mutex.
         if unsafe { slow.waiters.is_empty() } {
             inner.has_waiters.store(false, Ordering::Release);
         }
@@ -279,6 +287,7 @@ unsafe fn drop_acquire_wait(
         unsafe {
             slow.waiters.unregister(awaiter.as_mut());
         }
+        // SAFETY: We hold the mutex.
         if unsafe { slow.waiters.is_empty() } {
             inner.has_waiters.store(false, Ordering::Release);
         }

@@ -174,14 +174,28 @@ unsafe fn poll_lock<T>(
         return Poll::Ready(());
     }
 
+    // Check notification atomically — no mutex needed.
+    if awaiter.as_ref().take_notification() {
+        return Poll::Ready(());
+    }
+
+    // Give the lock holder a chance to release before we acquire
+    // the mutex (reduces contention with short critical sections).
+    std::hint::spin_loop();
+    if inner
+        .state
+        .compare_exchange(0, LOCKED, Ordering::Acquire, Ordering::Relaxed)
+        .is_ok()
+    {
+        return Poll::Ready(());
+    }
+
     // Slow path: lock is held or has waiters — acquire the mutex.
     let mut slow = inner.slow.lock().expect(NEVER_POISONED);
 
-    // Check if we were directly notified by unlock() (it popped us
-    // from the set and set our notified flag, transferring lock
-    // ownership to us).
-    // SAFETY: We hold the mutex that protects the awaiter and its set.
-    if unsafe { awaiter.as_mut().take_notification() } {
+    // Re-check notification under the mutex (catches the window
+    // between the atomic check above and acquiring the mutex).
+    if awaiter.as_ref().take_notification() {
         return Poll::Ready(());
     }
 
@@ -195,7 +209,11 @@ unsafe fn poll_lock<T>(
     }
 
     // Lock is held — register or update the waker.
-    inner.state.fetch_or(HAS_WAITERS, Ordering::Relaxed);
+    // Only set HAS_WAITERS if not already set (avoids unnecessary
+    // atomic RMW).
+    if current & HAS_WAITERS == 0 {
+        inner.state.fetch_or(HAS_WAITERS, Ordering::Relaxed);
+    }
     // SAFETY: We hold the mutex that protects the awaiter and
     // its set.
     unsafe {
@@ -210,20 +228,18 @@ unsafe fn poll_lock<T>(
 ///
 /// Same requirements as [`poll_lock`].
 unsafe fn drop_lock_wait<T>(inner: &MutexInner<T>, mut awaiter: Pin<&mut Awaiter>) {
-    let mut slow = inner.slow.lock().expect(NEVER_POISONED);
-
-    // SAFETY: We hold the mutex.
-    if !unsafe { awaiter.is_registered() } {
+    if !awaiter.is_registered() {
         return;
     }
 
-    // SAFETY: We hold the mutex.
-    if unsafe { awaiter.as_ref().is_notified() } {
+    let mut slow = inner.slow.lock().expect(NEVER_POISONED);
+
+    if awaiter.as_ref().is_notified() {
         // We were chosen as the next lock holder but the future was
         // cancelled. Forward the lock to the next waiter.
         // SAFETY: We hold the mutex.
         if let Some(waker) = unsafe { slow.waiters.notify_one() } {
-            // Clear HAS_WAITERS if set is now empty.
+            // SAFETY: We hold the mutex.
             if unsafe { slow.waiters.is_empty() } {
                 inner.state.store(LOCKED, Ordering::Relaxed);
             }
@@ -239,7 +255,7 @@ unsafe fn drop_lock_wait<T>(inner: &MutexInner<T>, mut awaiter: Pin<&mut Awaiter
         unsafe {
             slow.waiters.unregister(awaiter.as_mut());
         }
-        // Clear HAS_WAITERS if set is now empty.
+        // SAFETY: We hold the mutex.
         if unsafe { slow.waiters.is_empty() } {
             inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
         }

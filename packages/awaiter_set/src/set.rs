@@ -3,6 +3,7 @@ use std::fmt;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr;
+use std::sync::atomic::Ordering;
 use std::task::Waker;
 
 use crate::awaiter::{Awaiter, State};
@@ -77,8 +78,7 @@ use crate::awaiter::{Awaiter, State};
 ///     let waker = cx.waker().clone();
 ///     let mut guard = set.lock().unwrap();
 ///
-///     // SAFETY: We hold the lock that protects the set.
-///     if unsafe { awaiter.as_mut().take_notification() } {
+///     if awaiter.as_ref().take_notification() {
 ///         return Poll::Ready(());
 ///     }
 ///
@@ -344,13 +344,20 @@ impl AwaiterSet {
             unsafe { next_ref.state_mut() }.prev = prev;
         }
 
-        // Transition the removed awaiter to notified.
+        // Clean up the State data fields first, before publishing
+        // the notification via the atomic lifecycle store.
         // SAFETY: Access is serialized by the caller's lock.
         let state = unsafe { awaiter.state_mut() };
+        let waker = state.waker.take();
         state.next = ptr::null_mut();
         state.prev = ptr::null_mut();
-        state.notified = true;
-        state.waker.take()
+
+        // Publish the notification. The Release ordering ensures all
+        // State modifications above are visible to the polled task
+        // that loads with Acquire via take_notification().
+        awaiter.set_lifecycle(crate::awaiter::LIFECYCLE_NOTIFIED, Ordering::Release);
+
+        waker
     }
 
     // In debug builds, pick head or tail based on pointer address to
@@ -417,23 +424,25 @@ impl AwaiterSet {
         // address stability.
         let awaiter = unsafe { awaiter.get_unchecked_mut() };
 
-        // SAFETY: Access is serialized by the caller's lock.
-        let state = unsafe { awaiter.state_mut() };
+        let lifecycle = awaiter.lifecycle_phase();
 
-        if state.registered {
+        if lifecycle == crate::awaiter::LIFECYCLE_WAITING {
             // Already registered — update waker and data in place.
+            // SAFETY: Access is serialized by the caller's lock.
+            let state = unsafe { awaiter.state_mut() };
             state.waker = Some(waker);
             state.user_data = data;
         } else {
             // New registration — initialize fields and insert.
+            // SAFETY: Access is serialized by the caller's lock.
+            let state = unsafe { awaiter.state_mut() };
             *state = State {
                 waker: Some(waker),
                 user_data: data,
                 next: ptr::null_mut(),
                 prev: ptr::null_mut(),
-                registered: true,
-                notified: false,
             };
+            awaiter.set_lifecycle(crate::awaiter::LIFECYCLE_WAITING, Ordering::Relaxed);
 
             // SAFETY: The awaiter was originally pinned and has not
             // been moved.
@@ -465,20 +474,23 @@ impl AwaiterSet {
     pub unsafe fn unregister(&mut self, awaiter: Pin<&mut Awaiter>) {
         // SAFETY: We do not move the awaiter.
         let awaiter = unsafe { awaiter.get_unchecked_mut() };
-        // SAFETY: Access is serialized by the caller's lock.
-        let state = unsafe { awaiter.state_ref() };
 
-        debug_assert!(state.registered, "unregister called on an idle awaiter");
+        let lifecycle = awaiter.lifecycle_phase();
+
+        debug_assert!(
+            lifecycle != crate::awaiter::LIFECYCLE_IDLE,
+            "unregister called on an idle awaiter"
+        );
 
         // Notified awaiters have already been removed from the set
         // by notify_one(). Nothing to do.
-        if state.notified {
+        if lifecycle == crate::awaiter::LIFECYCLE_NOTIFIED {
             return;
         }
 
         // The awaiter is still registered — guard against idle
         // callers in release builds.
-        if !state.registered {
+        if lifecycle != crate::awaiter::LIFECYCLE_WAITING {
             return;
         }
 
@@ -499,6 +511,7 @@ impl AwaiterSet {
         // SAFETY: Access is serialized by the caller's lock.
         let state = unsafe { awaiter.state_mut() };
         *state = State::idle();
+        awaiter.set_lifecycle(crate::awaiter::LIFECYCLE_IDLE, Ordering::Relaxed);
     }
 }
 
@@ -627,10 +640,10 @@ mod tests {
             list.unregister(Pin::new_unchecked(&mut a));
         }
 
-        assert!(!unsafe { a.is_registered() });
+        assert!(!a.is_registered());
         let w = unsafe { list.notify_one() };
         assert!(w.is_some());
-        assert!(unsafe { b.is_registered() });
+        assert!(b.is_registered());
         assert!(unsafe { list.is_empty() });
     }
 
@@ -646,10 +659,10 @@ mod tests {
             list.unregister(Pin::new_unchecked(&mut b));
         }
 
-        assert!(!unsafe { b.is_registered() });
+        assert!(!b.is_registered());
         let w = unsafe { list.notify_one() };
         assert!(w.is_some());
-        assert!(unsafe { a.is_registered() });
+        assert!(a.is_registered());
         assert!(unsafe { list.is_empty() });
     }
 
@@ -667,12 +680,12 @@ mod tests {
             list.unregister(Pin::new_unchecked(&mut b));
         }
 
-        assert!(!unsafe { b.is_registered() });
+        assert!(!b.is_registered());
         // Both remaining awaiters should be notified.
         drop(unsafe { list.notify_one() });
         drop(unsafe { list.notify_one() });
-        assert!(unsafe { a.is_registered() });
-        assert!(unsafe { c.is_registered() });
+        assert!(a.is_registered());
+        assert!(c.is_registered());
         assert!(unsafe { list.is_empty() });
     }
 
@@ -702,7 +715,7 @@ mod tests {
         }
 
         // After unregister, the awaiter is back in Idle state.
-        assert!(!unsafe { a.is_registered() });
+        assert!(!a.is_registered());
     }
 
     #[test]
@@ -818,7 +831,7 @@ mod tests {
 
         drop(unsafe { list.notify_one() });
         // SAFETY: The awaiter is not moved.
-        assert!(unsafe { Pin::new_unchecked(&a).is_notified() });
+        assert!(unsafe { Pin::new_unchecked(&a) }.is_notified());
     }
 
     #[test]
@@ -874,7 +887,7 @@ mod tests {
 
         // The awaiter with user_data 3 should have been notified.
         assert!(unsafe { Pin::new_unchecked(&c).is_notified() });
-        assert!(!unsafe { Pin::new_unchecked(&a).is_notified() });
+        assert!(!unsafe { Pin::new_unchecked(&a) }.is_notified());
         assert!(!unsafe { Pin::new_unchecked(&b).is_notified() });
     }
 
@@ -892,7 +905,7 @@ mod tests {
         assert!(w.is_none());
 
         // The awaiter should still be registered.
-        assert!(unsafe { a.is_registered() });
+        assert!(a.is_registered());
         assert!(!unsafe { set.is_empty() });
     }
 
@@ -916,7 +929,7 @@ mod tests {
         let w = unsafe { set.notify_one() };
         assert!(w.is_some());
         assert!(unsafe { set.is_empty() });
-        assert!(unsafe { Pin::new_unchecked(&a).is_notified() });
+        assert!(unsafe { Pin::new_unchecked(&a) }.is_notified());
     }
 
     #[test]
@@ -1034,7 +1047,7 @@ mod tests {
                 let waker = cx.waker().clone();
                 let mut guard = set.lock().unwrap();
 
-                if unsafe { awaiter.as_mut().take_notification() } {
+                if awaiter.as_ref().take_notification() {
                     return Poll::Ready(());
                 }
 

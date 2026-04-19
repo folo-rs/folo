@@ -142,8 +142,7 @@ impl Inner {
     ///
     /// * The `awaiter` must belong to a future created from the same event.
     unsafe fn poll_wait(&self, mut awaiter: Pin<&mut Awaiter>, waker: Waker) -> Poll<()> {
-        // SAFETY: Single-threaded access.
-        if unsafe { awaiter.as_mut().take_notification() } {
+        if awaiter.as_ref().take_notification() {
             return Poll::Ready(());
         }
 
@@ -153,8 +152,7 @@ impl Inner {
         match state {
             InnerState::Set => {
                 debug_assert!(
-                    // SAFETY: Single-threaded access.
-                    !unsafe { awaiter.is_registered() },
+                    !awaiter.is_registered(),
                     "Set state is exclusive with registered waiters"
                 );
                 *state = InnerState::Unset(AwaiterSet::new());
@@ -176,13 +174,11 @@ impl Inner {
     ///
     /// Same requirements as [`poll_wait`][Self::poll_wait].
     unsafe fn drop_wait(&self, mut awaiter: Pin<&mut Awaiter>) {
-        // SAFETY: Single-threaded access.
-        if !unsafe { awaiter.is_registered() } {
+        if !awaiter.is_registered() {
             return;
         }
 
-        // SAFETY: Single-threaded access.
-        if unsafe { awaiter.as_ref().is_notified() } {
+        if awaiter.as_ref().is_notified() {
             let state_ptr = self.state.get();
             // SAFETY: Single-threaded access.
             let old_state =

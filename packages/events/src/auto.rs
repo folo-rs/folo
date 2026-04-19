@@ -102,6 +102,7 @@ fn set(inner: &EventInner) {
 
         // SAFETY: We hold the mutex.
         if let Some(w) = unsafe { waiters.notify_one() } {
+            // SAFETY: We hold the mutex.
             if unsafe { waiters.is_empty() } {
                 inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
             }
@@ -138,11 +139,26 @@ unsafe fn poll_wait(inner: &EventInner, mut awaiter: Pin<&mut Awaiter>, waker: W
         return Poll::Ready(());
     }
 
+    // Check if we were directly notified by set() before taking the mutex.
+    if awaiter.as_ref().take_notification() {
+        return Poll::Ready(());
+    }
+
+    // Spin once: a concurrent set() may have stored SIGNAL after our CAS.
+    std::hint::spin_loop();
+    if inner
+        .state
+        .compare_exchange(SIGNAL, 0, Ordering::Acquire, Ordering::Relaxed)
+        .is_ok()
+    {
+        return Poll::Ready(());
+    }
+
     // Slow path: acquire the mutex.
     let mut waiters = inner.slow.lock().expect(NEVER_POISONED);
 
-    // SAFETY: We hold the mutex.
-    if unsafe { awaiter.as_mut().take_notification() } {
+    // Re-check notification under the mutex.
+    if awaiter.as_ref().take_notification() {
         return Poll::Ready(());
     }
 
@@ -161,19 +177,18 @@ unsafe fn poll_wait(inner: &EventInner, mut awaiter: Pin<&mut Awaiter>, waker: W
 }
 
 unsafe fn drop_wait(inner: &EventInner, mut awaiter: Pin<&mut Awaiter>) {
-    let mut waiters = inner.slow.lock().expect(NEVER_POISONED);
-
-    // SAFETY: We hold the mutex.
-    if !unsafe { awaiter.is_registered() } {
+    if !awaiter.is_registered() {
         return;
     }
 
-    // SAFETY: We hold the mutex.
-    if unsafe { awaiter.as_ref().is_notified() } {
+    let mut waiters = inner.slow.lock().expect(NEVER_POISONED);
+
+    if awaiter.as_ref().is_notified() {
         // We were notified but the future was cancelled. Forward
         // the notification to the next waiter.
         // SAFETY: We hold the mutex.
         if let Some(waker) = unsafe { waiters.notify_one() } {
+            // SAFETY: We hold the mutex.
             if unsafe { waiters.is_empty() } {
                 inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
             }
@@ -189,6 +204,7 @@ unsafe fn drop_wait(inner: &EventInner, mut awaiter: Pin<&mut Awaiter>) {
         unsafe {
             waiters.unregister(awaiter.as_mut());
         }
+        // SAFETY: We hold the mutex.
         if unsafe { waiters.is_empty() } {
             inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
         }

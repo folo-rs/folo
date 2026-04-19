@@ -172,16 +172,14 @@ impl Inner {
         permits: usize,
         waker: Waker,
     ) -> Poll<()> {
-        // SAFETY: Single-threaded access.
-        if unsafe { awaiter.as_mut().take_notification() } {
+        if awaiter.as_ref().take_notification() {
             return Poll::Ready(());
         }
 
         // SAFETY: Single-threaded access.
         let state = unsafe { &mut *self.state.get() };
 
-        // SAFETY: Single-threaded access.
-        if !unsafe { awaiter.is_registered() }
+        if !awaiter.is_registered()
             // SAFETY: Single-threaded access.
             && unsafe { state.waiters.is_empty() }
             && state.available >= permits
@@ -208,13 +206,11 @@ impl Inner {
     ///
     /// Same requirements as [`poll_acquire`][Self::poll_acquire].
     unsafe fn drop_acquire_wait(&self, mut awaiter: Pin<&mut Awaiter>, permits: usize) {
-        // SAFETY: Single-threaded access.
-        if !unsafe { awaiter.is_registered() } {
+        if !awaiter.is_registered() {
             return;
         }
 
-        // SAFETY: Single-threaded access.
-        if unsafe { awaiter.as_ref().is_notified() } {
+        if awaiter.as_ref().is_notified() {
             // We were given permits but the future was cancelled.
             // Return the permits and try to wake the head waiter in
             // the same access scope.

@@ -138,8 +138,7 @@ impl Inner {
     unsafe fn poll_wait(&self, mut awaiter: Pin<&mut Awaiter>, waker: Waker) -> Poll<()> {
         // Check if we were directly notified by set() (it removed us
         // from the set and set our notified flag).
-        // SAFETY: Single-threaded access.
-        if unsafe { awaiter.as_mut().take_notification() } {
+        if awaiter.as_ref().take_notification() {
             return Poll::Ready(());
         }
 
@@ -163,8 +162,7 @@ impl Inner {
     ///
     /// Same requirements as [`poll_wait`][Self::poll_wait].
     unsafe fn drop_wait(&self, mut awaiter: Pin<&mut Awaiter>) {
-        // SAFETY: Single-threaded access.
-        if unsafe { awaiter.is_registered() } {
+        if awaiter.is_registered() {
             // SAFETY: Single-threaded, awaiter is registered in this
             // list.
             let waiters = unsafe { &mut *self.waiters.get() };
