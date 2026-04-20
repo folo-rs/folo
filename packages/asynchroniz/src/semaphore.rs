@@ -200,10 +200,15 @@ unsafe fn poll_acquire(
         return Poll::Ready(());
     }
 
-    // Re-check permits under the mutex — they may have been
-    // released between our CAS attempt and acquiring the mutex.
-    // Only take permits if no other waiter is already queued
-    // (to avoid starvation).
+    // Register or update the waker. Set has_waiters before the
+    // final permit re-check to close the race with a concurrent
+    // release_permits that could observe has_waiters=false.
+    inner.has_waiters.store(true, Ordering::Release);
+
+    // Re-check permits after setting has_waiters. A concurrent
+    // release that ran between our earlier check and the store
+    // would have added permits without entering the slow path.
+    // We catch that here if no other waiter is queued.
     if !awaiter.is_registered()
         // SAFETY: We hold the mutex.
         && unsafe { slow.waiters.is_empty() }
@@ -212,8 +217,6 @@ unsafe fn poll_acquire(
         return Poll::Ready(());
     }
 
-    // Register or update the waker.
-    inner.has_waiters.store(true, Ordering::Release);
     // SAFETY: We hold the mutex, awaiter is pinned.
     unsafe {
         slow.waiters

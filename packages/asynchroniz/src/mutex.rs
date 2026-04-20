@@ -199,21 +199,40 @@ unsafe fn poll_lock<T>(
         return Poll::Ready(());
     }
 
-    // Re-check the atomic state under the mutex — the lock may have
-    // been released between our CAS attempt and acquiring the mutex.
-    let current = inner.state.load(Ordering::Acquire);
-    if current & LOCKED == 0 {
-        // Lock is free — acquire it.
-        inner.state.store(current | LOCKED, Ordering::Relaxed);
+    // Re-check the atomic state under the mutex — the lock may
+    // have been released between our CAS attempt and acquiring
+    // the mutex. Use CAS (not load+store) to avoid a race where
+    // a concurrent try_lock also observes state == 0.
+    if inner
+        .state
+        .compare_exchange(0, LOCKED, Ordering::Acquire, Ordering::Relaxed)
+        .is_ok()
+    {
         return Poll::Ready(());
     }
 
-    // Lock is held — register or update the waker.
-    // Only set HAS_WAITERS if not already set (avoids unnecessary
-    // atomic RMW).
-    if current & HAS_WAITERS == 0 {
-        inner.state.fetch_or(HAS_WAITERS, Ordering::Relaxed);
+    // Lock is held — register. Set HAS_WAITERS first, then
+    // re-check to close the race with a concurrent unlock that
+    // could CAS(LOCKED, 0) between our CAS failure and the
+    // fetch_or.
+    inner.state.fetch_or(HAS_WAITERS, Ordering::Relaxed);
+
+    // Re-check after setting HAS_WAITERS. A concurrent unlock
+    // that ran between our CAS failure and the fetch_or would
+    // have stored 0 (fast path) — we catch that here.
+    if inner
+        .state
+        .compare_exchange(
+            HAS_WAITERS,
+            LOCKED | HAS_WAITERS,
+            Ordering::Acquire,
+            Ordering::Relaxed,
+        )
+        .is_ok()
+    {
+        return Poll::Ready(());
     }
+
     // SAFETY: We hold the mutex that protects the awaiter and
     // its set.
     unsafe {

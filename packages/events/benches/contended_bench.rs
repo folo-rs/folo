@@ -1,7 +1,7 @@
 //! Contended benchmarks for async event primitives.
 //!
 //! Uses `par_bench` to run multiple threads competing on the same
-//! event. All threads perform set + try_wait (+ reset for manual)
+//! event. All threads perform `set` + `try_wait` (+ `reset` for manual)
 //! cycles, measuring lock contention as thread count scales.
 //!
 //! `rsevents` is excluded because its blocking `.wait()` API is not
@@ -11,6 +11,7 @@
 #![allow(missing_docs, reason = "benchmark code")]
 
 use std::hint::black_box;
+use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use event_listener::Event as ElEvent;
@@ -27,7 +28,7 @@ fn entrypoint(c: &mut Criterion) {
 
 /// Contended benchmark for auto-reset events.
 ///
-/// All threads perform set() + try_wait() cycles on the same event.
+/// All threads perform `set()` + `try_wait()` cycles on the same event.
 /// This measures contention on the internal synchronization when
 /// multiple threads access the event state concurrently.
 fn contended_auto_reset(c: &mut Criterion) {
@@ -64,11 +65,11 @@ fn contended_auto_reset(c: &mut Criterion) {
 
         // event-listener (notify + try_listen pattern)
         {
-            let event = std::sync::Arc::new(ElEvent::new());
+            let event = Arc::new(ElEvent::new());
             Run::new()
                 .prepare_thread({
-                    let event = event.clone();
-                    move |_| event.clone()
+                    let event = Arc::clone(&event);
+                    move |_| Arc::clone(&event)
                 })
                 .iter(|args| {
                     let event = args.thread_state();
@@ -86,7 +87,7 @@ fn contended_auto_reset(c: &mut Criterion) {
 
 /// Contended benchmark for manual-reset events.
 ///
-/// All threads perform set() + try_wait() + reset() cycles on the
+/// All threads perform `set()` + `try_wait()` + `reset()` cycles on the
 /// same event. This measures contention on the internal
 /// synchronization.
 fn contended_manual_reset(c: &mut Criterion) {
@@ -124,11 +125,11 @@ fn contended_manual_reset(c: &mut Criterion) {
 
         // event-listener (notify_additional + total_listeners)
         {
-            let event = std::sync::Arc::new(ElEvent::new());
+            let event = Arc::new(ElEvent::new());
             Run::new()
                 .prepare_thread({
-                    let event = event.clone();
-                    move |_| event.clone()
+                    let event = Arc::clone(&event);
+                    move |_| Arc::clone(&event)
                 })
                 .iter(|args| {
                     let event = args.thread_state();

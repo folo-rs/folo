@@ -10,6 +10,7 @@
 #![allow(missing_docs, reason = "benchmark code")]
 
 use std::hint::black_box;
+use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use many_cpus::SystemHardware;
@@ -58,11 +59,11 @@ fn contended_mutex(c: &mut Criterion) {
 
         // tokio::sync::Mutex
         {
-            let mutex = std::sync::Arc::new(tokio::sync::Mutex::new(0_u64));
+            let mutex = Arc::new(tokio::sync::Mutex::new(0_u64));
             Run::new()
                 .prepare_thread({
-                    let mutex = mutex.clone();
-                    move |_| mutex.clone()
+                    let mutex = Arc::clone(&mutex);
+                    move |_| Arc::clone(&mutex)
                 })
                 .iter(|args| {
                     let mutex = args.thread_state();
@@ -75,11 +76,11 @@ fn contended_mutex(c: &mut Criterion) {
 
         // async_lock::Mutex
         {
-            let mutex = std::sync::Arc::new(async_lock::Mutex::new(0_u64));
+            let mutex = Arc::new(async_lock::Mutex::new(0_u64));
             Run::new()
                 .prepare_thread({
-                    let mutex = mutex.clone();
-                    move |_| mutex.clone()
+                    let mutex = Arc::clone(&mutex);
+                    move |_| Arc::clone(&mutex)
                 })
                 .iter(|args| {
                     let mutex = args.thread_state();
@@ -128,11 +129,11 @@ fn contended_semaphore(c: &mut Criterion) {
 
         // tokio::sync::Semaphore (1 permit)
         {
-            let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+            let sem = Arc::new(tokio::sync::Semaphore::new(1));
             Run::new()
                 .prepare_thread({
-                    let sem = sem.clone();
-                    move |_| sem.clone()
+                    let sem = Arc::clone(&sem);
+                    move |_| Arc::clone(&sem)
                 })
                 .iter(|args| {
                     let sem = args.thread_state();
@@ -144,11 +145,11 @@ fn contended_semaphore(c: &mut Criterion) {
 
         // async_lock::Semaphore (1 permit)
         {
-            let sem = std::sync::Arc::new(async_lock::Semaphore::new(1));
+            let sem = Arc::new(async_lock::Semaphore::new(1));
             Run::new()
                 .prepare_thread({
-                    let sem = sem.clone();
-                    move |_| sem.clone()
+                    let sem = Arc::clone(&sem);
+                    move |_| Arc::clone(&sem)
                 })
                 .iter(|args| {
                     let sem = args.thread_state();
