@@ -32,13 +32,13 @@
 //!
 //! # Waker invocation
 //!
-//! No mainstream async runtime re-polls a future synchronously
-//! inside [`Waker::wake()`][std::task::Waker::wake] — they all
-//! enqueue the task for later polling. Primitives may therefore
-//! call `wake()` while holding their lock without risking
-//! reentrancy deadlocks. However, releasing the lock before
-//! `wake()` is still preferred when practical, as it reduces
-//! contention.
+//! Some primitives call [`Waker::wake()`][std::task::Waker::wake]
+//! while holding their internal lock. This is safe for all
+//! mainstream async runtimes, which only enqueue the task for later
+//! polling rather than re-polling synchronously inside `wake()`.
+//! However, a user-defined waker that re-enters the same primitive
+//! from inside `wake()` will deadlock. Releasing the lock before
+//! `wake()` is preferred when practical.
 
 pub(crate) mod awaiter;
 mod set;

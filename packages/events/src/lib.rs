@@ -104,7 +104,7 @@ pub use manual::{EmbeddedManualResetEvent, EmbeddedManualResetEventRef, ManualRe
 
 /// Future types returned by event `wait()` methods.
 ///
-/// These futures are `!Unpin` and must be pinned before polling.
+/// These futures must be pinned before polling.
 pub mod futures {
     pub use crate::auto::{AutoResetWaitFuture, EmbeddedAutoResetWaitFuture};
     pub use crate::local_auto::{EmbeddedLocalAutoResetWaitFuture, LocalAutoResetWaitFuture};

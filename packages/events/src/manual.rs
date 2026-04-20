@@ -78,21 +78,34 @@ struct EventInner {
 
 #[cfg_attr(test, mutants::skip)]
 fn set(inner: &EventInner) {
-    // Fast path: no waiters — just set the flag.
-    let prev = inner.state.load(Ordering::Relaxed);
+    // Set IS_SET atomically. If HAS_WAITERS was not set, the
+    // returned previous value will have HAS_WAITERS == 0 and
+    // we are done. Using fetch_or instead of load+store avoids
+    // a race where a concurrent waiter registration would set
+    // HAS_WAITERS between our load and store.
+    let prev = inner.state.fetch_or(IS_SET, Ordering::Release);
     if prev & HAS_WAITERS == 0 {
-        inner.state.store(IS_SET, Ordering::Release);
         return;
     }
 
-    // Slow path: waiters exist — drain all under the mutex.
-    let mut waiters = inner.slow.lock().expect(NEVER_POISONED);
-    inner.state.fetch_or(IS_SET, Ordering::Release);
-    // SAFETY: We hold the mutex.
-    while let Some(w) = unsafe { waiters.notify_one() } {
-        w.wake();
+    // Slow path: waiters exist — drain all, waking each outside
+    // the mutex to avoid deadlocks with re-entrant wakers.
+    loop {
+        let mut waiters = inner.slow.lock().expect(NEVER_POISONED);
+        // SAFETY: We hold the mutex.
+        let waker = unsafe { waiters.notify_one() };
+        if let Some(w) = waker {
+            // SAFETY: We hold the mutex.
+            if unsafe { waiters.is_empty() } {
+                inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
+            }
+            drop(waiters);
+            w.wake();
+        } else {
+            inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
+            break;
+        }
     }
-    inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
 }
 
 fn reset(inner: &EventInner) {
@@ -134,8 +147,21 @@ unsafe fn poll_wait(inner: &EventInner, mut awaiter: Pin<&mut Awaiter>, waker: W
         return Poll::Ready(());
     }
 
-    // Register or update the waker.
+    // Register or update the waker. Set HAS_WAITERS before the
+    // final check to close the race window with set().
     inner.state.fetch_or(HAS_WAITERS, Ordering::Relaxed);
+
+    // Re-check after setting HAS_WAITERS. A concurrent set()
+    // that ran between our earlier check and fetch_or would
+    // have stored IS_SET.
+    if inner.state.load(Ordering::Acquire) & IS_SET != 0 {
+        // SAFETY: We hold the mutex.
+        if unsafe { waiters.is_empty() } {
+            inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
+        }
+        return Poll::Ready(());
+    }
+
     // SAFETY: We hold the mutex.
     unsafe {
         waiters.register(awaiter.as_mut(), waker);

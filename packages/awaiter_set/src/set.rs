@@ -353,8 +353,9 @@ impl AwaiterSet {
         state.prev = ptr::null_mut();
 
         // Publish the notification. The Release ordering ensures all
-        // State modifications above are visible to the polled task
-        // that loads with Acquire via take_notification().
+        // prior writes on this thread (including data writes through
+        // UnsafeCell done before the unlock call) are visible to the
+        // polled task that observes this via take_notification().
         awaiter.set_lifecycle(crate::awaiter::LIFECYCLE_NOTIFIED, Ordering::Release);
 
         waker

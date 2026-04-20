@@ -158,7 +158,7 @@ impl Awaiter {
 
     /// Returns the current lifecycle phase (for debug/test use).
     pub(crate) fn lifecycle_phase(&self) -> u8 {
-        self.lifecycle.load(Ordering::Relaxed)
+        self.lifecycle.load(Ordering::Acquire)
     }
 
     /// Stores a new lifecycle phase.

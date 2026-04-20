@@ -167,8 +167,25 @@ unsafe fn poll_wait(inner: &EventInner, mut awaiter: Pin<&mut Awaiter>, waker: W
         return Poll::Ready(());
     }
 
-    // Register or update the waker.
+    // Register or update the waker. Set HAS_WAITERS before the
+    // final signal check to close the race window: a concurrent
+    // set() that observes HAS_WAITERS will enter the slow path
+    // and wake us. If set() runs between our try_wait and this
+    // fetch_or, the re-check below catches it.
     inner.state.fetch_or(HAS_WAITERS, Ordering::Relaxed);
+
+    // Re-check signal after setting HAS_WAITERS. A concurrent
+    // set() that ran between try_wait and fetch_or would have
+    // stored SIGNAL. We consume it here so we do not miss it.
+    if try_wait(inner) {
+        // Undo HAS_WAITERS if no other waiters exist.
+        // SAFETY: We hold the mutex.
+        if unsafe { waiters.is_empty() } {
+            inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
+        }
+        return Poll::Ready(());
+    }
+
     // SAFETY: We hold the mutex, awaiter is pinned.
     unsafe {
         waiters.register(awaiter.as_mut(), waker);
