@@ -41,7 +41,7 @@ use crate::{
 /// }
 /// # }
 /// ```
-pub struct RawEventPool<T: Send + 'static> {
+pub struct RawEventPool<T: 'static> {
     // This is in an UnsafeCell to logically "detach" it from the parent object.
     // We will create direct (shared) references to the contents of the cell not only from
     // the pool but also from the event references themselves. This is safe as long as
@@ -61,7 +61,7 @@ impl<T: Send + 'static> fmt::Debug for RawEventPool<T> {
     }
 }
 
-impl<T: Send + 'static> Drop for RawEventPool<T> {
+impl<T: 'static> Drop for RawEventPool<T> {
     fn drop(&mut self) {
         // SAFETY: We are the owner of the core, so we know it remains valid.
         // Anyone calling rent() has to promise that we outlive the rented event
@@ -70,7 +70,7 @@ impl<T: Send + 'static> Drop for RawEventPool<T> {
     }
 }
 
-pub(crate) struct RawEventPoolCore<T: Send + 'static> {
+pub(crate) struct RawEventPoolCore<T: 'static> {
     pub(crate) pool: Mutex<RawPinnedPool<UnsafeCell<MaybeUninit<Event<T>>>>>,
 }
 

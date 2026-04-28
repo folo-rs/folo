@@ -21,7 +21,7 @@ use crate::{
 };
 
 /// Coordinates delivery of a `T` at most once from a sender to a receiver on the same thread.
-pub struct LocalEvent<T: 'static> {
+pub struct LocalEvent<T> {
     /// The logical state of the event; see constants in `state.rs`.
     pub(crate) state: Cell<u8>,
 

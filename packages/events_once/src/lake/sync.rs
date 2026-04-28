@@ -148,7 +148,7 @@ impl Default for EventLake {
     }
 }
 
-struct PoolWrapper<T: Send + 'static> {
+struct PoolWrapper<T: 'static> {
     inner: EventPool<T>,
 }
 

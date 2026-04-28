@@ -8,14 +8,14 @@ use std::ptr::NonNull;
 use crate::LocalEvent;
 
 /// Enables a sender or receiver to reference the event that connects them.
-pub(crate) trait LocalRef<T: 'static>: Deref<Target = LocalEvent<T>> + fmt::Debug {
+pub(crate) trait LocalRef<T>: Deref<Target = LocalEvent<T>> + fmt::Debug {
     /// Releases the event, asserting that the last endpoint has been dropped
     /// and nothing will access the event after this call.
     fn release_event(&self);
 }
 
 /// References an event stored anywhere, via raw pointer.
-pub(crate) struct PtrLocalRef<T: 'static> {
+pub(crate) struct PtrLocalRef<T> {
     event: NonNull<LocalEvent<T>>,
 }
 
@@ -49,7 +49,7 @@ impl<T: 'static> fmt::Debug for PtrLocalRef<T> {
 }
 
 /// References an event stored on the heap.
-pub(crate) struct BoxedLocalRef<T: 'static> {
+pub(crate) struct BoxedLocalRef<T> {
     event: NonNull<LocalEvent<T>>,
 }
 
