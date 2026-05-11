@@ -37,6 +37,68 @@
 //! [`embedded()`][AutoResetEvent::embedded] origin share the same
 //! underlying state.
 //!
+//! # Comparison with other crates
+//!
+//! The numbers below come from the `events_bench` and `contended_bench`
+//! benchmarks shipped with this crate, run single-process on a many-core
+//! Windows `x86_64` machine. They are intended to convey orders of magnitude,
+//! not exact figures — rerun the benchmarks in your own environment if you
+//! need precise measurements.
+//!
+//! [`event_listener`][el] is the closest async-only competitor.
+//! [`rsevents`][rs] is a synchronous (blocking) implementation included as a
+//! reference point on the non-blocking fast paths.
+//!
+//! [el]: https://crates.io/crates/event-listener
+//! [rs]: https://crates.io/crates/rsevents
+//!
+//! ## Sync fast path (`set` + `try_wait`, no contention)
+//!
+//! | Implementation                  | Manual-reset | Auto-reset |
+//! |---------------------------------|--------------|------------|
+//! | `events` (thread-safe, boxed)   |       1.1 ns |     4.2 ns |
+//! | `events` (thread-safe, embedded)|       1.1 ns |     4.1 ns |
+//! | `events` (local, boxed)         |     < 1.0 ns |     2.8 ns |
+//! | `rsevents` (sync)               |       1.3 ns |     4.0 ns |
+//! | `event_listener`                |        61 ns |        n/a |
+//!
+//! ## Async fast path (create, pin and poll a `wait` future on a pre-set event)
+//!
+//! | Implementation                  | Manual-reset | Auto-reset |
+//! |---------------------------------|--------------|------------|
+//! | `events` (thread-safe, boxed)   |       6.4 ns |     7.8 ns |
+//! | `events` (thread-safe, embedded)|       6.2 ns |     7.2 ns |
+//! | `events` (local, boxed)         |       7.4 ns |    10.0 ns |
+//! | `event_listener` (`Event`)      |        66 ns |        n/a |
+//! | `event_listener` (`listener!`)  |        32 ns |        n/a |
+//!
+//! ## 100-waiter release
+//!
+//! | Implementation                  | Manual-reset | Auto-reset |
+//! |---------------------------------|--------------|------------|
+//! | `events` (thread-safe)          |       4.1 µs |     4.3 µs |
+//! | `events` (local)                |       2.1 µs |     2.0 µs |
+//! | `event_listener`                |       6.9 µs |        n/a |
+//!
+//! ## Contention scaling (`set` + `try_wait` per thread, manual-reset)
+//!
+//! | Threads | `events` | `event_listener` |
+//! |---------|----------|------------------|
+//! |       1 |   4.6 ns |           9.1 ns |
+//! |       2 |    75 ns |           157 ns |
+//! |       4 |   108 ns |           570 ns |
+//!
+//! ## Allocations
+//!
+//! * `events` performs **zero allocations** on every benchmarked hot path,
+//!   including [`set()`][AutoResetEvent::set], [`try_wait()`][AutoResetEvent::try_wait]
+//!   and polling [`wait()`][AutoResetEvent::wait] futures, regardless of how many
+//!   waiters are registered.
+//! * `event_listener` allocates one heap node per registered listener
+//!   (~56 bytes per listener) plus per-call bookkeeping.
+//! * `rsevents` is allocation-free but offers only blocking APIs and cannot
+//!   be polled from an async context.
+//!
 //! # Manual-reset example
 //!
 //! ```
