@@ -122,11 +122,11 @@ fn set(inner: &EventInner) {
 // Mutating try_wait() to return false causes spin-loop tests to hang.
 #[cfg_attr(test, mutants::skip)]
 fn try_wait(inner: &EventInner) -> bool {
-    // Atomic CAS: consume the signal.
-    inner
-        .state
-        .compare_exchange(SIGNAL, 0, Ordering::Acquire, Ordering::Relaxed)
-        .is_ok()
+    // Atomically clear the SIGNAL bit, leaving HAS_WAITERS untouched.
+    // Using fetch_and rather than compare_exchange(SIGNAL, 0) ensures
+    // we still consume the signal when HAS_WAITERS happens to be set
+    // (which can occur in the slow path of poll_wait after fetch_or).
+    inner.state.fetch_and(!SIGNAL, Ordering::Acquire) & SIGNAL != 0
 }
 
 unsafe fn poll_wait(inner: &EventInner, mut awaiter: Pin<&mut Awaiter>, waker: Waker) -> Poll<()> {
@@ -900,6 +900,46 @@ mod tests {
 
             for h in handles {
                 h.join().unwrap();
+            }
+        });
+    }
+
+    #[test]
+    fn await_races_with_set_across_threads() {
+        // Regression test for a race where poll_wait() observed
+        // HAS_WAITERS|SIGNAL state after fetch_or, but the CAS-based
+        // try_wait failed because it required exact match on SIGNAL.
+        // Many awaiters waited forever despite set() running. Each
+        // iteration creates a real future and awaits it while a
+        // separate thread calls set() concurrently.
+        testing::with_watchdog(|| {
+            const ITERATIONS: usize = 200;
+
+            let event = AutoResetEvent::boxed();
+
+            for _ in 0..ITERATIONS {
+                let barrier = Arc::new(Barrier::new(2));
+
+                let setter_handle = thread::spawn({
+                    let event = event.clone();
+                    let barrier = Arc::clone(&barrier);
+                    move || {
+                        barrier.wait();
+                        event.set();
+                    }
+                });
+
+                let waiter_handle = thread::spawn({
+                    let event = event.clone();
+                    let barrier = Arc::clone(&barrier);
+                    move || {
+                        barrier.wait();
+                        futures::executor::block_on(event.wait());
+                    }
+                });
+
+                setter_handle.join().unwrap();
+                waiter_handle.join().unwrap();
             }
         });
     }

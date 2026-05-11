@@ -165,7 +165,7 @@ impl AwaiterSet {
         }
         self.tail = ptr;
 
-        awaiter.set_lifecycle(WAITING, Ordering::Relaxed);
+        awaiter.set_lifecycle(WAITING, Ordering::Release);
     }
 
     /// Removes an awaiter from the set, returning it to the idle
@@ -211,7 +211,7 @@ impl AwaiterSet {
         // SAFETY: Access is serialized by the caller's lock.
         let inner = unsafe { awaiter.inner_mut() };
         *inner = Inner::idle();
-        awaiter.set_lifecycle(IDLE, Ordering::Relaxed);
+        awaiter.set_lifecycle(IDLE, Ordering::Release);
     }
 
     /// Removes one awaiter and returns its waker.

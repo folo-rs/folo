@@ -842,7 +842,7 @@ mod tests {
 
     #[test]
     fn set_with_reentrant_waker_does_not_alias() {
-        use crate::test_helpers::ReentrantWakerData;
+        use testing::ReentrantWakerData;
 
         let event = LocalAutoResetEvent::boxed();
         let event_clone = event.clone();
@@ -868,7 +868,7 @@ mod tests {
 
     #[test]
     fn drop_forwarding_with_reentrant_waker_does_not_alias() {
-        use crate::test_helpers::ReentrantWakerData;
+        use testing::ReentrantWakerData;
 
         let event = LocalAutoResetEvent::boxed();
         let event_clone = event.clone();
@@ -901,7 +901,7 @@ mod tests {
 
     #[test]
     fn embedded_set_with_reentrant_waker_does_not_alias() {
-        use crate::test_helpers::ReentrantWakerData;
+        use testing::ReentrantWakerData;
 
         let container = Box::pin(EmbeddedLocalAutoResetEvent::new());
         // SAFETY: The container outlives the handle.
@@ -924,7 +924,7 @@ mod tests {
 
     #[test]
     fn embedded_drop_forwarding_with_reentrant_waker_does_not_alias() {
-        use crate::test_helpers::ReentrantWakerData;
+        use testing::ReentrantWakerData;
 
         let container = Box::pin(EmbeddedLocalAutoResetEvent::new());
         // SAFETY: The container outlives the handle.
@@ -954,7 +954,7 @@ mod tests {
 
     #[test]
     fn embedded_set_wakes_registered_waiter() {
-        use crate::test_helpers::ReentrantWakerData;
+        use testing::ReentrantWakerData;
 
         let container = Box::pin(EmbeddedLocalAutoResetEvent::new());
         // SAFETY: The container outlives the handle.

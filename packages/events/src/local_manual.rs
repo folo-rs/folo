@@ -756,7 +756,7 @@ mod tests {
 
     #[test]
     fn set_with_reentrant_waker_does_not_alias() {
-        use crate::test_helpers::ReentrantWakerData;
+        use testing::ReentrantWakerData;
 
         let event = LocalManualResetEvent::boxed();
         let event_clone = event.clone();
@@ -787,7 +787,7 @@ mod tests {
 
     #[test]
     fn embedded_set_with_reentrant_waker_does_not_alias() {
-        use crate::test_helpers::ReentrantWakerData;
+        use testing::ReentrantWakerData;
 
         let container = Box::pin(EmbeddedLocalManualResetEvent::new());
         // SAFETY: The container outlives the handle.
@@ -844,7 +844,7 @@ mod tests {
 
     #[test]
     fn embedded_set_wakes_registered_waiter() {
-        use crate::test_helpers::ReentrantWakerData;
+        use testing::ReentrantWakerData;
 
         let container = Box::pin(EmbeddedLocalManualResetEvent::new());
         // SAFETY: The container outlives the handle.
@@ -865,7 +865,7 @@ mod tests {
 
     #[test]
     fn drop_unlinks_registered_waiter_from_list() {
-        use crate::test_helpers::ReentrantWakerData;
+        use testing::ReentrantWakerData;
 
         let event = LocalManualResetEvent::boxed();
 
@@ -897,7 +897,7 @@ mod tests {
 
     #[test]
     fn embedded_drop_unlinks_registered_waiter_from_list() {
-        use crate::test_helpers::ReentrantWakerData;
+        use testing::ReentrantWakerData;
 
         let container = Box::pin(EmbeddedLocalManualResetEvent::new());
         // SAFETY: The container outlives the handle.
@@ -954,7 +954,7 @@ mod tests {
 
     #[test]
     fn drop_forwarding_with_reentrant_waker_does_not_alias() {
-        use crate::test_helpers::ReentrantWakerData;
+        use testing::ReentrantWakerData;
 
         let event = LocalManualResetEvent::boxed();
         let event_clone = event.clone();
@@ -987,7 +987,7 @@ mod tests {
 
     #[test]
     fn reentrant_reset_does_not_skip_awaiters() {
-        use crate::test_helpers::ReentrantWakerData;
+        use testing::ReentrantWakerData;
 
         // Register two awaiters A (with re-entrant waker) and B (noop).
         // A's waker calls reset(). Both A and B should still be notified
