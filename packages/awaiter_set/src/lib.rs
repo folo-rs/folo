@@ -3,16 +3,16 @@
 
 //! Awaiter tracking for async synchronization primitives.
 //!
-//! Async synchronization primitives (mutexes, semaphores, events)
-//! need a way to track which futures are waiting and wake them when
-//! a resource becomes available. This crate provides that mechanism.
+//! Async synchronization primitives (such as events) need a way to
+//! track which futures are waiting and wake them when a resource
+//! becomes available. This crate provides that mechanism.
 //!
 //! # Overview
 //!
 //! A synchronization primitive owns an [`AwaiterSet`]. Each future
 //! that cannot complete immediately embeds an [`Awaiter`] and
 //! registers it with the set. When the primitive wants to wake one
-//! future (e.g. on unlock or permit release), it calls
+//! future (for example when a signal is raised), it calls
 //! [`AwaiterSet::notify_one()`], which removes an awaiter from the
 //! set and returns its waker.
 //!
