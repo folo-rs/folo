@@ -42,7 +42,7 @@ use crate::LocalEvent;
 /// ```
 ///
 /// [1]: crate::LocalEvent::placed
-pub struct EmbeddedLocalEvent<T: 'static> {
+pub struct EmbeddedLocalEvent<T> {
     pub(crate) inner: MaybeUninit<LocalEvent<T>>,
 }
 

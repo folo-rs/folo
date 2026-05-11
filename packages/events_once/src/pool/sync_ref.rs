@@ -9,7 +9,7 @@ use infinity_pool::RawPooled;
 
 use crate::{Event, EventPoolCore, EventRef, NEVER_POISONED};
 
-pub(crate) struct PooledRef<T: Send + 'static> {
+pub(crate) struct PooledRef<T: 'static> {
     core: Arc<EventPoolCore<T>>,
     event: RawPooled<UnsafeCell<MaybeUninit<Event<T>>>>,
 }

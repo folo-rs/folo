@@ -9,20 +9,14 @@ use std::ptr::NonNull;
 use crate::Event;
 
 /// Enables a sender or receiver to reference the event that connects them.
-pub(crate) trait EventRef<T>: Deref<Target = UnsafeCell<Event<T>>> + fmt::Debug
-where
-    T: Send + 'static,
-{
+pub(crate) trait EventRef<T>: Deref<Target = UnsafeCell<Event<T>>> + fmt::Debug {
     /// Releases the event, asserting that the last endpoint has been dropped
     /// and nothing will access the event after this call.
     fn release_event(&self);
 }
 
 /// References an event stored anywhere, via raw pointer.
-pub(crate) struct PtrRef<T>
-where
-    T: Send + 'static,
-{
+pub(crate) struct PtrRef<T> {
     event: NonNull<UnsafeCell<Event<T>>>,
 }
 
@@ -68,10 +62,7 @@ impl<T: Send + 'static> fmt::Debug for PtrRef<T> {
 }
 
 /// References an event stored on the heap.
-pub(crate) struct BoxedRef<T>
-where
-    T: Send + 'static,
-{
+pub(crate) struct BoxedRef<T> {
     event: NonNull<UnsafeCell<Event<T>>>,
 }
 

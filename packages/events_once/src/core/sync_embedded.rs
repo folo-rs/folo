@@ -43,7 +43,7 @@ use crate::Event;
 /// ```
 ///
 /// [1]: crate::Event::placed
-pub struct EmbeddedEvent<T: Send + 'static> {
+pub struct EmbeddedEvent<T> {
     pub(crate) inner: UnsafeCell<MaybeUninit<Event<T>>>,
 }
 

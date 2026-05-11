@@ -236,7 +236,7 @@ unsafe impl Sync for RawEventLake {}
 impl UnwindSafe for RawEventLake {}
 impl RefUnwindSafe for RawEventLake {}
 
-struct PoolWrapper<T: Send + 'static> {
+struct PoolWrapper<T: 'static> {
     inner: RawEventPool<T>,
 }
 

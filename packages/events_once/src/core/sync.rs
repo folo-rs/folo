@@ -57,10 +57,7 @@ thread_local! {
 }
 
 /// Coordinates delivery of a `T` at most once from a sender to a receiver on any thread.
-pub struct Event<T>
-where
-    T: Send + 'static,
-{
+pub struct Event<T> {
     /// The logical state of the event; see constants in `state.rs`.
     pub(crate) state: AtomicU8,
 

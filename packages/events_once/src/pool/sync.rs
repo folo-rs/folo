@@ -36,7 +36,7 @@ use crate::{
 /// }
 /// # }
 /// ```
-pub struct EventPool<T: Send + 'static> {
+pub struct EventPool<T: 'static> {
     core: Arc<EventPoolCore<T>>,
 
     _owns_some: PhantomData<T>,
@@ -51,7 +51,7 @@ impl<T: Send + 'static> fmt::Debug for EventPool<T> {
     }
 }
 
-pub(crate) struct EventPoolCore<T: Send + 'static> {
+pub(crate) struct EventPoolCore<T: 'static> {
     pub(crate) pool: Mutex<RawPinnedPool<UnsafeCell<MaybeUninit<Event<T>>>>>,
 }
 
