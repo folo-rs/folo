@@ -45,57 +45,75 @@
 //! not exact figures — rerun the benchmarks in your own environment if you
 //! need precise measurements.
 //!
-//! [`event_listener`][el] is the closest async-only competitor.
+//! [`event_listener`][el] is the closest async-only competitor. It is included
+//! in two forms: [`Event::listen()`][el-listen] returns a heap-allocated
+//! `EventListener` future, while the [`listener!`][el-macro] macro pins a
+//! single listener on the stack and avoids the allocation at the cost of
+//! flexibility (the listener cannot be moved or stored, and only one listener
+//! can be registered per macro invocation).
+//!
 //! [`rsevents`][rs] is a synchronous (blocking) implementation included as a
 //! reference point on the non-blocking fast paths.
 //!
 //! [el]: https://crates.io/crates/event-listener
+//! [el-listen]: https://docs.rs/event-listener/5/event_listener/struct.Event.html#method.listen
+//! [el-macro]: https://docs.rs/event-listener/5/event_listener/macro.listener.html
 //! [rs]: https://crates.io/crates/rsevents
 //!
 //! ## Sync fast path (`set` + `try_wait`, no contention)
 //!
-//! | Implementation                  | Manual-reset | Auto-reset |
-//! |---------------------------------|--------------|------------|
-//! | `events` (thread-safe, boxed)   |       1.1 ns |     4.2 ns |
-//! | `events` (thread-safe, embedded)|       1.1 ns |     4.1 ns |
-//! | `events` (local, boxed)         |     < 1.0 ns |     2.8 ns |
-//! | `rsevents` (sync)               |       1.3 ns |     4.0 ns |
-//! | `event_listener`                |        61 ns |        n/a |
+//! | Implementation                     | Manual-reset | Auto-reset |
+//! |------------------------------------|--------------|------------|
+//! | `events` (thread-safe, boxed)      |       1.1 ns |     4.3 ns |
+//! | `events` (thread-safe, embedded)   |       1.1 ns |     4.4 ns |
+//! | `events` (local, boxed)            |     < 1.0 ns |     2.7 ns |
+//! | `rsevents` (sync)                  |       1.3 ns |     4.2 ns |
+//! | `event_listener` (`listen()`)      |        70 ns |        n/a |
+//! | `event_listener` (`listener!`)     |        32 ns |        n/a |
+//!
+//! `event_listener` exposes no non-future fast path, so its entries here use
+//! the same `notify` + create-listener + poll sequence as the async fast path.
 //!
 //! ## Async fast path (create, pin and poll a `wait` future on a pre-set event)
 //!
-//! | Implementation                  | Manual-reset | Auto-reset |
-//! |---------------------------------|--------------|------------|
-//! | `events` (thread-safe, boxed)   |       6.4 ns |     7.8 ns |
-//! | `events` (thread-safe, embedded)|       6.2 ns |     7.2 ns |
-//! | `events` (local, boxed)         |       7.4 ns |    10.0 ns |
-//! | `event_listener` (`Event`)      |        66 ns |        n/a |
-//! | `event_listener` (`listener!`)  |        32 ns |        n/a |
+//! | Implementation                     | Manual-reset | Auto-reset |
+//! |------------------------------------|--------------|------------|
+//! | `events` (thread-safe, boxed)      |       6.6 ns |     8.9 ns |
+//! | `events` (thread-safe, embedded)   |       6.3 ns |     8.2 ns |
+//! | `events` (local, boxed)            |       8.1 ns |    10.2 ns |
+//! | `event_listener` (`listen()`)      |        64 ns |        n/a |
+//! | `event_listener` (`listener!`)     |        33 ns |        n/a |
 //!
 //! ## 100-waiter release
 //!
-//! | Implementation                  | Manual-reset | Auto-reset |
-//! |---------------------------------|--------------|------------|
-//! | `events` (thread-safe)          |       4.1 µs |     4.3 µs |
-//! | `events` (local)                |       2.1 µs |     2.0 µs |
-//! | `event_listener`                |       6.9 µs |        n/a |
+//! | Implementation                     | Manual-reset | Auto-reset |
+//! |------------------------------------|--------------|------------|
+//! | `events` (thread-safe)             |       4.3 µs |     4.7 µs |
+//! | `events` (local)                   |       2.2 µs |     2.2 µs |
+//! | `event_listener` (`listen()`)      |       7.3 µs |        n/a |
+//!
+//! The `listener!` macro pins exactly one listener per invocation to the
+//! current stack frame, so it has no equivalent for N simultaneous waiters
+//! and is omitted from this group.
 //!
 //! ## Contention scaling (`set` + `try_wait` per thread, manual-reset)
 //!
 //! | Threads | `events` | `event_listener` |
 //! |---------|----------|------------------|
-//! |       1 |   4.6 ns |           9.1 ns |
-//! |       2 |    75 ns |           157 ns |
-//! |       4 |   108 ns |           570 ns |
+//! |       1 |   4.9 ns |           9.8 ns |
+//! |       2 |    30 ns |           111 ns |
+//! |       4 |   114 ns |           563 ns |
 //!
 //! ## Allocations
 //!
 //! * `events` performs **zero allocations** on every benchmarked hot path,
 //!   including [`set()`][AutoResetEvent::set], [`try_wait()`][AutoResetEvent::try_wait]
-//!   and polling [`wait()`][AutoResetEvent::wait] futures, regardless of how many
-//!   waiters are registered.
-//! * `event_listener` allocates one heap node per registered listener
-//!   (~56 bytes per listener) plus per-call bookkeeping.
+//!   and polling [`wait()`][AutoResetEvent::wait] futures, regardless of how
+//!   many waiters are registered.
+//! * `event_listener` allocates one heap node per `Event::listen()` call
+//!   (~56 bytes). The `listener!` macro avoids this allocation but supports
+//!   only one stack-pinned listener at a time and cannot be used to register
+//!   multiple simultaneous waiters.
 //! * `rsevents` is allocation-free but offers only blocking APIs and cannot
 //!   be polled from an async context.
 //!

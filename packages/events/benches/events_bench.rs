@@ -335,6 +335,24 @@ fn signal_round_trip(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
+    let op = allocs.operation("signal_round_trip/event_listener/Event (listener!)");
+    group.bench_function("event_listener/Event (listener!)", |b| {
+        let el_event = ElEvent::<()>::new();
+        let waker = Waker::noop();
+        let mut cx = Context::from_waker(waker);
+        b.iter_custom(|iters| {
+            let _span = op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for _ in 0..iters {
+                el_event.notify(1);
+                listener!(el_event => el_listener);
+                let mut el_listener = pin!(el_listener);
+                let _ = black_box(Future::poll(el_listener.as_mut(), &mut cx));
+            }
+            start.elapsed()
+        });
+    });
+
     let op = allocs.operation("signal_round_trip/rsevents/ManualResetEvent");
     group.bench_function("rsevents/ManualResetEvent", |b| {
         let rs_manual = RsManualReset::new(EventState::Set);
