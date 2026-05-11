@@ -341,28 +341,6 @@ jobs:
       - name: Run miri-harder for awaiter_set on windows-latest (shard ${{ matrix.shard }})
         run: just package=awaiter_set miri-harder ${{ matrix.shard }}
 
-  miri-harder-asynchroniz:
-    needs: [delta]
-    if: >-
-      needs.delta.outputs.skip_all != 'true'
-      && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'asynchroniz'))
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1/2, 2/2]
-    timeout-minutes: 90
-    runs-on: windows-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup environment
-        uses: ./.github/actions/setup-environment
-
-      - name: Run miri-harder for asynchroniz on windows-latest (shard ${{ matrix.shard }})
-        run: just package=asynchroniz miri-harder ${{ matrix.shard }}
-
   machete:
     needs: [delta]
     if: needs.delta.outputs.skip_all != 'true'
