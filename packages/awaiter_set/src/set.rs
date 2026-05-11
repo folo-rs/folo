@@ -1,10 +1,9 @@
 use std::any::type_name;
-use std::fmt;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
-use std::ptr;
 use std::sync::atomic::Ordering;
 use std::task::Waker;
+use std::{fmt, ptr};
 
 use crate::awaiter::{Awaiter, IDLE, Inner, NOTIFIED, WAITING};
 

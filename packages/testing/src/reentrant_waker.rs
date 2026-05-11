@@ -1,7 +1,6 @@
 use std::cell::Cell;
-use std::task::{RawWaker, RawWakerVTable, Waker};
-
 use std::fmt;
+use std::task::{RawWaker, RawWakerVTable, Waker};
 
 /// A custom waker that executes a caller-supplied closure when woken.
 ///

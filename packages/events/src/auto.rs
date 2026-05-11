@@ -131,11 +131,7 @@ fn try_wait(inner: &EventInner) -> bool {
 
 unsafe fn poll_wait(inner: &EventInner, mut awaiter: Pin<&mut Awaiter>, waker: Waker) -> Poll<()> {
     // Fast path: try to consume the signal atomically.
-    if inner
-        .state
-        .compare_exchange(SIGNAL, 0, Ordering::Acquire, Ordering::Relaxed)
-        .is_ok()
-    {
+    if try_wait(inner) {
         return Poll::Ready(());
     }
 
@@ -144,28 +140,31 @@ unsafe fn poll_wait(inner: &EventInner, mut awaiter: Pin<&mut Awaiter>, waker: W
         return Poll::Ready(());
     }
 
-    // Spin once: a concurrent set() may have stored SIGNAL after our CAS.
-    std::hint::spin_loop();
-    if inner
-        .state
-        .compare_exchange(SIGNAL, 0, Ordering::Acquire, Ordering::Relaxed)
-        .is_ok()
-    {
-        return Poll::Ready(());
-    }
+    #[cfg(test)]
+    crate::test_hooks::run(&crate::test_hooks::AUTO_PRE_MUTEX);
 
     // Slow path: acquire the mutex.
     let mut waiters = inner.slow.lock().expect(NEVER_POISONED);
 
-    // Re-check notification under the mutex.
+    // Re-check notification under the mutex. A concurrent set() may
+    // have taken the slow path and notified us before we acquired
+    // the mutex.
     if awaiter.as_ref().take_notification() {
         return Poll::Ready(());
     }
 
-    // Re-check signal under the mutex.
+    #[cfg(test)]
+    crate::test_hooks::run(&crate::test_hooks::AUTO_PRE_TRY_WAIT);
+
+    // Re-check signal under the mutex. A concurrent set() may have
+    // taken its fast path and stored SIGNAL before we acquired the
+    // mutex.
     if try_wait(inner) {
         return Poll::Ready(());
     }
+
+    #[cfg(test)]
+    crate::test_hooks::run(&crate::test_hooks::AUTO_PRE_FETCH_OR);
 
     // Register or update the waker. Set HAS_WAITERS before the
     // final signal check to close the race window: a concurrent
@@ -176,13 +175,12 @@ unsafe fn poll_wait(inner: &EventInner, mut awaiter: Pin<&mut Awaiter>, waker: W
 
     // Re-check signal after setting HAS_WAITERS. A concurrent
     // set() that ran between try_wait and fetch_or would have
-    // stored SIGNAL. We consume it here so we do not miss it.
+    // stored SIGNAL via its fast path, which requires state==0,
+    // which in turn requires the awaiter set to be empty. So when
+    // this branch fires we are the only would-be waiter and can
+    // unconditionally clear HAS_WAITERS.
     if try_wait(inner) {
-        // Undo HAS_WAITERS if no other waiters exist.
-        // SAFETY: We hold the mutex.
-        if unsafe { waiters.is_empty() } {
-            inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
-        }
+        inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
         return Poll::Ready(());
     }
 
@@ -654,6 +652,7 @@ mod tests {
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
+    use crate::test_hooks::BarrierHook;
 
     // --- trait assertions ---
 
@@ -901,6 +900,127 @@ mod tests {
             for h in handles {
                 h.join().unwrap();
             }
+        });
+    }
+
+    // The next three tests use the [`crate::test_hooks`] infrastructure
+    // to deterministically exercise the race-resolution branches in
+    // `poll_wait()` that would otherwise depend on thread interleaving.
+    // Each test pauses the producer thread inside `poll_wait()` via a
+    // barrier hook, performs the racing operation from the test thread,
+    // then releases the producer. The producer's poll is guaranteed to
+    // hit the targeted branch.
+
+    #[test]
+    fn poll_wait_post_mutex_take_notification_branch() {
+        // Covers the post-mutex `take_notification()` → Ready branch.
+        // Race: a concurrent `set()` notifies our awaiter between the
+        // pre-mutex `take_notification()` check and the moment we
+        // acquire the mutex.
+        testing::with_watchdog(|| {
+            let BarrierHook {
+                entered,
+                proceed,
+                hook,
+            } = crate::test_hooks::barrier_hook();
+            crate::test_hooks::with_hook(&crate::test_hooks::AUTO_PRE_MUTEX, hook, || {
+                let event = AutoResetEvent::boxed();
+
+                // First poll on the test thread registers the awaiter.
+                let mut future = Box::pin(event.wait());
+                let waker = Waker::noop();
+                let mut cx = task::Context::from_waker(waker);
+                assert!(future.as_mut().poll(&mut cx).is_pending());
+
+                // Second poll on a separate thread will pause at the
+                // hook after the pre-mutex `take_notification()` check
+                // but before locking the mutex.
+                let producer = thread::spawn(move || {
+                    crate::test_hooks::HOOK_PARTICIPANT.with(|c| c.set(true));
+                    let waker = Waker::noop();
+                    let mut cx = task::Context::from_waker(waker);
+                    future.as_mut().poll(&mut cx)
+                });
+
+                entered.wait();
+                event.set();
+                proceed.wait();
+
+                assert!(producer.join().unwrap().is_ready());
+            });
+        });
+    }
+
+    #[test]
+    fn poll_wait_post_mutex_try_wait_branch() {
+        // Covers the post-mutex `try_wait()` → Ready branch. Race: a
+        // concurrent `set()` stores SIGNAL via its fast path between
+        // our post-mutex `take_notification()` check and the post-mutex
+        // signal re-check.
+        testing::with_watchdog(|| {
+            let BarrierHook {
+                entered,
+                proceed,
+                hook,
+            } = crate::test_hooks::barrier_hook();
+            crate::test_hooks::with_hook(&crate::test_hooks::AUTO_PRE_TRY_WAIT, hook, || {
+                let event = AutoResetEvent::boxed();
+
+                let producer = thread::spawn({
+                    let event = event.clone();
+                    move || {
+                        crate::test_hooks::HOOK_PARTICIPANT.with(|c| c.set(true));
+                        let mut future = Box::pin(event.wait());
+                        let waker = Waker::noop();
+                        let mut cx = task::Context::from_waker(waker);
+                        future.as_mut().poll(&mut cx)
+                    }
+                });
+
+                entered.wait();
+                event.set();
+                proceed.wait();
+
+                assert!(producer.join().unwrap().is_ready());
+                // The signal was consumed by the producer.
+                assert!(!event.try_wait());
+            });
+        });
+    }
+
+    #[test]
+    fn poll_wait_post_fetch_or_try_wait_branch() {
+        // Covers the post-`fetch_or(HAS_WAITERS)` `try_wait()` → Ready
+        // branch. Regression coverage for the previously-fixed CAS bug.
+        // Race: a concurrent `set()` stores SIGNAL via its fast path
+        // between our post-mutex `try_wait()` check and the `fetch_or`.
+        testing::with_watchdog(|| {
+            let BarrierHook {
+                entered,
+                proceed,
+                hook,
+            } = crate::test_hooks::barrier_hook();
+            crate::test_hooks::with_hook(&crate::test_hooks::AUTO_PRE_FETCH_OR, hook, || {
+                let event = AutoResetEvent::boxed();
+
+                let producer = thread::spawn({
+                    let event = event.clone();
+                    move || {
+                        crate::test_hooks::HOOK_PARTICIPANT.with(|c| c.set(true));
+                        let mut future = Box::pin(event.wait());
+                        let waker = Waker::noop();
+                        let mut cx = task::Context::from_waker(waker);
+                        future.as_mut().poll(&mut cx)
+                    }
+                });
+
+                entered.wait();
+                event.set();
+                proceed.wait();
+
+                assert!(producer.join().unwrap().is_ready());
+                assert!(!event.try_wait());
+            });
         });
     }
 

@@ -171,6 +171,9 @@ mod manual;
 #[cfg(test)]
 mod test_helpers;
 
+#[cfg(test)]
+mod test_hooks;
+
 pub(crate) const NEVER_POISONED: &str = "we never panic while holding this lock";
 
 pub use auto::{AutoResetEvent, EmbeddedAutoResetEvent, EmbeddedAutoResetEventRef};

@@ -15,7 +15,6 @@
 //! future (for example when a signal is raised), it calls
 //! [`AwaiterSet::notify_one()`], which removes an awaiter from the
 //! set and returns its waker.
-//!
 #![doc = simple_mermaid::mermaid!("../docs/diagrams/list_structure.mermaid")]
 //!
 //! # Synchronization

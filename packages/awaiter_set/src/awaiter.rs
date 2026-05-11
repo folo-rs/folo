@@ -1,12 +1,11 @@
 use std::any::type_name;
 use std::cell::UnsafeCell;
-use std::fmt;
 use std::marker::PhantomPinned;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
-use std::ptr;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::task::Waker;
+use std::{fmt, ptr};
 
 // Lifecycle phase tracked by the atomic `lifecycle` field on Awaiter.
 // Using an atomic outside UnsafeCell allows the poll path to check
