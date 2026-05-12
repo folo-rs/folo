@@ -130,7 +130,11 @@ impl Inner {
         // targets the live set.
         loop {
             let waker = {
-                // SAFETY: Single-threaded — no concurrent access.
+                // SAFETY: Validity — `self.waiters` is an `UnsafeCell` field of `self`
+                // that outlives this borrow. Aliasing — `Inner: !Send` excludes other
+                // threads, and the borrow is scoped to this block, ending before
+                // `wake()` is invoked; a reentrant call therefore cannot observe an
+                // aliasing `&mut`.
                 let waiters = unsafe { &mut *self.waiters.get() };
                 waiters.notify_one()
             };
@@ -165,8 +169,10 @@ impl Inner {
         }
 
         // Register or update the waker.
-        // SAFETY: Single-threaded, awaiter is pinned and lives as
-        // long as the future.
+        // SAFETY: Validity — `self.waiters` is an `UnsafeCell` field of `self` that
+        // outlives this borrow. Aliasing — `Inner: !Send` excludes other threads, and
+        // the borrow is held only while invoking `AwaiterSet::register`, which runs no
+        // user code.
         let waiters = unsafe { &mut *self.waiters.get() };
         // SAFETY: Single-threaded.
         unsafe {
@@ -181,8 +187,10 @@ impl Inner {
     /// Same requirements as [`poll_wait`][Self::poll_wait].
     unsafe fn drop_wait(&self, mut awaiter: Pin<&mut Awaiter>) {
         if awaiter.is_registered() {
-            // SAFETY: Single-threaded, awaiter is registered in this
-            // list.
+            // SAFETY: Validity — `self.waiters` is an `UnsafeCell` field of `self` that
+            // outlives this borrow. Aliasing — `Inner: !Send` excludes other threads,
+            // and the borrow is held only while invoking `AwaiterSet::unregister`,
+            // which runs no user code.
             let waiters = unsafe { &mut *self.waiters.get() };
             // SAFETY: Single-threaded.
             unsafe {
@@ -431,8 +439,10 @@ impl RefUnwindSafe for EmbeddedLocalManualResetEventRef {}
 
 impl EmbeddedLocalManualResetEventRef {
     fn inner(&self) -> &Inner {
-        // SAFETY: The caller of `embedded()` guarantees the container
-        // outlives this handle.
+        // SAFETY: Validity — the caller of `embedded()` guarantees the container outlives
+        // this handle. Aliasing — `Inner`'s API never constructs `&mut Inner` (interior
+        // mutability lives behind `Cell`/`UnsafeCell` accessed only via `&self`), so
+        // multiple shared references may coexist.
         unsafe { self.inner.as_ref() }
     }
 
@@ -491,8 +501,10 @@ impl Future for EmbeddedLocalManualResetWaitFuture {
 
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
-        // SAFETY: The container outlives this future per the embedded()
-        // contract.
+        // SAFETY: Validity — the container outlives this future per the `embedded()`
+        // contract. Aliasing — `Inner`'s API never constructs `&mut Inner` (interior
+        // mutability lives behind `Cell`/`UnsafeCell` accessed only via `&self`), so
+        // multiple shared references may coexist.
         let inner = unsafe { this.inner.as_ref() };
         // SAFETY: The awaiter is pinned inside this future and not moved.
         let awaiter = unsafe { Pin::new_unchecked(&mut this.awaiter) };
@@ -503,8 +515,10 @@ impl Future for EmbeddedLocalManualResetWaitFuture {
 
 impl Drop for EmbeddedLocalManualResetWaitFuture {
     fn drop(&mut self) {
-        // SAFETY: The container outlives this future per the embedded()
-        // contract.
+        // SAFETY: Validity — the container outlives this future per the `embedded()`
+        // contract. Aliasing — `Inner`'s API never constructs `&mut Inner` (interior
+        // mutability lives behind `Cell`/`UnsafeCell` accessed only via `&self`), so
+        // multiple shared references may coexist.
         let inner = unsafe { self.inner.as_ref() };
         // SAFETY: The awaiter is pinned inside this future and not moved.
         let awaiter = unsafe { Pin::new_unchecked(&mut self.awaiter) };

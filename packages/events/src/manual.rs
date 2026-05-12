@@ -160,10 +160,12 @@ impl EventInner {
         }
 
         // Check if we were directly notified by set() before taking the mutex.
-        // Shared access to the awaiter only — the notifier may concurrently
-        // hold its own shared reference under the event mutex.
-        // SAFETY: The pointer references an awaiter pinned inside the
-        // owning future, which outlives this call.
+        // SAFETY: Validity — the awaiter is pinned inside the owning future and outlives
+        // this call. Aliasing — `Awaiter`'s public methods all take `&self`; the only
+        // place `&mut Awaiter` is ever constructed is under `slow` by this same future's
+        // poll/drop path, which is single-threaded (one future is polled by one task at a
+        // time) and has not constructed `&mut Awaiter` here. Other threads access the
+        // awaiter only via `AwaiterSet`, which uses `&Awaiter`.
         let awaiter_ref = unsafe { &*awaiter };
         if awaiter_ref.take_notification() {
             return Poll::Ready(());
@@ -209,9 +211,11 @@ impl EventInner {
             return Poll::Ready(());
         }
 
-        // SAFETY: We hold the mutex, the pointer references a pinned
-        // awaiter, and no other shared reference is live (the prior
-        // `awaiter_ref` borrows are no longer used past this point).
+        // SAFETY: Validity — the awaiter is pinned inside the owning future and outlives
+        // this call. Aliasing — we hold `slow` (so no other thread can construct an
+        // `Awaiter` reference via `AwaiterSet`); the awaiter is owned by a single future
+        // polled by a single task (so no other poll/drop path runs concurrently); and
+        // our prior `awaiter_ref` borrows are no longer in use past this point.
         let awaiter_mut = unsafe { &mut *awaiter };
         // SAFETY: The awaiter is pinned inside the owning future.
         let awaiter_mut = unsafe { Pin::new_unchecked(awaiter_mut) };
@@ -224,8 +228,12 @@ impl EventInner {
     }
 
     unsafe fn drop_wait(&self, awaiter: *mut Awaiter) {
-        // SAFETY: The pointer references an awaiter pinned inside the
-        // owning future, which outlives this call.
+        // SAFETY: Validity — the awaiter is pinned inside the owning future and outlives
+        // this call. Aliasing — `Awaiter`'s public methods all take `&self`; the only
+        // place `&mut Awaiter` is ever constructed is under `slow` by this same future's
+        // poll/drop path, which is single-threaded (one future is polled by one task at a
+        // time) and has not constructed `&mut Awaiter` here. Other threads access the
+        // awaiter only via `AwaiterSet`, which uses `&Awaiter`.
         let awaiter_ref = unsafe { &*awaiter };
         if !awaiter_ref.is_registered() {
             return;
@@ -233,9 +241,11 @@ impl EventInner {
 
         let mut waiters = self.slow.lock().expect(NEVER_POISONED);
 
-        // SAFETY: We hold the mutex, the pointer references a pinned
-        // awaiter, and no other shared reference is live (the prior
-        // `awaiter_ref` borrow is no longer used past this point).
+        // SAFETY: Validity — the awaiter is pinned inside the owning future and outlives
+        // this call. Aliasing — we hold `slow` (so no other thread can construct an
+        // `Awaiter` reference via `AwaiterSet`); the awaiter is owned by a single future
+        // polled by a single task (so no other poll/drop path runs concurrently); and
+        // our prior `awaiter_ref` borrow is no longer in use past this point.
         let awaiter_mut = unsafe { &mut *awaiter };
         // SAFETY: The awaiter is pinned inside the owning future.
         let awaiter_mut = unsafe { Pin::new_unchecked(awaiter_mut) };
@@ -562,8 +572,10 @@ impl RefUnwindSafe for EmbeddedManualResetEventRef {}
 
 impl EmbeddedManualResetEventRef {
     fn inner(&self) -> &EventInner {
-        // SAFETY: The caller of `embedded()` guarantees the container
-        // outlives this handle.
+        // SAFETY: Validity — the caller of `embedded()` guarantees the container outlives
+        // this handle. Aliasing — `EventInner`'s API never constructs `&mut EventInner`
+        // (interior mutability lives behind atomics and `Mutex`), so multiple shared
+        // references may coexist.
         unsafe { self.inner.as_ref() }
     }
 
@@ -621,8 +633,10 @@ impl Future for EmbeddedManualResetWaitFuture {
         let waker = cx.waker().clone();
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
-        // SAFETY: The container outlives this future per the embedded()
-        // contract.
+        // SAFETY: Validity — the container outlives this future per the `embedded()`
+        // contract. Aliasing — `EventInner`'s API never constructs `&mut EventInner`
+        // (interior mutability lives behind atomics and `Mutex`), so multiple shared
+        // references may coexist.
         let inner = unsafe { this.inner.as_ref() };
         // Capture a raw pointer to the awaiter. No `&mut Awaiter` is
         // created here; the mutable reference is built later inside
@@ -636,8 +650,10 @@ impl Future for EmbeddedManualResetWaitFuture {
 
 impl Drop for EmbeddedManualResetWaitFuture {
     fn drop(&mut self) {
-        // SAFETY: The container outlives this future per the
-        // embedded() contract.
+        // SAFETY: Validity — the container outlives this future per the `embedded()`
+        // contract. Aliasing — `EventInner`'s API never constructs `&mut EventInner`
+        // (interior mutability lives behind atomics and `Mutex`), so multiple shared
+        // references may coexist.
         let inner = unsafe { self.inner.as_ref() };
         // No `&mut Awaiter` is created here; the mutable reference is
         // built later inside the event mutex when needed.

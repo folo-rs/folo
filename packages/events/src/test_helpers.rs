@@ -50,8 +50,11 @@ fn atomic_wake_fn(data: *const ()) {
 }
 
 fn atomic_wake_by_ref_fn(data: *const ()) {
-    // SAFETY: data points to a valid AtomicWakeTracker that outlives this
-    // waker per the contract on `AtomicWakeTracker::waker()`.
+    // SAFETY: Validity — `data` was set up by `AtomicWakeTracker::waker()` to point
+    // to an `AtomicWakeTracker` that outlives every derived waker (per the safety
+    // contract on `waker()`). Aliasing — the type only exposes `&self` methods backed
+    // by atomics, so unbounded `&AtomicWakeTracker` references may coexist; no
+    // `&mut AtomicWakeTracker` is ever constructed by this type's API.
     let this = unsafe { &*(data as *const AtomicWakeTracker) };
     this.woken.store(true, Ordering::Relaxed);
 }

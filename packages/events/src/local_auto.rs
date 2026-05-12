@@ -119,7 +119,11 @@ impl Inner {
         // the waker is reentrant.
         let state_ptr = self.state.get();
         let waker = {
-            // SAFETY: Single-threaded access guaranteed by !Send.
+            // SAFETY: Validity — `state_ptr` came from `self.state.get()`, an `UnsafeCell`
+            // field of `self` that outlives this borrow. Aliasing — `Inner: !Send`
+            // excludes other threads, and the borrow is scoped to this block, ending
+            // before the captured waker is invoked; a reentrant `set()` therefore
+            // cannot observe an aliasing `&mut`.
             let state = unsafe { &mut *state_ptr };
 
             match state {
@@ -142,7 +146,10 @@ impl Inner {
     }
 
     fn try_wait(&self) -> bool {
-        // SAFETY: Single-threaded access.
+        // SAFETY: Validity — `self.state` is an `UnsafeCell` field of `self` that
+        // outlives this borrow. Aliasing — `Inner: !Send` excludes other threads, and
+        // this function runs no user code while the borrow is live, so no nested or
+        // reentrant access can construct an aliasing reference.
         let state = unsafe { &mut *self.state.get() };
         if matches!(state, InnerState::Set) {
             *state = InnerState::Unset(AwaiterSet::new());
@@ -160,7 +167,11 @@ impl Inner {
             return Poll::Ready(());
         }
 
-        // SAFETY: Single-threaded access.
+        // SAFETY: Validity — `self.state` is an `UnsafeCell` field of `self` that
+        // outlives this borrow. Aliasing — `Inner: !Send` excludes other threads; the
+        // borrow is held only while invoking internal `&mut AwaiterSet` methods (no
+        // user code runs), so no nested or reentrant access can construct an aliasing
+        // reference.
         let state = unsafe { &mut *self.state.get() };
 
         match state {
@@ -201,7 +212,11 @@ impl Inner {
             // The borrow on the awaiter set is dropped before the
             // returned waker is invoked, so a reentrant call from
             // the woken future observes the canonical state.
-            // SAFETY: Single-threaded access.
+            // SAFETY: Validity — `self.state` is an `UnsafeCell` field of `self` that
+            // outlives this borrow. Aliasing — `Inner: !Send` excludes other threads,
+            // and the borrow is scoped to the `let waker = match state { ... }` chain,
+            // ending before `wake()` is invoked; a reentrant call therefore cannot
+            // observe an aliasing `&mut`.
             let state = unsafe { &mut *self.state.get() };
             let waker = match state {
                 InnerState::Unset(waiters) => match waiters.notify_one() {
@@ -220,7 +235,10 @@ impl Inner {
             }
         } else {
             // Not notified — just remove from the set.
-            // SAFETY: Single-threaded access.
+            // SAFETY: Validity — `self.state` is an `UnsafeCell` field of `self` that
+            // outlives this borrow. Aliasing — `Inner: !Send` excludes other threads,
+            // and the borrow is held only while invoking `AwaiterSet::unregister`,
+            // which runs no user code.
             let state = unsafe { &mut *self.state.get() };
             match state {
                 InnerState::Unset(waiters) => {
@@ -464,8 +482,10 @@ impl RefUnwindSafe for EmbeddedLocalAutoResetEventRef {}
 
 impl EmbeddedLocalAutoResetEventRef {
     fn inner(&self) -> &Inner {
-        // SAFETY: The caller of `embedded()` guarantees the container
-        // outlives this handle.
+        // SAFETY: Validity — the caller of `embedded()` guarantees the container outlives
+        // this handle. Aliasing — `Inner`'s API never constructs `&mut Inner` (interior
+        // mutability lives behind `UnsafeCell` accessed only via `&self`), so multiple
+        // shared references may coexist.
         unsafe { self.inner.as_ref() }
     }
 
@@ -522,8 +542,10 @@ impl Future for EmbeddedLocalAutoResetWaitFuture {
 
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
-        // SAFETY: The container outlives this future per the embedded()
-        // contract.
+        // SAFETY: Validity — the container outlives this future per the `embedded()`
+        // contract. Aliasing — `Inner`'s API never constructs `&mut Inner` (interior
+        // mutability lives behind `UnsafeCell` accessed only via `&self`), so multiple
+        // shared references may coexist.
         let inner = unsafe { this.inner.as_ref() };
         // SAFETY: The awaiter is pinned inside this future and not moved.
         let awaiter = unsafe { Pin::new_unchecked(&mut this.awaiter) };
@@ -534,8 +556,10 @@ impl Future for EmbeddedLocalAutoResetWaitFuture {
 
 impl Drop for EmbeddedLocalAutoResetWaitFuture {
     fn drop(&mut self) {
-        // SAFETY: The container outlives this future per the embedded()
-        // contract.
+        // SAFETY: Validity — the container outlives this future per the `embedded()`
+        // contract. Aliasing — `Inner`'s API never constructs `&mut Inner` (interior
+        // mutability lives behind `UnsafeCell` accessed only via `&self`), so multiple
+        // shared references may coexist.
         let inner = unsafe { self.inner.as_ref() };
         // SAFETY: The awaiter is pinned inside this future and not moved.
         let awaiter = unsafe { Pin::new_unchecked(&mut self.awaiter) };
