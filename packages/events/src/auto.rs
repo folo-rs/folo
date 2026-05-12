@@ -85,7 +85,7 @@ pub struct AutoResetEvent {
     inner: Arc<EventInner>,
 }
 
-const SIGNAL: u8 = 0x1;
+const SIGNALED: u8 = 0x1;
 const HAS_WAITERS: u8 = 0x2;
 const IDLE: u8 = 0;
 
@@ -96,10 +96,10 @@ struct EventInner {
 
 impl EventInner {
     fn set(&self) {
-        // Fast path: no waiters — set the signal atomically.
+        // Fast path: no waiters — store the signal atomically.
         if self
             .state
-            .compare_exchange(IDLE, SIGNAL, Ordering::Release, Ordering::Relaxed)
+            .compare_exchange(IDLE, SIGNALED, Ordering::Release, Ordering::Relaxed)
             .is_ok()
         {
             return;
@@ -107,7 +107,7 @@ impl EventInner {
 
         // If already set, nothing to do.
         let prev = self.state.load(Ordering::Relaxed);
-        if prev & SIGNAL != 0 {
+        if prev & SIGNALED != 0 {
             return;
         }
 
@@ -127,8 +127,8 @@ impl EventInner {
                 }
                 waker = Some(w);
             } else {
-                // No waiters despite HAS_WAITERS — set signal.
-                self.state.store(SIGNAL, Ordering::Release);
+                // No waiters despite HAS_WAITERS — store SIGNALED.
+                self.state.store(SIGNALED, Ordering::Release);
                 waker = None;
             }
         }
@@ -139,11 +139,11 @@ impl EventInner {
     }
 
     fn try_wait(&self) -> bool {
-        // Atomically clear the SIGNAL bit, leaving HAS_WAITERS untouched.
-        // Using fetch_and rather than compare_exchange(SIGNAL, IDLE) ensures
+        // Atomically clear the SIGNALED bit, leaving HAS_WAITERS untouched.
+        // Using fetch_and rather than compare_exchange(SIGNALED, IDLE) ensures
         // we still consume the signal when HAS_WAITERS happens to be set
         // (which can occur in the slow path of poll_wait after fetch_or).
-        self.state.fetch_and(!SIGNAL, Ordering::Acquire) & SIGNAL != 0
+        self.state.fetch_and(!SIGNALED, Ordering::Acquire) & SIGNALED != 0
     }
 
     unsafe fn poll_wait(&self, awaiter: *mut Awaiter, waker: Waker) -> Poll<()> {
@@ -179,7 +179,7 @@ impl EventInner {
         crate::test_hooks::run(&crate::test_hooks::AUTO_PRE_TRY_WAIT);
 
         // Re-check signal under the mutex. A concurrent set() may have
-        // taken its fast path and stored SIGNAL before we acquired the
+        // taken its fast path and stored SIGNALED before we acquired the
         // mutex.
         if self.try_wait() {
             return Poll::Ready(());
@@ -197,7 +197,7 @@ impl EventInner {
 
         // Re-check signal after setting HAS_WAITERS. A concurrent
         // set() that ran between try_wait and fetch_or would have
-        // stored SIGNAL via its fast path, which requires state==IDLE,
+        // stored SIGNALED via its fast path, which requires state==IDLE,
         // which in turn requires the awaiter set to be empty. So when
         // this branch fires we are the only would-be waiter and can
         // unconditionally clear HAS_WAITERS.
@@ -239,8 +239,8 @@ impl EventInner {
                 drop(waiters);
                 waker.wake();
             } else {
-                // No more waiters — restore the signal.
-                self.state.store(SIGNAL, Ordering::Release);
+                // No more waiters — restore the SIGNALED state.
+                self.state.store(SIGNALED, Ordering::Release);
             }
         } else {
             // Not notified — just remove from the set.
@@ -976,7 +976,7 @@ mod tests {
     #[test]
     fn poll_wait_post_mutex_try_wait_branch() {
         // Covers the post-mutex `try_wait()` → Ready branch. Race: a
-        // concurrent `set()` stores SIGNAL via its fast path between
+        // concurrent `set()` stores SIGNALED via its fast path between
         // our post-mutex `take_notification()` check and the post-mutex
         // signal re-check.
         testing::with_watchdog(|| {
@@ -1014,7 +1014,7 @@ mod tests {
     fn poll_wait_post_fetch_or_try_wait_branch() {
         // Covers the post-`fetch_or(HAS_WAITERS)` `try_wait()` → Ready
         // branch. Regression coverage for the previously-fixed CAS bug.
-        // Race: a concurrent `set()` stores SIGNAL via its fast path
+        // Race: a concurrent `set()` stores SIGNALED via its fast path
         // between our post-mutex `try_wait()` check and the `fetch_or`.
         testing::with_watchdog(|| {
             let BarrierHook {
@@ -1048,7 +1048,7 @@ mod tests {
 
     #[test]
     fn set_no_waiters_despite_has_waiters_branch() {
-        // Covers `set()`'s "no waiters despite HAS_WAITERS — set signal"
+        // Covers `set()`'s "no waiters despite HAS_WAITERS — store SIGNALED"
         // else branch. Race: between `set()`'s state-load (which sees
         // HAS_WAITERS) and its mutex acquisition, a concurrent
         // `drop_wait` drains the awaiter set and clears HAS_WAITERS.
@@ -1087,7 +1087,7 @@ mod tests {
 
                 producer.join().unwrap();
 
-                // `set()` took the else branch and stored SIGNAL even
+                // `set()` took the else branch and stored SIGNALED even
                 // though it found no waiters.
                 assert!(event.try_wait());
             });
@@ -1097,8 +1097,8 @@ mod tests {
     #[test]
     fn await_races_with_set_across_threads() {
         // Regression test for a race where poll_wait() observed
-        // HAS_WAITERS|SIGNAL state after fetch_or, but the CAS-based
-        // try_wait failed because it required exact match on SIGNAL.
+        // HAS_WAITERS|SIGNALED state after fetch_or, but the CAS-based
+        // try_wait failed because it required exact match on SIGNALED.
         // Many awaiters waited forever despite set() running. Each
         // iteration creates a real future and awaits it while a
         // separate thread calls set() concurrently.
