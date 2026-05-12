@@ -93,165 +93,167 @@ struct EventInner {
     slow: Mutex<AwaiterSet>,
 }
 
-fn set(inner: &EventInner) {
-    // Fast path: no waiters — set the signal atomically.
-    if inner
-        .state
-        .compare_exchange(0, SIGNAL, Ordering::Release, Ordering::Relaxed)
-        .is_ok()
-    {
-        return;
-    }
+impl EventInner {
+    fn set(&self) {
+        // Fast path: no waiters — set the signal atomically.
+        if self
+            .state
+            .compare_exchange(0, SIGNAL, Ordering::Release, Ordering::Relaxed)
+            .is_ok()
+        {
+            return;
+        }
 
-    // If already set, nothing to do.
-    let prev = inner.state.load(Ordering::Relaxed);
-    if prev & SIGNAL != 0 {
-        return;
-    }
+        // If already set, nothing to do.
+        let prev = self.state.load(Ordering::Relaxed);
+        if prev & SIGNAL != 0 {
+            return;
+        }
 
-    #[cfg(test)]
-    crate::test_hooks::run(&crate::test_hooks::AUTO_SET_PRE_LOCK);
+        #[cfg(test)]
+        crate::test_hooks::run(&crate::test_hooks::AUTO_SET_PRE_LOCK);
 
-    // Slow path: waiters exist — notify one under the mutex.
-    let waker: Option<Waker>;
-    {
-        let mut waiters = inner.slow.lock().expect(NEVER_POISONED);
+        // Slow path: waiters exist — notify one under the mutex.
+        let waker: Option<Waker>;
+        {
+            let mut waiters = self.slow.lock().expect(NEVER_POISONED);
 
-        if let Some(w) = waiters.notify_one() {
-            if waiters.is_empty() {
-                inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
+            if let Some(w) = waiters.notify_one() {
+                if waiters.is_empty() {
+                    self.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
+                }
+                waker = Some(w);
+            } else {
+                // No waiters despite HAS_WAITERS — set signal.
+                self.state.store(SIGNAL, Ordering::Release);
+                waker = None;
             }
-            waker = Some(w);
-        } else {
-            // No waiters despite HAS_WAITERS — set signal.
-            inner.state.store(SIGNAL, Ordering::Release);
-            waker = None;
+        }
+
+        if let Some(w) = waker {
+            w.wake();
         }
     }
 
-    if let Some(w) = waker {
-        w.wake();
-    }
-}
-
-fn try_wait(inner: &EventInner) -> bool {
-    // Atomically clear the SIGNAL bit, leaving HAS_WAITERS untouched.
-    // Using fetch_and rather than compare_exchange(SIGNAL, 0) ensures
-    // we still consume the signal when HAS_WAITERS happens to be set
-    // (which can occur in the slow path of poll_wait after fetch_or).
-    inner.state.fetch_and(!SIGNAL, Ordering::Acquire) & SIGNAL != 0
-}
-
-unsafe fn poll_wait(inner: &EventInner, awaiter: *mut Awaiter, waker: Waker) -> Poll<()> {
-    // Fast path: try to consume the signal atomically.
-    if try_wait(inner) {
-        return Poll::Ready(());
+    fn try_wait(&self) -> bool {
+        // Atomically clear the SIGNAL bit, leaving HAS_WAITERS untouched.
+        // Using fetch_and rather than compare_exchange(SIGNAL, 0) ensures
+        // we still consume the signal when HAS_WAITERS happens to be set
+        // (which can occur in the slow path of poll_wait after fetch_or).
+        self.state.fetch_and(!SIGNAL, Ordering::Acquire) & SIGNAL != 0
     }
 
-    // Check if we were directly notified by set() before taking the mutex.
-    // Shared access to the awaiter only — the notifier may concurrently
-    // hold its own shared reference under the event mutex.
-    // SAFETY: The pointer references an awaiter pinned inside the
-    // owning future, which outlives this call.
-    let awaiter_ref = unsafe { &*awaiter };
-    if awaiter_ref.take_notification() {
-        return Poll::Ready(());
-    }
-
-    #[cfg(test)]
-    crate::test_hooks::run(&crate::test_hooks::AUTO_PRE_MUTEX);
-
-    // Slow path: acquire the mutex.
-    let mut waiters = inner.slow.lock().expect(NEVER_POISONED);
-
-    // Re-check notification under the mutex. A concurrent set() may
-    // have taken the slow path and notified us before we acquired
-    // the mutex.
-    if awaiter_ref.take_notification() {
-        return Poll::Ready(());
-    }
-
-    #[cfg(test)]
-    crate::test_hooks::run(&crate::test_hooks::AUTO_PRE_TRY_WAIT);
-
-    // Re-check signal under the mutex. A concurrent set() may have
-    // taken its fast path and stored SIGNAL before we acquired the
-    // mutex.
-    if try_wait(inner) {
-        return Poll::Ready(());
-    }
-
-    #[cfg(test)]
-    crate::test_hooks::run(&crate::test_hooks::AUTO_PRE_FETCH_OR);
-
-    // Register or update the waker. Set HAS_WAITERS before the
-    // final signal check to close the race window: a concurrent
-    // set() that observes HAS_WAITERS will enter the slow path
-    // and wake us. If set() runs between our try_wait and this
-    // fetch_or, the re-check below catches it.
-    inner.state.fetch_or(HAS_WAITERS, Ordering::Relaxed);
-
-    // Re-check signal after setting HAS_WAITERS. A concurrent
-    // set() that ran between try_wait and fetch_or would have
-    // stored SIGNAL via its fast path, which requires state==0,
-    // which in turn requires the awaiter set to be empty. So when
-    // this branch fires we are the only would-be waiter and can
-    // unconditionally clear HAS_WAITERS.
-    if try_wait(inner) {
-        inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
-        return Poll::Ready(());
-    }
-
-    // SAFETY: We hold the mutex, the pointer references a pinned
-    // awaiter, and no other shared reference is live (the prior
-    // `awaiter_ref` borrows are no longer used past this point).
-    let awaiter_mut = unsafe { &mut *awaiter };
-    // SAFETY: The awaiter is pinned inside the owning future.
-    let awaiter_mut = unsafe { Pin::new_unchecked(awaiter_mut) };
-    // SAFETY: We hold the mutex; the awaiter is pinned.
-    unsafe {
-        waiters.register(awaiter_mut, waker);
-    }
-    Poll::Pending
-}
-
-unsafe fn drop_wait(inner: &EventInner, awaiter: *mut Awaiter) {
-    // SAFETY: The pointer references an awaiter pinned inside the
-    // owning future, which outlives this call.
-    let awaiter_ref = unsafe { &*awaiter };
-    if !awaiter_ref.is_registered() {
-        return;
-    }
-
-    let mut waiters = inner.slow.lock().expect(NEVER_POISONED);
-
-    if awaiter_ref.is_notified() {
-        // We were notified but the future was cancelled. Forward
-        // the notification to the next waiter.
-        if let Some(waker) = waiters.notify_one() {
-            if waiters.is_empty() {
-                inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
-            }
-            drop(waiters);
-            waker.wake();
-        } else {
-            // No more waiters — restore the signal.
-            inner.state.store(SIGNAL, Ordering::Release);
+    unsafe fn poll_wait(&self, awaiter: *mut Awaiter, waker: Waker) -> Poll<()> {
+        // Fast path: try to consume the signal atomically.
+        if self.try_wait() {
+            return Poll::Ready(());
         }
-    } else {
-        // Not notified — just remove from the set.
+
+        // Check if we were directly notified by set() before taking the mutex.
+        // Shared access to the awaiter only — the notifier may concurrently
+        // hold its own shared reference under the event mutex.
+        // SAFETY: The pointer references an awaiter pinned inside the
+        // owning future, which outlives this call.
+        let awaiter_ref = unsafe { &*awaiter };
+        if awaiter_ref.take_notification() {
+            return Poll::Ready(());
+        }
+
+        #[cfg(test)]
+        crate::test_hooks::run(&crate::test_hooks::AUTO_PRE_MUTEX);
+
+        // Slow path: acquire the mutex.
+        let mut waiters = self.slow.lock().expect(NEVER_POISONED);
+
+        // Re-check notification under the mutex. A concurrent set() may
+        // have taken the slow path and notified us before we acquired
+        // the mutex.
+        if awaiter_ref.take_notification() {
+            return Poll::Ready(());
+        }
+
+        #[cfg(test)]
+        crate::test_hooks::run(&crate::test_hooks::AUTO_PRE_TRY_WAIT);
+
+        // Re-check signal under the mutex. A concurrent set() may have
+        // taken its fast path and stored SIGNAL before we acquired the
+        // mutex.
+        if self.try_wait() {
+            return Poll::Ready(());
+        }
+
+        #[cfg(test)]
+        crate::test_hooks::run(&crate::test_hooks::AUTO_PRE_FETCH_OR);
+
+        // Register or update the waker. Set HAS_WAITERS before the
+        // final signal check to close the race window: a concurrent
+        // set() that observes HAS_WAITERS will enter the slow path
+        // and wake us. If set() runs between our try_wait and this
+        // fetch_or, the re-check below catches it.
+        self.state.fetch_or(HAS_WAITERS, Ordering::Relaxed);
+
+        // Re-check signal after setting HAS_WAITERS. A concurrent
+        // set() that ran between try_wait and fetch_or would have
+        // stored SIGNAL via its fast path, which requires state==0,
+        // which in turn requires the awaiter set to be empty. So when
+        // this branch fires we are the only would-be waiter and can
+        // unconditionally clear HAS_WAITERS.
+        if self.try_wait() {
+            self.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
+            return Poll::Ready(());
+        }
+
         // SAFETY: We hold the mutex, the pointer references a pinned
         // awaiter, and no other shared reference is live (the prior
-        // `awaiter_ref` borrow is no longer used past this point).
+        // `awaiter_ref` borrows are no longer used past this point).
         let awaiter_mut = unsafe { &mut *awaiter };
         // SAFETY: The awaiter is pinned inside the owning future.
         let awaiter_mut = unsafe { Pin::new_unchecked(awaiter_mut) };
-        // SAFETY: We hold the mutex.
+        // SAFETY: We hold the mutex; the awaiter is pinned.
         unsafe {
-            waiters.unregister(awaiter_mut);
+            waiters.register(awaiter_mut, waker);
         }
-        if waiters.is_empty() {
-            inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
+        Poll::Pending
+    }
+
+    unsafe fn drop_wait(&self, awaiter: *mut Awaiter) {
+        // SAFETY: The pointer references an awaiter pinned inside the
+        // owning future, which outlives this call.
+        let awaiter_ref = unsafe { &*awaiter };
+        if !awaiter_ref.is_registered() {
+            return;
+        }
+
+        let mut waiters = self.slow.lock().expect(NEVER_POISONED);
+
+        if awaiter_ref.is_notified() {
+            // We were notified but the future was cancelled. Forward
+            // the notification to the next waiter.
+            if let Some(waker) = waiters.notify_one() {
+                if waiters.is_empty() {
+                    self.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
+                }
+                drop(waiters);
+                waker.wake();
+            } else {
+                // No more waiters — restore the signal.
+                self.state.store(SIGNAL, Ordering::Release);
+            }
+        } else {
+            // Not notified — just remove from the set.
+            // SAFETY: We hold the mutex, the pointer references a pinned
+            // awaiter, and no other shared reference is live (the prior
+            // `awaiter_ref` borrow is no longer used past this point).
+            let awaiter_mut = unsafe { &mut *awaiter };
+            // SAFETY: The awaiter is pinned inside the owning future.
+            let awaiter_mut = unsafe { Pin::new_unchecked(awaiter_mut) };
+            // SAFETY: We hold the mutex.
+            unsafe {
+                waiters.unregister(awaiter_mut);
+            }
+            if waiters.is_empty() {
+                self.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
+            }
         }
     }
 }
@@ -349,7 +351,7 @@ impl AutoResetEvent {
     /// ```
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn set(&self) {
-        set(&self.inner);
+        self.inner.set();
     }
 
     /// Attempts to consume the signal without blocking.
@@ -374,7 +376,7 @@ impl AutoResetEvent {
     #[must_use]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_wait(&self) -> bool {
-        try_wait(&self.inner)
+        self.inner.try_wait()
     }
 
     /// Returns a future that completes when the event is signaled.
@@ -445,7 +447,7 @@ impl Future for AutoResetWaitFuture {
         let awaiter: *mut Awaiter = &raw mut this.awaiter;
         // SAFETY: The awaiter is pinned inside this future and outlives
         // the call; `inner.slow` is the mutex it registers with.
-        unsafe { poll_wait(&this.inner, awaiter, waker) }
+        unsafe { this.inner.poll_wait(awaiter, waker) }
     }
 }
 
@@ -456,7 +458,7 @@ impl Drop for AutoResetWaitFuture {
         let awaiter: *mut Awaiter = &raw mut self.awaiter;
         // SAFETY: The awaiter is pinned inside this future and outlives
         // the call; `inner.slow` is the mutex it was registered with.
-        unsafe { drop_wait(&self.inner, awaiter) }
+        unsafe { self.inner.drop_wait(awaiter) }
     }
 }
 
@@ -564,7 +566,7 @@ impl EmbeddedAutoResetEventRef {
     /// Signals the event, releasing exactly one waiter.
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn set(&self) {
-        set(self.inner());
+        self.inner().set();
     }
 
     /// Attempts to consume the signal without blocking.
@@ -574,7 +576,7 @@ impl EmbeddedAutoResetEventRef {
     #[must_use]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_wait(&self) -> bool {
-        try_wait(self.inner())
+        self.inner().try_wait()
     }
 
     /// Returns a future that completes when the event is signaled.
@@ -623,7 +625,7 @@ impl Future for EmbeddedAutoResetWaitFuture {
         let awaiter: *mut Awaiter = &raw mut this.awaiter;
         // SAFETY: The awaiter is pinned inside this future and outlives
         // the call; `inner.slow` is the mutex it registers with.
-        unsafe { poll_wait(inner, awaiter, waker) }
+        unsafe { inner.poll_wait(awaiter, waker) }
     }
 }
 
@@ -637,7 +639,7 @@ impl Drop for EmbeddedAutoResetWaitFuture {
         let awaiter: *mut Awaiter = &raw mut self.awaiter;
         // SAFETY: The awaiter is pinned inside this future and outlives
         // the call; `inner.slow` is the mutex it was registered with.
-        unsafe { drop_wait(inner, awaiter) }
+        unsafe { inner.drop_wait(awaiter) }
     }
 }
 
