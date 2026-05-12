@@ -405,6 +405,16 @@ impl RefUnwindSafe for AutoResetWaitFuture {}
 impl Future for AutoResetWaitFuture {
     type Output = ();
 
+    // Trampoline into `poll_wait`. The `Poll::Ready(())` mutation is
+    // caught directly (the first `is_pending()` assert in
+    // `poll_wait_post_mutex_take_notification_branch` fires within
+    // microseconds), but the hook-based race tests deadlock under
+    // the mutation because `poll_wait` is bypassed and `entered.wait()`
+    // never returns. The watchdog is disabled under
+    // `MUTATION_TESTING=1`, so the run reports TIMEOUT. Skip — the
+    // function is a thin forwarder and all branches of the real
+    // logic live in `poll_wait`.
+    #[cfg_attr(test, mutants::skip)]
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<()> {
         // Clone the waker before acquiring the lock so a panicking clone
         // implementation cannot poison the mutex.

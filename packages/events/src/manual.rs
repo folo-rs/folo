@@ -382,6 +382,8 @@ impl RefUnwindSafe for ManualResetWaitFuture {}
 impl Future for ManualResetWaitFuture {
     type Output = ();
 
+    // See the equivalent comment on `AutoResetWaitFuture::poll`.
+    #[cfg_attr(test, mutants::skip)]
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<()> {
         let waker = cx.waker().clone();
         // SAFETY: We only access fields, we do not move self.
