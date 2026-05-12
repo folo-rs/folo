@@ -85,9 +85,29 @@ pub struct ManualResetEvent {
     inner: Arc<EventInner>,
 }
 
+// `EventInner::state` is an `AtomicU8` packing two independent flags
+// plus the implicit IDLE (all-zero) state:
+//
+// * `IDLE`        — no other bits set.
+// * `IS_SET`      — event is in the set state. Persists until
+//                   `reset()` clears it; unlike auto-reset events,
+//                   `wait()` does NOT consume this bit.
+// * `HAS_WAITERS` — one or more awaiters are registered in `slow`.
+//
+// All four combinations are reachable. `set()` drains every
+// registered waiter in a loop, so multiple waiters can be released
+// from a single `set()` call — the gate stays open until `reset()`.
+//
+// Key invariant: `HAS_WAITERS` clear ⇒ `slow` is empty. The converse
+// does not hold — the bit may briefly outlive the last waiter,
+// because `set()` and `drop_wait()` clear it under the mutex after
+// observing `slow.is_empty()`.
+//
+// `slow` is only consulted on the slow path. The `IS_SET` bit is
+// flipped without holding the mutex.
+const IDLE: u8 = 0;
 const IS_SET: u8 = 0x1;
 const HAS_WAITERS: u8 = 0x2;
-const IDLE: u8 = 0;
 
 struct EventInner {
     state: AtomicU8,

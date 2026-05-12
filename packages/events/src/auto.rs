@@ -85,9 +85,31 @@ pub struct AutoResetEvent {
     inner: Arc<EventInner>,
 }
 
+// `EventInner::state` is an `AtomicU8` packing two independent flags
+// plus the implicit IDLE (all-zero) state:
+//
+// * `IDLE`        — no other bits set.
+// * `SIGNALED`    — a signal is stored, awaiting consumption by the
+//                   next `wait()` / `try_wait()`.
+// * `HAS_WAITERS` — one or more awaiters are registered in `slow`.
+//
+// All four combinations (`IDLE`, `SIGNALED`, `HAS_WAITERS`, and
+// `SIGNALED | HAS_WAITERS`) are reachable. The combined state is
+// transient: it appears when `set()` (fast path) races with a
+// waiter's `fetch_or(HAS_WAITERS)`. The waiter's post-`fetch_or`
+// re-check consumes the signal and clears `HAS_WAITERS`.
+//
+// Key invariant: `HAS_WAITERS` clear ⇒ `slow` is empty. The converse
+// does not hold — the bit may briefly outlive the last waiter,
+// because `set()` and `drop_wait()` clear it under the mutex after
+// observing `slow.is_empty()`. The "no waiters despite HAS_WAITERS"
+// branch in `set()` handles the resulting window.
+//
+// `slow` is only consulted on the slow path. The `SIGNALED` bit is
+// flipped without holding the mutex.
+const IDLE: u8 = 0;
 const SIGNALED: u8 = 0x1;
 const HAS_WAITERS: u8 = 0x2;
-const IDLE: u8 = 0;
 
 struct EventInner {
     state: AtomicU8,
