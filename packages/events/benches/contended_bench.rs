@@ -11,6 +11,7 @@
 #![allow(missing_docs, reason = "benchmark code")]
 
 use std::hint::black_box;
+use std::num::NonZero;
 use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -36,10 +37,10 @@ fn contended_auto_reset(c: &mut Criterion) {
 
     let processors = SystemHardware::current().processors();
 
-    for thread_count in [1, 2, 4] {
+    for thread_count in [1_usize, 2, 4] {
         let Some(subset) = processors
             .to_builder()
-            .take(thread_count.try_into().unwrap())
+            .take(NonZero::new(thread_count).unwrap())
         else {
             continue;
         };
@@ -95,10 +96,10 @@ fn contended_manual_reset(c: &mut Criterion) {
 
     let processors = SystemHardware::current().processors();
 
-    for thread_count in [1, 2, 4] {
+    for thread_count in [1_usize, 2, 4] {
         let Some(subset) = processors
             .to_builder()
-            .take(thread_count.try_into().unwrap())
+            .take(NonZero::new(thread_count).unwrap())
         else {
             continue;
         };
