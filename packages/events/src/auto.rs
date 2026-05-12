@@ -109,6 +109,9 @@ fn set(inner: &EventInner) {
         return;
     }
 
+    #[cfg(test)]
+    crate::test_hooks::run(&crate::test_hooks::AUTO_SET_PRE_LOCK);
+
     // Slow path: waiters exist — notify one under the mutex.
     let waker: Option<Waker>;
     {
@@ -1046,6 +1049,54 @@ mod tests {
 
                 assert!(producer.join().unwrap().is_ready());
                 assert!(!event.try_wait());
+            });
+        });
+    }
+
+    #[test]
+    fn set_no_waiters_despite_has_waiters_branch() {
+        // Covers `set()`'s "no waiters despite HAS_WAITERS — set signal"
+        // else branch. Race: between `set()`'s state-load (which sees
+        // HAS_WAITERS) and its mutex acquisition, a concurrent
+        // `drop_wait` drains the awaiter set and clears HAS_WAITERS.
+        testing::with_watchdog(|| {
+            let BarrierHook {
+                entered,
+                proceed,
+                hook,
+            } = crate::test_hooks::barrier_hook();
+            crate::test_hooks::with_hook(&crate::test_hooks::AUTO_SET_PRE_LOCK, hook, || {
+                let event = AutoResetEvent::boxed();
+
+                // Register an awaiter on the test thread. After this
+                // poll the state has HAS_WAITERS set.
+                let mut future = Box::pin(event.wait());
+                let waker = Waker::noop();
+                let mut cx = task::Context::from_waker(waker);
+                assert!(future.as_mut().poll(&mut cx).is_pending());
+
+                // Producer thread calls `set()` and pauses at the hook
+                // after observing HAS_WAITERS but before locking the
+                // slow-path mutex.
+                let producer = thread::spawn({
+                    let event = event.clone();
+                    move || {
+                        crate::test_hooks::HOOK_PARTICIPANT.with(|c| c.set(true));
+                        event.set();
+                    }
+                });
+
+                entered.wait();
+                // Drop the registered future. `drop_wait` acquires the
+                // mutex, removes the awaiter, and clears HAS_WAITERS.
+                drop(future);
+                proceed.wait();
+
+                producer.join().unwrap();
+
+                // `set()` took the else branch and stored SIGNAL even
+                // though it found no waiters.
+                assert!(event.try_wait());
             });
         });
     }

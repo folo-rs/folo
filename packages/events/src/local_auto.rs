@@ -748,6 +748,38 @@ mod tests {
     }
 
     #[test]
+    fn dropping_notified_future_while_state_already_set_preserves_signal() {
+        // Covers the `InnerState::Set` arm of `drop_wait`. Scenario:
+        // 1. Register a future, then `set()` notifies it (transitions
+        //    the awaiter to NOTIFIED; state stays `Unset({})`).
+        // 2. A second `set()` on the (now-empty) awaiter set
+        //    transitions state to `Set`.
+        // 3. The still-pinned, still-NOTIFIED future is dropped. Its
+        //    `drop_wait` runs with state already in `Set` form.
+        let event = LocalAutoResetEvent::boxed();
+        let mut future = Box::pin(event.wait());
+        let waker = Waker::noop();
+        let mut cx = task::Context::from_waker(waker);
+
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+        // First set: notifies the future (transitions awaiter to
+        // NOTIFIED; state remains Unset with an empty awaiter set).
+        event.set();
+        // Second set: empty awaiter set, so the signal latches —
+        // state becomes `InnerState::Set`.
+        event.set();
+
+        // Drop the notified future. drop_wait observes
+        // `state == InnerState::Set` and must leave the signal in
+        // place (the notification belonged to this future and is
+        // forfeit; the second set's signal must remain).
+        drop(future);
+
+        assert!(event.try_wait());
+        assert!(!event.try_wait());
+    }
+
+    #[test]
     fn notified_then_dropped_forwards_to_next() {
         let event = LocalAutoResetEvent::boxed();
         let mut future1 = Box::pin(event.wait());

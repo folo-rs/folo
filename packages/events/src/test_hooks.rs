@@ -16,6 +16,8 @@
 //!
 //! Modelled on the equivalent mechanism in `events_once::core::sync`.
 
+#![cfg_attr(coverage_nightly, coverage(off))]
+
 use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::{Arc, Barrier, Mutex};
@@ -41,6 +43,13 @@ pub(crate) static AUTO_PRE_TRY_WAIT: HookSlot = Mutex::new(None);
 /// `fetch_or(HAS_WAITERS)`. Targets the "post-`fetch_or` `try_wait` →
 /// Ready" branch.
 pub(crate) static AUTO_PRE_FETCH_OR: HookSlot = Mutex::new(None);
+
+/// Auto-reset `set()`: after observing `HAS_WAITERS` in the state,
+/// before locking `slow`. Targets the "no waiters despite
+/// `HAS_WAITERS` — set signal" branch where a concurrent `drop_wait`
+/// drains the awaiter set in the gap between `set()`'s state-load
+/// and its mutex acquisition.
+pub(crate) static AUTO_SET_PRE_LOCK: HookSlot = Mutex::new(None);
 
 /// Manual-reset: equivalent to [`AUTO_PRE_MUTEX`].
 pub(crate) static MANUAL_PRE_MUTEX: HookSlot = Mutex::new(None);
