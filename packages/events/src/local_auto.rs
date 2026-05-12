@@ -1,3 +1,4 @@
+use std::any::type_name;
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::future::Future;
@@ -372,15 +373,14 @@ impl Drop for LocalAutoResetWaitFuture {
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for LocalAutoResetEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LocalAutoResetEvent")
-            .finish_non_exhaustive()
+        f.debug_struct(type_name::<Self>()).finish_non_exhaustive()
     }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for LocalAutoResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LocalAutoResetWaitFuture")
+        f.debug_struct(type_name::<Self>())
             // SAFETY: Debug output is best-effort; no concurrent
             // mutation during formatting.
             .finish_non_exhaustive()
@@ -547,23 +547,21 @@ impl Drop for EmbeddedLocalAutoResetWaitFuture {
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for EmbeddedLocalAutoResetEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("EmbeddedLocalAutoResetEvent")
-            .finish_non_exhaustive()
+        f.debug_struct(type_name::<Self>()).finish_non_exhaustive()
     }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for EmbeddedLocalAutoResetEventRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("EmbeddedLocalAutoResetEventRef")
-            .finish_non_exhaustive()
+        f.debug_struct(type_name::<Self>()).finish_non_exhaustive()
     }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for EmbeddedLocalAutoResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("EmbeddedLocalAutoResetWaitFuture")
+        f.debug_struct(type_name::<Self>())
             // SAFETY: Debug output is best-effort; no concurrent
             // mutation during formatting.
             .finish_non_exhaustive()

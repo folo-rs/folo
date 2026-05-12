@@ -1,3 +1,4 @@
+use std::any::type_name;
 use std::cell::{Cell, UnsafeCell};
 use std::fmt;
 use std::future::Future;
@@ -333,7 +334,7 @@ impl Drop for LocalManualResetWaitFuture {
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for LocalManualResetEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LocalManualResetEvent")
+        f.debug_struct(type_name::<Self>())
             .field("is_set", &self.inner.is_set.get())
             .finish()
     }
@@ -342,7 +343,7 @@ impl fmt::Debug for LocalManualResetEvent {
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for LocalManualResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LocalManualResetWaitFuture")
+        f.debug_struct(type_name::<Self>())
             // SAFETY: Debug output is best-effort; no concurrent
             // mutation during formatting.
             .finish_non_exhaustive()
@@ -517,8 +518,7 @@ impl Drop for EmbeddedLocalManualResetWaitFuture {
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for EmbeddedLocalManualResetEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("EmbeddedLocalManualResetEvent")
-            .finish_non_exhaustive()
+        f.debug_struct(type_name::<Self>()).finish_non_exhaustive()
     }
 }
 
@@ -526,7 +526,7 @@ impl fmt::Debug for EmbeddedLocalManualResetEvent {
 impl fmt::Debug for EmbeddedLocalManualResetEventRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let is_set = self.try_wait();
-        f.debug_struct("EmbeddedLocalManualResetEventRef")
+        f.debug_struct(type_name::<Self>())
             .field("is_set", &is_set)
             .finish()
     }
@@ -535,7 +535,7 @@ impl fmt::Debug for EmbeddedLocalManualResetEventRef {
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for EmbeddedLocalManualResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("EmbeddedLocalManualResetWaitFuture")
+        f.debug_struct(type_name::<Self>())
             // SAFETY: Debug output is best-effort; no concurrent
             // mutation during formatting.
             .finish_non_exhaustive()

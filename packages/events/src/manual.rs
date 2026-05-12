@@ -1,3 +1,4 @@
+use std::any::type_name;
 use std::fmt;
 use std::future::Future;
 use std::marker::PhantomPinned;
@@ -463,7 +464,7 @@ impl Drop for ManualResetWaitFuture {
 impl fmt::Debug for ManualResetEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let is_set = self.try_wait();
-        f.debug_struct("ManualResetEvent")
+        f.debug_struct(type_name::<Self>())
             .field("is_set", &is_set)
             .finish()
     }
@@ -472,7 +473,7 @@ impl fmt::Debug for ManualResetEvent {
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract for Debug format.
 impl fmt::Debug for ManualResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ManualResetWaitFuture")
+        f.debug_struct(type_name::<Self>())
             // SAFETY: Debug output is best-effort; no concurrent
             // mutation during formatting.
             .finish_non_exhaustive()
@@ -650,8 +651,7 @@ impl Drop for EmbeddedManualResetWaitFuture {
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for EmbeddedManualResetEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("EmbeddedManualResetEvent")
-            .finish_non_exhaustive()
+        f.debug_struct(type_name::<Self>()).finish_non_exhaustive()
     }
 }
 
@@ -659,7 +659,7 @@ impl fmt::Debug for EmbeddedManualResetEvent {
 impl fmt::Debug for EmbeddedManualResetEventRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let is_set = self.try_wait();
-        f.debug_struct("EmbeddedManualResetEventRef")
+        f.debug_struct(type_name::<Self>())
             .field("is_set", &is_set)
             .finish()
     }
@@ -668,7 +668,7 @@ impl fmt::Debug for EmbeddedManualResetEventRef {
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for EmbeddedManualResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("EmbeddedManualResetWaitFuture")
+        f.debug_struct(type_name::<Self>())
             // SAFETY: Debug output is best-effort; no concurrent
             // mutation during formatting.
             .finish_non_exhaustive()

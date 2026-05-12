@@ -1,3 +1,4 @@
+use std::any::type_name;
 use std::fmt;
 use std::future::Future;
 use std::marker::PhantomPinned;
@@ -490,14 +491,14 @@ impl Drop for AutoResetWaitFuture {
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract for Debug format.
 impl fmt::Debug for AutoResetEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AutoResetEvent").finish_non_exhaustive()
+        f.debug_struct(type_name::<Self>()).finish_non_exhaustive()
     }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract for Debug format.
 impl fmt::Debug for AutoResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AutoResetWaitFuture")
+        f.debug_struct(type_name::<Self>())
             // SAFETY: Debug output is best-effort; no concurrent
             // mutation during formatting.
             .finish_non_exhaustive()
@@ -671,23 +672,21 @@ impl Drop for EmbeddedAutoResetWaitFuture {
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for EmbeddedAutoResetEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("EmbeddedAutoResetEvent")
-            .finish_non_exhaustive()
+        f.debug_struct(type_name::<Self>()).finish_non_exhaustive()
     }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for EmbeddedAutoResetEventRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("EmbeddedAutoResetEventRef")
-            .finish_non_exhaustive()
+        f.debug_struct(type_name::<Self>()).finish_non_exhaustive()
     }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for EmbeddedAutoResetWaitFuture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("EmbeddedAutoResetWaitFuture")
+        f.debug_struct(type_name::<Self>())
             // SAFETY: Debug output is best-effort; no concurrent
             // mutation during formatting.
             .finish_non_exhaustive()
