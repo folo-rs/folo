@@ -765,15 +765,13 @@ mod tests {
     }
 
     // The owning-set-id invariant is only present in debug builds.
-    // The tests below assert that the invariant fires when an awaiter
-    // registered in one set is passed to a different one, catching a
-    // class of corruption (snapshot/replace patterns) that the
-    // lifecycle field alone cannot detect.
+    // The panic-tests below follow the repo convention: the function
+    // call is sound to perform in release (where the assert is
+    // stripped), but in debug builds it must trip the invariant.
 
-    #[cfg(debug_assertions)]
     #[test]
-    #[should_panic]
-    fn unregister_with_wrong_set_panics() {
+    #[cfg_attr(debug_assertions, should_panic)]
+    fn unregister_with_wrong_set_panics_in_debug() {
         let mut set_a = AwaiterSet::new();
         let mut set_b = AwaiterSet::new();
         let mut a = Awaiter::new();
@@ -787,10 +785,9 @@ mod tests {
         }
     }
 
-    #[cfg(debug_assertions)]
     #[test]
-    #[should_panic]
-    fn register_in_second_set_while_waiting_in_first_panics() {
+    #[cfg_attr(debug_assertions, should_panic)]
+    fn register_in_second_set_while_waiting_in_first_panics_in_debug() {
         let mut set_a = AwaiterSet::new();
         let mut set_b = AwaiterSet::new();
         let mut a = Awaiter::new();
@@ -804,10 +801,9 @@ mod tests {
         }
     }
 
-    #[cfg(debug_assertions)]
     #[test]
-    #[should_panic]
-    fn unregister_after_snapshot_panics() {
+    #[cfg_attr(debug_assertions, should_panic)]
+    fn unregister_after_snapshot_panics_in_debug() {
         // Reproduces the corruption pattern from PR 141: an awaiter is
         // registered in a set that is then moved out via mem::take. The
         // original location gets a fresh set_id. Calling unregister on
