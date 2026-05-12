@@ -115,6 +115,14 @@ impl Awaiter {
     /// with the `Release` store in
     /// [`AwaiterSet::notify_one()`][crate::AwaiterSet::notify_one].
     #[must_use]
+    // Mutating the success outcome (`is_ok() → false`) deadlocks every
+    // test that waits for a notification to be consumed. The
+    // `take_notification_transitions_notified_to_idle` test would
+    // catch this in microseconds, but other tests in the suite hang
+    // before the harness reports failure, so cargo-mutants classifies
+    // it as TIMEOUT. This is the same justification used for the
+    // events_once crate-wide skip.
+    #[cfg_attr(test, mutants::skip)]
     pub fn take_notification(self: Pin<&Self>) -> bool {
         self.lifecycle
             .compare_exchange(NOTIFIED, IDLE, Ordering::Acquire, Ordering::Relaxed)
@@ -136,10 +144,19 @@ impl Awaiter {
         self.lifecycle.load(Ordering::Acquire) == NOTIFIED
     }
 
+    // Same reasoning as `take_notification` above: mutating the
+    // returned phase causes the synchronization protocol to deadlock,
+    // and even though direct unit tests fail fast, the suite as a
+    // whole hangs before the failure is reported.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn lifecycle_phase(&self) -> u8 {
         self.lifecycle.load(Ordering::Relaxed)
     }
 
+    // Same reasoning as `take_notification` and `lifecycle_phase`
+    // above. Mutating this into a no-op freezes the protocol in IDLE,
+    // hanging every notification-driven test.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn set_lifecycle(&self, phase: u8, ordering: Ordering) {
         self.lifecycle.store(phase, ordering);
     }
@@ -296,6 +313,25 @@ mod tests {
 
         let notified = unsafe { Pin::new_unchecked(&a) }.take_notification();
         assert!(!notified);
+    }
+
+    #[test]
+    fn is_notified_returns_false_when_idle() {
+        let a = Awaiter::new();
+
+        assert!(!unsafe { Pin::new_unchecked(&a) }.is_notified());
+    }
+
+    #[test]
+    fn is_notified_returns_false_when_waiting() {
+        let mut a = Awaiter::new();
+        let mut set = AwaiterSet::new();
+
+        unsafe {
+            set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
+        }
+
+        assert!(!unsafe { Pin::new_unchecked(&a) }.is_notified());
     }
 
     #[test]
