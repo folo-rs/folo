@@ -116,6 +116,17 @@ pub struct AwaiterSet {
     head: *mut Awaiter,
     tail: *mut Awaiter,
 
+    // Counter stamped onto each new registration via `Inner.epoch`.
+    // Captured by `drain_threshold()` and consulted by
+    // `notify_one_in_drain()` to skip awaiters registered during a
+    // drain (e.g. by a reentrant waker firing mid-drain). The counter
+    // is monotonically non-decreasing for the lifetime of the set;
+    // because awaiters are always appended at the tail, the epoch
+    // values stored in the list form a non-decreasing sequence from
+    // head to tail. This lets `notify_one_in_drain` decide eligibility
+    // by inspecting only the head.
+    next_epoch: u64,
+
     // Debug-only sentinel used to detect awaiters being passed to a
     // different AwaiterSet than the one they are registered in (e.g.
     // via a snapshot/replace pattern that splits an awaiter from its
@@ -131,6 +142,7 @@ impl AwaiterSet {
         Self {
             head: ptr::null_mut(),
             tail: ptr::null_mut(),
+            next_epoch: 1,
             #[cfg(debug_assertions)]
             set_id: NEXT_SET_ID.fetch_add(1, Ordering::Relaxed),
         }
@@ -184,6 +196,7 @@ impl AwaiterSet {
         inner.waker = Some(waker);
         inner.next = ptr::null_mut();
         inner.prev = self.tail;
+        inner.epoch = self.next_epoch;
         #[cfg(debug_assertions)]
         {
             inner.owning_set_id = self.set_id;
@@ -276,10 +289,75 @@ impl AwaiterSet {
         // checked `self.head.is_null()` above) drawn from the set's link fields,
         // which the set invariant requires point to awaiters currently registered;
         // per `register`'s safety contract, those awaiters remain pinned and valid
-        // until removed. Aliasing — `Awaiter`'s public API is `&self`-only; access
-        // to its `Inner` is gated by this `&mut self` lock scope; and the owning
-        // future is asleep (it is a registered waiter), so no `&mut Awaiter` to it
-        // is live elsewhere.
+        // until removed. Aliasing — the dereference happens only inside `remove`,
+        // which is the sole entry point for any further access to this awaiter.
+        Some(unsafe { self.remove(ptr) })
+    }
+
+    /// Returns an epoch threshold for the current drain.
+    ///
+    /// Use with [`notify_one_in_drain()`][Self::notify_one_in_drain]
+    /// to drain only awaiters that were already registered when this
+    /// method was called. Awaiters registered after the returned
+    /// threshold was captured — typically by a reentrant waker
+    /// firing mid-drain — will be skipped.
+    ///
+    /// Each call advances an internal counter so threshold values
+    /// from sequential drains do not collide.
+    pub fn drain_threshold(&mut self) -> u64 {
+        let threshold = self.next_epoch;
+        self.next_epoch = self.next_epoch.wrapping_add(1);
+        threshold
+    }
+
+    /// Like [`notify_one()`][Self::notify_one], but only picks an
+    /// awaiter whose registration epoch is at or before `threshold`.
+    ///
+    /// Returns `None` when no eligible awaiter exists — either the
+    /// set is empty, or every remaining awaiter was registered after
+    /// the threshold was captured via
+    /// [`drain_threshold()`][Self::drain_threshold].
+    ///
+    /// The set's internal list is ordered head-to-tail by registration
+    /// time, so the head always carries the smallest epoch value. The
+    /// drain therefore proceeds in strict FIFO order regardless of the
+    /// debug-build ordering of [`notify_one()`][Self::notify_one].
+    pub fn notify_one_in_drain(&mut self, threshold: u64) -> Option<Waker> {
+        if self.head.is_null() {
+            return None;
+        }
+
+        // SAFETY: Validity — `self.head` is non-null (just checked) and the set
+        // invariant guarantees it points to an `Awaiter` currently registered in
+        // this set; per `register`'s safety contract, registered awaiters remain
+        // pinned and valid until removed. Aliasing — `Awaiter`'s public API is
+        // `&self`-only; access to its `Inner` is gated by this `&mut self` lock
+        // scope; the owning future is asleep (it is a registered waiter), so no
+        // `&mut Awaiter` to it is live elsewhere.
+        let head = unsafe { &*self.head };
+        // SAFETY: Access is serialized by this `&mut self` lock scope; we hold
+        // only `&Awaiter` and no `&mut Inner` is live.
+        let head_epoch = unsafe { head.inner_ref() }.epoch;
+
+        if head_epoch > threshold {
+            return None;
+        }
+
+        // SAFETY: Same as above for `self.head`.
+        Some(unsafe { self.remove(self.head) })
+    }
+
+    /// Unlinks the awaiter at `ptr` from the set and returns its waker.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must point to an awaiter currently registered in this
+    /// set. The caller's lock must guard concurrent access.
+    unsafe fn remove(&mut self, ptr: *mut Awaiter) -> Waker {
+        // SAFETY: Per the function's safety contract, `ptr` references a pinned,
+        // valid `Awaiter` currently in the set. Aliasing — `Awaiter`'s public API
+        // is `&self`-only; access to its `Inner` is gated by this `&mut self` lock
+        // scope; the owning future is asleep, so no `&mut Awaiter` to it is live.
         let awaiter = unsafe { &*ptr };
         // SAFETY: Access is serialized by this `&mut self` lock scope; we hold only
         // `&Awaiter` and no `&mut Inner` is live.
@@ -288,7 +366,8 @@ impl AwaiterSet {
         let next = inner.next;
         let prev = inner.prev;
 
-        // SAFETY: The awaiter is in this set, so unlinking is safe.
+        // SAFETY: The awaiter is in this set (per this function's safety contract),
+        // so unlinking is safe.
         unsafe {
             self.unlink(prev, next);
         }
@@ -302,6 +381,7 @@ impl AwaiterSet {
         let waker = inner.waker.take();
         inner.next = ptr::null_mut();
         inner.prev = ptr::null_mut();
+        inner.epoch = 0;
         #[cfg(debug_assertions)]
         {
             inner.owning_set_id = 0;
@@ -313,7 +393,7 @@ impl AwaiterSet {
         // polled task that observes this via take_notification().
         awaiter.set_lifecycle(NOTIFIED, Ordering::Release);
 
-        waker
+        waker.expect("waker is always set while the awaiter is in WAITING state")
     }
 
     // Verifies in debug builds that the awaiter referenced by `inner`
@@ -878,5 +958,110 @@ mod tests {
         assert_ne!(a.set_id, b.set_id);
         assert_ne!(b.set_id, c.set_id);
         assert_ne!(a.set_id, c.set_id);
+    }
+
+    #[test]
+    fn drain_threshold_advances_per_call() {
+        let mut set = AwaiterSet::new();
+        let first = set.drain_threshold();
+        let second = set.drain_threshold();
+        let third = set.drain_threshold();
+        assert!(second > first);
+        assert!(third > second);
+    }
+
+    #[test]
+    fn notify_one_in_drain_skips_awaiter_registered_after_threshold() {
+        let mut set = AwaiterSet::new();
+        let mut early = Awaiter::new();
+        unsafe {
+            set.register(Pin::new_unchecked(&mut early), waker());
+        }
+
+        let threshold = set.drain_threshold();
+
+        // Awaiter registered after the threshold capture — must be
+        // skipped by `notify_one_in_drain(threshold)`.
+        let mut late = Awaiter::new();
+        unsafe {
+            set.register(Pin::new_unchecked(&mut late), waker());
+        }
+
+        // First call drains the early awaiter.
+        let w = set.notify_one_in_drain(threshold);
+        assert!(w.is_some());
+        assert!(early.is_notified());
+        assert!(!late.is_notified());
+
+        // Second call — only the late awaiter is left, and it has an
+        // epoch beyond the threshold, so the drain finishes.
+        let w = set.notify_one_in_drain(threshold);
+        assert!(w.is_none());
+        assert!(!late.is_notified());
+        assert!(!set.is_empty());
+
+        // Clean up the late awaiter — required because Awaiter::drop
+        // asserts the awaiter is not still registered.
+        unsafe {
+            set.unregister(Pin::new_unchecked(&mut late));
+        }
+    }
+
+    #[test]
+    fn notify_one_in_drain_on_empty_returns_none() {
+        let mut set = AwaiterSet::new();
+        let threshold = set.drain_threshold();
+        assert!(set.notify_one_in_drain(threshold).is_none());
+    }
+
+    #[test]
+    fn notify_one_in_drain_drains_all_prior_awaiters_in_fifo_order() {
+        let mut set = AwaiterSet::new();
+        let mut a = Awaiter::new();
+        let mut b = Awaiter::new();
+        let mut c = Awaiter::new();
+
+        unsafe {
+            set.register(Pin::new_unchecked(&mut a), waker());
+            set.register(Pin::new_unchecked(&mut b), waker());
+            set.register(Pin::new_unchecked(&mut c), waker());
+        }
+
+        let threshold = set.drain_threshold();
+
+        let mut drained = 0_usize;
+        while let Some(w) = set.notify_one_in_drain(threshold) {
+            drop(w);
+            drained = drained.checked_add(1).unwrap();
+        }
+
+        assert_eq!(drained, 3);
+        for awaiter in [&a, &b, &c] {
+            assert!(awaiter.is_notified());
+        }
+        assert!(set.is_empty());
+    }
+
+    #[test]
+    fn successive_drain_batches_use_independent_thresholds() {
+        let mut set = AwaiterSet::new();
+
+        let mut first_batch = Awaiter::new();
+        unsafe {
+            set.register(Pin::new_unchecked(&mut first_batch), waker());
+        }
+        let threshold_a = set.drain_threshold();
+        drop(set.notify_one_in_drain(threshold_a));
+        assert!(first_batch.is_notified());
+
+        let mut second_batch = Awaiter::new();
+        unsafe {
+            set.register(Pin::new_unchecked(&mut second_batch), waker());
+        }
+        let threshold_b = set.drain_threshold();
+        assert!(threshold_b > threshold_a);
+        drop(set.notify_one_in_drain(threshold_b));
+        assert!(second_batch.is_notified());
+        assert!(set.is_empty());
     }
 }

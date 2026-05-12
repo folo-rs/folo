@@ -32,6 +32,16 @@ pub(crate) struct Inner {
     pub(crate) next: *mut Awaiter,
     pub(crate) prev: *mut Awaiter,
 
+    // Stamp recording the AwaiterSet's `next_epoch` value at the time
+    // this awaiter entered WAITING. Used by `notify_one_in_drain` to
+    // distinguish awaiters that were already registered when a drain
+    // captured its threshold from awaiters registered later (typically
+    // by a reentrant waker firing during the drain). Zero means "not
+    // currently registered" or "registered before any drain"; in either
+    // case the value is irrelevant because `notify_one_in_drain` only
+    // inspects this field for awaiters currently in the set.
+    pub(crate) epoch: u64,
+
     // Debug-only sentinel that records which AwaiterSet owns this
     // awaiter while it is WAITING. Used by AwaiterSet to assert that
     // operations like `unregister` or `notify_one` are not invoked on
@@ -48,6 +58,7 @@ impl Inner {
             waker: None,
             next: ptr::null_mut(),
             prev: ptr::null_mut(),
+            epoch: 0,
             #[cfg(debug_assertions)]
             owning_set_id: 0,
         }

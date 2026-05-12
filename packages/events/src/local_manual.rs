@@ -121,6 +121,20 @@ impl Inner {
         }
         self.is_set.set(true);
 
+        // Capture a drain threshold so that awaiters registered mid-
+        // drain (typically by a reentrant waker calling `reset()` and
+        // then re-entering `wait()`) are skipped — those awaiters
+        // belong logically after this `set()` returns and would
+        // otherwise observe a closed gate yet still be notified.
+        let threshold = {
+            // SAFETY: Validity — `self.waiters` is an `UnsafeCell` field of `self`
+            // that outlives this borrow. Aliasing — `Inner: !Send` excludes other
+            // threads, and the borrow is held only while invoking
+            // `AwaiterSet::drain_threshold`, which runs no user code.
+            let waiters = unsafe { &mut *self.waiters.get() };
+            waiters.drain_threshold()
+        };
+
         // Notify waiters one at a time, releasing the borrow on
         // `self.waiters` before each `wake()` call. A reentrant
         // waker may drop or register another future, which will
@@ -136,7 +150,7 @@ impl Inner {
                 // `wake()` is invoked; a reentrant call therefore cannot observe an
                 // aliasing `&mut`.
                 let waiters = unsafe { &mut *self.waiters.get() };
-                waiters.notify_one()
+                waiters.notify_one_in_drain(threshold)
             };
 
             match waker {
@@ -1157,6 +1171,63 @@ mod tests {
         assert!(waker_data_a.was_woken());
         assert!(future_c_holder.borrow().is_none());
         assert!(future_b.as_mut().poll(&mut cx_noop).is_ready());
+    }
+
+    #[test]
+    fn reentrant_register_during_set_does_not_notify_new_awaiter() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use testing::ReentrantWakerData;
+
+        // Register awaiter A whose waker calls reset() AND registers a
+        // new awaiter (B) mid-drain. With manual-reset event semantics
+        // (matching Win32/.NET ManualResetEvent), only awaiters that
+        // were registered when set() was called should be notified by
+        // this drain. B, registered after reset() closed the gate,
+        // must remain Pending.
+        let event = LocalManualResetEvent::boxed();
+        let event_for_waker = event.clone();
+
+        let late_future_holder: Rc<RefCell<Option<Pin<Box<LocalManualResetWaitFuture>>>>> =
+            Rc::new(RefCell::new(None));
+        let holder_for_waker = Rc::clone(&late_future_holder);
+
+        let waker_data_a = ReentrantWakerData::new(move || {
+            // Close the gate first, then register a fresh waiter.
+            event_for_waker.reset();
+
+            let noop = Waker::noop();
+            let mut cx_noop = task::Context::from_waker(noop);
+            let mut new_future = Box::pin(event_for_waker.wait());
+            assert!(new_future.as_mut().poll(&mut cx_noop).is_pending());
+            *holder_for_waker.borrow_mut() = Some(new_future);
+        });
+        // SAFETY: Data outlives waker, single-threaded test.
+        let waker_a = unsafe { waker_data_a.waker() };
+        let mut cx_a = task::Context::from_waker(&waker_a);
+
+        let mut future_a = Box::pin(event.wait());
+        assert!(future_a.as_mut().poll(&mut cx_a).is_pending());
+
+        event.set();
+
+        assert!(waker_data_a.was_woken());
+
+        // The mid-drain future must still be Pending: reset() closed
+        // the gate before set() reached it, and its drain epoch is
+        // higher than set()'s threshold so the drain skipped it.
+        let noop = Waker::noop();
+        let mut cx_noop = task::Context::from_waker(noop);
+        let mut late_future = late_future_holder
+            .borrow_mut()
+            .take()
+            .expect("reentrant waker registers the late future");
+        assert!(late_future.as_mut().poll(&mut cx_noop).is_pending());
+
+        // After another set(), the late future is notified normally.
+        event.set();
+        assert!(late_future.as_mut().poll(&mut cx_noop).is_ready());
     }
 
     #[test]

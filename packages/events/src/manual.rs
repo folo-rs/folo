@@ -127,21 +127,24 @@ impl EventInner {
             return;
         }
 
-        // Slow path: waiters exist — drain all, waking each outside
-        // the mutex to avoid deadlocks with reentrant wakers.
+        // Slow path: drain awaiters that were already registered when
+        // this call observed `HAS_WAITERS`, waking each outside the
+        // mutex to avoid deadlocks with reentrant wakers. Capture a
+        // drain threshold first so that any awaiter that registers
+        // mid-drain (typically via a reentrant waker calling
+        // `reset()` and then re-entering `wait()`) is skipped — those
+        // awaiters belong logically after this `set()` returns and
+        // would otherwise observe a closed gate yet still be notified.
+        let threshold = self.slow.lock().expect(NEVER_POISONED).drain_threshold();
         loop {
             let mut waiters = self.slow.lock().expect(NEVER_POISONED);
-            let waker = waiters.notify_one();
-            if let Some(w) = waker {
-                if waiters.is_empty() {
-                    self.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
-                }
-                drop(waiters);
-                w.wake();
-            } else {
+            let waker = waiters.notify_one_in_drain(threshold);
+            if waiters.is_empty() {
                 self.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
-                break;
             }
+            let Some(w) = waker else { break };
+            drop(waiters);
+            w.wake();
         }
     }
 
@@ -1520,5 +1523,57 @@ mod tests {
         assert!(waker_data_a.was_woken());
         assert!(future_c_holder.borrow().is_none());
         assert!(future_b.as_mut().poll(&mut cx_noop).is_ready());
+    }
+
+    #[test]
+    fn reentrant_register_during_set_does_not_notify_new_awaiter() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use testing::ReentrantWakerData;
+
+        // Register awaiter A whose waker calls reset() AND registers a
+        // new awaiter (B) mid-drain. With manual-reset event semantics
+        // (matching Win32/.NET ManualResetEvent), only awaiters that
+        // were registered when set() was called should be notified by
+        // this drain. B, registered after reset() closed the gate,
+        // must remain Pending.
+        let event = ManualResetEvent::boxed();
+        let event_for_waker = event.clone();
+
+        let late_future_holder: Rc<RefCell<Option<Pin<Box<ManualResetWaitFuture>>>>> =
+            Rc::new(RefCell::new(None));
+        let holder_for_waker = Rc::clone(&late_future_holder);
+
+        let waker_data_a = ReentrantWakerData::new(move || {
+            event_for_waker.reset();
+
+            let noop = Waker::noop();
+            let mut cx_noop = task::Context::from_waker(noop);
+            let mut new_future = Box::pin(event_for_waker.wait());
+            assert!(new_future.as_mut().poll(&mut cx_noop).is_pending());
+            *holder_for_waker.borrow_mut() = Some(new_future);
+        });
+        // SAFETY: Data outlives waker, single-threaded test.
+        let waker_a = unsafe { waker_data_a.waker() };
+        let mut cx_a = task::Context::from_waker(&waker_a);
+
+        let mut future_a = Box::pin(event.wait());
+        assert!(future_a.as_mut().poll(&mut cx_a).is_pending());
+
+        event.set();
+
+        assert!(waker_data_a.was_woken());
+
+        let noop = Waker::noop();
+        let mut cx_noop = task::Context::from_waker(noop);
+        let mut late_future = late_future_holder
+            .borrow_mut()
+            .take()
+            .expect("reentrant waker registers the late future");
+        assert!(late_future.as_mut().poll(&mut cx_noop).is_pending());
+
+        event.set();
+        assert!(late_future.as_mut().poll(&mut cx_noop).is_ready());
     }
 }
