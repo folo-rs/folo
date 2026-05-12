@@ -114,7 +114,9 @@ impl EventInner {
         #[cfg(test)]
         crate::test_hooks::run(&crate::test_hooks::AUTO_SET_PRE_LOCK);
 
-        // Slow path: waiters exist — notify one under the mutex.
+        // Slow path: waiters exist — pick a waker under the mutex,
+        // then wake it after releasing the mutex to avoid deadlocks
+        // with reentrant wakers.
         let waker: Option<Waker>;
         {
             let mut waiters = self.slow.lock().expect(NEVER_POISONED);
