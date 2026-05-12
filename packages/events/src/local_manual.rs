@@ -96,9 +96,6 @@ struct Inner {
 impl UnwindSafe for Inner {}
 impl RefUnwindSafe for Inner {}
 
-// Test hook that fires after each wake() call in Inner::set(). This allows
-// tests to inject re-entrant operations (e.g. calling reset() and re-polling
-// a future) between wake iterations, reproducing scenarios that would
 impl Inner {
     fn set(&self) {
         if self.is_set.get() {
@@ -106,18 +103,24 @@ impl Inner {
         }
         self.is_set.set(true);
 
-        // Take all current awaiters out of the set. New awaiters
-        // registered by re-entrant wakers go into the original
-        // (now empty) set and are not affected by this set() call.
-        // SAFETY: Single-threaded — no concurrent access.
-        let mut snapshot = std::mem::take(unsafe { &mut *self.waiters.get() });
+        // Notify waiters one at a time, releasing the borrow on
+        // `self.waiters` before each `wake()` call. A re-entrant
+        // waker may drop or register another future, which will
+        // need to acquire its own `&mut` to the same set; keeping
+        // the loop driven by `self.waiters` (rather than a snapshot)
+        // ensures unregister/register during re-entrancy always
+        // targets the live set.
+        loop {
+            let waker = {
+                // SAFETY: Single-threaded — no concurrent access.
+                let waiters = unsafe { &mut *self.waiters.get() };
+                waiters.notify_one()
+            };
 
-        // Notify all awaiters from the snapshot. The snapshot is
-        // exclusively owned by this stack frame. Re-entrant wakers
-        // may call set()/reset() but those operate on the original
-        // (now empty) set, not on this snapshot.
-        while let Some(w) = snapshot.notify_one() {
-            w.wake();
+            match waker {
+                Some(w) => w.wake(),
+                None => break,
+            }
         }
     }
 
@@ -1018,6 +1021,70 @@ mod tests {
         // B should also have been notified despite the re-entrant
         // reset(). Poll B to confirm.
         assert!(future_b.as_mut().poll(&mut cx_b).is_ready());
+    }
+
+    #[test]
+    fn reentrant_drop_of_sibling_waiter_does_not_skip_others() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use testing::ReentrantWakerData;
+
+        // Register three futures A, B, C. A's waker drops future B (a
+        // different sibling that is still waiting) and then resets the
+        // event. With a snapshot-based set() implementation, B's
+        // re-entrant `drop_wait` would mutate `self.waiters` (then
+        // empty) while B was still linked inside the snapshot —
+        // leaving the snapshot in a corrupted state and causing C to
+        // be lost. The rescan-from-head implementation tolerates this
+        // because every iteration re-borrows the live `self.waiters`.
+        //
+        // The re-entrant reset is what makes the bug observable in a
+        // test: without it, `poll()` short-circuits on `is_set` and
+        // returns Ready regardless of whether C was actually notified
+        // by set().
+        let event = LocalManualResetEvent::boxed();
+        let event_for_waker = event.clone();
+
+        let future_b_holder: Rc<RefCell<Option<Pin<Box<LocalManualResetWaitFuture>>>>> =
+            Rc::new(RefCell::new(None));
+        let holder_for_waker = Rc::clone(&future_b_holder);
+
+        let waker_data_a = ReentrantWakerData::new(move || {
+            // Drop B re-entrantly. B is still in WAITING state and will
+            // unregister itself from the awaiter set.
+            drop(holder_for_waker.borrow_mut().take());
+            // Reset so that polling C cannot short-circuit on is_set.
+            event_for_waker.reset();
+        });
+        // SAFETY: Data outlives waker, single-threaded test.
+        let waker_a = unsafe { waker_data_a.waker() };
+        let mut cx_a = task::Context::from_waker(&waker_a);
+
+        let noop = Waker::noop();
+        let mut cx_noop = task::Context::from_waker(noop);
+
+        // Register A, B, C in this order (head → tail).
+        let mut future_a = Box::pin(event.wait());
+        assert!(future_a.as_mut().poll(&mut cx_a).is_pending());
+
+        let mut future_b = Box::pin(event.wait());
+        assert!(future_b.as_mut().poll(&mut cx_noop).is_pending());
+        *future_b_holder.borrow_mut() = Some(future_b);
+
+        let mut future_c = Box::pin(event.wait());
+        assert!(future_c.as_mut().poll(&mut cx_noop).is_pending());
+
+        // set() notifies A first, A's waker drops B and resets the
+        // event, then the loop must still observe C in the live set
+        // and notify it.
+        event.set();
+
+        assert!(waker_data_a.was_woken());
+        assert!(future_b_holder.borrow().is_none());
+        // C must have been notified (lifecycle = NOTIFIED) even though
+        // is_set is now false from the re-entrant reset.
+        assert!(future_c.as_mut().poll(&mut cx_noop).is_ready());
     }
 
     #[test]
