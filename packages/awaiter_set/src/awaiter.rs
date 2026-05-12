@@ -246,7 +246,7 @@ mod tests {
         }
 
         assert!(a.is_registered());
-        let waker = unsafe { set.notify_one() };
+        let waker = set.notify_one();
         assert!(waker.is_some());
         assert!(set.is_empty());
     }
@@ -312,7 +312,7 @@ mod tests {
             set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
         }
 
-        let node = unsafe { set.notify_one() };
+        let node = set.notify_one();
         assert!(node.is_some());
 
         assert!(a.is_notified());
@@ -327,7 +327,7 @@ mod tests {
             set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
         }
 
-        drop(unsafe { set.notify_one() });
+        drop(set.notify_one());
 
         let notified = a.take_notification();
         assert!(notified);
@@ -342,7 +342,7 @@ mod tests {
         unsafe {
             set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
         }
-        drop(unsafe { set.notify_one() });
+        drop(set.notify_one());
 
         assert!(a.is_notified());
         assert!(a.is_notified());
@@ -358,7 +358,7 @@ mod tests {
         }
         assert!(a.is_registered());
 
-        drop(unsafe { set.notify_one() });
+        drop(set.notify_one());
 
         assert!(a.take_notification());
         assert!(!a.is_registered());
@@ -390,7 +390,7 @@ mod tests {
             set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
         }
 
-        drop(unsafe { set.notify_one() });
+        drop(set.notify_one());
         assert!(a.is_notified());
 
         unsafe {
@@ -407,7 +407,7 @@ mod tests {
         unsafe {
             set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
         }
-        drop(unsafe { set.notify_one() });
+        drop(set.notify_one());
         assert!(a.take_notification());
         assert!(!a.is_registered());
 
@@ -417,7 +417,7 @@ mod tests {
         assert!(a.is_registered());
         assert!(!set.is_empty());
 
-        drop(unsafe { set.notify_one() });
+        drop(set.notify_one());
     }
 
     #[test]

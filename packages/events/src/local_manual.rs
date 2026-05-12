@@ -116,8 +116,7 @@ impl Inner {
         // exclusively owned by this stack frame. Re-entrant wakers
         // may call set()/reset() but those operate on the original
         // (now empty) set, not on this snapshot.
-        // SAFETY: Single-threaded — confined to one thread.
-        while let Some(w) = unsafe { snapshot.notify_one() } {
+        while let Some(w) = snapshot.notify_one() {
             w.wake();
         }
     }

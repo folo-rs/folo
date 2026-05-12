@@ -91,8 +91,7 @@ fn set(inner: &EventInner) {
     // the mutex to avoid deadlocks with re-entrant wakers.
     loop {
         let mut waiters = inner.slow.lock().expect(NEVER_POISONED);
-        // SAFETY: We hold the mutex.
-        let waker = unsafe { waiters.notify_one() };
+        let waker = waiters.notify_one();
         if let Some(w) = waker {
             if waiters.is_empty() {
                 inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);

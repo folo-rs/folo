@@ -98,8 +98,7 @@ fn set(inner: &EventInner) {
     {
         let mut waiters = inner.slow.lock().expect(NEVER_POISONED);
 
-        // SAFETY: We hold the mutex.
-        if let Some(w) = unsafe { waiters.notify_one() } {
+        if let Some(w) = waiters.notify_one() {
             if waiters.is_empty() {
                 inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
             }
@@ -196,8 +195,7 @@ unsafe fn drop_wait(inner: &EventInner, mut awaiter: Pin<&mut Awaiter>) {
     if awaiter.as_ref().is_notified() {
         // We were notified but the future was cancelled. Forward
         // the notification to the next waiter.
-        // SAFETY: We hold the mutex.
-        if let Some(waker) = unsafe { waiters.notify_one() } {
+        if let Some(waker) = waiters.notify_one() {
             if waiters.is_empty() {
                 inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
             }

@@ -28,8 +28,7 @@ fn main() {
     // Later, the primitive grants its resource and wakes one awaiter.
     let waker = {
         let mut guard = set.lock().unwrap();
-        // SAFETY: The only registered awaiter is stack-pinned and outlives this call.
-        unsafe { guard.notify_one() }
+        guard.notify_one()
     };
 
     // Wake outside the lock to avoid reentrancy with user-defined wakers.
