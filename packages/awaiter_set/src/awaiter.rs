@@ -2,7 +2,6 @@ use std::any::type_name;
 use std::cell::UnsafeCell;
 use std::marker::PhantomPinned;
 use std::panic::{RefUnwindSafe, UnwindSafe};
-use std::pin::Pin;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::task::Waker;
 use std::{fmt, ptr};
@@ -59,13 +58,6 @@ impl Inner {
 /// 2. **Waiting** — registered in a set, holding a waker.
 /// 3. **Notified** — removed from the set by the primitive; the
 ///    owning future should complete with `Ready` on its next poll.
-///
-/// [`is_registered()`][Self::is_registered],
-/// [`is_notified()`][Self::is_notified] and
-/// [`take_notification()`][Self::take_notification] may be called
-/// without holding the primitive's lock; all other interactions
-/// happen through [`AwaiterSet`][crate::AwaiterSet] and require that
-/// lock.
 pub struct Awaiter {
     inner: UnsafeCell<Inner>,
 
@@ -95,8 +87,6 @@ impl Awaiter {
     ///
     /// A future's [`Drop`] handler uses this to decide whether
     /// cleanup (unregistering or forwarding a resource) is needed.
-    ///
-    /// May be called without holding the primitive's lock.
     #[must_use]
     pub fn is_registered(&self) -> bool {
         self.lifecycle.load(Ordering::Acquire) != IDLE
@@ -112,9 +102,8 @@ impl Awaiter {
     /// `Poll::Ready`.
     ///
     /// This is typically the first check in a future's `poll()`.
-    /// May be called without holding the primitive's lock.
     #[must_use]
-    pub fn take_notification(self: Pin<&Self>) -> bool {
+    pub fn take_notification(&self) -> bool {
         self.lifecycle
             .compare_exchange(NOTIFIED, IDLE, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
@@ -127,10 +116,8 @@ impl Awaiter {
     /// [`Drop`] handler to decide whether the primitive granted a
     /// resource (lock, permit, signal) that must be forwarded to
     /// another awaiter instead of being silently discarded.
-    ///
-    /// May be called without holding the primitive's lock.
     #[must_use]
-    pub fn is_notified(self: Pin<&Self>) -> bool {
+    pub fn is_notified(&self) -> bool {
         self.lifecycle.load(Ordering::Acquire) == NOTIFIED
     }
 
@@ -213,6 +200,7 @@ impl fmt::Debug for Awaiter {
     reason = "Pin::new_unchecked + unsafe method calls are idiomatic in tests"
 )]
 mod tests {
+    use std::pin::Pin;
     use std::task::Waker;
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
@@ -244,7 +232,7 @@ mod tests {
             set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
         }
         assert!(a.is_registered());
-        assert!(!unsafe { set.is_empty() });
+        assert!(!set.is_empty());
     }
 
     #[test]
@@ -260,7 +248,7 @@ mod tests {
         assert!(a.is_registered());
         let waker = unsafe { set.notify_one() };
         assert!(waker.is_some());
-        assert!(unsafe { set.is_empty() });
+        assert!(set.is_empty());
     }
 
     #[test]
@@ -274,7 +262,7 @@ mod tests {
         }
 
         assert!(!a.is_registered());
-        assert!(unsafe { set.is_empty() });
+        assert!(set.is_empty());
     }
 
     #[test]
@@ -292,7 +280,7 @@ mod tests {
     fn take_notification_returns_false_when_idle() {
         let a = Awaiter::new();
 
-        let notified = unsafe { Pin::new_unchecked(&a) }.take_notification();
+        let notified = a.take_notification();
         assert!(!notified);
     }
 
@@ -300,7 +288,7 @@ mod tests {
     fn is_notified_returns_false_when_idle() {
         let a = Awaiter::new();
 
-        assert!(!unsafe { Pin::new_unchecked(&a) }.is_notified());
+        assert!(!a.is_notified());
     }
 
     #[test]
@@ -312,7 +300,7 @@ mod tests {
             set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
         }
 
-        assert!(!unsafe { Pin::new_unchecked(&a) }.is_notified());
+        assert!(!a.is_notified());
     }
 
     #[test]
@@ -327,7 +315,7 @@ mod tests {
         let node = unsafe { set.notify_one() };
         assert!(node.is_some());
 
-        assert!(unsafe { Pin::new_unchecked(&a) }.is_notified());
+        assert!(a.is_notified());
     }
 
     #[test]
@@ -341,7 +329,7 @@ mod tests {
 
         drop(unsafe { set.notify_one() });
 
-        let notified = unsafe { Pin::new_unchecked(&a) }.take_notification();
+        let notified = a.take_notification();
         assert!(notified);
         assert!(!a.is_registered());
     }
@@ -356,8 +344,8 @@ mod tests {
         }
         drop(unsafe { set.notify_one() });
 
-        assert!(unsafe { Pin::new_unchecked(&a) }.is_notified());
-        assert!(unsafe { Pin::new_unchecked(&a) }.is_notified());
+        assert!(a.is_notified());
+        assert!(a.is_notified());
     }
 
     #[test]
@@ -372,7 +360,7 @@ mod tests {
 
         drop(unsafe { set.notify_one() });
 
-        assert!(unsafe { Pin::new_unchecked(&a) }.take_notification());
+        assert!(a.take_notification());
         assert!(!a.is_registered());
     }
 
@@ -390,7 +378,7 @@ mod tests {
             set.unregister(Pin::new_unchecked(&mut a));
         }
         assert!(!a.is_registered());
-        assert!(unsafe { set.is_empty() });
+        assert!(set.is_empty());
     }
 
     #[test]
@@ -403,12 +391,12 @@ mod tests {
         }
 
         drop(unsafe { set.notify_one() });
-        assert!(unsafe { Pin::new_unchecked(&a) }.is_notified());
+        assert!(a.is_notified());
 
         unsafe {
             set.unregister(Pin::new_unchecked(&mut a));
         }
-        assert!(unsafe { Pin::new_unchecked(&a) }.is_notified());
+        assert!(a.is_notified());
     }
 
     #[test]
@@ -420,14 +408,14 @@ mod tests {
             set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
         }
         drop(unsafe { set.notify_one() });
-        assert!(unsafe { Pin::new_unchecked(&a) }.take_notification());
+        assert!(a.take_notification());
         assert!(!a.is_registered());
 
         unsafe {
             set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
         }
         assert!(a.is_registered());
-        assert!(!unsafe { set.is_empty() });
+        assert!(!set.is_empty());
 
         drop(unsafe { set.notify_one() });
     }
@@ -441,7 +429,7 @@ mod tests {
             set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
         }
 
-        assert!(!unsafe { Pin::new_unchecked(&a) }.take_notification());
+        assert!(!a.take_notification());
         assert!(a.is_registered());
     }
 }

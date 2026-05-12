@@ -19,14 +19,17 @@
 //!
 //! # Synchronization
 //!
-//! Neither `AwaiterSet` nor `Awaiter` has internal synchronization.
-//! The caller must ensure that all access to the set and its awaiters are
-//! properly synchronized. It is up to the owner of these objects to
-//! protect all access to both the set and its registered awaiters with
-//! a single lock (or by confining them to a single thread).
+//! Neither `AwaiterSet` nor `Awaiter` has internal synchronization,
+//! and both are `Send` but not `Sync`.
 //!
-//! A small number of [`Awaiter`] methods are designed to be called
-//! without holding that lock — see their individual documentation.
+//! `AwaiterSet`'s mutating methods take `&mut self`. To share a set
+//! between threads, wrap it in a [`Mutex`][std::sync::Mutex] (or
+//! another exclusive lock); for single-threaded use no lock is
+//! required.
+//!
+//! `Awaiter`'s public methods are safe to call from the owning future
+//! without any external synchronization, even while the awaiter is
+//! registered with a set on another thread.
 //!
 //! # Waker invocation
 //!

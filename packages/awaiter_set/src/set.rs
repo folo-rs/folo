@@ -19,11 +19,15 @@ use crate::awaiter::{Awaiter, IDLE, Inner, NOTIFIED, WAITING};
 ///
 /// # Synchronization
 ///
-/// The set has no internal synchronization. The owning primitive must
-/// serialize all access to both the set and every [`Awaiter`]
-/// registered with it — for example by protecting them with a single
-/// synchronous [`Mutex`][std::sync::Mutex] or by confining the
-/// primitive and its futures to a single thread.
+/// The set has no internal synchronization. It is `Send` but not
+/// `Sync`. To share it between threads, wrap it in a
+/// [`Mutex`][std::sync::Mutex] (or another exclusive lock) so that
+/// each operation has exclusive access. For single-threaded use no
+/// lock is required.
+///
+/// All mutating operations take `&mut self`, so the Rust borrow
+/// checker (together with the lock guard from a wrapping mutex)
+/// already prevents concurrent modification.
 ///
 /// # Examples
 ///
@@ -48,7 +52,8 @@ use crate::awaiter::{Awaiter, IDLE, Inner, NOTIFIED, WAITING};
 ///     move || {
 ///         let waker = loop {
 ///             let mut guard = set.lock().unwrap();
-///             // SAFETY: We hold the lock that protects the set.
+///             // SAFETY: The awaiter below is heap-pinned and is
+///             // unregistered before being dropped.
 ///             if let Some(w) = unsafe { guard.notify_one() } {
 ///                 break w;
 ///             }
@@ -70,8 +75,8 @@ use crate::awaiter::{Awaiter, IDLE, Inner, NOTIFIED, WAITING};
 ///         return Poll::Ready(());
 ///     }
 ///
-///     // SAFETY: We hold the lock. The awaiter remains pinned and
-///     // valid until removed from the set.
+///     // SAFETY: The awaiter is heap-pinned and remains valid
+///     // until removed from the set.
 ///     unsafe {
 ///         guard.register(awaiter.as_mut(), waker);
 ///     }
@@ -99,9 +104,7 @@ impl AwaiterSet {
     /// use awaiter_set::AwaiterSet;
     ///
     /// let set = AwaiterSet::new();
-    ///
-    /// // SAFETY: Single-threaded example requires no synchronization.
-    /// assert!(unsafe { set.is_empty() });
+    /// assert!(set.is_empty());
     /// ```
     #[must_use]
     pub fn new() -> Self {
@@ -112,13 +115,8 @@ impl AwaiterSet {
     }
 
     /// Returns `true` if the set contains no awaiters.
-    ///
-    /// # Safety
-    ///
-    /// The set and all its awaiters must be protected by the same
-    /// lock (or confined to a single thread).
     #[must_use]
-    pub unsafe fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.head.is_null()
     }
 
@@ -130,9 +128,10 @@ impl AwaiterSet {
     ///
     /// # Safety
     ///
-    /// The awaiter and the set must be protected by the same lock
-    /// (or confined to a single thread). The awaiter must remain
-    /// pinned and valid until it is removed from the set.
+    /// The awaiter must remain pinned and valid until it is removed
+    /// from the set (via [`unregister()`][Self::unregister] or
+    /// [`notify_one()`][Self::notify_one]). Dropping a registered
+    /// awaiter without removing it is undefined behavior.
     pub unsafe fn register(&mut self, awaiter: Pin<&mut Awaiter>, waker: Waker) {
         // SAFETY: We do not move the awaiter. Pin guarantees address
         // stability.
@@ -182,8 +181,9 @@ impl AwaiterSet {
     ///
     /// # Safety
     ///
-    /// The awaiter and the set must be protected by the same lock
-    /// (or confined to a single thread).
+    /// The awaiter must currently be registered with this set (or
+    /// already notified by it). Passing an awaiter that belongs to a
+    /// different set is undefined behavior.
     pub unsafe fn unregister(&mut self, awaiter: Pin<&mut Awaiter>) {
         // SAFETY: We do not move the awaiter.
         let awaiter = unsafe { awaiter.get_unchecked_mut() };
@@ -226,8 +226,9 @@ impl AwaiterSet {
     ///
     /// # Safety
     ///
-    /// The set and all its awaiters must be protected by the same
-    /// lock (or confined to a single thread).
+    /// Every awaiter currently registered with this set must remain
+    /// pinned and valid. Dropping a registered awaiter without
+    /// unregistering it first is undefined behavior.
     pub unsafe fn notify_one(&mut self) -> Option<Waker> {
         if self.head.is_null() {
             return None;
@@ -361,13 +362,13 @@ mod tests {
     #[test]
     fn new_set_is_empty() {
         let set = AwaiterSet::new();
-        assert!(unsafe { set.is_empty() });
+        assert!(set.is_empty());
     }
 
     #[test]
     fn default_set_is_empty() {
         let set = AwaiterSet::default();
-        assert!(unsafe { set.is_empty() });
+        assert!(set.is_empty());
     }
 
     #[test]
@@ -384,11 +385,11 @@ mod tests {
         unsafe {
             set.register(Pin::new_unchecked(&mut a), waker());
         }
-        assert!(!unsafe { set.is_empty() });
+        assert!(!set.is_empty());
 
         let waker = unsafe { set.notify_one() };
         assert!(waker.is_some());
-        assert!(unsafe { set.is_empty() });
+        assert!(set.is_empty());
     }
 
     #[test]
@@ -404,7 +405,7 @@ mod tests {
             set.register(Pin::new_unchecked(&mut c), waker());
         }
 
-        assert!(!unsafe { set.is_empty() });
+        assert!(!set.is_empty());
 
         let mut notified = 0_usize;
         while let Some(w) = unsafe { set.notify_one() } {
@@ -414,10 +415,10 @@ mod tests {
         assert_eq!(notified, 3);
 
         for awaiter in [&a, &b, &c] {
-            assert!(unsafe { Pin::new_unchecked(awaiter) }.is_notified());
+            assert!(awaiter.is_notified());
         }
 
-        assert!(unsafe { set.is_empty() });
+        assert!(set.is_empty());
     }
 
     #[test]
@@ -435,8 +436,8 @@ mod tests {
         assert!(!a.is_registered());
         let w = unsafe { set.notify_one() };
         assert!(w.is_some());
-        assert!(unsafe { Pin::new_unchecked(&b) }.is_notified());
-        assert!(unsafe { set.is_empty() });
+        assert!(b.is_notified());
+        assert!(set.is_empty());
     }
 
     #[test]
@@ -454,8 +455,8 @@ mod tests {
         assert!(!b.is_registered());
         let w = unsafe { set.notify_one() };
         assert!(w.is_some());
-        assert!(unsafe { Pin::new_unchecked(&a) }.is_notified());
-        assert!(unsafe { set.is_empty() });
+        assert!(a.is_notified());
+        assert!(set.is_empty());
     }
 
     #[test]
@@ -475,9 +476,9 @@ mod tests {
         assert!(!b.is_registered());
         drop(unsafe { set.notify_one() });
         drop(unsafe { set.notify_one() });
-        assert!(unsafe { Pin::new_unchecked(&a) }.is_notified());
-        assert!(unsafe { Pin::new_unchecked(&c) }.is_notified());
-        assert!(unsafe { set.is_empty() });
+        assert!(a.is_notified());
+        assert!(c.is_notified());
+        assert!(set.is_empty());
     }
 
     #[test]
@@ -490,7 +491,7 @@ mod tests {
             set.unregister(Pin::new_unchecked(&mut a));
         }
 
-        assert!(unsafe { set.is_empty() });
+        assert!(set.is_empty());
     }
 
     #[test]
@@ -521,8 +522,8 @@ mod tests {
         }
 
         drop(unsafe { set.notify_one() });
-        assert!(unsafe { Pin::new_unchecked(&b) }.is_notified());
-        assert!(unsafe { set.is_empty() });
+        assert!(b.is_notified());
+        assert!(set.is_empty());
     }
 
     #[test]
@@ -545,13 +546,10 @@ mod tests {
 
         drop(unsafe { set.notify_one() });
         drop(unsafe { set.notify_one() });
-        assert!(unsafe { set.is_empty() });
+        assert!(set.is_empty());
 
         // Order is unspecified — but all three must have been notified.
-        let count = [&a, &b, &c]
-            .iter()
-            .filter(|aw| unsafe { Pin::new_unchecked(**aw) }.is_notified())
-            .count();
+        let count = [&a, &b, &c].iter().filter(|aw| aw.is_notified()).count();
         assert_eq!(count, 3);
     }
 
@@ -578,7 +576,7 @@ mod tests {
         }
 
         drop(unsafe { set.notify_one() });
-        assert!(unsafe { Pin::new_unchecked(&a) }.is_notified());
+        assert!(a.is_notified());
     }
 
     #[test]
@@ -600,10 +598,10 @@ mod tests {
             assert!(w.is_some());
         }
 
-        assert!(unsafe { set.is_empty() });
+        assert!(set.is_empty());
 
         for node in &nodes {
-            assert!(unsafe { Pin::new_unchecked(node) }.is_notified());
+            assert!(node.is_notified());
         }
     }
 
@@ -650,7 +648,7 @@ mod tests {
 
                 let guard = shared.lock().unwrap();
                 assert!(guard.notified);
-                assert!(unsafe { Pin::new_unchecked(&awaiter) }.is_notified());
+                assert!(awaiter.is_notified());
             }
         });
 

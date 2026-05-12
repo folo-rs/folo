@@ -94,8 +94,7 @@ fn set(inner: &EventInner) {
         // SAFETY: We hold the mutex.
         let waker = unsafe { waiters.notify_one() };
         if let Some(w) = waker {
-            // SAFETY: We hold the mutex.
-            if unsafe { waiters.is_empty() } {
+            if waiters.is_empty() {
                 inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
             }
             drop(waiters);
@@ -185,8 +184,7 @@ unsafe fn drop_wait(inner: &EventInner, mut awaiter: Pin<&mut Awaiter>) {
     unsafe {
         waiters.unregister(awaiter.as_mut());
     }
-    // SAFETY: We hold the mutex.
-    if unsafe { waiters.is_empty() } {
+    if waiters.is_empty() {
         inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
     }
 }
