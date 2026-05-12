@@ -37,7 +37,7 @@ use crate::NEVER_POISONED;
 /// The event is a lightweight cloneable handle. All clones derived
 /// from the same origin share the same underlying state.
 ///
-/// # Re-entrancy
+/// # Reentrancy
 ///
 /// A [`Waker`] invoked by this event may re-enter the same event.
 /// The following operations are sound when performed from inside a
@@ -51,7 +51,7 @@ use crate::NEVER_POISONED;
 ///   this event, including one that is still pending
 ///
 /// The event always releases its internal mutex before calling
-/// [`Waker::wake()`], so re-entrant operations never deadlock or
+/// [`Waker::wake()`], so reentrant operations never deadlock or
 /// observe partially mutated state.
 ///
 /// # Examples
@@ -106,7 +106,7 @@ impl EventInner {
         }
 
         // Slow path: waiters exist — drain all, waking each outside
-        // the mutex to avoid deadlocks with re-entrant wakers.
+        // the mutex to avoid deadlocks with reentrant wakers.
         loop {
             let mut waiters = self.slow.lock().expect(NEVER_POISONED);
             let waker = waiters.notify_one();
@@ -1325,11 +1325,11 @@ mod tests {
     }
 
     //
-    // These tests use a custom waker that re-entrantly accesses the same
+    // These tests use a custom waker that reentrantly accesses the same
     // event when woken. They catch:
     //   * Aliased mutable access (`AwaiterSet` borrow held while invoking
     //     `Waker::wake()`) — Miri flags this as UB.
-    //   * Lost wakes when a re-entrant call mutates the waiter set
+    //   * Lost wakes when a reentrant call mutates the waiter set
     //     mid-drain (the bug PR 141 fixed in `LocalManualResetEvent`).
 
     #[test]
@@ -1340,7 +1340,7 @@ mod tests {
         let event_clone = event.clone();
 
         let waker_data = ReentrantWakerData::new(move || {
-            // Re-entrantly reset and poll a new waiter, which acquires
+            // Reentrantly reset and poll a new waiter, which acquires
             // the mutex to register another awaiter.
             event_clone.reset();
             let mut new_future = Box::pin(event_clone.wait());
@@ -1434,7 +1434,7 @@ mod tests {
 
         assert!(waker_data_a.was_woken());
         assert!(future_b_holder.borrow().is_none());
-        // The re-entrant reset cleared `is_set`, so C must have been
+        // The reentrant reset cleared `is_set`, so C must have been
         // notified directly by the drain loop.
         assert!(future_c.as_mut().poll(&mut cx_noop).is_ready());
     }

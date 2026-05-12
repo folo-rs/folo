@@ -44,7 +44,7 @@ use awaiter_set::{Awaiter, AwaiterSet};
 /// The event is a lightweight cloneable handle. All clones derived
 /// from the same origin share the same underlying state.
 ///
-/// # Re-entrancy
+/// # Reentrancy
 ///
 /// A [`Waker`] invoked by this event may re-enter the same event.
 /// The following operations are sound when performed from inside a
@@ -57,7 +57,7 @@ use awaiter_set::{Awaiter, AwaiterSet};
 ///   this event, including one that is still pending
 ///
 /// The event always drops any internal borrow on its awaiter set
-/// before calling [`Waker::wake()`], so re-entrant operations never
+/// before calling [`Waker::wake()`], so reentrant operations never
 /// observe partially mutated state.
 ///
 /// # Examples
@@ -115,7 +115,7 @@ impl Inner {
     fn set(&self) {
         // Capture the waker while borrowing the state, then wake
         // after the borrow ends to avoid aliased mutable access if
-        // the waker is re-entrant.
+        // the waker is reentrant.
         let state_ptr = self.state.get();
         let waker = {
             // SAFETY: Single-threaded access guaranteed by !Send.
@@ -198,7 +198,7 @@ impl Inner {
             // the signal so it is not lost.
             //
             // The borrow on the awaiter set is dropped before the
-            // returned waker is invoked, so a re-entrant call from
+            // returned waker is invoked, so a reentrant call from
             // the woken future observes the canonical state.
             // SAFETY: Single-threaded access.
             let state = unsafe { &mut *self.state.get() };
@@ -861,9 +861,9 @@ mod tests {
         assert!(future2.as_mut().poll(&mut cx).is_ready());
     }
     //
-    // These tests use a custom waker that re-entrantly accesses the same event
+    // These tests use a custom waker that reentrantly accesses the same event
     // when woken. If wake() were called while an &mut AwaiterSet borrow from
-    // UnsafeCell is still active, the re-entrant access would create aliased
+    // UnsafeCell is still active, the reentrant access would create aliased
     // mutable references and Miri would flag the UB.
 
     #[test]
@@ -874,7 +874,7 @@ mod tests {
         let event_clone = event.clone();
 
         let waker_data = ReentrantWakerData::new(move || {
-            // Re-entrantly call set(), which accesses the awaiter set.
+            // Reentrantly call set(), which accesses the awaiter set.
             event_clone.set();
         });
         // SAFETY: Data outlives waker, single-threaded test.
@@ -885,7 +885,7 @@ mod tests {
         assert!(future.as_mut().poll(&mut cx).is_pending());
 
         // Outer set() pops the waiter, releases the awaiter set borrow,
-        // then calls wake(). The re-entrant set() safely obtains its own
+        // then calls wake(). The reentrant set() safely obtains its own
         // &mut AwaiterSet.
         event.set();
 
@@ -905,7 +905,7 @@ mod tests {
         let mut noop_cx = task::Context::from_waker(noop_waker);
         assert!(future1.as_mut().poll(&mut noop_cx).is_pending());
 
-        // future2 uses a re-entrant waker.
+        // future2 uses a reentrant waker.
         let waker_data = ReentrantWakerData::new(move || {
             event_clone.set();
         });
@@ -919,7 +919,7 @@ mod tests {
         event.set();
 
         // Drop future1 — it was notified, so it forwards to future2,
-        // calling the re-entrant waker which accesses the awaiter set.
+        // calling the reentrant waker which accesses the awaiter set.
         drop(future1);
 
         assert!(waker_data.was_woken());
@@ -962,7 +962,7 @@ mod tests {
         let mut noop_cx = task::Context::from_waker(noop_waker);
         assert!(future1.as_mut().poll(&mut noop_cx).is_pending());
 
-        // future2 uses a re-entrant waker.
+        // future2 uses a reentrant waker.
         let waker_data = ReentrantWakerData::new(move || {
             event.set();
         });

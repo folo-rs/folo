@@ -26,12 +26,12 @@ static NEXT_SET_ID: AtomicU64 = AtomicU64::new(1);
 /// it to the notified state, and return its [`Waker`] so the primitive
 /// can wake the corresponding future.
 ///
-/// # Re-entrancy
+/// # Reentrancy
 ///
 /// Invoking a returned [`Waker`] may execute arbitrary user code which
 /// in turn calls back into the owning primitive — dropping another
 /// pending future, registering a new one, or signalling the primitive
-/// again. To remain correct in the face of such re-entrancy, code that
+/// again. To remain correct in the face of such reentrancy, code that
 /// drains the set must always operate against the live, current set
 /// rather than a borrowed snapshot of its contents.
 ///

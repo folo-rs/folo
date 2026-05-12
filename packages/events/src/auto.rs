@@ -42,7 +42,7 @@ use crate::NEVER_POISONED;
 /// The event is a lightweight cloneable handle. All clones derived
 /// from the same origin share the same underlying state.
 ///
-/// # Re-entrancy
+/// # Reentrancy
 ///
 /// A [`Waker`] invoked by this event may re-enter the same event.
 /// The following operations are sound when performed from inside a
@@ -55,7 +55,7 @@ use crate::NEVER_POISONED;
 ///   this event, including one that is still pending
 ///
 /// The event always releases its internal mutex before calling
-/// [`Waker::wake()`], so re-entrant operations never deadlock or
+/// [`Waker::wake()`], so reentrant operations never deadlock or
 /// observe partially mutated state.
 ///
 /// # Examples
@@ -1479,7 +1479,7 @@ mod tests {
         let event_for_waker = event.clone();
 
         let waker_data = ReentrantWakerData::new(move || {
-            // Re-entrantly call set() on the same event.
+            // Reentrantly call set() on the same event.
             event_for_waker.set();
         });
         // SAFETY: Data outlives waker, test is single-threaded.
@@ -1489,13 +1489,13 @@ mod tests {
         let mut future = Box::pin(event.wait());
         assert!(future.as_mut().poll(&mut cx).is_pending());
 
-        // set() notifies the future, calling the re-entrant waker
+        // set() notifies the future, calling the reentrant waker
         // which calls set() again. The second set() should store
         // the signal (no waiters left).
         event.set();
 
         assert!(waker_data.was_woken());
-        // The re-entrant set() stored a signal.
+        // The reentrant set() stored a signal.
         assert!(event.try_wait());
     }
 
@@ -1507,7 +1507,7 @@ mod tests {
         // When future1 is dropped after being notified, it must hand
         // the signal off to future2 by calling notify_one on the
         // awaiter set. The mutex protecting the set must be released
-        // before the re-entrant waker fires.
+        // before the reentrant waker fires.
         let event = AutoResetEvent::boxed();
         let event_clone = event.clone();
 
@@ -1529,7 +1529,7 @@ mod tests {
         event.set();
 
         // Drop future1 — it was notified, so it forwards to future2,
-        // calling the re-entrant waker which accesses the awaiter set
+        // calling the reentrant waker which accesses the awaiter set
         // again.
         drop(future1);
 

@@ -5,7 +5,7 @@ use std::task::{RawWaker, RawWakerVTable, Waker};
 /// A custom waker that executes a caller-supplied closure when woken.
 ///
 /// Used to test that synchronization primitives release their locks
-/// before calling `wake()`. If a re-entrant waker accesses the same
+/// before calling `wake()`. If a reentrant waker accesses the same
 /// primitive's internal state while the lock is still held, Miri
 /// detects the aliased access as undefined behavior.
 ///
