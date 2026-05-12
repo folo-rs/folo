@@ -40,9 +40,16 @@ impl ReentrantWakerData {
     ///
     /// # Safety
     ///
-    /// The caller must ensure this `ReentrantWakerData` outlives all
-    /// wakers (and their clones) created from it. The returned waker
-    /// must not be sent to another thread.
+    /// * The caller must ensure this `ReentrantWakerData` outlives all
+    ///   wakers (and their clones) created from it.
+    /// * The returned waker must not be sent to another thread.
+    /// * Aliasing — the caller must not hold any `&mut ReentrantWakerData`
+    ///   pointing at `self` (and must not move or drop `self`) while
+    ///   any waker, or clone of a waker, returned from this method may
+    ///   still be invoked. `ReentrantWakerData`'s public API is
+    ///   `&self`-only and backed by [`Cell`] plus a boxed `Fn`, so
+    ///   simultaneous `&` reborrows from `wake()` callers are sound;
+    ///   simultaneous `&mut` would violate Rust's aliasing rules.
     pub unsafe fn waker(&self) -> Waker {
         let data: *const () = std::ptr::from_ref(self).cast();
 
@@ -66,8 +73,13 @@ fn wake_fn(data: *const ()) {
 }
 
 fn wake_by_ref_fn(data: *const ()) {
-    // SAFETY: data points to a valid ReentrantWakerData that outlives
-    // this waker per the contract on `ReentrantWakerData::waker()`.
+    // SAFETY: Validity — `data` points to a valid `ReentrantWakerData` that
+    // outlives this waker per the contract on `ReentrantWakerData::waker()`.
+    // Aliasing — `ReentrantWakerData`'s public API exposes only `&self`
+    // methods, backed by `Cell` and a boxed `Fn`. The safety contract on
+    // `waker()` requires the caller hold no `&mut ReentrantWakerData` while
+    // any waker (or clone) created from it may be invoked, so this `&` borrow
+    // does not alias with any `&mut` elsewhere.
     let this = unsafe { &*(data.cast::<ReentrantWakerData>()) };
     this.was_woken.set(true);
     (this.action)();
