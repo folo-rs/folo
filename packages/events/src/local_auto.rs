@@ -1,4 +1,5 @@
 use std::cell::UnsafeCell;
+use std::fmt;
 use std::future::Future;
 use std::marker::{PhantomData, PhantomPinned};
 use std::panic::{RefUnwindSafe, UnwindSafe};
@@ -6,7 +7,6 @@ use std::pin::Pin;
 use std::ptr::NonNull;
 use std::rc::Rc;
 use std::task::{self, Poll, Waker};
-use std::{fmt, mem};
 
 use awaiter_set::{Awaiter, AwaiterSet};
 
@@ -43,6 +43,22 @@ use awaiter_set::{Awaiter, AwaiterSet};
 ///
 /// The event is a lightweight cloneable handle. All clones derived
 /// from the same origin share the same underlying state.
+///
+/// # Re-entrancy
+///
+/// A [`Waker`] invoked by this event may re-enter the same event.
+/// The following operations are sound when performed from inside a
+/// `Waker::wake` callback fired by this event:
+///
+/// * [`set()`][Self::set] and [`try_wait()`][Self::try_wait]
+/// * Creating and polling a fresh [`wait()`][Self::wait] future
+///   (registers a new awaiter)
+/// * Dropping another in-flight [`Future`][std::future::Future] from
+///   this event, including one that is still pending
+///
+/// The event always drops any internal borrow on its awaiter set
+/// before calling [`Waker::wake()`], so re-entrant operations never
+/// observe partially mutated state.
 ///
 /// # Examples
 ///
@@ -176,37 +192,27 @@ impl Inner {
         }
 
         if awaiter.as_ref().is_notified() {
-            let state_ptr = self.state.get();
+            // The awaiter caught a notification but the future is
+            // being dropped before it could observe it. Hand the
+            // notification off to another waiter (if any) or restore
+            // the signal so it is not lost.
+            //
+            // The borrow on the awaiter set is dropped before the
+            // returned waker is invoked, so a re-entrant call from
+            // the woken future observes the canonical state.
             // SAFETY: Single-threaded access.
-            let old_state =
-                unsafe { mem::replace(&mut *state_ptr, InnerState::Unset(AwaiterSet::new())) };
-            let waker = match old_state {
-                InnerState::Unset(mut waiters) => {
-                    if let Some(waker) = waiters.notify_one() {
-                        // Restore the awaiter set.
-                        // SAFETY: Single-threaded.
-                        unsafe {
-                            *state_ptr = InnerState::Unset(waiters);
-                        }
-                        Some(waker)
-                    } else {
-                        // No more waiters — restore the signal so
-                        // it is not lost.
-                        // SAFETY: Single-threaded.
-                        unsafe {
-                            *state_ptr = InnerState::Set;
-                        }
+            let state = unsafe { &mut *self.state.get() };
+            let waker = match state {
+                InnerState::Unset(waiters) => match waiters.notify_one() {
+                    Some(w) => Some(w),
+                    None => {
+                        // No more waiters — restore the signal so it
+                        // is not lost.
+                        *state = InnerState::Set;
                         None
                     }
-                }
-                InnerState::Set => {
-                    // Already set — restore.
-                    // SAFETY: Single-threaded.
-                    unsafe {
-                        *state_ptr = InnerState::Set;
-                    }
-                    None
-                }
+                },
+                InnerState::Set => None,
             };
             if let Some(w) = waker {
                 w.wake();

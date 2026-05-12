@@ -39,6 +39,23 @@ use awaiter_set::{Awaiter, AwaiterSet};
 /// The event is a lightweight cloneable handle. All clones derived
 /// from the same origin share the same underlying state.
 ///
+/// # Re-entrancy
+///
+/// A [`Waker`] invoked by this event may re-enter the same event.
+/// The following operations are sound when performed from inside a
+/// `Waker::wake` callback fired by this event:
+///
+/// * [`set()`][Self::set], [`reset()`][Self::reset] and
+///   [`try_wait()`][Self::try_wait]
+/// * Creating and polling a fresh [`wait()`][Self::wait] future
+///   (registers a new awaiter)
+/// * Dropping another in-flight [`Future`][std::future::Future] from
+///   this event, including one that is still pending
+///
+/// The event always drops any internal borrow on its awaiter set
+/// before calling [`Waker::wake()`], so re-entrant operations never
+/// observe partially mutated state.
+///
 /// # Examples
 ///
 /// ```
@@ -1085,6 +1102,51 @@ mod tests {
         // C must have been notified (lifecycle = NOTIFIED) even though
         // is_set is now false from the re-entrant reset.
         assert!(future_c.as_mut().poll(&mut cx_noop).is_ready());
+    }
+
+    #[test]
+    fn reentrant_drop_of_tail_sibling_does_not_skip_others() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use testing::ReentrantWakerData;
+
+        // Register three futures A, B, C. A's waker drops the TAIL
+        // future C and resets the event. The drain loop must still
+        // observe B in the live set and notify it.
+        let event = LocalManualResetEvent::boxed();
+        let event_for_waker = event.clone();
+
+        let future_c_holder: Rc<RefCell<Option<Pin<Box<LocalManualResetWaitFuture>>>>> =
+            Rc::new(RefCell::new(None));
+        let holder_for_waker = Rc::clone(&future_c_holder);
+
+        let waker_data_a = ReentrantWakerData::new(move || {
+            drop(holder_for_waker.borrow_mut().take());
+            event_for_waker.reset();
+        });
+        // SAFETY: Data outlives waker, single-threaded test.
+        let waker_a = unsafe { waker_data_a.waker() };
+        let mut cx_a = task::Context::from_waker(&waker_a);
+
+        let noop = Waker::noop();
+        let mut cx_noop = task::Context::from_waker(noop);
+
+        let mut future_a = Box::pin(event.wait());
+        assert!(future_a.as_mut().poll(&mut cx_a).is_pending());
+
+        let mut future_b = Box::pin(event.wait());
+        assert!(future_b.as_mut().poll(&mut cx_noop).is_pending());
+
+        let mut future_c = Box::pin(event.wait());
+        assert!(future_c.as_mut().poll(&mut cx_noop).is_pending());
+        *future_c_holder.borrow_mut() = Some(future_c);
+
+        event.set();
+
+        assert!(waker_data_a.was_woken());
+        assert!(future_c_holder.borrow().is_none());
+        assert!(future_b.as_mut().poll(&mut cx_noop).is_ready());
     }
 
     #[test]

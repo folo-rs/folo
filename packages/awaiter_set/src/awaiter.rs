@@ -31,6 +31,15 @@ pub(crate) struct Inner {
     // by AwaiterSet.
     pub(crate) next: *mut Awaiter,
     pub(crate) prev: *mut Awaiter,
+
+    // Debug-only sentinel that records which AwaiterSet owns this
+    // awaiter while it is WAITING. Used by AwaiterSet to assert that
+    // operations like `unregister` or `notify_one` are not invoked on
+    // an awaiter that lives in a different set — a class of corruption
+    // that the lifecycle field alone cannot detect because the awaiter
+    // still appears WAITING. Zero means "not in any set".
+    #[cfg(debug_assertions)]
+    pub(crate) owning_set_id: u64,
 }
 
 impl Inner {
@@ -39,6 +48,8 @@ impl Inner {
             waker: None,
             next: ptr::null_mut(),
             prev: ptr::null_mut(),
+            #[cfg(debug_assertions)]
+            owning_set_id: 0,
         }
     }
 }

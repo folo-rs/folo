@@ -42,6 +42,22 @@ use crate::NEVER_POISONED;
 /// The event is a lightweight cloneable handle. All clones derived
 /// from the same origin share the same underlying state.
 ///
+/// # Re-entrancy
+///
+/// A [`Waker`] invoked by this event may re-enter the same event.
+/// The following operations are sound when performed from inside a
+/// `Waker::wake` callback fired by this event:
+///
+/// * [`set()`][Self::set] and [`try_wait()`][Self::try_wait]
+/// * Creating and polling a fresh [`wait()`][Self::wait] future
+///   (registers a new awaiter)
+/// * Dropping another in-flight [`Future`][std::future::Future] from
+///   this event, including one that is still pending
+///
+/// The event always releases its internal mutex before calling
+/// [`Waker::wake()`], so re-entrant operations never deadlock or
+/// observe partially mutated state.
+///
 /// # Examples
 ///
 /// ```
@@ -1444,6 +1460,43 @@ mod tests {
         assert!(waker_data.was_woken());
         // The re-entrant set() stored a signal.
         assert!(event.try_wait());
+    }
+
+    #[test]
+    fn drop_forwarding_with_reentrant_waker_does_not_alias() {
+        use testing::ReentrantWakerData;
+
+        // Mirrors `LocalAutoResetEvent::drop_forwarding_with_reentrant_waker_does_not_alias`.
+        // When future1 is dropped after being notified, it must hand
+        // the signal off to future2 by calling notify_one on the
+        // awaiter set. The mutex protecting the set must be released
+        // before the re-entrant waker fires.
+        let event = AutoResetEvent::boxed();
+        let event_clone = event.clone();
+
+        let mut future1 = Box::pin(event.wait());
+        let noop_waker = Waker::noop();
+        let mut noop_cx = task::Context::from_waker(noop_waker);
+        assert!(future1.as_mut().poll(&mut noop_cx).is_pending());
+
+        let waker_data = ReentrantWakerData::new(move || {
+            event_clone.set();
+        });
+        // SAFETY: Data outlives waker, single-threaded test.
+        let waker = unsafe { waker_data.waker() };
+        let mut reentrant_cx = task::Context::from_waker(&waker);
+        let mut future2 = Box::pin(event.wait());
+        assert!(future2.as_mut().poll(&mut reentrant_cx).is_pending());
+
+        // set() notifies future1 (noop waker, harmless).
+        event.set();
+
+        // Drop future1 — it was notified, so it forwards to future2,
+        // calling the re-entrant waker which accesses the awaiter set
+        // again.
+        drop(future1);
+
+        assert!(waker_data.was_woken());
     }
 
     #[test]

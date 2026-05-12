@@ -1,11 +1,20 @@
 use std::any::type_name;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
+#[cfg(debug_assertions)]
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::task::Waker;
 use std::{fmt, ptr};
 
 use crate::awaiter::{Awaiter, IDLE, Inner, NOTIFIED, WAITING};
+
+// Monotonically increasing per-set identifier used to detect awaiters
+// being passed to the wrong AwaiterSet (a class of corruption that the
+// lifecycle field alone cannot catch). Zero is reserved for "not in any
+// set", so we start at 1.
+#[cfg(debug_assertions)]
+static NEXT_SET_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Tracks awaiters for a synchronization primitive.
 ///
@@ -16,6 +25,33 @@ use crate::awaiter::{Awaiter, IDLE, Inner, NOTIFIED, WAITING};
 /// [`notify_one()`][Self::notify_one] to remove an awaiter, transition
 /// it to the notified state, and return its [`Waker`] so the primitive
 /// can wake the corresponding future.
+///
+/// # Re-entrancy
+///
+/// Invoking a returned [`Waker`] may execute arbitrary user code which
+/// in turn calls back into the owning primitive — dropping another
+/// pending future, registering a new one, or signalling the primitive
+/// again. To remain correct in the face of such re-entrancy, code that
+/// drains the set must always operate against the live, current set
+/// rather than a borrowed snapshot of its contents.
+///
+/// The canonical drain loop:
+///
+/// 1. Take a short-lived borrow of the set.
+/// 2. Call [`notify_one()`][Self::notify_one], stash the returned
+///    waker, and release the borrow.
+/// 3. Wake the future outside the borrow.
+/// 4. Repeat from step 1 until [`notify_one()`][Self::notify_one]
+///    returns `None`.
+///
+/// In particular, do not take a snapshot via [`std::mem::take`] or
+/// [`std::mem::replace`] and drain that — a waker firing during the
+/// drain may mutate the original (now-empty) set, leaving the
+/// snapshot and the original out of sync. In debug builds an
+/// owning-set invariant catches such cross-set operations.
+///
+/// See the canonical implementation in `events::ManualResetEvent::set`
+/// for an example of this pattern.
 ///
 /// # Examples
 ///
@@ -79,6 +115,13 @@ pub struct AwaiterSet {
     // based on pointer address to catch code that depends on ordering.
     head: *mut Awaiter,
     tail: *mut Awaiter,
+
+    // Debug-only sentinel used to detect awaiters being passed to a
+    // different AwaiterSet than the one they are registered in (e.g.
+    // via a snapshot/replace pattern that splits an awaiter from its
+    // home set). Stored on each WAITING awaiter via `Inner.owning_set_id`.
+    #[cfg(debug_assertions)]
+    set_id: u64,
 }
 
 impl AwaiterSet {
@@ -88,6 +131,8 @@ impl AwaiterSet {
         Self {
             head: ptr::null_mut(),
             tail: ptr::null_mut(),
+            #[cfg(debug_assertions)]
+            set_id: NEXT_SET_ID.fetch_add(1, Ordering::Relaxed),
         }
     }
 
@@ -123,9 +168,11 @@ impl AwaiterSet {
         );
 
         if awaiter.lifecycle_phase() == WAITING {
-            // Already registered — update the waker in place.
             // SAFETY: Access is serialized by the caller's lock.
-            unsafe { awaiter.inner_mut() }.waker = Some(waker);
+            let inner = unsafe { awaiter.inner_mut() };
+            self.debug_assert_owns(inner, "register");
+            // Already registered — update the waker in place.
+            inner.waker = Some(waker);
             return;
         }
 
@@ -135,6 +182,10 @@ impl AwaiterSet {
         inner.waker = Some(waker);
         inner.next = ptr::null_mut();
         inner.prev = self.tail;
+        #[cfg(debug_assertions)]
+        {
+            inner.owning_set_id = self.set_id;
+        }
 
         let ptr = ptr::from_mut(awaiter);
 
@@ -177,6 +228,7 @@ impl AwaiterSet {
 
         // SAFETY: Access is serialized by the caller's lock.
         let inner = unsafe { awaiter.inner_ref() };
+        self.debug_assert_owns(inner, "unregister");
         let next = inner.next;
         let prev = inner.prev;
 
@@ -211,6 +263,7 @@ impl AwaiterSet {
         let awaiter = unsafe { &*ptr };
         // SAFETY: Access is serialized by the caller's lock.
         let inner = unsafe { awaiter.inner_ref() };
+        self.debug_assert_owns(inner, "notify_one");
         let next = inner.next;
         let prev = inner.prev;
 
@@ -226,6 +279,10 @@ impl AwaiterSet {
         let waker = inner.waker.take();
         inner.next = ptr::null_mut();
         inner.prev = ptr::null_mut();
+        #[cfg(debug_assertions)]
+        {
+            inner.owning_set_id = 0;
+        }
 
         // Publish the notification. The Release ordering ensures all
         // prior writes on this thread (including data writes through
@@ -235,6 +292,29 @@ impl AwaiterSet {
 
         waker
     }
+
+    // Verifies in debug builds that the awaiter referenced by `inner`
+    // is registered in this set, not a different one. Catches bugs
+    // where an awaiter's home set has been split from `self` (e.g. via
+    // a snapshot/replace pattern) and the wrong set is being mutated.
+    #[cfg(debug_assertions)]
+    fn debug_assert_owns(&self, inner: &Inner, op: &str) {
+        debug_assert!(
+            inner.owning_set_id == self.set_id,
+            "AwaiterSet::{op} called on an awaiter that belongs to a different set \
+             (awaiter.owning_set_id = {}, self.set_id = {})",
+            inner.owning_set_id,
+            self.set_id,
+        );
+    }
+
+    #[cfg(not(debug_assertions))]
+    #[expect(
+        clippy::unused_self,
+        reason = "signature matches the debug build for call-site uniformity"
+    )]
+    #[inline(always)]
+    fn debug_assert_owns(&self, _inner: &Inner, _op: &str) {}
 
     // Updates the head/tail and the neighbours' next/prev pointers to
     // splice out a single awaiter whose links were `prev` and `next`.
@@ -682,5 +762,90 @@ mod tests {
             })
             .await;
         });
+    }
+
+    // The owning-set-id invariant is only present in debug builds.
+    // The tests below assert that the invariant fires when an awaiter
+    // registered in one set is passed to a different one, catching a
+    // class of corruption (snapshot/replace patterns) that the
+    // lifecycle field alone cannot detect.
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic]
+    fn unregister_with_wrong_set_panics() {
+        let mut set_a = AwaiterSet::new();
+        let mut set_b = AwaiterSet::new();
+        let mut a = Awaiter::new();
+
+        unsafe {
+            set_a.register(Pin::new_unchecked(&mut a), waker());
+        }
+
+        unsafe {
+            set_b.unregister(Pin::new_unchecked(&mut a));
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic]
+    fn register_in_second_set_while_waiting_in_first_panics() {
+        let mut set_a = AwaiterSet::new();
+        let mut set_b = AwaiterSet::new();
+        let mut a = Awaiter::new();
+
+        unsafe {
+            set_a.register(Pin::new_unchecked(&mut a), waker());
+        }
+
+        unsafe {
+            set_b.register(Pin::new_unchecked(&mut a), waker());
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic]
+    fn unregister_after_snapshot_panics() {
+        // Reproduces the corruption pattern from PR 141: an awaiter is
+        // registered in a set that is then moved out via mem::take. The
+        // original location gets a fresh set_id. Calling unregister on
+        // the original (post-take) for an awaiter that lives in the
+        // snapshot must trip the invariant — this is the assertion
+        // that catches snapshot/replace-style state corruption.
+        let mut original = AwaiterSet::new();
+        let mut a = Awaiter::new();
+
+        unsafe {
+            original.register(Pin::new_unchecked(&mut a), waker());
+        }
+
+        // Move the live state into a snapshot; the original is now a
+        // fresh, empty set with a different set_id.
+        let _snapshot = std::mem::take(&mut original);
+
+        // A still has owning_set_id equal to the OLD set_id, which now
+        // lives only in `_snapshot`. The fresh `original` does not own
+        // this awaiter.
+        unsafe {
+            original.unregister(Pin::new_unchecked(&mut a));
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn each_set_has_a_unique_id() {
+        // The owning-set-id mechanism relies on freshly constructed
+        // sets having distinct ids. We do not pin the exact values
+        // (they monotonically increase via a static counter that may
+        // already be advanced by other tests), only that no two new
+        // sets share the same id.
+        let a = AwaiterSet::new();
+        let b = AwaiterSet::new();
+        let c = AwaiterSet::default();
+        assert_ne!(a.set_id, b.set_id);
+        assert_ne!(b.set_id, c.set_id);
+        assert_ne!(a.set_id, c.set_id);
     }
 }
