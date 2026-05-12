@@ -421,6 +421,23 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(debug_assertions, should_panic)]
+    fn register_while_notified_panics_in_debug() {
+        let mut a = Awaiter::new();
+        let mut set = AwaiterSet::new();
+
+        unsafe {
+            set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
+        }
+        drop(set.notify_one());
+        assert!(a.is_notified());
+
+        unsafe {
+            set.register(Pin::new_unchecked(&mut a), Waker::noop().clone());
+        }
+    }
+
+    #[test]
     fn take_notification_returns_false_for_waiting() {
         let mut a = Awaiter::new();
         let mut set = AwaiterSet::new();

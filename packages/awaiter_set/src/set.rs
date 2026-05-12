@@ -103,6 +103,10 @@ impl AwaiterSet {
     /// waker is stored. If the awaiter is already registered, only
     /// the stored waker is replaced.
     ///
+    /// The awaiter must not be in the notified state. Call
+    /// [`Awaiter::take_notification()`] to consume a pending
+    /// notification before re-registering.
+    ///
     /// # Safety
     ///
     /// The awaiter must remain pinned and valid until it is removed
@@ -112,6 +116,11 @@ impl AwaiterSet {
         // SAFETY: We do not move the awaiter. Pin guarantees address
         // stability.
         let awaiter = unsafe { awaiter.get_unchecked_mut() };
+
+        debug_assert!(
+            awaiter.lifecycle_phase() != NOTIFIED,
+            "notified awaiters must consume the notification before re-registering",
+        );
 
         if awaiter.lifecycle_phase() == WAITING {
             // Already registered — update the waker in place.

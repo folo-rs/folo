@@ -113,14 +113,19 @@ fn try_wait(inner: &EventInner) -> bool {
     inner.state.load(Ordering::Acquire) & IS_SET != 0
 }
 
-unsafe fn poll_wait(inner: &EventInner, mut awaiter: Pin<&mut Awaiter>, waker: Waker) -> Poll<()> {
+unsafe fn poll_wait(inner: &EventInner, awaiter: *mut Awaiter, waker: Waker) -> Poll<()> {
     // Fast path: event is already set.
     if inner.state.load(Ordering::Acquire) & IS_SET != 0 {
         return Poll::Ready(());
     }
 
     // Check if we were directly notified by set() before taking the mutex.
-    if awaiter.as_ref().take_notification() {
+    // Shared access to the awaiter only — the notifier may concurrently
+    // hold its own shared reference under the event mutex.
+    // SAFETY: The pointer references an awaiter pinned inside the
+    // owning future, which outlives this call.
+    let awaiter_ref = unsafe { &*awaiter };
+    if awaiter_ref.take_notification() {
         return Poll::Ready(());
     }
 
@@ -133,7 +138,7 @@ unsafe fn poll_wait(inner: &EventInner, mut awaiter: Pin<&mut Awaiter>, waker: W
     // Re-check notification under the mutex. A concurrent set() may
     // have taken the slow path and notified us before we acquired
     // the mutex.
-    if awaiter.as_ref().take_notification() {
+    if awaiter_ref.take_notification() {
         return Poll::Ready(());
     }
 
@@ -164,24 +169,39 @@ unsafe fn poll_wait(inner: &EventInner, mut awaiter: Pin<&mut Awaiter>, waker: W
         return Poll::Ready(());
     }
 
+    // SAFETY: We hold the mutex, the pointer references a pinned
+    // awaiter, and no other shared reference is live (the prior
+    // `awaiter_ref` borrows are no longer used past this point).
+    let awaiter_mut = unsafe { &mut *awaiter };
+    // SAFETY: The awaiter is pinned inside the owning future.
+    let awaiter_mut = unsafe { Pin::new_unchecked(awaiter_mut) };
     // SAFETY: We hold the mutex.
     unsafe {
-        waiters.register(awaiter.as_mut(), waker);
+        waiters.register(awaiter_mut, waker);
     }
 
     Poll::Pending
 }
 
-unsafe fn drop_wait(inner: &EventInner, mut awaiter: Pin<&mut Awaiter>) {
-    if !awaiter.is_registered() {
+unsafe fn drop_wait(inner: &EventInner, awaiter: *mut Awaiter) {
+    // SAFETY: The pointer references an awaiter pinned inside the
+    // owning future, which outlives this call.
+    let awaiter_ref = unsafe { &*awaiter };
+    if !awaiter_ref.is_registered() {
         return;
     }
 
     let mut waiters = inner.slow.lock().expect(NEVER_POISONED);
 
+    // SAFETY: We hold the mutex, the pointer references a pinned
+    // awaiter, and no other shared reference is live (the prior
+    // `awaiter_ref` borrow is no longer used past this point).
+    let awaiter_mut = unsafe { &mut *awaiter };
+    // SAFETY: The awaiter is pinned inside the owning future.
+    let awaiter_mut = unsafe { Pin::new_unchecked(awaiter_mut) };
     // SAFETY: We hold the mutex.
     unsafe {
-        waiters.unregister(awaiter.as_mut());
+        waiters.unregister(awaiter_mut);
     }
     if waiters.is_empty() {
         inner.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
@@ -307,9 +327,11 @@ impl ManualResetEvent {
 
     /// Returns a future that completes when the event is set.
     ///
-    /// If the event is already set at the time of polling, the future
-    /// completes immediately. If the event is reset between being woken and
-    /// being re-polled, the future goes back to pending.
+    /// If the event is set at the time of polling, the future
+    /// completes immediately. Once a [`set()`][Self::set] call has
+    /// released this wait operation, the future remains ready even
+    /// if [`reset()`][Self::reset] is called before the future is
+    /// polled again.
     ///
     /// The returned future is `Send` and can be awaited on any
     /// thread.
@@ -376,19 +398,23 @@ impl Future for ManualResetWaitFuture {
         let waker = cx.waker().clone();
         // SAFETY: We only access fields, we do not move self.
         let this = unsafe { self.get_unchecked_mut() };
-        // SAFETY: The awaiter is pinned inside this future and not moved.
-        let awaiter = unsafe { Pin::new_unchecked(&mut this.awaiter) };
-        // SAFETY: The state field is the mutex this awaiter registers
-        // with.
+        // Capture a raw pointer to the awaiter. No `&mut Awaiter` is
+        // created here; the mutable reference is built later inside
+        // the event mutex.
+        let awaiter: *mut Awaiter = &raw mut this.awaiter;
+        // SAFETY: The awaiter is pinned inside this future and outlives
+        // the call; `inner.slow` is the mutex it registers with.
         unsafe { poll_wait(&this.inner, awaiter, waker) }
     }
 }
 
 impl Drop for ManualResetWaitFuture {
     fn drop(&mut self) {
-        // SAFETY: The awaiter is pinned inside this future and not moved.
-        let awaiter = unsafe { Pin::new_unchecked(&mut self.awaiter) };
-        // SAFETY: The awaiter belongs to this event.
+        // No `&mut Awaiter` is created here; the mutable reference is
+        // built later inside the event mutex when needed.
+        let awaiter: *mut Awaiter = &raw mut self.awaiter;
+        // SAFETY: The awaiter is pinned inside this future and outlives
+        // the call; the awaiter belongs to this event.
         unsafe { drop_wait(&self.inner, awaiter) }
     }
 }
@@ -561,9 +587,12 @@ impl Future for EmbeddedManualResetWaitFuture {
         // SAFETY: The container outlives this future per the embedded()
         // contract.
         let inner = unsafe { this.inner.as_ref() };
-        // SAFETY: The awaiter is pinned inside this future and not moved.
-        let awaiter = unsafe { Pin::new_unchecked(&mut this.awaiter) };
-        // SAFETY: The awaiter belongs to this event and is pinned.
+        // Capture a raw pointer to the awaiter. No `&mut Awaiter` is
+        // created here; the mutable reference is built later inside
+        // the event mutex.
+        let awaiter: *mut Awaiter = &raw mut this.awaiter;
+        // SAFETY: The awaiter is pinned inside this future and outlives
+        // the call; `inner.slow` is the mutex it registers with.
         unsafe { poll_wait(inner, awaiter, waker) }
     }
 }
@@ -573,9 +602,11 @@ impl Drop for EmbeddedManualResetWaitFuture {
         // SAFETY: The container outlives this future per the
         // embedded() contract.
         let inner = unsafe { self.inner.as_ref() };
-        // SAFETY: The awaiter is pinned inside this future and not moved.
-        let awaiter = unsafe { Pin::new_unchecked(&mut self.awaiter) };
-        // SAFETY: The awaiter belongs to this event and is pinned.
+        // No `&mut Awaiter` is created here; the mutable reference is
+        // built later inside the event mutex when needed.
+        let awaiter: *mut Awaiter = &raw mut self.awaiter;
+        // SAFETY: The awaiter is pinned inside this future and outlives
+        // the call; `inner.slow` is the mutex it was registered with.
         unsafe { drop_wait(inner, awaiter) }
     }
 }

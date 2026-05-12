@@ -84,6 +84,8 @@
 //! ```
 
 mod auto;
+mod constants;
+pub mod futures;
 mod local_auto;
 mod local_manual;
 mod manual;
@@ -94,9 +96,8 @@ mod test_helpers;
 #[cfg(test)]
 mod test_hooks;
 
-pub(crate) const NEVER_POISONED: &str = "we never panic while holding this lock";
-
 pub use auto::{AutoResetEvent, EmbeddedAutoResetEvent, EmbeddedAutoResetEventRef};
+pub(crate) use constants::*;
 pub use local_auto::{
     EmbeddedLocalAutoResetEvent, EmbeddedLocalAutoResetEventRef, LocalAutoResetEvent,
 };
@@ -104,13 +105,3 @@ pub use local_manual::{
     EmbeddedLocalManualResetEvent, EmbeddedLocalManualResetEventRef, LocalManualResetEvent,
 };
 pub use manual::{EmbeddedManualResetEvent, EmbeddedManualResetEventRef, ManualResetEvent};
-
-/// Future types returned by event `wait()` methods.
-///
-/// These futures must be pinned before polling.
-pub mod futures {
-    pub use crate::auto::{AutoResetWaitFuture, EmbeddedAutoResetWaitFuture};
-    pub use crate::local_auto::{EmbeddedLocalAutoResetWaitFuture, LocalAutoResetWaitFuture};
-    pub use crate::local_manual::{EmbeddedLocalManualResetWaitFuture, LocalManualResetWaitFuture};
-    pub use crate::manual::{EmbeddedManualResetWaitFuture, ManualResetWaitFuture};
-}
