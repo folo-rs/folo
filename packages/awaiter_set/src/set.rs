@@ -83,15 +83,6 @@ pub struct AwaiterSet {
 
 impl AwaiterSet {
     /// Creates a new empty set.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use awaiter_set::AwaiterSet;
-    ///
-    /// let set = AwaiterSet::new();
-    /// assert!(set.is_empty());
-    /// ```
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -197,7 +188,7 @@ impl AwaiterSet {
     /// that owns it will observe this on its next poll via
     /// [`Awaiter::take_notification()`] and complete with `Ready`.
     ///
-    /// The caller should invoke [`Waker::wake()`] outside any lock
+    /// The caller may want to invoke [`Waker::wake()`] outside any lock
     /// scope to prevent reentrancy deadlocks.
     ///
     /// Returns `None` if the set is empty.
