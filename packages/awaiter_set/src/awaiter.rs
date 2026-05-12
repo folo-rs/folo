@@ -144,15 +144,20 @@ impl Awaiter {
     ///
     /// # Safety
     ///
-    /// Access must be serialized by the caller (via a lock or
-    /// single-thread confinement).
+    /// The caller must serialize access to this awaiter's `Inner`
+    /// (via a lock or single-thread confinement) and must not hold
+    /// any other reference (`&Inner` or `&mut Inner`) to the same
+    /// awaiter's interior for the duration of the returned borrow.
     #[expect(
         clippy::mut_from_ref,
         reason = "interior mutability via UnsafeCell is the \
                   intended pattern; caller serializes access"
     )]
     pub(crate) unsafe fn inner_mut(&self) -> &mut Inner {
-        // SAFETY: Caller guarantees serialized access.
+        // SAFETY: Validity — `self.inner` is an `UnsafeCell` field of `self` and lives
+        // for as long as `self` does. Aliasing — the caller of this `unsafe` function
+        // guarantees that access is serialized and that no other reference to this
+        // awaiter's `Inner` is live for the duration of the returned borrow.
         unsafe { &mut *self.inner.get() }
     }
 
@@ -160,10 +165,15 @@ impl Awaiter {
     ///
     /// # Safety
     ///
-    /// Access must be serialized by the caller (via a lock or
-    /// single-thread confinement).
+    /// The caller must serialize access to this awaiter's `Inner`
+    /// (via a lock or single-thread confinement) and must not hold
+    /// any `&mut Inner` to the same awaiter's interior for the
+    /// duration of the returned borrow.
     pub(crate) unsafe fn inner_ref(&self) -> &Inner {
-        // SAFETY: Caller guarantees serialized access.
+        // SAFETY: Validity — `self.inner` is an `UnsafeCell` field of `self` and lives
+        // for as long as `self` does. Aliasing — the caller of this `unsafe` function
+        // guarantees that access is serialized and that no `&mut Inner` to this
+        // awaiter's interior is live for the duration of the returned borrow.
         unsafe { &*self.inner.get() }
     }
 }

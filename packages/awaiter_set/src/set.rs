@@ -168,7 +168,8 @@ impl AwaiterSet {
         );
 
         if awaiter.lifecycle_phase() == WAITING {
-            // SAFETY: Access is serialized by the caller's lock.
+            // SAFETY: Access is serialized by this `&mut self` lock scope; we hold
+            // `&mut Awaiter` and no other `Inner` reference is live.
             let inner = unsafe { awaiter.inner_mut() };
             self.debug_assert_owns(inner, "register");
             // Already registered — update the waker in place.
@@ -177,7 +178,8 @@ impl AwaiterSet {
         }
 
         // New registration — initialize fields and insert.
-        // SAFETY: Access is serialized by the caller's lock.
+        // SAFETY: Access is serialized by this `&mut self` lock scope; we hold
+        // `&mut Awaiter` and no other `Inner` reference is live.
         let inner = unsafe { awaiter.inner_mut() };
         inner.waker = Some(waker);
         inner.next = ptr::null_mut();
@@ -192,9 +194,17 @@ impl AwaiterSet {
         if self.tail.is_null() {
             self.head = ptr;
         } else {
-            // SAFETY: `tail` is non-null and valid (set invariant).
+            // SAFETY: Validity — `self.tail` is non-null (just checked) and the set
+            // invariant guarantees it points to an `Awaiter` currently registered in
+            // this set; per `register`'s safety contract, registered awaiters remain
+            // pinned and valid until removed. Aliasing — `Awaiter`'s public API is
+            // `&self`-only; access to its `Inner` is gated by this `&mut self` lock
+            // scope; and the tail awaiter is a distinct object from `awaiter` (which
+            // is being newly inserted), so the existing `&mut Awaiter` borrow does
+            // not alias.
             let tail = unsafe { &*self.tail };
-            // SAFETY: Access is serialized by the caller's lock.
+            // SAFETY: Access is serialized by the caller's lock; no other reference
+            // to `tail`'s `Inner` is live (we hold only `&Awaiter` to it here).
             unsafe { tail.inner_mut() }.next = ptr;
         }
         self.tail = ptr;
@@ -226,7 +236,8 @@ impl AwaiterSet {
             return;
         }
 
-        // SAFETY: Access is serialized by the caller's lock.
+        // SAFETY: Access is serialized by this `&mut self` lock scope; we hold
+        // `&mut Awaiter` and no other `Inner` reference is live.
         let inner = unsafe { awaiter.inner_ref() };
         self.debug_assert_owns(inner, "unregister");
         let next = inner.next;
@@ -237,7 +248,9 @@ impl AwaiterSet {
             self.unlink(prev, next);
         }
 
-        // SAFETY: Access is serialized by the caller's lock.
+        // SAFETY: Access is serialized by this `&mut self` lock scope; the previous
+        // `inner_ref` borrow has ended (its values were copied into `next`/`prev`),
+        // so no other `Inner` reference is live.
         let inner = unsafe { awaiter.inner_mut() };
         *inner = Inner::idle();
         awaiter.set_lifecycle(IDLE, Ordering::Release);
@@ -259,9 +272,17 @@ impl AwaiterSet {
         }
 
         let ptr = self.pick_one();
-        // SAFETY: ptr is a valid awaiter in the set.
+        // SAFETY: Validity — `pick_one` returns a non-null pointer (we already
+        // checked `self.head.is_null()` above) drawn from the set's link fields,
+        // which the set invariant requires point to awaiters currently registered;
+        // per `register`'s safety contract, those awaiters remain pinned and valid
+        // until removed. Aliasing — `Awaiter`'s public API is `&self`-only; access
+        // to its `Inner` is gated by this `&mut self` lock scope; and the owning
+        // future is asleep (it is a registered waiter), so no `&mut Awaiter` to it
+        // is live elsewhere.
         let awaiter = unsafe { &*ptr };
-        // SAFETY: Access is serialized by the caller's lock.
+        // SAFETY: Access is serialized by this `&mut self` lock scope; we hold only
+        // `&Awaiter` and no `&mut Inner` is live.
         let inner = unsafe { awaiter.inner_ref() };
         self.debug_assert_owns(inner, "notify_one");
         let next = inner.next;
@@ -274,7 +295,9 @@ impl AwaiterSet {
 
         // Take the waker and clear the link fields before publishing
         // the notification via the atomic lifecycle store.
-        // SAFETY: Access is serialized by the caller's lock.
+        // SAFETY: Access is serialized by this `&mut self` lock scope; the previous
+        // `inner_ref` borrow has ended (its values were copied into `next`/`prev`),
+        // so no other `Inner` reference is live.
         let inner = unsafe { awaiter.inner_mut() };
         let waker = inner.waker.take();
         inner.next = ptr::null_mut();
@@ -327,18 +350,30 @@ impl AwaiterSet {
         if prev.is_null() {
             self.head = next;
         } else {
-            // SAFETY: `prev` is a valid awaiter in the set.
+            // SAFETY: Validity — `prev` is a link field of an awaiter currently in
+            // this set (per `unlink`'s safety contract), so it points to a pinned,
+            // valid `Awaiter`. Aliasing — `Awaiter`'s public API is `&self`-only;
+            // access to its `Inner` is gated by this `&mut self` lock scope; and
+            // `prev` is a distinct awaiter from the one being unlinked, so no
+            // `&mut Awaiter` borrow held elsewhere in this call aliases.
             let prev = unsafe { &*prev };
-            // SAFETY: Access is serialized by the caller's lock.
+            // SAFETY: Access is serialized by the caller's lock; no other reference
+            // to `prev`'s `Inner` is live (we hold only `&Awaiter` to it here).
             unsafe { prev.inner_mut() }.next = next;
         }
 
         if next.is_null() {
             self.tail = prev;
         } else {
-            // SAFETY: `next` is a valid awaiter in the set.
+            // SAFETY: Validity — `next` is a link field of an awaiter currently in
+            // this set (per `unlink`'s safety contract), so it points to a pinned,
+            // valid `Awaiter`. Aliasing — `Awaiter`'s public API is `&self`-only;
+            // access to its `Inner` is gated by this `&mut self` lock scope; and
+            // `next` is a distinct awaiter from the one being unlinked, so no
+            // `&mut Awaiter` borrow held elsewhere in this call aliases.
             let next = unsafe { &*next };
-            // SAFETY: Access is serialized by the caller's lock.
+            // SAFETY: Access is serialized by the caller's lock; no other reference
+            // to `next`'s `Inner` is live (we hold only `&Awaiter` to it here).
             unsafe { next.inner_mut() }.prev = prev;
         }
     }
