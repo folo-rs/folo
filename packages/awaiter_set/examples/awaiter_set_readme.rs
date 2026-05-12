@@ -1,25 +1,5 @@
-# awaiter_set
+//! Example for README.md demonstration of basic `awaiter_set` usage.
 
-Zero-allocation awaiter tracking for async synchronization primitives.
-
-Async synchronization primitives (such as events) need a way to track which futures are waiting
-and wake them when a resource becomes available. This crate provides that mechanism with two
-types:
-
-- `AwaiterSet` — the set of registered awaiters, owned by the synchronization primitive.
-- `Awaiter` — a single awaiter, embedded inside an awaiting future.
-
-Each awaiter lives directly inside its future rather than being heap-allocated, making
-registration and removal zero-allocation. Awaiters must remain at a stable pinned address from
-registration until removal.
-
-Neither `AwaiterSet` nor `Awaiter` has internal synchronization. The owning primitive must
-serialize all access to the set and its awaiters — either by protecting them with a single
-synchronous lock or by confining them to a single thread.
-
-## Example
-
-```rust
 use std::pin::pin;
 use std::sync::Mutex;
 use std::task::Waker;
@@ -62,11 +42,3 @@ fn main() {
 
     println!("awaiter notified and consumed.");
 }
-```
-
-## See also
-
-More details in the [package documentation](https://docs.rs/awaiter_set/).
-
-This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for
-high-performance hardware-aware programming in Rust.

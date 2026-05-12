@@ -25,9 +25,8 @@
 //! protect all access to both the set and its registered awaiters with
 //! a single lock (or by confining them to a single thread).
 //!
-//! The synchronization must be external to the awaiter set because the
-//! primitive typically needs to atomically update its own state
-//! (e.g. a `locked` flag) together with the set.
+//! A small number of [`Awaiter`] methods are designed to be called
+//! without holding that lock — see their individual documentation.
 //!
 //! # Waker invocation
 //!

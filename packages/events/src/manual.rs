@@ -76,7 +76,6 @@ struct EventInner {
     slow: Mutex<AwaiterSet>,
 }
 
-#[cfg_attr(test, mutants::skip)]
 fn set(inner: &EventInner) {
     // Set IS_SET atomically. If HAS_WAITERS was not set, the
     // returned previous value will have HAS_WAITERS == 0 and
@@ -112,7 +111,6 @@ fn reset(inner: &EventInner) {
     inner.state.fetch_and(!IS_SET, Ordering::Release);
 }
 
-#[cfg_attr(test, mutants::skip)]
 fn try_wait(inner: &EventInner) -> bool {
     inner.state.load(Ordering::Acquire) & IS_SET != 0
 }
@@ -284,9 +282,6 @@ impl ManualResetEvent {
     ///     assert!(event.try_wait());
     /// }
     /// ```
-    // Mutating set() to a no-op causes wait futures to hang. We cannot
-    // detect "wait never completes" without real-time timeouts.
-    #[cfg_attr(test, mutants::skip)]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn set(&self) {
         set(&self.inner);
@@ -308,8 +303,6 @@ impl ManualResetEvent {
     /// returned value is immediately stale. Use this for diagnostics or
     /// best-effort checks, not for synchronization.
     #[must_use]
-    // Mutating try_wait() to return false causes spin-loop tests to hang.
-    #[cfg_attr(test, mutants::skip)]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_wait(&self) -> bool {
         try_wait(&self.inner)
@@ -382,8 +375,6 @@ impl RefUnwindSafe for ManualResetWaitFuture {}
 impl Future for ManualResetWaitFuture {
     type Output = ();
 
-    // See the equivalent comment on `AutoResetWaitFuture::poll`.
-    #[cfg_attr(test, mutants::skip)]
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<()> {
         let waker = cx.waker().clone();
         // SAFETY: We only access fields, we do not move self.
@@ -519,8 +510,6 @@ impl EmbeddedManualResetEventRef {
     /// Opens the gate, releasing all current awaiters.
     ///
     /// If the event is already set, this is a no-op.
-    // Mutating set() to a no-op causes wait futures to hang.
-    #[cfg_attr(test, mutants::skip)]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn set(&self) {
         set(self.inner());
@@ -534,8 +523,6 @@ impl EmbeddedManualResetEventRef {
 
     /// Returns `true` if the event is currently set.
     #[must_use]
-    // Mutating try_wait() to return false causes spin-loop tests to hang.
-    #[cfg_attr(test, mutants::skip)]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_wait(&self) -> bool {
         try_wait(self.inner())

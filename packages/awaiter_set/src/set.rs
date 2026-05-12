@@ -228,9 +228,6 @@ impl AwaiterSet {
     ///
     /// The set and all its awaiters must be protected by the same
     /// lock (or confined to a single thread).
-    // Mutating to return None causes all notification paths to hang
-    // because waiters are never woken.
-    #[cfg_attr(test, mutants::skip)]
     pub unsafe fn notify_one(&mut self) -> Option<Waker> {
         if self.head.is_null() {
             return None;
@@ -293,13 +290,6 @@ impl AwaiterSet {
         }
     }
 
-    // In debug builds, pick head or tail based on pointer address to
-    // flush out tests that depend on notification order. In release
-    // builds, always pick head (FIFO).
-    //
-    // The exact comparison logic is a testing aid and has no
-    // correctness implications — any choice is valid.
-    #[cfg_attr(test, mutants::skip)]
     fn pick_one(&self) -> *mut Awaiter {
         #[cfg(debug_assertions)]
         {

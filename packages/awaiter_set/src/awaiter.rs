@@ -60,9 +60,12 @@ impl Inner {
 /// 3. **Notified** — removed from the set by the primitive; the
 ///    owning future should complete with `Ready` on its next poll.
 ///
-/// The lifecycle phase is tracked by an atomic field so that the
-/// notification check ([`take_notification`][Self::take_notification])
-/// can be performed without acquiring the protecting lock.
+/// [`is_registered()`][Self::is_registered],
+/// [`is_notified()`][Self::is_notified] and
+/// [`take_notification()`][Self::take_notification] may be called
+/// without holding the primitive's lock; all other interactions
+/// happen through [`AwaiterSet`][crate::AwaiterSet] and require that
+/// lock.
 pub struct Awaiter {
     inner: UnsafeCell<Inner>,
 
@@ -93,8 +96,7 @@ impl Awaiter {
     /// A future's [`Drop`] handler uses this to decide whether
     /// cleanup (unregistering or forwarding a resource) is needed.
     ///
-    /// This reads the atomic lifecycle phase and does not require the
-    /// protecting lock.
+    /// May be called without holding the primitive's lock.
     #[must_use]
     pub fn is_registered(&self) -> bool {
         self.lifecycle.load(Ordering::Acquire) != IDLE
@@ -110,19 +112,8 @@ impl Awaiter {
     /// `Poll::Ready`.
     ///
     /// This is typically the first check in a future's `poll()`.
-    /// It reads the atomic lifecycle phase and does not require
-    /// the protecting lock — the `Acquire` ordering synchronizes
-    /// with the `Release` store in
-    /// [`AwaiterSet::notify_one()`][crate::AwaiterSet::notify_one].
+    /// May be called without holding the primitive's lock.
     #[must_use]
-    // Mutating the success outcome (`is_ok() → false`) deadlocks every
-    // test that waits for a notification to be consumed. The
-    // `take_notification_transitions_notified_to_idle` test would
-    // catch this in microseconds, but other tests in the suite hang
-    // before the harness reports failure, so cargo-mutants classifies
-    // it as TIMEOUT. This is the same justification used for the
-    // events_once crate-wide skip.
-    #[cfg_attr(test, mutants::skip)]
     pub fn take_notification(self: Pin<&Self>) -> bool {
         self.lifecycle
             .compare_exchange(NOTIFIED, IDLE, Ordering::Acquire, Ordering::Relaxed)
@@ -137,26 +128,16 @@ impl Awaiter {
     /// resource (lock, permit, signal) that must be forwarded to
     /// another awaiter instead of being silently discarded.
     ///
-    /// This reads the atomic lifecycle phase and does not require
-    /// the protecting lock.
+    /// May be called without holding the primitive's lock.
     #[must_use]
     pub fn is_notified(self: Pin<&Self>) -> bool {
         self.lifecycle.load(Ordering::Acquire) == NOTIFIED
     }
 
-    // Same reasoning as `take_notification` above: mutating the
-    // returned phase causes the synchronization protocol to deadlock,
-    // and even though direct unit tests fail fast, the suite as a
-    // whole hangs before the failure is reported.
-    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn lifecycle_phase(&self) -> u8 {
         self.lifecycle.load(Ordering::Relaxed)
     }
 
-    // Same reasoning as `take_notification` and `lifecycle_phase`
-    // above. Mutating this into a no-op freezes the protocol in IDLE,
-    // hanging every notification-driven test.
-    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn set_lifecycle(&self, phase: u8, ordering: Ordering) {
         self.lifecycle.store(phase, ordering);
     }

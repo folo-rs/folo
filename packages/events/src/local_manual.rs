@@ -100,8 +100,6 @@ impl RefUnwindSafe for Inner {}
 // tests to inject re-entrant operations (e.g. calling reset() and re-polling
 // a future) between wake iterations, reproducing scenarios that would
 impl Inner {
-    // Mutating set() to a no-op causes wait futures to hang.
-    #[cfg_attr(test, mutants::skip)]
     fn set(&self) {
         if self.is_set.get() {
             return;
@@ -248,7 +246,6 @@ impl LocalManualResetEvent {
     /// If the event is already set, this is a no-op.
     // Trivial forwarder.
     #[cfg_attr(coverage_nightly, coverage(off))]
-    #[cfg_attr(test, mutants::skip)]
     pub fn set(&self) {
         self.inner.set();
     }
@@ -428,7 +425,6 @@ impl EmbeddedLocalManualResetEventRef {
     /// If the event is already set, this is a no-op.
     // Trivial forwarder.
     #[cfg_attr(coverage_nightly, coverage(off))]
-    #[cfg_attr(test, mutants::skip)]
     pub fn set(&self) {
         self.inner().set();
     }

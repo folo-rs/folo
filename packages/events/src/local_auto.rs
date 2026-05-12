@@ -96,8 +96,6 @@ impl UnwindSafe for Inner {}
 impl RefUnwindSafe for Inner {}
 
 impl Inner {
-    // Mutating set() to a no-op causes wait futures to hang.
-    #[cfg_attr(test, mutants::skip)]
     fn set(&self) {
         // Capture the waker while borrowing the state, then wake
         // after the borrow ends to avoid aliased mutable access if
@@ -306,8 +304,6 @@ impl LocalAutoResetEvent {
     /// If one or more waiters are registered, a single waiter is
     /// released and the event remains unset. If no one is waiting,
     /// the event transitions to the set state.
-    // Mutating set() to a no-op causes wait futures to hang.
-    #[cfg_attr(test, mutants::skip)]
     // Trivial forwarder.
     #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn set(&self) {
@@ -478,8 +474,6 @@ impl EmbeddedLocalAutoResetEventRef {
     /// If one or more waiters are registered, a single waiter is
     /// released and the event remains unset. If no one is waiting,
     /// the event transitions to the set state.
-    // Mutating set() to a no-op causes wait futures to hang.
-    #[cfg_attr(test, mutants::skip)]
     // Trivial forwarder.
     #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn set(&self) {

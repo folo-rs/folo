@@ -77,8 +77,6 @@ struct EventInner {
     slow: Mutex<AwaiterSet>,
 }
 
-// Mutating set() to a no-op causes wait futures to hang.
-#[cfg_attr(test, mutants::skip)]
 fn set(inner: &EventInner) {
     // Fast path: no waiters — set the signal atomically.
     if inner
@@ -119,8 +117,6 @@ fn set(inner: &EventInner) {
     }
 }
 
-// Mutating try_wait() to return false causes spin-loop tests to hang.
-#[cfg_attr(test, mutants::skip)]
 fn try_wait(inner: &EventInner) -> bool {
     // Atomically clear the SIGNAL bit, leaving HAS_WAITERS untouched.
     // Using fetch_and rather than compare_exchange(SIGNAL, 0) ensures
@@ -317,8 +313,6 @@ impl AutoResetEvent {
     ///     event.wait().await;
     /// }
     /// ```
-    // Mutating set() to a no-op causes wait futures to hang.
-    #[cfg_attr(test, mutants::skip)]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn set(&self) {
         set(&self.inner);
@@ -344,8 +338,6 @@ impl AutoResetEvent {
     /// assert!(!event.try_wait());
     /// ```
     #[must_use]
-    // Mutating try_wait() to return false causes spin-loop tests to hang.
-    #[cfg_attr(test, mutants::skip)]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_wait(&self) -> bool {
         try_wait(&self.inner)
@@ -405,16 +397,6 @@ impl RefUnwindSafe for AutoResetWaitFuture {}
 impl Future for AutoResetWaitFuture {
     type Output = ();
 
-    // Trampoline into `poll_wait`. The `Poll::Ready(())` mutation is
-    // caught directly (the first `is_pending()` assert in
-    // `poll_wait_post_mutex_take_notification_branch` fires within
-    // microseconds), but the hook-based race tests deadlock under
-    // the mutation because `poll_wait` is bypassed and `entered.wait()`
-    // never returns. The watchdog is disabled under
-    // `MUTATION_TESTING=1`, so the run reports TIMEOUT. Skip — the
-    // function is a thin forwarder and all branches of the real
-    // logic live in `poll_wait`.
-    #[cfg_attr(test, mutants::skip)]
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<()> {
         // Clone the waker before acquiring the lock so a panicking clone
         // implementation cannot poison the mutex.
@@ -547,8 +529,6 @@ impl EmbeddedAutoResetEventRef {
     }
 
     /// Signals the event, releasing exactly one waiter.
-    // Mutating set() to a no-op causes wait futures to hang.
-    #[cfg_attr(test, mutants::skip)]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn set(&self) {
         set(self.inner());
@@ -559,8 +539,6 @@ impl EmbeddedAutoResetEventRef {
     /// Returns `true` if the event was set, atomically transitioning it
     /// back to the unset state. Returns `false` if the event was not set.
     #[must_use]
-    // Mutating try_wait() to return false causes spin-loop tests to hang.
-    #[cfg_attr(test, mutants::skip)]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_wait(&self) -> bool {
         try_wait(self.inner())
