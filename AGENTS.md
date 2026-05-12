@@ -495,6 +495,12 @@ mutation if it is impractical to catch.
 Avoid magic values in the code and use named constants instead. It does not matter how many
 times the magic value is present, even one instance is enough to warrant a named constant.
 
+This includes zero. `0` is just as much a magic value as `1` or `42` when it represents a
+domain concept (e.g. an initial state, a sentinel index, an empty bitfield, the absence of
+flags). Define a named constant (`IDLE`, `EMPTY`, `NONE`, `ROOT`, etc.) and use it instead.
+Numeric `0` only stays unadorned when it is literally arithmetic (e.g. `for i in 0..n`,
+`x.saturating_sub(0)`, `Vec::with_capacity(0)`).
+
 If constants are only used in one function, put them at the top of that function.
 
 The exception is example code - if a magic value is only used once in an example, it is

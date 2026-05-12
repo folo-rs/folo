@@ -87,6 +87,7 @@ pub struct AutoResetEvent {
 
 const SIGNAL: u8 = 0x1;
 const HAS_WAITERS: u8 = 0x2;
+const IDLE: u8 = 0;
 
 struct EventInner {
     state: AtomicU8,
@@ -98,7 +99,7 @@ impl EventInner {
         // Fast path: no waiters — set the signal atomically.
         if self
             .state
-            .compare_exchange(0, SIGNAL, Ordering::Release, Ordering::Relaxed)
+            .compare_exchange(IDLE, SIGNAL, Ordering::Release, Ordering::Relaxed)
             .is_ok()
         {
             return;
@@ -137,7 +138,7 @@ impl EventInner {
 
     fn try_wait(&self) -> bool {
         // Atomically clear the SIGNAL bit, leaving HAS_WAITERS untouched.
-        // Using fetch_and rather than compare_exchange(SIGNAL, 0) ensures
+        // Using fetch_and rather than compare_exchange(SIGNAL, IDLE) ensures
         // we still consume the signal when HAS_WAITERS happens to be set
         // (which can occur in the slow path of poll_wait after fetch_or).
         self.state.fetch_and(!SIGNAL, Ordering::Acquire) & SIGNAL != 0
@@ -194,7 +195,7 @@ impl EventInner {
 
         // Re-check signal after setting HAS_WAITERS. A concurrent
         // set() that ran between try_wait and fetch_or would have
-        // stored SIGNAL via its fast path, which requires state==0,
+        // stored SIGNAL via its fast path, which requires state==IDLE,
         // which in turn requires the awaiter set to be empty. So when
         // this branch fires we are the only would-be waiter and can
         // unconditionally clear HAS_WAITERS.
@@ -281,7 +282,7 @@ impl AutoResetEvent {
     pub fn boxed() -> Self {
         Self {
             inner: Arc::new(EventInner {
-                state: AtomicU8::new(0),
+                state: AtomicU8::new(IDLE),
                 slow: Mutex::new(AwaiterSet::new()),
             }),
         }
@@ -515,7 +516,7 @@ impl EmbeddedAutoResetEvent {
     pub fn new() -> Self {
         Self {
             inner: EventInner {
-                state: AtomicU8::new(0),
+                state: AtomicU8::new(IDLE),
                 slow: Mutex::new(AwaiterSet::new()),
             },
             _pinned: PhantomPinned,

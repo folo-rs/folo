@@ -87,6 +87,7 @@ pub struct ManualResetEvent {
 
 const IS_SET: u8 = 0x1;
 const HAS_WAITERS: u8 = 0x2;
+const IDLE: u8 = 0;
 
 struct EventInner {
     state: AtomicU8,
@@ -178,10 +179,10 @@ impl EventInner {
 
         // Re-check after setting HAS_WAITERS. A concurrent set() that
         // ran between the previous check and fetch_or would have stored
-        // IS_SET via its fast path, which requires state==0, which in
-        // turn requires the awaiter set to be empty. So when this branch
-        // fires we are the only would-be waiter and can unconditionally
-        // clear HAS_WAITERS.
+        // IS_SET via its fast path, which requires state==IDLE, which
+        // in turn requires the awaiter set to be empty. So when this
+        // branch fires we are the only would-be waiter and can
+        // unconditionally clear HAS_WAITERS.
         if self.state.load(Ordering::Acquire) & IS_SET != 0 {
             self.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
             return Poll::Ready(());
@@ -250,7 +251,7 @@ impl ManualResetEvent {
     pub fn boxed() -> Self {
         Self {
             inner: Arc::new(EventInner {
-                state: AtomicU8::new(0),
+                state: AtomicU8::new(IDLE),
                 slow: Mutex::new(AwaiterSet::new()),
             }),
         }
@@ -497,7 +498,7 @@ impl EmbeddedManualResetEvent {
     pub fn new() -> Self {
         Self {
             inner: EventInner {
-                state: AtomicU8::new(0),
+                state: AtomicU8::new(IDLE),
                 slow: Mutex::new(AwaiterSet::new()),
             },
             _pinned: PhantomPinned,
