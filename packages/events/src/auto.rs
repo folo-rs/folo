@@ -477,10 +477,6 @@ impl fmt::Debug for AutoResetWaitFuture {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Embedded variant
-// ---------------------------------------------------------------------------
-
 /// Embedded-state container for [`AutoResetEvent`].
 ///
 /// Stores the event state inline in a struct, avoiding the heap allocation
@@ -683,8 +679,6 @@ mod tests {
     use super::*;
     use crate::test_hooks::BarrierHook;
 
-    // --- trait assertions ---
-
     assert_impl_all!(AutoResetEvent: Send, Sync, Clone, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(AutoResetWaitFuture: Send, UnwindSafe, RefUnwindSafe);
     assert_not_impl_any!(AutoResetWaitFuture: Sync, Unpin);
@@ -694,8 +688,6 @@ mod tests {
     assert_impl_all!(EmbeddedAutoResetEventRef: Send, Sync, Clone, Copy, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(EmbeddedAutoResetWaitFuture: Send, UnwindSafe, RefUnwindSafe);
     assert_not_impl_any!(EmbeddedAutoResetWaitFuture: Sync, Unpin);
-
-    // --- basic functionality ---
 
     #[test]
     fn starts_unset() {
@@ -729,8 +721,6 @@ mod tests {
         // Second set was a no-op (already set).
         assert!(!event.try_wait());
     }
-
-    // --- async tests ---
 
     #[test]
     fn wait_completes_when_already_set() {
@@ -821,8 +811,6 @@ mod tests {
         event.set();
         futures::executor::block_on(event.wait());
     }
-
-    // --- multithreaded tests (Miri-compatible) ---
 
     #[test]
     fn set_from_another_thread() {
@@ -1166,8 +1154,6 @@ mod tests {
         });
     }
 
-    // --- embedded variant tests ---
-
     #[test]
     fn embedded_set_and_wait() {
         futures::executor::block_on(async {
@@ -1217,8 +1203,6 @@ mod tests {
             event.wait().await;
         });
     }
-
-    // --- manual-poll tests (cover register→wake→ready cycle) ---
 
     #[test]
     fn notified_then_dropped_re_sets_event() {

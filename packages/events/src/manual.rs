@@ -456,10 +456,6 @@ impl fmt::Debug for ManualResetWaitFuture {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Embedded variant
-// ---------------------------------------------------------------------------
-
 /// Embedded-state container for [`ManualResetEvent`].
 ///
 /// Stores the event state inline in a struct, avoiding the heap allocation
@@ -668,8 +664,6 @@ mod tests {
     use super::*;
     use crate::test_hooks::BarrierHook;
 
-    // --- trait assertions ---
-
     assert_impl_all!(ManualResetEvent: Send, Sync, Clone, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(ManualResetWaitFuture: Send, UnwindSafe, RefUnwindSafe);
     assert_not_impl_any!(ManualResetWaitFuture: Sync, Unpin);
@@ -681,8 +675,6 @@ mod tests {
     );
     assert_impl_all!(EmbeddedManualResetWaitFuture: Send, UnwindSafe, RefUnwindSafe);
     assert_not_impl_any!(EmbeddedManualResetWaitFuture: Sync, Unpin);
-
-    // --- basic functionality ---
 
     #[test]
     fn starts_unset() {
@@ -713,8 +705,6 @@ mod tests {
         a.set();
         assert!(b.try_wait());
     }
-
-    // --- async tests ---
 
     #[test]
     fn wait_completes_when_already_set() {
@@ -808,8 +798,6 @@ mod tests {
 
         assert!(tracker.was_woken());
     }
-
-    // --- multithreaded tests (Miri-compatible) ---
 
     #[test]
     fn set_from_another_thread() {
@@ -1052,8 +1040,6 @@ mod tests {
             handle.join().unwrap();
         });
     }
-
-    // --- embedded variant tests ---
 
     #[test]
     fn embedded_set_and_wait() {
@@ -1336,7 +1322,6 @@ mod tests {
         assert!(!event.try_wait());
     }
 
-    // --- re-entrant waker tests ---
     //
     // These tests use a custom waker that re-entrantly accesses the same
     // event when woken. They catch:

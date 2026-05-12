@@ -349,10 +349,6 @@ impl fmt::Debug for LocalManualResetWaitFuture {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Embedded variant
-// ---------------------------------------------------------------------------
-
 /// Embedded-state container for [`LocalManualResetEvent`].
 ///
 /// Stores the event state inline in a struct, avoiding the heap allocation

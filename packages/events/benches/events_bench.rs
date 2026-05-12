@@ -177,8 +177,6 @@ fn creation_embedded(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    // --- competitors ---
-
     let op = allocs.operation("creation_embedded/rsevents/ManualResetEvent");
     group.bench_function("rsevents/ManualResetEvent", |b| {
         b.iter_custom(|iters| {
@@ -284,8 +282,6 @@ fn signal_round_trip(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    // --- events (embedded) ---
-
     let op = allocs.operation("signal_round_trip/events/embedded/ManualResetEvent");
     group.bench_function("events/embedded/ManualResetEvent", |b| {
         let container = pin!(EmbeddedManualResetEvent::new());
@@ -316,8 +312,6 @@ fn signal_round_trip(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    // --- competitors ---
-
     let op = allocs.operation("signal_round_trip/event_listener/Event");
     group.bench_function("event_listener/Event", |b| {
         let el_event = ElEvent::<()>::new();
@@ -329,7 +323,7 @@ fn signal_round_trip(c: &mut Criterion, allocs: &AllocSession) {
             for _ in 0..iters {
                 el_event.notify(1);
                 let mut future = pin!(el_event.listen());
-                let _ = black_box(future.as_mut().poll(&mut cx));
+                _ = black_box(future.as_mut().poll(&mut cx));
             }
             start.elapsed()
         });
@@ -347,7 +341,7 @@ fn signal_round_trip(c: &mut Criterion, allocs: &AllocSession) {
                 el_event.notify(1);
                 listener!(el_event => el_listener);
                 let mut el_listener = pin!(el_listener);
-                let _ = black_box(Future::poll(el_listener.as_mut(), &mut cx));
+                _ = black_box(Future::poll(el_listener.as_mut(), &mut cx));
             }
             start.elapsed()
         });
@@ -402,7 +396,7 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
             let start = Instant::now();
             for _ in 0..iters {
                 let mut future = pin!(manual.wait());
-                let _ = black_box(future.as_mut().poll(&mut cx));
+                _ = black_box(future.as_mut().poll(&mut cx));
             }
             start.elapsed()
         });
@@ -418,7 +412,7 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
             let start = Instant::now();
             for _ in 0..iters {
                 let mut future = pin!(local_manual.wait());
-                let _ = black_box(future.as_mut().poll(&mut cx));
+                _ = black_box(future.as_mut().poll(&mut cx));
             }
             start.elapsed()
         });
@@ -434,7 +428,7 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
             for _ in 0..iters {
                 auto.set();
                 let mut future = pin!(auto.wait());
-                let _ = black_box(future.as_mut().poll(&mut cx));
+                _ = black_box(future.as_mut().poll(&mut cx));
             }
             start.elapsed()
         });
@@ -450,13 +444,11 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
             for _ in 0..iters {
                 local_auto.set();
                 let mut future = pin!(local_auto.wait());
-                let _ = black_box(future.as_mut().poll(&mut cx));
+                _ = black_box(future.as_mut().poll(&mut cx));
             }
             start.elapsed()
         });
     });
-
-    // --- events (embedded) ---
 
     let op = allocs.operation("async_poll_ready/events/embedded/ManualResetEvent");
     group.bench_function("events/embedded/ManualResetEvent", |b| {
@@ -469,7 +461,7 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
             let start = Instant::now();
             for _ in 0..iters {
                 let mut future = pin!(manual.wait());
-                let _ = black_box(future.as_mut().poll(&mut cx));
+                _ = black_box(future.as_mut().poll(&mut cx));
             }
             start.elapsed()
         });
@@ -486,13 +478,11 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
             for _ in 0..iters {
                 auto.set();
                 let mut future = pin!(auto.wait());
-                let _ = black_box(future.as_mut().poll(&mut cx));
+                _ = black_box(future.as_mut().poll(&mut cx));
             }
             start.elapsed()
         });
     });
-
-    // --- competitors ---
 
     let op = allocs.operation("async_poll_ready/event_listener/Event");
     group.bench_function("event_listener/Event", |b| {
@@ -504,7 +494,7 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
             for _ in 0..iters {
                 el_event.notify(1);
                 let mut future = pin!(el_event.listen());
-                let _ = black_box(future.as_mut().poll(&mut cx));
+                _ = black_box(future.as_mut().poll(&mut cx));
             }
             start.elapsed()
         });
@@ -521,7 +511,7 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
                 el_event.notify(1);
                 listener!(el_event => el_listener);
                 let mut el_listener = pin!(el_listener);
-                let _ = black_box(Future::poll(el_listener.as_mut(), &mut cx));
+                _ = black_box(Future::poll(el_listener.as_mut(), &mut cx));
             }
             start.elapsed()
         });
@@ -567,11 +557,11 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
                 let event = unsafe { ManualResetEvent::embedded(container.as_ref()) };
                 futures.extend(iter::repeat_with(|| event.wait()).take(MANY_WAITER_COUNT));
                 for f in &mut futures {
-                    let _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
+                    _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
                 }
                 event.set();
                 for f in &mut futures {
-                    let _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
+                    _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
                 }
                 // Clear before the container goes out of scope.
                 futures.clear();
@@ -592,11 +582,11 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
                 let event = unsafe { LocalManualResetEvent::embedded(container.as_ref()) };
                 futures.extend(iter::repeat_with(|| event.wait()).take(MANY_WAITER_COUNT));
                 for f in &mut futures {
-                    let _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
+                    _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
                 }
                 event.set();
                 for f in &mut futures {
-                    let _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
+                    _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
                 }
                 futures.clear();
             }
@@ -616,11 +606,11 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
                 let event = unsafe { AutoResetEvent::embedded(container.as_ref()) };
                 futures.extend(iter::repeat_with(|| event.wait()).take(MANY_WAITER_COUNT));
                 for f in &mut futures {
-                    let _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
+                    _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
                 }
                 for f in &mut futures {
                     event.set();
-                    let _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
+                    _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
                 }
                 futures.clear();
             }
@@ -640,11 +630,11 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
                 let event = unsafe { LocalAutoResetEvent::embedded(container.as_ref()) };
                 futures.extend(iter::repeat_with(|| event.wait()).take(MANY_WAITER_COUNT));
                 for f in &mut futures {
-                    let _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
+                    _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
                 }
                 for f in &mut futures {
                     event.set();
-                    let _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
+                    _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
                 }
                 futures.clear();
             }
@@ -654,8 +644,6 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
 
     // rsevents uses synchronous blocking and cannot register multiple
     // async waiters, so it is excluded from this benchmark group.
-
-    // --- competitors ---
 
     let op = allocs.operation("many_waiters/event_listener/Event");
     group.bench_function("event_listener/Event", |b| {
@@ -669,11 +657,11 @@ fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
                 futures.clear();
                 futures.extend(iter::repeat_with(|| el_event.listen()).take(MANY_WAITER_COUNT));
                 for f in &mut futures {
-                    let _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
+                    _ = unsafe { Pin::new_unchecked(f) }.poll(&mut cx);
                 }
                 el_event.notify(MANY_WAITER_COUNT);
                 for f in &mut futures {
-                    let _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
+                    _ = black_box(unsafe { Pin::new_unchecked(f) }.poll(&mut cx));
                 }
             }
             start.elapsed()
