@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "all_the_time"
-version = "0.4.15"
+version = "0.4.16"
 dependencies = [
  "cpu-time",
  "criterion",
@@ -23,7 +23,7 @@ dependencies = [
 
 [[package]]
 name = "alloc_tracker"
-version = "0.5.19"
+version = "0.5.20"
 dependencies = [
  "criterion",
  "mutants",
@@ -452,7 +452,7 @@ dependencies = [
 
 [[package]]
 name = "events"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "alloc_tracker",
  "awaiter_set",
@@ -471,7 +471,7 @@ dependencies = [
 
 [[package]]
 name = "events_once"
-version = "0.5.19"
+version = "0.5.20"
 dependencies = [
  "criterion",
  "futures",
@@ -574,7 +574,7 @@ dependencies = [
 
 [[package]]
 name = "future_deque"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "criterion",
  "events_once",
@@ -852,7 +852,7 @@ dependencies = [
 
 [[package]]
 name = "infinity_pool"
-version = "0.8.10"
+version = "0.8.11"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -1205,7 +1205,7 @@ dependencies = [
 
 [[package]]
 name = "par_bench"
-version = "0.2.33"
+version = "0.2.34"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -2019,7 +2019,7 @@ checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
 
 [[package]]
 name = "vicinal"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
