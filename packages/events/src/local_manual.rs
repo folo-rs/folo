@@ -121,19 +121,19 @@ impl Inner {
         }
         self.is_set.set(true);
 
-        // Capture a drain threshold so that awaiters registered mid-
-        // drain (typically by a reentrant waker calling `reset()` and
-        // then re-entering `wait()`) are skipped — those awaiters
-        // belong logically after this `set()` returns and would
-        // otherwise observe a closed gate yet still be notified.
-        let threshold = {
+        // Begin a drain pass so that awaiters registered mid-drain
+        // (typically by a reentrant waker calling `reset()` and then
+        // re-entering `wait()`) are skipped — those awaiters belong
+        // logically after this `set()` returns and would otherwise
+        // observe a closed gate yet still be notified.
+        {
             // SAFETY: Validity — `self.waiters` is an `UnsafeCell` field of `self`
             // that outlives this borrow. Aliasing — `Inner: !Send` excludes other
             // threads, and the borrow is held only while invoking
-            // `AwaiterSet::drain_threshold`, which runs no user code.
+            // `AwaiterSet::begin_drain`, which runs no user code.
             let waiters = unsafe { &mut *self.waiters.get() };
-            waiters.drain_threshold()
-        };
+            waiters.begin_drain();
+        }
 
         // Notify waiters one at a time, releasing the borrow on
         // `self.waiters` before each `wake()` call. A reentrant
@@ -150,7 +150,7 @@ impl Inner {
                 // `wake()` is invoked; a reentrant call therefore cannot observe an
                 // aliasing `&mut`.
                 let waiters = unsafe { &mut *self.waiters.get() };
-                waiters.notify_one_in_drain(threshold)
+                waiters.notify_one_drain()
             };
 
             match waker {
@@ -1215,8 +1215,8 @@ mod tests {
         assert!(waker_data_a.was_woken());
 
         // The mid-drain future must still be Pending: reset() closed
-        // the gate before set() reached it, and its drain epoch is
-        // higher than set()'s threshold so the drain skipped it.
+        // the gate before set() reached it, and its drain epoch
+        // matches the post-bump generation so the drain skipped it.
         let noop = Waker::noop();
         let mut cx_noop = task::Context::from_waker(noop);
         let mut late_future = late_future_holder

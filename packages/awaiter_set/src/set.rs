@@ -116,16 +116,19 @@ pub struct AwaiterSet {
     head: *mut Awaiter,
     tail: *mut Awaiter,
 
-    // Counter stamped onto each new registration via `Inner.epoch`.
-    // Captured by `drain_threshold()` and consulted by
-    // `notify_one_in_drain()` to skip awaiters registered during a
-    // drain (e.g. by a reentrant waker firing mid-drain). The counter
-    // is monotonically non-decreasing for the lifetime of the set;
-    // because awaiters are always appended at the tail, the epoch
-    // values stored in the list form a non-decreasing sequence from
-    // head to tail. This lets `notify_one_in_drain` decide eligibility
-    // by inspecting only the head.
-    next_epoch: u64,
+    // Generation counter for the drain mechanism. Each registered
+    // awaiter is stamped with the value held here at registration
+    // time (`Inner.epoch`). `begin_drain()` advances this counter so
+    // that subsequent registrations are stamped with a strictly
+    // larger value, and `notify_one_drain()` then notifies only
+    // awaiters whose epoch predates the bump.
+    //
+    // The counter is monotonically non-decreasing for the lifetime
+    // of the set; because awaiters are always appended at the tail,
+    // the epoch values stored in the list form a non-decreasing
+    // sequence from head to tail. This lets `notify_one_drain`
+    // decide eligibility by inspecting only the head.
+    epoch: u64,
 
     // Debug-only sentinel used to detect awaiters being passed to a
     // different AwaiterSet than the one they are registered in (e.g.
@@ -142,7 +145,7 @@ impl AwaiterSet {
         Self {
             head: ptr::null_mut(),
             tail: ptr::null_mut(),
-            next_epoch: 1,
+            epoch: 1,
             #[cfg(debug_assertions)]
             set_id: NEXT_SET_ID.fetch_add(1, Ordering::Relaxed),
         }
@@ -196,7 +199,7 @@ impl AwaiterSet {
         inner.waker = Some(waker);
         inner.next = ptr::null_mut();
         inner.prev = self.tail;
-        inner.epoch = self.next_epoch;
+        inner.epoch = self.epoch;
         #[cfg(debug_assertions)]
         {
             inner.owning_set_id = self.set_id;
@@ -294,35 +297,36 @@ impl AwaiterSet {
         Some(unsafe { self.remove(ptr) })
     }
 
-    /// Returns an epoch threshold for the current drain.
+    /// Marks the boundary of a drain pass.
     ///
-    /// Use with [`notify_one_in_drain()`][Self::notify_one_in_drain]
-    /// to drain only awaiters that were already registered when this
-    /// method was called. Awaiters registered after the returned
-    /// threshold was captured — typically by a reentrant waker
-    /// firing mid-drain — will be skipped.
+    /// Use with [`notify_one_drain()`][Self::notify_one_drain] to
+    /// drain only awaiters that were already registered when this
+    /// method was called. Awaiters registered after this call —
+    /// typically by a reentrant waker firing mid-drain — will not
+    /// be notified by the current drain pass.
     ///
-    /// Each call advances an internal counter so threshold values
-    /// from sequential drains do not collide.
-    pub fn drain_threshold(&mut self) -> u64 {
-        let threshold = self.next_epoch;
-        self.next_epoch = self.next_epoch.wrapping_add(1);
-        threshold
+    /// Calling this method advances the set's internal generation
+    /// counter. New registrations after this call carry the new
+    /// generation and are skipped by `notify_one_drain` until the
+    /// next `begin_drain` call.
+    pub fn begin_drain(&mut self) {
+        self.epoch = self.epoch.wrapping_add(1);
     }
 
     /// Like [`notify_one()`][Self::notify_one], but only picks an
-    /// awaiter whose registration epoch is at or before `threshold`.
+    /// awaiter that was registered before the current drain pass
+    /// began (the last [`begin_drain()`][Self::begin_drain] call).
     ///
     /// Returns `None` when no eligible awaiter exists — either the
-    /// set is empty, or every remaining awaiter was registered after
-    /// the threshold was captured via
-    /// [`drain_threshold()`][Self::drain_threshold].
+    /// set is empty, or every remaining awaiter was registered
+    /// during or after the current drain pass.
     ///
-    /// The set's internal list is ordered head-to-tail by registration
-    /// time, so the head always carries the smallest epoch value. The
-    /// drain therefore proceeds in strict FIFO order regardless of the
-    /// debug-build ordering of [`notify_one()`][Self::notify_one].
-    pub fn notify_one_in_drain(&mut self, threshold: u64) -> Option<Waker> {
+    /// The set's internal list is ordered head-to-tail by
+    /// registration time, so the head always carries the lowest
+    /// epoch value. The drain therefore proceeds in strict FIFO
+    /// order regardless of the debug-build ordering of
+    /// [`notify_one()`][Self::notify_one].
+    pub fn notify_one_drain(&mut self) -> Option<Waker> {
         if self.head.is_null() {
             return None;
         }
@@ -339,7 +343,7 @@ impl AwaiterSet {
         // only `&Awaiter` and no `&mut Inner` is live.
         let head_epoch = unsafe { head.inner_ref() }.epoch;
 
-        if head_epoch > threshold {
+        if head_epoch >= self.epoch {
             return None;
         }
 
@@ -961,41 +965,58 @@ mod tests {
     }
 
     #[test]
-    fn drain_threshold_advances_per_call() {
+    fn begin_drain_advances_epoch_each_call() {
+        // We cannot inspect the internal counter directly through the
+        // public API; verify by behaviour: after each `begin_drain`,
+        // an awaiter registered between two `begin_drain` calls is
+        // eligible for the second drain but not the first.
         let mut set = AwaiterSet::new();
-        let first = set.drain_threshold();
-        let second = set.drain_threshold();
-        let third = set.drain_threshold();
-        assert!(second > first);
-        assert!(third > second);
+
+        set.begin_drain();
+
+        let mut a = Awaiter::new();
+        unsafe {
+            set.register(Pin::new_unchecked(&mut a), waker());
+        }
+
+        // The first drain pass should not see `a` — `a` was
+        // registered after `begin_drain`.
+        assert!(set.notify_one_drain().is_none());
+        assert!(!a.is_notified());
+
+        // After another `begin_drain`, `a` becomes eligible.
+        set.begin_drain();
+        let w = set.notify_one_drain();
+        assert!(w.is_some());
+        assert!(a.is_notified());
     }
 
     #[test]
-    fn notify_one_in_drain_skips_awaiter_registered_after_threshold() {
+    fn notify_one_drain_skips_awaiter_registered_after_begin() {
         let mut set = AwaiterSet::new();
         let mut early = Awaiter::new();
         unsafe {
             set.register(Pin::new_unchecked(&mut early), waker());
         }
 
-        let threshold = set.drain_threshold();
+        set.begin_drain();
 
-        // Awaiter registered after the threshold capture — must be
-        // skipped by `notify_one_in_drain(threshold)`.
+        // Awaiter registered after `begin_drain` — must be skipped
+        // by `notify_one_drain`.
         let mut late = Awaiter::new();
         unsafe {
             set.register(Pin::new_unchecked(&mut late), waker());
         }
 
         // First call drains the early awaiter.
-        let w = set.notify_one_in_drain(threshold);
+        let w = set.notify_one_drain();
         assert!(w.is_some());
         assert!(early.is_notified());
         assert!(!late.is_notified());
 
-        // Second call — only the late awaiter is left, and it has an
-        // epoch beyond the threshold, so the drain finishes.
-        let w = set.notify_one_in_drain(threshold);
+        // Second call — only the late awaiter is left, and it belongs
+        // to a later drain pass, so the drain finishes.
+        let w = set.notify_one_drain();
         assert!(w.is_none());
         assert!(!late.is_notified());
         assert!(!set.is_empty());
@@ -1008,14 +1029,33 @@ mod tests {
     }
 
     #[test]
-    fn notify_one_in_drain_on_empty_returns_none() {
+    fn notify_one_drain_on_empty_returns_none() {
         let mut set = AwaiterSet::new();
-        let threshold = set.drain_threshold();
-        assert!(set.notify_one_in_drain(threshold).is_none());
+        set.begin_drain();
+        assert!(set.notify_one_drain().is_none());
     }
 
     #[test]
-    fn notify_one_in_drain_drains_all_prior_awaiters_in_fifo_order() {
+    fn notify_one_drain_without_begin_drain_returns_none() {
+        // Awaiters share the set's current epoch on registration, so
+        // without an intervening `begin_drain` they are not eligible
+        // for the drain pass.
+        let mut set = AwaiterSet::new();
+        let mut a = Awaiter::new();
+        unsafe {
+            set.register(Pin::new_unchecked(&mut a), waker());
+        }
+        assert!(set.notify_one_drain().is_none());
+        assert!(!a.is_notified());
+
+        // Clean up.
+        unsafe {
+            set.unregister(Pin::new_unchecked(&mut a));
+        }
+    }
+
+    #[test]
+    fn notify_one_drain_drains_all_prior_awaiters_in_fifo_order() {
         let mut set = AwaiterSet::new();
         let mut a = Awaiter::new();
         let mut b = Awaiter::new();
@@ -1027,10 +1067,10 @@ mod tests {
             set.register(Pin::new_unchecked(&mut c), waker());
         }
 
-        let threshold = set.drain_threshold();
+        set.begin_drain();
 
         let mut drained = 0_usize;
-        while let Some(w) = set.notify_one_in_drain(threshold) {
+        while let Some(w) = set.notify_one_drain() {
             drop(w);
             drained = drained.checked_add(1).unwrap();
         }
@@ -1043,24 +1083,23 @@ mod tests {
     }
 
     #[test]
-    fn successive_drain_batches_use_independent_thresholds() {
+    fn successive_drain_passes_only_notify_prior_registrations() {
         let mut set = AwaiterSet::new();
 
         let mut first_batch = Awaiter::new();
         unsafe {
             set.register(Pin::new_unchecked(&mut first_batch), waker());
         }
-        let threshold_a = set.drain_threshold();
-        drop(set.notify_one_in_drain(threshold_a));
+        set.begin_drain();
+        drop(set.notify_one_drain());
         assert!(first_batch.is_notified());
 
         let mut second_batch = Awaiter::new();
         unsafe {
             set.register(Pin::new_unchecked(&mut second_batch), waker());
         }
-        let threshold_b = set.drain_threshold();
-        assert!(threshold_b > threshold_a);
-        drop(set.notify_one_in_drain(threshold_b));
+        set.begin_drain();
+        drop(set.notify_one_drain());
         assert!(second_batch.is_notified());
         assert!(set.is_empty());
     }
