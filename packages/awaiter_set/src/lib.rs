@@ -17,20 +17,6 @@
 //! set and returns its waker.
 #![doc = simple_mermaid::mermaid!("../docs/diagrams/list_structure.mermaid")]
 //!
-//! # Synchronization
-//!
-//! Neither `AwaiterSet` nor `Awaiter` has internal synchronization,
-//! and both are `Send` but not `Sync`.
-//!
-//! `AwaiterSet`'s mutating methods take `&mut self`. To share a set
-//! between threads, wrap it in a [`Mutex`][std::sync::Mutex] (or
-//! another exclusive lock); for single-threaded use no lock is
-//! required.
-//!
-//! `Awaiter`'s public methods are safe to call from the owning future
-//! without any external synchronization, even while the awaiter is
-//! registered with a set on another thread.
-//!
 //! # Waker invocation
 //!
 //! Some primitives call [`Waker::wake()`][std::task::Waker::wake]
