@@ -1054,7 +1054,7 @@ mod tests {
     }
 
     #[test]
-    fn notify_one_prior_generation_drains_all_in_fifo_order() {
+    fn notify_one_prior_generation_drains_all_prior_awaiters() {
         let mut set = AwaiterSet::new();
         let mut a = Awaiter::new();
         let mut b = Awaiter::new();

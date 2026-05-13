@@ -898,7 +898,7 @@ mod tests {
     }
 
     #[test]
-    fn drop_unlinks_registered_waiter_from_list() {
+    fn drop_unregisters_waiter() {
         use testing::ReentrantWakerData;
 
         let event = LocalManualResetEvent::boxed();
@@ -930,7 +930,7 @@ mod tests {
     }
 
     #[test]
-    fn embedded_drop_unlinks_registered_waiter_from_list() {
+    fn embedded_drop_unregisters_waiter() {
         use testing::ReentrantWakerData;
 
         let container = Box::pin(EmbeddedLocalManualResetEvent::new());
@@ -1013,7 +1013,7 @@ mod tests {
         // calls set() again, accessing the awaiter set.
         event.set();
 
-        // Drop future1 after notification — unlinks from list.
+        // Drop future1 after notification.
         drop(future1);
 
         assert!(waker_data.was_woken());

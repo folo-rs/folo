@@ -1244,7 +1244,7 @@ mod tests {
     }
 
     #[test]
-    fn drop_unlinks_registered_waiter_from_list() {
+    fn drop_unregisters_waiter() {
         use crate::test_helpers::AtomicWakeTracker;
 
         let event = ManualResetEvent::boxed();
@@ -1276,7 +1276,7 @@ mod tests {
     }
 
     #[test]
-    fn embedded_drop_unlinks_registered_waiter_from_list() {
+    fn embedded_drop_unregisters_waiter() {
         use crate::test_helpers::AtomicWakeTracker;
 
         let container = Box::pin(EmbeddedManualResetEvent::new());
