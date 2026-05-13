@@ -32,15 +32,16 @@ pub(crate) struct Inner {
     pub(crate) next: *mut Awaiter,
     pub(crate) prev: *mut Awaiter,
 
-    // Generation counter recording the AwaiterSet's `epoch` value at
-    // the time this awaiter entered WAITING. Used by
-    // `notify_one_drain` to distinguish awaiters that were already
-    // registered when a drain pass began from awaiters registered
-    // later (typically by a reentrant waker firing during the
-    // drain). Zero is reserved as the "idle"/sentinel value and is
-    // never produced by registration because `AwaiterSet::epoch`
-    // starts at 1 and is monotonically non-decreasing.
-    pub(crate) epoch: u64,
+    // Generation counter recording the AwaiterSet's `generation`
+    // value at the time this awaiter entered WAITING. Used by
+    // `notify_one_prior_generation` to distinguish awaiters that
+    // were already registered when a generation advance occurred
+    // from awaiters registered later (typically by a reentrant
+    // waker firing during the drain). Zero is reserved as the
+    // "idle"/sentinel value and is never produced by registration
+    // because `AwaiterSet::generation` starts at 1 and is
+    // monotonically non-decreasing.
+    pub(crate) generation: u64,
 
     // Debug-only sentinel that records which AwaiterSet owns this
     // awaiter while it is WAITING. Used by AwaiterSet to assert that
@@ -58,7 +59,7 @@ impl Inner {
             waker: None,
             next: ptr::null_mut(),
             prev: ptr::null_mut(),
-            epoch: 0,
+            generation: 0,
             #[cfg(debug_assertions)]
             owning_set_id: 0,
         }

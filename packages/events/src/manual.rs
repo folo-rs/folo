@@ -129,17 +129,17 @@ impl EventInner {
 
         // Slow path: drain awaiters that were already registered when
         // this call observed `HAS_WAITERS`, waking each outside the
-        // mutex to avoid deadlocks with reentrant wakers. Begin a
-        // drain pass first so that any awaiter that registers
-        // mid-drain (typically via a reentrant waker calling
-        // `reset()` and then re-entering `wait()`) is skipped —
-        // those awaiters belong logically after this `set()` returns
-        // and would otherwise observe a closed gate yet still be
-        // notified.
-        self.slow.lock().expect(NEVER_POISONED).begin_drain();
+        // mutex to avoid deadlocks with reentrant wakers. Advance
+        // the waiter set's generation first so that any awaiter
+        // that registers mid-drain (typically via a reentrant waker
+        // calling `reset()` and then re-entering `wait()`) is
+        // skipped — those awaiters belong logically after this
+        // `set()` returns and would otherwise observe a closed gate
+        // yet still be notified.
+        self.slow.lock().expect(NEVER_POISONED).advance_generation();
         loop {
             let mut waiters = self.slow.lock().expect(NEVER_POISONED);
-            let waker = waiters.notify_one_drain();
+            let waker = waiters.notify_one_prior_generation();
             if waiters.is_empty() {
                 self.state.fetch_and(!HAS_WAITERS, Ordering::Relaxed);
             }
