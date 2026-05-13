@@ -297,35 +297,29 @@ impl AwaiterSet {
         Some(unsafe { self.remove(ptr) })
     }
 
-    /// Advances the set's generation counter, opening a new
-    /// generation for subsequent registrations.
+    /// Opens a new generation, so that any awaiters registered from
+    /// this point on are considered to belong to it.
     ///
-    /// Use with
+    /// Use in conjunction with
     /// [`notify_one_prior_generation()`][Self::notify_one_prior_generation]
-    /// to drain only awaiters that were registered before this call.
-    /// Awaiters registered after this call — typically by a
-    /// reentrant waker firing mid-drain — carry the new generation
-    /// and are skipped by `notify_one_prior_generation` until the
-    /// next call to this method.
+    /// to notify only awaiters that existed before this call —
+    /// typically because the caller wants to exclude awaiters that
+    /// a reentrant waker may register while the notification is in
+    /// progress.
     pub fn advance_generation(&mut self) {
         self.generation = self.generation.wrapping_add(1);
     }
 
     /// Like [`notify_one()`][Self::notify_one], but only picks an
-    /// awaiter from a prior generation — that is, one that was
-    /// registered before the last
-    /// [`advance_generation()`][Self::advance_generation] call.
+    /// awaiter that was registered before the last call to
+    /// [`advance_generation()`][Self::advance_generation] — that
+    /// is, an awaiter from any prior generation.
     ///
-    /// Returns `None` when no eligible awaiter exists — either the
-    /// set is empty, or every remaining awaiter belongs to the
-    /// current generation (registered after the most recent
-    /// `advance_generation`).
-    ///
-    /// The set's internal list is ordered head-to-tail by
-    /// registration time, so the head always carries the lowest
-    /// generation value. The drain therefore proceeds in strict
-    /// FIFO order regardless of the debug-build ordering of
-    /// [`notify_one()`][Self::notify_one].
+    /// Returns `None` when no such awaiter exists. This happens
+    /// when the set is empty, when every registered awaiter belongs
+    /// to the current generation, or when no generation has been
+    /// opened yet (no [`advance_generation()`][Self::advance_generation]
+    /// call has been made).
     pub fn notify_one_prior_generation(&mut self) -> Option<Waker> {
         if self.head.is_null() {
             return None;
