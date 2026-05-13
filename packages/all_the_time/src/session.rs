@@ -300,8 +300,7 @@ mod tests {
         assert!(!report.is_empty());
     }
 
-    use std::panic::RefUnwindSafe;
-    use std::panic::UnwindSafe;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
 
     // The type is thread-safe.
     static_assertions::assert_impl_all!(Session: Send, Sync);

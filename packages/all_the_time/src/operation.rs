@@ -204,8 +204,7 @@ impl fmt::Display for Operation {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::hint::black_box;
-    use std::panic::RefUnwindSafe;
-    use std::panic::UnwindSafe;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
 
     use super::*;
     use crate::Session;

@@ -74,6 +74,10 @@ types, we re-export them all at the parent, so while we have modules like
 `packages/many_cpus/src/hardware_tracker.rs` the type itself is exported at the crate root as
 `many_cpus::HardwareTracker` instead of at the module as `many_cpus::hardware_tracker::HardwareTracker`.
 
+`lib.rs` and `mod.rs` files should only contain API documentation and re-exports. Do not define
+constants, helper functions, or other items in these files — move them to dedicated files (e.g.
+`constants.rs`) for better filesystem organization.
+
 # Scripting
 
 You can assume PowerShell 7 (`pwsh`) is available on every operating system and environment.
@@ -90,6 +94,72 @@ There are many Clippy rules defined in the workspace-level `Cargo.toml`.
 Follow these even in doctests. Note that Clippy does not actually check doctests! You will need to
 manually check what Clippy rules we enable in the workspace-level `Cargo.toml` and follow them in
 the inline examples in API documentation.
+
+# Discarding values
+
+Use `_ = expr;` to discard values, not `let _ = expr;`. The `let` keyword is unnecessary and
+triggers `clippy::let_underscore_must_use`. Use `drop(expr)` when you want to explicitly drop a
+value that has a destructor.
+
+# Cloning into closures
+
+When cloning a variable to move it into a closure, create a separate scope for the clone instead
+of polluting the parent scope with renamed variables. This applies to all closure types: async
+blocks, thread spawns, and regular closures.
+
+Bad:
+
+```rust
+let handle = mutex.clone();
+spawn(async move { handle.something(); });
+```
+
+Good:
+
+```rust
+spawn({
+    let mutex = mutex.clone();
+    async move {
+        mutex.something();
+    }
+});
+```
+
+The same pattern applies to thread spawning:
+
+```rust
+thread::spawn({
+    let set = Arc::clone(&set);
+    move || {
+        set.do_work();
+    }
+});
+```
+
+# Variable shadowing for type conversions
+
+When converting a variable to a different form (e.g. removing a `Pin` wrapper, dereferencing a
+pointer to a reference, or re-pinning a reference), prefer shadowing the original variable name
+instead of inventing a new abbreviated name. This keeps the code readable and avoids cryptic
+short names like `aw`, `aw_ref`, or `raw`.
+
+Good:
+
+```rust
+let awaiter = unsafe { awaiter.get_unchecked_mut() };
+let awaiter = ptr::from_mut(awaiter);
+let awaiter = unsafe { &*awaiter };
+```
+
+Bad:
+
+```rust
+let aw = unsafe { awaiter.get_unchecked_mut() };
+let raw = ptr::from_mut(aw);
+let aw_ref = unsafe { &*raw };
+```
+
+Only use a different name when both forms are needed simultaneously in the same scope.
 
 # Language
 
@@ -135,6 +205,21 @@ and the safety comment is the response - the two must be paired and correspond t
 Safety comments are not there just to re-state the requirements or make generic claims, they must
 specifically explain how we satisfy the safety requirements of the function we are calling (e.g.
 by referencing an assertion, a type invariant, earlier logic or other mechanism).
+
+When creating a reference from a raw pointer (`unsafe { &*ptr }`, `unsafe { &mut *ptr }`,
+`NonNull::as_ref`, `NonNull::as_mut`, etc.), the safety comment must address BOTH:
+
+1. **Validity** — the pointer is non-null, properly aligned, points to an initialized value of
+   the correct type, and the pointee outlives the new reference.
+2. **Aliasing** — explain why no conflicting reference exists for the duration of the new borrow:
+   - For `&T`: no `&mut T` to the same memory may exist concurrently.
+   - For `&mut T`: no other `&T` or `&mut T` to the same memory may exist concurrently. This
+     includes references on other threads.
+
+Documenting only validity is insufficient. Rust's aliasing rules are equally strict and equally
+easy to violate, especially when constructing references from raw pointers stored across function
+calls or threads. Justify aliasing by referencing locks held, single-threaded ownership,
+`!Send`/`!Sync` markers, scope-bounded borrows, atomic-only access, or other concrete mechanisms.
 
 Safety comments are also required in examples and doctests that use `unsafe` blocks.
 
@@ -212,6 +297,9 @@ Comments that merely restate the obvious are not desired. Comments should add va
 why something is done, what it accomplishes, or how it works. Avoid comments that simply repeat
 what the code does.
 
+Do not use section separator comments (e.g. `// --- Section ---` or `// ======= Title =======`)
+to create visual "chapters" in code. Code organization should be clear from naming and structure.
+
 Bad comment:
 
 ```rust
@@ -252,6 +340,13 @@ Performance-critical code should include Criterion benchmarks to help detect reg
 API documentation on types and functions should describe the API contract (i.e. the inputs,
 the outputs and the behavior) not how it is implemented. Do not discuss implementation details
 like private helper types or reference the internal field structure of a type in API documentation.
+
+Specific things that are implementation details and do NOT belong in API documentation:
+
+* Internal data structures (e.g. "uses an intrusive linked list").
+* Internal ordering guarantees (e.g. "FIFO") unless they are part of the API contract.
+* What fields a node or struct contains internally.
+* Whether a future is `Unpin` or not (obvious from the type's auto-trait inference).
 
 # Keep API documentation summary lines short
 
@@ -414,6 +509,12 @@ mutation if it is impractical to catch.
 
 Avoid magic values in the code and use named constants instead. It does not matter how many
 times the magic value is present, even one instance is enough to warrant a named constant.
+
+This includes zero. `0` is just as much a magic value as `1` or `42` when it represents a
+domain concept (e.g. an initial state, a sentinel index, an empty bitfield, the absence of
+flags). Define a named constant (`IDLE`, `EMPTY`, `NONE`, `ROOT`, etc.) and use it instead.
+Numeric `0` only stays unadorned when it is literally arithmetic (e.g. `for i in 0..n`,
+`x.saturating_sub(0)`, `Vec::with_capacity(0)`).
 
 If constants are only used in one function, put them at the top of that function.
 
@@ -640,6 +741,11 @@ static_assertions::assert_impl_all!(MyType: UnwindSafe, RefUnwindSafe);
 If a type cannot reasonably be made unwind-safe (e.g. it wraps a lock guard), pin the negative
 contract with `assert_not_impl_any!` and a comment explaining why.
 
+**Exception: types that guard user data** (e.g. mutex guards, lock types wrapping `UnsafeCell<T>`)
+should NOT implement `UnwindSafe` or `RefUnwindSafe`. User code can panic while holding the lock,
+leaving the guarded data in an inconsistent state. Let the compiler's auto-trait inference
+correctly mark these types as `!UnwindSafe`. Do not add manual `impl UnwindSafe` for such types.
+
 When a `!Sync` marker is needed, use `PhantomData<Cell<()>>`. The `Cell<()>` type is natively
 `Send + !Sync`, so no `unsafe impl Send` is required. Since `Cell` wraps `UnsafeCell` which is
 `!RefUnwindSafe`, a manual `impl RefUnwindSafe` is needed on the containing type. This is sound
@@ -728,6 +834,10 @@ In some circumstances, we may need to mark parts of code as intentionally not co
 To exclude code from coverage measurement, mark it with `#[cfg_attr(coverage_nightly, coverage(off))]`. This
 also requires `#![cfg_attr(coverage_nightly, feature(coverage_attribute))]` on the crate level.
 
+Note that `coverage(off)` applies to entire functions, not to individual branches. Defensive branches inside
+a function (e.g. `debug_assert!(false)` for structurally unreachable states) cannot be excluded from coverage
+measurement. Accept these as known gaps rather than trying to restructure the code to work around them.
+
 When excluding code for any other reason than "it is test code", leave a comment to explain why.
 
 # Keep names simple and unadorned
@@ -737,6 +847,10 @@ Avoid unnecessary and repetitive prefixes and suffixes.
 For example:
 
 * Builder methods are just a noun. It is `FooBuilder::bar(value)` not `FooBuilder::with_bar(value)`.
+
+# Memory allocation is the root of all evil
+
+Avoid algorithms that allocate memory at runtime when an allocation-free alternative is available.
 
 # Creating GitHub pull requests
 
@@ -748,3 +862,7 @@ and use `--body-file path/to/file.md`.
 
 When addressing PR review comments, reply to each comment thread with the disposition (what you
 did to address it) and mark the thread as resolved after pushing the commit that addresses it.
+
+# Version bumps
+
+Do not bump crate versions in feature branches. Version bumps are handled by the release process.

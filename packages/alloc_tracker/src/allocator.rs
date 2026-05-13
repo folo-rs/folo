@@ -301,12 +301,10 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Allocator<A> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::{iter, thread};
 
     use super::*;
-
-    use std::panic::RefUnwindSafe;
-    use std::panic::UnwindSafe;
 
     // Static assertions for thread safety.
     static_assertions::assert_impl_all!(Allocator<std::alloc::System>: Send, Sync);

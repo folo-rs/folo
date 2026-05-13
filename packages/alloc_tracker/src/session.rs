@@ -171,10 +171,9 @@ impl fmt::Display for Session {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use super::*;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
 
-    use std::panic::RefUnwindSafe;
-    use std::panic::UnwindSafe;
+    use super::*;
 
     // The type is thread-safe.
     static_assertions::assert_impl_all!(Session: Send, Sync);

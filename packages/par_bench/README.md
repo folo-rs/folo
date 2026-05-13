@@ -3,14 +3,17 @@ Mechanisms for multithreaded benchmarking, designed for integration with Criteri
 This package provides low-overhead utilities for benchmarking operations across multiple threads, with features like thread pool reuse, flexible configuration, and seamless integration with popular benchmark frameworks.
 
 ```rust
+use std::num::NonZero;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use many_cpus::ProcessorSet;
+use many_cpus::SystemHardware;
 use par_bench::{Run, ThreadPool};
 
-// Create a thread pool with two processors.
-let two_processors = ProcessorSet::builder()
-    .take(std::num::NonZero::new(2).unwrap())
+// Build a thread pool with two processors.
+let two_processors = SystemHardware::current()
+    .processors()
+    .to_builder()
+    .take(NonZero::new(2).unwrap())
     .expect("need at least 2 processors for multi-threaded benchmarks");
 
 let mut pool = ThreadPool::new(&two_processors);

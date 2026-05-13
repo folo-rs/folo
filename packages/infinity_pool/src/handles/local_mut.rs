@@ -291,7 +291,6 @@ impl<T: ?Sized> Drop for LocalPooledMut<T> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::borrow::{Borrow, BorrowMut};
-
     use std::panic::{RefUnwindSafe, UnwindSafe};
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};

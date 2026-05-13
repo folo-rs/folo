@@ -526,9 +526,8 @@ impl<T: 'static> fmt::Debug for LocalEvent<T> {
 #[expect(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::task::{self, Poll};
-
     use std::panic::{RefUnwindSafe, UnwindSafe};
+    use std::task::{self, Poll};
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 

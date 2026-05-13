@@ -71,18 +71,18 @@ validate-linux:
 # Performs validation on the current platform, whatever that may be.
 [group('quality')]
 validate-local:
-    just package={{ package }} format-check
-    just package={{ package }} check dev
-    just package={{ package }} clippy dev
-    just package={{ package }} test
-    just package={{ package }} test-docs
-    just package={{ package }} docs
-    just package={{ package }} miri
-    just package={{ package }} machete
-    just package={{ package }} default-features-check
-    just package={{ package }} check release
-    just package={{ package }} clippy release
-    just package={{ package }} build release
+    just package="{{ package }}" format-check
+    just package="{{ package }}" check dev
+    just package="{{ package }}" clippy dev
+    just package="{{ package }}" test
+    just package="{{ package }}" test-docs
+    just package="{{ package }}" docs
+    just package="{{ package }}" miri
+    just package="{{ package }}" machete
+    just package="{{ package }}" default-features-check
+    just package="{{ package }}" check release
+    just package="{{ package }}" clippy release
+    just package="{{ package }}" build release
 
 # Validation of extra factors that take potentially too long to run in regular validation.
 [group('quality')]
@@ -97,7 +97,7 @@ validate-extra-linux:
 # Performs validation on the current platform, whatever that may be.
 [group('quality')]
 validate-extra-local:
-    just package={{ package }} mutants
-    just package={{ package }} run-examples
-    just package={{ package }} hack
-    just package={{ package }} careful
+    just package="{{ package }}" mutants
+    just package="{{ package }}" run-examples
+    just package="{{ package }}" hack
+    just package="{{ package }}" careful

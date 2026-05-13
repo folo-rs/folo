@@ -216,7 +216,6 @@ impl Drop for Remover {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::borrow::Borrow;
-
     use std::panic::{RefUnwindSafe, UnwindSafe};
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};

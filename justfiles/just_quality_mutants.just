@@ -46,10 +46,14 @@ mutants:
         "-e"
         (Escape-Wildcards "packages/many_cpus/src/pal/linux/filesystem/**")
 
-        # This package is literally full of synchronization primitives, so 95% of mutations will
-        # just cause tests to time out and never complete - pointless to try mutate this stuff.
+        # These packages are literally full of synchronization primitives, so 95% of mutations
+        # will just cause tests to time out and never complete - pointless to try mutate this stuff.
         "-e"
-        "events_once"
+        "events_once",
+        "-e"
+        "awaiter_set",
+        "-e"
+        "events"
         
         # All this is code only used in tests/benchmarks - we do not test this code itself.
         "-e"

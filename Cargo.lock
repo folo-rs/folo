@@ -93,6 +93,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
+name = "awaiter_set"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "mutants",
+ "simple-mermaid",
+ "static_assertions",
+]
+
+[[package]]
 name = "axum"
 version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -445,10 +455,14 @@ name = "events"
 version = "0.6.0"
 dependencies = [
  "alloc_tracker",
+ "awaiter_set",
  "criterion",
  "event-listener",
  "futures",
+ "many_cpus",
  "mutants",
+ "new_zealand",
+ "par_bench",
  "rsevents",
  "static_assertions",
  "testing",

@@ -288,11 +288,10 @@ fn ensure_inner_pool<'a, T: Send + 'static>(
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::mem::MaybeUninit;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicI32, Ordering};
     use std::thread;
-
-    use std::panic::{RefUnwindSafe, UnwindSafe};
 
     use static_assertions::assert_impl_all;
 
