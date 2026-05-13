@@ -111,8 +111,8 @@ static NEXT_SET_ID: AtomicU64 = AtomicU64::new(1);
 pub struct AwaiterSet {
     // Both are null if the set is empty. New entries are appended at
     // the tail. In release builds, notify_one() removes from the head
-    // (FIFO). In debug builds, it alternates between head and tail
-    // based on pointer address to catch code that depends on ordering.
+    // (FIFO). In debug builds, it may pick head or tail based on their
+    // relative pointer addresses to catch code that depends on ordering.
     head: *mut Awaiter,
     tail: *mut Awaiter,
 

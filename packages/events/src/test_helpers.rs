@@ -3,9 +3,10 @@ use std::task::{RawWaker, RawWakerVTable, Waker};
 
 /// A thread-safe waker that tracks whether `wake()` was called.
 ///
-/// Use `testing::ReentrantWakerData` when testing single-threaded
-/// (`Local`) event types — its backing `Cell` is `!Sync` and not
-/// suitable for thread-safe variants.
+/// Use `testing::ReentrantWakerData` when the waker stays on a single
+/// thread — its backing storage is `!Send` and cannot be shared across
+/// threads. This tracker exists for tests where the waker may be sent
+/// to or invoked from another thread.
 pub(crate) struct AtomicWakeTracker {
     woken: AtomicBool,
 }
