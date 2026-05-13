@@ -15,9 +15,8 @@ use awaiter_set::{Awaiter, AwaiterSet};
 ///
 /// Each [`set()`][Self::set] call releases at most one awaiter.
 ///
-/// This is the `!Send` counterpart of [`AutoResetEvent`][crate::AutoResetEvent].
-/// It avoids atomic operations and locking, making it more efficient on
-/// single-threaded executors.
+/// This is the `!Send` counterpart of [`AutoResetEvent`][crate::AutoResetEvent],
+/// more efficient on single-threaded executors.
 ///
 /// # Signal rules
 ///
@@ -53,13 +52,8 @@ use awaiter_set::{Awaiter, AwaiterSet};
 ///
 /// * [`set()`][Self::set] and [`try_wait()`][Self::try_wait]
 /// * Creating and polling a fresh [`wait()`][Self::wait] future
-///   (registers a new awaiter)
 /// * Dropping another in-flight [`Future`][std::future::Future] from
 ///   this event, including one that is still pending
-///
-/// The event always drops any internal borrow on its awaiter set
-/// before calling [`Waker::wake()`], so reentrant operations never
-/// observe partially mutated state.
 ///
 /// # Examples
 ///

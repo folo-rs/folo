@@ -47,13 +47,8 @@ use crate::NEVER_POISONED;
 /// * [`set()`][Self::set], [`reset()`][Self::reset] and
 ///   [`try_wait()`][Self::try_wait]
 /// * Creating and polling a fresh [`wait()`][Self::wait] future
-///   (registers a new awaiter)
 /// * Dropping another in-flight [`Future`][std::future::Future] from
 ///   this event, including one that is still pending
-///
-/// The event always releases its internal mutex before calling
-/// [`Waker::wake()`], so reentrant operations never deadlock or
-/// observe partially mutated state.
 ///
 /// # Examples
 ///
