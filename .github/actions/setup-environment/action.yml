@@ -33,6 +33,12 @@ runs:
         # This enables more reuse, e.g. the Copilot workflow can reuse artifacts from the
         # validate workflow, which speeds up copilot executions.
         shared-key: prerequisites
+        # Include the runner image version (e.g. macos-15-arm64 20260511.0048.1) in the
+        # cache key. Cached binaries can subtly depend on image-specific dylibs and tools,
+        # so caches must not flow across image versions even when the lockfile and rust
+        # toolchain are identical. ImageVersion is set automatically on every GitHub-hosted
+        # runner. env-vars is additive on top of the rust-cache defaults.
+        env-vars: ImageVersion
     
     - name: Install just
       shell: bash
