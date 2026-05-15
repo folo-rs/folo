@@ -959,14 +959,16 @@ impl<T: Send + 'static> fmt::Debug for Event<T> {
 )]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::cell::RefCell;
     use std::panic::{AssertUnwindSafe, RefUnwindSafe, UnwindSafe, catch_unwind, resume_unwind};
+    use std::rc::Rc;
     use std::sync::Barrier;
     use std::task::Poll;
     use std::{task, thread};
 
     use futures::executor::block_on;
     use static_assertions::assert_impl_all;
-    use testing::with_watchdog;
+    use testing::{ReentrantWakerData, with_watchdog};
 
     use super::*;
     use crate::IntoValueError;
@@ -2056,11 +2058,6 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Custom raw waker is not Miri-compatible.
     fn boxed_sender_drop_with_reentrant_waker_does_not_deadlock() {
-        use std::cell::RefCell;
-        use std::rc::Rc;
-
-        use testing::ReentrantWakerData;
-
         type ObservedResult = Poll<Result<i32, Disconnected>>;
 
         with_watchdog(|| {
