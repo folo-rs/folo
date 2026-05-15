@@ -174,6 +174,16 @@ impl<T, H: FutureHandle<T>> FutureDequeCore<T, H> {
             };
 
             if let Poll::Ready(value) = poll_result {
+                // Replace the slot atomically before dropping the old `Slot::Pending`. The
+                // pool handle inside the old slot may invoke a user-supplied `Drop` impl on
+                // the wrapped future when it is dropped at the end of this statement. By the
+                // time that user code runs, the slot is already fully `Ready { value }`, so a
+                // reentrant observer (if one were possible) would see consistent state.
+                // `FutureDequeCore` is not exposed behind any shared interior mutability, so
+                // user code reachable through the future's drop cannot obtain a second
+                // `&mut FutureDequeCore` while we hold this borrow. The `shared_parent` mutex
+                // is also not held at this point (released above after cloning the parent
+                // waker), so a reentrant wake through the parent waker path does not deadlock.
                 let old = std::mem::replace(slot, Slot::Ready { value });
 
                 // Release the Slot's metadata reference. The handle is dropped as
