@@ -622,6 +622,11 @@ impl BenchmarkBatch {
     fn wait(&mut self) -> Duration {
         let thread_count = self.join_handles.len();
 
+        // Take the join handles out so we can join them outside any borrow of `self`.
+        // Worker threads may still be running user payload code while we join, but the
+        // join is not reentrant: no mutex or partially mutated shared state is held
+        // during the wait, so any callback the workers run (or panic they propagate)
+        // cannot observe inconsistent state through this struct.
         let join_handles = mem::replace(&mut self.join_handles, Box::new([]));
 
         let mut total_elapsed_nanos: u128 = 0;
@@ -722,6 +727,10 @@ impl BenchmarkBatch {
 
 impl Drop for BenchmarkBatch {
     fn drop(&mut self) {
+        // Take the join handles out before iterating; no shared borrow is held while
+        // joining. Worker threads may still be unwinding user code, but the join is
+        // not reentrant — there is no partial state on `self` for a callback to
+        // observe.
         let join_handles = mem::replace(&mut self.join_handles, Box::new([]));
 
         for handle in join_handles {

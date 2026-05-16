@@ -254,6 +254,18 @@ let entity = unsafe {
 };
 ```
 
+# Reentrancy through callbacks
+
+User-supplied callbacks (`Waker::wake`, `Drop` impls, observer closures, etc.) can
+re-enter the data structure they were invoked from and silently corrupt invariants
+without violating any borrow-checker, type-system, or Miri rule. Never invoke a user
+callback while holding a borrow or lock on shared state, never `mem::take`/`swap`/
+`replace` shared state when the callback could re-enter through the original location,
+and document the reentrancy contract (with parity tests across thread-safe and
+single-threaded variants) on every public async primitive. See
+[docs/callback-safety.md](docs/callback-safety.md) for the full rationale, anti-patterns,
+and examples.
+
 # Whitespace
 
 There should be an empty line between functions.

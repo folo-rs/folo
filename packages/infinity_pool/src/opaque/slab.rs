@@ -206,7 +206,9 @@ impl Slab {
         // to act. We only ever create this one dropper for the object, so no double-drop can occur.
         let dropper = unsafe { Dropper::new(object_ptr) };
 
-        // Update the slot metadata to mark it as occupied and store the dropper.
+        // Update the slot metadata to mark it as occupied and store the dropper. The
+        // previous meta is `SlotMeta::Vacant` (no dropper), so this `mem::replace` does
+        // not invoke any user code as part of dropping the returned value.
         let previous_meta = mem::replace(slot_meta, SlotMeta::Occupied { _dropper: dropper });
 
         self.next_free_slot_index = match previous_meta {
@@ -330,6 +332,10 @@ impl Slab {
         // SAFETY: Forwarding safety requirements from the caller (object must be present in slab).
         let slot_meta = unsafe { self.slot_meta_mut(handle.index()) };
 
+        // Replace the slot meta with `Vacant` before reading out the object. The old
+        // meta would normally drop the user-supplied object via its dropper, but we
+        // `mem::forget` it below so no user code runs from this `mem::replace` — the
+        // object is handed to the caller instead.
         let old_meta = mem::replace(
             slot_meta,
             SlotMeta::Vacant {
