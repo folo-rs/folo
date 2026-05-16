@@ -33,6 +33,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: cargo-delta
+          # See setup-environment/action.yml for the rationale behind including
+          # the runner image version in the cache key.
+          env-vars: ImageVersion
 
       - name: Install cargo-delta
         run: cargo install cargo-delta --locked

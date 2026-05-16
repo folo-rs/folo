@@ -88,6 +88,10 @@ for manual cache warming after toolchain updates.
 5. **Shared infrastructure**:
    - All jobs use the common `.github/actions/setup-environment` action
    - Rust cache uses `shared-key: prerequisites` for cross-job cache sharing
+   - Cache key includes the runner image version via `env-vars: ImageVersion`
+     so caches do not flow across runner image releases (cached binaries can
+     subtly depend on image-specific dylibs and system tools, even when the
+     lockfile and rust toolchain are identical)
    - `fail-fast: false` ensures all platform checks complete even if one fails
 
 ## Maintenance Notes
