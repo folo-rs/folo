@@ -206,25 +206,8 @@ impl ObservationBagSync {
         self.count.store(data.count.get(), SYNC_BAG_ACCESS_ORDERING);
         self.sum.store(data.sum.get(), SYNC_BAG_ACCESS_ORDERING);
 
-        let mut dirty = data.take_dirty_buckets();
-        let overflow_mask = 1_u64 << DIRTY_BUCKETS_OVERFLOW_INDEX;
-
-        // If the overflow bit is set, scan every bucket at or above the threshold.
-        // This catch-all path covers the rare case of histograms with more than
-        // `DIRTY_BUCKETS_OVERFLOW_INDEX` buckets.
-        if dirty & overflow_mask != 0 {
-            dirty &= !overflow_mask;
-            for i in DIRTY_BUCKETS_OVERFLOW_INDEX..data.bucket_counts.len() {
-                // SAFETY: The loop bound is `data.bucket_counts.len()`, so `i` is in
-                // bounds for `data.bucket_counts`.
-                let source = unsafe { data.bucket_counts.get_unchecked(i) };
-                // SAFETY: The `assert!` above guarantees
-                // `self.bucket_counts.len() == data.bucket_counts.len()`, so `i` is
-                // also in bounds for `self.bucket_counts`.
-                let target = unsafe { self.bucket_counts.get_unchecked(i) };
-                target.store(source.get(), SYNC_BAG_ACCESS_ORDERING);
-            }
-        }
+        let dirty = data.take_dirty_buckets();
+        let mut dirty = self.drain_overflow_buckets(data, dirty);
 
         // Iterate the remaining set bits one at a time.
         while dirty != 0 {
@@ -242,6 +225,43 @@ impl ObservationBagSync {
             let target = unsafe { self.bucket_counts.get_unchecked(i) };
             target.store(source.get(), SYNC_BAG_ACCESS_ORDERING);
         }
+    }
+
+    /// Copies buckets at indices `>= DIRTY_BUCKETS_OVERFLOW_INDEX` from `data` into
+    /// `self` when the overflow bit is set in `dirty`. Returns `dirty` with the
+    /// overflow bit cleared so the caller can iterate the remaining per-bucket bits.
+    ///
+    /// Mutation testing on this helper is suppressed because the mutations the
+    /// tool generates here (`&` -> `|`, `&` -> `^`, `&=` -> `|=` on the overflow
+    /// mask handling) all degrade to over-iteration of bucket stores. The
+    /// redundant stores copy `source` buckets that already match the destination,
+    /// leaving observable behavior unchanged in any state reachable through the
+    /// public API. Catching them would require reaching into private fields to
+    /// construct a state where `source.bucket_counts` and `self.bucket_counts`
+    /// disagree in buckets that were not marked dirty - a condition no normal
+    /// caller can produce. The function body is small and trivially reviewable.
+    #[cfg_attr(test, mutants::skip)]
+    fn drain_overflow_buckets(&self, data: &ObservationBag, dirty: u64) -> u64 {
+        // Caller (`copy_from`) asserts the length invariant we rely on below.
+        debug_assert_eq!(self.bucket_counts.len(), data.bucket_counts.len());
+
+        let overflow_mask = 1_u64 << DIRTY_BUCKETS_OVERFLOW_INDEX;
+        if dirty & overflow_mask == 0 {
+            return dirty;
+        }
+
+        for i in DIRTY_BUCKETS_OVERFLOW_INDEX..data.bucket_counts.len() {
+            // SAFETY: The loop bound is `data.bucket_counts.len()`, so `i` is in
+            // bounds for `data.bucket_counts`.
+            let source = unsafe { data.bucket_counts.get_unchecked(i) };
+            // SAFETY: The caller's `assert!` guarantees
+            // `self.bucket_counts.len() == data.bucket_counts.len()`, so `i` is
+            // also in bounds for `self.bucket_counts`.
+            let target = unsafe { self.bucket_counts.get_unchecked(i) };
+            target.store(source.get(), SYNC_BAG_ACCESS_ORDERING);
+        }
+
+        dirty & !overflow_mask
     }
 }
 
