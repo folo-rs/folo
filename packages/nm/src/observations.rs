@@ -15,6 +15,15 @@ pub(crate) struct ObservationBag {
 
     bucket_counts: Box<[Cell<u64>]>,
     bucket_magnitudes: &'static [Magnitude],
+
+    /// Bitmap indicating which buckets have been modified since the last `copy_from`.
+    ///
+    /// Bit `i` (for `i < DIRTY_BUCKETS_OVERFLOW_INDEX`) is set when bucket at index `i`
+    /// has been incremented. The highest bit (`DIRTY_BUCKETS_OVERFLOW_INDEX`) is a
+    /// catch-all that is set when any bucket at that index or higher is modified.
+    /// `copy_from` consumes (reads and clears) this bitmap to skip stores for buckets
+    /// that have not changed since the previous push.
+    dirty_buckets: Cell<u64>,
 }
 
 /// Records the observations of an event in a thread-safe manner.
@@ -62,6 +71,7 @@ impl ObservationBag {
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
             bucket_magnitudes,
+            dirty_buckets: Cell::new(0),
         };
 
         // Important type invariant used to ensure safety - the lengths of these two
@@ -84,7 +94,25 @@ impl ObservationBag {
     pub(crate) fn count(&self) -> u64 {
         self.count.get()
     }
+
+    /// Reads the dirty-bucket bitmap and clears it.
+    ///
+    /// Used by `ObservationBagSync::copy_from` to determine which buckets need to be
+    /// copied to the global bag without iterating over buckets that have not been
+    /// modified since the previous copy. See `dirty_buckets` for the bit encoding.
+    pub(crate) fn take_dirty_buckets(&self) -> u64 {
+        let bits = self.dirty_buckets.get();
+        self.dirty_buckets.set(0);
+        bits
+    }
 }
+
+/// Maximum bucket index that gets its own bit in the per-bag dirty bitmap. Bucket
+/// indices at or above this value are coalesced into the highest bit, which acts as
+/// a catch-all that causes `copy_from` to scan all buckets at or above the threshold.
+/// 64-bucket histograms are not anticipated in practice, so this is "good enough" for
+/// realistic workloads.
+const DIRTY_BUCKETS_OVERFLOW_INDEX: usize = 63;
 
 /// We use `Relaxed` ordering for all atomic operations to allow field access to be as
 /// fast as possible because we want to avoid any penalties on write accesses. This should be
@@ -155,6 +183,10 @@ impl ObservationBagSync {
     }
 
     /// Replaces the data in the bag with the data from the local observation bag.
+    ///
+    /// Only buckets that have been modified in `data` since the previous `copy_from`
+    /// are stored; the rest are left as they were. Reads (and clears) `data`'s dirty
+    /// bitmap as part of the copy.
     pub(crate) fn copy_from(&self, data: &ObservationBag) {
         // We cannot replace with a snapshot with different bucket magnitudes.
         debug_assert_eq!(self.bucket_magnitudes, data.bucket_magnitudes);
@@ -170,14 +202,41 @@ impl ObservationBagSync {
         self.count.store(data.count.get(), SYNC_BAG_ACCESS_ORDERING);
         self.sum.store(data.sum.get(), SYNC_BAG_ACCESS_ORDERING);
 
-        for (i, bucket_count) in data.bucket_counts.iter().enumerate() {
-            // SAFETY: The `assert!` above guarantees
-            // `self.bucket_counts.len() == data.bucket_counts.len()`, and `i` is produced
-            // by `enumerate()` over `data.bucket_counts`, so `i < data.bucket_counts.len()
-            // == self.bucket_counts.len()`. The index is therefore in bounds.
-            let target = unsafe { self.bucket_counts.get_unchecked(i) };
+        let mut dirty = data.take_dirty_buckets();
+        let overflow_mask = 1_u64 << DIRTY_BUCKETS_OVERFLOW_INDEX;
 
-            target.store(bucket_count.get(), SYNC_BAG_ACCESS_ORDERING);
+        // If the overflow bit is set, scan every bucket at or above the threshold.
+        // This catch-all path covers the rare case of histograms with more than
+        // `DIRTY_BUCKETS_OVERFLOW_INDEX` buckets.
+        if dirty & overflow_mask != 0 {
+            dirty &= !overflow_mask;
+            for i in DIRTY_BUCKETS_OVERFLOW_INDEX..data.bucket_counts.len() {
+                // SAFETY: The loop bound is `data.bucket_counts.len()`, so `i` is in
+                // bounds for `data.bucket_counts`.
+                let source = unsafe { data.bucket_counts.get_unchecked(i) };
+                // SAFETY: The `assert!` above guarantees
+                // `self.bucket_counts.len() == data.bucket_counts.len()`, so `i` is
+                // also in bounds for `self.bucket_counts`.
+                let target = unsafe { self.bucket_counts.get_unchecked(i) };
+                target.store(source.get(), SYNC_BAG_ACCESS_ORDERING);
+            }
+        }
+
+        // Iterate the remaining set bits one at a time.
+        while dirty != 0 {
+            let i = dirty.trailing_zeros() as usize;
+            dirty &= dirty.wrapping_sub(1);
+
+            // SAFETY: Bit `i` (with `i < DIRTY_BUCKETS_OVERFLOW_INDEX`) is only set by
+            // `ObservationBag::insert` when a bucket at exactly index `i` was modified,
+            // which requires `data.bucket_counts.len() > i`. The access is therefore
+            // in bounds for `data.bucket_counts`.
+            let source = unsafe { data.bucket_counts.get_unchecked(i) };
+            // SAFETY: The `assert!` above guarantees
+            // `self.bucket_counts.len() == data.bucket_counts.len()`, so `i` is also
+            // in bounds for `self.bucket_counts`.
+            let target = unsafe { self.bucket_counts.get_unchecked(i) };
+            target.store(source.get(), SYNC_BAG_ACCESS_ORDERING);
         }
     }
 }
@@ -234,6 +293,12 @@ impl Observations for ObservationBag {
             // as there are bucket magnitudes.
             let bucket_count = unsafe { self.bucket_counts.get_unchecked(bucket_index) };
             bucket_count.set(bucket_count.get().wrapping_add(count_u64));
+
+            // Mark this bucket as dirty so that the next `copy_from` knows to copy it.
+            // Bucket indices at or above the overflow threshold share the highest bit.
+            let dirty_bit = bucket_index.min(DIRTY_BUCKETS_OVERFLOW_INDEX);
+            self.dirty_buckets
+                .set(self.dirty_buckets.get() | (1_u64 << dirty_bit));
         }
     }
 
