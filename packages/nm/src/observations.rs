@@ -153,17 +153,23 @@ impl ObservationBagSync {
         // We cannot replace with a snapshot with different bucket magnitudes.
         debug_assert_eq!(self.bucket_magnitudes, data.bucket_magnitudes);
 
-        // Extra sanity check for maximum paranoia.
-        debug_assert!(self.bucket_counts.len() == data.bucket_counts.len());
+        // Both bags derive `bucket_counts` length from `bucket_magnitudes` length at
+        // construction. We enforce length match in release builds because the unsafe
+        // iteration below depends on this invariant for soundness.
+        assert!(
+            self.bucket_counts.len() == data.bucket_counts.len(),
+            "bucket_counts length invariant must hold"
+        );
 
         self.count.store(data.count.get(), SYNC_BAG_ACCESS_ORDERING);
         self.sum.store(data.sum.get(), SYNC_BAG_ACCESS_ORDERING);
 
         for (i, bucket_count) in data.bucket_counts.iter().enumerate() {
-            let target = self
-                .bucket_counts
-                .get(i)
-                .expect("guarded by assertion above");
+            // SAFETY: The `assert!` above guarantees
+            // `self.bucket_counts.len() == data.bucket_counts.len()`, and `i` is produced
+            // by `enumerate()` over `data.bucket_counts`, so `i < data.bucket_counts.len()
+            // == self.bucket_counts.len()`. The index is therefore in bounds.
+            let target = unsafe { self.bucket_counts.get_unchecked(i) };
 
             target.store(bucket_count.get(), SYNC_BAG_ACCESS_ORDERING);
         }
