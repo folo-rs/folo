@@ -38,3 +38,7 @@ workspace = true
 [[bench]]
 name = "nm_performance"
 harness = false
+
+[[bench]]
+name = "nm_push_bulk"
+harness = false
