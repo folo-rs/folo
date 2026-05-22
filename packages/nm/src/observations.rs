@@ -19,10 +19,14 @@ pub(crate) struct ObservationBag {
     /// Bitmap indicating which buckets have been modified since the last `copy_from`.
     ///
     /// Bit `i` (for `i < DIRTY_BUCKETS_OVERFLOW_INDEX`) is set when bucket at index `i`
-    /// has been incremented. The highest bit (`DIRTY_BUCKETS_OVERFLOW_INDEX`) is a
-    /// catch-all that is set when any bucket at that index or higher is modified.
-    /// `copy_from` consumes (reads and clears) this bitmap to skip stores for buckets
-    /// that have not changed since the previous push.
+    /// has been incremented by a non-zero observation. The highest bit
+    /// (`DIRTY_BUCKETS_OVERFLOW_INDEX`) is a catch-all that is set when any bucket at
+    /// that index or higher is modified. `copy_from` consumes (reads and clears) this
+    /// bitmap to skip stores for buckets that have not changed since the previous push.
+    ///
+    /// Observations with `count == 0` short-circuit before reaching the bucket-update
+    /// path, so the dirty bit is only set when the corresponding bucket count actually
+    /// changes.
     dirty_buckets: Cell<u64>,
 }
 
@@ -225,7 +229,7 @@ impl ObservationBagSync {
         // Iterate the remaining set bits one at a time.
         while dirty != 0 {
             let i = dirty.trailing_zeros() as usize;
-            dirty &= dirty.wrapping_sub(1);
+            dirty = clear_lowest_set_bit(dirty);
 
             // SAFETY: Bit `i` (with `i < DIRTY_BUCKETS_OVERFLOW_INDEX`) is only set by
             // `ObservationBag::insert` when a bucket at exactly index `i` was modified,
@@ -241,8 +245,28 @@ impl ObservationBagSync {
     }
 }
 
+/// Clears the lowest set bit of `value` (Brian Kernighan's bit-clear trick).
+///
+/// Extracted into a dedicated function so we can suppress mutation testing on it.
+/// Mutating the `&` to `|` produces a no-op (the bit-iteration loop never makes
+/// progress), which leads to an infinite loop in `copy_from`. Mutation testing
+/// runs with the watchdog disabled, so the hang manifests as a timeout rather
+/// than a normal test failure. The function is trivially correct.
+#[cfg_attr(test, mutants::skip)]
+const fn clear_lowest_set_bit(value: u64) -> u64 {
+    value & value.wrapping_sub(1)
+}
+
 impl Observations for ObservationBag {
     fn insert(&self, magnitude: Magnitude, count: usize) {
+        // No-op observations would not change any field anyway, but exiting early also
+        // ensures the dirty-bucket bitmap is not polluted with bits whose buckets did
+        // not actually change. That would force the next `copy_from` to perform stores
+        // for buckets that hold the same value as before.
+        if count == 0 {
+            return;
+        }
+
         // Crate policy is to not panic but instead to mangle data upon mathematical
         // challenges and edge cases that cannot be correctly handled. We apply this here
         // by using "as" yolo-casting. If it works, great. If not, too bad.
@@ -773,6 +797,94 @@ mod tests {
         assert_eq!(snapshot_after.bucket_counts[3], 4); // le 10
         assert_eq!(snapshot_after.bucket_counts[4], 5); // le 100
         // Note: observations with magnitude 1000 do not go into any bucket.
+    }
+
+    #[test]
+    fn copy_from_handles_repeated_observations_on_same_bucket() {
+        // Observing the same bucket multiple times must leave that bucket dirty
+        // exactly once - the dirty bit is set via `|=`, so subsequent observations
+        // are idempotent with respect to the bitmap. A mutation that replaces `|`
+        // with `^` would XOR the bit off on the second observation, causing
+        // `copy_from` to skip the bucket even though its accumulated value changed.
+        let source = ObservationBag::new(&[10]);
+        let target = ObservationBagSync::new(&[10]);
+
+        source.insert(5, 1);
+        source.insert(5, 1);
+
+        target.copy_from(&source);
+
+        let snapshot = target.snapshot();
+        assert_eq!(snapshot.count, 2);
+        assert_eq!(snapshot.sum, 10);
+        assert_eq!(snapshot.bucket_counts[0], 2);
+    }
+
+    #[test]
+    fn copy_from_handles_overflow_bucket_indices() {
+        // Build a histogram with more than `DIRTY_BUCKETS_OVERFLOW_INDEX` buckets so
+        // that observations targeting the overflow region exercise the overflow
+        // catch-all branch in `copy_from`. We use 70 buckets at strictly increasing
+        // magnitudes so each insert lands in a distinct, known bucket.
+        const BUCKET_COUNT: usize = 70;
+        static MAGNITUDES: [Magnitude; BUCKET_COUNT] = {
+            let mut arr = [0_i64; BUCKET_COUNT];
+            let mut i = 0;
+            while i < BUCKET_COUNT {
+                #[expect(
+                    clippy::cast_possible_wrap,
+                    reason = "small bucket index, wrapping is not possible"
+                )]
+                let m = i as Magnitude;
+                arr[i] = m;
+                i += 1;
+            }
+            arr
+        };
+
+        let source = ObservationBag::new(&MAGNITUDES);
+        let target = ObservationBagSync::new(&MAGNITUDES);
+
+        // Observe one value below the overflow threshold and two at or above it,
+        // so that both the non-overflow loop and the overflow scan must run.
+        source.insert(MAGNITUDES[10], 1); // bucket 10 (below overflow)
+        source.insert(MAGNITUDES[63], 2); // bucket 63 (overflow boundary)
+        source.insert(MAGNITUDES[BUCKET_COUNT - 1], 3); // last bucket (above overflow)
+
+        target.copy_from(&source);
+
+        let snapshot = target.snapshot();
+        assert_eq!(snapshot.count, 6);
+        assert_eq!(snapshot.bucket_counts[10], 1);
+        assert_eq!(snapshot.bucket_counts[63], 2);
+        assert_eq!(snapshot.bucket_counts[BUCKET_COUNT - 1], 3);
+
+        // All other buckets must remain untouched - the overflow path must not
+        // bleed writes into buckets that were never observed.
+        for (i, &count) in snapshot.bucket_counts.iter().enumerate() {
+            let expected = match i {
+                10 => 1,
+                63 => 2,
+                i if i == BUCKET_COUNT - 1 => 3,
+                _ => 0,
+            };
+            assert_eq!(count, expected, "bucket {i} mismatch");
+        }
+    }
+
+    #[test]
+    fn insert_with_zero_count_does_not_mark_dirty() {
+        // A no-op observation must not pollute the dirty-bucket bitmap. Otherwise
+        // a later `copy_from` would perform a redundant atomic store for a bucket
+        // whose value never changed.
+        let bag = ObservationBag::new(&[10]);
+
+        bag.insert(5, 0);
+
+        assert_eq!(bag.count(), 0);
+        assert_eq!(bag.take_dirty_buckets(), 0);
+        let snapshot = bag.snapshot();
+        assert_eq!(snapshot.bucket_counts[0], 0);
     }
 
     // Multithreaded tests exercising concurrent access patterns on ObservationBagSync.
