@@ -74,6 +74,16 @@ impl ObservationBag {
 
         bag
     }
+
+    /// Returns the current count of observations recorded in this bag.
+    ///
+    /// The count is incremented monotonically by every observation (by the batch
+    /// size, which is non-zero for any data-changing observation). `MetricsPusher`
+    /// uses this as a dirty indicator to skip pushing pairs that have not received
+    /// new observations since the last push.
+    pub(crate) fn count(&self) -> u64 {
+        self.count.get()
+    }
 }
 
 /// We use `Relaxed` ordering for all atomic operations to allow field access to be as
