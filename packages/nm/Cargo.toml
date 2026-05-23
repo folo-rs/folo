@@ -32,6 +32,10 @@ mutants = { workspace = true }
 par_bench = { path = "../par_bench", features = ["criterion"] }
 static_assertions = { workspace = true }
 
+# Gungraun drives Valgrind-based cycle-accurate benchmarks; Linux-only.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
 [lints]
 workspace = true
 
@@ -41,4 +45,8 @@ harness = false
 
 [[bench]]
 name = "nm_push_bulk"
+harness = false
+
+[[bench]]
+name = "nm_observe_cycles"
 harness = false
