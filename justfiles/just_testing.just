@@ -139,9 +139,22 @@ test FILTER="":
 # Runs regular tests as well as doing one iteration of benchmarks.
 # We separate it from "test" because benchmarks are quite slow,
 # so we tend to only run them as part of a full validation pass.
+#
+# Tests go through nextest (parallel execution, junit reporting, retries, etc.). Benches
+# go through `cargo test --benches` instead: nextest's per-test discover-then-dispatch
+# model is incompatible with the cycle-accurate (`*_cycles`) benches, whose `harness =
+# false` main() spawns Valgrind for the entire suite in one shot. `cargo test --benches`
+# invokes each bench binary's main() once with `--test`, which Criterion treats as
+# "run each bench once" and Gungraun treats as its normal one-shot Valgrind run. We only
+# care that the benches do not panic; their measurements are not consumed here.
 [group('testing')]
+[script]
 test-more FILTER="":
-    cargo +{{ env_var('RUST_MSRV') }} nextest run {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast --tests --benches
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    cargo +$env:RUST_MSRV nextest run {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast --tests
+    cargo +$env:RUST_MSRV test {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast --benches
 
 [group('testing')]
 [script]
