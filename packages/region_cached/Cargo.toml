@@ -36,8 +36,15 @@ static_assertions = { workspace = true }
 testing = { path = "../testing" }
 tokio = { workspace = true, features = ["net", "rt-multi-thread"] }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
 [[bench]]
 name = "region_cached"
+harness = false
+
+[[bench]]
+name = "region_cached_cycles"
 harness = false
 
 [lints]
