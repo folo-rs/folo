@@ -962,6 +962,7 @@ name = "linked"
 version = "1.0.9"
 dependencies = [
  "criterion",
+ "gungraun",
  "hash_hasher",
  "linked_macros",
  "many_cpus",

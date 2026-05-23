@@ -31,6 +31,9 @@ par_bench = { path = "../par_bench", features = ["criterion"] }
 seq-macro = { workspace = true }
 static_assertions = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
 [[bench]]
 name = "instances"
 harness = false
@@ -49,6 +52,10 @@ harness = false
 
 [[bench]]
 name = "static_thread_local_rc"
+harness = false
+
+[[bench]]
+name = "instance_per_thread_cycles"
 harness = false
 
 [lints]
