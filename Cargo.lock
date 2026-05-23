@@ -469,6 +469,7 @@ dependencies = [
  "criterion",
  "event-listener",
  "futures",
+ "gungraun",
  "many_cpus",
  "mutants",
  "new_zealand",
@@ -485,6 +486,7 @@ version = "0.5.21"
 dependencies = [
  "criterion",
  "futures",
+ "gungraun",
  "hash_hasher",
  "infinity_pool",
  "oneshot",
@@ -508,6 +510,7 @@ name = "fast_time"
 version = "0.1.17"
 dependencies = [
  "criterion",
+ "gungraun",
  "libc",
  "mockall",
  "mutants",
