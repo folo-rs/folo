@@ -908,6 +908,7 @@ version = "0.8.12"
 dependencies = [
  "alloc_tracker",
  "criterion",
+ "gungraun",
  "mutants",
  "new_zealand",
  "num-integer",
