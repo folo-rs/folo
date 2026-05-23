@@ -406,6 +406,25 @@ and in the same benchmark group.
 
 Do not forget to register benchmarks in `Cargo.toml`.
 
+# Cycle-accurate benchmarks
+
+For performance-critical hot paths, complement the Criterion benchmarks with cycle-accurate
+benchmarks driven by Valgrind/Callgrind. These live alongside the Criterion benches in the same
+`packages/<pkg>/benches/` directory, with the file-suffix convention `_cycles.rs`.
+
+The pairing is **asymmetric**: every cycle scenario must have an analogous Criterion scenario
+(so we have both wall-clock and instruction-count signals on the same operation). The reverse
+is not required — Criterion can legitimately stand alone for multithreaded contention, syscalls,
+allocation, or bulk throughput where instruction-count resolution adds no signal.
+
+See [docs/cycle-accurate-benchmarks.md](docs/cycle-accurate-benchmarks.md) for the full strategy,
+including: which operations warrant cycle-accurate coverage, scenario selection guidelines
+(default case, branching extremes, state/occupancy variants, size sensitivity, initialization
+vs steady state, sibling variants), the bench file template (including the file-scope lint
+suppression block required by Gungraun's macro expansions), Cargo.toml setup with the
+target-gated dependency, Gungraun syntax gotchas, the pairing convention, and how to interpret
+results.
+
 # YAML formatting
 
 Prefer not using quotes around strings, unless the string starts with special characters.

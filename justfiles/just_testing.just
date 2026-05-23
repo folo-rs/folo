@@ -13,6 +13,53 @@ bench TARGET="":
 
     cargo bench {{ target_package }} --all-features $target_selector --locked
 
+# Run cycle-accurate benchmarks. Requires Linux (Valgrind). Discovers any
+# bench file whose name ends with `_cycles` under `packages/<pkg>/benches/`.
+# Callers on Windows must invoke this through WSL themselves.
+[group('testing')]
+[script]
+bench-cycles TARGET="":
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    if (-not $IsLinux) {
+        Write-Error "bench-cycles requires Linux (Valgrind). On Windows, invoke through WSL from the repo root: wsl -e bash -l -c 'just bench-cycles'"
+        exit 1
+    }
+
+    $package_filter = "{{ package }}"
+    $target_filter = "{{ TARGET }}"
+
+    $packages = if ($package_filter -eq "") {
+        Get-ChildItem packages -Directory | ForEach-Object { $_.Name }
+    } else {
+        # Support space-separated package lists (e.g. from cargo-delta output).
+        $package_filter -split " " | Where-Object { $_ -ne "" }
+    }
+
+    $any_run = $false
+    foreach ($pkg in $packages) {
+        $benches_dir = Join-Path "packages" $pkg "benches"
+        if (-not (Test-Path $benches_dir)) { continue }
+
+        $bench_files = Get-ChildItem $benches_dir -Filter "*_cycles.rs"
+        foreach ($bench_file in $bench_files) {
+            $bench_name = $bench_file.BaseName
+            if ($target_filter -ne "" -and $bench_name -ne $target_filter) { continue }
+
+            Write-Host "Running ${pkg}::${bench_name}" -ForegroundColor Cyan
+            cargo bench -p $pkg --bench $bench_name --all-features --locked
+            $any_run = $true
+        }
+    }
+
+    if (-not $any_run) {
+        $scope = if ($package_filter -eq "") { "the workspace" } else { "package(s) '$package_filter'" }
+        $target_clause = if ($target_filter -eq "") { "" } else { " matching target '$target_filter'" }
+        Write-Host "No cycle-accurate benchmarks found in $scope$target_clause." -ForegroundColor Yellow
+    }
+
+
 [group('testing')]
 miri FILTER="":
     cargo +{{ env_var('RUST_NIGHTLY') }} miri nextest run {{ target_package }} --no-fail-fast --all-features {{ FILTER }} --locked --no-tests=pass

@@ -194,6 +194,8 @@ This project aims for high quality standards:
 ✅ **Miri validation** - All packages pass strict Rust memory safety validation via Miri  
 ✅ **Mutation testing** - Code quality verified through comprehensive mutation testing with `cargo-mutants`  
 ✅ **High test coverage** - Test coverage measured and maintained via `cargo-llvm-cov`  
+✅ **Wall-clock benchmarks** - Hot paths covered by [Criterion][criterion] benchmarks (often multi-threaded via `par_bench`) to detect real-world performance changes  
+✅ **Cycle-accurate benchmarks** - Selected hot paths also covered by Valgrind/Callgrind-based one-shot benchmarks for deterministic, run-to-run-stable instruction counts and simulated cache behavior. See [docs/cycle-accurate-benchmarks.md](docs/cycle-accurate-benchmarks.md)  
 ✅ **Zero warnings policy** - All code must compile without any compiler or Clippy warnings  
 ✅ **Extensive Clippy rules** - 100+ custom Clippy lint rules enforced across the workspace  
 ✅ **Cross-platform validation** - All code tested on both Windows and Linux platforms  
