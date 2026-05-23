@@ -30,9 +30,16 @@ mockall = { workspace = true }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
 [lints]
 workspace = true
 
 [[bench]]
 name = "timestamp_performance"
+harness = false
+
+[[bench]]
+name = "clock_cycles"
 harness = false
