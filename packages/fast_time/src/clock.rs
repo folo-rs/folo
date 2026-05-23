@@ -30,16 +30,16 @@ use crate::pal::{Platform, PlatformFacade, TimeSource, TimeSourceFacade};
 /// Measuring elapsed time:
 ///
 /// ```rust
-/// use std::time::Duration;
-///
 /// use fast_time::Clock;
 ///
 /// let mut clock = Clock::new();
 /// let start = clock.now();
 ///
-/// // The clock is monotonic, so elapsed is always non-negative.
+/// // Monotonic timestamps never go backwards.
 /// let elapsed = start.elapsed(&mut clock);
-/// assert!(elapsed >= Duration::ZERO);
+/// let later = clock.now();
+/// assert!(later >= start);
+/// assert!(later.saturating_duration_since(start) >= elapsed);
 /// ```
 ///
 /// High-frequency timestamp collection:
