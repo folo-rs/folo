@@ -29,6 +29,9 @@ static_assertions = { workspace = true }
 testing = { path = "../testing" }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
 [lints]
 workspace = true
 
@@ -42,4 +45,8 @@ harness = false
 
 [[bench]]
 name = "ev_once_vs_3p"
+harness = false
+
+[[bench]]
+name = "ev_once_cycles"
 harness = false
