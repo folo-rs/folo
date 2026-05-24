@@ -403,7 +403,8 @@ Windows the most convenient options are:
   (`sudo apt install -y kcachegrind`) and launch it via WSLg (Windows 11)
   or an X server such as VcXsrv (Windows 10). The Callgrind output files
   in `target/gungraun/` are accessible to the Linux GUI as Windows paths
-  under `/mnt/c/Source/folo/target/gungraun/...`.
+  under the WSL mount path corresponding to your checkout (e.g.
+  `/mnt/c/path/to/folo/target/gungraun/...` on Windows).
 * Install QCacheGrind for Windows natively from
   <https://sourceforge.net/projects/qcachegrindwin/> (an unofficial port).
   Open the same `callgrind.out` files directly from the Windows file
