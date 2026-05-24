@@ -72,16 +72,25 @@ impl InstrumentRegistry {
         magnitudes: Option<impl Iterator<Item = Magnitude>>,
     ) -> &EventInstruments {
         let meter = &self.meter;
-        let instruments = self.events.entry(event_name.clone()).or_insert_with(|| {
-            let sum_name = format!("{event_name}{SUM_SUFFIX}");
 
-            EventInstruments {
-                count_counter: meter.u64_counter(event_name.to_string()).build(),
-                sum_gauge: meter.i64_gauge(sum_name).build(),
-                bucket_counter: None,
-                bucket_bounds: Vec::new(),
-            }
-        });
+        // Lookup-first pattern to avoid cloning `event_name` on cache hits. For owned event names
+        // (`Cow::Owned`), the avoided clone is a heap allocation per event per export.
+        if !self.events.contains_key(event_name) {
+            let sum_name = format!("{event_name}{SUM_SUFFIX}");
+            self.events.insert(
+                event_name.clone(),
+                EventInstruments {
+                    count_counter: meter.u64_counter(event_name.to_string()).build(),
+                    sum_gauge: meter.i64_gauge(sum_name).build(),
+                    bucket_counter: None,
+                    bucket_bounds: Vec::new(),
+                },
+            );
+        }
+        let instruments = self
+            .events
+            .get_mut(event_name)
+            .expect("entry was either present or just inserted above");
 
         // Lazily create the bucket counter and cache bucket bounds if histogram data provided.
         if let Some(mags) = magnitudes

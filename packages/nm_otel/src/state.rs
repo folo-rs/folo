@@ -23,7 +23,14 @@ impl CollectionState {
 
     /// Gets or creates the state for an event.
     pub(crate) fn event_state(&mut self, name: &EventName) -> &mut EventState {
-        self.events.entry(name.clone()).or_default()
+        // Lookup-first pattern to avoid cloning `name` on cache hits. For owned event names
+        // (`Cow::Owned`), the avoided clone is a heap allocation per event per export.
+        if !self.events.contains_key(name) {
+            self.events.insert(name.clone(), EventState::default());
+        }
+        self.events
+            .get_mut(name)
+            .expect("entry was either present or just inserted above")
     }
 }
 
