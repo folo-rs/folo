@@ -1,8 +1,11 @@
 //! Mapping from nm metrics to OpenTelemetry instruments.
 
+use std::hash::BuildHasher;
 use std::sync::Arc;
 
-use foldhash::HashMap;
+use foldhash::fast::RandomState;
+use hashbrown::HashTable;
+use hashbrown::hash_table::Entry;
 use nm::{EventName, Magnitude, Report};
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::{Counter, Gauge, Meter};
@@ -49,8 +52,10 @@ struct EventInstruments {
 pub(crate) struct InstrumentRegistry {
     meter: Meter,
 
+    hasher: RandomState,
+
     /// Cached instruments per event name.
-    events: HashMap<EventName, EventInstruments>,
+    events: HashTable<(EventName, EventInstruments)>,
 }
 
 impl InstrumentRegistry {
@@ -58,7 +63,8 @@ impl InstrumentRegistry {
     pub(crate) fn new(meter: Meter) -> Self {
         Self {
             meter,
-            events: HashMap::default(),
+            hasher: RandomState::default(),
+            events: HashTable::new(),
         }
     }
 
@@ -73,24 +79,31 @@ impl InstrumentRegistry {
     ) -> &EventInstruments {
         let meter = &self.meter;
 
-        // Lookup-first pattern to avoid cloning `event_name` on cache hits. For owned event names
-        // (`Cow::Owned`), the avoided clone is a heap allocation per event per export.
-        if !self.events.contains_key(event_name) {
-            let sum_name = format!("{event_name}{SUM_SUFFIX}");
-            self.events.insert(
-                event_name.clone(),
-                EventInstruments {
+        // Single-pass lookup-or-insert: hashes `event_name` once and only clones it on cache
+        // misses. For owned event names (`Cow::Owned`), the avoided clone is a heap allocation
+        // per event per export.
+        let hash = self.hasher.hash_one(event_name);
+        let hasher = &self.hasher;
+        let instruments = match self.events.entry(
+            hash,
+            |(existing, _)| existing == event_name,
+            |(existing, _)| hasher.hash_one(existing),
+        ) {
+            Entry::Occupied(occupied) => &mut occupied.into_mut().1,
+            Entry::Vacant(vacant) => {
+                let sum_name = format!("{event_name}{SUM_SUFFIX}");
+                let new_instruments = EventInstruments {
                     count_counter: meter.u64_counter(event_name.to_string()).build(),
                     sum_gauge: meter.i64_gauge(sum_name).build(),
                     bucket_counter: None,
                     bucket_bounds: Vec::new(),
-                },
-            );
-        }
-        let instruments = self
-            .events
-            .get_mut(event_name)
-            .expect("entry was either present or just inserted above");
+                };
+                &mut vacant
+                    .insert((event_name.clone(), new_instruments))
+                    .into_mut()
+                    .1
+            }
+        };
 
         // Lazily create the bucket counter and cache bucket bounds if histogram data provided.
         if let Some(mags) = magnitudes

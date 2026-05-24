@@ -19,6 +19,7 @@ default = []
 [dependencies]
 foldhash = { workspace = true }
 futures = { workspace = true }
+hashbrown = { workspace = true }
 nm = { workspace = true }
 opentelemetry = { workspace = true, features = ["metrics"] }
 tick = { workspace = true }

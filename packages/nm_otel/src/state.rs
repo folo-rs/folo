@@ -1,6 +1,10 @@
 //! State tracking for delta computation between collections.
 
-use foldhash::HashMap;
+use std::hash::BuildHasher;
+
+use foldhash::fast::RandomState;
+use hashbrown::HashTable;
+use hashbrown::hash_table::Entry;
 use nm::{EventName, Magnitude};
 
 /// Tracks the previous state of nm metrics for delta computation.
@@ -9,28 +13,41 @@ use nm::{EventName, Magnitude};
 /// delta computation for OpenTelemetry. Gauge-type metrics (sum) are set directly.
 #[derive(Debug, Default)]
 pub(crate) struct CollectionState {
+    hasher: RandomState,
+
     /// Previous state per event name.
-    events: HashMap<EventName, EventState>,
+    events: HashTable<(EventName, EventState)>,
 }
 
 impl CollectionState {
     /// Creates a new empty collection state.
     pub(crate) fn new() -> Self {
         Self {
-            events: HashMap::default(),
+            hasher: RandomState::default(),
+            events: HashTable::new(),
         }
     }
 
     /// Gets or creates the state for an event.
     pub(crate) fn event_state(&mut self, name: &EventName) -> &mut EventState {
-        // Lookup-first pattern to avoid cloning `name` on cache hits. For owned event names
-        // (`Cow::Owned`), the avoided clone is a heap allocation per event per export.
-        if !self.events.contains_key(name) {
-            self.events.insert(name.clone(), EventState::default());
+        // Single-pass lookup-or-insert: hashes `name` once and only clones it on cache misses.
+        // For owned event names (`Cow::Owned`), the avoided clone is a heap allocation per event
+        // per export.
+        let hash = self.hasher.hash_one(name);
+        let hasher = &self.hasher;
+        match self.events.entry(
+            hash,
+            |(existing, _)| existing == name,
+            |(existing, _)| hasher.hash_one(existing),
+        ) {
+            Entry::Occupied(occupied) => &mut occupied.into_mut().1,
+            Entry::Vacant(vacant) => {
+                &mut vacant
+                    .insert((name.clone(), EventState::default()))
+                    .into_mut()
+                    .1
+            }
         }
-        self.events
-            .get_mut(name)
-            .expect("entry was either present or just inserted above")
     }
 }
 
