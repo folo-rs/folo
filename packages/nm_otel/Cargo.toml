@@ -15,6 +15,7 @@ all-features = true
 
 [features]
 default = []
+test-util = ["nm/test-util"]
 
 [dependencies]
 foldhash = { workspace = true }
@@ -24,13 +25,23 @@ opentelemetry = { workspace = true, features = ["metrics"] }
 tick = { workspace = true }
 
 [dev-dependencies]
+alloc_tracker = { path = "../alloc_tracker" }
+criterion = { workspace = true }
+many_cpus = { workspace = true }
 mutants = { workspace = true }
+new_zealand = { workspace = true }
 nm = { path = "../nm", features = ["test-util"] }
+nm_otel = { path = ".", features = ["test-util"] }
 opentelemetry-stdout = { workspace = true, features = ["metrics"] }
 opentelemetry_sdk = { workspace = true, features = ["metrics", "testing"] }
+par_bench = { path = "../par_bench", features = ["alloc_tracker", "criterion"] }
 static_assertions = { workspace = true }
 tick = { workspace = true, features = ["tokio", "test-util"] }
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
+
+[[bench]]
+name = "nm_otel_export"
+harness = false
 
 [lints]
 workspace = true

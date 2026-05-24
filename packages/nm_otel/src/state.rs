@@ -29,7 +29,7 @@ impl CollectionState {
 
 /// Previous state for a single event.
 #[derive(Debug, Default)]
-pub(crate) struct EventState {
+pub struct EventState {
     /// Previous cumulative count.
     pub(crate) count: u64,
 
@@ -51,96 +51,75 @@ impl EventState {
     /// Computes deltas for histogram bucket counts.
     ///
     /// Takes nm's non-cumulative bucket counts, converts to cumulative format,
-    /// computes deltas from previous state, and updates internal state.
+    /// computes deltas from previous state, and updates internal state. All
+    /// computation is streaming so the steady-state path performs no heap
+    /// allocations.
     ///
-    /// Returns a vector of `(magnitude, cumulative_count, delta)` for each bucket.
+    /// Returns an iterator yielding `(magnitude, cumulative_count, delta)` for each bucket
+    /// in input order. Internal state is only updated as the iterator is consumed, so the
+    /// returned iterator must be fully driven for the next call to observe the deltas
+    /// correctly.
     ///
     /// # Panics
     ///
-    /// Panics if the number of buckets changes between calls for the same event.
-    /// Histogram bucket configuration is expected to be fixed for the lifetime of an event.
-    pub(crate) fn histogram_deltas(
-        &mut self,
-        magnitudes: impl Iterator<Item = Magnitude>,
-        non_cumulative_counts: impl Iterator<Item = u64>,
-    ) -> Vec<(Magnitude, u64, u64)> {
-        // Convert non-cumulative to cumulative counts.
-        let cumulative_counts = to_cumulative(non_cumulative_counts);
+    /// Panics during iteration if the number of buckets increases beyond the count
+    /// established on the first call. Histogram bucket configuration is expected to be
+    /// fixed for the lifetime of an event.
+    pub fn histogram_deltas<'a>(
+        &'a mut self,
+        magnitudes: impl IntoIterator<Item = Magnitude> + 'a,
+        non_cumulative_counts: impl IntoIterator<Item = u64> + 'a,
+    ) -> impl Iterator<Item = (Magnitude, u64, u64)> + 'a {
+        // On the first call `histogram_buckets` is empty; we grow it lazily as we yield
+        // values. On subsequent calls we index into the existing storage.
+        let first_call = self.histogram_buckets.is_empty();
+        let buckets = &mut self.histogram_buckets;
+        let mut running_cumulative = 0_u64;
+        let mut index = 0_usize;
 
-        // Initialize bucket state on first call, panic on bucket count mismatch.
-        if self.histogram_buckets.is_empty() {
-            self.histogram_buckets = vec![0; cumulative_counts.len()];
-        } else {
-            assert_eq!(
-                self.histogram_buckets.len(),
-                cumulative_counts.len(),
-                "histogram bucket count changed unexpectedly"
-            );
-        }
+        magnitudes
+            .into_iter()
+            .zip(non_cumulative_counts)
+            .map(move |(magnitude, non_cumulative)| {
+                running_cumulative = running_cumulative.saturating_add(non_cumulative);
 
-        // Compute deltas.
-        let mut result = Vec::with_capacity(cumulative_counts.len());
+                let previous = if first_call {
+                    buckets.push(0);
+                    0
+                } else {
+                    assert!(
+                        index < buckets.len(),
+                        "histogram bucket count changed unexpectedly"
+                    );
+                    #[expect(
+                        clippy::indexing_slicing,
+                        reason = "index is bounds-checked by the assertion above"
+                    )]
+                    let previous = buckets[index];
+                    previous
+                };
 
-        #[expect(
-            clippy::indexing_slicing,
-            reason = "index i is always valid because we iterate over cumulative_counts \
-                      and verified histogram_buckets has the same length"
-        )]
-        for (i, (magnitude, cumulative)) in magnitudes
-            .zip(cumulative_counts.iter().copied())
-            .enumerate()
-        {
-            let previous = self.histogram_buckets[i];
-            let delta = cumulative.saturating_sub(previous);
+                let delta = running_cumulative.saturating_sub(previous);
 
-            // Update previous state.
-            self.histogram_buckets[i] = cumulative;
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "on first call we just pushed; otherwise the assertion above \
+                              verified the index is in bounds"
+                )]
+                {
+                    buckets[index] = running_cumulative;
+                }
+                index = index.saturating_add(1);
 
-            result.push((magnitude, cumulative, delta));
-        }
-
-        result
+                (magnitude, running_cumulative, delta)
+            })
     }
-}
-
-/// Converts non-cumulative bucket counts to cumulative format.
-///
-/// nm stores per-bucket counts: `[5, 12, 8]` means 5 in bucket 0, 12 in bucket 1, etc.
-/// Prometheus expects cumulative: `[5, 17, 25]` means 5 ≤ bound0, 17 ≤ bound1, etc.
-fn to_cumulative(non_cumulative: impl Iterator<Item = u64>) -> Vec<u64> {
-    let mut cumulative = Vec::new();
-    let mut running_total = 0_u64;
-
-    for count in non_cumulative {
-        running_total = running_total.saturating_add(count);
-        cumulative.push(running_total);
-    }
-
-    cumulative
 }
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-
-    #[test]
-    fn to_cumulative_empty() {
-        let result = to_cumulative(std::iter::empty());
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn to_cumulative_single() {
-        let result = to_cumulative(std::iter::once(5));
-        assert_eq!(result, vec![5]);
-    }
-
-    #[test]
-    fn to_cumulative_multiple() {
-        let result = to_cumulative([5, 12, 8, 3, 2].into_iter());
-        assert_eq!(result, vec![5, 17, 25, 28, 30]);
-    }
 
     #[test]
     fn event_state_count_delta_first_collection() {
@@ -174,7 +153,7 @@ mod tests {
         let magnitudes = [10, 50, 100, Magnitude::MAX];
         let non_cumulative = [5, 12, 8, 2];
 
-        let result = state.histogram_deltas(magnitudes.into_iter(), non_cumulative.into_iter());
+        let result: Vec<_> = state.histogram_deltas(magnitudes, non_cumulative).collect();
 
         // First collection: deltas equal cumulative values.
         assert_eq!(result.len(), 4);
@@ -197,11 +176,15 @@ mod tests {
 
         // First collection.
         let non_cumulative1 = [5, 12, 8, 2];
-        drop(state.histogram_deltas(magnitudes.into_iter(), non_cumulative1.into_iter()));
+        state
+            .histogram_deltas(magnitudes, non_cumulative1)
+            .for_each(drop);
 
         // Second collection with more observations.
         let non_cumulative2 = [7, 15, 10, 3];
-        let result = state.histogram_deltas(magnitudes.into_iter(), non_cumulative2.into_iter());
+        let result: Vec<_> = state
+            .histogram_deltas(magnitudes, non_cumulative2)
+            .collect();
 
         // Cumulative: [7, 22, 32, 35].
         // Previous:   [5, 17, 25, 27].
@@ -250,14 +233,15 @@ mod tests {
         let non_cumulative1 = [5, 10, 3];
 
         // First call - initializes to 3 buckets.
-        let result1 = state.histogram_deltas(magnitudes.into_iter(), non_cumulative1.into_iter());
-        assert_eq!(result1.len(), 3);
+        let count1 = state.histogram_deltas(magnitudes, non_cumulative1).count();
+        assert_eq!(count1, 3);
         assert_eq!(state.histogram_buckets.len(), 3);
 
         // Second call with same bucket count - should work fine.
         let non_cumulative2 = [7, 12, 5];
-        let result2 = state.histogram_deltas(magnitudes.into_iter(), non_cumulative2.into_iter());
-        assert_eq!(result2.len(), 3);
+        let result2: Vec<_> = state
+            .histogram_deltas(magnitudes, non_cumulative2)
+            .collect();
         assert_eq!(state.histogram_buckets.len(), 3);
 
         // Verify deltas are computed correctly.
@@ -274,11 +258,16 @@ mod tests {
         // First call with 3 buckets.
         let magnitudes3 = [10, 50, 100];
         let non_cumulative3 = [5, 10, 3];
-        drop(state.histogram_deltas(magnitudes3.into_iter(), non_cumulative3.into_iter()));
+        state
+            .histogram_deltas(magnitudes3, non_cumulative3)
+            .for_each(drop);
 
-        // Second call with 4 buckets - should panic.
+        // Second call with 4 buckets - should panic when the iterator is consumed past the
+        // established bucket count.
         let magnitudes4 = [10, 50, 100, 500];
         let non_cumulative4 = [5, 10, 3, 2];
-        drop(state.histogram_deltas(magnitudes4.into_iter(), non_cumulative4.into_iter()));
+        state
+            .histogram_deltas(magnitudes4, non_cumulative4)
+            .for_each(drop);
     }
 }

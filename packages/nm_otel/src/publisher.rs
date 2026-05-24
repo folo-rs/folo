@@ -223,19 +223,33 @@ impl Publisher {
     /// This is an internal method for testing purposes.
     #[doc(hidden)]
     pub fn run_one_iteration(&mut self) {
+        let report = Report::collect();
+        self.export(&report);
+    }
+
+    /// Runs a single export iteration using the supplied report.
+    ///
+    /// This bypasses [`Report::collect`] so callers can drive the export pipeline with
+    /// fabricated reports built via [`nm::Report::fake`]. Available only under the
+    /// `test-util` feature for use by benchmarks and tests.
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    pub fn run_one_iteration_with_report(&mut self, report: &Report) {
+        self.export(report);
+    }
+
+    fn export(&mut self, report: &Report) {
         // Lazily initialize instruments on first use.
         if self.instruments.is_none() {
             self.instruments = Some(InstrumentRegistry::new(self.meter.clone()));
         }
-
-        let report = Report::collect();
 
         let instruments = self
             .instruments
             .as_mut()
             .expect("we just initialized it above");
 
-        export_report(&report, &mut self.state, instruments);
+        export_report(report, &mut self.state, instruments);
     }
 }
 

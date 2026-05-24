@@ -128,14 +128,14 @@ pub(crate) fn export_report(
                 .as_ref()
                 .expect("bucket counter was created during instruments() call");
 
-            let bucket_deltas =
-                event_state.histogram_deltas(histogram.magnitudes(), histogram.counts());
-
-            for (i, (_magnitude, _cumulative, delta)) in bucket_deltas.into_iter().enumerate() {
+            for (i, (_magnitude, _cumulative, delta)) in event_state
+                .histogram_deltas(histogram.magnitudes(), histogram.counts())
+                .enumerate()
+            {
                 let le_value = event_instruments
                     .bucket_bounds
                     .get(i)
-                    .expect("bucket_bounds length matches bucket_deltas length");
+                    .expect("bucket_bounds length matches histogram bucket count");
                 add_bucket_delta(bucket_counter, delta, le_value);
             }
         }
