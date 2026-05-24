@@ -177,7 +177,14 @@ mod linux {
 pub use linux::{lifecycle_group, partial_state_group};
 
 #[cfg(target_os = "linux")]
+use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
+
+#[cfg(target_os = "linux")]
 gungraun::main!(
-    library_benchmark_groups = lifecycle_group,
-    partial_state_group
+    config = LibraryBenchmarkConfig::default().tool(
+        Callgrind::default()
+            .args(["--branch-sim=yes"])
+            .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
+    );
+    library_benchmark_groups = lifecycle_group, partial_state_group
 );

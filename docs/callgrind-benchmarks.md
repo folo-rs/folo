@@ -223,7 +223,17 @@ mod linux {
 pub use linux::{my_group};
 
 #[cfg(target_os = "linux")]
-gungraun::main!(library_benchmark_groups = my_group);
+use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
+
+#[cfg(target_os = "linux")]
+gungraun::main!(
+    config = LibraryBenchmarkConfig::default().tool(
+        Callgrind::default()
+            .args(["--branch-sim=yes"])
+            .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
+    );
+    library_benchmark_groups = my_group
+);
 ```
 
 A complete worked example lives in
@@ -339,6 +349,20 @@ Each scenario reports:
   has no out-of-order execution, no realistic branch predictor, no
   prefetcher, and a fixed cache geometry. Treat it as a secondary signal
   behind the instruction count.
+* **Bc / Bcm** — conditional branches taken and mispredicted by Callgrind's
+  simple 2-bit local predictor. A high `Bcm/Bc` ratio means the predictor
+  guessed wrong frequently; on real hardware each misprediction costs
+  ~15-20 cycles of pipeline flush. Useful for spotting regressions where
+  instruction count is flat but a hot branch has become harder to predict
+  (e.g. a state machine gaining a new common-case branch).
+* **Bi / Bim** — indirect branches and mispredictions (vtable calls,
+  function pointers, jump tables). Almost always 100 % mispredicted on
+  cold paths, which is normal: the simulator has no call-site history.
+  Care more about how this changes between runs than the absolute count.
+
+Callgrind's predictor is a generic 2-bit local model. It does not match
+any specific x86 part. The absolute counts are therefore not directly
+comparable to real hardware perf counters — they are a stable proxy.
 
 Two important caveats:
 

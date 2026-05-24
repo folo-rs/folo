@@ -390,8 +390,14 @@ mod linux {
 pub use linux::{aggregate_group, pull_group, push_group};
 
 #[cfg(target_os = "linux")]
+use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
+
+#[cfg(target_os = "linux")]
 gungraun::main!(
-    library_benchmark_groups = pull_group,
-    push_group,
-    aggregate_group
+    config = LibraryBenchmarkConfig::default().tool(
+        Callgrind::default()
+            .args(["--branch-sim=yes"])
+            .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
+    );
+    library_benchmark_groups = pull_group, push_group, aggregate_group
 );

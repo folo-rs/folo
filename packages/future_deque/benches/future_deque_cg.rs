@@ -239,4 +239,14 @@ mod linux {
 pub use linux::{local_group, sync_group};
 
 #[cfg(target_os = "linux")]
-gungraun::main!(library_benchmark_groups = local_group, sync_group);
+use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
+
+#[cfg(target_os = "linux")]
+gungraun::main!(
+    config = LibraryBenchmarkConfig::default().tool(
+        Callgrind::default()
+            .args(["--branch-sim=yes"])
+            .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
+    );
+    library_benchmark_groups = local_group, sync_group
+);

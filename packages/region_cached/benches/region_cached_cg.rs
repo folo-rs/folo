@@ -147,8 +147,14 @@ mod linux {
 pub use linux::{baseline_group, read_group, write_group};
 
 #[cfg(target_os = "linux")]
+use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
+
+#[cfg(target_os = "linux")]
 gungraun::main!(
-    library_benchmark_groups = read_group,
-    write_group,
-    baseline_group
+    config = LibraryBenchmarkConfig::default().tool(
+        Callgrind::default()
+            .args(["--branch-sim=yes"])
+            .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
+    );
+    library_benchmark_groups = read_group, write_group, baseline_group
 );
