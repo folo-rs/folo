@@ -4,6 +4,18 @@ use std::sync::atomic::{self, AtomicI64, AtomicU64};
 
 use crate::Magnitude;
 
+/// Hints to the compiler that the calling branch is unlikely to be taken.
+///
+/// LLVM propagates the `#[cold]` attribute from the called function to the call
+/// site, biasing branch prediction and code layout so that the hot fall-through
+/// path is laid out in straight-line fashion. The cold branch target is moved
+/// to a far section to reduce icache pressure on the hot path.
+///
+/// This is a temporary workaround until `std::hint::cold_path()` is stabilized.
+#[cold]
+#[inline]
+fn cold_path() {}
+
 /// Records the observations of an event.
 ///
 /// This variant is intended for single-threaded use, though may be shared on that
@@ -285,6 +297,7 @@ impl Observations for ObservationBag {
         // not actually change. That would force the next `copy_from` to perform stores
         // for buckets that hold the same value as before.
         if count == 0 {
+            cold_path();
             return;
         }
 
@@ -305,7 +318,8 @@ impl Observations for ObservationBag {
         self.sum.set(self.sum.get().wrapping_add(sum_increment));
 
         // This may be none if we have no buckets (i.e. the event is a bare counter,
-        // no histogram).
+        // no histogram) or if the magnitude exceeds the largest bucket's threshold.
+        // Both are rare on the hot path of a well-configured histogram event.
         //
         // We benchmarked a manual SIMD (AVX2/SSE4.2) branchless "count less-than"
         // approach against this scalar linear scan. The scalar version wins across
@@ -319,7 +333,7 @@ impl Observations for ObservationBag {
         //   large_32_hit_first       17.3 ns   1.3 ns
         //   large_32_hit_last        17.6 ns   9.2 ns
         //   large_32_miss            17.4 ns  10.6 ns
-        if let Some(bucket_index) =
+        let Some(bucket_index) =
             self.bucket_magnitudes
                 .iter()
                 .enumerate()
@@ -330,21 +344,24 @@ impl Observations for ObservationBag {
                         None
                     }
                 })
-        {
-            // We do this unsafely because we need minimal overhead in the hot path from
-            // collecting observations and this will be a very hot path.
-            //
-            // SAFETY: Type invariant: there are always the same number of bucket counts
-            // as there are bucket magnitudes.
-            let bucket_count = unsafe { self.bucket_counts.get_unchecked(bucket_index) };
-            bucket_count.set(bucket_count.get().wrapping_add(count_u64));
+        else {
+            cold_path();
+            return;
+        };
 
-            // Mark this bucket as dirty so that the next `copy_from` knows to copy it.
-            // Bucket indices at or above the overflow threshold share the highest bit.
-            let dirty_bit = bucket_index.min(DIRTY_BUCKETS_OVERFLOW_INDEX);
-            self.dirty_buckets
-                .set(self.dirty_buckets.get() | (1_u64 << dirty_bit));
-        }
+        // We do this unsafely because we need minimal overhead in the hot path from
+        // collecting observations and this will be a very hot path.
+        //
+        // SAFETY: Type invariant: there are always the same number of bucket counts
+        // as there are bucket magnitudes.
+        let bucket_count = unsafe { self.bucket_counts.get_unchecked(bucket_index) };
+        bucket_count.set(bucket_count.get().wrapping_add(count_u64));
+
+        // Mark this bucket as dirty so that the next `copy_from` knows to copy it.
+        // Bucket indices at or above the overflow threshold share the highest bit.
+        let dirty_bit = bucket_index.min(DIRTY_BUCKETS_OVERFLOW_INDEX);
+        self.dirty_buckets
+            .set(self.dirty_buckets.get() | (1_u64 << dirty_bit));
     }
 
     fn snapshot(&self) -> ObservationBagSnapshot {
@@ -388,7 +405,8 @@ impl Observations for ObservationBagSync {
         self.sum.fetch_add(sum_increment, SYNC_BAG_ACCESS_ORDERING);
 
         // This may be none if we have no buckets (i.e. the event is a bare counter,
-        // no histogram).
+        // no histogram) or if the magnitude exceeds the largest bucket's threshold.
+        // Both are rare on the hot path of a well-configured histogram event.
         //
         // We benchmarked a manual SIMD (AVX2/SSE4.2) branchless "count less-than"
         // approach against this scalar linear scan. The scalar version wins across
@@ -402,7 +420,7 @@ impl Observations for ObservationBagSync {
         //   large_32_hit_first       17.3 ns   1.3 ns
         //   large_32_hit_last        17.6 ns   9.2 ns
         //   large_32_miss            17.4 ns  10.6 ns
-        if let Some(bucket_index) =
+        let Some(bucket_index) =
             self.bucket_magnitudes
                 .iter()
                 .enumerate()
@@ -413,15 +431,18 @@ impl Observations for ObservationBagSync {
                         None
                     }
                 })
-        {
-            // We do this unsafely because we need minimal overhead in the hot path from
-            // collecting observations and this will be a very hot path.
-            //
-            // SAFETY: Type invariant: there are always the same number of bucket counts
-            // as there are bucket magnitudes.
-            unsafe { self.bucket_counts.get_unchecked(bucket_index) }
-                .fetch_add(count_u64, SYNC_BAG_ACCESS_ORDERING);
-        }
+        else {
+            cold_path();
+            return;
+        };
+
+        // We do this unsafely because we need minimal overhead in the hot path from
+        // collecting observations and this will be a very hot path.
+        //
+        // SAFETY: Type invariant: there are always the same number of bucket counts
+        // as there are bucket magnitudes.
+        unsafe { self.bucket_counts.get_unchecked(bucket_index) }
+            .fetch_add(count_u64, SYNC_BAG_ACCESS_ORDERING);
     }
 
     fn snapshot(&self) -> ObservationBagSnapshot {

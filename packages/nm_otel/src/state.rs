@@ -68,8 +68,11 @@ impl EventState {
         let cumulative_counts = to_cumulative(non_cumulative_counts);
 
         // Initialize bucket state on first call, panic on bucket count mismatch.
+        // The first-call init is only ever taken once per event lifetime, so it is
+        // refactored into a `#[cold]` helper to bias branch layout toward the
+        // steady-state path that runs on every subsequent collection.
         if self.histogram_buckets.is_empty() {
-            self.histogram_buckets = vec![0; cumulative_counts.len()];
+            self.init_histogram_buckets(cumulative_counts.len());
         } else {
             assert_eq!(
                 self.histogram_buckets.len(),
@@ -100,6 +103,16 @@ impl EventState {
         }
 
         result
+    }
+
+    /// Initializes the cumulative bucket-count storage on the first collection.
+    ///
+    /// Marked `#[cold]` because this only runs once per event lifetime; every
+    /// subsequent call takes the validation branch in `histogram_deltas`.
+    #[cold]
+    #[inline(never)]
+    fn init_histogram_buckets(&mut self, len: usize) {
+        self.histogram_buckets = vec![0; len];
     }
 }
 
