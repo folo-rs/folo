@@ -47,16 +47,19 @@ tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 gungraun = { workspace = true, features = ["default"] }
 
 [[bench]]
-name = "events_bench"
+name = "events_uncontended"
 harness = false
 
 [[bench]]
-name = "contended_bench"
+name = "events_contended"
 harness = false
 
 [[bench]]
-name = "events_cycles"
+name = "events_cg"
 harness = false
 
 [lints]
 workspace = true
+
+
+

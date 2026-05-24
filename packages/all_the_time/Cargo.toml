@@ -22,12 +22,14 @@ mutants = { workspace = true }
 static_assertions = { workspace = true }
 
 [[bench]]
-name = "all_the_time_bench_example"
+name = "all_the_time_example"
 harness = false
 
 [[bench]]
-name = "tracking_overhead"
+name = "all_the_time_tracking_overhead"
 harness = false
 
 [lints]
 workspace = true
+
+

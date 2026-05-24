@@ -35,28 +35,35 @@ static_assertions = { workspace = true }
 gungraun = { workspace = true, features = ["default"] }
 
 [[bench]]
-name = "instances"
+name = "linked_instances"
 harness = false
 
 [[bench]]
-name = "instance_per_thread"
+name = "linked_instance_per_thread"
 harness = false
 
 [[bench]]
-name = "instance_per_thread_sync"
+name = "linked_instance_per_thread_sync"
 harness = false
 
 [[bench]]
-name = "static_thread_local_arc"
+name = "linked_static_thread_local_arc"
 harness = false
 
 [[bench]]
-name = "static_thread_local_rc"
+name = "linked_static_thread_local_rc"
 harness = false
 
 [[bench]]
-name = "instance_per_thread_cycles"
+name = "linked_instance_per_thread_cg"
 harness = false
 
 [lints]
 workspace = true
+
+
+
+
+
+
+

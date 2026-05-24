@@ -37,9 +37,11 @@ gungraun = { workspace = true, features = ["default"] }
 workspace = true
 
 [[bench]]
-name = "timestamp_performance"
+name = "fast_time_timestamp_performance"
 harness = false
 
 [[bench]]
-name = "clock_cycles"
+name = "clock_cg"
 harness = false
+
+

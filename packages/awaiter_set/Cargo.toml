@@ -27,12 +27,14 @@ static_assertions = { workspace = true }
 gungraun = { workspace = true, features = ["default"] }
 
 [[bench]]
-name = "awaiter_set_bench"
+name = "awaiter_set"
 harness = false
 
 [[bench]]
-name = "awaiter_set_cycles"
+name = "awaiter_set_cg"
 harness = false
 
 [lints]
 workspace = true
+
+

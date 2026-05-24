@@ -43,5 +43,6 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 workspace = true
 
 [[bench]]
-name = "vicinal_benches"
+name = "vicinal"
 harness = false
+

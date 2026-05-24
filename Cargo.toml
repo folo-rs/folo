@@ -37,11 +37,11 @@ futures = { version = "0.3", default-features = false, features = [
 ] }
 futures-core = { version = "0.3", default-features = false }
 # Keep this version in lockstep with the `gungraun-runner` install line in
-# `justfiles/just_setup.just` and the install command in `docs/cycle-accurate-benchmarks.md`.
-# The runner is invoked by the cycle bench binaries via an encoded payload and
+# `justfiles/just_setup.just` and the install command in `docs/callgrind-benchmarks.md`.
+# The runner is invoked by the Callgrind bench binaries via an encoded payload and
 # `gungraun-runner` enforces strict string equality on the version (see
 # `gungraun-runner::runner::compare_versions`), so any patch-level drift between the library
-# and the installed runner causes `*_cycles` benches to fail at runtime with VersionMismatch.
+# and the installed runner causes `*_cg` benches to fail at runtime with VersionMismatch.
 # Pinned with `=` to prevent `cargo update` from drifting Cargo.lock away from the installed
 # runner version. When bumping, update all three locations together.
 gungraun = { version = "=0.19.0", default-features = false }

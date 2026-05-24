@@ -32,12 +32,15 @@ static_assertions = { workspace = true }
 gungraun = { workspace = true, features = ["default"] }
 
 [[bench]]
-name = "ip_vs_std"
+name = "infinity_pool_vs_std"
 harness = false
 
 [[bench]]
-name = "ip_cycles"
+name = "infinity_pool_cg"
 harness = false
 
 [lints]
 workspace = true
+
+
+

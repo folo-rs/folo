@@ -17,21 +17,22 @@ install-tools:
 
     cargo install cargo-machete cargo-nextest release-plz cargo-semver-checks cargo-audit cargo-hack cargo-mutants cargo-llvm-cov cargo-sort cargo-sort-derives cargo-udeps cargo-careful cargo-ensure-no-default-features cargo-delta --locked
 
-    # gungraun-runner drives Valgrind for cycle-accurate benchmarks. Only useful on Linux
-    # (Valgrind is Linux-only); on Windows and macOS the cycle bench binaries are no-op stubs.
+    # gungraun-runner drives Valgrind for Callgrind-based instruction-count benchmarks. Only
+    # useful on Linux (Valgrind is Linux-only); on Windows and macOS the Callgrind bench binaries
+    # are no-op stubs.
     #
-    # The cycle bench binary is just a shim that forwards its CLI args (including the libtest
+    # The Callgrind bench binary is just a shim that forwards its CLI args (including the libtest
     # --list / --format / --ignored flags that `cargo bench` and `nextest` use during target
     # enumeration) to gungraun-runner via an encoded payload. Without gungraun-runner on $PATH,
-    # any invocation of a `*_cycles` bench binary fails with "Failed to run benchmarks: No such
+    # any invocation of a `*_cg` bench binary fails with "Failed to run benchmarks: No such
     # file or directory", including the harmless --list call that nextest issues for `--benches`.
     #
     # The version is pinned to the exact patch matching the `gungraun = "=0.19.0"` workspace
     # entry in the root Cargo.toml. gungraun-runner enforces strict string equality on the
     # version (see `gungraun-runner::runner::compare_versions`), so any drift between the
-    # installed runner and the library causes `*_cycles` benches to fail at runtime with
+    # installed runner and the library causes `*_cg` benches to fail at runtime with
     # VersionMismatch. Keep this line, the workspace Cargo.toml entry, and the install command
-    # in `docs/cycle-accurate-benchmarks.md` in sync when bumping.
+    # in `docs/callgrind-benchmarks.md` in sync when bumping.
     if ($IsLinux) {
         cargo install gungraun-runner --version 0.19.0 --locked
     }

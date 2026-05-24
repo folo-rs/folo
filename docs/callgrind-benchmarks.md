@@ -1,12 +1,20 @@
-# Cycle-accurate benchmarks
+# Callgrind benchmarks
 
-This document describes our strategy for adding instruction-count benchmarks
-alongside the existing wall-clock Criterion benchmarks. (We use the
-colloquial "cycle-accurate" name throughout because that is how the file
-suffix and the just recipe are spelled, but the headline measurement is the
-instruction count; see "Interpreting results" below.) The doc covers the
-why, the when, the how, and the conventions that keep these benchmarks
-comparable and maintainable across the workspace.
+This document describes our strategy for adding Callgrind-based
+instruction-count benchmarks alongside the existing wall-clock Criterion
+benchmarks. We call them "Callgrind benchmarks" because that is honestly
+what they are: each scenario runs once under [Valgrind][valgrind]'s
+[Callgrind][callgrind] CPU simulator (driven by the [Gungraun][gungraun]
+harness), which executes the benchmark on a *simulated* microarchitecture
+and reports instructions executed and simulated cache hits at each level.
+The file suffix is `_cg` (short for Callgrind) and the just recipe is
+`bench-cg`.
+
+The headline measurement is the **instruction count**, but the cache
+simulation (L1 / LL / RAM hits) and the Callgrind-derived "estimated
+cycles" are also stable run-to-run and used for spotting changes in memory
+access patterns. See "Interpreting results" below for what each number
+actually means and what it does not.
 
 ## Why two kinds of benchmarks
 
@@ -17,36 +25,35 @@ We use two complementary benchmark mechanisms:
   capture cache effects, branch prediction, contention, and operating system
   jitter that matter for actual users. The downside is that the numbers are
   noisy and machine-dependent.
-* **Instruction-count benchmarks** run each function exactly once under
-  [Valgrind][valgrind]'s [Callgrind][callgrind] CPU simulator (driven by
-  the [Gungraun][gungraun] harness). They produce deterministic
-  instruction counts and simulated cache-hit counts that are stable
-  run-to-run on the same toolchain. The downside is that the simulator is
-  single-threaded, uses a fixed cache model with no out-of-order execution
-  or prefetcher, and models syscalls as a fixed cost — so it cannot
-  reproduce real contention, scheduling, or kernel behavior.
+* **Callgrind benchmarks** run each function exactly once under Valgrind's
+  Callgrind CPU simulator. They produce deterministic instruction counts and
+  simulated cache-hit counts that are stable run-to-run on the same
+  toolchain. The downside is that the simulator is single-threaded, uses a
+  fixed cache model with no out-of-order execution or prefetcher, and models
+  syscalls as a fixed cost — so it cannot reproduce real contention,
+  scheduling, or kernel behavior.
 
 The two are complementary, not redundant. Criterion tells you whether a change
-is observably faster or slower for a user. Instruction counts tell you
+is observably faster or slower for a user. Callgrind counts tell you
 **why** — pointing at the specific code-path delta that explains the
 wall-clock difference, or at a regression that wall-clock noise might be
 hiding.
 
 The pairing rule is therefore **asymmetric**:
 
-> Every cycle scenario must have an analogous Criterion scenario covering
+> Every Callgrind scenario must have an analogous Criterion scenario covering
 > the same operation. The pair gives both signals: "did the wall-clock cost
 > change?" and "did the instruction count change?".
 >
 > The reverse is not required. Criterion scenarios can legitimately exist
-> without a cycle counterpart when the operation is dominated by something
-> Callgrind cannot meaningfully model: multi-threaded contention, syscall
-> behavior, allocation, scheduling, or bulk throughput where per-instruction
-> resolution adds no signal.
+> without a Callgrind counterpart when the operation is dominated by
+> something Callgrind cannot meaningfully model: multi-threaded contention,
+> syscall behavior, allocation, scheduling, or bulk throughput where
+> per-instruction resolution adds no signal.
 
-## When to add a cycle-accurate benchmark
+## When to add a Callgrind benchmark
 
-Add a cycle-accurate benchmark when at least one of these is true:
+Add a Callgrind benchmark when at least one of these is true:
 
 * The package's value proposition is **low overhead** (an allocator, a pool,
   a metrics primitive, a synchronization primitive, a thread-local cache, a
@@ -58,31 +65,38 @@ Add a cycle-accurate benchmark when at least one of these is true:
   regression compounds across millions of calls, but may be invisible to
   Criterion because each individual call is well under a microsecond.
 * The operation has **branching shape** that matters (first / last / miss,
-  empty / one / many, cached / uncached, idle / dirty). Cycle counts make
-  these branches legible at a glance, where Criterion runs them all together
-  and reports a mean.
+  empty / one / many, cached / uncached, idle / dirty). Instruction counts
+  make these branches legible at a glance, where Criterion runs them all
+  together and reports a mean.
 * The package documents performance claims in comments or README (e.g. "we
   use SIMD here", "this avoids allocation", "this is faster than `Box::pin`").
-  Cycle counts pin those claims to a number.
+  Instruction counts pin those claims to a number.
 
-Do **not** add a cycle-accurate benchmark for:
+Do **not** add a Callgrind benchmark for:
 
 * Operations dominated by I/O, allocation, syscall, or kernel parking cost
   — the simulator models the cost as essentially-free for these. If you do
   benchmark such an operation anyway, document the scope explicitly: "this
   measures wrapper overhead, not the actual cost of the underlying syscall".
 * Operations that only matter at scale (throughput, contention, scheduling
-  fairness) — these need Criterion + `par_bench`, not cycle counts.
-* Blocking waits or any operation that may park a thread. Cycle scenarios
-  must be deterministic and non-blocking. Wait on already-signaled state,
-  poll already-ready futures, etc.
+  fairness) — these need Criterion + `par_bench`, not instruction counts.
+* Blocking waits or any operation that may park a thread. Callgrind
+  scenarios must be deterministic and non-blocking. Wait on already-signaled
+  state, poll already-ready futures, etc.
 * Tests for "is this still correct" — that is what the test suite is for.
-* Internal helper functions that are not part of the package's public
-  contract; benchmark the public API, not the implementation detail.
+
+Prefer benchmarking the **public API** rather than internal helpers, since
+the public API is what callers actually pay for. But this is a soft rule:
+when a public API exposes large operation chains, the chain may be too big
+to give a clear Callgrind signal, and benchmarking the dominant internal
+step that the chain delegates to is often the only way to surface useful
+deltas. If you find yourself benchmarking internals frequently, that is a
+signal that the internals deserve to be factored out into their own
+crate-public surface so they can be benchmarked as first-class operations.
 
 ## Scenario selection
 
-Each `_cycles.rs` file should cover **2 to 6 logical axes** of the operation
+Each `_cg.rs` file should cover **2 to 6 logical axes** of the operation
 (the product of those axes may produce more than 6 measured cases). Aim for
 the smallest set that catches the regressions you care about.
 
@@ -128,16 +142,18 @@ What **not** to do:
   models the allocator and the kernel as a fixed cost; comparing benches
   that allocate to benches that do not is misleading.
 
-## Adding a cycle-accurate benchmark
+## Adding a Callgrind benchmark
 
 Each Gungraun bench lives alongside the Criterion benches in its package:
 
 ```
-packages/<pkg>/benches/<name>_cycles.rs
+packages/<pkg>/benches/<crate>_<name>_cg.rs
 ```
 
-The `_cycles.rs` filename suffix is required for `just bench-cycles`
-discovery.
+The `_cg.rs` filename suffix is required for `just bench-cg` discovery. Use
+a crate-name prefix on the file name (e.g. `nm_observe_cg.rs`,
+`fast_time_clock_cg.rs`) so the resulting bench binary does not collide
+with binaries from other crates in the shared `target/.../deps/` directory.
 
 ### Cargo.toml
 
@@ -149,7 +165,7 @@ In `packages/<pkg>/Cargo.toml`, add a target-gated dev-dependency and a
 gungraun = { workspace = true, features = ["default"] }
 
 [[bench]]
-name = "<name>_cycles"
+name = "<crate>_<name>_cg"
 harness = false
 ```
 
@@ -162,8 +178,14 @@ contents (see next section).
 
 ### Bench file template
 
+The Linux-only Gungraun code lives in a single `mod linux { ... }` block so
+the file does not need a per-line `#[cfg(target_os = "linux")]` annotation.
+A top-level `gungraun::main!(...)` invocation references the groups via the
+`pub use linux::*;` re-export so the macro's simple-identifier requirement
+on group names is satisfied.
+
 ```rust
-//! Cycle-accurate benchmarks for <operation> in the `<pkg>` package.
+//! Callgrind benchmarks for <operation> in the `<pkg>` package.
 //!
 //! Paired with <criterion-bench-name>.rs which covers the same operations
 //! under wall-clock measurement.
@@ -172,107 +194,97 @@ contents (see next section).
     missing_docs,
     reason = "no need for API documentation on benchmark code"
 )]
-// Gungraun macro expansions trigger a large number of lints we cannot
-// control from this file. The list below was assembled empirically and will
-// need to grow as either Clippy or Gungraun evolves. We accept the
-// maintenance cost in exchange for keeping bench files at the workspace
-// lint level for hand-written code; the macro expansion sites are the only
-// places these allows actually fire.
 #![cfg_attr(
     target_os = "linux",
-    allow(
-        clippy::absolute_paths,
-        clippy::allow_attributes_without_reason,
-        clippy::exhaustive_structs,
-        clippy::partial_pub_fields,
-        clippy::pub_underscore_fields,
-        clippy::cognitive_complexity,
-        clippy::unnecessary_wraps,
-        clippy::ignore_without_reason,
-        clippy::default_trait_access,
-        clippy::needless_pass_by_value,
-        clippy::missing_assert_message,
-        clippy::elidable_lifetime_names,
-        clippy::needless_pass_by_ref_mut,
-        clippy::doc_markdown,
-        clippy::needless_for_each,
-        clippy::redundant_clone,
-        clippy::missing_docs_in_private_items,
+    expect(
         clippy::exit,
-        unused_imports,
+        clippy::missing_docs_in_private_items,
         unused_qualifications,
-        unreachable_pub,
-        missing_debug_implementations,
-        unnameable_types,
-        non_local_definitions,
+        reason = "Triggered by Gungraun macro expansion. Tracking issue drafts live at \
+          c:/Source/gungraun-lint-issues/ pending upstream filing."
     )
 )]
 
 #[cfg(not(target_os = "linux"))]
 fn main() {
-    // Valgrind is Linux-only. On other platforms this bench target compiles
-    // to a no-op so `cargo build --all-targets` still works.
+    // Gungraun requires Valgrind, which is Linux-only.
 }
 
 #[cfg(target_os = "linux")]
-extern crate gungraun;
+mod linux {
+    use std::hint::black_box;
+
+    use gungraun::prelude::*;
+
+    // ... benchmark fns and library_benchmark_group! calls ...
+}
 
 #[cfg(target_os = "linux")]
-use std::hint::black_box;
+pub use linux::{my_group};
 
 #[cfg(target_os = "linux")]
-use gungraun::prelude::*;
-
-// ... (your benchmark fns, groups, and `main!` invocation, all
-//      `#[cfg(target_os = "linux")]`-gated)
+gungraun::main!(library_benchmark_groups = my_group);
 ```
 
 A complete worked example lives in
-[`packages/nm/benches/nm_observe_cycles.rs`](../packages/nm/benches/nm_observe_cycles.rs).
+[`packages/nm/benches/nm_observe_cg.rs`](../packages/nm/benches/nm_observe_cg.rs).
+
+#### Why `expect` instead of `allow`?
+
+The three lints in the `expect` block are spuriously triggered by Gungraun's
+macro expansions and cannot be fixed in our code. We use `expect` rather
+than `allow` so that when an upstream fix lands (in either Gungraun or
+Clippy), our build immediately surfaces the now-unfulfilled expectation and
+we can remove the suppression. Draft GitHub issues for each suppressed lint
+live in `c:/Source/gungraun-lint-issues/<lint>/{gungraun.md, clippy.md}`,
+to be filed upstream once they have been polished.
 
 ### Gungraun syntax gotchas
 
 These are easy to get wrong on the first attempt:
 
-* `main!()` generates its own `fn main()`. Invoke it at module top level, not
-  wrapped inside another `fn main()`.
+* `gungraun::main!()` generates its own `fn main()`. Invoke it at file
+  scope, **not** inside `mod linux`. Inside the module the generated
+  function would not become the binary entry point.
+* `gungraun::main!(library_benchmark_groups = ...)` accepts simple
+  identifiers only, not paths. Re-export the groups at file scope with
+  `pub use linux::{group_a, group_b};` so the identifiers resolve.
 * `library_benchmark_group!` requires `benchmarks = [a, b, c]` square
   brackets around the list of benchmark function names.
-* `#[bench::id(...)]` accepts either named setup functions or direct value
-  expressions. Closure form (`setup = || ...`) is not supported.
+* `#[bench::id(...)]` and `#[benches::sizes(args = [...], setup = ...)]`
+  accept either named setup functions or direct value expressions. Closure
+  form (`setup = || ...`) is not supported.
 * Doc comments (`///`) on `#[library_benchmark]` functions are rejected.
   Use plain `//` comments instead.
-* Bench files must include `extern crate gungraun;` even on the 2024
-  edition — the macros resolve crate paths at expansion time.
 
 ### Pairing with Criterion
 
-For each scenario in the `_cycles.rs` file, an analogous Criterion benchmark
+For each scenario in the `_cg.rs` file, an analogous Criterion benchmark
 must exist in the same package's `benches/` directory. The two need not be
 in the same file, and they need not use identical names — but if a future
 maintainer cannot trivially identify the Criterion counterpart for a given
-cycle scenario, the pairing has failed.
+Callgrind scenario, the pairing has failed.
 
 Practical guidelines:
 
 * Use the same setup functions (or thread-local initializers) for both, so
-  the measured object is in the same state. If the cycle scenario uses a
-  fresh single-event registry, do not pair it to a Criterion scenario that
-  runs against the full thread-local registry of every other benchmark in
-  the same file — add a matching controlled-state Criterion scenario.
-* Use the same scenario taxonomy: if the cycle bench has `hit_first`,
+  the measured object is in the same state. If the Callgrind scenario uses
+  a fresh single-event registry, do not pair it to a Criterion scenario
+  that runs against the full thread-local registry of every other benchmark
+  in the same file — add a matching controlled-state Criterion scenario.
+* Use the same scenario taxonomy: if the Callgrind bench has `hit_first`,
   `hit_last`, `miss`, the Criterion bench should have the same three (under
   matching or similar names).
 * Document the pairing in a one-line `//!` doc comment at the top of the
-  `_cycles.rs` file: "Paired with `<criterion-bench-name>.rs`".
-* When you add a new cycle scenario, add the matching Criterion scenario at
-  the same time. (The reverse — adding cycle coverage when you add a
-  Criterion scenario — is encouraged but not required; see the asymmetric
-  pairing rule above.)
+  `_cg.rs` file: "Paired with `<criterion-bench-name>.rs`".
+* When you add a new Callgrind scenario, add the matching Criterion
+  scenario at the same time. (The reverse — adding Callgrind coverage when
+  you add a Criterion scenario — is encouraged but not required; see the
+  asymmetric pairing rule above.)
 
 ## Running
 
-Cycle-accurate benchmarks require Valgrind and run only on Linux (including
+Callgrind benchmarks require Valgrind and run only on Linux (including
 WSL on Windows).
 
 Install once:
@@ -282,32 +294,33 @@ sudo apt install -y valgrind
 cargo install gungraun-runner --version 0.19.0 --locked
 ```
 
-The `gungraun-runner` version must match the `gungraun` library version pinned in
-the workspace `Cargo.toml` exactly — `gungraun-runner` enforces strict string equality on the
-version and any drift surfaces as a `VersionMismatch` runtime error. `just install-tools`
-performs the equivalent install for you.
+The `gungraun-runner` version must match the `gungraun` library version
+pinned in the workspace `Cargo.toml` exactly — `gungraun-runner` enforces
+strict string equality on the version and any drift surfaces as a
+`VersionMismatch` runtime error. `just install-tools` performs the
+equivalent install for you.
 
 Then:
 
 ```bash
-# Run all cycle-accurate benchmarks across the workspace.
-just bench-cycles
+# Run all Callgrind benchmarks across the workspace.
+just bench-cg
 
 # Scope to a single package.
-just package=nm bench-cycles
+just package=nm bench-cg
 
 # Run a specific bench file by name.
-just bench-cycles nm_observe_cycles
+just bench-cg nm_observe_cg
 ```
 
 On Windows, run the recipe via WSL from the repo root (WSL inherits the
 caller's working directory):
 
 ```powershell
-wsl -e bash -l -c "just bench-cycles"
+wsl -e bash -l -c "just bench-cg"
 ```
 
-The recipe enumerates every `packages/*/benches/*_cycles.rs` file and runs
+The recipe enumerates every `packages/*/benches/*_cg.rs` file and runs
 each via `cargo bench -p <pkg> --bench <name>`. Subsequent runs automatically
 compare against the previous run's baseline in `target/gungraun/` and exit
 non-zero if any regression is detected.
@@ -343,7 +356,7 @@ is a **trip wire**, not a verdict: a regression may be intentional (a new
 feature that costs cycles), benign (a layout change in an unrelated type),
 or a genuine bug. The pattern is:
 
-1. Run `just bench-cycles` locally before opening a PR. If there is a
+1. Run `just bench-cg` locally before opening a PR. If there is a
    regression, decide whether to accept it.
 2. If the regression is intentional, mention it in the PR description with
    the before/after numbers and the rationale.
@@ -355,11 +368,16 @@ performance trade-offs require human evaluation, not automated rejection.
 ## Baselines
 
 Baselines live in `target/gungraun/` and are local to each developer's
-machine. They are intentionally not committed: a developer's machine
-produces stable counts run-to-run, but a different toolchain or linked
-standard library version can shift the absolute counts by a small constant.
-The relative deltas remain meaningful within a single environment; the
-absolute numbers are not portable.
+machine. They are intentionally not committed.
+
+Even though Callgrind is a deterministic simulator, the simulated program is
+still real code linked against the real standard library and Rust runtime on
+the host. Toolchain upgrades, distro libc updates, glibc patches, and even
+inlining decisions made by the compiler on a different machine shift the
+absolute instruction count by a small constant. The deltas within a single
+machine remain meaningful for spotting regressions, but the absolute numbers
+do not transfer cleanly between machines or even between toolchain bumps on
+the same machine.
 
 A future improvement may add a normalized baseline format that can be
 committed. Until then, the human review described above is the regression
@@ -374,8 +392,22 @@ specific scenario's hottest functions:
 callgrind_annotate target/gungraun/<package>/<bench>/<scenario>/callgrind.out
 ```
 
-Or load the same file in [KCachegrind][kcachegrind] for a GUI view of the
-call graph.
+This produces a plain text annotated report and works fine on Windows when
+invoked through WSL.
+
+For a GUI view of the call graph, load the same file in
+[KCachegrind][kcachegrind] (Linux) or its Qt-based fork QCacheGrind. On
+Windows the most convenient options are:
+
+* Install KCachegrind inside the Ubuntu WSL distro
+  (`sudo apt install -y kcachegrind`) and launch it via WSLg (Windows 11)
+  or an X server such as VcXsrv (Windows 10). The Callgrind output files
+  in `target/gungraun/` are accessible to the Linux GUI as Windows paths
+  under `/mnt/c/Source/folo/target/gungraun/...`.
+* Install QCacheGrind for Windows natively from
+  <https://sourceforge.net/projects/qcachegrindwin/> (an unofficial port).
+  Open the same `callgrind.out` files directly from the Windows file
+  system. Renders identical output to KCachegrind on Linux.
 
 [criterion]: https://github.com/bheisler/criterion.rs
 [valgrind]: https://valgrind.org/

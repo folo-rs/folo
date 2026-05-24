@@ -44,8 +44,9 @@ name = "region_cached"
 harness = false
 
 [[bench]]
-name = "region_cached_cycles"
+name = "region_cached_cg"
 harness = false
 
 [lints]
 workspace = true
+

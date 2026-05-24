@@ -13,17 +13,24 @@ bench TARGET="":
 
     cargo bench {{ target_package }} --all-features $target_selector --locked
 
-# Run cycle-accurate benchmarks. Requires Linux (Valgrind). Discovers any
-# bench file whose name ends with `_cycles` under `packages/<pkg>/benches/`.
-# Callers on Windows must invoke this through WSL themselves.
+# Run Callgrind-based instruction-count benchmarks. Requires Linux (Valgrind)
+# and the `gungraun-runner` binary on PATH; both are installed by
+# `just install-tools`. Discovers any bench file whose name ends with `_cg`
+# (short for Callgrind) under `packages/<pkg>/benches/`. Callers on Windows
+# must invoke this through WSL themselves.
 [group('testing')]
 [script]
-bench-cycles TARGET="":
+bench-cg TARGET="":
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
     if (-not $IsLinux) {
-        Write-Error "bench-cycles requires Linux (Valgrind). On Windows, invoke through WSL from the repo root: wsl -e bash -l -c 'just bench-cycles'"
+        Write-Error "bench-cg requires Linux (Valgrind). On Windows, invoke through WSL from the repo root: wsl -e bash -l -c 'just bench-cg'"
+        exit 1
+    }
+
+    if (-not (Get-Command gungraun-runner -ErrorAction SilentlyContinue)) {
+        Write-Error "bench-cg requires the 'gungraun-runner' binary on PATH. Run 'just install-tools' to install it."
         exit 1
     }
 
@@ -42,7 +49,7 @@ bench-cycles TARGET="":
         $benches_dir = Join-Path "packages" $pkg "benches"
         if (-not (Test-Path $benches_dir)) { continue }
 
-        $bench_files = Get-ChildItem $benches_dir -Filter "*_cycles.rs"
+        $bench_files = Get-ChildItem $benches_dir -Filter "*_cg.rs"
         foreach ($bench_file in $bench_files) {
             $bench_name = $bench_file.BaseName
             if ($target_filter -ne "" -and $bench_name -ne $target_filter) { continue }
@@ -56,7 +63,7 @@ bench-cycles TARGET="":
     if (-not $any_run) {
         $scope = if ($package_filter -eq "") { "the workspace" } else { "package(s) '$package_filter'" }
         $target_clause = if ($target_filter -eq "") { "" } else { " matching target '$target_filter'" }
-        Write-Host "No cycle-accurate benchmarks found in $scope$target_clause." -ForegroundColor Yellow
+        Write-Host "No Callgrind benchmarks found in $scope$target_clause." -ForegroundColor Yellow
     }
 
 
@@ -142,11 +149,12 @@ test FILTER="":
 #
 # Tests go through nextest (parallel execution, junit reporting, retries, etc.). Benches
 # go through `cargo test --benches` instead: nextest's per-test discover-then-dispatch
-# model is incompatible with the cycle-accurate (`*_cycles`) benches, whose `harness =
+# model is incompatible with the Callgrind (`*_cg`) benches, whose `harness =
 # false` main() spawns Valgrind for the entire suite in one shot. `cargo test --benches`
 # invokes each bench binary's main() once with `--test`, which Criterion treats as
 # "run each bench once" and Gungraun treats as its normal one-shot Valgrind run. We only
 # care that the benches do not panic; their measurements are not consumed here.
+# Upstream tracking: https://github.com/gungraun/gungraun/pull/644.
 [group('testing')]
 [script]
 test-more FILTER="":
@@ -250,7 +258,7 @@ run-examples:
         $excluded_examples = @(
             "nm_otel_console"     # This example runs an infinite loop by design
             "nm_otel_readme"      # This example runs an infinite loop by design
-            "panic_on_alloc_demo"  # This example intentionally panics to demonstrate functionality
+            "alloc_tracker_panic_on_alloc_demo"  # This example intentionally panics to demonstrate functionality
         )
         
         # Process .rs files

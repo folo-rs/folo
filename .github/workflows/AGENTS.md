@@ -103,12 +103,10 @@ for manual cache warming after toolchain updates.
 ## System dependencies
 
 The `setup-environment` action installs Valgrind on Linux runners and `gungraun-runner` (via
-`just install-tools`). Both are required for the cycle-accurate `*_cycles` bench targets that
-live in `packages/*/benches/`. Even when those targets are not executed, `cargo nextest run
---benches` (which `test-more` uses) invokes each bench binary with `--list --format terse` to
-enumerate cases; the bench binary then forwards those flags to `gungraun-runner`, which honours
-`--list` and exits without running anything under Valgrind. Without `gungraun-runner` on
-`$PATH` the listing call fails with `Failed to run benchmarks: No such file or directory`,
-which breaks `test-more` and `coverage`. The cycle bench binaries are compiled to no-op stubs
-on Windows and macOS via `#[cfg(not(target_os = "linux"))] fn main() {}`, so neither tool is
-required there.
+`just install-tools`). Both are required for the Callgrind `*_cg` bench targets that
+live in `packages/*/benches/`. Even when those targets are not executed, `cargo test
+--benches` (which `test-more` uses) invokes each bench binary's `main()` once, which forwards
+its args to `gungraun-runner`. Without `gungraun-runner` on `$PATH` the call fails with
+`Failed to run benchmarks: No such file or directory`, which breaks `test-more` and
+`coverage`. The Callgrind bench binaries are compiled to no-op stubs on Windows and macOS via
+`#[cfg(not(target_os = "linux"))] fn main() {}`, so neither tool is required there.

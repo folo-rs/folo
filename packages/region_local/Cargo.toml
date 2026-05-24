@@ -44,8 +44,9 @@ name = "region_local"
 harness = false
 
 [[bench]]
-name = "region_local_cycles"
+name = "region_local_cg"
 harness = false
 
 [lints]
 workspace = true
+

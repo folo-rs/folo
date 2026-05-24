@@ -40,5 +40,6 @@ name = "future_deque"
 harness = false
 
 [[bench]]
-name = "future_deque_cycles"
+name = "future_deque_cg"
 harness = false
+

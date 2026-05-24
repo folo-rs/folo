@@ -1,7 +1,7 @@
 //! Wall-clock benchmarks for the `awaiter_set` crate.
 //!
 //! Three round-trip scenarios cover the same operations isolated by
-//! `awaiter_set_cycles.rs`:
+//! `awaiter_set_cg.rs`:
 //!
 //! * `register_unregister/empty` — register + unregister on an empty set.
 //! * `register_unregister/with_10_anchors` — same, but the set has 10

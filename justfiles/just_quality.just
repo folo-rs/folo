@@ -11,14 +11,14 @@ coverage-measure:
     # This will run tests and generate test coverage data files, to be analyzed separately.
     #
     # We enumerate `--lib --bins --tests --examples` instead of using `--all-targets`
-    # because `--all-targets` would also pull in `--benches`. The cycle-accurate (`*_cycles`)
+    # because `--all-targets` would also pull in `--benches`. The Callgrind (`*_cg`)
     # benches use Gungraun's `harness = false` main(), which is incompatible with nextest's
     # per-test discover-then-dispatch model (its `--list` output is libtest "pretty" format,
-    # which nextest rejects). Bench code is not production code and any production paths
-    # only exercised by benchmarks should be flagged as undertested, so excluding bench
-    # targets from coverage is also the methodologically correct choice. The `test-more`
-    # recipe runs the benches separately through `cargo test --benches` to verify they
-    # do not panic.
+    # which nextest rejects). Upstream fix proposed in
+    # https://github.com/gungraun/gungraun/pull/644; until that lands (and possibly even
+    # after, for better isolation), excluding bench targets from `coverage-measure` is the
+    # simplest workaround. The `test-more` recipe runs the benches separately through
+    # `cargo test --benches` to verify they do not panic.
     cargo +{{ env_var('RUST_NIGHTLY') }} llvm-cov nextest {{ target_package }} --no-fail-fast --lib --bins --tests --examples --no-report --all-features --locked
 
 # This tool needs a different way to specify the package.
