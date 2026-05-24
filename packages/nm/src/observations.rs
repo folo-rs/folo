@@ -278,6 +278,7 @@ const fn clear_lowest_set_bit(value: u64) -> u64 {
 }
 
 impl Observations for ObservationBag {
+    #[inline]
     fn insert(&self, magnitude: Magnitude, count: usize) {
         // No-op observations would not change any field anyway, but exiting early also
         // ensures the dirty-bucket bitmap is not polluted with bits whose buckets did
@@ -367,6 +368,7 @@ impl Observations for ObservationBag {
 }
 
 impl Observations for ObservationBagSync {
+    #[inline]
     fn insert(&self, magnitude: Magnitude, count: usize) {
         // Crate policy is to not panic but instead to mangle data upon mathematical
         // challenges and edge cases that cannot be correctly handled. We apply this here
