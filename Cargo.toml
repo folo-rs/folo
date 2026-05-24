@@ -316,11 +316,6 @@ development = ["mutants", "static_assertions"]
 [profile.release]
 # This ensures we have high quality data with proper stack traces when profiling.
 debug = "line-tables-only"
-# Production-grade optimization: fat LTO and a single codegen unit enable
-# cross-crate inlining and global optimization. This also keeps benchmarks
-# (which inherit from this profile) representative of real production builds.
-lto = "fat"
-codegen-units = 1
 
 [profile.test]
 # This is supposed to be the default (inherited from "dev") but in practice,
