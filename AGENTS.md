@@ -406,6 +406,27 @@ and in the same benchmark group.
 
 Do not forget to register benchmarks in `Cargo.toml`.
 
+# Callgrind benchmarks
+
+For performance-critical hot paths, complement the Criterion benchmarks with Callgrind-based
+instruction-count benchmarks driven by Valgrind. These live alongside the Criterion benches in
+the same `packages/<pkg>/benches/` directory, with the file-suffix convention `_cg.rs` (short
+for Callgrind, to be honest about the fact that the numbers come from a simulated
+microarchitecture rather than the real CPU).
+
+The pairing is **asymmetric**: every Callgrind scenario must have an analogous Criterion
+scenario (so we have both wall-clock and instruction-count signals on the same operation). The
+reverse is not required — Criterion can legitimately stand alone for multithreaded contention,
+syscalls, allocation, or bulk throughput where instruction-count resolution adds no signal.
+
+See [docs/callgrind-benchmarks.md](docs/callgrind-benchmarks.md) for the full strategy,
+including: which operations warrant Callgrind coverage, scenario selection guidelines
+(default case, branching extremes, state/occupancy variants, size sensitivity, initialization
+vs steady state, sibling variants), the bench file template (including the file-scope lint
+suppression block required by Gungraun's macro expansions), Cargo.toml setup with the
+target-gated dependency, Gungraun syntax gotchas, the pairing convention, and how to interpret
+results.
+
 # YAML formatting
 
 Prefer not using quotes around strings, unless the string starts with special characters.
@@ -504,6 +525,24 @@ used in test code (via `tick::ClockControl`).
 
 You may use events/signals for synchronization (e.g. `Barrier` or `events_once` events or message channels),
 as long as there are no delays or wait-loops in the test code itself.
+
+# Flaky test discoveries are recorded as issues
+
+If you stumble across a flaky test while working on something unrelated (for example a
+CI failure that is not caused by your change, or a doctest that violates the "no delays"
+rule above), file a GitHub issue so the discovery is not lost. Use `gh issue create` with
+a clear title and a body that includes:
+
+- the path and line range of the offending test,
+- the failure mode (which assertion / message / scenario triggers it),
+- a link to the run or PR where you noticed it,
+- a suggested fix if one is obvious.
+
+We do this for any flake — not just timing-related ones (e.g. order-sensitive,
+environment-sensitive, machine-load-sensitive). Recording these accidental discoveries
+lets us batch the cleanup later instead of losing the lead. Do not silently fix the
+flake as part of an unrelated change — the issue lets us track and prioritise it
+independently.
 
 # Tests must not hang
 

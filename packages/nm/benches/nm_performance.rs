@@ -41,12 +41,48 @@ fn entrypoint(c: &mut Criterion) {
         .execute_criterion_on(&mut one_thread, &mut group, "plain_st_pull");
 
     Run::new()
+        .iter(|_| PULL_COUNTER.with(|x| x.batch(1).observe_once()))
+        .execute_criterion_on(&mut one_thread, &mut group, "counter_batch_1_st_pull");
+
+    Run::new()
+        .iter(|_| PULL_COUNTER.with(|x| x.batch(10).observe_once()))
+        .execute_criterion_on(&mut one_thread, &mut group, "counter_batch_10_st_pull");
+
+    Run::new()
+        .iter(|_| PULL_COUNTER.with(|x| x.batch(100).observe_once()))
+        .execute_criterion_on(&mut one_thread, &mut group, "counter_batch_100_st_pull");
+
+    Run::new()
+        .iter(|_| PULL_COUNTER.with(|x| x.batch(1_000).observe_once()))
+        .execute_criterion_on(&mut one_thread, &mut group, "counter_batch_1k_st_pull");
+
+    Run::new()
+        .iter(|_| PULL_COUNTER.with(|x| x.batch(10_000).observe_once()))
+        .execute_criterion_on(&mut one_thread, &mut group, "counter_batch_10k_st_pull");
+
+    Run::new()
         .iter(|_| PULL_SMALL_HISTOGRAM.with(|x| x.observe(0)))
         .execute_criterion_on(&mut one_thread, &mut group, "small_histogram_zero_st_pull");
 
     Run::new()
+        .iter(|_| PULL_SMALL_HISTOGRAM.with(|x| x.observe(SMALL_HISTOGRAM_LAST_BUCKET_VALUE)))
+        .execute_criterion_on(
+            &mut one_thread,
+            &mut group,
+            "small_histogram_last_bucket_st_pull",
+        );
+
+    Run::new()
         .iter(|_| PULL_LARGE_HISTOGRAM.with(|x| x.observe(0)))
         .execute_criterion_on(&mut one_thread, &mut group, "large_histogram_zero_st_pull");
+
+    Run::new()
+        .iter(|_| PULL_LARGE_HISTOGRAM.with(|x| x.observe(LARGE_HISTOGRAM_LAST_BUCKET_VALUE)))
+        .execute_criterion_on(
+            &mut one_thread,
+            &mut group,
+            "large_histogram_last_bucket_st_pull",
+        );
 
     // We use Magnitude::MAX to intentionally go out of range (naively implemented, searching
     // through all the buckets for a matching one and finding none).
@@ -73,8 +109,24 @@ fn entrypoint(c: &mut Criterion) {
         .execute_criterion_on(&mut one_thread, &mut group, "small_histogram_zero_st_push");
 
     Run::new()
+        .iter(|_| PUSH_SMALL_HISTOGRAM.with(|x| x.observe(SMALL_HISTOGRAM_LAST_BUCKET_VALUE)))
+        .execute_criterion_on(
+            &mut one_thread,
+            &mut group,
+            "small_histogram_last_bucket_st_push",
+        );
+
+    Run::new()
         .iter(|_| PUSH_LARGE_HISTOGRAM.with(|x| x.observe(0)))
         .execute_criterion_on(&mut one_thread, &mut group, "large_histogram_zero_st_push");
+
+    Run::new()
+        .iter(|_| PUSH_LARGE_HISTOGRAM.with(|x| x.observe(LARGE_HISTOGRAM_LAST_BUCKET_VALUE)))
+        .execute_criterion_on(
+            &mut one_thread,
+            &mut group,
+            "large_histogram_last_bucket_st_push",
+        );
 
     // We use Magnitude::MAX to intentionally go out of range (naively implemented, searching
     // through all the buckets for a matching one and finding none).
@@ -209,6 +261,13 @@ const LARGE_HISTOGRAM_BUCKETS: &[Magnitude] = &[
     262144, 524288, 1048576, 2097152, 4194304, 8388608, 16777216, 33554432, 67108864, 134217728,
     268435456, 536870912, 1073741824,
 ];
+
+// The largest bucket boundary in each histogram. We use these for the
+// "hit the last bucket" benchmarks so the search walks every bucket but
+// still lands in a defined range (rather than the implicit overflow
+// range that `Magnitude::MAX` lands in).
+const SMALL_HISTOGRAM_LAST_BUCKET_VALUE: Magnitude = 10_000;
+const LARGE_HISTOGRAM_LAST_BUCKET_VALUE: Magnitude = 1_073_741_824;
 
 thread_local! {
     static PULL_COUNTER: Event = Event::builder()

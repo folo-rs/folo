@@ -29,7 +29,7 @@ use crate::{
 ///   ignored by this package and cannot be used to spawn threads, though such processors are still
 ///   accounted for when inspecting hardware information such as "max processor ID".
 ///   The mechanisms for defining such limits are cgroups on Linux and job objects on Windows.
-///   See `examples/obey_job_affinity_limits_windows.rs` for a Windows-specific example.
+///   See `examples/many_cpus_obey_job_affinity_windows.rs` for a Windows-specific example.
 /// * Soft limits on which processors are allowed are ignored by default - specifying a processor
 ///   affinity via `taskset` on Linux, `start.exe /affinity 0xff` on Windows or similar mechanisms
 ///   does not affect the set of processors this package will use by default, though you can opt in to
@@ -38,7 +38,7 @@ use crate::{
 ///   count of the processor set returned by [`SystemHardware::processors()`].
 /// * Any other processor set can be opt-in quota-limited when building the processor set. For example, by calling `SystemHardware::current().all_processors().to_builder().enforce_resource_quota().take_all()`.
 ///
-/// See `examples/obey_job_resource_quota_limits_windows.rs` for a Windows-specific example of processor
+/// See `examples/many_cpus_obey_job_resource_quota_windows.rs` for a Windows-specific example of processor
 /// time quota enforcement.
 ///
 /// # Avoiding operating system quota penalties

@@ -28,9 +28,19 @@ mutants = { workspace = true }
 rand = { workspace = true, features = ["small_rng"] }
 static_assertions = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
 [[bench]]
-name = "ip_vs_std"
+name = "infinity_pool_vs_std"
+harness = false
+
+[[bench]]
+name = "infinity_pool_cg"
 harness = false
 
 [lints]
 workspace = true
+
+
+

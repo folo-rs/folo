@@ -5,7 +5,7 @@
 //!
 //! To run this example, enable the `panic_on_next_alloc` feature:
 //! ```bash
-//! cargo run --example panic_on_alloc_demo --features panic_on_next_alloc
+//! cargo run --example alloc_tracker_panic_on_alloc_demo --features panic_on_next_alloc
 //! ```
 
 #[cfg(not(feature = "panic_on_next_alloc"))]
@@ -29,5 +29,7 @@ fn main() {
 #[cfg(not(feature = "panic_on_next_alloc"))]
 fn main() {
     println!("This example requires the 'panic_on_next_alloc' feature to be enabled.");
-    println!("Run with: cargo run --example panic_on_alloc_demo --features panic_on_next_alloc");
+    println!(
+        "Run with: cargo run --example alloc_tracker_panic_on_alloc_demo --features panic_on_next_alloc"
+    );
 }

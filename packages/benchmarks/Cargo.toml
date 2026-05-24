@@ -31,16 +31,19 @@ linked = { path = "../linked" }
 windows = { workspace = true, features = ["Win32_System_Memory"] }
 
 [[bench]]
-name = "variable_access"
+name = "benchmarks_variable_access"
 harness = false
 
 [[bench]]
-name = "effects_of_memory"
+name = "benchmarks_effects_of_memory"
 harness = false
 
 [[bench]]
-name = "effects_of_memory_windows"
+name = "benchmarks_effects_of_memory_windows"
 harness = false
 
 [lints]
 workspace = true
+
+
+

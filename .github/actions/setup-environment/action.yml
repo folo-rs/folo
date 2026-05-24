@@ -18,7 +18,7 @@ runs:
         sudo dpkg -i --force-confnew packages-microsoft-prod.deb
 
         sudo apt update
-        sudo apt install -y git git-lfs build-essential cmake gcc make curl libssl-dev pkg-config powershell
+        sudo apt install -y git git-lfs build-essential cmake gcc make curl libssl-dev pkg-config powershell valgrind
 
         # Set up Git LFS
         git lfs install

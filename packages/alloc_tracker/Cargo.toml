@@ -30,12 +30,14 @@ serial_test = { workspace = true }
 static_assertions = { workspace = true }
 
 [[bench]]
-name = "alloc_tracker_bench_example"
+name = "alloc_tracker_example"
 harness = false
 
 [[bench]]
-name = "tracking_overhead"
+name = "alloc_tracker_tracking_overhead"
 harness = false
 
 [lints]
 workspace = true
+
+

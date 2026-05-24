@@ -43,13 +43,23 @@ static_assertions = { workspace = true }
 testing = { path = "../testing" }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
 [[bench]]
-name = "events_bench"
+name = "events_uncontended"
 harness = false
 
 [[bench]]
-name = "contended_bench"
+name = "events_contended"
+harness = false
+
+[[bench]]
+name = "events_cg"
 harness = false
 
 [lints]
 workspace = true
+
+
+

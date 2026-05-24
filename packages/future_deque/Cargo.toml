@@ -29,9 +29,17 @@ mutants = { workspace = true }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
 [lints]
 workspace = true
 
 [[bench]]
 name = "future_deque"
 harness = false
+
+[[bench]]
+name = "future_deque_cg"
+harness = false
+
