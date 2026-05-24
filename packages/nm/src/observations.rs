@@ -317,10 +317,13 @@ impl Observations for ObservationBag {
         self.count.set(self.count.get().wrapping_add(count_u64));
         self.sum.set(self.sum.get().wrapping_add(sum_increment));
 
-        // This may be none if we have no buckets (i.e. the event is a bare counter,
-        // no histogram) or if the magnitude exceeds the largest bucket's threshold.
-        // Both are rare on the hot path of a well-configured histogram event.
-        //
+        // Counter events (no buckets) are a common API shape, not a rare case,
+        // so we exit here without a `cold_path` hint. Only the overflow branch
+        // below is marked cold.
+        if self.bucket_magnitudes.is_empty() {
+            return;
+        }
+
         // We benchmarked a manual SIMD (AVX2/SSE4.2) branchless "count less-than"
         // approach against this scalar linear scan. The scalar version wins across
         // all scenarios because branch prediction is highly effective for sorted
@@ -345,6 +348,8 @@ impl Observations for ObservationBag {
                     }
                 })
         else {
+            // Magnitude exceeds the largest bucket - rare in well-configured
+            // histograms.
             cold_path();
             return;
         };
@@ -404,10 +409,13 @@ impl Observations for ObservationBagSync {
         self.count.fetch_add(count_u64, SYNC_BAG_ACCESS_ORDERING);
         self.sum.fetch_add(sum_increment, SYNC_BAG_ACCESS_ORDERING);
 
-        // This may be none if we have no buckets (i.e. the event is a bare counter,
-        // no histogram) or if the magnitude exceeds the largest bucket's threshold.
-        // Both are rare on the hot path of a well-configured histogram event.
-        //
+        // Counter events (no buckets) are a common API shape, not a rare case,
+        // so we exit here without a `cold_path` hint. Only the overflow branch
+        // below is marked cold.
+        if self.bucket_magnitudes.is_empty() {
+            return;
+        }
+
         // We benchmarked a manual SIMD (AVX2/SSE4.2) branchless "count less-than"
         // approach against this scalar linear scan. The scalar version wins across
         // all scenarios because branch prediction is highly effective for sorted
@@ -432,6 +440,8 @@ impl Observations for ObservationBagSync {
                     }
                 })
         else {
+            // Magnitude exceeds the largest bucket - rare in well-configured
+            // histograms.
             cold_path();
             return;
         };
