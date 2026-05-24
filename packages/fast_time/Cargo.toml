@@ -41,7 +41,7 @@ name = "fast_time_timestamp_performance"
 harness = false
 
 [[bench]]
-name = "clock_cg"
+name = "fast_time_clock_cg"
 harness = false
 
 
