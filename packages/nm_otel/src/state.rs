@@ -62,57 +62,89 @@ impl EventState {
     ///
     /// # Panics
     ///
-    /// Panics during iteration if the number of buckets increases beyond the count
+    /// Panics during iteration if the number of buckets yielded differs from the count
     /// established on the first call. Histogram bucket configuration is expected to be
-    /// fixed for the lifetime of an event.
+    /// fixed for the lifetime of an event. The check fires either when an extra bucket
+    /// is yielded beyond the established length, or when the source iterator is exhausted
+    /// before all established buckets have been visited.
     pub fn histogram_deltas<'a>(
         &'a mut self,
         magnitudes: impl IntoIterator<Item = Magnitude> + 'a,
         non_cumulative_counts: impl IntoIterator<Item = u64> + 'a,
     ) -> impl Iterator<Item = (Magnitude, u64, u64)> + 'a {
-        // On the first call `histogram_buckets` is empty; we grow it lazily as we yield
-        // values. On subsequent calls we index into the existing storage.
         let first_call = self.histogram_buckets.is_empty();
-        let buckets = &mut self.histogram_buckets;
-        let mut running_cumulative = 0_u64;
-        let mut index = 0_usize;
+        let source = magnitudes.into_iter().zip(non_cumulative_counts);
+        HistogramDeltas {
+            source,
+            buckets: &mut self.histogram_buckets,
+            first_call,
+            running_cumulative: 0,
+            index: 0,
+        }
+    }
+}
 
-        magnitudes
-            .into_iter()
-            .zip(non_cumulative_counts)
-            .map(move |(magnitude, non_cumulative)| {
-                running_cumulative = running_cumulative.saturating_add(non_cumulative);
+/// Streaming iterator returned by [`EventState::histogram_deltas`].
+///
+/// On the first call `buckets` starts empty and is grown lazily as items are yielded.
+/// On subsequent calls `buckets` already has the established length and we index into
+/// it in lockstep with the source iterator, panicking if the yielded count drifts.
+struct HistogramDeltas<'a, I> {
+    source: I,
+    buckets: &'a mut Vec<u64>,
+    first_call: bool,
+    running_cumulative: u64,
+    index: usize,
+}
 
-                let previous = if first_call {
-                    buckets.push(0);
-                    0
-                } else {
-                    assert!(
-                        index < buckets.len(),
-                        "histogram bucket count changed unexpectedly"
-                    );
-                    #[expect(
-                        clippy::indexing_slicing,
-                        reason = "index is bounds-checked by the assertion above"
-                    )]
-                    let previous = buckets[index];
-                    previous
-                };
+impl<I> Iterator for HistogramDeltas<'_, I>
+where
+    I: Iterator<Item = (Magnitude, u64)>,
+{
+    type Item = (Magnitude, u64, u64);
 
-                let delta = running_cumulative.saturating_sub(previous);
+    fn next(&mut self) -> Option<Self::Item> {
+        let Some((magnitude, non_cumulative)) = self.source.next() else {
+            // Source exhausted: verify we visited every previously-established bucket.
+            // On the first call there is no established length yet, so anything goes.
+            assert!(
+                self.first_call || self.index == self.buckets.len(),
+                "histogram bucket count changed unexpectedly"
+            );
+            return None;
+        };
 
-                #[expect(
-                    clippy::indexing_slicing,
-                    reason = "on first call we just pushed; otherwise the assertion above \
-                              verified the index is in bounds"
-                )]
-                {
-                    buckets[index] = running_cumulative;
-                }
-                index = index.saturating_add(1);
+        self.running_cumulative = self.running_cumulative.saturating_add(non_cumulative);
 
-                (magnitude, running_cumulative, delta)
-            })
+        let previous = if self.first_call {
+            self.buckets.push(0);
+            0
+        } else {
+            assert!(
+                self.index < self.buckets.len(),
+                "histogram bucket count changed unexpectedly"
+            );
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "index is bounds-checked by the assertion above"
+            )]
+            let previous = self.buckets[self.index];
+            previous
+        };
+
+        let delta = self.running_cumulative.saturating_sub(previous);
+
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "on first call we just pushed; otherwise the assertion above \
+                      verified the index is in bounds"
+        )]
+        {
+            self.buckets[self.index] = self.running_cumulative;
+        }
+        self.index = self.index.saturating_add(1);
+
+        Some((magnitude, self.running_cumulative, delta))
     }
 }
 
@@ -268,6 +300,27 @@ mod tests {
         let non_cumulative4 = [5, 10, 3, 2];
         state
             .histogram_deltas(magnitudes4, non_cumulative4)
+            .for_each(drop);
+    }
+
+    #[test]
+    #[should_panic]
+    fn event_state_histogram_deltas_fewer_buckets_panics() {
+        let mut state = EventState::default();
+
+        // First call establishes 3 buckets.
+        let magnitudes3 = [10, 50, 100];
+        let non_cumulative3 = [5, 10, 3];
+        state
+            .histogram_deltas(magnitudes3, non_cumulative3)
+            .for_each(drop);
+
+        // Second call yields only 2 buckets - should panic when the source iterator
+        // is exhausted before all established buckets have been visited.
+        let magnitudes2 = [10, 50];
+        let non_cumulative2 = [7, 12];
+        state
+            .histogram_deltas(magnitudes2, non_cumulative2)
             .for_each(drop);
     }
 }
