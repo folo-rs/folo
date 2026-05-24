@@ -267,6 +267,35 @@ mod tests {
     }
 
     #[test]
+    fn collection_state_preserves_entries_across_table_growth() {
+        // The underlying `HashTable` grows when capacity is exceeded, which calls the
+        // rehash closure passed to `entry()` on every existing entry. This test inserts
+        // enough events to force multiple grows and then reads every entry back to
+        // verify the rehash closure produces hashes consistent with the lookup-time
+        // hashing — otherwise entries would land in the wrong buckets after a grow
+        // and the reads would return fresh `EventState::default()` values instead of
+        // the values we wrote.
+        const NUM_EVENTS: u64 = 64;
+
+        let mut state = CollectionState::new();
+
+        for i in 0..NUM_EVENTS {
+            // Use distinguishable non-zero values so a re-defaulted `EventState` (count = 0)
+            // would be detectable.
+            state.event_state(&format!("growth_event_{i}").into()).count =
+                i.saturating_mul(7).saturating_add(1);
+        }
+
+        for i in 0..NUM_EVENTS {
+            let expected = i.saturating_mul(7).saturating_add(1);
+            assert_eq!(
+                state.event_state(&format!("growth_event_{i}").into()).count,
+                expected,
+            );
+        }
+    }
+
+    #[test]
     fn event_state_histogram_deltas_same_bucket_count_works() {
         let mut state = EventState::default();
 

@@ -335,6 +335,54 @@ mod tests {
     // OpenTelemetry SDK uses system time calls not available under Miri isolation.
     #[cfg_attr(miri, ignore)]
     #[test]
+    fn instrument_registry_preserves_entries_across_table_growth() {
+        // The underlying `HashTable` grows when capacity is exceeded, which calls the
+        // rehash closure passed to `entry()` on every existing entry. This test inserts
+        // enough events to force multiple grows and then re-exports the same events to
+        // verify that lookups still find the existing entries — otherwise entries would
+        // land in the wrong buckets after a grow and the second export would create
+        // duplicate `EventInstruments`, leaving the table with more than `NUM_EVENTS`
+        // entries.
+        const NUM_EVENTS: u64 = 64;
+
+        let (provider, _exporter) = create_test_provider();
+        let meter = provider.meter("test");
+
+        let mut state = CollectionState::new();
+        let mut instruments = InstrumentRegistry::new(meter);
+
+        // First pass: register every event, forcing the `HashTable` to grow.
+        let events: Vec<_> = (0..NUM_EVENTS)
+            .map(|i| EventMetrics::fake(format!("growth_event_{i}"), i.saturating_add(1), 0, None))
+            .collect();
+        let report = Report::fake(events);
+        export_report(&report, &mut state, &mut instruments);
+
+        let expected_len = usize::try_from(NUM_EVENTS).unwrap();
+        assert_eq!(instruments.events.len(), expected_len);
+
+        // Second pass with the same events: every lookup must hit the existing entry.
+        let events2: Vec<_> = (0..NUM_EVENTS)
+            .map(|i| {
+                EventMetrics::fake(
+                    format!("growth_event_{i}"),
+                    i.saturating_add(1).saturating_mul(2),
+                    0,
+                    None,
+                )
+            })
+            .collect();
+        let report2 = Report::fake(events2);
+        export_report(&report2, &mut state, &mut instruments);
+
+        // If the rehash closure produced inconsistent hashes for any existing entry,
+        // the second export would have inserted a duplicate instead of reusing it.
+        assert_eq!(instruments.events.len(), expected_len);
+    }
+
+    // OpenTelemetry SDK uses system time calls not available under Miri isolation.
+    #[cfg_attr(miri, ignore)]
+    #[test]
     fn export_report_zero_count_delta_does_not_add_to_counter() {
         static BUCKETS: &[Magnitude] = &[10, 50];
 
