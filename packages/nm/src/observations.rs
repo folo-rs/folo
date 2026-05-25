@@ -11,9 +11,15 @@ use crate::Magnitude;
 /// path is laid out in straight-line fashion. The cold branch target is moved
 /// to a far section to reduce icache pressure on the hot path.
 ///
-/// This is a temporary workaround until `std::hint::cold_path()` is stabilized.
+/// Marked `#[inline(never)]` so the call is preserved at the call site even
+/// though the body is empty. If LLVM inlined the empty body away, the cold
+/// marker would vanish along with it and the surrounding branch would lose
+/// its cold biasing.
+///
+/// This is a temporary workaround until `std::hint::cold_path()` is
+/// stabilized. See `TODO.md` at the workspace root for the migration note.
 #[cold]
-#[inline]
+#[inline(never)]
 fn cold_path() {}
 
 /// Records the observations of an event.
