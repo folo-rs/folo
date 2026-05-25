@@ -10,8 +10,16 @@ list of available commands. Some relevant ones are:
 
 The `package` argument must be the first argument to any `just` command, if used. You can specify it on most commands to scope them down to a specific package instead of running them on the entire repo (which is slow).
 
-Avoid running `just bench`, as the benchmarks take a lot of time and `just test` will anyway run
-a single benchmark iteration to validate they are still working.
+Avoid running `just bench` (wall-clock Criterion benchmarks) without explicit confirmation: they
+take a lot of time, and the numbers are also noisy and machine-dependent — running them on a
+shared machine produces results that should not be acted on. `just test` already runs a single
+iteration of every Criterion benchmark to validate that they still execute.
+
+`just bench-cg` (Callgrind / Gungraun) is different: it runs each scenario once under Valgrind's
+CPU simulator, so the instruction counts and simulated cache numbers are deterministic and
+unaffected by other processes on the machine. It is safe to run `just bench-cg` (or
+`just package=foo bench-cg`) any time without asking — including as a smoke test of a new
+Callgrind benchmark. The same applies to the `bench-cycles` recipe in packages that still use it.
 
 We generally prefer using Just commands over raw Cargo commands if there is a suitable Just command
 defined in one of the *.just files.
