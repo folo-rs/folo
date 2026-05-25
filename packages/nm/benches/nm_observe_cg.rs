@@ -387,10 +387,9 @@ mod linux {
 }
 
 #[cfg(target_os = "linux")]
-pub use linux::{aggregate_group, pull_group, push_group};
-
-#[cfg(target_os = "linux")]
 use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
+#[cfg(target_os = "linux")]
+pub use linux::{aggregate_group, pull_group, push_group};
 
 #[cfg(target_os = "linux")]
 gungraun::main!(

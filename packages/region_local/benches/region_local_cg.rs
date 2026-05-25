@@ -140,10 +140,9 @@ mod linux {
 }
 
 #[cfg(target_os = "linux")]
-pub use linux::{baseline_group, read_group, write_group};
-
-#[cfg(target_os = "linux")]
 use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
+#[cfg(target_os = "linux")]
+pub use linux::{baseline_group, read_group, write_group};
 
 #[cfg(target_os = "linux")]
 gungraun::main!(

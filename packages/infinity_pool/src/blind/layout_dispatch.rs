@@ -2,26 +2,29 @@ use smallvec::SmallVec;
 
 use crate::LayoutKey;
 
-/// Inline capacity chosen to cover the documented "handful of distinct layouts" common case
-/// fully inline. Each entry is `(LayoutKey, V)` where `V` is a `RawOpaquePool`-sized value
-/// (~152 bytes on x64), so the inline footprint is ~1.3 KiB on 64-bit targets.
+/// Inline capacity for the secondary `rest` `SmallVec` — sized so that, together with the
+/// hoisted `front` slot, total inline capacity matches the documented "handful of distinct
+/// layouts" common case fully inline.
 ///
-/// Beyond this capacity, the underlying `SmallVec` falls back to heap allocation. Lookup
-/// remains correct; only the cache locality on the cold spill path is reduced.
-const INLINE_CAPACITY: usize = 8;
+/// Beyond this capacity the `SmallVec` falls back to heap allocation. Lookup remains correct;
+/// only the cache locality on the cold spill path is reduced.
+const REST_INLINE_CAPACITY: usize = 7;
+
+/// Total inline capacity including the hoisted `front` slot.
+#[cfg(test)]
+const INLINE_CAPACITY: usize = REST_INLINE_CAPACITY + 1;
 
 /// Dispatches by `LayoutKey` to an associated value, optimized for a small number of distinct
 /// keys with strong locality of reference.
 ///
-/// Storage is a `SmallVec` of `(LayoutKey, V)` entries with inline capacity sized for the
-/// typical case so no heap allocation is needed when the pool holds a handful of distinct
-/// object layouts. Lookup is a linear scan, and on every successful lookup the matching
-/// entry is moved to position 0 ("move-to-front"). Newly inserted entries are also placed
-/// at position 0. The combination keeps the most-recently used key at the front, so
-/// repeated inserts of the same type — the common case in `BlindPool` workloads — find
-/// their entry on the first comparison.
+/// Storage is split into a hoisted `front: Option<(LayoutKey, V)>` slot that holds the
+/// most-recently-used entry, plus a `SmallVec` of `(LayoutKey, V)` entries for the rest.
+/// On every successful lookup the matching entry is promoted into `front` (the previous
+/// `front` is demoted into the `SmallVec`). The combination keeps the most-recently used
+/// key in a dedicated field, so repeated inserts of the same type — the common case in
+/// `BlindPool` workloads — find their entry without touching the `SmallVec` at all.
 ///
-/// Iteration order of `values()` / `values_mut()` is therefore not part of the contract.
+/// Iteration order of `values()` / `values_mut()` is not part of the contract.
 //
 // This is a deviation from the standard `BTreeMap<LayoutKey, V>` we used previously, and
 // also from the obvious "sorted SmallVec + binary_search_by_key" pattern proposed in
@@ -39,29 +42,41 @@ const INLINE_CAPACITY: usize = 8;
 // Beyond the inline capacity, the underlying `SmallVec` falls back to heap allocation;
 // correctness is preserved, only cache locality on the cold spill path is reduced.
 //
-// Moving entries via `SmallVec::insert` or `SmallVec::swap` is safe: the value type
-// stores its bulk data in separately allocated buffers (e.g. slab vectors) and is not
-// self-referential to the enclosing struct.
+// Moving entries via `SmallVec::push` or replacing the `front` slot is safe: the value
+// type stores its bulk data in separately allocated buffers (e.g. slab vectors) and is
+// not self-referential to the enclosing struct.
 #[derive(Debug)]
 pub(crate) struct LayoutDispatch<V> {
-    entries: SmallVec<[(LayoutKey, V); INLINE_CAPACITY]>,
+    front: Option<(LayoutKey, V)>,
+    rest: SmallVec<[(LayoutKey, V); REST_INLINE_CAPACITY]>,
 }
 
 impl<V> LayoutDispatch<V> {
     pub(crate) fn new() -> Self {
         Self {
-            entries: SmallVec::new(),
+            front: None,
+            rest: SmallVec::new(),
         }
     }
 
     /// Returns a shared reference to the value associated with `key`, if present.
     pub(crate) fn get(&self, key: LayoutKey) -> Option<&V> {
-        self.entries.iter().find(|(k, _)| *k == key).map(|(_, v)| v)
+        if let Some((k, v)) = &self.front
+            && *k == key
+        {
+            return Some(v);
+        }
+        self.rest.iter().find(|(k, _)| *k == key).map(|(_, v)| v)
     }
 
     /// Returns a unique reference to the value associated with `key`, if present.
     pub(crate) fn get_mut(&mut self, key: LayoutKey) -> Option<&mut V> {
-        self.entries
+        // Copy out the front key first so the immutable borrow does not extend into the
+        // mutable-access branch (Polonius limitation in current borrow-checker).
+        if self.front.as_ref().is_some_and(|(k, _)| *k == key) {
+            return self.front.as_mut().map(|(_, v)| v);
+        }
+        self.rest
             .iter_mut()
             .find(|(k, _)| *k == key)
             .map(|(_, v)| v)
@@ -69,46 +84,56 @@ impl<V> LayoutDispatch<V> {
 
     /// Returns the value associated with `key`, inserting one produced by `f` if not present.
     ///
-    /// The matching (or newly inserted) entry is positioned at index 0, so the next call
+    /// The matching (or newly inserted) entry is promoted into `front`, so the next call
     /// with the same key returns on the first comparison.
     pub(crate) fn get_or_insert_with<F>(&mut self, key: LayoutKey, f: F) -> &mut V
     where
         F: FnOnce() -> V,
     {
-        // Fast path: the most-recently-used entry is at position 0 by construction of this
-        // dispatch, so a check against `entries[0].0` short-circuits the iterator setup
-        // and the secondary `get_mut` access on the hot repeated-lookup path.
-        if let Some((k0, _)) = self.entries.first()
-            && *k0 == key
-        {
+        // Fast path: the most-recently-used entry sits in the hoisted `front` slot, so a
+        // single Option discriminant + key compare resolves the hit without touching the
+        // SmallVec at all on the hot repeated-lookup path.
+        if self.front.as_ref().is_some_and(|(k, _)| *k == key) {
             return &mut self
-                .entries
-                .get_mut(0)
-                .expect("first entry exists per the immediately preceding `first()`")
+                .front
+                .as_mut()
+                .expect("front matched in the immediately preceding check")
                 .1;
         }
 
-        if let Some(idx) = self.entries.iter().position(|(k, _)| *k == key) {
-            self.entries.swap(0, idx);
+        // Either find the entry in `rest` and promote it, or construct a new one. Either
+        // way, the previous `front` (if any) is demoted into `rest`.
+        let new_front = if let Some(idx) = self.rest.iter().position(|(k, _)| *k == key) {
+            self.rest.swap_remove(idx)
         } else {
-            self.entries.insert(0, (key, f()));
+            (key, f())
+        };
+        let demoted = self.front.replace(new_front);
+        if let Some(old) = demoted {
+            self.rest.push(old);
         }
 
         &mut self
-            .entries
-            .get_mut(0)
-            .expect("either swapped to position 0 or inserted at position 0")
+            .front
+            .as_mut()
+            .expect("front was just assigned via `replace`")
             .1
     }
 
     /// Returns an iterator over the values in current MRU order.
     pub(crate) fn values(&self) -> impl Iterator<Item = &V> {
-        self.entries.iter().map(|(_, v)| v)
+        self.front
+            .iter()
+            .map(|(_, v)| v)
+            .chain(self.rest.iter().map(|(_, v)| v))
     }
 
     /// Returns an iterator over the values for mutation, in current MRU order.
     pub(crate) fn values_mut(&mut self) -> impl Iterator<Item = &mut V> {
-        self.entries.iter_mut().map(|(_, v)| v)
+        self.front
+            .iter_mut()
+            .map(|(_, v)| v)
+            .chain(self.rest.iter_mut().map(|(_, v)| v))
     }
 }
 

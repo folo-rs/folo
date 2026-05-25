@@ -488,10 +488,9 @@ mod linux {
 }
 
 #[cfg(target_os = "linux")]
-pub use linux::{deref_group, drop_group, insert_group, iter_group};
-
-#[cfg(target_os = "linux")]
 use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
+#[cfg(target_os = "linux")]
+pub use linux::{deref_group, drop_group, insert_group, iter_group};
 
 #[cfg(target_os = "linux")]
 gungraun::main!(
