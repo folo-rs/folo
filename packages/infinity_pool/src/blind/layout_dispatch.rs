@@ -81,11 +81,12 @@ impl<V> LayoutDispatch<V> {
         if let Some((k0, _)) = self.entries.first()
             && *k0 == key
         {
-            return &mut self
-                .entries
-                .get_mut(0)
-                .expect("first entry exists per the immediately preceding `first()`")
-                .1;
+            // SAFETY: `entries.first()` returned `Some` in the condition immediately above,
+            // so the slice has at least one element and index 0 is in-bounds. The borrow
+            // from `first()` ends with the condition; this fresh mutable borrow does not
+            // alias it.
+            let entry = unsafe { self.entries.get_unchecked_mut(0) };
+            return &mut entry.1;
         }
 
         if let Some(idx) = self.entries.iter().position(|(k, _)| *k == key) {
