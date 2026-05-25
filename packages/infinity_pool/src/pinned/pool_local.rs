@@ -172,7 +172,12 @@ where
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn insert(&self, value: T) -> LocalPooledMut<T> {
-        let inner = self.inner.borrow_mut().insert(value);
+        // SAFETY: `LocalPinnedPool<T>` is a typed wrapper. The underlying opaque pool was
+        // constructed via `RawOpaquePool::with_layout_of::<T>()`, which records
+        // `Layout::new::<T>()` as the pool's object layout, and the wrapper never permits
+        // inserting any other type. The layout match required by `insert_unchecked` is
+        // therefore statically guaranteed.
+        let inner = unsafe { self.inner.borrow_mut().insert_unchecked(value) };
 
         LocalPooledMut::new(inner, Rc::clone(&self.inner))
     }
@@ -226,8 +231,10 @@ where
     where
         F: FnOnce(&mut MaybeUninit<T>),
     {
-        // SAFETY: Forwarding safety guarantees from caller.
-        let inner = unsafe { self.inner.borrow_mut().insert_with(f) };
+        // SAFETY: `LocalPinnedPool<T>` is a typed wrapper, so the layout match required by
+        // `insert_with_unchecked` is statically guaranteed. The closure-initialization
+        // requirement is forwarded from this method's own safety contract.
+        let inner = unsafe { self.inner.borrow_mut().insert_with_unchecked(f) };
 
         LocalPooledMut::new(inner, Rc::clone(&self.inner))
     }
