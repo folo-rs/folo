@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
 use std::panic::{RefUnwindSafe, UnwindSafe};
+use std::ptr::NonNull;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -16,7 +17,22 @@ use crate::{EventName, LOCAL_REGISTRY, ObservationBag, ObservationBagSync, Obser
 #[derive(Debug)]
 pub struct MetricsPusher {
     /// When we are asked to push data, we publish everything from the local bag to the global bag.
-    push_registry: Rc<RefCell<Vec<LocalGlobalPair>>>,
+    ///
+    /// Each pair lives in its own `Rc` so that `LocalGlobalPair::dirty` has a stable
+    /// address that the bag can hold a raw back-pointer to. We deliberately do not use
+    /// `Box` even though that would be the obvious owning indirection: under Stacked
+    /// Borrows, every move of a `Box` (including when the `Vec` reallocates and moves
+    /// the existing slots) issues a `Unique` retag on the pointee, which invalidates
+    /// any raw pointer derived from `&pair.dirty` that was installed in the bag earlier.
+    /// `Rc` carries no `noalias`/`Unique` semantics, so its moves leave the pointee's
+    /// borrow stack untouched and prior raw pointers remain valid. Registration is
+    /// cold, so the small per-pair `Rc` header (two counters) is negligible.
+    ///
+    /// The alternative — keeping `Vec<LocalGlobalPair>` contiguous and reconnecting
+    /// every existing bag's back-pointer on reallocation — is a more invasive design
+    /// with a larger `unsafe` surface and is deferred to a follow-up if the
+    /// `Rc`-per-pair layout proves insufficient (see issue #160 design notes).
+    push_registry: Rc<RefCell<Vec<Rc<LocalGlobalPair>>>>,
 
     _single_threaded: PhantomData<*const ()>,
 }
@@ -76,24 +92,27 @@ impl MetricsPusher {
     /// ```
     pub fn push(&self) {
         for pair in self.push_registry.borrow().iter() {
-            let current_count = pair.local.count();
-
-            // The local count is monotonically incremented by every data-changing
-            // observation. If it has not advanced since the previous push, the local
-            // bag's contents are identical to what we already published to the global
-            // bag, so we can safely skip the copy.
-            //
-            // Edge case (accepted under the crate's mathematics policy): if the local
-            // count wraps back to the previously pushed value within a single push
-            // interval (e.g., via `batch(usize::MAX).observe(...)`), this check
-            // misidentifies the pair as clean. Treated as documented data mangling for
-            // extreme values.
-            if current_count == pair.last_pushed_count.get() {
+            // The dirty bit is set by every data-changing observation through the bag's
+            // back-pointer into this pair (see `ObservationBag::external_dirty`). Reading
+            // it here means the idle scan touches only the pair's own cache line, never
+            // the bag through its `Rc`.
+            if !pair.dirty.get() {
                 continue;
             }
 
+            // Clear the bit BEFORE the copy. `copy_from` currently only manipulates
+            // `Cell` and atomic fields (no user callbacks, no destructors of user-owned
+            // values), so a re-entrant observation during the copy cannot happen today.
+            // Clearing first is a defense-in-depth measure: if `copy_from` ever grows a
+            // path that re-enters via observe (e.g. through a future callback), the
+            // late-set dirty bit will survive past this push and be picked up next time
+            // rather than being lost.
+            //
+            // We use `get` + conditional `set(false)` instead of `replace(false)`.
+            // `replace` writes unconditionally, which would dirty every idle pair's
+            // cache line every push tick - defeating the optimization.
+            pair.dirty.set(false);
             pair.global.copy_from(&pair.local);
-            pair.last_pushed_count.set(current_count);
         }
     }
 
@@ -121,13 +140,31 @@ struct LocalGlobalPair {
     local: Rc<ObservationBag>,
     global: Arc<ObservationBagSync>,
 
-    /// The local bag's `count` at the time of the most recent push for this pair.
+    /// `true` when the local bag has received at least one data-changing observation
+    /// since the most recent `copy_from`. Written from the bag's `insert` path via
+    /// the back-pointer installed by `connect_external_dirty` on registration, and
+    /// cleared by `MetricsPusher::push` immediately before each `copy_from`.
     ///
-    /// On every push, we compare this to `local.count()`; if they match, no new
-    /// observations have arrived since the last push and we can skip the copy.
-    /// Initialized to 0, which matches the bag's initial count and correctly
-    /// causes the first push of a never-observed pair to be a no-op.
-    last_pushed_count: Cell<u64>,
+    /// `Drop` clears the bag's back-pointer so that the bag never references a freed
+    /// `Cell<bool>`. This requires the pair to live behind a stable address (an
+    /// `Rc`), which is why `MetricsPusher::push_registry` is `Vec<Rc<...>>`.
+    dirty: Cell<bool>,
+}
+
+impl Drop for LocalGlobalPair {
+    fn drop(&mut self) {
+        // Custom `Drop` runs before the fields are released, so `self.local` is
+        // guaranteed alive here. `disconnect_external_dirty` restores the bag's
+        // self-referential pointer to its own `dummy_dirty` field, so after this
+        // returns and `self.dirty` is destructed, the bag no longer references the
+        // freed `Cell<bool>`.
+        //
+        // Any subsequent observe on a still-living orphaned bag (e.g. an
+        // `Event<Push>` that outlives its `MetricsPusher`) writes to the bag's
+        // `dummy_dirty` field, which is a safe no-op.
+        let ptr = NonNull::from(&self.dirty);
+        self.local.disconnect_external_dirty(ptr);
+    }
 }
 
 /// The pusher hands out pre-registrations to the builder because the builder may not yet
@@ -138,7 +175,7 @@ struct LocalGlobalPair {
 /// with the pusher once it is ready.
 #[derive(Debug)]
 pub(crate) struct PusherPreRegistration {
-    push_registry: Rc<RefCell<Vec<LocalGlobalPair>>>,
+    push_registry: Rc<RefCell<Vec<Rc<LocalGlobalPair>>>>,
 }
 
 impl PusherPreRegistration {
@@ -155,13 +192,45 @@ impl PusherPreRegistration {
         // This will panic if it is already registered. This is not strictly required and
         // we may relax this constraint in the future but for now we keep it here to help
         // uncover problematic patterns and learn when/where relaxed constraints may be useful.
+        //
+        // We let this fallible step run BEFORE connecting the bag's back-pointer so that
+        // a panic here cannot leave the bag with a dangling pointer to a `Cell<bool>`
+        // that the unwound caller never gets to drop.
         LOCAL_REGISTRY.with_borrow(|r| r.register(name, Arc::clone(&global)));
 
-        self.push_registry.borrow_mut().push(LocalGlobalPair {
+        // Capture `source.count()` before moving `source` into the pair. Used to
+        // preserve the existing "pre-existing local data is published on first push"
+        // behavior: if the bag was observed before being registered with the pusher,
+        // mark the pair dirty so the first push copies that pre-existing data.
+        let initial_dirty = source.count() > 0;
+
+        let pair = Rc::new(LocalGlobalPair {
             local: source,
             global,
-            last_pushed_count: Cell::new(0),
+            dirty: Cell::new(initial_dirty),
         });
+
+        let dirty_ptr = NonNull::from(&pair.dirty);
+
+        // SAFETY: `pair` lives behind an `Rc` from this point on, so `&pair.dirty`
+        // has a stable heap address that does not move when the `Rc` is later cloned
+        // into the registry's `Vec` or when that `Vec` later reallocates (the moves
+        // only touch the `Rc` struct itself, not the heap-allocated `RcBox` that owns
+        // the `LocalGlobalPair`). Unlike `Box`, `Rc` does not carry `Unique`/`noalias`
+        // semantics under Stacked Borrows, so those moves do not retag the pointee and
+        // the raw pointer derived here remains valid for the full lifetime of the pair.
+        //
+        // `LocalGlobalPair::drop` calls `disconnect_external_dirty(dirty_ptr)` before
+        // `self.dirty` is destructed, so the bag never observes a freed pointee.
+        //
+        // The one-bag-one-pair invariant holds: the bag's `Rc` was just moved into
+        // this pair, and the pre-registration is consumed (`self`) by this single
+        // call, so we are the only caller that can connect this bag.
+        unsafe {
+            pair.local.connect_external_dirty(dirty_ptr);
+        }
+
+        self.push_registry.borrow_mut().push(pair);
     }
 }
 
@@ -339,5 +408,30 @@ mod tests {
         let snapshot = global.snapshot();
         assert_eq!(snapshot.count, 2);
         assert_eq!(snapshot.sum, 3);
+    }
+
+    #[test]
+    fn observe_after_pusher_drop_is_safe_noop() {
+        // The bag may outlive its pusher (e.g. when an `Event<Push>` keeps an `Rc`
+        // strand alive). Once the pusher (and therefore its pair) drops, the bag's
+        // back-pointer is cleared and further observations must be a safe no-op
+        // rather than a use-after-free.
+        let local = Rc::new(ObservationBag::new(&[]));
+
+        let pusher = MetricsPusher::new();
+        let pre_registration = pusher.pre_register();
+        pre_registration.register("orphaned_event_test".into(), Rc::clone(&local));
+
+        // Drop the pusher while the bag is still alive (via our `Rc::clone`).
+        drop(pusher);
+
+        // Subsequent observations must be safe. We do not need to assert anything
+        // beyond "this does not crash or trip Miri" - the bag is no longer connected
+        // to any pusher, so the dirty back-pointer step becomes a no-op.
+        local.insert(1, 1);
+        local.insert(42, 5);
+
+        // The bag itself still records observations locally even when orphaned.
+        assert_eq!(local.count(), 6);
     }
 }

@@ -362,6 +362,89 @@ mod linux {
         state
     }
 
+    // ---------- Scaled push scans ----------
+    //
+    // The aggregate `push` benches above measure the 4-pair case. The scenarios
+    // below cover the documented sparse-push workload (issue 160): hundreds to
+    // thousands of registered counter pairs with only a handful dirty per tick.
+    //
+    // Each benchmark targets a specific axis of the idle-scan cost:
+    //
+    // * `sparse_100_3`   — N=100, K=3 dirty per push. Primary target workload.
+    // * `sparse_1000_3`  — N=1000, K=3 dirty per push. Stress-tests the per-pair
+    //                      scan cost in isolation.
+    // * `all_idle_100`   — N=100, K=0 dirty. Worst case for the idle scan: every
+    //                      pair must be checked and skipped.
+    // * `all_dirty_100`  — N=100, K=100 dirty. Regression guard for dense pushes;
+    //                      the idle-scan optimization must not penalise this case.
+    //
+    // Each Gungraun measurement runs the body exactly once, so setup-then-push
+    // measures the cost of one push() call with the prepared dirty/idle mix.
+
+    struct ScaledPushState {
+        // Keeping the events around so they are not dropped (which would un-register).
+        _events: Vec<Event<Push>>,
+        pusher: MetricsPusher,
+    }
+
+    fn make_scaled_push_state(
+        name_prefix: &'static str,
+        registered_count: usize,
+        dirty_count: usize,
+    ) -> ScaledPushState {
+        let pusher = MetricsPusher::new();
+        let events: Vec<Event<Push>> = (0..registered_count)
+            .map(|i| {
+                Event::builder()
+                    .name(format!("{name_prefix}_{i}"))
+                    .pusher(&pusher)
+                    .build()
+            })
+            .collect();
+
+        // Push once outside the measured region so that any "first-push" overhead
+        // (registration-time dirty seeding etc.) is excluded from the bench.
+        pusher.push();
+
+        // Re-dirty the first `dirty_count` pairs by observing on them. The push
+        // benchmark itself runs after setup, so these observations land in the
+        // local bag and are picked up by the single measured push().
+        for event in events.iter().take(dirty_count) {
+            event.observe_once();
+        }
+
+        ScaledPushState {
+            _events: events,
+            pusher,
+        }
+    }
+
+    fn make_scaled_sparse_100_3() -> ScaledPushState {
+        make_scaled_push_state("cg_push_sparse_100_3", 100, 3)
+    }
+
+    fn make_scaled_sparse_1000_3() -> ScaledPushState {
+        make_scaled_push_state("cg_push_sparse_1000_3", 1000, 3)
+    }
+
+    fn make_scaled_all_idle_100() -> ScaledPushState {
+        make_scaled_push_state("cg_push_all_idle_100", 100, 0)
+    }
+
+    fn make_scaled_all_dirty_100() -> ScaledPushState {
+        make_scaled_push_state("cg_push_all_dirty_100", 100, 100)
+    }
+
+    #[library_benchmark]
+    #[bench::sparse_100_3(make_scaled_sparse_100_3())]
+    #[bench::sparse_1000_3(make_scaled_sparse_1000_3())]
+    #[bench::all_idle_100(make_scaled_all_idle_100())]
+    #[bench::all_dirty_100(make_scaled_all_dirty_100())]
+    fn push_scaled(state: ScaledPushState) -> ScaledPushState {
+        state.pusher.push();
+        state
+    }
+
     library_benchmark_group!(
         name = pull_group,
         benchmarks = [
@@ -383,7 +466,10 @@ mod linux {
         ]
     );
 
-    library_benchmark_group!(name = aggregate_group, benchmarks = [collect, push]);
+    library_benchmark_group!(
+        name = aggregate_group,
+        benchmarks = [collect, push, push_scaled]
+    );
 }
 
 #[cfg(target_os = "linux")]

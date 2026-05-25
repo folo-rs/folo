@@ -1,5 +1,6 @@
 use std::cell::Cell;
 use std::iter;
+use std::ptr::NonNull;
 use std::sync::atomic::{self, AtomicI64, AtomicU64};
 
 use crate::Magnitude;
@@ -46,6 +47,26 @@ pub(crate) struct ObservationBag {
     /// path, so the dirty bit is only set when the corresponding bucket count actually
     /// changes.
     dirty_buckets: Cell<u64>,
+
+    /// Back-pointer into a `MetricsPusher`-owned `Cell<bool>` to mark the owning pair
+    /// as dirty on every data-changing observation. `None` until the bag is registered
+    /// with a pusher pair, and cleared again when the pair is dropped.
+    ///
+    /// The pointer must remain valid for shared `&Cell<bool>` access for as long as it
+    /// is installed here. Installation and removal happen through
+    /// `connect_external_dirty` / `disconnect_external_dirty`; the pair's `Drop` impl
+    /// is responsible for the latter so the pointee is never freed while the bag still
+    /// holds a pointer to it.
+    ///
+    /// `None` is the meaningful default for Pull events (which have no pusher) and for
+    /// freshly built Push bags that have not yet completed registration: in those
+    /// cases the observe path skips the pointer write entirely. A branchless variant
+    /// (bag-resident dummy `Cell<bool>` and always-valid pointer) was measured to be
+    /// strictly worse - it forces every Pull observe to perform an unconditional
+    /// store, regressing `observe_pull_*` benchmarks by ~10-20% while the saved
+    /// branch is negligible on the Push observe path because the same observation
+    /// already pays an unavoidable cache-line touch on the pair's `dirty` cell.
+    external_dirty: Cell<Option<NonNull<Cell<bool>>>>,
 }
 
 /// Records the observations of an event in a thread-safe manner.
@@ -94,6 +115,7 @@ impl ObservationBag {
                 .into_boxed_slice(),
             bucket_magnitudes,
             dirty_buckets: Cell::new(0),
+            external_dirty: Cell::new(None),
         };
 
         // Important type invariant used to ensure safety - the lengths of these two
@@ -110,9 +132,10 @@ impl ObservationBag {
     /// Returns the current count of observations recorded in this bag.
     ///
     /// The count is incremented monotonically by every observation (by the batch
-    /// size, which is non-zero for any data-changing observation). `MetricsPusher`
-    /// uses this as a dirty indicator to skip pushing pairs that have not received
-    /// new observations since the last push.
+    /// size, which is non-zero for any data-changing observation). The push-side
+    /// dirty indicator is the pair-resident `external_dirty` cell rather than this
+    /// counter, but `MetricsPusher` still reads `count()` at registration time to
+    /// decide whether a pre-existing data set must be published on the first push.
     pub(crate) fn count(&self) -> u64 {
         self.count.get()
     }
@@ -126,6 +149,40 @@ impl ObservationBag {
         let bits = self.dirty_buckets.get();
         self.dirty_buckets.set(0);
         bits
+    }
+
+    /// Installs a back-pointer into a `MetricsPusher`-owned `Cell<bool>` so that
+    /// `insert` can mark the owning pair as dirty without dereferencing the bag's
+    /// `Rc` on the push side. Replaces any previously installed pointer.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must point to a `Cell<bool>` that remains valid for shared
+    /// (`&Cell<bool>`) access for as long as this bag continues to receive
+    /// observations, or until `disconnect_external_dirty` is called with the
+    /// same pointer. The caller is responsible for ensuring the disconnect runs
+    /// before the pointee is freed (typically from a `Drop` impl).
+    ///
+    /// # Panics
+    ///
+    /// Panics if a pointer is already connected. The bag-to-pair relationship is
+    /// one-to-one; double-connecting indicates a registration logic bug.
+    pub(crate) unsafe fn connect_external_dirty(&self, ptr: NonNull<Cell<bool>>) {
+        assert!(
+            self.external_dirty.get().is_none(),
+            "external_dirty already connected - one bag, one pair invariant violated",
+        );
+        self.external_dirty.set(Some(ptr));
+    }
+
+    /// Clears the back-pointer installed by `connect_external_dirty`, but only if
+    /// the currently stored pointer matches `expected`. This guards against an
+    /// older pair accidentally clearing a newer connection if the one-bag-one-pair
+    /// invariant is ever violated.
+    pub(crate) fn disconnect_external_dirty(&self, expected: NonNull<Cell<bool>>) {
+        if self.external_dirty.get() == Some(expected) {
+            self.external_dirty.set(None);
+        }
     }
 }
 
@@ -305,6 +362,27 @@ impl Observations for ObservationBag {
         if count == 0 {
             cold_path();
             return;
+        }
+
+        // Mark the pair-resident dirty bit before any other early returns (counter
+        // events, overflow-magnitude observations). Every data-changing observation
+        // dirties the pair so that `MetricsPusher::push` knows to copy it. Reading
+        // the bit pair-resident keeps the idle scan in `push` cheap because the
+        // dirty byte sits in the pair's cache line, not the bag's.
+        if let Some(ptr) = self.external_dirty.get() {
+            // SAFETY: `connect_external_dirty` installed this pointer from
+            // `NonNull::from(&pair.dirty)` where the pair lives in an `Rc` on the
+            // heap, giving the `Cell<bool>` a stable address. The pair's `Drop`
+            // impl calls `disconnect_external_dirty` before the pair's fields are
+            // released, so we only ever observe `None` here or a pointer to a live
+            // `Cell<bool>` (validity).
+            //
+            // We construct only `&Cell<bool>` (never `&mut`), and `Cell::set` is
+            // valid through a shared reference. Multiple `&Cell<bool>` aliases to
+            // the same memory are sound by `Cell`'s type contract. `ObservationBag`
+            // is `!Send + !Sync` and is shared only via `Rc` on a single thread, so
+            // no concurrent writer exists (aliasing).
+            unsafe { ptr.as_ref() }.set(true);
         }
 
         // Crate policy is to not panic but instead to mangle data upon mathematical
