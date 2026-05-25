@@ -153,6 +153,12 @@ where
 mod tests {
     use super::*;
 
+    /// Caps iterator consumption in these tests. If `HistogramDeltas::next` ever fails to
+    /// terminate (for example, due to a mutation-testing substitution that replaces the body
+    /// with `Some(Default::default())`), bounded consumption surfaces the defect as a
+    /// length-mismatch failure instead of letting the test hang.
+    const HISTOGRAM_ITER_SAFETY_BOUND: usize = 8;
+
     #[test]
     fn event_state_count_delta_first_collection() {
         let mut state = EventState::default();
@@ -185,7 +191,10 @@ mod tests {
         let magnitudes = [10, 50, 100, Magnitude::MAX];
         let non_cumulative = [5, 12, 8, 2];
 
-        let result: Vec<_> = state.histogram_deltas(magnitudes, non_cumulative).collect();
+        let result: Vec<_> = state
+            .histogram_deltas(magnitudes, non_cumulative)
+            .take(HISTOGRAM_ITER_SAFETY_BOUND)
+            .collect();
 
         // First collection: deltas equal cumulative values.
         assert_eq!(result.len(), 4);
@@ -208,14 +217,17 @@ mod tests {
 
         // First collection.
         let non_cumulative1 = [5, 12, 8, 2];
-        state
+        let count1 = state
             .histogram_deltas(magnitudes, non_cumulative1)
-            .for_each(drop);
+            .take(HISTOGRAM_ITER_SAFETY_BOUND)
+            .count();
+        assert_eq!(count1, 4);
 
         // Second collection with more observations.
         let non_cumulative2 = [7, 15, 10, 3];
         let result: Vec<_> = state
             .histogram_deltas(magnitudes, non_cumulative2)
+            .take(HISTOGRAM_ITER_SAFETY_BOUND)
             .collect();
 
         // Cumulative: [7, 22, 32, 35].
@@ -265,7 +277,10 @@ mod tests {
         let non_cumulative1 = [5, 10, 3];
 
         // First call - initializes to 3 buckets.
-        let count1 = state.histogram_deltas(magnitudes, non_cumulative1).count();
+        let count1 = state
+            .histogram_deltas(magnitudes, non_cumulative1)
+            .take(HISTOGRAM_ITER_SAFETY_BOUND)
+            .count();
         assert_eq!(count1, 3);
         assert_eq!(state.histogram_buckets.len(), 3);
 
@@ -273,6 +288,7 @@ mod tests {
         let non_cumulative2 = [7, 12, 5];
         let result2: Vec<_> = state
             .histogram_deltas(magnitudes, non_cumulative2)
+            .take(HISTOGRAM_ITER_SAFETY_BOUND)
             .collect();
         assert_eq!(state.histogram_buckets.len(), 3);
 
@@ -292,6 +308,7 @@ mod tests {
         let non_cumulative3 = [5, 10, 3];
         state
             .histogram_deltas(magnitudes3, non_cumulative3)
+            .take(HISTOGRAM_ITER_SAFETY_BOUND)
             .for_each(drop);
 
         // Second call with 4 buckets - should panic when the iterator is consumed past the
@@ -300,6 +317,7 @@ mod tests {
         let non_cumulative4 = [5, 10, 3, 2];
         state
             .histogram_deltas(magnitudes4, non_cumulative4)
+            .take(HISTOGRAM_ITER_SAFETY_BOUND)
             .for_each(drop);
     }
 
@@ -313,6 +331,7 @@ mod tests {
         let non_cumulative3 = [5, 10, 3];
         state
             .histogram_deltas(magnitudes3, non_cumulative3)
+            .take(HISTOGRAM_ITER_SAFETY_BOUND)
             .for_each(drop);
 
         // Second call yields only 2 buckets - should panic when the source iterator
@@ -321,6 +340,7 @@ mod tests {
         let non_cumulative2 = [7, 12];
         state
             .histogram_deltas(magnitudes2, non_cumulative2)
+            .take(HISTOGRAM_ITER_SAFETY_BOUND)
             .for_each(drop);
     }
 }

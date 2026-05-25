@@ -12,6 +12,10 @@ static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
 const BUCKETS: [i64; 4] = [10, 50, 100, 500];
 
+/// Caps iterator consumption so a failure to terminate in `histogram_deltas` surfaces as a
+/// fast unit-test failure elsewhere rather than letting this test hang.
+const HISTOGRAM_ITER_SAFETY_BOUND: usize = 8;
+
 #[test]
 #[cfg_attr(
     miri,
@@ -27,6 +31,7 @@ fn histogram_deltas_does_not_allocate_on_steady_state() {
     // First call initializes the bucket storage (this allocates).
     state
         .histogram_deltas(BUCKETS, [5_u64, 12, 8, 3])
+        .take(HISTOGRAM_ITER_SAFETY_BOUND)
         .for_each(drop);
 
     // Subsequent calls must perform no allocations.
@@ -36,6 +41,7 @@ fn histogram_deltas_does_not_allocate_on_steady_state() {
         for _ in 0..iterations {
             state
                 .histogram_deltas(BUCKETS, [7_u64, 9, 11, 4])
+                .take(HISTOGRAM_ITER_SAFETY_BOUND)
                 .for_each(drop);
         }
     }
