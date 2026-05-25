@@ -131,7 +131,7 @@ impl BlindPool {
 
         let core = self.core.lock().expect(NEVER_POISONED);
 
-        core.get(&key)
+        core.get(key)
             .map(|pool| pool.capacity())
             .unwrap_or_default()
     }
@@ -278,7 +278,7 @@ fn ensure_inner_pool<'a, T: Send + 'static>(
     let layout = Layout::new::<T>();
     let key = LayoutKey::new(layout);
 
-    core.entry(key).or_insert_with(|| {
+    core.get_or_insert_with(key, || {
         // SAFETY: We always require `T: Send`.
         unsafe { RawOpaquePoolThreadSafe::new(RawOpaquePool::with_layout(layout)) }
     })

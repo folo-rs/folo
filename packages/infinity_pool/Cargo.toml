@@ -20,6 +20,7 @@ default = []
 new_zealand = { workspace = true }
 num-integer = { workspace = true }
 pastey = { workspace = true }
+smallvec = { workspace = true }
 
 [dev-dependencies]
 alloc_tracker = { path = "../alloc_tracker" }

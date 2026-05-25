@@ -17,7 +17,12 @@
 //! and untyped pools, and against `Arc::pin` and `Box::pin` baselines:
 //!
 //! * `local_pinned_pool_insert_into_10k` — single-threaded path.
-//! * `blind_pool_insert_into_10k` — untyped path.
+//! * `blind_pool_insert_into_10k` — untyped path (single layout).
+//! * `blind_pool_insert_into_10k_n5_layouts` — dispatch over 5 distinct layouts.
+//! * `blind_pool_insert_into_10k_n8_layouts` — dispatch over 8 distinct layouts.
+//! * `blind_pool_insert_into_10k_n16_layouts` — dispatch over 16 layouts (heap spill).
+//! * `blind_pool_insert_into_10k_n8_layouts_adversarial` — measured key is *not* the
+//!   most-recently used; exercises the worst-case linear-scan path.
 //! * `arc_pin_baseline_insert` — `Arc::pin` for comparison.
 //! * `box_pin_baseline_insert` — `Box::pin` for comparison.
 //!
@@ -108,6 +113,91 @@ mod linux {
         BlindPoolState { pool, anchors }
     }
 
+    // Populates the dispatch with N - 1 extra inner pools by inserting and immediately
+    // dropping one item of each anchor type. The inner `RawOpaquePool` instances remain
+    // in the dispatch even after all items are removed, so the measured `pool.insert::<u64>`
+    // call must traverse a dispatch with N distinct `LayoutKey` entries.
+    //
+    // The 10k u64 anchor inserts that follow ensure u64 is the most-recently-used entry
+    // in the dispatch — the typical pattern in real `BlindPool` workloads where one or
+    // two layouts dominate. This is the scenario the move-to-front linear scan is
+    // designed to make cheap.
+    fn make_populated_blind_pool_n5_layouts() -> BlindPoolState {
+        let pool = BlindPool::new();
+        // 4 extra layouts so the dispatch holds 5 entries once u64 is added.
+        drop(pool.insert::<u8>(0));
+        drop(pool.insert::<u16>(0));
+        drop(pool.insert::<u32>(0));
+        drop(pool.insert::<u128>(0));
+        let anchors: Vec<BlindPooledMut<u64>> =
+            (0..ANCHOR_COUNT).map(|i| pool.insert::<u64>(i)).collect();
+        BlindPoolState { pool, anchors }
+    }
+
+    fn make_populated_blind_pool_n8_layouts() -> BlindPoolState {
+        let pool = BlindPool::new();
+        // 7 extra layouts so the dispatch holds 8 entries once u64 is added.
+        drop(pool.insert::<u8>(0));
+        drop(pool.insert::<u16>(0));
+        drop(pool.insert::<u32>(0));
+        drop(pool.insert::<u128>(0));
+        drop(pool.insert::<[u8; 3]>([0; 3]));
+        drop(pool.insert::<[u8; 5]>([0; 5]));
+        drop(pool.insert::<[u8; 6]>([0; 6]));
+        let anchors: Vec<BlindPooledMut<u64>> =
+            (0..ANCHOR_COUNT).map(|i| pool.insert::<u64>(i)).collect();
+        BlindPoolState { pool, anchors }
+    }
+
+    fn make_populated_blind_pool_n16_layouts() -> BlindPoolState {
+        let pool = BlindPool::new();
+        // 15 extra layouts via varied byte-array sizes (size N, align 1) plus u128 so the
+        // dispatch holds 16 entries once u64 is added. This exceeds the inline capacity
+        // of the dispatch and forces heap spillover.
+        drop(pool.insert::<[u8; 1]>([0; 1]));
+        drop(pool.insert::<[u8; 2]>([0; 2]));
+        drop(pool.insert::<[u8; 3]>([0; 3]));
+        drop(pool.insert::<[u8; 4]>([0; 4]));
+        drop(pool.insert::<[u8; 5]>([0; 5]));
+        drop(pool.insert::<[u8; 6]>([0; 6]));
+        drop(pool.insert::<[u8; 7]>([0; 7]));
+        drop(pool.insert::<[u8; 9]>([0; 9]));
+        drop(pool.insert::<[u8; 10]>([0; 10]));
+        drop(pool.insert::<[u8; 11]>([0; 11]));
+        drop(pool.insert::<[u8; 12]>([0; 12]));
+        drop(pool.insert::<[u8; 13]>([0; 13]));
+        drop(pool.insert::<[u8; 14]>([0; 14]));
+        drop(pool.insert::<[u8; 15]>([0; 15]));
+        drop(pool.insert::<u128>(0));
+        let anchors: Vec<BlindPooledMut<u64>> =
+            (0..ANCHOR_COUNT).map(|i| pool.insert::<u64>(i)).collect();
+        BlindPoolState { pool, anchors }
+    }
+
+    // Adversarial setup for the dispatch: builds an 8-entry dispatch where the measured
+    // key (u64) is *not* the most-recently used. The dispatch internally maintains
+    // most-recently-used order, so an insert here cannot benefit from the front fast
+    // path and must walk through the other entries before finding u64.
+    //
+    // This complements the locality-friendly `make_populated_blind_pool_n8_layouts`
+    // helper and quantifies the worst-case scan cost.
+    fn make_adversarial_blind_pool_n8_layouts() -> BlindPoolState {
+        let pool = BlindPool::new();
+        // u64 first so it is initially in the dispatch with anchor items, then 7 extras
+        // inserted afterward — each pushes u64 further back in MRU order. Final MRU
+        // order: [u128, [u8; 6], [u8; 5], [u8; 3], u32, u16, u8, u64].
+        let anchors: Vec<BlindPooledMut<u64>> =
+            (0..ANCHOR_COUNT).map(|i| pool.insert::<u64>(i)).collect();
+        drop(pool.insert::<u8>(0));
+        drop(pool.insert::<u16>(0));
+        drop(pool.insert::<u32>(0));
+        drop(pool.insert::<[u8; 3]>([0; 3]));
+        drop(pool.insert::<[u8; 5]>([0; 5]));
+        drop(pool.insert::<[u8; 6]>([0; 6]));
+        drop(pool.insert::<u128>(0));
+        BlindPoolState { pool, anchors }
+    }
+
     // State for the drop benchmark: a populated pool plus a freshly-inserted
     // extra handle that the bench drops. The pool keeps its 10k anchors so
     // the drop only frees one slot in a fully-populated slab.
@@ -165,6 +255,42 @@ mod linux {
         (state, handle)
     }
 
+    #[library_benchmark]
+    #[bench::populated(make_populated_blind_pool_n5_layouts())]
+    fn blind_pool_insert_into_10k_n5_layouts(
+        state: BlindPoolState,
+    ) -> (BlindPoolState, BlindPooledMut<u64>) {
+        let handle = black_box(&state.pool).insert::<u64>(black_box(ANCHOR_COUNT));
+        (state, handle)
+    }
+
+    #[library_benchmark]
+    #[bench::populated(make_populated_blind_pool_n8_layouts())]
+    fn blind_pool_insert_into_10k_n8_layouts(
+        state: BlindPoolState,
+    ) -> (BlindPoolState, BlindPooledMut<u64>) {
+        let handle = black_box(&state.pool).insert::<u64>(black_box(ANCHOR_COUNT));
+        (state, handle)
+    }
+
+    #[library_benchmark]
+    #[bench::populated(make_populated_blind_pool_n16_layouts())]
+    fn blind_pool_insert_into_10k_n16_layouts(
+        state: BlindPoolState,
+    ) -> (BlindPoolState, BlindPooledMut<u64>) {
+        let handle = black_box(&state.pool).insert::<u64>(black_box(ANCHOR_COUNT));
+        (state, handle)
+    }
+
+    #[library_benchmark]
+    #[bench::populated(make_adversarial_blind_pool_n8_layouts())]
+    fn blind_pool_insert_into_10k_n8_layouts_adversarial(
+        state: BlindPoolState,
+    ) -> (BlindPoolState, BlindPooledMut<u64>) {
+        let handle = black_box(&state.pool).insert::<u64>(black_box(ANCHOR_COUNT));
+        (state, handle)
+    }
+
     // ---------- Drop path ----------
 
     #[library_benchmark]
@@ -210,6 +336,10 @@ mod linux {
             pinned_pool_insert_into_10k,
             local_pinned_pool_insert_into_10k,
             blind_pool_insert_into_10k,
+            blind_pool_insert_into_10k_n5_layouts,
+            blind_pool_insert_into_10k_n8_layouts,
+            blind_pool_insert_into_10k_n16_layouts,
+            blind_pool_insert_into_10k_n8_layouts_adversarial,
             arc_pin_baseline_insert,
             box_pin_baseline_insert,
         ]

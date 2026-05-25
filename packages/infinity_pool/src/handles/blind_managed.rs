@@ -200,7 +200,7 @@ impl Drop for Remover {
         let mut core = self.core.lock().expect(NEVER_POISONED);
 
         let pool = core
-            .get_mut(&self.key)
+            .get_mut(self.key)
             .expect("if the handle still exists, the inner pool must still exist");
 
         // SAFETY: The remover controls the shared object lifetime and is the only thing

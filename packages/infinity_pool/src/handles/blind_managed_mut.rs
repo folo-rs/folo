@@ -183,7 +183,7 @@ where
         let mut core = core.lock().expect(NEVER_POISONED);
 
         let pool = core
-            .get_mut(&key)
+            .get_mut(key)
             .expect("if the handle still exists, the inner pool must still exist");
 
         // SAFETY: We are a managed unique handle, so we are the only one who is allowed to remove
@@ -283,7 +283,7 @@ impl<T: ?Sized> Drop for BlindPooledMut<T> {
         let mut core = self.core.lock().expect(NEVER_POISONED);
 
         let pool = core
-            .get_mut(&self.key)
+            .get_mut(self.key)
             .expect("if the handle still exists, the inner pool must still exist");
 
         // SAFETY: We are a managed unique handle, so we are the only one who is allowed to remove

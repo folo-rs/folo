@@ -193,7 +193,7 @@ where
         let mut core = RefCell::borrow_mut(&core);
 
         let pool = core
-            .get_mut(&key)
+            .get_mut(key)
             .expect("if the handle still exists, the inner pool must still exist");
 
         // SAFETY: We are a managed unique handle, so we are the only one who is allowed to remove
@@ -293,7 +293,7 @@ impl<T: ?Sized> Drop for LocalBlindPooledMut<T> {
         let mut core = RefCell::borrow_mut(&self.core);
 
         let pool = core
-            .get_mut(&self.key)
+            .get_mut(self.key)
             .expect("if the handle still exists, the inner pool must still exist");
 
         // SAFETY: We are a managed unique handle, so we are the only one who is allowed to remove

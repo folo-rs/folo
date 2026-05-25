@@ -197,7 +197,7 @@ impl Drop for Remover {
         let mut core = RefCell::borrow_mut(&self.core);
 
         let pool = core
-            .get_mut(&self.key)
+            .get_mut(self.key)
             .expect("if the handle still exists, the inner pool must still exist");
 
         // SAFETY: The remover controls the shared object lifetime and is the only thing

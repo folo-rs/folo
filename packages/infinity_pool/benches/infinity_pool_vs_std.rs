@@ -503,6 +503,45 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
         });
     });
 
+    // BlindPool variants where the dispatch holds extra distinct layouts so the per-insert
+    // dispatch traversal touches more entries. The churn pattern still operates on u64
+    // values; the extra layouts only populate the dispatch and exercise the lookup path.
+    // These pair 1:1 with the Callgrind scenarios `blind_pool_insert_into_10k_n{5,8,16}_layouts`.
+    blind_pool_churn_with_extra_layouts(&mut group, &allocs, "BlindPool_5layouts", |pool| {
+        drop(pool.insert::<u8>(0));
+        drop(pool.insert::<u16>(0));
+        drop(pool.insert::<u32>(0));
+        drop(pool.insert::<u128>(0));
+    });
+
+    blind_pool_churn_with_extra_layouts(&mut group, &allocs, "BlindPool_8layouts", |pool| {
+        drop(pool.insert::<u8>(0));
+        drop(pool.insert::<u16>(0));
+        drop(pool.insert::<u32>(0));
+        drop(pool.insert::<u128>(0));
+        drop(pool.insert::<[u8; 3]>([0; 3]));
+        drop(pool.insert::<[u8; 5]>([0; 5]));
+        drop(pool.insert::<[u8; 6]>([0; 6]));
+    });
+
+    blind_pool_churn_with_extra_layouts(&mut group, &allocs, "BlindPool_16layouts", |pool| {
+        drop(pool.insert::<[u8; 1]>([0; 1]));
+        drop(pool.insert::<[u8; 2]>([0; 2]));
+        drop(pool.insert::<[u8; 3]>([0; 3]));
+        drop(pool.insert::<[u8; 4]>([0; 4]));
+        drop(pool.insert::<[u8; 5]>([0; 5]));
+        drop(pool.insert::<[u8; 6]>([0; 6]));
+        drop(pool.insert::<[u8; 7]>([0; 7]));
+        drop(pool.insert::<[u8; 9]>([0; 9]));
+        drop(pool.insert::<[u8; 10]>([0; 10]));
+        drop(pool.insert::<[u8; 11]>([0; 11]));
+        drop(pool.insert::<[u8; 12]>([0; 12]));
+        drop(pool.insert::<[u8; 13]>([0; 13]));
+        drop(pool.insert::<[u8; 14]>([0; 14]));
+        drop(pool.insert::<[u8; 15]>([0; 15]));
+        drop(pool.insert::<u128>(0));
+    });
+
     // LocalBlindPool (single-threaded, reference counted, multiple types) with churn
     let allocs_op = allocs.operation("LocalBlindPool");
     group.bench_function("LocalBlindPool", |b| {
@@ -599,6 +638,60 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
     group.finish();
 
     allocs.print_to_stdout();
+}
+
+// Drives the BlindPool churn measurement for a pool that has been pre-populated with extra
+// inner pools via `extra_layouts`. The inner pools persist in the dispatch even after the
+// inserted handles drop, so the measured churn exercises a dispatch with N distinct
+// `LayoutKey` entries (where N = 1 + number of extra layouts added by the closure).
+fn blind_pool_churn_with_extra_layouts<F>(
+    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
+    allocs: &alloc_tracker::Session,
+    label: &'static str,
+    extra_layouts: F,
+) where
+    F: Fn(&BlindPool),
+{
+    let allocs_op = allocs.operation(label);
+    group.bench_function(label, |b| {
+        b.iter_custom(|iters| {
+            let mut all_pools = Vec::with_capacity(iters as usize);
+            let mut all_handles = Vec::with_capacity(iters as usize);
+
+            for _ in 0..iters {
+                let pool = BlindPool::new();
+                extra_layouts(&pool);
+                all_pools.push(pool);
+                all_handles.push(Vec::with_capacity((INITIAL_ITEMS + BATCH_SIZE) as usize));
+            }
+
+            for (pool, handles) in all_pools.iter_mut().zip(all_handles.iter_mut()) {
+                for i in 0..INITIAL_ITEMS {
+                    handles.push(pool.insert(i));
+                }
+            }
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for (pool, handles) in all_pools.iter_mut().zip(all_handles.iter_mut()) {
+                let mut rng = SmallRng::seed_from_u64(42);
+                let mut next_value = INITIAL_ITEMS;
+
+                for _ in 0..BATCH_COUNT {
+                    for _ in 0..BATCH_SIZE {
+                        handles.push(pool.insert(next_value));
+                        next_value = next_value.wrapping_add(1);
+                    }
+
+                    for _ in 0..BATCH_SIZE {
+                        let target_index = rng.random_range(0..handles.len());
+                        handles.swap_remove(target_index);
+                    }
+                }
+            }
+            start.elapsed()
+        });
+    });
 }
 
 criterion_group!(benches, churn_insertion_benchmark);

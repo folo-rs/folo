@@ -285,7 +285,7 @@ impl RawBlindPool {
     fn inner_pool_of<T>(&self) -> Option<&RawOpaquePool> {
         let key = LayoutKey::with_layout_of::<T>();
 
-        self.pools.get(&key)
+        self.pools.get(key)
     }
 
     fn inner_pool_of_mut<T>(&mut self) -> &mut RawOpaquePool {
@@ -296,16 +296,18 @@ impl RawBlindPool {
     }
 
     fn inner_pool_mut(&mut self, layout: Layout, key: LayoutKey) -> &mut RawOpaquePool {
-        self.pools.entry(key).or_insert_with(|| {
+        let drop_policy = self.drop_policy;
+
+        self.pools.get_or_insert_with(key, || {
             RawOpaquePool::builder()
-                .drop_policy(self.drop_policy)
+                .drop_policy(drop_policy)
                 .layout(layout)
                 .build()
         })
     }
 
     fn try_inner_pool_mut(&mut self, key: LayoutKey) -> Option<&mut RawOpaquePool> {
-        self.pools.get_mut(&key)
+        self.pools.get_mut(key)
     }
 }
 

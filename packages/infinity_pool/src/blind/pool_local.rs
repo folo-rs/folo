@@ -137,7 +137,7 @@ impl LocalBlindPool {
 
         let core = self.core.borrow();
 
-        core.get(&key)
+        core.get(key)
             .map(RawOpaquePool::capacity)
             .unwrap_or_default()
     }
@@ -267,9 +267,7 @@ fn ensure_inner_pool<'a, T: 'static>(
     let layout = Layout::new::<T>();
     let key = LayoutKey::new(layout);
 
-    pools
-        .entry(key)
-        .or_insert_with(|| RawOpaquePool::with_layout(layout))
+    pools.get_or_insert_with(key, || RawOpaquePool::with_layout(layout))
 }
 
 #[cfg(test)]
