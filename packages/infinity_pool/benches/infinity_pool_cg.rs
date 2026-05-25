@@ -129,8 +129,10 @@ mod linux {
 
     // State for the `blind_pool_insert_with_5_layouts` bench. The pool holds
     // anchors for five distinct layouts so the dispatch path performs a
-    // multi-key lookup. Layouts are chosen with prime-ish sizes that do not
-    // share alignment classes to ensure each is a distinct `LayoutKey`.
+    // multi-key lookup. The five wrapper types below have sizes 1, 2, 4, 8,
+    // and 24 bytes respectively, giving distinct `LayoutKey`s (which are
+    // derived from `(size, align)`); distinct sizes alone are sufficient
+    // here.
     struct BlindPoolFiveLayoutsState {
         pool: BlindPool,
         #[expect(
@@ -183,9 +185,10 @@ mod linux {
         BlindPoolFiveLayoutsState { pool, anchors }
     }
 
-    // State for the sparse-iteration bench: 10 000-slot capacity with only
-    // 1250 occupied (every 8th). Exposes the cost the iterator pays for
-    // scanning past empty slots.
+    // State for the sparse-iteration bench: insert ANCHOR_COUNT (10 000)
+    // items, then drop 7 out of every 8, leaving 1 250 surviving handles
+    // scattered across the slabs allocated for the 10 000 inserts.
+    // Exposes the cost the iterator pays for scanning past empty slots.
     struct SparsePinnedPoolState {
         pool: PinnedPool<u64>,
         #[expect(
@@ -198,7 +201,8 @@ mod linux {
     fn make_sparse_pinned_pool() -> SparsePinnedPoolState {
         let pool = PinnedPool::<u64>::new();
         let all: Vec<PooledMut<u64>> = (0..ANCHOR_COUNT).map(|i| pool.insert(i)).collect();
-        // Keep every 8th, drop the rest, leaving 1250 occupied slots in a 10 000-slot capacity.
+        // Keep every 8th, drop the rest, leaving 1250 surviving handles
+        // scattered across the slabs allocated for the 10 000 inserts.
         let mut anchors: Vec<PooledMut<u64>> = Vec::with_capacity(1250);
         for (idx, handle) in all.into_iter().enumerate() {
             if idx.is_multiple_of(8) {
@@ -378,8 +382,9 @@ mod linux {
     #[library_benchmark]
     #[bench::sparse(make_sparse_pinned_pool())]
     fn pinned_pool_iter_sparse_10k(state: SparsePinnedPoolState) -> SparsePinnedPoolState {
-        // Sparse iteration: 1250 occupied slots out of 10 000-slot capacity.
-        // Exposes the per-empty-slot scan cost.
+        // Sparse iteration: 1250 surviving handles scattered across the
+        // slabs allocated for the 10 000 inserts. Exposes the per-empty-slot
+        // scan cost.
         state.pool.with_iter(|iter| {
             for ptr in iter {
                 _ = black_box(ptr);
