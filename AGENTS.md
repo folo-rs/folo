@@ -774,6 +774,16 @@ and verified via `just package=<name> miri-harder`, which runs Miri with many ra
 highly effective at detecting data races, incorrect memory orderings, and other concurrency bugs
 that are nearly impossible to catch with single-threaded tests alone.
 
+# parking_lot is forbidden — use std::sync primitives
+
+Do not use `parking_lot::Mutex`, `parking_lot::RwLock`, or other primitives from the `parking_lot`
+crate. They rely on OS-specific syscalls that Miri cannot model, so introducing them breaks our
+Miri-based correctness validation. Use `std::sync::Mutex`, `std::sync::RwLock`, and other
+std-provided synchronization primitives instead — these are Miri-compatible.
+
+This rule applies even when `parking_lot` would offer a measurable performance benefit: Miri
+coverage is more valuable than the fast-path savings.
+
 # Mutation testing coverage and skipping mutations
 
 We expect all mutations to either be unviable or to be caught. Uncaught mutations and mutants that
