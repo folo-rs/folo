@@ -1133,14 +1133,20 @@ dependencies = [
 name = "nm_otel"
 version = "0.4.1"
 dependencies = [
+ "alloc_tracker",
+ "criterion",
  "foldhash 0.2.0",
  "futures",
  "hashbrown 0.15.5",
+ "many_cpus",
  "mutants",
+ "new_zealand",
  "nm",
+ "nm_otel",
  "opentelemetry",
  "opentelemetry-stdout",
  "opentelemetry_sdk",
+ "par_bench",
  "static_assertions",
  "tick",
  "tokio",

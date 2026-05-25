@@ -78,6 +78,12 @@ types, we re-export them all at the parent, so while we have modules like
 constants, helper functions, or other items in these files — move them to dedicated files (e.g.
 `constants.rs`) for better filesystem organization.
 
+Inline `mod` blocks defined directly in `lib.rs` / `mod.rs` count as "re-exports" for the purpose
+of this rule as long as they only re-export items from other modules (no logic, no constants, no
+new type definitions). This is common for `#[doc(hidden)] pub mod __private { pub use ...; }` or
+similar grouping modules whose sole purpose is to gather and re-expose existing items under a
+distinct namespace.
+
 # Scripting
 
 You can assume PowerShell 7 (`pwsh`) is available on every operating system and environment.
@@ -555,6 +561,31 @@ Watchdogs are automatically disabled during mutation testing (`MUTATION_TESTING=
 variable). A mutation that causes a test to hang should be fixed by either redesigning the test
 to catch the mutation without blocking (e.g. adding `debug_assert!` checks) or by skipping the
 mutation if it is impractical to catch.
+
+# Threshold-based mutation protections are an anti-pattern
+
+When a mutation could make a test hang (for example, a mutation that turns an iterator's
+`next()` into an infinite source), it is tempting to add a `.take(N)` "safety bound" or a
+similar magic constant that caps consumption so the test cannot hang. Do not do this.
+Such thresholds are fragile in the same way time-based delays are fragile: they are easy
+to miss when tests evolve, and there is no principled way to verify that the chosen value
+is the "right" threshold for every future test scenario. The anti-pattern applies even
+when the threshold is numeric rather than time-based.
+
+Legitimate alternatives, in order of preference:
+
+1. **Meaningful-iteration assertion.** Rewrite the test so it asserts on the actual
+   produced values rather than just consuming them. Tools that naturally bound consumption
+   while verifying values are ideal — for example, `Iterator::eq(expected_array)` calls
+   `self.next()` at most `expected.len() + 1` times, returns `false` on the first value
+   mismatch, and detects both wrong values and wrong length. A correct implementation
+   matches the expected array; a mutation that yields wrong values or runs forever
+   short-circuits on the first comparison. The bound is implicit in the scenario data
+   (the expected length), not a hand-tuned safety margin.
+
+2. **Skip the mutation** with `#[cfg_attr(test, mutants::skip)]` and a comment explaining
+   why catching it is impractical (see the "Mutation testing coverage and skipping
+   mutations" section below for the criteria).
 
 # Named constants
 
