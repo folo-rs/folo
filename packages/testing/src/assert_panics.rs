@@ -13,6 +13,12 @@ use std::panic::{self, AssertUnwindSafe};
 /// Use [`assert_panics_with`] when the test needs to inspect the panic
 /// message (e.g. to check a canary substring).
 ///
+/// The default panic hook still runs before the panic is caught, so the
+/// expected panic's message and backtrace are printed to stderr during the
+/// test run. This is intentional — silencing the hook would also hide
+/// genuinely unexpected panics from elsewhere in the test. Treat the stderr
+/// output as expected noise for tests that exercise panicking code paths.
+///
 /// # Panics
 ///
 /// Panics if the closure does not panic.
@@ -55,6 +61,10 @@ where
 /// inspector receives an empty string. Standard `panic!()` invocations
 /// always produce one of these payload types.
 ///
+/// The default panic hook still runs before the panic is caught, so the
+/// expected panic's message and backtrace are printed to stderr during the
+/// test run. See [`assert_panics`] for the rationale.
+///
 /// # Panics
 ///
 /// Panics if the closure does not panic.
@@ -82,17 +92,16 @@ where
         panic!("closure did not panic as expected");
     };
 
-    let message = extract_panic_message(&*payload);
-    inspector(&message);
+    inspector(extract_panic_message(&*payload));
 }
 
-fn extract_panic_message(payload: &(dyn Any + Send)) -> String {
+fn extract_panic_message(payload: &(dyn Any + Send)) -> &str {
     if let Some(s) = payload.downcast_ref::<&'static str>() {
-        (*s).to_owned()
+        s
     } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
+        s.as_str()
     } else {
-        String::new()
+        ""
     }
 }
 
