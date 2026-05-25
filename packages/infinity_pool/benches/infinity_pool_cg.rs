@@ -73,7 +73,6 @@ mod linux {
     use gungraun::prelude::*;
     use infinity_pool::{
         BlindPool, BlindPooledMut, LocalPinnedPool, PinnedPool, PooledMut, RawPinnedPool,
-        RawPooledMut,
     };
 
     // Anchor count used to populate pools before the measured operation —
@@ -218,50 +217,31 @@ mod linux {
         SparsePinnedPoolState { pool, anchors }
     }
 
-    // State for the bulk-slab-drop bench with a payload that does NOT need drop.
-    // Uses the raw pool so handle drops are no-ops; only the slab's per-slot scan
-    // contributes to the measurement.
-    struct RawPinnedPoolU64BulkState {
-        #[expect(
-            dead_code,
-            reason = "pool owns the slabs that the drop measurement releases; the field's `Drop` is the cleanup contract"
-        )]
-        pool: RawPinnedPool<u64>,
-        #[expect(
-            dead_code,
-            reason = "handles keep nothing alive (RawPooledMut has no Drop); they exist only to populate the pool"
-        )]
-        handles: Vec<RawPooledMut<u64>>,
-    }
-
-    fn make_raw_pinned_pool_u64_bulk() -> RawPinnedPoolU64BulkState {
+    // Bulk-slab-drop bench with a payload that does NOT need drop.
+    // The `RawPooledMut` handles produced by `insert` are intentionally
+    // discarded inside setup (excluded from timing): `RawPooledMut` has
+    // no `Drop` and does not keep slots alive, so this leaves the pool
+    // fully populated while keeping the timed routine free of any
+    // unrelated `Vec<RawPooledMut<_>>` deallocation cost.
+    fn make_raw_pinned_pool_u64_bulk() -> RawPinnedPool<u64> {
         let mut pool = RawPinnedPool::<u64>::new();
-        let handles: Vec<RawPooledMut<u64>> = (0..ANCHOR_COUNT).map(|i| pool.insert(i)).collect();
-        RawPinnedPoolU64BulkState { pool, handles }
+        for i in 0..ANCHOR_COUNT {
+            _ = pool.insert(i);
+        }
+        pool
     }
 
-    // State for the bulk-slab-drop bench with a payload that DOES need drop.
-    // Each `String` carries an owned heap allocation that must be freed via
-    // the per-slot type-erased dropper invocation.
-    struct RawPinnedPoolStringBulkState {
-        #[expect(
-            dead_code,
-            reason = "pool owns the slabs that the drop measurement releases; the field's `Drop` is the cleanup contract"
-        )]
-        pool: RawPinnedPool<String>,
-        #[expect(
-            dead_code,
-            reason = "handles keep nothing alive (RawPooledMut has no Drop); they exist only to populate the pool"
-        )]
-        handles: Vec<RawPooledMut<String>>,
-    }
-
-    fn make_raw_pinned_pool_string_bulk() -> RawPinnedPoolStringBulkState {
+    // Bulk-slab-drop bench with a payload that DOES need drop.
+    // Each `String` carries an owned heap allocation that must be freed
+    // via the per-slot type-erased dropper invocation. As for the u64
+    // counterpart above, the handles are discarded inside setup so the
+    // measurement focuses on the pool drop path.
+    fn make_raw_pinned_pool_string_bulk() -> RawPinnedPool<String> {
         let mut pool = RawPinnedPool::<String>::new();
-        let handles: Vec<RawPooledMut<String>> = (0..ANCHOR_COUNT)
-            .map(|i| pool.insert(format!("item-{i}")))
-            .collect();
-        RawPinnedPoolStringBulkState { pool, handles }
+        for i in 0..ANCHOR_COUNT {
+            _ = pool.insert(format!("item-{i}"));
+        }
+        pool
     }
 
     // State for the drop benchmark: a populated pool plus a freshly-inserted
@@ -350,22 +330,22 @@ mod linux {
 
     #[library_benchmark]
     #[bench::u64_no_drop(make_raw_pinned_pool_u64_bulk())]
-    fn raw_pinned_pool_drop_full_with_10k_u64(state: RawPinnedPoolU64BulkState) {
-        // Drops handles (no-op) then the pool. Isolates the slab's per-slot
-        // drop-scan cost for a payload that does not need drop — the per-slot
+    fn raw_pinned_pool_drop_full_with_10k_u64(pool: RawPinnedPool<u64>) {
+        // Drops the pool. Isolates the slab's per-slot drop-scan cost for
+        // a payload that does not need drop — the per-slot
         // `drop_in_place::<u64>` is a no-op the compiler elides, but the
         // dropper indirection (`SlotMeta::drop` -> `Dropper::drop` -> fn-ptr)
         // and the per-slot `catch_unwind` setup both run regardless.
-        drop(black_box(state));
+        drop(black_box(pool));
     }
 
     #[library_benchmark]
     #[bench::string_with_drop(make_raw_pinned_pool_string_bulk())]
-    fn raw_pinned_pool_drop_full_with_10k_string(state: RawPinnedPoolStringBulkState) {
-        // Drops handles (no-op) then the pool. Each slot's `String` allocation
-        // is freed via the per-slot type-erased dropper invocation, on top of
-        // the same per-slot scan and `catch_unwind` setup.
-        drop(black_box(state));
+    fn raw_pinned_pool_drop_full_with_10k_string(pool: RawPinnedPool<String>) {
+        // Drops the pool. Each slot's `String` allocation is freed via the
+        // per-slot type-erased dropper invocation, on top of the same
+        // per-slot scan and `catch_unwind` setup.
+        drop(black_box(pool));
     }
 
     // ---------- Iteration path ----------

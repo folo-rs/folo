@@ -28,9 +28,7 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use infinity_pool::{
-    BlindPool, BlindPooledMut, PinnedPool, PooledMut, RawPinnedPool, RawPooledMut,
-};
+use infinity_pool::{BlindPool, BlindPooledMut, PinnedPool, PooledMut, RawPinnedPool};
 
 /// Anchor count used to populate pools before the measured operation —
 /// matches `ANCHOR_COUNT` in `infinity_pool_cg.rs` so wall-clock and
@@ -100,8 +98,7 @@ fn blind_insert_with_5_layouts(c: &mut Criterion) {
         b.iter_batched(
             make_blind_pool_with_5_layouts,
             |(pool, anchors)| {
-                let handle: BlindPooledMut<u64> =
-                    black_box(&pool).insert::<u64>(black_box(42_u64));
+                let handle: BlindPooledMut<u64> = black_box(&pool).insert::<u64>(black_box(42_u64));
                 (pool, anchors, handle)
             },
             BatchSize::SmallInput,
@@ -123,7 +120,7 @@ fn raw_drop_full_u64(c: &mut Criterion) {
     group.bench_function("raw_drop_full_u64", |b| {
         b.iter_batched(
             make_raw_pinned_pool_u64_bulk,
-            |state| drop(black_box(state)),
+            |pool| drop(black_box(pool)),
             BatchSize::LargeInput,
         );
     });
@@ -143,7 +140,7 @@ fn raw_drop_full_string(c: &mut Criterion) {
     group.bench_function("raw_drop_full_string", |b| {
         b.iter_batched(
             make_raw_pinned_pool_string_bulk,
-            |state| drop(black_box(state)),
+            |pool| drop(black_box(pool)),
             BatchSize::LargeInput,
         );
     });
@@ -256,18 +253,20 @@ fn make_blind_pool_with_5_layouts() -> (BlindPool, Vec<Box<dyn std::any::Any>>) 
     (pool, anchors)
 }
 
-fn make_raw_pinned_pool_u64_bulk() -> (RawPinnedPool<u64>, Vec<RawPooledMut<u64>>) {
+fn make_raw_pinned_pool_u64_bulk() -> RawPinnedPool<u64> {
     let mut pool = RawPinnedPool::<u64>::new();
-    let handles: Vec<RawPooledMut<u64>> = (0..ANCHOR_COUNT).map(|i| pool.insert(i)).collect();
-    (pool, handles)
+    for i in 0..ANCHOR_COUNT {
+        _ = pool.insert(i);
+    }
+    pool
 }
 
-fn make_raw_pinned_pool_string_bulk() -> (RawPinnedPool<String>, Vec<RawPooledMut<String>>) {
+fn make_raw_pinned_pool_string_bulk() -> RawPinnedPool<String> {
     let mut pool = RawPinnedPool::<String>::new();
-    let handles: Vec<RawPooledMut<String>> = (0..ANCHOR_COUNT)
-        .map(|i| pool.insert(format!("item-{i}")))
-        .collect();
-    (pool, handles)
+    for i in 0..ANCHOR_COUNT {
+        _ = pool.insert(format!("item-{i}"));
+    }
+    pool
 }
 
 fn make_sparse_pinned_pool() -> (PinnedPool<u64>, Vec<PooledMut<u64>>) {
