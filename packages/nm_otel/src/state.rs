@@ -1,6 +1,10 @@
 //! State tracking for delta computation between collections.
 
-use foldhash::HashMap;
+use std::hash::BuildHasher;
+
+use foldhash::fast::RandomState;
+use hashbrown::HashTable;
+use hashbrown::hash_table::Entry;
 use nm::{EventName, Magnitude};
 
 /// Tracks the previous state of nm metrics for delta computation.
@@ -9,21 +13,54 @@ use nm::{EventName, Magnitude};
 /// delta computation for OpenTelemetry. Gauge-type metrics (sum) are set directly.
 #[derive(Debug, Default)]
 pub(crate) struct CollectionState {
+    // We use `hashbrown::HashTable` (not `HashMap`) so the `entry(hash, eq, hasher)` API can
+    // avoid cloning `EventName` on cache hits. The natural `HashMap::entry(name.clone())` shape
+    // clones on every call, which is a heap allocation per export for `Cow::Owned` event names.
+    // Stable `HashMap` has no equivalent: `raw_entry_mut` is unstable, `entry_ref` needs
+    // `&Q: Into<K>` (no such impl exists for `Cow<'static, str>`), and `get_mut`-first
+    // early-return fails NLL borrow-check on rustc 1.93. Hashing is still done by
+    // `foldhash::fast::RandomState`; only the map shell changed. The hasher must be stored on
+    // the struct so the lookup-time hash and the growth-time rehash closure use the same
+    // instance and therefore produce the same hash for the same key.
+    hasher: RandomState,
+
     /// Previous state per event name.
-    events: HashMap<EventName, EventState>,
+    events: HashTable<(EventName, EventState)>,
 }
 
 impl CollectionState {
     /// Creates a new empty collection state.
     pub(crate) fn new() -> Self {
         Self {
-            events: HashMap::default(),
+            hasher: RandomState::default(),
+            events: HashTable::new(),
         }
     }
 
     /// Gets or creates the state for an event.
     pub(crate) fn event_state(&mut self, name: &EventName) -> &mut EventState {
-        self.events.entry(name.clone()).or_default()
+        let hash = self.hasher.hash_one(name);
+        let hasher = &self.hasher;
+        // The three closures fed to `entry()`:
+        // 1. `hash`            - precomputed hash of the lookup key.
+        // 2. `|...| ... == name` - tiebreaker on probed slots (collision check).
+        // 3. `|...| hash_one`  - rehash closure, called per existing entry on table growth.
+        // All three must agree on hashing; we route them through the same `RandomState`.
+        match self.events.entry(
+            hash,
+            |(existing, _)| existing == name,
+            |(existing, _)| hasher.hash_one(existing),
+        ) {
+            Entry::Occupied(occupied) => &mut occupied.into_mut().1,
+            Entry::Vacant(vacant) => {
+                // The key clone is confined to this branch — we only pay for it on a true
+                // cache miss, not on the steady-state hit path.
+                &mut vacant
+                    .insert((name.clone(), EventState::default()))
+                    .into_mut()
+                    .1
+            }
+        }
     }
 }
 
@@ -253,6 +290,35 @@ mod tests {
 
         assert_eq!(state.event_state(&"event_a".into()).count, 10);
         assert_eq!(state.event_state(&"event_b".into()).count, 20);
+    }
+
+    #[test]
+    fn collection_state_preserves_entries_across_table_growth() {
+        // The underlying `HashTable` grows when capacity is exceeded, which calls the
+        // rehash closure passed to `entry()` on every existing entry. This test inserts
+        // enough events to force multiple grows and then reads every entry back to
+        // verify the rehash closure produces hashes consistent with the lookup-time
+        // hashing — otherwise entries would land in the wrong buckets after a grow
+        // and the reads would return fresh `EventState::default()` values instead of
+        // the values we wrote.
+        const NUM_EVENTS: u64 = 64;
+
+        let mut state = CollectionState::new();
+
+        for i in 0..NUM_EVENTS {
+            // Use distinguishable non-zero values so a re-defaulted `EventState` (count = 0)
+            // would be detectable.
+            state.event_state(&format!("growth_event_{i}").into()).count =
+                i.saturating_mul(7).saturating_add(1);
+        }
+
+        for i in 0..NUM_EVENTS {
+            let expected = i.saturating_mul(7).saturating_add(1);
+            assert_eq!(
+                state.event_state(&format!("growth_event_{i}").into()).count,
+                expected,
+            );
+        }
     }
 
     #[test]

@@ -577,6 +577,26 @@ fine to leave it inline.
 Document design elements, key decisions and architectural choices in inline comments in the
 files to which they apply. Use regular `//` comments, not API documentation comments.
 
+# Justify deviations from standard patterns
+
+When you reach for a hand-rolled construct or non-standard pattern in place of the obvious
+ecosystem default — for example, `hashbrown::HashTable` instead of `std::collections::HashMap`,
+a custom intrusive container instead of `Vec`/`VecDeque`, a bespoke synchronization primitive
+instead of `std::sync`, manual `Pin`/`UnsafeCell` plumbing instead of safe wrappers, an internal
+trait re-implementation instead of using a library trait — you must explain *why* in a comment
+next to the deviation.
+
+The justification should cover:
+
+* What standard pattern the reader would expect to see here and is not seeing.
+* Which alternatives were considered and ruled out, with the concrete reason each was rejected
+  (e.g. "unstable on Rust 1.93", "fails NLL borrow-check", "trait bound `X: Y` does not hold for
+  our key type", "allocates per call").
+* What the chosen variant buys us that the standard pattern does not.
+
+Without this, the next reader will reasonably assume the deviation is accidental or unnecessary
+and try to "fix" it back to the standard pattern. The comment is what prevents that wasted cycle.
+
 # Hide async entrypoint in examples
 
 In inline code examples that use `.await`, do not render the async
