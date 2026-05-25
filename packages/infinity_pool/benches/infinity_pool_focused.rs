@@ -28,7 +28,9 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use infinity_pool::{BlindPool, PinnedPool, PooledMut, RawPinnedPool, RawPooledMut};
+use infinity_pool::{
+    BlindPool, BlindPooledMut, PinnedPool, PooledMut, RawPinnedPool, RawPooledMut,
+};
 
 /// Anchor count used to populate pools before the measured operation —
 /// matches `ANCHOR_COUNT` in `infinity_pool_cg.rs` so wall-clock and
@@ -88,16 +90,19 @@ fn deref_handle(c: &mut Criterion) {
 /// into a `BlindPool` that already holds anchors for five distinct
 /// layouts, exercising the multi-key dispatch path. Each iteration
 /// requires a fresh populated pool because insert mutates the pool;
-/// the setup is batched and excluded from timing.
+/// the setup is batched and excluded from timing. The newly inserted
+/// handle is returned alongside the pool and anchors so its drop runs
+/// after timing stops — the routine measures only the insert path.
 fn blind_insert_with_5_layouts(c: &mut Criterion) {
     let mut group = c.benchmark_group("focused");
 
     group.bench_function("blind_insert_with_5_layouts", |b| {
         b.iter_batched(
             make_blind_pool_with_5_layouts,
-            |(pool, _anchors)| {
-                drop(black_box(black_box(&pool).insert::<u64>(black_box(42_u64))));
-                pool
+            |(pool, anchors)| {
+                let handle: BlindPooledMut<u64> =
+                    black_box(&pool).insert::<u64>(black_box(42_u64));
+                (pool, anchors, handle)
             },
             BatchSize::SmallInput,
         );
@@ -109,7 +114,9 @@ fn blind_insert_with_5_layouts(c: &mut Criterion) {
 /// Pairs with `raw_pinned_pool_drop_full_with_10k_u64`. Measures the
 /// drop of a `RawPinnedPool<u64>` populated with 10 000 items. The
 /// payload does not need drop, so this isolates the slab's per-slot
-/// drop-scan and the `Dropper` indirection. Fresh state per iteration.
+/// drop-scan and the `Dropper` indirection. Fresh state per iteration;
+/// `LargeInput` keeps the batch small so peak memory stays bounded
+/// (each setup input holds ~80 KB of payload plus slab metadata).
 fn raw_drop_full_u64(c: &mut Criterion) {
     let mut group = c.benchmark_group("focused");
 
@@ -117,7 +124,7 @@ fn raw_drop_full_u64(c: &mut Criterion) {
         b.iter_batched(
             make_raw_pinned_pool_u64_bulk,
             |state| drop(black_box(state)),
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -127,7 +134,9 @@ fn raw_drop_full_u64(c: &mut Criterion) {
 /// Pairs with `raw_pinned_pool_drop_full_with_10k_string`. Measures the
 /// drop of a `RawPinnedPool<String>` populated with 10 000 items.
 /// `String` has a non-trivial `Drop`, so the per-slot dropper
-/// indirection runs and the heap allocations are freed.
+/// indirection runs and the heap allocations are freed. `LargeInput`
+/// caps the batch size so the bench does not measure under allocator
+/// pressure caused by many fully populated `String` pools coexisting.
 fn raw_drop_full_string(c: &mut Criterion) {
     let mut group = c.benchmark_group("focused");
 
@@ -135,7 +144,7 @@ fn raw_drop_full_string(c: &mut Criterion) {
         b.iter_batched(
             make_raw_pinned_pool_string_bulk,
             |state| drop(black_box(state)),
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
