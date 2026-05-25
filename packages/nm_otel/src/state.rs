@@ -217,13 +217,9 @@ impl<I> HistogramDeltas<'_, I> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use super::*;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    /// Caps iterator consumption in these tests. If `HistogramDeltas::next` ever fails to
-    /// terminate (for example, due to a mutation-testing substitution that replaces the body
-    /// with `Some(Default::default())`), bounded consumption surfaces the defect as a
-    /// length-mismatch failure instead of letting the test hang.
-    const HISTOGRAM_ITER_SAFETY_BOUND: usize = 8;
+    use super::*;
 
     #[test]
     fn event_state_count_delta_first_collection() {
@@ -250,6 +246,15 @@ mod tests {
         assert_eq!(delta4, 50);
     }
 
+    // `Iterator::eq` against a finite expected array is the bounded-consumption pattern
+    // we use throughout these tests: it calls `self.next()` at most `expected.len() + 1`
+    // times and returns `false` on the first value mismatch. That makes it self-bounded
+    // for both correct code (matches all items, then one trailing `None` lookahead) and
+    // mutated code that yields the wrong values or runs forever (mismatch on the first
+    // comparison short-circuits the loop). This avoids the threshold-based "safety
+    // bound" anti-pattern of bounding consumption with a magic number divorced from the
+    // test scenario.
+
     #[test]
     fn event_state_histogram_deltas_first_collection() {
         let mut state = EventState::default();
@@ -257,21 +262,17 @@ mod tests {
         let magnitudes = [10, 50, 100, Magnitude::MAX];
         let non_cumulative = [5, 12, 8, 2];
 
-        let result: Vec<_> = state
-            .histogram_deltas(magnitudes, non_cumulative)
-            .take(HISTOGRAM_ITER_SAFETY_BOUND)
-            .collect();
-
         // First collection: deltas equal cumulative values.
-        assert_eq!(result.len(), 4);
-        assert_eq!(
-            result,
-            vec![
-                (10, 5, 5),
-                (50, 17, 17),
-                (100, 25, 25),
-                (Magnitude::MAX, 27, 27),
-            ]
+        let expected: [(Magnitude, u64, u64); 4] = [
+            (10, 5, 5),
+            (50, 17, 17),
+            (100, 25, 25),
+            (Magnitude::MAX, 27, 27),
+        ];
+        assert!(
+            state
+                .histogram_deltas(magnitudes, non_cumulative)
+                .eq(expected)
         );
 
         // First call must reserve enough capacity to hold every bucket without growth, so
@@ -288,31 +289,33 @@ mod tests {
 
         // First collection.
         let non_cumulative1 = [5, 12, 8, 2];
-        let count1 = state
-            .histogram_deltas(magnitudes, non_cumulative1)
-            .take(HISTOGRAM_ITER_SAFETY_BOUND)
-            .count();
-        assert_eq!(count1, 4);
+        let expected1: [(Magnitude, u64, u64); 4] = [
+            (10, 5, 5),
+            (50, 17, 17),
+            (100, 25, 25),
+            (Magnitude::MAX, 27, 27),
+        ];
+        assert!(
+            state
+                .histogram_deltas(magnitudes, non_cumulative1)
+                .eq(expected1)
+        );
 
         // Second collection with more observations.
-        let non_cumulative2 = [7, 15, 10, 3];
-        let result: Vec<_> = state
-            .histogram_deltas(magnitudes, non_cumulative2)
-            .take(HISTOGRAM_ITER_SAFETY_BOUND)
-            .collect();
-
         // Cumulative: [7, 22, 32, 35].
         // Previous:   [5, 17, 25, 27].
         // Deltas:     [2, 5, 7, 8].
-        assert_eq!(result.len(), 4);
-        assert_eq!(
-            result,
-            vec![
-                (10, 7, 2),
-                (50, 22, 5),
-                (100, 32, 7),
-                (Magnitude::MAX, 35, 8),
-            ]
+        let non_cumulative2 = [7, 15, 10, 3];
+        let expected2: [(Magnitude, u64, u64); 4] = [
+            (10, 7, 2),
+            (50, 22, 5),
+            (100, 32, 7),
+            (Magnitude::MAX, 35, 8),
+        ];
+        assert!(
+            state
+                .histogram_deltas(magnitudes, non_cumulative2)
+                .eq(expected2)
         );
     }
 
@@ -374,73 +377,97 @@ mod tests {
         let mut state = EventState::default();
 
         let magnitudes = [10, 50, 100];
-        let non_cumulative1 = [5, 10, 3];
 
         // First call - initializes to 3 buckets.
-        let count1 = state
-            .histogram_deltas(magnitudes, non_cumulative1)
-            .take(HISTOGRAM_ITER_SAFETY_BOUND)
-            .count();
-        assert_eq!(count1, 3);
+        let non_cumulative1 = [5, 10, 3];
+        let expected1: [(Magnitude, u64, u64); 3] = [(10, 5, 5), (50, 15, 15), (100, 18, 18)];
+        assert!(
+            state
+                .histogram_deltas(magnitudes, non_cumulative1)
+                .eq(expected1)
+        );
         assert_eq!(state.histogram_buckets.len(), 3);
 
         // Second call with same bucket count - should work fine.
-        let non_cumulative2 = [7, 12, 5];
-        let result2: Vec<_> = state
-            .histogram_deltas(magnitudes, non_cumulative2)
-            .take(HISTOGRAM_ITER_SAFETY_BOUND)
-            .collect();
-        assert_eq!(state.histogram_buckets.len(), 3);
-
-        // Verify deltas are computed correctly.
         // Cumulative1: [5, 15, 18], Cumulative2: [7, 19, 24].
         // Deltas: [2, 4, 6].
-        assert_eq!(result2, vec![(10, 7, 2), (50, 19, 4), (100, 24, 6)]);
+        let non_cumulative2 = [7, 12, 5];
+        let expected2: [(Magnitude, u64, u64); 3] = [(10, 7, 2), (50, 19, 4), (100, 24, 6)];
+        assert!(
+            state
+                .histogram_deltas(magnitudes, non_cumulative2)
+                .eq(expected2)
+        );
+        assert_eq!(state.histogram_buckets.len(), 3);
     }
 
+    // Panic tests use `catch_unwind` around the panic-triggering call rather than
+    // `#[should_panic]`. Setup of the first call runs outside `catch_unwind`, so any
+    // mutation that breaks setup (e.g. the infinite-iterator mutation, which causes
+    // `Iterator::eq` to return `false` and the `assert!` to fire) fails the test
+    // normally instead of being incorrectly satisfied by `#[should_panic]`. The
+    // panic-triggering call is wrapped in `Iterator::eq(expected_pre_panic_items)`
+    // which drives the iterator just past the last successful yield and then triggers
+    // the bucket-count panic; if `next()` were mutated to be infinite, `eq` would
+    // mismatch on the first comparison and return without panicking, leaving
+    // `panic_result.is_ok()` and failing the final assertion below.
+
     #[test]
-    #[should_panic]
     fn event_state_histogram_deltas_bucket_count_mismatch_panics() {
         let mut state = EventState::default();
 
         // First call with 3 buckets.
         let magnitudes3 = [10, 50, 100];
         let non_cumulative3 = [5, 10, 3];
-        state
-            .histogram_deltas(magnitudes3, non_cumulative3)
-            .take(HISTOGRAM_ITER_SAFETY_BOUND)
-            .for_each(drop);
+        let expected3: [(Magnitude, u64, u64); 3] = [(10, 5, 5), (50, 15, 15), (100, 18, 18)];
+        assert!(
+            state
+                .histogram_deltas(magnitudes3, non_cumulative3)
+                .eq(expected3)
+        );
 
-        // Second call with 4 buckets - should panic when the iterator is consumed past the
-        // established bucket count.
-        let magnitudes4 = [10, 50, 100, 500];
-        let non_cumulative4 = [5, 10, 3, 2];
-        state
-            .histogram_deltas(magnitudes4, non_cumulative4)
-            .take(HISTOGRAM_ITER_SAFETY_BOUND)
-            .for_each(drop);
+        // Second call with 4 buckets - should panic when the iterator is consumed past
+        // the established bucket count. Yielded values on the first 3 items: cumulative
+        // equals the previously established values [5, 15, 18], so all deltas are 0.
+        let panic_result = catch_unwind(AssertUnwindSafe(|| {
+            let magnitudes4 = [10, 50, 100, 500];
+            let non_cumulative4 = [5, 10, 3, 2];
+            let expected_pre_panic: [(Magnitude, u64, u64); 3] =
+                [(10, 5, 0), (50, 15, 0), (100, 18, 0)];
+            _ = state
+                .histogram_deltas(magnitudes4, non_cumulative4)
+                .eq(expected_pre_panic);
+        }));
+
+        assert!(panic_result.is_err());
     }
 
     #[test]
-    #[should_panic]
     fn event_state_histogram_deltas_fewer_buckets_panics() {
         let mut state = EventState::default();
 
         // First call establishes 3 buckets.
         let magnitudes3 = [10, 50, 100];
         let non_cumulative3 = [5, 10, 3];
-        state
-            .histogram_deltas(magnitudes3, non_cumulative3)
-            .take(HISTOGRAM_ITER_SAFETY_BOUND)
-            .for_each(drop);
+        let expected3: [(Magnitude, u64, u64); 3] = [(10, 5, 5), (50, 15, 15), (100, 18, 18)];
+        assert!(
+            state
+                .histogram_deltas(magnitudes3, non_cumulative3)
+                .eq(expected3)
+        );
 
         // Second call yields only 2 buckets - should panic when the source iterator
-        // is exhausted before all established buckets have been visited.
-        let magnitudes2 = [10, 50];
-        let non_cumulative2 = [7, 12];
-        state
-            .histogram_deltas(magnitudes2, non_cumulative2)
-            .take(HISTOGRAM_ITER_SAFETY_BOUND)
-            .for_each(drop);
+        // is exhausted before all established buckets have been visited. Cumulative
+        // [7, 19] against previous [5, 15] gives deltas [2, 4].
+        let panic_result = catch_unwind(AssertUnwindSafe(|| {
+            let magnitudes2 = [10, 50];
+            let non_cumulative2 = [7, 12];
+            let expected_pre_panic: [(Magnitude, u64, u64); 2] = [(10, 7, 2), (50, 19, 4)];
+            _ = state
+                .histogram_deltas(magnitudes2, non_cumulative2)
+                .eq(expected_pre_panic);
+        }));
+
+        assert!(panic_result.is_err());
     }
 }
