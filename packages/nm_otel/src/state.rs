@@ -117,7 +117,7 @@ where
         self.running_cumulative = self.running_cumulative.saturating_add(non_cumulative);
 
         let previous = if self.first_call {
-            self.buckets.push(0);
+            self.push_initial_bucket();
             0
         } else {
             assert!(
@@ -145,6 +145,20 @@ where
         self.index = self.index.saturating_add(1);
 
         Some((magnitude, self.running_cumulative, delta))
+    }
+}
+
+impl<I> HistogramDeltas<'_, I> {
+    /// Appends a zero entry to grow `buckets` during the first collection.
+    ///
+    /// Marked `#[cold]` because the first-call path is only ever taken during the
+    /// very first `histogram_deltas` invocation for an event; every subsequent call
+    /// takes the steady-state validation branch. Biasing branch layout this way keeps
+    /// the steady-state path as the straight-line fall-through.
+    #[cold]
+    #[inline(never)]
+    fn push_initial_bucket(&mut self) {
+        self.buckets.push(0);
     }
 }
 
