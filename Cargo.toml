@@ -46,6 +46,10 @@ futures-core = { version = "0.3", default-features = false }
 # runner version. When bumping, update all three locations together.
 gungraun = { version = "=0.19.0", default-features = false }
 hash_hasher = { version = "2.0", default-features = false }
+hashbrown = { version = "0.15", default-features = false, features = [
+    "default-hasher",
+    "inline-more",
+] }
 heapless = { version = "0.9", default-features = false }
 http = { version = "1.2", default-features = false, features = ["std"] }
 infinity_pool = { version = "0.8.12", path = "packages/infinity_pool", default-features = false }

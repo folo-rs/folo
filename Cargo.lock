@@ -1137,6 +1137,7 @@ dependencies = [
  "criterion",
  "foldhash 0.2.0",
  "futures",
+ "hashbrown 0.15.5",
  "many_cpus",
  "mutants",
  "new_zealand",
