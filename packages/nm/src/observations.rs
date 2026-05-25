@@ -153,7 +153,8 @@ impl ObservationBag {
 
     /// Installs a back-pointer into a `MetricsPusher`-owned `Cell<bool>` so that
     /// `insert` can mark the owning pair as dirty without dereferencing the bag's
-    /// `Rc` on the push side. Replaces any previously installed pointer.
+    /// `Rc` on the push side. The connection is one-time: the bag must be in the
+    /// disconnected state (`external_dirty == None`) when this is called.
     ///
     /// # Safety
     ///
@@ -183,6 +184,16 @@ impl ObservationBag {
         if self.external_dirty.get() == Some(expected) {
             self.external_dirty.set(None);
         }
+    }
+
+    /// Test-only accessor for verifying that registration / drop connect and clear
+    /// the back-pointer correctly. Mutation testing on `disconnect_external_dirty`
+    /// and `LocalGlobalPair::drop` would otherwise pass silently because the
+    /// observable behavior (a dangling write that the allocator may or may not
+    /// have reused yet) is non-deterministic.
+    #[cfg(test)]
+    pub(crate) fn external_dirty_is_connected(&self) -> bool {
+        self.external_dirty.get().is_some()
     }
 }
 
@@ -380,8 +391,11 @@ impl Observations for ObservationBag {
             // We construct only `&Cell<bool>` (never `&mut`), and `Cell::set` is
             // valid through a shared reference. Multiple `&Cell<bool>` aliases to
             // the same memory are sound by `Cell`'s type contract. `ObservationBag`
-            // is `!Send + !Sync` and is shared only via `Rc` on a single thread, so
-            // no concurrent writer exists (aliasing).
+            // is shared only via `Rc<ObservationBag>` (which is `!Send`) and is
+            // referenced from the `MetricsPusher` and any owning `Event`, both of
+            // which are themselves `!Send` (they carry `PhantomData<*const ()>`
+            // markers). The bag therefore never escapes its construction thread,
+            // and no concurrent writer can exist (aliasing).
             unsafe { ptr.as_ref() }.set(true);
         }
 

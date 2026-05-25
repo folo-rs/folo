@@ -154,14 +154,13 @@ struct LocalGlobalPair {
 impl Drop for LocalGlobalPair {
     fn drop(&mut self) {
         // Custom `Drop` runs before the fields are released, so `self.local` is
-        // guaranteed alive here. `disconnect_external_dirty` restores the bag's
-        // self-referential pointer to its own `dummy_dirty` field, so after this
-        // returns and `self.dirty` is destructed, the bag no longer references the
-        // freed `Cell<bool>`.
+        // guaranteed alive here. `disconnect_external_dirty` clears the bag's
+        // back-pointer to `None`, so after this returns and `self.dirty` is
+        // destructed, the bag no longer references the freed `Cell<bool>`.
         //
         // Any subsequent observe on a still-living orphaned bag (e.g. an
-        // `Event<Push>` that outlives its `MetricsPusher`) writes to the bag's
-        // `dummy_dirty` field, which is a safe no-op.
+        // `Event<Push>` that outlives its `MetricsPusher`) sees `external_dirty
+        // == None` and the pointer-set step becomes a safe no-op.
         let ptr = NonNull::from(&self.dirty);
         self.local.disconnect_external_dirty(ptr);
     }
@@ -433,5 +432,40 @@ mod tests {
 
         // The bag itself still records observations locally even when orphaned.
         assert_eq!(local.count(), 6);
+    }
+
+    #[test]
+    fn pair_drop_clears_bag_back_pointer() {
+        // Verifies that `LocalGlobalPair::Drop` actually runs the
+        // `disconnect_external_dirty` step and that the disconnect actually
+        // clears the bag's back-pointer. Without this assertion, mutations that
+        // turn the `Drop` body or the disconnect logic into a no-op would pass
+        // silently: the bag would retain a dangling pointer, but writes to the
+        // freed cell would not observably fail in unit tests (the allocator may
+        // not have reused the memory yet, and the bag still records the
+        // observation locally).
+        let local = Rc::new(ObservationBag::new(&[]));
+        assert!(
+            !local.external_dirty_is_connected(),
+            "fresh bag must not be connected to any pair",
+        );
+
+        let pusher = MetricsPusher::new();
+        pusher
+            .pre_register()
+            .register("pair_drop_clears_back_pointer".into(), Rc::clone(&local));
+        assert!(
+            local.external_dirty_is_connected(),
+            "registration must install the back-pointer",
+        );
+
+        drop(pusher);
+
+        // Drop must have called `disconnect_external_dirty` with the pair's
+        // matching pointer, restoring the bag to the disconnected state.
+        assert!(
+            !local.external_dirty_is_connected(),
+            "pair drop must clear the bag's back-pointer",
+        );
     }
 }
