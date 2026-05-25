@@ -297,6 +297,14 @@ Practical guidelines:
 Callgrind benchmarks require Valgrind and run only on Linux (including
 WSL on Windows).
 
+Because each scenario runs once on a simulated CPU rather than wall-clock
+time on the real machine, results are deterministic run-to-run and are
+**unaffected by other load on the machine**. It is therefore safe to run
+`just bench-cg` (or `just package=foo bench-cg`) on a shared workstation
+at any time, including as a quick smoke test of a newly added Callgrind
+benchmark. This is the headline difference from `just bench`, whose
+wall-clock numbers should not be acted on when the machine is contended.
+
 Install once:
 
 ```bash

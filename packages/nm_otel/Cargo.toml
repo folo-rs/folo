@@ -40,8 +40,16 @@ static_assertions = { workspace = true }
 tick = { workspace = true, features = ["tokio", "test-util"] }
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
 
+# Gungraun drives Valgrind-based Callgrind benchmarks; Linux-only.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
 [[bench]]
 name = "nm_otel_export"
+harness = false
+
+[[bench]]
+name = "nm_otel_export_cg"
 harness = false
 
 [lints]
