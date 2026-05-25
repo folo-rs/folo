@@ -654,6 +654,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
+    use testing::assert_panics;
 
     use super::*;
 
@@ -855,16 +856,13 @@ mod tests {
 
         let original_index = panicking_handle.index();
 
-        // Remove the object - this should panic during drop but still remove the object
-        let panic_result = catch_unwind(AssertUnwindSafe(|| {
+        // Remove the object - this should panic during drop but still remove the object.
+        assert_panics(|| {
             // SAFETY: panicking_handle is valid and from this slab
             unsafe {
                 slab.remove(panicking_handle);
             }
-        }));
-
-        // The removal should have panicked
-        assert!(panic_result.is_err());
+        });
 
         // But the slab should still be in a valid state:
         // 1. The object should be removed (count should be 0)
@@ -1754,7 +1752,7 @@ mod tests {
 
         DROP_COUNT.store(0, Ordering::SeqCst);
 
-        let drop_result = catch_unwind(AssertUnwindSafe(|| {
+        assert_panics(|| {
             let layout = SlabLayout::new(Layout::new::<AlwaysPanickingDrop>());
             let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
@@ -1771,10 +1769,7 @@ mod tests {
             assert_eq!(slab.len(), 4);
 
             // Slab drops here - should call drop() on all 4 objects even though they all panic
-        }));
-
-        // The slab drop should have panicked due to the panicking object drops
-        assert!(drop_result.is_err());
+        });
 
         // But all 4 objects should have had their drop() called
         assert_eq!(DROP_COUNT.load(Ordering::SeqCst), 4);

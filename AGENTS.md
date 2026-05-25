@@ -347,6 +347,11 @@ It is good to create tests that verify expected panics/errors are returned. Howe
 check for a specific error/panic message - these are not part of the public API and create
 fragile tests. Just verify that an error of an expected type occurs or any panic occurs.
 
+For tests that must verify a panic but also continue running afterwards (e.g. to check that
+a data structure is still in a valid state), use `testing::assert_panics(|| ...)` instead of
+hand-rolling `catch_unwind(AssertUnwindSafe(...))`. When a canary substring check is warranted,
+use `testing::assert_panics_with(|| ..., |message| assert!(message.contains("canary")))`.
+
 # Keep the house in order
 
 Do not only focus on the immediate task at hand but also consider how it affects the codebase
