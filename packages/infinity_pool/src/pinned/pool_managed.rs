@@ -170,10 +170,11 @@ where
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn insert(&self, value: T) -> PooledMut<T> {
-        // SAFETY: `PinnedPool<T>` is a typed wrapper. The underlying opaque pool's object
-        // layout was set to `Layout::of::<T>()` at construction time and the wrapper never
-        // permits inserting any other type, so the layout match required by
-        // `insert_unchecked` is statically guaranteed.
+        // SAFETY: `PinnedPool<T>` is a typed wrapper. The underlying opaque pool was
+        // constructed via `RawOpaquePool::with_layout_of::<T>()`, which records
+        // `Layout::new::<T>()` as the pool's object layout, and the wrapper never permits
+        // inserting any other type. The layout match required by `insert_unchecked` is
+        // therefore statically guaranteed.
         let inner = unsafe {
             self.inner
                 .lock()
