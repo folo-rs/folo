@@ -1,8 +1,12 @@
 //! Callgrind benchmarks for the `infinity_pool` crate.
 //!
-//! Paired with `infinity_pool_vs_std.rs` (the `ip_vs_std` Criterion group) which
-//! covers the same operations under wall-clock measurement in a
-//! comprehensive churn pattern.
+//! Paired Criterion (wall-clock) coverage lives in two sibling files:
+//!
+//! * `infinity_pool_vs_std.rs` (the `ip_vs_std` Criterion group) covers
+//!   the insert/drop scenarios here under a comprehensive churn pattern.
+//! * `infinity_pool_focused.rs` (the `focused` Criterion group) covers
+//!   the remaining scenarios as elementary single-op measurements:
+//!   deref, multi-layout `BlindPool` insert, raw bulk drop, and iter.
 //!
 //! Scenarios isolate the per-operation cost of pool handles so each
 //! can be tracked at instruction-level granularity, separated from the
