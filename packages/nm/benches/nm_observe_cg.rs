@@ -366,17 +366,21 @@ mod linux {
     //
     // The aggregate `push` benches above measure the 4-pair case. The scenarios
     // below cover the documented sparse-push workload (issue 160): hundreds to
-    // thousands of registered counter pairs with only a handful dirty per tick.
+    // thousands of registered counter pairs with a varying fraction dirty per tick.
     //
     // Each benchmark targets a specific axis of the idle-scan cost:
     //
-    // * `sparse_100_3`   — N=100, K=3 dirty per push. Primary target workload.
-    // * `sparse_1000_3`  — N=1000, K=3 dirty per push. Stress-tests the per-pair
+    // * `sparse_100_3`   — N=100, K=3 dirty (3%). Primary target workload.
+    // * `sparse_1000_3`  — N=1000, K=3 dirty (0.3%). Stress-tests the per-pair
     //                      scan cost in isolation.
-    // * `all_idle_100`   — N=100, K=0 dirty. Worst case for the idle scan: every
-    //                      pair must be checked and skipped.
-    // * `all_dirty_100`  — N=100, K=100 dirty. Regression guard for dense pushes;
-    //                      the idle-scan optimization must not penalise this case.
+    // * `mixed_100_20`   — N=100, K=20 dirty (20%). Representative "normal"
+    //                      working-set ratio - many events are alive in the
+    //                      registry but only a fraction sees traffic each tick.
+    // * `all_idle_100`   — N=100, K=0 dirty (0%). Best case for the optimization:
+    //                      every pair scan must skip without copying.
+    // * `all_dirty_100`  — N=100, K=100 dirty (100%). Regression guard for dense
+    //                      pushes; the idle-scan optimization must not penalise
+    //                      this case more than the per-pair fixed cost dictates.
     //
     // Each Gungraun measurement runs the body exactly once, so setup-then-push
     // measures the cost of one push() call with the prepared dirty/idle mix.
@@ -427,6 +431,10 @@ mod linux {
         make_scaled_push_state("cg_push_sparse_1000_3", 1000, 3)
     }
 
+    fn make_scaled_mixed_100_20() -> ScaledPushState {
+        make_scaled_push_state("cg_push_mixed_100_20", 100, 20)
+    }
+
     fn make_scaled_all_idle_100() -> ScaledPushState {
         make_scaled_push_state("cg_push_all_idle_100", 100, 0)
     }
@@ -438,6 +446,7 @@ mod linux {
     #[library_benchmark]
     #[bench::sparse_100_3(make_scaled_sparse_100_3())]
     #[bench::sparse_1000_3(make_scaled_sparse_1000_3())]
+    #[bench::mixed_100_20(make_scaled_mixed_100_20())]
     #[bench::all_idle_100(make_scaled_all_idle_100())]
     #[bench::all_dirty_100(make_scaled_all_dirty_100())]
     fn push_scaled(state: ScaledPushState) -> ScaledPushState {
