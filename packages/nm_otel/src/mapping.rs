@@ -37,10 +37,18 @@ struct EventInstruments {
     /// Different bucket bounds are distinguished by the `le` attribute, not by instrument name.
     bucket_counter: Option<Counter<u64>>,
 
-    /// Cached formatted bucket bounds for the `le` attribute (e.g. "10", "50", "+Inf").
+    /// Precomputed `[KeyValue; 1]` attribute slice for each histogram bucket.
+    ///
     /// Indexed by bucket index, matching the order from `histogram.magnitudes()`.
-    /// Uses `Arc<str>` to avoid cloning strings on every metric export.
-    bucket_bounds: Vec<Arc<str>>,
+    /// Building the full `KeyValue` once per bucket at registration time eliminates the
+    /// per-export `Arc<str>` clone and `KeyValue` construction that the export hot path
+    /// would otherwise perform on every call to `add_bucket_delta`.
+    ///
+    /// `[KeyValue; 1]` (not `KeyValue`) so the hot path can pass the attribute slice to
+    /// `Counter::add` as `&self.bucket_attrs[i]` without constructing a `&[KeyValue]`
+    /// reference each call. The fixed-size array's `&[KeyValue; 1]` deref-coerces to
+    /// `&[KeyValue]` directly.
+    bucket_attrs: Vec<[KeyValue; 1]>,
 }
 
 /// Manages OpenTelemetry instruments for nm metrics.
@@ -74,8 +82,8 @@ impl InstrumentRegistry {
 
     /// Gets or creates instruments for an event.
     ///
-    /// If histogram magnitudes are provided, the bucket counter and cached bucket bound
-    /// strings are also created. This avoids creating them for events without histogram data.
+    /// If histogram magnitudes are provided, the bucket counter and cached bucket attribute
+    /// arrays are also created. This avoids creating them for events without histogram data.
     fn instruments(
         &mut self,
         event_name: &EventName,
@@ -99,7 +107,7 @@ impl InstrumentRegistry {
                     count_counter: meter.u64_counter(event_name.to_string()).build(),
                     sum_gauge: meter.i64_gauge(sum_name).build(),
                     bucket_counter: None,
-                    bucket_bounds: Vec::new(),
+                    bucket_attrs: Vec::new(),
                 };
                 // Cache miss — clone the key here so the hit path stays clone-free.
                 &mut vacant
@@ -109,13 +117,17 @@ impl InstrumentRegistry {
             }
         };
 
-        // Lazily create the bucket counter and cache bucket bounds if histogram data provided.
+        // Lazily create the bucket counter and cache bucket attributes if histogram data
+        // provided. Building the `KeyValue` once per bucket here eliminates per-export
+        // `Arc<str>` clone and `KeyValue::new` work in `add_bucket_delta`.
         if let Some(mags) = magnitudes
             && instruments.bucket_counter.is_none()
         {
             let bucket_name = format!("{event_name}{BUCKET_SUFFIX}");
             instruments.bucket_counter = Some(meter.u64_counter(bucket_name).build());
-            instruments.bucket_bounds = mags.map(format_bucket_bound).collect();
+            instruments.bucket_attrs = mags
+                .map(|m| [KeyValue::new(LE_ATTRIBUTE, format_bucket_bound(m))])
+                .collect();
         }
 
         instruments
@@ -158,11 +170,11 @@ pub(crate) fn export_report(
                 .histogram_deltas(histogram.magnitudes(), histogram.counts())
                 .enumerate()
             {
-                let le_value = event_instruments
-                    .bucket_bounds
+                let attrs = event_instruments
+                    .bucket_attrs
                     .get(i)
-                    .expect("bucket_bounds length matches histogram bucket count");
-                add_bucket_delta(bucket_counter, delta, le_value);
+                    .expect("bucket_attrs length matches histogram bucket count");
+                add_bucket_delta(bucket_counter, delta, attrs);
             }
         }
     }
@@ -181,13 +193,16 @@ fn add_count_delta(counter: &Counter<u64>, delta: u64) {
 
 /// Adds a bucket delta to a counter if positive.
 ///
+/// `attrs` is a fixed-size attribute array stored in the registry. `&[KeyValue; 1]`
+/// auto-coerces to `&[KeyValue]` at the `Counter::add` call site, so no per-call
+/// slice or `KeyValue` construction is required on the hot path.
+///
 /// This is a separate function to allow skipping equivalent mutations - adding 0 to a counter
 /// produces the same observable result as not calling add at all.
 #[cfg_attr(test, mutants::skip)]
-fn add_bucket_delta(counter: &Counter<u64>, delta: u64, le_value: &Arc<str>) {
+fn add_bucket_delta(counter: &Counter<u64>, delta: u64, attrs: &[KeyValue; 1]) {
     if delta > 0 {
-        let attributes = [KeyValue::new(LE_ATTRIBUTE, Arc::<str>::clone(le_value))];
-        counter.add(delta, &attributes);
+        counter.add(delta, attrs);
     }
 }
 
