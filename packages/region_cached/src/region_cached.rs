@@ -536,7 +536,7 @@ mod tests {
 
     use many_cpus::fake::{HardwareBuilder, ProcessorBuilder};
     use static_assertions::assert_impl_all;
-    use testing::with_watchdog;
+    use testing::{assert_panics, with_watchdog};
 
     use super::*;
     use crate::{RegionCachedCopyExt, RegionCachedExt, region_cached};
@@ -786,12 +786,11 @@ mod tests {
             assert_eq!(local.get_cached(), 42);
 
             // Second call with panicking closure.
-            let panic_result = panic::catch_unwind(AssertUnwindSafe(|| {
+            assert_panics(|| {
                 local.with_cached(|_| {
                     panic!("User callback panicked!");
                 })
-            }));
-            assert!(panic_result.is_err());
+            });
 
             // Third call should still work and return the cached value.
             assert_eq!(local.get_cached(), 42);
@@ -810,12 +809,11 @@ mod tests {
             pin_to_processor(&hardware, 0);
 
             // First call with panicking closure should fail but not break state.
-            let panic_result = panic::catch_unwind(AssertUnwindSafe(|| {
+            assert_panics(|| {
                 local.with_cached(|_| {
                     panic!("User callback panicked during initialization!");
                 })
-            }));
-            assert!(panic_result.is_err());
+            });
 
             // Second call should successfully initialize and work.
             assert_eq!(local.get_cached(), 42);

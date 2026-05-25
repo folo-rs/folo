@@ -916,6 +916,7 @@ dependencies = [
  "pastey",
  "rand 0.9.2",
  "static_assertions",
+ "testing",
 ]
 
 [[package]]
@@ -1149,6 +1150,7 @@ dependencies = [
  "opentelemetry_sdk",
  "par_bench",
  "static_assertions",
+ "testing",
  "tick",
  "tokio",
 ]

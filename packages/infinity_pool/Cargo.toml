@@ -27,6 +27,7 @@ criterion = { workspace = true }
 mutants = { workspace = true }
 rand = { workspace = true, features = ["small_rng"] }
 static_assertions = { workspace = true }
+testing = { path = "../testing" }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 gungraun = { workspace = true, features = ["default"] }

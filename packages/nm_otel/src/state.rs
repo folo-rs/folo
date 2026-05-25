@@ -217,7 +217,7 @@ impl<I> HistogramDeltas<'_, I> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use testing::assert_panics;
 
     use super::*;
 
@@ -401,8 +401,8 @@ mod tests {
         assert_eq!(state.histogram_buckets.len(), 3);
     }
 
-    // Panic tests use `catch_unwind` around the panic-triggering call rather than
-    // `#[should_panic]`. Setup of the first call runs outside `catch_unwind`, so any
+    // Panic tests use `assert_panics` around the panic-triggering call rather than
+    // `#[should_panic]`. Setup of the first call runs outside `assert_panics`, so any
     // mutation that breaks setup (e.g. the infinite-iterator mutation, which causes
     // `Iterator::eq` to return `false` and the `assert!` to fire) fails the test
     // normally instead of being incorrectly satisfied by `#[should_panic]`. The
@@ -410,7 +410,7 @@ mod tests {
     // which drives the iterator just past the last successful yield and then triggers
     // the bucket-count panic; if `next()` were mutated to be infinite, `eq` would
     // mismatch on the first comparison and return without panicking, leaving
-    // `panic_result.is_ok()` and failing the final assertion below.
+    // `assert_panics` to fail because no panic occurred.
 
     #[test]
     fn event_state_histogram_deltas_bucket_count_mismatch_panics() {
@@ -429,7 +429,7 @@ mod tests {
         // Second call with 4 buckets - should panic when the iterator is consumed past
         // the established bucket count. Yielded values on the first 3 items: cumulative
         // equals the previously established values [5, 15, 18], so all deltas are 0.
-        let panic_result = catch_unwind(AssertUnwindSafe(|| {
+        assert_panics(|| {
             let magnitudes4 = [10, 50, 100, 500];
             let non_cumulative4 = [5, 10, 3, 2];
             let expected_pre_panic: [(Magnitude, u64, u64); 3] =
@@ -437,9 +437,7 @@ mod tests {
             _ = state
                 .histogram_deltas(magnitudes4, non_cumulative4)
                 .eq(expected_pre_panic);
-        }));
-
-        assert!(panic_result.is_err());
+        });
     }
 
     #[test]
@@ -459,15 +457,13 @@ mod tests {
         // Second call yields only 2 buckets - should panic when the source iterator
         // is exhausted before all established buckets have been visited. Cumulative
         // [7, 19] against previous [5, 15] gives deltas [2, 4].
-        let panic_result = catch_unwind(AssertUnwindSafe(|| {
+        assert_panics(|| {
             let magnitudes2 = [10, 50];
             let non_cumulative2 = [7, 12];
             let expected_pre_panic: [(Magnitude, u64, u64); 2] = [(10, 7, 2), (50, 19, 4)];
             _ = state
                 .histogram_deltas(magnitudes2, non_cumulative2)
                 .eq(expected_pre_panic);
-        }));
-
-        assert!(panic_result.is_err());
+        });
     }
 }
