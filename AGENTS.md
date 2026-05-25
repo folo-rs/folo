@@ -78,6 +78,12 @@ types, we re-export them all at the parent, so while we have modules like
 constants, helper functions, or other items in these files — move them to dedicated files (e.g.
 `constants.rs`) for better filesystem organization.
 
+Inline `mod` blocks defined directly in `lib.rs` / `mod.rs` count as "re-exports" for the purpose
+of this rule as long as they only re-export items from other modules (no logic, no constants, no
+new type definitions). This is common for `#[doc(hidden)] pub mod __private { pub use ...; }` or
+similar grouping modules whose sole purpose is to gather and re-expose existing items under a
+distinct namespace.
+
 # Scripting
 
 You can assume PowerShell 7 (`pwsh`) is available on every operating system and environment.
