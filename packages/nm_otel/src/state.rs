@@ -13,6 +13,15 @@ use nm::{EventName, Magnitude};
 /// delta computation for OpenTelemetry. Gauge-type metrics (sum) are set directly.
 #[derive(Debug, Default)]
 pub(crate) struct CollectionState {
+    // We use `hashbrown::HashTable` (not `HashMap`) so the `entry(hash, eq, hasher)` API can
+    // avoid cloning `EventName` on cache hits. The natural `HashMap::entry(name.clone())` shape
+    // clones on every call, which is a heap allocation per export for `Cow::Owned` event names.
+    // Stable `HashMap` has no equivalent: `raw_entry_mut` is unstable, `entry_ref` needs
+    // `&Q: Into<K>` (no such impl exists for `Cow<'static, str>`), and `get_mut`-first
+    // early-return fails NLL borrow-check on rustc 1.93. Hashing is still done by
+    // `foldhash::fast::RandomState`; only the map shell changed. The hasher must be stored on
+    // the struct so the lookup-time hash and the growth-time rehash closure use the same
+    // instance and therefore produce the same hash for the same key.
     hasher: RandomState,
 
     /// Previous state per event name.
@@ -30,11 +39,13 @@ impl CollectionState {
 
     /// Gets or creates the state for an event.
     pub(crate) fn event_state(&mut self, name: &EventName) -> &mut EventState {
-        // Single-pass lookup-or-insert: hashes `name` once and only clones it on cache misses.
-        // For owned event names (`Cow::Owned`), the avoided clone is a heap allocation per event
-        // per export.
         let hash = self.hasher.hash_one(name);
         let hasher = &self.hasher;
+        // The three closures fed to `entry()`:
+        // 1. `hash`            - precomputed hash of the lookup key.
+        // 2. `|...| ... == name` - tiebreaker on probed slots (collision check).
+        // 3. `|...| hash_one`  - rehash closure, called per existing entry on table growth.
+        // All three must agree on hashing; we route them through the same `RandomState`.
         match self.events.entry(
             hash,
             |(existing, _)| existing == name,
@@ -42,6 +53,8 @@ impl CollectionState {
         ) {
             Entry::Occupied(occupied) => &mut occupied.into_mut().1,
             Entry::Vacant(vacant) => {
+                // The key clone is confined to this branch — we only pay for it on a true
+                // cache miss, not on the steady-state hit path.
                 &mut vacant
                     .insert((name.clone(), EventState::default()))
                     .into_mut()

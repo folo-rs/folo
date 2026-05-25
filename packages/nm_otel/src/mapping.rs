@@ -52,6 +52,10 @@ struct EventInstruments {
 pub(crate) struct InstrumentRegistry {
     meter: Meter,
 
+    // See the matching comment on `CollectionState::hasher` in `state.rs` for the design
+    // rationale. In short: we use `hashbrown::HashTable` instead of `HashMap` so the
+    // `entry(hash, eq, hasher)` API can clone `EventName` only on cache miss, which stable
+    // `HashMap` cannot do without double-hashing on hits. Hashing is still `foldhash`.
     hasher: RandomState,
 
     /// Cached instruments per event name.
@@ -79,11 +83,10 @@ impl InstrumentRegistry {
     ) -> &EventInstruments {
         let meter = &self.meter;
 
-        // Single-pass lookup-or-insert: hashes `event_name` once and only clones it on cache
-        // misses. For owned event names (`Cow::Owned`), the avoided clone is a heap allocation
-        // per event per export.
         let hash = self.hasher.hash_one(event_name);
         let hasher = &self.hasher;
+        // See `CollectionState::event_state` for the per-closure breakdown; the same three-
+        // closure contract (lookup hash, equality, growth-time rehash) applies here.
         let instruments = match self.events.entry(
             hash,
             |(existing, _)| existing == event_name,
@@ -98,6 +101,7 @@ impl InstrumentRegistry {
                     bucket_counter: None,
                     bucket_bounds: Vec::new(),
                 };
+                // Cache miss — clone the key here so the hit path stays clone-free.
                 &mut vacant
                     .insert((event_name.clone(), new_instruments))
                     .into_mut()
