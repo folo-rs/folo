@@ -13,12 +13,6 @@ const INLINE_CAPACITY: usize = 8;
 /// converging the dispatch order toward the actual usage distribution quickly.
 const SORT_INTERVAL: u32 = 100;
 
-/// Saturation threshold for per-entry hit counts. Picked with headroom below `u32::MAX` so a
-/// burst of hits cannot quietly bypass the reset. When any entry reaches this value, all hit
-/// counts (and `lookups_since_sort`) are reset to zero; for a stable workload the dispatch
-/// order reconverges on the next sort window.
-const HIT_COUNT_MAX: u32 = u32::MAX >> 1;
-
 /// Per-key dispatch metadata. Kept deliberately small so the linear scan stays cache-friendly:
 /// on 64-bit targets this struct is 24 bytes (8-aligned), so a full inline-capacity scan
 /// touches three cache lines regardless of how large `V` is.
@@ -28,9 +22,11 @@ struct DispatchEntry {
     /// Index into the parallel `values` array. Stays valid across sorts because we sort the
     /// dispatch metadata only — the `values` array is append-only and never reordered.
     value_idx: usize,
-    /// Number of times `get_or_insert_with` has touched this entry since the last reset.
-    /// Drives the periodic sort that places the hottest entries first.
-    hit_count: u32,
+    /// Number of times `get_or_insert_with` has touched this entry. Drives the periodic sort
+    /// that places the hottest entries first. `u64` exhausts the existing 8-byte alignment
+    /// padding for free and pushes overflow centuries beyond any realistic lookup volume, so
+    /// no saturation handling is needed.
+    hit_count: u64,
 }
 
 /// Dispatches by `LayoutKey` to an associated value, optimized for a small number of distinct
@@ -134,7 +130,10 @@ impl<V> LayoutDispatch<V> {
                     .dispatch
                     .get_mut(i)
                     .expect("index `i` was just produced by `position`");
-                entry.hit_count = entry.hit_count.saturating_add(1);
+                // `u64` hit counts cannot realistically overflow (centuries at 1 ns/call),
+                // so an explicit `wrapping_add` is safe and saves the saturating-arithmetic
+                // overhead on the hot path.
+                entry.hit_count = entry.hit_count.wrapping_add(1);
                 entry.value_idx
             }
             None => {
@@ -152,7 +151,11 @@ impl<V> LayoutDispatch<V> {
             }
         };
 
-        self.lookups_since_sort = self.lookups_since_sort.saturating_add(1);
+        // `lookups_since_sort` is reset to 0 every `SORT_INTERVAL` (= 100) increments, so its
+        // value is structurally bounded well below `u32::MAX`. `wrapping_add` is therefore
+        // equivalent to checked arithmetic here and avoids the saturating-add overhead on the
+        // hot path.
+        self.lookups_since_sort = self.lookups_since_sort.wrapping_add(1);
         if self.lookups_since_sort >= SORT_INTERVAL {
             self.resort();
         }
@@ -173,20 +176,12 @@ impl<V> LayoutDispatch<V> {
         self.values.iter_mut()
     }
 
-    /// Sorts the dispatch metadata in descending hit-count order, resets the lookup counter,
-    /// and zeroes all hit counts if any entry has saturated. `value_idx` fields remain valid
-    /// because we never reorder the `values` array.
+    /// Sorts the dispatch metadata in descending hit-count order and resets the lookup
+    /// counter. `value_idx` fields remain valid because we never reorder the `values` array.
     fn resort(&mut self) {
         // Unstable sort is fine: tie-breaking order between entries with equal hit counts has
         // no observable effect — they all match the key with equal probability.
         self.dispatch.sort_unstable_by(|a, b| b.hit_count.cmp(&a.hit_count));
-
-        if self.dispatch.iter().any(|e| e.hit_count >= HIT_COUNT_MAX) {
-            for entry in &mut self.dispatch {
-                entry.hit_count = 0;
-            }
-        }
-
         self.lookups_since_sort = 0;
     }
 }
@@ -325,44 +320,6 @@ mod tests {
             let value = dispatch.get_or_insert_with(hot, || unreachable!());
             assert_eq!(*value, 30);
         }
-    }
-
-    #[test]
-    fn saturation_resets_hit_counts_without_losing_values() {
-        let mut dispatch: LayoutDispatch<u32> = LayoutDispatch::new();
-
-        let key_a = key_from_size_align(1, 1);
-        let key_b = key_from_size_align(2, 2);
-
-        _ = dispatch.get_or_insert_with(key_a, || 10);
-        _ = dispatch.get_or_insert_with(key_b, || 20);
-
-        // Force one entry past the saturation threshold by editing the metadata directly,
-        // then trigger a resort. The saturated counter must be detected and reset, but the
-        // values themselves must remain intact and addressable.
-        dispatch
-            .dispatch
-            .iter_mut()
-            .find(|e| e.key == key_a)
-            .unwrap()
-            .hit_count = HIT_COUNT_MAX;
-
-        for _ in 0..SORT_INTERVAL {
-            _ = dispatch.get_or_insert_with(key_b, || unreachable!());
-        }
-
-        // After the resort triggered inside the loop, key_a's count must have been reset.
-        // We never hit key_a after the reset, so its current count is still 0.
-        let key_a_count = dispatch
-            .dispatch
-            .iter()
-            .find(|e| e.key == key_a)
-            .unwrap()
-            .hit_count;
-        assert_eq!(key_a_count, 0);
-
-        assert_eq!(dispatch.get(key_a), Some(&10));
-        assert_eq!(dispatch.get(key_b), Some(&20));
     }
 
     #[test]
