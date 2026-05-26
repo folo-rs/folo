@@ -145,6 +145,7 @@ impl Clock {
     /// assert_eq!(timestamps.len(), 100);
     /// ```
     #[must_use]
+    #[inline]
     pub fn now(&mut self) -> Instant {
         self.inner.now().into()
     }

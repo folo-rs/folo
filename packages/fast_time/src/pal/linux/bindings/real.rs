@@ -28,6 +28,7 @@ impl Bindings for BuildTargetBindings {
         clippy::arithmetic_side_effects,
         reason = "never going to happen with timestamps within real-universe ranges"
     )]
+    #[inline]
     fn clock_gettime_nanos(&self) -> u128 {
         // SAFETY: All-zero is a valid initial value for this type.
         let mut ts: timespec = unsafe { mem::zeroed() };
@@ -40,6 +41,7 @@ impl Bindings for BuildTargetBindings {
         ts.tv_sec as u128 * 1_000_000_000 + ts.tv_nsec as u128
     }
 
+    #[inline]
     fn now(&self) -> Instant {
         Instant::now()
     }
