@@ -695,6 +695,39 @@ The justification should cover:
 Without this, the next reader will reasonably assume the deviation is accidental or unnecessary
 and try to "fix" it back to the standard pattern. The comment is what prevents that wasted cycle.
 
+# Performance optimization principles
+
+When proposing or applying performance optimizations:
+
+* **Optimizations must be motivated by user-facing scenarios, not raw benchmark deltas.**
+  A Callgrind win on a synthetic micro-benchmark is not by itself sufficient justification. Ask:
+  *what real workload does this help, and is that workload a design target of this package?* If
+  the answer is "I would have to invent one", the change should usually not land.
+* **Prefer surgical interventions over architectural rewrites.** A 5-line `#[inline]`, a
+  single-field type change (`fn` → `Option<fn>`), or an `unreachable!()` → `unreachable_unchecked!()`
+  swap is the right shape of optimization PR when measurement points at a specific instruction
+  the compiler is emitting. Multi-file restructurings (changing in-memory representation,
+  monomorphizing on type traits, deferring initialization, swapping data structures) are an
+  order of magnitude harder to land and need correspondingly stronger motivation.
+* **Preserve defensive runtime checks even if they cost a handful of instructions.** A runtime
+  `unreachable!()`, `debug_assert!`, or `Option::expect` arm is often there to surface
+  thread-safety bugs, state-machine corruption, or other "this should never happen but if it
+  does we want to know" conditions. Do not remove these to save a `cmpq` — if you have a
+  measured need to remove the check, prefer the surgical alternative (`unreachable_unchecked!`,
+  `debug_assert!` instead of `assert!`, etc.) that keeps the contract documented.
+* **Stay idiomatic Rust.** Manually controlling memory representation (`repr(C)` for layout
+  stability, `alloc_zeroed` on hand-crafted layouts, explicit discriminant encoding) leans
+  toward "coding Rust as if it were C" and is rarely worth the resulting reader confusion
+  and soundness review burden. Trust the compiler's layout decisions unless there is a
+  concrete cross-language interop or ABI requirement that forces your hand.
+* **First-insert and teardown costs are usually not worth optimizing.** Most data structures
+  in this workspace target long-lived, steady-state workloads. Optimizations whose entire
+  value is in the construction or destruction path (first allocation, bulk drop, etc.)
+  rarely pay for the complexity they introduce.
+
+When filing a performance issue, state explicitly which of these criteria the proposal meets.
+If you have to invent a scenario to motivate it, the issue should probably not be filed.
+
 # Hide async entrypoint in examples
 
 In inline code examples that use `.await`, do not render the async
