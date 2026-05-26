@@ -349,6 +349,7 @@ impl ManualResetEvent {
     ///     assert!(event.try_wait());
     /// }
     /// ```
+    #[inline]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn set(&self) {
         self.inner.set();
@@ -359,6 +360,7 @@ impl ManualResetEvent {
     ///
     /// Awaiters that are already past the gate (i.e. whose futures have
     /// already returned [`Poll::Ready`]) are not affected.
+    #[inline]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn reset(&self) {
         self.inner.reset();
@@ -369,6 +371,7 @@ impl ManualResetEvent {
     /// Because other threads may set or reset the event concurrently, the
     /// returned value is immediately stale. Use this for diagnostics or
     /// best-effort checks, not for synchronization.
+    #[inline]
     #[must_use]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_wait(&self) -> bool {
@@ -581,18 +584,21 @@ impl EmbeddedManualResetEventRef {
     /// Opens the gate, releasing all current awaiters.
     ///
     /// If the event is already set, this is a no-op.
+    #[inline]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn set(&self) {
         self.inner().set();
     }
 
     /// Closes the gate.
+    #[inline]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn reset(&self) {
         self.inner().reset();
     }
 
     /// Returns `true` if the event is currently set.
+    #[inline]
     #[must_use]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_wait(&self) -> bool {

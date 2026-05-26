@@ -322,6 +322,7 @@ impl LocalAutoResetEvent {
     /// released and the event remains unset. If no one is waiting,
     /// the event transitions to the set state.
     // Trivial forwarder.
+    #[inline]
     #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn set(&self) {
         self.inner.set();
@@ -331,6 +332,7 @@ impl LocalAutoResetEvent {
     ///
     /// Returns `true` if the event was set, transitioning it back to the
     /// unset state. Returns `false` if the event was not set.
+    #[inline]
     #[must_use]
     // Trivial forwarder.
     #[cfg_attr(coverage_nightly, coverage(off))]
@@ -489,6 +491,7 @@ impl EmbeddedLocalAutoResetEventRef {
     /// released and the event remains unset. If no one is waiting,
     /// the event transitions to the set state.
     // Trivial forwarder.
+    #[inline]
     #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn set(&self) {
         self.inner().set();
@@ -498,6 +501,7 @@ impl EmbeddedLocalAutoResetEventRef {
     ///
     /// Returns `true` if the event was set, transitioning it back to the
     /// unset state. Returns `false` if the event was not set.
+    #[inline]
     #[must_use]
     // Trivial forwarder.
     #[cfg_attr(coverage_nightly, coverage(off))]
