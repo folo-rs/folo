@@ -728,6 +728,11 @@ When proposing or applying performance optimizations:
 When filing a performance issue, state explicitly which of these criteria the proposal meets.
 If you have to invent a scenario to motivate it, the issue should probably not be filed.
 
+Some packages have package-scoped optimization guidance that refines these principles for
+their domain (e.g. `packages/events_once/AGENTS.md` codifies the relative priority of pooled,
+embedded and boxed events, and the expectation that `LocalEvent` beats `Event`). Always check
+for a package-local `AGENTS.md` when planning optimization work in a specific crate.
+
 # Hide async entrypoint in examples
 
 In inline code examples that use `.await`, do not render the async
