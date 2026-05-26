@@ -49,6 +49,11 @@ impl Dropper {
 }
 
 impl Drop for Dropper {
+    // Without `#[inline]`, `Slab::remove` lowers the dropper invocation to a PLT/dynamic-linker
+    // indirect call (verified in disassembly). The body is small — a function-pointer null check
+    // plus an indirect call to the stored drop function — and inlining it removes that overhead
+    // for every handle drop. See issue #192.
+    #[inline]
     fn drop(&mut self) {
         if let Some(drop_fn) = self.drop_fn {
             drop_fn(self.ptr);
