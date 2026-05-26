@@ -12,6 +12,10 @@
 //! * `unregister_only` — unlink the only awaiter, set becomes empty.
 //! * `take_notification_when_notified` — `take_notification` CAS success.
 //! * `take_notification_when_waiting` — `take_notification` CAS failure.
+//! * `is_empty_when_empty` — null-head fast path on an empty set.
+//! * `is_empty_when_populated` — null-head check on a populated set.
+//! * `notify_one_prior_generation_eligible` — pop an awaiter that
+//!   belongs to a prior generation.
 //!
 //! Multi-threaded contention is intentionally out of scope; callers
 //! synchronize external to the set, and Callgrind cannot model cache
@@ -186,6 +190,39 @@ mod linux {
         state
     }
 
+    // ---------- Emptiness check ----------
+
+    #[library_benchmark]
+    #[bench::empty(make_empty_solo())]
+    fn is_empty_when_empty(state: SoloState) -> SoloState {
+        _ = black_box(black_box(&state.set).is_empty());
+        state
+    }
+
+    #[library_benchmark]
+    #[bench::populated(make_registered_solo())]
+    fn is_empty_when_populated(state: SoloState) -> SoloState {
+        _ = black_box(black_box(&state.set).is_empty());
+        state
+    }
+
+    // ---------- Generation-bounded notification ----------
+
+    // Sets up a registered awaiter that belongs to a prior generation,
+    // so `notify_one_prior_generation` is eligible to pop it.
+    fn make_registered_solo_prior_generation() -> SoloState {
+        let mut state = make_registered_solo();
+        state.set.advance_generation();
+        state
+    }
+
+    #[library_benchmark]
+    #[bench::eligible(make_registered_solo_prior_generation())]
+    fn notify_one_prior_generation_eligible(mut state: SoloState) -> SoloState {
+        drop(black_box(state.set.notify_one_prior_generation()));
+        state
+    }
+
     library_benchmark_group!(
         name = register_group,
         benchmarks = [register_into_empty, register_appending_to_10]
@@ -193,7 +230,11 @@ mod linux {
 
     library_benchmark_group!(
         name = removal_group,
-        benchmarks = [notify_one_singleton, unregister_only]
+        benchmarks = [
+            notify_one_singleton,
+            unregister_only,
+            notify_one_prior_generation_eligible,
+        ]
     );
 
     library_benchmark_group!(
@@ -203,10 +244,15 @@ mod linux {
             take_notification_when_waiting,
         ]
     );
+
+    library_benchmark_group!(
+        name = inspection_group,
+        benchmarks = [is_empty_when_empty, is_empty_when_populated]
+    );
 }
 
 #[cfg(target_os = "linux")]
-pub use linux::{atomic_group, register_group, removal_group};
+pub use linux::{atomic_group, inspection_group, register_group, removal_group};
 
 #[cfg(target_os = "linux")]
 use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
@@ -218,5 +264,5 @@ gungraun::main!(
             .args(["--branch-sim=yes"])
             .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
     );
-    library_benchmark_groups = register_group, removal_group, atomic_group
+    library_benchmark_groups = register_group, removal_group, atomic_group, inspection_group
 );
