@@ -32,6 +32,7 @@ impl TimeSourceImpl {
 }
 
 impl TimeSource for TimeSourceImpl {
+    #[inline]
     fn now(&mut self) -> Instant {
         let platform_time = self.bindings.clock_gettime_nanos();
 

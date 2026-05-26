@@ -91,6 +91,7 @@ impl Instant {
     /// assert!(elapsed <= Duration::from_secs(1)); // Generous upper bound
     /// ```
     #[must_use]
+    #[inline]
     pub fn elapsed(&self, clock: &mut Clock) -> Duration {
         clock.now().saturating_duration_since(*self)
     }
@@ -136,6 +137,7 @@ impl Instant {
     /// assert_eq!(duration, Duration::ZERO);
     /// ```
     #[must_use]
+    #[inline]
     pub fn saturating_duration_since(&self, earlier: Self) -> Duration {
         self.inner.saturating_duration_since(earlier.inner)
     }
@@ -250,12 +252,14 @@ impl Instant {
 }
 
 impl From<std::time::Instant> for Instant {
+    #[inline]
     fn from(inner: std::time::Instant) -> Self {
         Self { inner }
     }
 }
 
 impl From<Instant> for std::time::Instant {
+    #[inline]
     fn from(instant: Instant) -> Self {
         instant.inner
     }

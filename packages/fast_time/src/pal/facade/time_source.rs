@@ -47,6 +47,7 @@ impl From<MockTimeSource> for TimeSourceFacade {
 }
 
 impl TimeSource for TimeSourceFacade {
+    #[inline]
     fn now(&mut self) -> Instant {
         match self {
             #[cfg(all(any(target_os = "linux", windows), not(miri)))]
