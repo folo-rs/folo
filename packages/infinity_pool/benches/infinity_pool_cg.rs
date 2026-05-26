@@ -27,6 +27,28 @@
 //! * `arc_pin_baseline_insert` — `Arc::pin` for comparison.
 //! * `box_pin_baseline_insert` — `Box::pin` for comparison.
 //!
+//! The `OpaquePool` family wraps the same inner `RawOpaquePool` as the
+//! `PinnedPool` family, but differs on two axes the typed variants do
+//! not exercise: the runtime layout assertion on every `insert` (the
+//! typed wrappers can statically prove the layout match and use the
+//! unchecked path), and the per-handle drop/remove cost on a pool whose
+//! API does not name the stored type. The sibling scenarios isolate
+//! these costs at instruction-level granularity:
+//!
+//! * `opaque_pool_insert_into_10k` — `OpaquePool::insert` (`Arc` + `Mutex` +
+//!   layout-check); paired with `ip_vs_std::OpaquePool` churn.
+//! * `local_opaque_pool_insert_into_10k` — `LocalOpaquePool::insert`
+//!   (`Rc` + `RefCell` + layout-check); paired with `ip_vs_std::LocalOpaquePool`.
+//! * `raw_opaque_pool_insert_into_10k` — `RawOpaquePool::insert` (layout
+//!   check only, no ref count); paired with `ip_vs_std::RawOpaquePool`.
+//! * `opaque_pool_drop_handle_from_10k` — drop a `PooledMut<u64>`,
+//!   exercising the `Arc`-clone drop path through the inner pool's mutex.
+//! * `local_opaque_pool_drop_handle_from_10k` — drop a `LocalPooledMut<u64>`,
+//!   exercising the `Rc`-clone drop path through the inner pool's `RefCell`.
+//! * `raw_opaque_pool_remove_from_10k` — explicit `unsafe pool.remove(handle)`
+//!   on a populated `RawOpaquePool`; raw handles have no `Drop`, so the
+//!   measurement isolates the unguarded slot-release cost.
+//!
 //! Iteration and bulk-drop scenarios exercise the per-slot scan paths
 //! that are not visible through insert/remove micro-benchmarks:
 //!
@@ -72,7 +94,8 @@ mod linux {
 
     use gungraun::prelude::*;
     use infinity_pool::{
-        BlindPool, BlindPooledMut, LocalPinnedPool, PinnedPool, PooledMut, RawPinnedPool,
+        BlindPool, BlindPooledMut, LocalOpaquePool, LocalPinnedPool, LocalPooledMut, OpaquePool,
+        PinnedPool, PooledMut, RawOpaquePool, RawPinnedPool, RawPooledMut,
     };
 
     // Anchor count used to populate pools before the measured operation —
@@ -128,6 +151,106 @@ mod linux {
         let anchors: Vec<BlindPooledMut<u64>> =
             (0..ANCHOR_COUNT).map(|i| pool.insert::<u64>(i)).collect();
         BlindPoolState { pool, anchors }
+    }
+
+    struct OpaquePoolState {
+        pool: OpaquePool,
+        #[expect(
+            dead_code,
+            reason = "anchors keep slots in the populated pool occupied during measurement; their `Drop` is the cleanup contract"
+        )]
+        anchors: Vec<PooledMut<u64>>,
+    }
+
+    fn make_populated_opaque_pool() -> OpaquePoolState {
+        let pool = OpaquePool::with_layout_of::<u64>();
+        let anchors: Vec<PooledMut<u64>> = (0..ANCHOR_COUNT).map(|i| pool.insert(i)).collect();
+        OpaquePoolState { pool, anchors }
+    }
+
+    struct LocalOpaquePoolState {
+        pool: LocalOpaquePool,
+        #[expect(
+            dead_code,
+            reason = "anchors keep slots in the populated pool occupied during measurement; their `Drop` is the cleanup contract"
+        )]
+        anchors: Vec<LocalPooledMut<u64>>,
+    }
+
+    fn make_populated_local_opaque_pool() -> LocalOpaquePoolState {
+        let pool = LocalOpaquePool::with_layout_of::<u64>();
+        let anchors: Vec<LocalPooledMut<u64>> = (0..ANCHOR_COUNT).map(|i| pool.insert(i)).collect();
+        LocalOpaquePoolState { pool, anchors }
+    }
+
+    // `RawOpaquePool` handles have no `Drop`, so the anchors are intentionally
+    // discarded inside setup: dropping them does not release any slots. The
+    // pool itself is moved into the bench fn and dropped after the timed call.
+    fn make_populated_raw_opaque_pool() -> RawOpaquePool {
+        let mut pool = RawOpaquePool::with_layout_of::<u64>();
+        for i in 0..ANCHOR_COUNT {
+            _ = pool.insert(i);
+        }
+        pool
+    }
+
+    // State for the `raw_opaque_pool_remove_from_10k` bench: a populated raw
+    // pool plus a freshly-inserted extra handle that the bench removes via
+    // `unsafe pool.remove(handle)`. Mirrors the `PinnedPoolWithExtraHandle`
+    // shape used by `pinned_pool_drop_handle_from_10k`.
+    struct RawOpaquePoolWithExtraHandle {
+        pool: RawOpaquePool,
+        extra: RawPooledMut<u64>,
+    }
+
+    fn make_raw_opaque_pool_with_extra_handle() -> RawOpaquePoolWithExtraHandle {
+        let mut pool = RawOpaquePool::with_layout_of::<u64>();
+        for i in 0..ANCHOR_COUNT {
+            _ = pool.insert(i);
+        }
+        let extra = pool.insert(ANCHOR_COUNT);
+        RawOpaquePoolWithExtraHandle { pool, extra }
+    }
+
+    // State for `opaque_pool_drop_handle_from_10k`. Mirrors the pinned-pool
+    // variant: anchors keep the pool fully populated, and the bench drops
+    // the `extra` handle so the measurement isolates the per-handle drop
+    // path through the Arc + Mutex inner pool.
+    struct OpaquePoolWithExtraHandle {
+        pool: OpaquePool,
+        anchors: Vec<PooledMut<u64>>,
+        extra: PooledMut<u64>,
+    }
+
+    fn make_opaque_pool_with_extra_handle() -> OpaquePoolWithExtraHandle {
+        let pool = OpaquePool::with_layout_of::<u64>();
+        let anchors: Vec<PooledMut<u64>> = (0..ANCHOR_COUNT).map(|i| pool.insert(i)).collect();
+        let extra = pool.insert(ANCHOR_COUNT);
+        OpaquePoolWithExtraHandle {
+            pool,
+            anchors,
+            extra,
+        }
+    }
+
+    // State for `local_opaque_pool_drop_handle_from_10k`. Mirrors the
+    // managed-opaque variant but exercises the single-threaded Rc + RefCell
+    // drop path instead of the Arc + Mutex one.
+    struct LocalOpaquePoolWithExtraHandle {
+        pool: LocalOpaquePool,
+        anchors: Vec<LocalPooledMut<u64>>,
+        extra: LocalPooledMut<u64>,
+    }
+
+    fn make_local_opaque_pool_with_extra_handle() -> LocalOpaquePoolWithExtraHandle {
+        let pool = LocalOpaquePool::with_layout_of::<u64>();
+        let anchors: Vec<LocalPooledMut<u64>> = (0..ANCHOR_COUNT).map(|i| pool.insert(i)).collect();
+        let extra = pool.insert(ANCHOR_COUNT);
+        LocalOpaquePoolWithExtraHandle {
+            pool,
+            anchors,
+            extra,
+        }
     }
 
     // State for the `blind_pool_insert_with_5_layouts` bench. The pool holds
@@ -312,6 +435,40 @@ mod linux {
         (state, handle)
     }
 
+    #[library_benchmark]
+    #[bench::populated(make_populated_opaque_pool())]
+    fn opaque_pool_insert_into_10k(state: OpaquePoolState) -> (OpaquePoolState, PooledMut<u64>) {
+        // Exercises the managed (Arc + Mutex) opaque insert path with the
+        // runtime layout assertion that the typed `PinnedPool` wrapper
+        // bypasses via `insert_unchecked`.
+        let handle = black_box(&state.pool).insert(black_box(ANCHOR_COUNT));
+        (state, handle)
+    }
+
+    #[library_benchmark]
+    #[bench::populated(make_populated_local_opaque_pool())]
+    fn local_opaque_pool_insert_into_10k(
+        state: LocalOpaquePoolState,
+    ) -> (LocalOpaquePoolState, LocalPooledMut<u64>) {
+        // Exercises the single-threaded (Rc + RefCell) opaque insert path
+        // with the runtime layout assertion that `LocalPinnedPool` bypasses
+        // via `insert_unchecked`.
+        let handle = black_box(&state.pool).insert(black_box(ANCHOR_COUNT));
+        (state, handle)
+    }
+
+    #[library_benchmark]
+    #[bench::populated(make_populated_raw_opaque_pool())]
+    fn raw_opaque_pool_insert_into_10k(
+        mut pool: RawOpaquePool,
+    ) -> (RawOpaquePool, RawPooledMut<u64>) {
+        // Exercises the raw opaque insert path: no ref-counting, no
+        // synchronization, but the runtime layout assertion still runs
+        // because callers may insert any same-layout `T`.
+        let handle = black_box(&mut pool).insert(black_box(ANCHOR_COUNT));
+        (pool, handle)
+    }
+
     // ---------- Drop path ----------
 
     #[library_benchmark]
@@ -326,6 +483,58 @@ mod linux {
         } = state;
         drop(black_box(extra));
         (pool, anchors)
+    }
+
+    #[library_benchmark]
+    #[bench::with_extra(make_opaque_pool_with_extra_handle())]
+    fn opaque_pool_drop_handle_from_10k(
+        state: OpaquePoolWithExtraHandle,
+    ) -> (OpaquePool, Vec<PooledMut<u64>>) {
+        // Drops a `PooledMut<u64>` whose `Drop` impl removes the slot
+        // through the `Arc<Mutex<RawOpaquePoolThreadSafe>>` inner pool.
+        // Isolates the managed-opaque per-handle drop cost relative to
+        // the typed `pinned_pool_drop_handle_from_10k` baseline.
+        let OpaquePoolWithExtraHandle {
+            pool,
+            anchors,
+            extra,
+        } = state;
+        drop(black_box(extra));
+        (pool, anchors)
+    }
+
+    #[library_benchmark]
+    #[bench::with_extra(make_local_opaque_pool_with_extra_handle())]
+    fn local_opaque_pool_drop_handle_from_10k(
+        state: LocalOpaquePoolWithExtraHandle,
+    ) -> (LocalOpaquePool, Vec<LocalPooledMut<u64>>) {
+        // Drops a `LocalPooledMut<u64>` whose `Drop` impl removes the slot
+        // through the `Rc<RefCell<RawOpaquePool>>` inner pool. Isolates the
+        // single-threaded opaque per-handle drop cost.
+        let LocalOpaquePoolWithExtraHandle {
+            pool,
+            anchors,
+            extra,
+        } = state;
+        drop(black_box(extra));
+        (pool, anchors)
+    }
+
+    #[library_benchmark]
+    #[bench::with_extra(make_raw_opaque_pool_with_extra_handle())]
+    fn raw_opaque_pool_remove_from_10k(state: RawOpaquePoolWithExtraHandle) -> RawOpaquePool {
+        // Explicitly removes a `RawPooledMut<u64>` from a populated raw
+        // pool. `RawPooledMut` has no `Drop`, so the measurement isolates
+        // the unguarded slot-release path with no ref-count or
+        // synchronization overhead.
+        let RawOpaquePoolWithExtraHandle { mut pool, extra } = state;
+        // SAFETY: `extra` was produced by `pool.insert` above and has not
+        // been removed yet, so the handle refers to an object currently
+        // present in this pool.
+        unsafe {
+            pool.remove(black_box(extra));
+        }
+        pool
     }
 
     #[library_benchmark]
@@ -407,6 +616,9 @@ mod linux {
             local_pinned_pool_insert_into_10k,
             blind_pool_insert_into_10k,
             blind_pool_insert_with_5_layouts,
+            opaque_pool_insert_into_10k,
+            local_opaque_pool_insert_into_10k,
+            raw_opaque_pool_insert_into_10k,
             arc_pin_baseline_insert,
             box_pin_baseline_insert,
         ]
@@ -416,6 +628,9 @@ mod linux {
         name = drop_group,
         benchmarks = [
             pinned_pool_drop_handle_from_10k,
+            opaque_pool_drop_handle_from_10k,
+            local_opaque_pool_drop_handle_from_10k,
+            raw_opaque_pool_remove_from_10k,
             raw_pinned_pool_drop_full_with_10k_u64,
             raw_pinned_pool_drop_full_with_10k_string,
         ]
