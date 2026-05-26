@@ -443,8 +443,10 @@ including: which operations warrant Callgrind coverage, scenario selection guide
 (default case, branching extremes, state/occupancy variants, size sensitivity, initialization
 vs steady state, sibling variants), the bench file template (including the file-scope lint
 suppression block required by Gungraun's macro expansions), Cargo.toml setup with the
-target-gated dependency, Gungraun syntax gotchas, the pairing convention, and how to interpret
-results.
+target-gated dependency, Gungraun syntax gotchas, the pairing convention, how to interpret
+results, and why design decisions motivated by a Callgrind delta should always be
+cross-validated against the Criterion counterpart (real CPUs can absorb or amplify a
+simulated cost by orders of magnitude).
 
 # YAML formatting
 
