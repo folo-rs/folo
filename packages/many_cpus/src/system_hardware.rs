@@ -117,6 +117,7 @@ impl SystemHardware {
     /// let processor_count = hardware.max_processor_count();
     /// println!("Running on hardware with up to {processor_count} processors");
     /// ```
+    #[inline]
     #[must_use]
     pub fn current() -> &'static Self {
         CURRENT_HARDWARE.get_or_init(|| Self::from_platform(PlatformFacade::target()))
