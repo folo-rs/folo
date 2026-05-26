@@ -158,18 +158,23 @@ mod linux {
     }
 
     // The embedded lifecycle measures placing the event into caller-owned pinned storage,
-    // sending a value, polling for it, and tearing down. There is no heap allocation for
-    // the event itself (the EmbeddedEvent is on the stack frame), only for boxing the
-    // receiver to pin it for poll.
+    // sending a value, polling for it, and tearing down. There is no heap allocation on the
+    // measured path: both the event place and the receiver are stack-pinned via `pin!`. This
+    // is the whole point of the embedded variant — if we boxed either of them we would be
+    // measuring boxed-event semantics, not embedded ones. `pin!` is justified here per the
+    // workspace policy because `Box::pin` would invalidate the benchmark.
 
     #[library_benchmark]
     fn sync_embedded_lifecycle() {
-        let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+        let mut place = std::pin::pin!(EmbeddedEvent::<i32>::new());
 
-        // SAFETY: `place` is the only owner of the event, lives until the end of this
-        // function, and is pinned.
+        // SAFETY: `place` remains valid for writes and pinned for the entire body of this
+        // function (it is a stack-pinned local that we never move). The endpoints we obtain
+        // borrow `place` exclusively; we do not touch `place` again while they are alive and
+        // they do not escape this function, so no conflicting reference to the event can
+        // exist. `place` was just created and is not already in use by another event.
         let (sender, receiver) = black_box(unsafe { Event::placed(place.as_mut()) });
-        let mut receiver = Box::pin(receiver);
+        let mut receiver = std::pin::pin!(receiver);
 
         sender.send(black_box(42));
 
@@ -179,12 +184,15 @@ mod linux {
 
     #[library_benchmark]
     fn local_embedded_lifecycle() {
-        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
+        let mut place = std::pin::pin!(EmbeddedLocalEvent::<i32>::new());
 
-        // SAFETY: `place` is the only owner of the event, lives until the end of this
-        // function, and is pinned.
+        // SAFETY: `place` remains valid for writes and pinned for the entire body of this
+        // function (it is a stack-pinned local that we never move). The endpoints we obtain
+        // borrow `place` exclusively; we do not touch `place` again while they are alive and
+        // they do not escape this function, so no conflicting reference to the event can
+        // exist. `place` was just created and is not already in use by another event.
         let (sender, receiver) = black_box(unsafe { LocalEvent::placed(place.as_mut()) });
-        let mut receiver = Box::pin(receiver);
+        let mut receiver = std::pin::pin!(receiver);
 
         sender.send(black_box(42));
 
