@@ -551,6 +551,13 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
     // never observe (because their tight u64-only loop keeps u64 permanently at front).
     blind_pool_churn_n8_layouts_adversarial(&mut group, &allocs);
 
+    // Mixed-layout wall-clock scenario. The dispatch holds 8 entries; accesses are evenly
+    // distributed across all 8 layouts in a pre-shuffled (deterministic) order, so no MRU
+    // or hit-count-based predictor sees a recognizable pattern. This is the realistic
+    // middle ground between the "one hot layout" common case (which existing N=8 benches
+    // exercise) and the worst-case adversarial pattern.
+    blind_pool_churn_n8_layouts_mixed(&mut group, &allocs);
+
     // LocalBlindPool (single-threaded, reference counted, multiple types) with churn
     let allocs_op = allocs.operation("LocalBlindPool");
     group.bench_function("LocalBlindPool", |b| {
@@ -780,3 +787,149 @@ fn blind_pool_churn_n8_layouts_adversarial(
 
 criterion_group!(benches, churn_insertion_benchmark);
 criterion_main!(benches);
+
+// Mixed-layout wall-clock counterpart of `blind_pool_churn_n8_layouts_adversarial`. The
+// dispatch holds 8 distinct layouts, and each measured iteration inserts (and later
+// removes) items distributed evenly across all 8 layouts in a pre-shuffled, deterministic
+// order. The shuffle ensures no recognizable pattern that an MRU front-cache or
+// hit-count-based reordering could lock onto, so the average per-insert scan position
+// approximates N/2 rather than 0 (typical case) or N-1 (adversarial).
+fn blind_pool_churn_n8_layouts_mixed(
+    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
+    allocs: &alloc_tracker::Session,
+) {
+    let label = "BlindPool_8layouts_mixed";
+    let allocs_op = allocs.operation(label);
+    group.bench_function(label, |b| {
+        b.iter_custom(|iters| {
+            // Pre-build the access pattern: BATCH_COUNT * BATCH_SIZE entries, each in
+            // [0, 8), with each value appearing the same number of times, shuffled with a
+            // fixed seed so the order is deterministic but arbitrary.
+            let total_accesses = (BATCH_COUNT * BATCH_SIZE) as usize;
+            let access: Vec<u8> = {
+                let mut a: Vec<u8> = (0..total_accesses).map(|i| (i % 8) as u8).collect();
+                let mut shuffle_rng = SmallRng::seed_from_u64(7777);
+                for i in (1..a.len()).rev() {
+                    let j = shuffle_rng.random_range(0..=i);
+                    a.swap(i, j);
+                }
+                a
+            };
+
+            let mut all_pools = Vec::with_capacity(iters as usize);
+            let mut all_handles: Vec<(
+                Vec<BlindPooledMut<u8>>,
+                Vec<BlindPooledMut<u16>>,
+                Vec<BlindPooledMut<u32>>,
+                Vec<BlindPooledMut<u64>>,
+                Vec<BlindPooledMut<u128>>,
+                Vec<BlindPooledMut<[u8; 3]>>,
+                Vec<BlindPooledMut<[u8; 5]>>,
+                Vec<BlindPooledMut<[u8; 6]>>,
+            )> = Vec::with_capacity(iters as usize);
+
+            for _ in 0..iters {
+                let pool = BlindPool::new();
+                let cap = INITIAL_ITEMS as usize / 8 + BATCH_SIZE as usize;
+                let mut handles = (
+                    Vec::with_capacity(cap),
+                    Vec::with_capacity(cap),
+                    Vec::with_capacity(cap),
+                    Vec::with_capacity(cap),
+                    Vec::with_capacity(cap),
+                    Vec::with_capacity(cap),
+                    Vec::with_capacity(cap),
+                    Vec::with_capacity(cap),
+                );
+                // Pre-populate INITIAL_ITEMS distributed evenly across the 8 layouts so
+                // each per-type slab is hot before the timed loop starts.
+                for i in 0..INITIAL_ITEMS {
+                    match (i % 8) as u8 {
+                        0 => handles.0.push(pool.insert::<u8>(0)),
+                        1 => handles.1.push(pool.insert::<u16>(0)),
+                        2 => handles.2.push(pool.insert::<u32>(0)),
+                        3 => handles.3.push(pool.insert::<u64>(0)),
+                        4 => handles.4.push(pool.insert::<u128>(0)),
+                        5 => handles.5.push(pool.insert::<[u8; 3]>([0; 3])),
+                        6 => handles.6.push(pool.insert::<[u8; 5]>([0; 5])),
+                        _ => handles.7.push(pool.insert::<[u8; 6]>([0; 6])),
+                    }
+                }
+                all_pools.push(pool);
+                all_handles.push(handles);
+            }
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for (pool, handles) in all_pools.iter_mut().zip(all_handles.iter_mut()) {
+                let mut rng = SmallRng::seed_from_u64(42);
+
+                for batch_idx in 0..BATCH_COUNT {
+                    let batch_start = (batch_idx * BATCH_SIZE) as usize;
+
+                    // Insert BATCH_SIZE items, layout chosen by the pre-shuffled sequence.
+                    for i in 0..BATCH_SIZE as usize {
+                        match access[batch_start + i] {
+                            0 => handles.0.push(pool.insert::<u8>(0)),
+                            1 => handles.1.push(pool.insert::<u16>(0)),
+                            2 => handles.2.push(pool.insert::<u32>(0)),
+                            3 => handles.3.push(pool.insert::<u64>(0)),
+                            4 => handles.4.push(pool.insert::<u128>(0)),
+                            5 => handles.5.push(pool.insert::<[u8; 3]>([0; 3])),
+                            6 => handles.6.push(pool.insert::<[u8; 5]>([0; 5])),
+                            _ => handles.7.push(pool.insert::<[u8; 6]>([0; 6])),
+                        }
+                    }
+
+                    // Remove BATCH_SIZE items, layout chosen by the same sequence; a
+                    // uniformly random item within each type's handle vector is removed.
+                    for i in 0..BATCH_SIZE as usize {
+                        match access[batch_start + i] {
+                            0 => {
+                                let len = handles.0.len();
+                                let target = rng.random_range(0..len);
+                                handles.0.swap_remove(target);
+                            }
+                            1 => {
+                                let len = handles.1.len();
+                                let target = rng.random_range(0..len);
+                                handles.1.swap_remove(target);
+                            }
+                            2 => {
+                                let len = handles.2.len();
+                                let target = rng.random_range(0..len);
+                                handles.2.swap_remove(target);
+                            }
+                            3 => {
+                                let len = handles.3.len();
+                                let target = rng.random_range(0..len);
+                                handles.3.swap_remove(target);
+                            }
+                            4 => {
+                                let len = handles.4.len();
+                                let target = rng.random_range(0..len);
+                                handles.4.swap_remove(target);
+                            }
+                            5 => {
+                                let len = handles.5.len();
+                                let target = rng.random_range(0..len);
+                                handles.5.swap_remove(target);
+                            }
+                            6 => {
+                                let len = handles.6.len();
+                                let target = rng.random_range(0..len);
+                                handles.6.swap_remove(target);
+                            }
+                            _ => {
+                                let len = handles.7.len();
+                                let target = rng.random_range(0..len);
+                                handles.7.swap_remove(target);
+                            }
+                        }
+                    }
+                }
+            }
+            start.elapsed()
+        });
+    });
+}
