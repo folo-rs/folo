@@ -381,6 +381,48 @@ Two important caveats:
    ordering effects do not show up. Multithreaded behavior must be covered
    by Criterion + `par_bench`.
 
+### Cross-validate design decisions against Criterion
+
+Callgrind is excellent for *spotting* a delta and *attributing* it to a
+specific code path, but the absolute magnitude of that delta on real
+hardware is unpredictable. The simulator has no out-of-order execution, no
+modern branch predictor, no prefetcher, and a fixed cache geometry — all
+of which real CPUs use to absorb (or sometimes amplify) instruction-count
+deltas. Two failure modes are common enough to plan for:
+
+* **Absorbed:** Callgrind shows a worrying instruction-count increase that
+  wall-clock barely registers. Branch prediction nails the new branches,
+  ILP overlaps the extra arithmetic with the surrounding load latency, the
+  added comparisons live entirely in registers. A +20% Callgrind delta on
+  a hot path can shrink to +2% wall-clock.
+* **Amplified:** Callgrind shows a small instruction-count delta but
+  wall-clock shows a much larger regression. The new code introduces a
+  hard-to-predict branch, a `swap_remove`+`push` pair that touches more
+  cache lines than the in-place rotation it replaced, or a store-load
+  dependency the OoO engine cannot hide. A +50% Callgrind delta can
+  blow up to +100% or worse wall-clock.
+
+Therefore, when a Callgrind delta is driving a *design decision* (which
+data structure to use, which fast path to add, whether a regression on
+one axis is acceptable in exchange for a win on another), **run the
+Criterion counterpart on the same scenario before committing to the
+design.** Treat Callgrind as the hypothesis generator and Criterion as
+the verifier:
+
+* If wall-clock agrees in direction and rough magnitude, the change is safe
+  to ship and the Callgrind number is a fair summary.
+* If wall-clock disagrees in direction, the design needs to be revisited
+  — the simulated cost was misleading.
+* If wall-clock confirms the direction but the magnitude differs sharply,
+  document both numbers in the PR description. Reviewers should see the
+  real-world cost, not just the simulated one.
+
+This is especially important for *worst-case* / adversarial scenarios. A
+typical-case Criterion churn loop will often hide a worst-case regression
+because the hot path keeps the data structure in the cheap state — you
+need a dedicated adversarial Criterion bench to expose what the
+adversarial Callgrind scenario actually costs in cycles.
+
 ### Regression handling
 
 Gungraun's auto-diff exits non-zero on any regression, however small. This
