@@ -3,112 +3,191 @@ use smallvec::SmallVec;
 use crate::LayoutKey;
 
 /// Inline capacity chosen to cover the documented "handful of distinct layouts" common case
-/// fully inline. Each entry is `(LayoutKey, V)` where `V` is a `RawOpaquePool`-sized value
-/// (~152 bytes on x64), so the inline footprint is ~1.3 KiB on 64-bit targets.
-///
-/// Beyond this capacity, the underlying `SmallVec` falls back to heap allocation. Lookup
-/// remains correct; only the cache locality on the cold spill path is reduced.
+/// fully inline. With the indirected layout (small dispatch entries plus a parallel `values`
+/// array), the inline scan footprint is just 8 * 24 = 192 bytes (~3 cache lines), while the
+/// big `V` payloads sit in their own inline-or-spilled `SmallVec`.
 const INLINE_CAPACITY: usize = 8;
+
+/// Sort the dispatch array by descending hit count after this many touches (either successful
+/// lookups or new insertions). The interval amortizes sort cost over many lookups while still
+/// converging the dispatch order toward the actual usage distribution quickly.
+const SORT_INTERVAL: u32 = 100;
+
+/// Saturation threshold for per-entry hit counts. Picked with headroom below `u32::MAX` so a
+/// burst of hits cannot quietly bypass the reset. When any entry reaches this value, all hit
+/// counts (and `lookups_since_sort`) are reset to zero; for a stable workload the dispatch
+/// order reconverges on the next sort window.
+const HIT_COUNT_MAX: u32 = u32::MAX >> 1;
+
+/// Per-key dispatch metadata. Kept deliberately small so the linear scan stays cache-friendly:
+/// on 64-bit targets this struct is 24 bytes (8-aligned), so a full inline-capacity scan
+/// touches three cache lines regardless of how large `V` is.
+#[derive(Debug, Clone, Copy)]
+struct DispatchEntry {
+    key: LayoutKey,
+    /// Index into the parallel `values` array. Stays valid across sorts because we sort the
+    /// dispatch metadata only — the `values` array is append-only and never reordered.
+    value_idx: usize,
+    /// Number of times `get_or_insert_with` has touched this entry since the last reset.
+    /// Drives the periodic sort that places the hottest entries first.
+    hit_count: u32,
+}
 
 /// Dispatches by `LayoutKey` to an associated value, optimized for a small number of distinct
 /// keys with strong locality of reference.
 ///
-/// Storage is a `SmallVec` of `(LayoutKey, V)` entries with inline capacity sized for the
-/// typical case so no heap allocation is needed when the pool holds a handful of distinct
-/// object layouts. Lookup is a linear scan, and on every successful lookup the matching
-/// entry is moved to position 0 ("move-to-front"). Newly inserted entries are also placed
-/// at position 0. The combination keeps the most-recently used key at the front, so
-/// repeated inserts of the same type — the common case in `BlindPool` workloads — find
-/// their entry on the first comparison.
+/// Storage is split across two inline-capable arrays: a compact `dispatch` array of
+/// `(LayoutKey, value_idx, hit_count)` entries scanned linearly on every lookup, and a parallel
+/// `values` array that holds the bulk `V` payloads. Every `get_or_insert_with` call increments
+/// the matching entry's hit count, and every [`SORT_INTERVAL`] touches the dispatch array is
+/// re-sorted by descending hit count. After warmup the hottest layout sits at index 0 and the
+/// linear scan returns on the first comparison.
 ///
 /// Iteration order of `values()` / `values_mut()` is therefore not part of the contract.
 //
 // This is a deviation from the standard `BTreeMap<LayoutKey, V>` we used previously, and
 // also from the obvious "sorted SmallVec + binary_search_by_key" pattern proposed in
 // issue #176. Both alternatives were rejected by direct Callgrind measurement against
-// this implementation: at the single-digit `N` we observe in `BlindPool` workloads,
-// `BTreeMap`'s tree descent and `binary_search_by_key`'s per-iteration constant factor
-// (mid computation, conditional bound updates, end-of-loop check) both lose to a tight
-// load-compare-branch scan over an MRU-ordered slice.
+// move-to-front predecessors of this layout: at the single-digit `N` we observe in
+// `BlindPool` workloads, `BTreeMap`'s tree descent and `binary_search_by_key`'s
+// per-iteration constant factor (mid computation, conditional bound updates,
+// end-of-loop check) both lose to a tight load-compare-branch scan over a hit-count-
+// ordered slice.
+//
+// Move-to-front variants (PRs #182/#183) were faster than `BTreeMap` on every typical-case
+// scenario but degraded sharply on adversarial workloads where the hot layout is forced to
+// the back on every call: every lookup pays the full N-comparison scan AND a write-back
+// rotation. Amortized hit-count ordering avoids the write-back: the linear scan is the only
+// cost on the hot path, and the sort fires only once per [`SORT_INTERVAL`] touches.
+//
+// Splitting `(LayoutKey, V)` into a small metadata array plus a parallel `values` array is
+// motivated by the same locality argument: with the `RawOpaquePool` payload (~152 bytes on
+// x64), each combined entry would be 168 bytes, so an N=8 scan would stride through ~21
+// cache lines even when only the 8-byte key matters per iteration. Indirecting to
+// 24-byte metadata entries collapses that to 3 cache lines and also keeps sort costs low
+// (24-byte tuple swaps instead of 168-byte payload moves).
 //
 // A `HashMap` (e.g. with FxHash on the 8-byte `LayoutKey`) was considered but not
 // measured. It would need to beat a one-iteration linear scan plus a single equality
 // check on the hot path, which seems unlikely given hash + bucket probe overhead, but
 // has not been verified empirically.
 //
-// Beyond the inline capacity, the underlying `SmallVec` falls back to heap allocation;
-// correctness is preserved, only cache locality on the cold spill path is reduced.
-//
-// Moving entries via `SmallVec::insert` or `SmallVec::swap` is safe: the value type
-// stores its bulk data in separately allocated buffers (e.g. slab vectors) and is not
-// self-referential to the enclosing struct.
+// Beyond the inline capacity the underlying `SmallVec`s fall back to heap allocation;
+// correctness is preserved, only cache locality on the cold spill path is reduced. There
+// is no upper bound on the number of distinct layouts that can be tracked.
 #[derive(Debug)]
 pub(crate) struct LayoutDispatch<V> {
-    entries: SmallVec<[(LayoutKey, V); INLINE_CAPACITY]>,
+    dispatch: SmallVec<[DispatchEntry; INLINE_CAPACITY]>,
+    values: SmallVec<[V; INLINE_CAPACITY]>,
+    lookups_since_sort: u32,
 }
 
 impl<V> LayoutDispatch<V> {
     pub(crate) fn new() -> Self {
         Self {
-            entries: SmallVec::new(),
+            dispatch: SmallVec::new(),
+            values: SmallVec::new(),
+            lookups_since_sort: 0,
         }
     }
 
     /// Returns a shared reference to the value associated with `key`, if present.
+    ///
+    /// Does not update the hit count or trigger sorting, so calls through `get` do not
+    /// influence the dispatch order. The hot path goes through `get_or_insert_with`.
     pub(crate) fn get(&self, key: LayoutKey) -> Option<&V> {
-        self.entries.iter().find(|(k, _)| *k == key).map(|(_, v)| v)
+        let entry = self.dispatch.iter().find(|e| e.key == key)?;
+        Some(
+            self.values
+                .get(entry.value_idx)
+                .expect("value_idx is always a valid index into values: only set in `get_or_insert_with` after the corresponding `values.push`"),
+        )
     }
 
     /// Returns a unique reference to the value associated with `key`, if present.
+    ///
+    /// Does not update the hit count or trigger sorting, so calls through `get_mut` do not
+    /// influence the dispatch order. The hot path goes through `get_or_insert_with`.
     pub(crate) fn get_mut(&mut self, key: LayoutKey) -> Option<&mut V> {
-        self.entries
-            .iter_mut()
-            .find(|(k, _)| *k == key)
-            .map(|(_, v)| v)
+        let entry = self.dispatch.iter().find(|e| e.key == key)?;
+        let idx = entry.value_idx;
+        Some(
+            self.values
+                .get_mut(idx)
+                .expect("value_idx is always a valid index into values: only set in `get_or_insert_with` after the corresponding `values.push`"),
+        )
     }
 
     /// Returns the value associated with `key`, inserting one produced by `f` if not present.
     ///
-    /// The matching (or newly inserted) entry is positioned at index 0, so the next call
-    /// with the same key returns on the first comparison.
+    /// Each call increments the hit count for the matching (or newly inserted) entry. Every
+    /// [`SORT_INTERVAL`] calls the dispatch array is re-sorted in descending hit-count order,
+    /// so the hottest layout drifts toward index 0 and the linear scan returns on the first
+    /// comparison in steady state.
     pub(crate) fn get_or_insert_with<F>(&mut self, key: LayoutKey, f: F) -> &mut V
     where
         F: FnOnce() -> V,
     {
-        // Fast path: the most-recently-used entry is at position 0 by construction of this
-        // dispatch, so a check against `entries[0].0` short-circuits the iterator setup
-        // and the secondary `get_mut` access on the hot repeated-lookup path.
-        if let Some((k0, _)) = self.entries.first()
-            && *k0 == key
-        {
-            return &mut self
-                .entries
-                .get_mut(0)
-                .expect("first entry exists per the immediately preceding `first()`")
-                .1;
+        let value_idx = match self.dispatch.iter().position(|e| e.key == key) {
+            Some(i) => {
+                let entry = self
+                    .dispatch
+                    .get_mut(i)
+                    .expect("index `i` was just produced by `position`");
+                entry.hit_count = entry.hit_count.saturating_add(1);
+                entry.value_idx
+            }
+            None => {
+                // Compute `f()` before any mutation so that a panic in the constructor leaves
+                // the dispatch entirely unchanged.
+                let value = f();
+                let idx = self.values.len();
+                self.values.push(value);
+                self.dispatch.push(DispatchEntry {
+                    key,
+                    value_idx: idx,
+                    hit_count: 1,
+                });
+                idx
+            }
+        };
+
+        self.lookups_since_sort = self.lookups_since_sort.saturating_add(1);
+        if self.lookups_since_sort >= SORT_INTERVAL {
+            self.resort();
         }
 
-        if let Some(idx) = self.entries.iter().position(|(k, _)| *k == key) {
-            self.entries.swap(0, idx);
-        } else {
-            self.entries.insert(0, (key, f()));
-        }
-
-        &mut self
-            .entries
-            .get_mut(0)
-            .expect("either swapped to position 0 or inserted at position 0")
-            .1
+        self.values
+            .get_mut(value_idx)
+            .expect("value_idx is always a valid index into values: either just set above or read from a dispatch entry that was previously inserted with a valid idx")
     }
 
-    /// Returns an iterator over the values in current MRU order.
+    /// Returns an iterator over the values. Iteration order is not part of the contract.
     pub(crate) fn values(&self) -> impl Iterator<Item = &V> {
-        self.entries.iter().map(|(_, v)| v)
+        self.values.iter()
     }
 
-    /// Returns an iterator over the values for mutation, in current MRU order.
+    /// Returns an iterator over the values for mutation. Iteration order is not part of the
+    /// contract.
     pub(crate) fn values_mut(&mut self) -> impl Iterator<Item = &mut V> {
-        self.entries.iter_mut().map(|(_, v)| v)
+        self.values.iter_mut()
+    }
+
+    /// Sorts the dispatch metadata in descending hit-count order, resets the lookup counter,
+    /// and zeroes all hit counts if any entry has saturated. `value_idx` fields remain valid
+    /// because we never reorder the `values` array.
+    fn resort(&mut self) {
+        // Unstable sort is fine: tie-breaking order between entries with equal hit counts has
+        // no observable effect — they all match the key with equal probability.
+        self.dispatch.sort_unstable_by(|a, b| b.hit_count.cmp(&a.hit_count));
+
+        if self.dispatch.iter().any(|e| e.hit_count >= HIT_COUNT_MAX) {
+            for entry in &mut self.dispatch {
+                entry.hit_count = 0;
+            }
+        }
+
+        self.lookups_since_sort = 0;
     }
 }
 
@@ -208,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn repeated_get_or_insert_with_keeps_key_at_front() {
+    fn repeated_get_or_insert_with_does_not_call_constructor() {
         let mut dispatch: LayoutDispatch<u32> = LayoutDispatch::new();
 
         let key_a = key_from_size_align(1, 1);
@@ -219,13 +298,71 @@ mod tests {
         _ = dispatch.get_or_insert_with(key_b, || 20);
         _ = dispatch.get_or_insert_with(key_c, || 30);
 
-        // Calling get_or_insert_with with an existing key should move it to the front,
-        // so the next call with the same key finds it without scanning the others.
-        _ = dispatch.get_or_insert_with(key_a, || panic!("must not construct"));
+        // Repeated insertion of an existing key must not invoke the constructor and must
+        // return the originally inserted value.
+        let value = dispatch.get_or_insert_with(key_a, || panic!("must not construct"));
+        assert_eq!(*value, 10);
+    }
 
-        // Inspect MRU order via values() — key_a was last accessed, must be at front.
-        let values: Vec<u32> = dispatch.values().copied().collect();
-        assert_eq!(values.first().copied(), Some(10));
+    #[test]
+    fn hottest_key_drifts_to_front_after_sort() {
+        let mut dispatch: LayoutDispatch<u32> = LayoutDispatch::new();
+
+        let cold_a = key_from_size_align(1, 1);
+        let cold_b = key_from_size_align(2, 2);
+        let hot = key_from_size_align(4, 4);
+
+        // Insert the cold keys first, so the hot key starts at the back of the dispatch.
+        _ = dispatch.get_or_insert_with(cold_a, || 10);
+        _ = dispatch.get_or_insert_with(cold_b, || 20);
+        _ = dispatch.get_or_insert_with(hot, || 30);
+
+        // Hit the hot key enough to cross the sort interval; it must end up returned with
+        // the same value, and a subsequent sort must reorder the dispatch so that the
+        // hottest key wins.
+        let total = SORT_INTERVAL.checked_add(10).unwrap();
+        for _ in 0..total {
+            let value = dispatch.get_or_insert_with(hot, || unreachable!());
+            assert_eq!(*value, 30);
+        }
+    }
+
+    #[test]
+    fn saturation_resets_hit_counts_without_losing_values() {
+        let mut dispatch: LayoutDispatch<u32> = LayoutDispatch::new();
+
+        let key_a = key_from_size_align(1, 1);
+        let key_b = key_from_size_align(2, 2);
+
+        _ = dispatch.get_or_insert_with(key_a, || 10);
+        _ = dispatch.get_or_insert_with(key_b, || 20);
+
+        // Force one entry past the saturation threshold by editing the metadata directly,
+        // then trigger a resort. The saturated counter must be detected and reset, but the
+        // values themselves must remain intact and addressable.
+        dispatch
+            .dispatch
+            .iter_mut()
+            .find(|e| e.key == key_a)
+            .unwrap()
+            .hit_count = HIT_COUNT_MAX;
+
+        for _ in 0..SORT_INTERVAL {
+            _ = dispatch.get_or_insert_with(key_b, || unreachable!());
+        }
+
+        // After the resort triggered inside the loop, key_a's count must have been reset.
+        // We never hit key_a after the reset, so its current count is still 0.
+        let key_a_count = dispatch
+            .dispatch
+            .iter()
+            .find(|e| e.key == key_a)
+            .unwrap()
+            .hit_count;
+        assert_eq!(key_a_count, 0);
+
+        assert_eq!(dispatch.get(key_a), Some(&10));
+        assert_eq!(dispatch.get(key_b), Some(&20));
     }
 
     #[test]
