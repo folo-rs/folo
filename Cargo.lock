@@ -484,7 +484,7 @@ dependencies = [
 
 [[package]]
 name = "events_once"
-version = "0.5.23"
+version = "0.5.24"
 dependencies = [
  "criterion",
  "futures",
@@ -589,7 +589,7 @@ dependencies = [
 
 [[package]]
 name = "future_deque"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "criterion",
  "events_once",
@@ -905,7 +905,7 @@ dependencies = [
 
 [[package]]
 name = "infinity_pool"
-version = "0.8.14"
+version = "0.8.15"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -2115,7 +2115,7 @@ checksum = "6bce2adbe4c8e63c3e7f79e9249b5409fb3c9bce989dd44337493cf1c8d7dea0"
 
 [[package]]
 name = "vicinal"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
