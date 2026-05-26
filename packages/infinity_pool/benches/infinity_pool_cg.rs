@@ -36,11 +36,14 @@
 //! these costs at instruction-level granularity:
 //!
 //! * `opaque_pool_insert_into_10k` — `OpaquePool::insert` (`Arc` + `Mutex` +
-//!   layout-check); paired with `ip_vs_std::OpaquePool` churn.
+//!   layout-check); paired with the `OpaquePool` bench in the `ip_vs_std`
+//!   Criterion group.
 //! * `local_opaque_pool_insert_into_10k` — `LocalOpaquePool::insert`
-//!   (`Rc` + `RefCell` + layout-check); paired with `ip_vs_std::LocalOpaquePool`.
+//!   (`Rc` + `RefCell` + layout-check); paired with the `LocalOpaquePool`
+//!   bench in the `ip_vs_std` Criterion group.
 //! * `raw_opaque_pool_insert_into_10k` — `RawOpaquePool::insert` (layout
-//!   check only, no ref count); paired with `ip_vs_std::RawOpaquePool`.
+//!   check only, no ref count); paired with the `RawOpaquePool` bench in
+//!   the `ip_vs_std` Criterion group.
 //! * `opaque_pool_drop_handle_from_10k` — drop a `PooledMut<u64>`,
 //!   exercising the `Arc`-clone drop path through the inner pool's mutex.
 //! * `local_opaque_pool_drop_handle_from_10k` — drop a `LocalPooledMut<u64>`,
@@ -99,8 +102,8 @@ mod linux {
     };
 
     // Anchor count used to populate pools before the measured operation —
-    // matches `ip_vs_std::INITIAL_ITEMS` so Callgrind and wall-clock benches
-    // observe the same steady-state.
+    // matches the private `INITIAL_ITEMS` constant in `infinity_pool_vs_std.rs`
+    // so Callgrind and wall-clock benches observe the same steady-state.
     const ANCHOR_COUNT: u64 = 10_000;
 
     struct PinnedPoolState {
