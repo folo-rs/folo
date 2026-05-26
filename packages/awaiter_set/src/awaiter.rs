@@ -96,6 +96,7 @@ pub struct Awaiter {
 
 impl Awaiter {
     /// Creates a new awaiter in the idle state.
+    #[inline]
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -110,6 +111,7 @@ impl Awaiter {
     ///
     /// A future's [`Drop`] handler uses this to decide whether
     /// cleanup (unregistering or forwarding a resource) is needed.
+    #[inline]
     #[must_use]
     pub fn is_registered(&self) -> bool {
         self.lifecycle.load(Ordering::Acquire) != IDLE
@@ -125,6 +127,7 @@ impl Awaiter {
     /// `Poll::Ready`.
     ///
     /// This is typically the first check in a future's `poll()`.
+    #[inline]
     #[must_use]
     pub fn take_notification(&self) -> bool {
         self.lifecycle
@@ -139,6 +142,7 @@ impl Awaiter {
     /// [`Drop`] handler to decide whether the primitive granted a
     /// resource (lock, permit, signal) that must be forwarded to
     /// another awaiter instead of being silently discarded.
+    #[inline]
     #[must_use]
     pub fn is_notified(&self) -> bool {
         self.lifecycle.load(Ordering::Acquire) == NOTIFIED

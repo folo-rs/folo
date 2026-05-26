@@ -152,6 +152,7 @@ impl AwaiterSet {
     }
 
     /// Returns `true` if the set contains no awaiters.
+    #[inline]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.head.is_null()
@@ -172,6 +173,7 @@ impl AwaiterSet {
     /// The awaiter must remain pinned and valid until it is removed
     /// from the set (via [`unregister()`][Self::unregister] or
     /// [`notify_one()`][Self::notify_one]).
+    #[inline]
     pub unsafe fn register(&mut self, awaiter: Pin<&mut Awaiter>, waker: Waker) {
         // SAFETY: We do not move the awaiter. Pin guarantees address
         // stability.
@@ -239,6 +241,7 @@ impl AwaiterSet {
     ///
     /// The awaiter must currently be registered with this set (or
     /// already notified by it).
+    #[inline]
     pub unsafe fn unregister(&mut self, awaiter: Pin<&mut Awaiter>) {
         // SAFETY: We do not move the awaiter.
         let awaiter = unsafe { awaiter.get_unchecked_mut() };
@@ -282,6 +285,7 @@ impl AwaiterSet {
     /// scope to prevent reentrancy deadlocks.
     ///
     /// Returns `None` if the set is empty.
+    #[inline]
     pub fn notify_one(&mut self) -> Option<Waker> {
         if self.head.is_null() {
             return None;
@@ -306,6 +310,7 @@ impl AwaiterSet {
     /// typically because the caller wants to exclude awaiters that
     /// a reentrant waker may register while the notification is in
     /// progress.
+    #[inline]
     pub fn advance_generation(&mut self) {
         self.generation = self.generation.wrapping_add(1);
     }
@@ -320,6 +325,7 @@ impl AwaiterSet {
     /// to the current generation, or when no generation has been
     /// opened yet (no [`advance_generation()`][Self::advance_generation]
     /// call has been made).
+    #[inline]
     pub fn notify_one_prior_generation(&mut self) -> Option<Waker> {
         if self.head.is_null() {
             return None;
