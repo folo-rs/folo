@@ -11,14 +11,15 @@ scenarios is:
 
 1. **Pooled events** (`EventPool::rent` / `LocalEventPool::rent`) — primary
    performance target. Anyone reaching for `events_once` for high throughput
-   uses pooled or laked events.
-2. **Embedded / laked events** — also primary. Embedded events live inside
-   user storage with no allocator hop; laked events extend pooling to
-   variable T.
-3. **Boxed events** (`Event::new_in_box`) — least important. Any
-   performance-conscious user will use one of the variants above. Boxed events
-   exist primarily for convenience and for cases where the caller cannot bound
-   the event's lifetime to a specific scope.
+   uses pooled events or events rented from an `EventLake`.
+2. **Embedded events and events rented from an `EventLake`** — also primary.
+   Embedded events live inside user storage with no allocator hop; events
+   rented from a lake (`EventLake` / `LocalEventLake`) extend pooling to
+   variable `T`.
+3. **Boxed events** (`Event::boxed()` / `LocalEvent::boxed()`) — least
+   important. Any performance-conscious user will use one of the variants
+   above. Boxed events exist primarily for convenience and for cases where
+   the caller cannot bound the event's lifetime to a specific scope.
 
 Within all variants:
 
@@ -49,7 +50,8 @@ The package's Callgrind benchmark suite is expected to cover every
 combination of:
 
 * event variant (sync `Event`, local `LocalEvent`)
-* storage strategy (boxed, pooled, embedded / by-ref, laked)
+* storage strategy (boxed, pooled, embedded / by-ref, rented from an
+  `EventLake`)
 * primary lifecycle outcome (send + receive happy path, sender dropped,
   receiver dropped before polling)
 
@@ -80,6 +82,6 @@ confirm whether the function is being inlined.
 Inlining is asymmetric and not transitive: inlining a function with a body
 that is too large into its caller can prevent the caller from being inlined
 into ITS caller. When tempted to add `#[inline]` to a heavy method (e.g.
-`PooledRef::release_event`, which takes a mutex), measure first — the
-"inline cascade" can regress overall numbers even though the local symbol
-gets inlined.
+the `EventRef::release_event` impl for `PooledRef`, which locks the pool
+mutex), measure first — the "inline cascade" can regress overall numbers
+even though the local symbol gets inlined.
