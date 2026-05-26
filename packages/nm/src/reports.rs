@@ -98,6 +98,7 @@ impl Report {
     ///     println!("Event: {}, Count: {}", event.name(), event.count());
     /// }
     /// ```
+    #[inline]
     pub fn events(&self) -> impl Iterator<Item = &EventMetrics> {
         self.events.iter()
     }
@@ -205,6 +206,7 @@ impl EventMetrics {
     ///     println!("Event name: {}", event.name());
     /// }
     /// ```
+    #[inline]
     #[must_use]
     pub fn name(&self) -> &EventName {
         &self.name
@@ -231,6 +233,7 @@ impl EventMetrics {
     ///     println!("Total count: {}", event.count());
     /// }
     /// ```
+    #[inline]
     #[must_use]
     pub fn count(&self) -> u64 {
         self.count
@@ -257,6 +260,7 @@ impl EventMetrics {
     ///     println!("Total bytes: {}", event.sum());
     /// }
     /// ```
+    #[inline]
     #[must_use]
     pub fn sum(&self) -> Magnitude {
         self.sum
@@ -285,6 +289,7 @@ impl EventMetrics {
     ///     println!("Average response time: {}ms", event.mean());
     /// }
     /// ```
+    #[inline]
     #[must_use]
     pub fn mean(&self) -> Magnitude {
         self.mean
@@ -322,6 +327,7 @@ impl EventMetrics {
     /// ```
     ///
     /// [1]: crate::EventBuilder::histogram
+    #[inline]
     #[must_use]
     pub fn histogram(&self) -> Option<&Histogram> {
         self.histogram.as_ref()
@@ -427,6 +433,7 @@ impl Histogram {
     ///
     /// The last bucket always has the magnitude `Magnitude::MAX`, counting
     /// occurrences that do not fit into any of the previous buckets.
+    #[inline]
     pub fn magnitudes(&self) -> impl Iterator<Item = Magnitude> {
         self.magnitudes
             .iter()
@@ -440,6 +447,7 @@ impl Histogram {
     /// Each bucket counts the number of events that are less than or equal to the corresponding
     /// magnitude. Each occurrence of an event is counted only once, in the first bucket that can
     /// accept it.
+    #[inline]
     pub fn counts(&self) -> impl Iterator<Item = u64> {
         self.counts
             .iter()
@@ -456,6 +464,7 @@ impl Histogram {
     ///
     /// The last bucket always has the magnitude `Magnitude::MAX`, counting
     /// occurrences that do not fit into any of the previous buckets.
+    #[inline]
     pub fn buckets(&self) -> impl Iterator<Item = (Magnitude, u64)> {
         self.magnitudes().zip(self.counts())
     }
