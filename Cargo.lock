@@ -94,7 +94,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "awaiter_set"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "criterion",
  "futures",
@@ -464,7 +464,7 @@ dependencies = [
 
 [[package]]
 name = "events"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "alloc_tracker",
  "awaiter_set",
@@ -484,7 +484,7 @@ dependencies = [
 
 [[package]]
 name = "events_once"
-version = "0.5.22"
+version = "0.5.23"
 dependencies = [
  "criterion",
  "futures",
@@ -509,7 +509,7 @@ dependencies = [
 
 [[package]]
 name = "fast_time"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "criterion",
  "gungraun",
@@ -589,7 +589,7 @@ dependencies = [
 
 [[package]]
 name = "future_deque"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "criterion",
  "events_once",
@@ -905,7 +905,7 @@ dependencies = [
 
 [[package]]
 name = "infinity_pool"
-version = "0.8.13"
+version = "0.8.14"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -1011,7 +1011,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus"
-version = "2.4.1"
+version = "2.4.2"
 dependencies = [
  "cpulist",
  "criterion",
@@ -1035,7 +1035,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus_benchmarking"
-version = "0.1.45"
+version = "0.1.46"
 dependencies = [
  "cpulist",
  "criterion",
@@ -1116,7 +1116,7 @@ version = "1.0.6"
 
 [[package]]
 name = "nm"
-version = "0.1.32"
+version = "0.1.33"
 dependencies = [
  "criterion",
  "fast_time",
@@ -1132,7 +1132,7 @@ dependencies = [
 
 [[package]]
 name = "nm_otel"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -1271,7 +1271,7 @@ dependencies = [
 
 [[package]]
 name = "par_bench"
-version = "0.2.35"
+version = "0.2.36"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -1532,7 +1532,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "region_cached"
-version = "1.0.15"
+version = "1.0.16"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1554,7 +1554,7 @@ dependencies = [
 
 [[package]]
 name = "region_local"
-version = "1.0.15"
+version = "1.0.16"
 dependencies = [
  "arc-swap",
  "axum",
@@ -2115,7 +2115,7 @@ checksum = "6bce2adbe4c8e63c3e7f79e9249b5409fb3c9bce989dd44337493cf1c8d7dea0"
 
 [[package]]
 name = "vicinal"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
