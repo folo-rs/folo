@@ -542,6 +542,15 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
         drop(pool.insert::<u128>(0));
     });
 
+    // Adversarial wall-clock counterpart of the Callgrind
+    // `blind_pool_insert_into_10k_n8_layouts_adversarial` scenario. The dispatch holds 8
+    // entries. Each iteration of the inner timed loop performs a u128 insert immediately
+    // before each u64 insert: the u128 insert always moves itself to the front of the
+    // dispatch's MRU order, which forces the subsequent u64 insert to be the most-distant
+    // entry in MRU order — exactly the worst-case linear scan the typical-case benches
+    // never observe (because their tight u64-only loop keeps u64 permanently at front).
+    blind_pool_churn_n8_layouts_adversarial(&mut group, &allocs);
+
     // LocalBlindPool (single-threaded, reference counted, multiple types) with churn
     let allocs_op = allocs.operation("LocalBlindPool");
     group.bench_function("LocalBlindPool", |b| {
@@ -686,6 +695,81 @@ fn blind_pool_churn_with_extra_layouts<F>(
                     for _ in 0..BATCH_SIZE {
                         let target_index = rng.random_range(0..handles.len());
                         handles.swap_remove(target_index);
+                    }
+                }
+            }
+            start.elapsed()
+        });
+    });
+}
+
+// Adversarial-MRU counterpart of `blind_pool_churn_with_extra_layouts`. Each measured
+// u64 insert is preceded by a u128 insert. The u128 insert always moves itself to
+// the front of the dispatch's MRU order, so each subsequent u64 insert must scan past
+// every other entry before finding u64 — the worst case the MTF dispatch is designed
+// to be tolerable but slower at. The dispatch holds 8 distinct layouts (7 extras + u64);
+// the inserted u128 handle is one of those 7 extras, so the dispatch size is invariant.
+// Both inserts contribute to the measured time; what matters across branches is the
+// relative cost of the adversarial path.
+fn blind_pool_churn_n8_layouts_adversarial(
+    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
+    allocs: &alloc_tracker::Session,
+) {
+    let label = "BlindPool_8layouts_adversarial";
+    let allocs_op = allocs.operation(label);
+    group.bench_function(label, |b| {
+        b.iter_custom(|iters| {
+            let mut all_pools = Vec::with_capacity(iters as usize);
+            let mut all_u64_handles = Vec::with_capacity(iters as usize);
+            let mut all_u128_handles = Vec::with_capacity(iters as usize);
+
+            for _ in 0..iters {
+                let pool = BlindPool::new();
+                // 7 extra layouts so the dispatch holds 8 entries once u64 is added.
+                drop(pool.insert::<u8>(0));
+                drop(pool.insert::<u16>(0));
+                drop(pool.insert::<u32>(0));
+                drop(pool.insert::<[u8; 3]>([0; 3]));
+                drop(pool.insert::<[u8; 5]>([0; 5]));
+                drop(pool.insert::<[u8; 6]>([0; 6]));
+                drop(pool.insert::<u128>(0));
+                all_pools.push(pool);
+                all_u64_handles
+                    .push(Vec::with_capacity((INITIAL_ITEMS + BATCH_SIZE) as usize));
+                all_u128_handles
+                    .push(Vec::with_capacity((INITIAL_ITEMS + BATCH_SIZE) as usize));
+            }
+
+            for (pool, handles) in all_pools.iter_mut().zip(all_u64_handles.iter_mut()) {
+                for i in 0..INITIAL_ITEMS {
+                    handles.push(pool.insert::<u64>(i));
+                }
+            }
+
+            let _span = allocs_op.measure_thread().iterations(iters);
+            let start = Instant::now();
+            for ((pool, u64_handles), u128_handles) in all_pools
+                .iter_mut()
+                .zip(all_u64_handles.iter_mut())
+                .zip(all_u128_handles.iter_mut())
+            {
+                let mut rng = SmallRng::seed_from_u64(42);
+                let mut next_value = INITIAL_ITEMS;
+
+                for _ in 0..BATCH_COUNT {
+                    for _ in 0..BATCH_SIZE {
+                        // The u128 insert bumps u128 to the front of MRU; the u64
+                        // insert that follows is then the most distant entry.
+                        u128_handles.push(pool.insert::<u128>(0));
+                        u64_handles.push(pool.insert::<u64>(next_value));
+                        next_value = next_value.wrapping_add(1);
+                    }
+
+                    for _ in 0..BATCH_SIZE {
+                        let target_index = rng.random_range(0..u64_handles.len());
+                        u64_handles.swap_remove(target_index);
+                        let target_index = rng.random_range(0..u128_handles.len());
+                        u128_handles.swap_remove(target_index);
                     }
                 }
             }
