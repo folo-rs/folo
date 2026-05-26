@@ -474,6 +474,32 @@ Apply the first matching rule:
    justification.** These are stronger hints intended as advanced tuning knobs;
    general-purpose code should not reach for them.
 
+# `#[inline]` annotations
+
+`#[inline]` is a hint to the compiler to consider inlining a function. Throughout this
+section, "generic" includes any function that needs monomorphization — a function counts
+as generic if it takes type parameters of its own or if it is defined in a generic type
+or `impl`, even when the function itself takes no type parameters.
+
+Apply the first matching rule:
+
+1. **Apply `#[inline]` to non-generic functions exported from the crate that sit on a hot
+   path** based on your knowledge of how the API is used. Act on this knowledge alone,
+   accepting some documentation noise — without the annotation the compiler has no
+   opportunity to inline the function into downstream consumers, and we want to give it
+   that opportunity even if no current benchmark measurably benefits (a future workload
+   or customer case might).
+
+2. **Otherwise, only apply `#[inline]` if benchmarks or disassembly show a generic or
+   same-crate function on a hot path is not being inlined.** These are already inlining
+   candidates by default, so the annotation is an extra hint applied only when measurement
+   shows the default decision is wrong. Verify with `just package=<pkg> bench-cg` before
+   and after, comparing instruction counts; revert if the numbers do not move.
+
+3. **Do not use `#[inline(always)]` or `#[inline(never)]` without specific
+   justification.** These are stronger hints intended as advanced tuning knobs;
+   general-purpose code should not reach for them.
+
 # YAML formatting
 
 Prefer not using quotes around strings, unless the string starts with special characters.

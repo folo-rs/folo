@@ -282,6 +282,7 @@ impl LocalManualResetEvent {
     ///
     /// If the event is already set, this is a no-op.
     // Trivial forwarder.
+    #[inline]
     #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn set(&self) {
         self.inner.set();
@@ -289,6 +290,7 @@ impl LocalManualResetEvent {
 
     /// Closes the gate.
     // Trivial forwarder.
+    #[inline]
     #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn reset(&self) {
         self.inner.reset();
@@ -296,6 +298,7 @@ impl LocalManualResetEvent {
 
     /// Returns `true` if the event is currently set.
     // Trivial forwarder.
+    #[inline]
     #[cfg_attr(coverage_nightly, coverage(off))]
     #[must_use]
     pub fn try_wait(&self) -> bool {
@@ -459,6 +462,7 @@ impl EmbeddedLocalManualResetEventRef {
     ///
     /// If the event is already set, this is a no-op.
     // Trivial forwarder.
+    #[inline]
     #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn set(&self) {
         self.inner().set();
@@ -466,6 +470,7 @@ impl EmbeddedLocalManualResetEventRef {
 
     /// Closes the gate.
     // Trivial forwarder.
+    #[inline]
     #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn reset(&self) {
         self.inner().reset();
@@ -473,6 +478,7 @@ impl EmbeddedLocalManualResetEventRef {
 
     /// Returns `true` if the event is currently set.
     // Trivial forwarder.
+    #[inline]
     #[cfg_attr(coverage_nightly, coverage(off))]
     #[must_use]
     pub fn try_wait(&self) -> bool {

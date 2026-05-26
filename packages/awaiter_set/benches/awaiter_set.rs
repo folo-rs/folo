@@ -1,12 +1,16 @@
 //! Wall-clock benchmarks for the `awaiter_set` crate.
 //!
-//! Three round-trip scenarios cover the same operations isolated by
+//! Round-trip scenarios cover the same operations isolated by
 //! `awaiter_set_cg.rs`:
 //!
 //! * `register_unregister/empty` — register + unregister on an empty set.
 //! * `register_unregister/with_10_anchors` — same, but the set has 10
 //!   anchor awaiters that remain registered for the duration.
 //! * `register_notify_take/empty` — full lifecycle: register, notify, take.
+//! * `is_empty/empty` — null-head fast path on an empty set.
+//! * `is_empty/populated` — null-head check on a populated set.
+//! * `notify_one_prior_generation/eligible` — register, advance generation,
+//!   notify prior generation, take notification.
 
 #![allow(missing_docs, reason = "benchmark code")]
 #![allow(
@@ -37,6 +41,8 @@ criterion_main!(benches);
 fn entrypoint(c: &mut Criterion) {
     register_unregister(c);
     register_notify_take(c);
+    is_empty(c);
+    notify_one_prior_generation(c);
 }
 
 /// Measures back-to-back `register` + `unregister` on a single
@@ -113,6 +119,77 @@ fn register_notify_take(c: &mut Criterion) {
                     set.register(awaiter.as_mut(), Waker::noop().clone());
                 }
                 drop(black_box(set.notify_one()));
+                _ = black_box(awaiter.as_ref().take_notification());
+            }
+            let elapsed = start.elapsed();
+            black_box(&mut set);
+            black_box(&mut awaiter);
+            elapsed
+        });
+    });
+
+    group.finish();
+}
+
+/// Measures `is_empty` on an empty and a populated set. State is
+/// invariant across iterations, so the set and awaiter are constructed
+/// once per sample.
+fn is_empty(c: &mut Criterion) {
+    let mut group = c.benchmark_group("is_empty");
+
+    group.bench_function("empty", |b| {
+        b.iter_custom(|iters| {
+            let set = AwaiterSet::new();
+            let start = Instant::now();
+            for _ in 0..iters {
+                _ = black_box(black_box(&set).is_empty());
+            }
+            let elapsed = start.elapsed();
+            black_box(&set);
+            elapsed
+        });
+    });
+
+    group.bench_function("populated", |b| {
+        b.iter_custom(|iters| {
+            let mut awaiter = Box::pin(Awaiter::new());
+            let mut set = AwaiterSet::new();
+            unsafe {
+                set.register(awaiter.as_mut(), Waker::noop().clone());
+            }
+            let start = Instant::now();
+            for _ in 0..iters {
+                _ = black_box(black_box(&set).is_empty());
+            }
+            let elapsed = start.elapsed();
+            black_box(&mut set);
+            black_box(&mut awaiter);
+            elapsed
+        });
+    });
+
+    group.finish();
+}
+
+/// Measures a full round-trip exercising
+/// `advance_generation` + `notify_one_prior_generation`: register the
+/// awaiter in the current generation, advance into a new generation
+/// (the awaiter is now in a prior generation), notify it, then take
+/// the notification to reset state for the next iteration.
+fn notify_one_prior_generation(c: &mut Criterion) {
+    let mut group = c.benchmark_group("notify_one_prior_generation");
+
+    group.bench_function("eligible", |b| {
+        b.iter_custom(|iters| {
+            let mut awaiter = Box::pin(Awaiter::new());
+            let mut set = AwaiterSet::new();
+            let start = Instant::now();
+            for _ in 0..iters {
+                unsafe {
+                    set.register(awaiter.as_mut(), Waker::noop().clone());
+                }
+                set.advance_generation();
+                drop(black_box(set.notify_one_prior_generation()));
                 _ = black_box(awaiter.as_ref().take_notification());
             }
             let elapsed = start.elapsed();
