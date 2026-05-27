@@ -85,13 +85,20 @@ mod linux {
     // ---------- Full lifecycle ----------
     //
     // The full send-receive cycle, including event acquisition. The boxed case
-    // pays one heap allocation; the pooled, embedded, and laked cases do not
-    // (after pool warm-up, which we perform in setup where applicable).
+    // pays one heap allocation for the event itself; the pooled, embedded, and
+    // laked cases do not (after pool warm-up, which we perform in setup where
+    // applicable).
+    //
+    // Across all lifecycle benches the receiver is stack-pinned via
+    // `std::pin::pin!` rather than `Box::pin` so that the measured iteration
+    // reflects event mechanics rather than allocator overhead. See AGENTS.md
+    // "Benchmark design" for the rationale (the cost of a `Box::pin` per
+    // iteration is 40-50% of the measured count).
 
     #[library_benchmark]
     fn sync_boxed_lifecycle() {
         let (sender, receiver) = black_box(Event::<i32>::boxed());
-        let mut receiver = Box::pin(receiver);
+        let mut receiver = std::pin::pin!(receiver);
 
         sender.send(black_box(42));
 
@@ -102,7 +109,7 @@ mod linux {
     #[library_benchmark]
     fn local_boxed_lifecycle() {
         let (sender, receiver) = black_box(LocalEvent::<i32>::boxed());
-        let mut receiver = Box::pin(receiver);
+        let mut receiver = std::pin::pin!(receiver);
 
         sender.send(black_box(42));
 
@@ -133,7 +140,7 @@ mod linux {
     #[bench::warm(make_warm_sync_pool())]
     fn sync_pooled_lifecycle(pool: EventPool<i32>) -> EventPool<i32> {
         let (sender, receiver) = black_box(pool.rent());
-        let mut receiver = Box::pin(receiver);
+        let mut receiver = std::pin::pin!(receiver);
 
         sender.send(black_box(42));
 
@@ -147,7 +154,7 @@ mod linux {
     #[bench::warm(make_warm_local_pool())]
     fn local_pooled_lifecycle(pool: LocalEventPool<i32>) -> LocalEventPool<i32> {
         let (sender, receiver) = black_box(pool.rent());
-        let mut receiver = Box::pin(receiver);
+        let mut receiver = std::pin::pin!(receiver);
 
         sender.send(black_box(42));
 
@@ -158,11 +165,10 @@ mod linux {
     }
 
     // The embedded lifecycle measures placing the event into caller-owned pinned storage,
-    // sending a value, polling for it, and tearing down. There is no heap allocation on the
-    // measured path: both the event place and the receiver are stack-pinned via `pin!`. This
-    // is the whole point of the embedded variant — if we boxed either of them we would be
-    // measuring boxed-event semantics, not embedded ones. `pin!` is justified here per the
-    // workspace policy because `Box::pin` would invalidate the benchmark.
+    // sending a value, polling for it, and tearing down. The `place` itself must be
+    // stack-pinned — that is the whole point of the embedded variant; boxing it would
+    // measure boxed-event semantics instead. (Receiver stack-pinning follows the
+    // group-wide convention documented above.)
 
     #[library_benchmark]
     fn sync_embedded_lifecycle() {
@@ -223,7 +229,7 @@ mod linux {
     #[bench::warm(make_warm_sync_lake())]
     fn sync_lake_lifecycle(lake: EventLake) -> EventLake {
         let (sender, receiver) = black_box(lake.rent::<i32>());
-        let mut receiver = Box::pin(receiver);
+        let mut receiver = std::pin::pin!(receiver);
 
         sender.send(black_box(42));
 
@@ -237,7 +243,7 @@ mod linux {
     #[bench::warm(make_warm_local_lake())]
     fn local_lake_lifecycle(lake: LocalEventLake) -> LocalEventLake {
         let (sender, receiver) = black_box(lake.rent::<i32>());
-        let mut receiver = Box::pin(receiver);
+        let mut receiver = std::pin::pin!(receiver);
 
         sender.send(black_box(42));
 
