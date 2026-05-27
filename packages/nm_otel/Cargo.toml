@@ -39,7 +39,7 @@ par_bench = { path = "../par_bench", features = ["alloc_tracker", "criterion"] }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }
 tick = { workspace = true, features = ["tokio", "test-util"] }
-tokio = { workspace = true, features = ["rt", "macros", "time"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }
 
 # Gungraun drives Valgrind-based Callgrind benchmarks; Linux-only.
 [target.'cfg(target_os = "linux")'.dev-dependencies]

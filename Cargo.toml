@@ -17,7 +17,7 @@ argh = { version = "0.1.13", default-features = false, features = ["help"] }
 awaiter_set = { version = "0.1.2", path = "packages/awaiter_set", default-features = false }
 axum = { version = "0.8", default-features = false }
 cpulist = { version = "1.1.2", path = "packages/cpulist", default-features = false }
-criterion = { version = "0.7", default-features = false }
+criterion = { version = "0.8.2", default-features = false }
 deranged = { version = "0.5", default-features = false }
 derive_more = { version = "2.0", default-features = false }
 event-listener = { version = "5.4", default-features = false, features = [
@@ -46,7 +46,7 @@ futures-core = { version = "0.3", default-features = false }
 # runner version. When bumping, update all three locations together.
 gungraun = { version = "=0.19.0", default-features = false }
 hash_hasher = { version = "2.0", default-features = false }
-hashbrown = { version = "0.15", default-features = false, features = [
+hashbrown = { version = "0.17.1", default-features = false, features = [
     "default-hasher",
     "inline-more",
 ] }
@@ -61,8 +61,8 @@ linked = { version = "1.0.10", path = "packages/linked", default-features = fals
 linked_macros = { version = "1.0.10", path = "packages/linked_macros", default-features = false }
 linked_macros_impl = { version = "1.0.10", path = "packages/linked_macros_impl", default-features = false }
 many_cpus = { version = "2.4.2", path = "packages/many_cpus", default-features = false }
-mockall = { version = "0.13", default-features = false }
-mutants = { version = "0.0.3", default-features = false }
+mockall = { version = "0.14.0", default-features = false }
+mutants = { version = "0.0.4", default-features = false }
 negative-impl = { version = "0.1", default-features = false }
 new_zealand = { version = "1.0.6", path = "packages/new_zealand", default-features = false }
 nm = { version = "0.1.33", path = "packages/nm", default-features = false }
@@ -71,18 +71,18 @@ nonempty = { version = "0.12", default-features = false }
 num-integer = { version = "0.1.46", default-features = false }
 num-traits = { version = "0.2.19", default-features = false }
 ohno = { version = "0.3", default-features = false }
-oneshot = { version = "0.1", default-features = false, features = [
+oneshot = { version = "0.2.1", default-features = false, features = [
     "std",
     "async",
 ] }
-opentelemetry = { version = "0.31", default-features = false }
-opentelemetry-stdout = { version = "0.31", default-features = false }
-opentelemetry_sdk = { version = "0.31", default-features = false }
-pastey = { version = "0.1.1", default-features = false }
+opentelemetry = { version = "0.32.0", default-features = false }
+opentelemetry-stdout = { version = "0.32.0", default-features = false }
+opentelemetry_sdk = { version = "0.32.1", default-features = false }
+pastey = { version = "0.2.3", default-features = false }
 pin-project = { version = "1.1", default-features = false }
 proc-macro2 = { version = "1.0", default-features = false }
 quote = { version = "1.0", default-features = false }
-rand = { version = "0.9", default-features = false, features = ["std"] }
+rand = { version = "0.10.1", default-features = false, features = ["std"] }
 rsevents = { version = "0.3.1", default-features = false }
 scc = { version = "3.0", default-features = false }
 scopeguard = { version = "1.2", default-features = false }
@@ -94,9 +94,9 @@ static_assertions = { version = "1", default-features = false }
 syn = { version = "2.0", default-features = false }
 tempfile = { version = "3.20", default-features = false }
 threadpool = { version = "1.8.1", default-features = false }
-tick = { version = "0.2", default-features = false }
+tick = { version = "0.3.0", default-features = false }
 tokio = { version = "1.43", default-features = false }
-toml = { version = "0.9.2", default-features = false }
+toml = { version = "1.1.2", default-features = false }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 trybuild = { version = "1.0", default-features = false }
 vicinal = { version = "0.1.21", path = "packages/vicinal", default-features = false }

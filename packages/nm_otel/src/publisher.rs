@@ -280,6 +280,10 @@ mod tests {
         Clock::new_frozen()
     }
 
+    // The OpenTelemetry SDK calls `env::current_exe()` during default resource detection,
+    // which Miri aborts on. Tracked upstream as
+    // https://github.com/open-telemetry/opentelemetry-rust/issues/3523 (regression in 0.32).
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn builder_with_defaults() {
         let (provider, _exporter) = create_test_provider();
@@ -292,6 +296,7 @@ mod tests {
         assert_eq!(publisher.interval, DEFAULT_INTERVAL);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn builder_with_custom_interval() {
         let (provider, _exporter) = create_test_provider();
@@ -305,6 +310,7 @@ mod tests {
         assert_eq!(publisher.interval, Duration::from_secs(5));
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn builder_with_custom_meter_name() {
         let (provider, _exporter) = create_test_provider();
@@ -322,6 +328,7 @@ mod tests {
         let _publisher = Publisher::builder().clock(create_test_clock()).build();
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     #[should_panic]
     fn builder_without_clock_panics() {
@@ -329,6 +336,7 @@ mod tests {
         let _publisher = Publisher::builder().provider(provider).build();
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn run_one_iteration_collects_metrics() {
         let (provider, exporter) = create_test_provider();
@@ -350,6 +358,7 @@ mod tests {
         drop(metrics);
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn multiple_iterations_track_state() {
         let (provider, _exporter) = create_test_provider();
@@ -367,6 +376,7 @@ mod tests {
         // If this completes without panic, state tracking is working.
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn builder_debug_formatting() {
         let (provider, _exporter) = create_test_provider();
@@ -423,7 +433,8 @@ mod tests {
         None
     }
 
-    // The OpenTelemetry SDK uses system time calls that are not available under Miri.
+    // Same Miri limitation as the other tests above
+    // (https://github.com/open-telemetry/opentelemetry-rust/issues/3523).
     #[cfg_attr(miri, ignore)]
     #[test]
     fn run_one_iteration_with_report_exports_fake_report() {
