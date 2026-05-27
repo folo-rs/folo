@@ -517,7 +517,7 @@ impl ProcessorSetBuilder {
                 }
 
                 all_processors
-                    .choose_multiple(&mut rng(), count.get())
+                    .sample(&mut rng(), count.get())
                     .cloned()
                     .collect_vec()
             }
@@ -557,7 +557,7 @@ impl ProcessorSetBuilder {
                     let choose_count = count.min(processors_in_region.len());
 
                     let region_processors = processors_in_region
-                        .choose_multiple(&mut rng(), choose_count)
+                        .sample(&mut rng(), choose_count)
                         .cloned();
 
                     processors.extend(region_processors);
@@ -586,7 +586,7 @@ impl ProcessorSetBuilder {
                 );
 
                 processors
-                    .choose_multiple(&mut rng(), count.get())
+                    .sample(&mut rng(), count.get())
                     .cloned()
                     .collect_vec()
             }
@@ -636,7 +636,7 @@ impl ProcessorSetBuilder {
 
                 candidates
                     .iter()
-                    .choose_multiple(&mut rng(), count.get())
+                    .sample(&mut rng(), count.get())
                     .into_iter()
                     .map(|(_, processors)| {
                         processors.iter().choose(&mut rng()).cloned().expect(
