@@ -367,6 +367,7 @@ impl RawOpaquePool {
     ///
     /// The closure must correctly initialize the object. All fields that
     /// are not `MaybeUninit` must be initialized when the closure returns.
+    #[inline]
     pub unsafe fn insert_with_unchecked<T, F>(&mut self, f: F) -> RawPooledMut<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
