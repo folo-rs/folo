@@ -34,6 +34,7 @@ impl<T: Send + 'static> Clone for PooledRef<T> {
 }
 
 impl<T: Send + 'static> EventRef<T> for PooledRef<T> {
+    #[inline]
     fn release_event(&self) {
         let mut pool = self.core.pool.lock().expect(NEVER_POISONED);
 

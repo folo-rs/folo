@@ -31,6 +31,7 @@ impl<T> EventRef<T> for PtrRef<T>
 where
     T: Send + 'static,
 {
+    #[inline]
     fn release_event(&self) {}
 }
 

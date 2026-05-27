@@ -70,6 +70,7 @@ impl<T: Send + 'static> EventPool<T> {
     /// Rents an event from the pool, returning its endpoints.
     ///
     /// The event will be returned to the pool when both endpoints are dropped.
+    #[inline]
     #[must_use]
     pub fn rent(&self) -> (PooledSender<T>, PooledReceiver<T>) {
         let storage = {
