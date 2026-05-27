@@ -377,6 +377,31 @@ impl<T: 'static> LocalEvent<T> {
     ///
     /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
     pub(crate) fn sender_dropped_without_set(&self) -> Result<(), Disconnected> {
+        // Fast path: the receiver has not yet polled, so there is no awaiter to wake. This
+        // mirrors the `Event<T>` fast path so that `LocalEvent<T>` retains its performance
+        // edge over the thread-safe variant on the cancellation path.
+        if self.state.get() == EVENT_BOUND {
+            self.state.set(EVENT_DISCONNECTED);
+            // The receiver is the last endpoint remaining, so it will clean up.
+            return Ok(());
+        }
+
+        // Slow path - the receiver is awaiting (with a waker we must fire) or has
+        // already disconnected. Outlined as `#[cold]` so the fast-path BOUND case
+        // stays compact.
+        self.sender_dropped_without_set_slow()
+    }
+
+    /// Slow-path companion to [`sender_dropped_without_set`].
+    ///
+    /// Handles the cases where the receiver has registered an awaiter (`EVENT_AWAITING`)
+    /// or has already disconnected (`EVENT_DISCONNECTED`).
+    ///
+    /// `#[cold]` and `#[inline(never)]` keep this code out of the fast-path callsite's
+    /// instruction stream, mirroring the sync `Event<T>` slow-path treatment.
+    #[cold]
+    #[inline(never)]
+    fn sender_dropped_without_set_slow(&self) -> Result<(), Disconnected> {
         let previous_state = self.state.get();
 
         // We can immediately set this because this is a single-threaded event, so there cannot
@@ -384,11 +409,6 @@ impl<T: 'static> LocalEvent<T> {
         self.state.set(EVENT_DISCONNECTED);
 
         match previous_state {
-            EVENT_BOUND => {
-                // There was nobody listening via the receiver - our work here is done.
-                // The receiver still exists, so it will clean up.
-                Ok(())
-            }
             EVENT_AWAITING => {
                 // There was someone listening via the receiver. We need to notify
                 // the awaiter that they can come back for another check now.
@@ -414,7 +434,8 @@ impl<T: 'static> LocalEvent<T> {
                 // The sender is the last endpoint remaining, so it will clean up.
                 Err(Disconnected)
             }
-            // Defensive: state machine guarantees this is unreachable.
+            // Defensive: state machine guarantees this is unreachable. The fast path already
+            // handled EVENT_BOUND, so it cannot be observed here either.
             _ => {
                 unreachable!("unreachable LocalEvent state on sender disconnect: {previous_state}");
             }

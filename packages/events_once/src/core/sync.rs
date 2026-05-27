@@ -392,29 +392,115 @@ where
     pub(crate) fn sender_dropped_without_set(
         event_cell: &UnsafeCell<Self>,
     ) -> Result<(), Disconnected> {
-        // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
-        // The event lives until both sender and receiver are dropped or inert, so we know it must
-        // still exist because something was able to call this method.
+        // SAFETY: Validity: the event lives until both sender and receiver are dropped or
+        // inert, so it must still exist because something was able to call this method.
+        // `UnsafeCell::get()` returns a non-null aligned pointer to the initialized `Event<T>`.
+        // Aliasing: we only create shared references to the event throughout the type, and the
+        // receiver does likewise; mutation goes through atomics or `UnsafeCell`-guarded fields,
+        // so no `&mut Event<T>` ever exists.
         let event_maybe = unsafe { event_cell.get().as_ref() };
-        // SAFETY: UnsafeCell pointer is never null.
+        // SAFETY: `UnsafeCell::get()` is documented as never returning a null pointer.
         let event = unsafe { event_maybe.unwrap_unchecked() };
 
-        // We first need to switch into the SIGNALING state, which acquires exclusive access
+        // Fast path: the receiver has not yet polled, so there is no awaiter to wake and no
+        // need to acquire the SIGNALING synchronization block. A single CAS transitions us
+        // directly to the terminal DISCONNECTED state, avoiding the swap + store pair used
+        // by the general path below.
+        //
+        // We use Release on success because we are publishing the terminal state to the
+        // receiver, which may observe it via Acquire load in `poll()` or Acquire fence in
+        // `poll_awaiting`. Release ensures any sender-side writes before the drop are
+        // visible to the receiver after it observes DISCONNECTED.
+        //
+        // It is legal to transition straight to DISCONNECTED here, permitting dealloc, even
+        // though we still hold an `&event` reference, which ordinarily means it is still
+        // illegal to deallocate the object. The `event` binding here was constructed via the
+        // `as_ref()` return value (not received as a function argument), so Stacked Borrows
+        // does not install a strong protector on it; the receiver is free to dealloc the
+        // moment it observes DISCONNECTED.
+        if event
+            .state
+            .compare_exchange(
+                EVENT_BOUND,
+                EVENT_DISCONNECTED,
+                atomic::Ordering::Release,
+                atomic::Ordering::Relaxed,
+            )
+            .is_ok()
+        {
+            // The receiver is the last endpoint remaining, so it will clean up.
+            return Ok(());
+        }
+
+        // Slow path - the receiver is mid-poll, has already polled, or has disconnected.
+        // Outlined as a `#[cold]` helper so the fast-path BOUND case stays compact in
+        // instruction cache; this matters because sender drops are extremely common in
+        // cancellation-heavy workloads (timeouts, request cancellations).
+        //
+        // The slow path takes `&UnsafeCell<Self>` rather than `&Self` so that the function-
+        // entry retag does not install a strong (SharedReadOnly) Stacked Borrows protector
+        // on the Freeze parts of `Event<T>`. Such a protector would block the receiver from
+        // deallocating the event after observing DISCONNECTED while the slow path is still
+        // returning (the receiver can be scheduled between the `store(DISCONNECTED)` and
+        // the function return). With `&UnsafeCell<Self>` the protector covers only the
+        // !Freeze SharedReadWrite tag, which Miri treats as a weak protector that permits
+        // dealloc. Inside the slow path, `&Self` is reconstructed via a pointer deref so
+        // it is never retagged at a function boundary and never carries a protector.
+        Self::sender_dropped_without_set_slow(event_cell)
+    }
+
+    /// Slow-path companion to [`sender_dropped_without_set`].
+    ///
+    /// Handles the cases where the receiver has registered an awaiter (`EVENT_AWAITING`),
+    /// has already disconnected (`EVENT_DISCONNECTED`), or is mid-transition.
+    ///
+    /// `#[cold]` and `#[inline(never)]` keep the slow path out of the fast-path callsite's
+    /// instruction stream. Without this, the BOUND fast path picks up an extra cache line
+    /// of cold code in the same function (verified via Callgrind: ~30 cycles of estimated
+    /// cold instruction-fetch penalty).
+    ///
+    /// Takes `&UnsafeCell<Self>` rather than `&Self` so that the Stacked Borrows retag on
+    /// function entry does not install a strong protector on the Freeze parts of
+    /// `Event<T>`; see the call site in [`Self::sender_dropped_without_set`] for the full
+    /// rationale.
+    #[cold]
+    #[inline(never)]
+    fn sender_dropped_without_set_slow(event_cell: &UnsafeCell<Self>) -> Result<(), Disconnected> {
+        // SAFETY: Validity: the event lives until both sender and receiver are dropped or
+        // inert, so it must still exist because we got here from
+        // `sender_dropped_without_set`, which only delegates here while the sender is still
+        // live. `UnsafeCell::get()` returns a non-null aligned pointer to the initialized
+        // `Event<T>`. Aliasing: we only create shared references to the event throughout
+        // the type, and the receiver does likewise; mutation goes through atomics or
+        // `UnsafeCell`-guarded fields, so no `&mut Event<T>` ever exists. The `&Self`
+        // binding here is local (not a function argument), so it carries no protector and
+        // the receiver remains free to dealloc the event after observing DISCONNECTED.
+        let event_maybe = unsafe { event_cell.get().as_ref() };
+        // SAFETY: `UnsafeCell::get()` is documented as never returning a null pointer.
+        let event = unsafe { event_maybe.unwrap_unchecked() };
+
+        // We need to switch into the SIGNALING state, which acquires exclusive access
         // of the awaiter field, so we can send the wake signal if there is an awaiter.
         // Only after that can we transition into the DISCONNECTED state (because that must
-        // be our last action - the receiver may clean up the event at any point after we do that).
+        // be our last action - the receiver may clean up the event at any point after we do
+        // that).
 
         let previous_state = event.state.swap(EVENT_SIGNALING, atomic::Ordering::Relaxed);
 
         match previous_state {
             EVENT_BOUND => {
-                // There was nobody polling via the receiver - our work here is done.
+                // The fast-path CAS observed a non-BOUND state, but by the time we did the
+                // swap above, the state was BOUND again. This can happen when a concurrent
+                // receiver transitioned BOUND -> AWAITING -> BOUND in `poll_awaiting`
+                // between the two atomic operations. The receiver has already destroyed
+                // the previous waker in that path, so there is no awaiter for us to handle.
 
-                // It is legal to set DISCONNECTED here, permitting dealloc, even though we still
-                // hold an &event reference here, which ordinarily means it is still illegal to
-                // deallocate the object. However, the dangling reference in this method is an
-                // `UnsafeCell` which is allowed to dangle, so we are fine even if the object is
-                // immediately destroyed after this line.
+                // Setting DISCONNECTED here permits the receiver to immediately observe the
+                // terminal state and deallocate the event. That is safe even though we are
+                // still inside this function: our `event_cell: &UnsafeCell<Self>` parameter
+                // carries only a weak (SharedReadWrite) Stacked Borrows protector, and the
+                // local `&event` is not retagged across a function boundary, so no strong
+                // protector blocks the dealloc.
                 event
                     .state
                     .store(EVENT_DISCONNECTED, atomic::Ordering::Release);
@@ -446,11 +532,12 @@ where
                 // used by `set()` on the `EVENT_SET` path and prevents same-thread reentrancy
                 // deadlocks.
                 //
-                // It is legal to set DISCONNECTED here, permitting dealloc, even though we still
-                // hold an &event reference here, which ordinarily means it is still illegal to
-                // deallocate the object. However, the dangling reference in this method is an
-                // `UnsafeCell` which is allowed to dangle, so we are fine even if the object is
-                // immediately destroyed after this line.
+                // Setting DISCONNECTED here permits the receiver to immediately observe the
+                // terminal state and deallocate the event. That is safe even though we are
+                // still inside this function: our `event_cell: &UnsafeCell<Self>` parameter
+                // carries only a weak (SharedReadWrite) Stacked Borrows protector, and the
+                // local `&event` is not retagged across a function boundary, so no strong
+                // protector blocks the dealloc.
                 event
                     .state
                     .store(EVENT_DISCONNECTED, atomic::Ordering::Release);
