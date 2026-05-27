@@ -35,10 +35,15 @@ mod linux {
     use std::pin::Pin;
     use std::task::{self, Waker};
 
-    use events_once::{BoxedReceiver, BoxedSender, Event, EventPool, LocalEvent};
+    use events_once::{
+        BoxedLocalReceiver, BoxedLocalSender, BoxedReceiver, BoxedSender, EmbeddedEvent,
+        EmbeddedLocalEvent, Event, EventLake, EventPool, LocalEvent, LocalEventLake,
+        LocalEventPool,
+    };
     use gungraun::prelude::*;
 
     type SyncEndpoints = (BoxedSender<i32>, Pin<Box<BoxedReceiver<i32>>>);
+    type LocalEndpoints = (BoxedLocalSender<i32>, Pin<Box<BoxedLocalReceiver<i32>>>);
 
     fn make_sync_endpoints() -> SyncEndpoints {
         let (sender, receiver) = Event::<i32>::boxed();
@@ -57,15 +62,38 @@ mod linux {
         Box::pin(receiver)
     }
 
+    fn make_sync_endpoints_bound() -> SyncEndpoints {
+        // The BOUND state is the initial state of every freshly constructed event: no value
+        // has been set, no awaiter has been registered. Dropping the sender from this state
+        // is the fast path of cancellation - the receiver has not yet asked for the value.
+        make_sync_endpoints()
+    }
+
+    fn make_local_endpoints_bound() -> LocalEndpoints {
+        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        (sender, Box::pin(receiver))
+    }
+
     fn make_sync_pool() -> EventPool<i32> {
         EventPool::<i32>::new()
+    }
+
+    fn make_local_pool() -> LocalEventPool<i32> {
+        LocalEventPool::<i32>::new()
     }
 
     // ---------- Full lifecycle ----------
     //
     // The full send-receive cycle, including event acquisition. The boxed case
-    // pays one heap allocation; the pooled case does not (after pool warm-up,
-    // which we perform in setup).
+    // pays one heap allocation for the event itself; the pooled, embedded, and
+    // laked cases do not (after pool warm-up, which we perform in setup where
+    // applicable).
+    //
+    // Across all lifecycle benches the receiver is stack-pinned via
+    // `std::pin::pin!` rather than `Box::pin` so that the measured iteration
+    // reflects event mechanics rather than allocator overhead. See AGENTS.md
+    // "Benchmark design" for the rationale (the cost of a `Box::pin` per
+    // iteration is 40-50% of the measured count).
 
     #[library_benchmark]
     fn sync_boxed_lifecycle() {
@@ -100,6 +128,14 @@ mod linux {
         pool
     }
 
+    fn make_warm_local_pool() -> LocalEventPool<i32> {
+        let pool = make_local_pool();
+        let (sender, receiver) = pool.rent();
+        drop(sender);
+        drop(receiver);
+        pool
+    }
+
     #[library_benchmark]
     #[bench::warm(make_warm_sync_pool())]
     fn sync_pooled_lifecycle(pool: EventPool<i32>) -> EventPool<i32> {
@@ -112,6 +148,109 @@ mod linux {
         _ = black_box(receiver.as_mut().poll(&mut cx));
 
         pool
+    }
+
+    #[library_benchmark]
+    #[bench::warm(make_warm_local_pool())]
+    fn local_pooled_lifecycle(pool: LocalEventPool<i32>) -> LocalEventPool<i32> {
+        let (sender, receiver) = black_box(pool.rent());
+        let mut receiver = std::pin::pin!(receiver);
+
+        sender.send(black_box(42));
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+        _ = black_box(receiver.as_mut().poll(&mut cx));
+
+        pool
+    }
+
+    // The embedded lifecycle measures placing the event into caller-owned pinned storage,
+    // sending a value, polling for it, and tearing down. The `place` itself must be
+    // stack-pinned — that is the whole point of the embedded variant; boxing it would
+    // measure boxed-event semantics instead. (Receiver stack-pinning follows the
+    // group-wide convention documented above.)
+
+    #[library_benchmark]
+    fn sync_embedded_lifecycle() {
+        let mut place = std::pin::pin!(EmbeddedEvent::<i32>::new());
+
+        // SAFETY: `place` remains valid for writes and pinned for the entire body of this
+        // function (it is a stack-pinned local that we never move). The endpoints we obtain
+        // borrow `place` exclusively; we do not touch `place` again while they are alive and
+        // they do not escape this function, so no conflicting reference to the event can
+        // exist. `place` was just created and is not already in use by another event.
+        let (sender, receiver) = black_box(unsafe { Event::placed(place.as_mut()) });
+        let mut receiver = std::pin::pin!(receiver);
+
+        sender.send(black_box(42));
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+        _ = black_box(receiver.as_mut().poll(&mut cx));
+    }
+
+    #[library_benchmark]
+    fn local_embedded_lifecycle() {
+        let mut place = std::pin::pin!(EmbeddedLocalEvent::<i32>::new());
+
+        // SAFETY: `place` remains valid for writes and pinned for the entire body of this
+        // function (it is a stack-pinned local that we never move). The endpoints we obtain
+        // borrow `place` exclusively; we do not touch `place` again while they are alive and
+        // they do not escape this function, so no conflicting reference to the event can
+        // exist. `place` was just created and is not already in use by another event.
+        let (sender, receiver) = black_box(unsafe { LocalEvent::placed(place.as_mut()) });
+        let mut receiver = std::pin::pin!(receiver);
+
+        sender.send(black_box(42));
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+        _ = black_box(receiver.as_mut().poll(&mut cx));
+    }
+
+    // Lake lifecycle: like pooled, but routed through a type-erased lake that maintains
+    // one underlying pool per TypeId. The warm path pre-creates the per-TypeId pool so
+    // the steady-state iteration is rent + send + poll + release.
+    fn make_warm_sync_lake() -> EventLake {
+        let lake = EventLake::new();
+        let (sender, receiver) = lake.rent::<i32>();
+        drop(sender);
+        drop(receiver);
+        lake
+    }
+
+    fn make_warm_local_lake() -> LocalEventLake {
+        let lake = LocalEventLake::new();
+        let (sender, receiver) = lake.rent::<i32>();
+        drop(sender);
+        drop(receiver);
+        lake
+    }
+
+    #[library_benchmark]
+    #[bench::warm(make_warm_sync_lake())]
+    fn sync_lake_lifecycle(lake: EventLake) -> EventLake {
+        let (sender, receiver) = black_box(lake.rent::<i32>());
+        let mut receiver = std::pin::pin!(receiver);
+
+        sender.send(black_box(42));
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+        _ = black_box(receiver.as_mut().poll(&mut cx));
+
+        lake
+    }
+
+    #[library_benchmark]
+    #[bench::warm(make_warm_local_lake())]
+    fn local_lake_lifecycle(lake: LocalEventLake) -> LocalEventLake {
+        let (sender, receiver) = black_box(lake.rent::<i32>());
+        let mut receiver = std::pin::pin!(receiver);
+
+        sender.send(black_box(42));
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+        _ = black_box(receiver.as_mut().poll(&mut cx));
+
+        lake
     }
 
     // ---------- Partial-state hot paths ----------
@@ -153,12 +292,39 @@ mod linux {
         receiver
     }
 
+    // ---------- Cancellation paths ----------
+    //
+    // Sender dropped without sending, from BOUND state - the receiver has not yet
+    // polled. This is the fast cancellation path: no waker is registered, the
+    // sender just signals DISCONNECTED.
+
+    #[library_benchmark]
+    #[bench::bound(make_sync_endpoints_bound())]
+    fn sync_sender_dropped_from_bound(input: SyncEndpoints) -> Pin<Box<BoxedReceiver<i32>>> {
+        let (sender, receiver) = input;
+        drop(sender);
+        receiver
+    }
+
+    #[library_benchmark]
+    #[bench::bound(make_local_endpoints_bound())]
+    fn local_sender_dropped_from_bound(input: LocalEndpoints) -> Pin<Box<BoxedLocalReceiver<i32>>> {
+        let (sender, receiver) = input;
+        drop(sender);
+        receiver
+    }
+
     library_benchmark_group!(
         name = lifecycle_group,
         benchmarks = [
             sync_boxed_lifecycle,
             local_boxed_lifecycle,
             sync_pooled_lifecycle,
+            local_pooled_lifecycle,
+            sync_embedded_lifecycle,
+            local_embedded_lifecycle,
+            sync_lake_lifecycle,
+            local_lake_lifecycle,
         ]
     );
 
@@ -169,15 +335,16 @@ mod linux {
             sync_set_disconnected,
             sync_poll_connected,
             sync_poll_disconnected,
+            sync_sender_dropped_from_bound,
+            local_sender_dropped_from_bound,
         ]
     );
 }
 
 #[cfg(target_os = "linux")]
-pub use linux::{lifecycle_group, partial_state_group};
-
-#[cfg(target_os = "linux")]
 use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
+#[cfg(target_os = "linux")]
+pub use linux::{lifecycle_group, partial_state_group};
 
 #[cfg(target_os = "linux")]
 gungraun::main!(
