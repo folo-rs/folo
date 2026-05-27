@@ -62,6 +62,23 @@ mod linux {
         Box::pin(receiver)
     }
 
+    fn make_local_endpoints() -> LocalEndpoints {
+        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        (sender, Box::pin(receiver))
+    }
+
+    fn make_local_sender_only() -> BoxedLocalSender<i32> {
+        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        drop(receiver);
+        sender
+    }
+
+    fn make_local_receiver_only() -> Pin<Box<BoxedLocalReceiver<i32>>> {
+        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        drop(sender);
+        Box::pin(receiver)
+    }
+
     fn make_sync_endpoints_bound() -> SyncEndpoints {
         // The BOUND state is the initial state of every freshly constructed event: no value
         // has been set, no awaiter has been registered. Dropping the sender from this state
@@ -292,6 +309,39 @@ mod linux {
         receiver
     }
 
+    #[library_benchmark]
+    #[bench::connected(make_local_endpoints())]
+    fn local_set_connected(input: LocalEndpoints) -> Pin<Box<BoxedLocalReceiver<i32>>> {
+        let (sender, receiver) = input;
+        sender.send(black_box(42));
+        receiver
+    }
+
+    #[library_benchmark]
+    #[bench::disconnected(make_local_sender_only())]
+    fn local_set_disconnected(sender: BoxedLocalSender<i32>) {
+        sender.send(black_box(42));
+    }
+
+    #[library_benchmark]
+    #[bench::connected(make_local_endpoints())]
+    fn local_poll_connected(input: LocalEndpoints) -> LocalEndpoints {
+        let (sender, mut receiver) = input;
+        let mut cx = task::Context::from_waker(Waker::noop());
+        _ = black_box(receiver.as_mut().poll(&mut cx));
+        (sender, receiver)
+    }
+
+    #[library_benchmark]
+    #[bench::disconnected(make_local_receiver_only())]
+    fn local_poll_disconnected(
+        mut receiver: Pin<Box<BoxedLocalReceiver<i32>>>,
+    ) -> Pin<Box<BoxedLocalReceiver<i32>>> {
+        let mut cx = task::Context::from_waker(Waker::noop());
+        _ = black_box(receiver.as_mut().poll(&mut cx));
+        receiver
+    }
+
     // ---------- Cancellation paths ----------
     //
     // Sender dropped without sending, from BOUND state - the receiver has not yet
@@ -333,8 +383,12 @@ mod linux {
         benchmarks = [
             sync_set_connected,
             sync_set_disconnected,
+            local_set_connected,
+            local_set_disconnected,
             sync_poll_connected,
             sync_poll_disconnected,
+            local_poll_connected,
+            local_poll_disconnected,
             sync_sender_dropped_from_bound,
             local_sender_dropped_from_bound,
         ]
