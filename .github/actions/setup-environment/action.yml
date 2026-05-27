@@ -10,11 +10,23 @@ runs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
+        # Print each command before executing so a future silent failure points at
+        # the offending line. The script previously used "wget -q" which masked an
+        # intermittent SSL verification failure as a context-free "exit code 5".
+        set -x
+
         # This supposedly speeds up installation by avoiding mandb updates.
         sudo mv /usr/bin/mandb /usr/bin/mandb.deactivated && sudo cp -p /bin/true /usr/bin/mandb
 
         # Add Microsoft package repository (for PowerShell and any other Microsoft packages).
-        wget -q "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb"
+        # We use curl with --retry-all-errors because the runner can transiently fail
+        # TLS verification against packages.microsoft.com during early boot — likely a
+        # race with unattended-upgrades rewriting /etc/ssl/certs/ca-certificates.crt.
+        # --show-error ensures the failure is visible if all retries are exhausted.
+        curl --fail --silent --show-error --location \
+          --retry 5 --retry-delay 2 --retry-all-errors \
+          --output packages-microsoft-prod.deb \
+          "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb"
         sudo dpkg -i --force-confnew packages-microsoft-prod.deb
 
         sudo apt update
