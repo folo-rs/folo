@@ -90,6 +90,25 @@ mod linux {
         make_local_endpoints()
     }
 
+    fn make_sync_endpoints_awaiting() -> SyncEndpoints {
+        // The AWAITING state is reached after the receiver has polled the event once and
+        // registered a waker. In practice this is the most common state when a sender is
+        // dropped without sending: most events that are ever awaited are awaited
+        // immediately after subscription, so cancellation typically catches the event with
+        // an awaiter already registered.
+        let (sender, mut receiver) = make_sync_endpoints();
+        let mut cx = task::Context::from_waker(Waker::noop());
+        _ = black_box(receiver.as_mut().poll(&mut cx));
+        (sender, receiver)
+    }
+
+    fn make_local_endpoints_awaiting() -> LocalEndpoints {
+        let (sender, mut receiver) = make_local_endpoints();
+        let mut cx = task::Context::from_waker(Waker::noop());
+        _ = black_box(receiver.as_mut().poll(&mut cx));
+        (sender, receiver)
+    }
+
     fn make_sync_pool() -> EventPool<i32> {
         EventPool::<i32>::new()
     }
@@ -343,9 +362,15 @@ mod linux {
 
     // ---------- Cancellation paths ----------
     //
-    // Sender dropped without sending, from BOUND state - the receiver has not yet
-    // polled. This is the fast cancellation path: no waker is registered, the
-    // sender just signals DISCONNECTED.
+    // Sender dropped without sending. Two sub-cases are measured because cancellation can
+    // catch the event in different states with very different costs:
+    //
+    // - BOUND: the receiver has not yet polled. No waker is registered, no wake to deliver.
+    // - AWAITING: the receiver has polled and parked a waker. We must wake the receiver and
+    //   (for the sync variant) acquire the SIGNALING handshake to safely consume the waker
+    //   before we publish the terminal DISCONNECTED state. AWAITING is the more common
+    //   state in practice: most events that get awaited are awaited immediately after
+    //   subscription.
 
     #[library_benchmark]
     #[bench::bound(make_sync_endpoints_bound())]
@@ -358,6 +383,24 @@ mod linux {
     #[library_benchmark]
     #[bench::bound(make_local_endpoints_bound())]
     fn local_sender_dropped_from_bound(input: LocalEndpoints) -> Pin<Box<BoxedLocalReceiver<i32>>> {
+        let (sender, receiver) = input;
+        drop(sender);
+        receiver
+    }
+
+    #[library_benchmark]
+    #[bench::awaiting(make_sync_endpoints_awaiting())]
+    fn sync_sender_dropped_from_awaiting(input: SyncEndpoints) -> Pin<Box<BoxedReceiver<i32>>> {
+        let (sender, receiver) = input;
+        drop(sender);
+        receiver
+    }
+
+    #[library_benchmark]
+    #[bench::awaiting(make_local_endpoints_awaiting())]
+    fn local_sender_dropped_from_awaiting(
+        input: LocalEndpoints,
+    ) -> Pin<Box<BoxedLocalReceiver<i32>>> {
         let (sender, receiver) = input;
         drop(sender);
         receiver
@@ -390,6 +433,8 @@ mod linux {
             local_poll_disconnected,
             sync_sender_dropped_from_bound,
             local_sender_dropped_from_bound,
+            sync_sender_dropped_from_awaiting,
+            local_sender_dropped_from_awaiting,
         ]
     );
 }
