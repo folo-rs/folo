@@ -242,8 +242,18 @@ impl<T: 'static> LocalEvent<T> {
             value_cell.write(MaybeUninit::new(result));
         }
 
-        let previous_state = self.state.get();
-        self.state.set(previous_state.wrapping_add(1));
+        // We transition directly to EVENT_SET. The sync variant uses a `+= 1`
+        // trick that exits the BOUND path in a single atomic fetch_add and uses
+        // an intermediate EVENT_SIGNALING state to act as a mutex against the
+        // concurrent receiver. LocalEvent is single-threaded, so the SIGNALING
+        // intermediate has no purpose, and the non-atomic equivalent of `+= 1`
+        // (load + add + store) is one instruction wider than a direct store.
+        // `Cell::replace` emits a single load + store sequence and collapses
+        // the AWAITING branch's two state writes (SIGNALING then SET) into
+        // one. In the DISCONNECTED branch the SET we just stored is a
+        // don't-care because the event is about to be deallocated, and no
+        // external observer can witness the transient state.
+        let previous_state = self.state.replace(EVENT_SET);
 
         match previous_state {
             EVENT_BOUND => {
@@ -254,22 +264,28 @@ impl<T: 'static> LocalEvent<T> {
             EVENT_AWAITING => {
                 // There was someone listening via the receiver. We need to
                 // notify the awaiter that they can come back for the value now.
+                //
+                // The state is already EVENT_SET (set by the replace above), so
+                // the reentrant receiver poll triggered by `wake()` will observe
+                // a terminal state and proceed straight to value extraction.
 
-                // SAFETY: The only other potential references to the field are other short-lived
-                // references in this type, which cannot exist at the moment because
-                // the type is single-threaded and does not let any references escape.
-                let awaiter_cell_maybe = unsafe { self.awaiter.get().as_mut() };
-                // SAFETY: UnsafeCell pointer is never null.
-                let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
+                // Extract the waker in a tight scope so the `&mut MaybeUninit<Waker>`
+                // borrow is released before the wake callback fires, matching the
+                // callback-safety guidance in docs/callback-safety.md.
+                let waker = {
+                    // SAFETY: The only other potential references to the field are other
+                    // short-lived references in this type, which cannot exist at the moment
+                    // because the type is single-threaded and does not let any references
+                    // escape.
+                    let awaiter_cell_maybe = unsafe { self.awaiter.get().as_mut() };
+                    // SAFETY: UnsafeCell pointer is never null.
+                    let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
 
-                // We extract the waker and consider the field uninitialized again.
-                // SAFETY: We were in EVENT_AWAITING which guarantees there is a waker in there.
-                let waker = unsafe { awaiter_cell.assume_init_read() };
-
-                // Before sending the wake signal we must transition into `EVENT_SET` state, so
-                // as soon as it wakes up it can grab the result. Granted, as this specific type
-                // is a single-threaded signal, the order of operations does not actually matter.
-                self.state.set(EVENT_SET);
+                    // We extract the waker and consider the field uninitialized again.
+                    // SAFETY: We were in EVENT_AWAITING which guarantees there is a waker
+                    // in there.
+                    unsafe { awaiter_cell.assume_init_read() }
+                };
 
                 // Come and get it.
                 waker.wake();
@@ -530,10 +546,14 @@ impl<T: 'static> fmt::Debug for LocalEvent<T> {
 #[expect(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::cell::RefCell;
     use std::panic::{RefUnwindSafe, UnwindSafe};
+    use std::pin::Pin;
+    use std::rc::Rc;
     use std::task::{self, Poll};
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
+    use testing::{ReentrantWakerData, with_watchdog};
 
     use super::*;
     use crate::IntoValueError;
@@ -1131,5 +1151,66 @@ mod tests {
         });
 
         assert!(called);
+    }
+
+    // Regression test for the synchronous reentrancy hazard in `set`. A waker
+    // fired by the sender's `send` that synchronously polls the receiver must
+    // observe a terminal state (SET) and read out the value, not see the
+    // intermediate state from the +1 collapse. This also exercises the
+    // callback-safety contract that the awaiter cell is drained before the
+    // wake callback runs.
+    #[test]
+    #[cfg_attr(miri, ignore)] // Custom raw waker is not Miri-compatible.
+    fn boxed_send_with_reentrant_waker_observes_set() {
+        type ObservedResult = Poll<Result<i32, Disconnected>>;
+
+        with_watchdog(|| {
+            let (sender, receiver) = LocalEvent::<i32>::boxed();
+            let receiver_holder: Rc<RefCell<Option<Pin<Box<_>>>>> =
+                Rc::new(RefCell::new(Some(Box::pin(receiver))));
+            let receiver_for_waker = Rc::clone(&receiver_holder);
+
+            let reentrant_observed: Rc<RefCell<Option<ObservedResult>>> =
+                Rc::new(RefCell::new(None));
+            let observed_for_waker = Rc::clone(&reentrant_observed);
+
+            let waker_data = ReentrantWakerData::new(move || {
+                // Synchronously poll the receiver from inside the waker.
+                // The receiver should observe EVENT_SET and return Ready(Ok(42)).
+                let mut holder = receiver_for_waker.borrow_mut();
+                let receiver = holder.as_mut().expect("receiver still held");
+                let noop = Waker::noop();
+                let mut cx = task::Context::from_waker(noop);
+                let result = receiver.as_mut().poll(&mut cx);
+                *observed_for_waker.borrow_mut() = Some(result);
+            });
+            // SAFETY: `waker_data` outlives the waker and the test is single-threaded.
+            let waker = unsafe { waker_data.waker() };
+
+            // First poll transitions BOUND -> AWAITING and stores the
+            // reentrant waker.
+            {
+                let mut holder = receiver_holder.borrow_mut();
+                let receiver = holder.as_mut().expect("receiver still held");
+                let mut cx = task::Context::from_waker(&waker);
+                assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Pending));
+            }
+
+            // Send a value. This calls `set` which transitions AWAITING -> SET
+            // and then invokes the waker, which must observe the SET state
+            // and consume the value reentrantly.
+            sender.send(42);
+
+            assert!(waker_data.was_woken());
+            let observed = reentrant_observed.borrow_mut().take();
+            assert!(
+                matches!(observed, Some(Poll::Ready(Ok(42)))),
+                "reentrant poll should observe SET and read the value",
+            );
+
+            // The receiver was consumed reentrantly; the receiver_holder still
+            // owns the Pin<Box> shell, drop it to release.
+            drop(receiver_holder.borrow_mut().take());
+        });
     }
 }

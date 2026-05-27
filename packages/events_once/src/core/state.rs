@@ -11,12 +11,21 @@
 //!                 this state is a mutex of sorts, to stop a receiver from updating event state;
 //!                 we transition into the "set" state from this state, at which point the receiver
 //!                 is welcome to receive the payload.
+//!                 Only the thread-safe `Event` variant ever observes this state; the
+//!                 single-threaded `LocalEvent` variant transitions directly from `awaiting`
+//!                 to `set` because no concurrent receiver can witness the intermediate value.
 //! 4 - disconnected - one of the endpoints has disconnected before completing the send/receive.
 //!
-//! A key optimization is that the "send" transition is a simple `+= 1` operation:
+//! A key optimization in the thread-safe `Event` variant is that the "send" transition is a
+//! simple `+= 1` operation, executed via a single atomic `fetch_add`:
 //!
 //! * If nobody is listening, we get `bound + 1 = set`
 //! * If a receiver is listening, we get `awaiting + 1 = signaling`
+//!
+//! This trick is specific to the thread-safe variant because it compresses the read-and-write
+//! into one atomic instruction. The single-threaded `LocalEvent` variant cannot benefit from
+//! the encoding (a non-atomic `Cell` `+= 1` lowers to a separate load + add + store), so it
+//! transitions directly to the target state instead.
 //!
 //! These states are also used to coordinate which of the endpoints drops the event itself:
 //! * If the receiver disconnects first, it will set the `disconnected` state and the sender
