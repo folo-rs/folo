@@ -87,8 +87,7 @@ mod linux {
     }
 
     fn make_local_endpoints_bound() -> LocalEndpoints {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
-        (sender, Box::pin(receiver))
+        make_local_endpoints()
     }
 
     fn make_sync_pool() -> EventPool<i32> {
