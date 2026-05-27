@@ -70,7 +70,7 @@ mod linux {
     #[library_benchmark]
     fn sync_boxed_lifecycle() {
         let (sender, receiver) = black_box(Event::<i32>::boxed());
-        let mut receiver = Box::pin(receiver);
+        let mut receiver = std::pin::pin!(receiver);
 
         sender.send(black_box(42));
 
@@ -81,7 +81,7 @@ mod linux {
     #[library_benchmark]
     fn local_boxed_lifecycle() {
         let (sender, receiver) = black_box(LocalEvent::<i32>::boxed());
-        let mut receiver = Box::pin(receiver);
+        let mut receiver = std::pin::pin!(receiver);
 
         sender.send(black_box(42));
 
@@ -104,7 +104,7 @@ mod linux {
     #[bench::warm(make_warm_sync_pool())]
     fn sync_pooled_lifecycle(pool: EventPool<i32>) -> EventPool<i32> {
         let (sender, receiver) = black_box(pool.rent());
-        let mut receiver = Box::pin(receiver);
+        let mut receiver = std::pin::pin!(receiver);
 
         sender.send(black_box(42));
 

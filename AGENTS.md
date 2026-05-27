@@ -423,6 +423,24 @@ being benchmarked, to avoid unrealistic eager optimizations due to output values
 Benchmarks that are meant to be compared to each other must be in the same benchmark function
 and in the same benchmark group.
 
+Do not use `Box::pin(value)` on the measured path. It allocates a `Box` on the heap on every
+iteration, which can easily add 100-200 instructions (or 40-50% of the measurement) of pure
+allocator overhead that has nothing to do with the operation under test. Use
+`std::pin::pin!(value)` instead — it pins on the stack with zero allocation. Add a brief inline
+comment justifying the deviation from the usual `Box::pin` preference (e.g. "stack-pin to avoid
+allocator noise on the measured path"). This is an exception to the workspace-wide rule against
+the `pin!` macro.
+
+`Box::pin` remains correct in benchmark code that is NOT inside the measured region:
+
+* Criterion `iter_custom` setup (anything before `Instant::now()`).
+* The first ("payload preparation") callback of `iter_batched()`.
+* Gungraun setup functions referenced via `#[bench::id(setup_fn())]` — these run outside the
+  measured region and pass the result into the bench body by value.
+* Helper functions that must return `Pin<Box<T>>` across a function boundary (a stack pin would
+  dangle).
+* Intentional `Box::pin` baselines where the allocation IS what is being measured.
+
 Do not forget to register benchmarks in `Cargo.toml`.
 
 # Callgrind benchmarks
@@ -815,6 +833,9 @@ This macro is special-purpose and not intended for general use. Instead, use
 
 If there is some reason `Box::pin(value)` would not work, you can use `std::pin::pin!(value)`
 as a last resort but leave a comment to justify why this is the case.
+
+Benchmarks are an exception: on the measured path, use `std::pin::pin!` to avoid allocator
+overhead distorting the measurement. See the "Benchmark design" section for details.
 
 # Multiple statements per command
 
