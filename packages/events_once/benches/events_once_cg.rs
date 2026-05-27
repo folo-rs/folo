@@ -82,7 +82,9 @@ mod linux {
     fn make_sync_endpoints_bound() -> SyncEndpoints {
         // The BOUND state is the initial state of every freshly constructed event: no value
         // has been set, no awaiter has been registered. Dropping the sender from this state
-        // is the fast path of cancellation - the receiver has not yet asked for the value.
+        // exercises the cheaper of the two cancellation paths because there is no waker to
+        // consume and no wake to deliver - but it is also the less common case in practice,
+        // see the AWAITING helper below.
         make_sync_endpoints()
     }
 
