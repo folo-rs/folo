@@ -139,6 +139,7 @@ where
 {
     type Output = Result<T, Disconnected>;
 
+    #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
         let event_ref = self
             .event_ref
@@ -176,6 +177,7 @@ where
     E: EventRef<T>,
     T: Send + 'static,
 {
+    #[inline]
     fn drop(&mut self) {
         if let Some(event_ref) = self.event_ref.take() {
             match Event::final_poll(&event_ref) {

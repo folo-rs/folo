@@ -82,6 +82,6 @@ confirm whether the function is being inlined.
 Inlining is asymmetric and not transitive: inlining a function with a body
 that is too large into its caller can prevent the caller from being inlined
 into ITS caller. When tempted to add `#[inline]` to a heavy method (e.g.
-the `EventRef::release_event` impl for `PooledRef`, which locks the pool
-mutex), measure first — the "inline cascade" can regress overall numbers
-even though the local symbol gets inlined.
+the `EventRef::release_event` impl for `BoxedRef` / `BoxedLocalRef`, which
+deallocates), measure first — the "inline cascade" can regress overall
+numbers even though the local symbol gets inlined.

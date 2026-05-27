@@ -267,6 +267,7 @@ where
     /// Sets the value of the event and notifies the receiver's awaiter, if there is one.
     ///
     /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
+    #[inline]
     pub(crate) fn set(event_cell: &UnsafeCell<Self>, value: T) -> Result<(), Disconnected> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must
@@ -389,6 +390,7 @@ where
     /// Marks the event as having been disconnected early from the sender side.
     ///
     /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
+    #[inline]
     pub(crate) fn sender_dropped_without_set(
         event_cell: &UnsafeCell<Self>,
     ) -> Result<(), Disconnected> {
@@ -480,6 +482,7 @@ where
     ///
     /// If `Some` is returned, the caller is the last remaining endpoint and responsible
     /// for cleaning up the event.
+    #[inline]
     #[must_use]
     pub(crate) fn poll(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         #[cfg(debug_assertions)]
@@ -784,6 +787,7 @@ where
     /// Returns `Ok(Some(value))` if the sender sender has already sent a value.
     /// Returns `Err` if the sender has already disconnected without sending a value.
     /// In both of these cases, the receiver must clean up the event now.
+    #[inline]
     pub(crate) fn final_poll(event_cell: &UnsafeCell<Self>) -> Result<Option<T>, Disconnected> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must

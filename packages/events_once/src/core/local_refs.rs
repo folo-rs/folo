@@ -27,6 +27,7 @@ impl<T: 'static> PtrLocalRef<T> {
 }
 
 impl<T: 'static> LocalRef<T> for PtrLocalRef<T> {
+    #[inline]
     fn release_event(&self) {}
 }
 

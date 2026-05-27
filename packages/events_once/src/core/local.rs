@@ -226,6 +226,7 @@ impl<T: 'static> LocalEvent<T> {
     /// Sets the value of the event and notifies the awaiter, if there is one.
     ///
     /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
+    #[inline]
     pub(crate) fn set(&self, result: T) -> Result<(), Disconnected> {
         let value_cell = self.value.get();
 
@@ -308,6 +309,7 @@ impl<T: 'static> LocalEvent<T> {
     ///
     /// If `Some` result is returned, the caller is the last remaining endpoint and responsible
     /// for cleaning up the event.
+    #[inline]
     #[must_use]
     pub(crate) fn poll(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         #[cfg(debug_assertions)]
@@ -376,6 +378,7 @@ impl<T: 'static> LocalEvent<T> {
     /// Marks the event as having been disconnected early from the sender side.
     ///
     /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
+    #[inline]
     pub(crate) fn sender_dropped_without_set(&self) -> Result<(), Disconnected> {
         let previous_state = self.state.get();
 
@@ -436,6 +439,7 @@ impl<T: 'static> LocalEvent<T> {
     /// Returns `Ok(Some(value))` if the sender sender has already sent a value.
     /// Returns `Err` if the sender has already disconnected without sending a value.
     /// In both of these cases, the receiver must clean up the event now.
+    #[inline]
     pub(crate) fn final_poll(&self) -> Result<Option<T>, Disconnected> {
         let previous_state = self.state.get();
 

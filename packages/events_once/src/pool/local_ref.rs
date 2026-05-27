@@ -29,6 +29,7 @@ impl<T: 'static> Clone for PooledLocalRef<T> {
 }
 
 impl<T: 'static> LocalRef<T> for PooledLocalRef<T> {
+    #[inline]
     fn release_event(&self) {
         let mut pool = self.core.pool.borrow_mut();
 
