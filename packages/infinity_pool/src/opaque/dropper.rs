@@ -117,7 +117,7 @@ mod tests {
 
         // Create dropper for the pinned object.
         // SAFETY: We ensure the target outlives the dropper and prevent double-drop with mem::forget.
-        let dropper = unsafe { Dropper::new(NonNull::from(&mut stack_value)) };
+        let dropper = unsafe { Dropper::new(NonNull::from_mut(&mut stack_value)) };
 
         // Target should not be dropped yet.
         assert!(
@@ -144,7 +144,7 @@ mod tests {
         let mut stack_value = ((), tracker);
 
         // SAFETY: We ensure the target outlives the dropper and prevent double-drop with mem::forget.
-        let dropper = unsafe { Dropper::new(NonNull::from(&mut stack_value)) };
+        let dropper = unsafe { Dropper::new(NonNull::from_mut(&mut stack_value)) };
 
         assert!(!dropped_flag.get());
         drop(dropper);
@@ -179,7 +179,7 @@ mod tests {
 
         {
             // SAFETY: We ensure the target outlives the dropper and prevent double-drop with mem::forget.
-            let dropper = unsafe { Dropper::new(NonNull::from(&mut stack_complex)) };
+            let dropper = unsafe { Dropper::new(NonNull::from_mut(&mut stack_complex)) };
             assert!(!dropped_flag.get());
             drop(dropper);
         }
@@ -198,7 +198,7 @@ mod tests {
         let mut value: u64 = 0x1234_5678_9abc_def0;
 
         // SAFETY: `u64` is `Copy` and does not need dropping; the target outlives the dropper.
-        let dropper = unsafe { Dropper::new(NonNull::from(&mut value)) };
+        let dropper = unsafe { Dropper::new(NonNull::from_mut(&mut value)) };
 
         assert!(
             dropper.drop_fn.is_none(),
@@ -217,7 +217,7 @@ mod tests {
         let mut stack_value = tracker;
 
         // SAFETY: target outlives dropper; we mem::forget the original below to prevent double-drop.
-        let dropper = unsafe { Dropper::new(NonNull::from(&mut stack_value)) };
+        let dropper = unsafe { Dropper::new(NonNull::from_mut(&mut stack_value)) };
 
         assert!(
             dropper.drop_fn.is_some(),
