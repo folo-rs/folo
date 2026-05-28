@@ -33,5 +33,5 @@ fn main() {
         processor_set.len()
     );
 
-    thread::sleep(Duration::from_secs(60));
+    thread::sleep(Duration::from_mins(1));
 }

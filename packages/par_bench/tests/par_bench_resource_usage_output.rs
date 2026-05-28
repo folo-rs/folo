@@ -153,7 +153,7 @@ fn resource_usage_output_provides_meaningful_processor_time_data() {
             // If time was measured, it should be reasonable
             let mean_time = operation_stats.mean();
             assert!(
-                mean_time < Duration::from_millis(1000),
+                mean_time < Duration::from_secs(1),
                 "Mean processor time per iteration should be reasonable, got {mean_time:?}"
             );
         }

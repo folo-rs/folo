@@ -252,10 +252,9 @@ mod linux {
 }
 
 #[cfg(target_os = "linux")]
-pub use linux::{atomic_group, inspection_group, register_group, removal_group};
-
-#[cfg(target_os = "linux")]
 use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
+#[cfg(target_os = "linux")]
+pub use linux::{atomic_group, inspection_group, register_group, removal_group};
 
 #[cfg(target_os = "linux")]
 gungraun::main!(

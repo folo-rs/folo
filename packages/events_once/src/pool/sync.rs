@@ -76,11 +76,7 @@ impl<T: Send + 'static> EventPool<T> {
         let storage = {
             let mut pool = self.core.pool.lock().expect(NEVER_POISONED);
 
-            #[expect(
-                clippy::multiple_unsafe_ops_per_block,
-                unused_unsafe,
-                reason = "it cannot handle the closure"
-            )]
+            #[expect(unused_unsafe, reason = "rustc cannot handle the closure")]
             // SAFETY: We are required to initialize the storage of the item we store in the pool.
             // We do - that is what new_in_inner is for.
             unsafe {

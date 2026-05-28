@@ -19,7 +19,7 @@ async fn main() {
     let mut nm_publisher = nm_otel::Publisher::builder()
         .provider(my_meter_provider)
         .clock(Clock::new_tokio())
-        .interval(Duration::from_secs(60))
+        .interval(Duration::from_mins(1))
         .build();
 
     nm_publisher.publish_forever().await;

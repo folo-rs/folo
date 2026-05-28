@@ -26,7 +26,7 @@ impl LayoutKey {
         let size = layout.size();
         let align = layout.align();
 
-        assert!(size <= u32::MAX as usize, "Layout size exceeds u32::MAX",);
+        assert!(size <= u32::MAX as usize, "Layout size exceeds u32::MAX");
         assert!(
             align <= u32::MAX as usize,
             "Layout alignment exceeds u32::MAX"

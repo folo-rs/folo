@@ -24,7 +24,7 @@
 //! Publisher::builder()
 //!     .provider(my_meter_provider)
 //!     .clock(Clock::new_tokio())
-//!     .interval(Duration::from_secs(60))
+//!     .interval(Duration::from_mins(1))
 //!     .build()
 //!     .publish_forever()
 //!     .await;
