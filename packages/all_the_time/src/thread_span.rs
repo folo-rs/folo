@@ -317,7 +317,7 @@ mod tests {
     fn iterations_divisor_applied_correctly_single() {
         // Test that single iteration does not divide (just returns total duration)
         let test_cases = [
-            Duration::from_nanos(1000),
+            Duration::from_micros(1),
             Duration::from_millis(5),
             Duration::from_secs(1),
         ];
@@ -348,7 +348,7 @@ mod tests {
     fn iterations_divisor_applied_correctly_multiple() {
         // Test that multiple iterations properly divide the duration
         let test_cases = [
-            (Duration::from_nanos(1000), 5_u64, Duration::from_nanos(200)),
+            (Duration::from_micros(1), 5_u64, Duration::from_nanos(200)),
             (Duration::from_millis(100), 4_u64, Duration::from_millis(25)),
             (Duration::from_secs(1), 10_u64, Duration::from_millis(100)),
         ];
@@ -392,7 +392,7 @@ mod tests {
         // Since our fake platform does not automatically advance time,
         // and we cannot modify it after creation, let us test with
         // a different approach - verify the logic through calculation
-        let test_total_duration = Duration::from_nanos(1000);
+        let test_total_duration = Duration::from_micros(1);
         let iterations = 5_u64;
 
         // This is what the division logic should produce

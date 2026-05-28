@@ -4,14 +4,17 @@ Tracking notes for follow-up work that is intentionally deferred. Each entry
 should describe the task, the trigger condition that makes it actionable, and
 links to the relevant code.
 
-## Migrate to stable `std::hint::cold_path()` (Rust 1.95+)
+## Migrate to stable `std::hint::cold_path()` (requires MSRV 1.95+)
 
 `packages/nm/src/observations.rs` defines a private `cold_path()` helper as a
-workaround for `std::hint::cold_path()` being unstable in the current
-workspace toolchain (Rust 1.93, gated behind `feature(cold_path)`).
+workaround for `std::hint::cold_path()` being unavailable at the workspace MSRV.
 
-The intrinsic stabilized in Rust 1.95. Once the workspace toolchain
-(`rust-toolchain.toml`) is upgraded to 1.95 or later:
+The intrinsic stabilized in Rust 1.95. The workspace toolchain
+(`rust-toolchain.toml`) is at 1.95, but the workspace MSRV is 1.91, so
+`std::hint::cold_path()` cannot yet be used without raising `nm`'s MSRV.
+
+Once the workspace MSRV (or just `nm`'s package MSRV) is raised to 1.95 or
+later:
 
 1. Delete the private `fn cold_path()` helper from
    `packages/nm/src/observations.rs`.

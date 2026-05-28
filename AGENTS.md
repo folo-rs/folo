@@ -706,7 +706,7 @@ The justification should cover:
 
 * What standard pattern the reader would expect to see here and is not seeing.
 * Which alternatives were considered and ruled out, with the concrete reason each was rejected
-  (e.g. "unstable on Rust 1.93", "fails NLL borrow-check", "trait bound `X: Y` does not hold for
+  (e.g. "unstable on Rust 1.95", "fails NLL borrow-check", "trait bound `X: Y` does not hold for
   our key type", "allocates per call").
 * What the chosen variant buys us that the standard pattern does not.
 

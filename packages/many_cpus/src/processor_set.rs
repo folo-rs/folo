@@ -979,9 +979,7 @@ mod tests_fallback {
         let hw = SystemHardware::fallback();
         let all_set = hw.processors();
 
-        let expected_count = thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1);
+        let expected_count = thread::available_parallelism().map_or(1, std::num::NonZero::get);
 
         assert_eq!(all_set.len(), expected_count);
     }

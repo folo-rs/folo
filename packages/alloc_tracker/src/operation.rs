@@ -149,19 +149,12 @@ impl Operation {
     /// Calculates the mean bytes allocated per iteration.
     ///
     /// Returns 0 if no iterations have been recorded.
-    #[expect(clippy::integer_division, reason = "we accept loss of precision")]
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "division by zero excluded via if-else"
-    )]
     #[must_use]
     pub fn mean(&self) -> u64 {
         let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
-        if data.total_iterations == 0 {
-            0
-        } else {
-            data.total_bytes_allocated / data.total_iterations
-        }
+        data.total_bytes_allocated
+            .checked_div(data.total_iterations)
+            .unwrap_or(0)
     }
 
     /// Returns the total number of iterations recorded.

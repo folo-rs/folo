@@ -13,7 +13,7 @@ use crate::mapping::{InstrumentRegistry, export_report};
 use crate::state::CollectionState;
 
 /// Default collection interval.
-const DEFAULT_INTERVAL: Duration = Duration::from_secs(60);
+const DEFAULT_INTERVAL: Duration = Duration::from_mins(1);
 
 /// Default meter name.
 const DEFAULT_METER_NAME: &str = "nm";

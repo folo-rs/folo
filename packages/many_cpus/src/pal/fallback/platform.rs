@@ -48,11 +48,8 @@ pub(crate) static BUILD_TARGET_PLATFORM: BuildTargetPlatform = BuildTargetPlatfo
 impl BuildTargetPlatform {
     #[expect(clippy::unused_self, reason = "matches Platform trait signature")]
     pub(crate) fn processor_count(&self) -> usize {
-        *PROCESSOR_COUNT.get_or_init(|| {
-            std::thread::available_parallelism()
-                .map(NonZero::get)
-                .unwrap_or(1)
-        })
+        *PROCESSOR_COUNT
+            .get_or_init(|| std::thread::available_parallelism().map_or(1, NonZero::get))
     }
 
     fn get_processors(&self) -> NonEmpty<ProcessorFacade> {

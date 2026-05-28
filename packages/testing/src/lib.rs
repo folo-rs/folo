@@ -70,7 +70,7 @@ where
     // Miri is dramatically slower for thread synchronization, so we use a
     // longer timeout to avoid false positives while still catching real hangs.
     let timeout = if cfg!(miri) {
-        Duration::from_secs(60)
+        Duration::from_mins(1)
     } else {
         Duration::from_secs(10)
     };
