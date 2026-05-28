@@ -14,7 +14,7 @@ rust-version.workspace = true
 all-features = true
 
 [dependencies]
-cpu-time = "1.0.0"
+cpu-time = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

@@ -22,7 +22,7 @@ infinity_pool = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
-futures = { workspace = true }
+futures = { workspace = true, features = ["executor"] }
 oneshot = { workspace = true }
 pin-project = { workspace = true }
 static_assertions = { workspace = true }

@@ -19,7 +19,7 @@ simple-mermaid = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
-futures = { workspace = true }
+futures = { workspace = true, features = ["executor"] }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
 
