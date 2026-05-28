@@ -273,7 +273,7 @@ impl LocalManualResetEvent {
     pub unsafe fn embedded(
         place: Pin<&EmbeddedLocalManualResetEvent>,
     ) -> EmbeddedLocalManualResetEventRef {
-        let inner = NonNull::from(&place.get_ref().inner);
+        let inner = NonNull::from_ref(&place.get_ref().inner);
         EmbeddedLocalManualResetEventRef { inner }
     }
 

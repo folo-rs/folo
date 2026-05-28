@@ -82,7 +82,7 @@ impl<T: ?Sized> SlabHandle<T> {
         let new_ref: &U = cast_fn(value_ref);
 
         // Now we need a pointer to stuff into a new SlabHandle.
-        let new_ptr = NonNull::from(new_ref);
+        let new_ptr = NonNull::from_ref(new_ref);
 
         // Create a new slab handle with the trait object type.
         SlabHandle {
@@ -115,7 +115,7 @@ impl<T: ?Sized> SlabHandle<T> {
         let new_ref: &mut U = cast_fn(value_ref);
 
         // Now we need a pointer to stuff into a new SlabHandle.
-        let new_ptr = NonNull::from(new_ref);
+        let new_ptr = NonNull::from_mut(new_ref);
 
         // Create a new slab handle with the trait object type.
         SlabHandle {
@@ -217,15 +217,15 @@ mod tests {
     fn same_index_different_ptr_is_not_equal() {
         let mut x = 42_u32;
         let mut y = 42_u32;
-        let handle1 = SlabHandle::new(0, NonNull::from(&mut x));
-        let handle2 = SlabHandle::new(0, NonNull::from(&mut y));
+        let handle1 = SlabHandle::new(0, NonNull::from_mut(&mut x));
+        let handle2 = SlabHandle::new(0, NonNull::from_mut(&mut y));
         assert_ne!(handle1, handle2);
     }
 
     #[test]
     fn same_index_same_ptr_is_equal() {
         let mut x = 42_u32;
-        let ptr = NonNull::from(&mut x);
+        let ptr = NonNull::from_mut(&mut x);
         let handle1 = SlabHandle::new(0, ptr);
         let handle2 = SlabHandle::new(0, ptr);
         assert_eq!(handle1, handle2);
@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn different_index_same_ptr_is_not_equal() {
         let mut x = 42_u32;
-        let ptr = NonNull::from(&mut x);
+        let ptr = NonNull::from_mut(&mut x);
         let handle1 = SlabHandle::new(0, ptr);
         let handle2 = SlabHandle::new(1, ptr);
         assert_ne!(handle1, handle2);
@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn clone_copy_are_equal() {
         let mut x = 42_u32;
-        let handle = SlabHandle::new(5, NonNull::from(&mut x));
+        let handle = SlabHandle::new(5, NonNull::from_mut(&mut x));
         let cloned = Clone::clone(&handle);
         let copied = handle;
         assert_eq!(handle, cloned);
@@ -254,7 +254,7 @@ mod tests {
     #[test]
     fn cast_with_to_display_trait() {
         let mut value = 42_usize;
-        let handle: SlabHandle<usize> = SlabHandle::new(10, NonNull::from(&mut value));
+        let handle: SlabHandle<usize> = SlabHandle::new(10, NonNull::from_mut(&mut value));
 
         // Cast from SlabHandle<usize> to SlabHandle<dyn Display>
         // SAFETY: We control the lifetime and the value is valid for the duration of the test
@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn cast_with_mut_to_display_trait() {
         let mut value = 123_u64;
-        let handle: SlabHandle<u64> = SlabHandle::new(7, NonNull::from(&mut value));
+        let handle: SlabHandle<u64> = SlabHandle::new(7, NonNull::from_mut(&mut value));
 
         // Cast from SlabHandle<u64> to SlabHandle<dyn Display>
         // SAFETY: We control the lifetime and the value is valid for the duration of the test
@@ -316,7 +316,7 @@ mod tests {
     #[test]
     fn cast_with_mut_allows_mutation() {
         let mut value = 100_u32;
-        let handle: SlabHandle<u32> = SlabHandle::new(15, NonNull::from(&mut value));
+        let handle: SlabHandle<u32> = SlabHandle::new(15, NonNull::from_mut(&mut value));
 
         // Cast to mutable trait object
         // SAFETY: We control the lifetime and the value is valid for the duration of the test

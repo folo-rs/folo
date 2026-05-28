@@ -187,7 +187,7 @@ where
         Self::new_in_inner(place_mut);
 
         // We cast away the MaybeUninit wrapper because it is now initialized.
-        let event = NonNull::from(place_mut).cast::<UnsafeCell<Self>>();
+        let event = NonNull::from_mut(place_mut).cast::<UnsafeCell<Self>>();
 
         (
             SenderCore::new(PtrRef::new(event)),
