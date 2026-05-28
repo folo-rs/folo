@@ -1897,6 +1897,7 @@ mod tests {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests_fallback {
     use std::num::NonZero;
+    use std::thread;
 
     use new_zealand::nz;
 
@@ -1931,7 +1932,7 @@ mod tests_fallback {
 
         let set = builder.take_all().unwrap();
 
-        let expected_count = std::thread::available_parallelism().map_or(1, NonZero::get);
+        let expected_count = thread::available_parallelism().map_or(1, NonZero::get);
 
         assert_eq!(set.len(), expected_count);
     }
@@ -1944,7 +1945,7 @@ mod tests_fallback {
 
         let set = builder.performance_processors_only().take_all().unwrap();
 
-        let expected_count = std::thread::available_parallelism().map_or(1, NonZero::get);
+        let expected_count = thread::available_parallelism().map_or(1, NonZero::get);
 
         assert_eq!(set.len(), expected_count);
     }
@@ -1957,7 +1958,7 @@ mod tests_fallback {
 
         let set = builder.same_memory_region().take_all().unwrap();
 
-        let expected_count = std::thread::available_parallelism().map_or(1, NonZero::get);
+        let expected_count = thread::available_parallelism().map_or(1, NonZero::get);
 
         assert_eq!(set.len(), expected_count);
 
@@ -1995,8 +1996,6 @@ mod tests_fallback {
 
     #[test]
     fn where_available_for_current_thread() {
-        use std::thread;
-
         thread::spawn(|| {
             let hw = SystemHardware::fallback();
 
@@ -2028,7 +2027,7 @@ mod tests_fallback {
 
         // The fallback platform reports max_processor_time == processor_count.
         // Since quota is NOT enforced by default, we should get all processors.
-        let expected_count = std::thread::available_parallelism().map_or(1, NonZero::get);
+        let expected_count = thread::available_parallelism().map_or(1, NonZero::get);
 
         assert_eq!(set.len(), expected_count);
     }

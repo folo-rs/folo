@@ -25,7 +25,7 @@ impl Filesystem for BuildTargetFilesystem {
     }
 
     fn get_numa_node_cpulist_contents(&self, node_index: u32) -> String {
-        fs::read_to_string(format!("/sys/devices/system/node/node{node_index}/cpulist",))
+        fs::read_to_string(format!("/sys/devices/system/node/node{node_index}/cpulist"))
             .expect("failed to read NUMA node cpulist - cannot continue execution")
     }
 
