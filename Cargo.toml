@@ -14,7 +14,7 @@ all_the_time = { version = "0.4.18", path = "packages/all_the_time", default-fea
 alloc_tracker = { version = "0.5.22", path = "packages/alloc_tracker", default-features = false }
 arc-swap = { version = "1.7", default-features = false }
 argh = { version = "0.1.13", default-features = false, features = ["help"] }
-awaiter_set = { version = "0.1.3", path = "packages/awaiter_set", default-features = false }
+awaiter_set = { version = "0.1.4", path = "packages/awaiter_set", default-features = false }
 axum = { version = "0.8", default-features = false }
 cpulist = { version = "1.1.2", path = "packages/cpulist", default-features = false }
 criterion = { version = "0.8.2", default-features = false }
@@ -23,7 +23,7 @@ derive_more = { version = "2.0", default-features = false }
 event-listener = { version = "5.4", default-features = false, features = [
     "std",
 ] }
-events = { version = "0.7.3", path = "packages/events", default-features = false }
+events = { version = "0.7.4", path = "packages/events", default-features = false }
 events_once = { version = "0.5.25", path = "packages/events_once", default-features = false }
 fake_headers = { version = "0.0", default-features = false }
 fast_time = { version = "0.1.20", path = "packages/fast_time", default-features = false }
