@@ -385,16 +385,17 @@ impl AwaiterSet {
             self.unlink(prev, next);
         }
 
-        // Take the waker and clear the link fields before publishing
-        // the notification via the atomic lifecycle store.
+        // Take the waker (transferring ownership to the caller) before publishing
+        // the notification via the atomic lifecycle store. The link fields and
+        // generation are dead writes in NOTIFIED/IDLE (no code path reads them
+        // outside WAITING) and `register` fully overwrites all of them on the next
+        // IDLE -> WAITING transition. Clearing `owning_set_id` in debug builds
+        // preserves the "0 = not in any set" sentinel for diagnostic clarity.
         // SAFETY: Access is serialized by this `&mut self` lock scope; the previous
         // `inner_ref` borrow has ended (its values were copied into `next`/`prev`),
         // so no other `Inner` reference is live.
         let inner = unsafe { awaiter.inner_mut() };
         let waker = inner.waker.take();
-        inner.next = ptr::null_mut();
-        inner.prev = ptr::null_mut();
-        inner.generation = 0;
         #[cfg(debug_assertions)]
         {
             inner.owning_set_id = 0;
