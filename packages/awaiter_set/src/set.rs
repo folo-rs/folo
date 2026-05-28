@@ -271,7 +271,16 @@ impl AwaiterSet {
         // `inner_ref` borrow has ended (its values were copied into `next`/`prev`),
         // so no other `Inner` reference is live.
         let inner = unsafe { awaiter.inner_mut() };
-        *inner = Inner::idle();
+        // Drop the waker; the link fields and generation are dead writes in IDLE
+        // (no code path reads them while the awaiter is idle) and `register` fully
+        // overwrites all of them on the next IDLE -> WAITING transition. Clearing
+        // `owning_set_id` in debug builds preserves the "0 = not in any set"
+        // sentinel for diagnostic clarity.
+        drop(inner.waker.take());
+        #[cfg(debug_assertions)]
+        {
+            inner.owning_set_id = 0;
+        }
         awaiter.set_lifecycle(IDLE, Ordering::Release);
     }
 
