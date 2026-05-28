@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "all_the_time"
-version = "0.4.19"
+version = "0.4.20"
 dependencies = [
  "cpu-time",
  "criterion",
@@ -23,7 +23,7 @@ dependencies = [
 
 [[package]]
 name = "alloc_tracker"
-version = "0.5.23"
+version = "0.5.24"
 dependencies = [
  "criterion",
  "mutants 0.0.4",
@@ -112,7 +112,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "awaiter_set"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "criterion",
  "futures",
@@ -514,7 +514,7 @@ dependencies = [
 
 [[package]]
 name = "events"
-version = "0.7.5"
+version = "0.7.6"
 dependencies = [
  "alloc_tracker",
  "awaiter_set",
@@ -534,7 +534,7 @@ dependencies = [
 
 [[package]]
 name = "events_once"
-version = "0.5.26"
+version = "0.5.27"
 dependencies = [
  "criterion",
  "futures",
@@ -559,7 +559,7 @@ dependencies = [
 
 [[package]]
 name = "fast_time"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "criterion",
  "gungraun",
@@ -645,7 +645,7 @@ dependencies = [
 
 [[package]]
 name = "future_deque"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "criterion",
  "events_once",
@@ -992,7 +992,7 @@ dependencies = [
 
 [[package]]
 name = "infinity_pool"
-version = "0.8.17"
+version = "0.8.18"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -1056,7 +1056,7 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "linked"
-version = "1.0.12"
+version = "1.0.13"
 dependencies = [
  "criterion",
  "gungraun",
@@ -1074,7 +1074,7 @@ dependencies = [
 
 [[package]]
 name = "linked_macros"
-version = "1.0.12"
+version = "1.0.13"
 dependencies = [
  "linked_macros_impl",
  "proc-macro2",
@@ -1082,7 +1082,7 @@ dependencies = [
 
 [[package]]
 name = "linked_macros_impl"
-version = "1.0.12"
+version = "1.0.13"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1112,7 +1112,7 @@ checksum = "616ec5685824bcc94416c6d4a7a446eea774a31efd7062c8480ba6fd06d7a6e5"
 
 [[package]]
 name = "many_cpus"
-version = "2.4.4"
+version = "2.4.5"
 dependencies = [
  "cpulist",
  "criterion",
@@ -1136,7 +1136,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus_benchmarking"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "cpulist",
  "criterion",
@@ -1223,7 +1223,7 @@ version = "1.0.6"
 
 [[package]]
 name = "nm"
-version = "0.1.35"
+version = "0.1.36"
 dependencies = [
  "criterion",
  "fast_time",
@@ -1239,7 +1239,7 @@ dependencies = [
 
 [[package]]
 name = "nm_otel"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -1388,7 +1388,7 @@ dependencies = [
 
 [[package]]
 name = "par_bench"
-version = "0.2.38"
+version = "0.2.39"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -1688,7 +1688,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "region_cached"
-version = "1.0.18"
+version = "1.0.19"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1710,7 +1710,7 @@ dependencies = [
 
 [[package]]
 name = "region_local"
-version = "1.0.18"
+version = "1.0.19"
 dependencies = [
  "arc-swap",
  "axum",
@@ -2247,7 +2247,7 @@ checksum = "6bce2adbe4c8e63c3e7f79e9249b5409fb3c9bce989dd44337493cf1c8d7dea0"
 
 [[package]]
 name = "vicinal"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
