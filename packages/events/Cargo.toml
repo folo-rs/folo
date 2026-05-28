@@ -33,7 +33,7 @@ awaiter_set = { workspace = true }
 alloc_tracker = { path = "../alloc_tracker" }
 criterion = { workspace = true }
 event-listener = { workspace = true }
-futures = { workspace = true }
+futures = { workspace = true, features = ["executor"] }
 many_cpus = { path = "../many_cpus" }
 mutants = { workspace = true }
 new_zealand = { workspace = true }

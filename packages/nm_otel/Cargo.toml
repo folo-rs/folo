@@ -20,7 +20,7 @@ test-util = ["nm/test-util"]
 [dependencies]
 foldhash = { workspace = true }
 futures = { workspace = true }
-hashbrown = { workspace = true }
+hashbrown = { workspace = true, features = ["default-hasher", "inline-more"] }
 nm = { workspace = true }
 opentelemetry = { workspace = true, features = ["metrics"] }
 tick = { workspace = true }

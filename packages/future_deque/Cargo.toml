@@ -23,7 +23,7 @@ infinity_pool = { workspace = true }
 [dev-dependencies]
 criterion = { workspace = true }
 events_once = { path = "../events_once" }
-futures = { workspace = true }
+futures = { workspace = true, features = ["executor"] }
 futures-core = { workspace = true }
 mutants = { workspace = true }
 static_assertions = { workspace = true }

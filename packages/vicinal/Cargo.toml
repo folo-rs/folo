@@ -31,7 +31,7 @@ tracing = { workspace = true }
 all_the_time = { path = "../all_the_time" }
 alloc_tracker = { path = "../alloc_tracker" }
 criterion = { workspace = true }
-futures = { workspace = true }
+futures = { workspace = true, features = ["executor"] }
 many_cpus = { path = "../many_cpus", features = ["test-util"] }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
