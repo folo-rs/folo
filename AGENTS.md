@@ -109,6 +109,13 @@ Follow these even in doctests. Note that Clippy does not actually check doctests
 manually check what Clippy rules we enable in the workspace-level `Cargo.toml` and follow them in
 the inline examples in API documentation.
 
+This applies whenever Clippy-relevant changes are made, including: (a) enabling a new lint, (b)
+migrating a pattern from one form to another to satisfy an existing lint, (c) running `cargo
+clippy --fix`. After any such change, sweep `///` and `//!` code blocks for the same pattern.
+Pay special attention to *mirrored* examples — a standalone `examples/<crate>_readme.rs` paired
+with code blocks in `lib.rs` and `README.md` — Clippy only sees the standalone example; the
+inline doctest and the README copy must be updated by hand.
+
 # Discarding values
 
 Use `_ = expr;` to discard values, not `let _ = expr;`. The `let` keyword is unnecessary and
