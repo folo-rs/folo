@@ -27,8 +27,13 @@ pub(crate) struct Inner {
     // notify_one).
     pub(crate) waker: Option<Waker>,
 
-    // Idle/Notified: null. Waiting: linked-set pointers maintained
-    // by AwaiterSet.
+    // Linked-set pointers maintained by AwaiterSet. Defined only while
+    // the awaiter is WAITING — on transitions out of WAITING the prior
+    // values are left stale rather than spending two stores to clear
+    // them (no code path reads next/prev outside WAITING, and
+    // `register` fully overwrites both on the next IDLE -> WAITING
+    // transition). `Inner::idle()` initializes them to null for
+    // freshly-constructed awaiters.
     pub(crate) next: *mut Awaiter,
     pub(crate) prev: *mut Awaiter,
 
@@ -37,10 +42,16 @@ pub(crate) struct Inner {
     // `notify_one_prior_generation` to distinguish awaiters that
     // were already registered when a generation advance occurred
     // from awaiters registered later (typically by a reentrant
-    // waker firing during the drain). Zero is reserved as the
-    // "idle"/sentinel value and is never produced by registration
-    // because `AwaiterSet::generation` starts at 1 and is
-    // monotonically non-decreasing.
+    // waker firing during the drain).
+    //
+    // Defined only while the awaiter is WAITING — transitions out of
+    // WAITING leave the prior generation stale (no code path reads
+    // `generation` outside WAITING) and `register` fully overwrites
+    // it on the next IDLE -> WAITING transition. Zero is reserved as
+    // a sentinel never produced by registration because
+    // `AwaiterSet::generation` starts at 1 and is monotonically
+    // non-decreasing; `Inner::idle()` initializes the field to zero
+    // for freshly-constructed awaiters.
     pub(crate) generation: u64,
 
     // Debug-only sentinel that records which AwaiterSet owns this
@@ -48,7 +59,10 @@ pub(crate) struct Inner {
     // operations like `unregister` or `notify_one` are not invoked on
     // an awaiter that lives in a different set — a class of corruption
     // that the lifecycle field alone cannot detect because the awaiter
-    // still appears WAITING. Zero means "not in any set".
+    // still appears WAITING. Zero means "not in any set" and is
+    // explicitly restored on every transition out of WAITING (the
+    // other link/generation fields are left stale, but this sentinel
+    // is preserved so the cross-set assertion remains reliable).
     #[cfg(debug_assertions)]
     pub(crate) owning_set_id: u64,
 }
