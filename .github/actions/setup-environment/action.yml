@@ -18,19 +18,50 @@ runs:
         # This supposedly speeds up installation by avoiding mandb updates.
         sudo mv /usr/bin/mandb /usr/bin/mandb.deactivated && sudo cp -p /bin/true /usr/bin/mandb
 
-        # Add Microsoft package repository (for PowerShell and any other Microsoft packages).
-        # We use curl with --retry-all-errors because the runner can transiently fail
-        # TLS verification against packages.microsoft.com during early boot — likely a
-        # race with unattended-upgrades rewriting /etc/ssl/certs/ca-certificates.crt.
-        # --show-error ensures the failure is visible if all retries are exhausted.
-        curl --fail --silent --show-error --location \
-          --retry 5 --retry-delay 2 --retry-all-errors \
-          --output packages-microsoft-prod.deb \
-          "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb"
-        sudo dpkg -i --force-confnew packages-microsoft-prod.deb
+        ARCH="$(dpkg --print-architecture)"
 
-        sudo apt update
-        sudo apt install -y git git-lfs build-essential cmake gcc make curl libssl-dev pkg-config powershell valgrind
+        # PowerShell on Linux is distributed differently per architecture:
+        # - amd64: Microsoft's apt repo ships a powershell package, so we register the
+        #   repo and install via apt alongside our other system packages.
+        # - arm64: The packages.microsoft.com apt repo for Ubuntu only ships amd64
+        #   PowerShell packages — installing the repo and apt-getting `powershell`
+        #   fails with "Depends: libc6:amd64 but it is not installable". Microsoft
+        #   instead ships ARM64 PowerShell as a tarball on the PowerShell GitHub
+        #   releases page, which is what we use here.
+        if [ "$ARCH" = "amd64" ]; then
+          # Add Microsoft package repository (for PowerShell and any other Microsoft packages).
+          # We use curl with --retry-all-errors because the runner can transiently fail
+          # TLS verification against packages.microsoft.com during early boot — likely a
+          # race with unattended-upgrades rewriting /etc/ssl/certs/ca-certificates.crt.
+          # --show-error ensures the failure is visible if all retries are exhausted.
+          curl --fail --silent --show-error --location \
+            --retry 5 --retry-delay 2 --retry-all-errors \
+            --output packages-microsoft-prod.deb \
+            "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb"
+          sudo dpkg -i --force-confnew packages-microsoft-prod.deb
+
+          sudo apt update
+          sudo apt install -y git git-lfs build-essential cmake gcc make curl libssl-dev pkg-config powershell valgrind
+        elif [ "$ARCH" = "arm64" ]; then
+          sudo apt update
+          sudo apt install -y git git-lfs build-essential cmake gcc make curl libssl-dev pkg-config valgrind
+
+          # Pinned to a current LTS release. Bump as newer 7.4.x patches ship.
+          PWSH_VERSION="7.4.6"
+          curl --fail --silent --show-error --location \
+            --retry 5 --retry-delay 2 --retry-all-errors \
+            --output /tmp/powershell.tar.gz \
+            "https://github.com/PowerShell/PowerShell/releases/download/v${PWSH_VERSION}/powershell-${PWSH_VERSION}-linux-arm64.tar.gz"
+          sudo mkdir -p /opt/microsoft/powershell/7
+          sudo tar zxf /tmp/powershell.tar.gz -C /opt/microsoft/powershell/7
+          sudo chmod +x /opt/microsoft/powershell/7/pwsh
+          sudo ln -sf /opt/microsoft/powershell/7/pwsh /usr/bin/pwsh
+        else
+          echo "ERROR: Unsupported Linux architecture '$ARCH'." >&2
+          echo "Extend the setup-environment action to add a PowerShell install path" >&2
+          echo "for this architecture before adding a runner of this type to CI." >&2
+          exit 1
+        fi
 
         # Set up Git LFS
         git lfs install

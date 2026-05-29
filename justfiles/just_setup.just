@@ -15,7 +15,20 @@ install-tools:
     rustup toolchain install $env:RUST_MSRV
     rustup toolchain install $env:RUST_NIGHTLY --component miri --component rustfmt --component rust-src --component llvm-tools-preview
 
-    cargo install cargo-machete cargo-nextest release-plz cargo-semver-checks cargo-audit cargo-hack cargo-mutants cargo-llvm-cov cargo-sort cargo-sort-derives cargo-udeps cargo-careful cargo-ensure-no-default-features cargo-delta --locked
+    cargo install cargo-machete cargo-nextest release-plz cargo-semver-checks cargo-audit cargo-hack cargo-llvm-cov cargo-sort cargo-sort-derives cargo-udeps cargo-careful cargo-ensure-no-default-features cargo-delta --locked
+
+    # cargo-mutants transitively depends on `winapi 0.2.8`, which only defines its
+    # types for `target_arch = "x86"` / `"x86_64"` and fails to compile on aarch64
+    # with errors like `cannot find type 'ULONG_PTR' in this scope`. Until that
+    # transitive dependency is updated upstream, skip the install on ARM. The CI
+    # `mutants` job only runs on x86_64 runners, so this only affects local dev on
+    # ARM machines (where running mutation testing locally is not supported).
+    $arch = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
+    if ($arch -ne [System.Runtime.InteropServices.Architecture]::Arm64) {
+        cargo install cargo-mutants --locked
+    } else {
+        Write-Host "Skipping cargo-mutants install on ARM64 (winapi 0.2.8 has no aarch64 support)."
+    }
 
     # gungraun-runner drives Valgrind for Callgrind-based instruction-count benchmarks. Only
     # useful on Linux (Valgrind is Linux-only); on Windows and macOS the Callgrind bench binaries
