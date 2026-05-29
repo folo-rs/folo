@@ -254,10 +254,67 @@ jobs:
       - name: Run miri on ${{ matrix.platform }}
         run: just package="${{ needs.delta.outputs.packages }}" miri
 
+  # ARM64 coverage for test-more. Architecture-specific atomic/memory-ordering bugs
+  # or platform-specific behavior in dependencies will not show up on x86_64 runners,
+  # so we exercise the same test suite on Linux ARM and Windows ARM runners.
+  test-more-arm:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-24.04-arm, windows-11-arm]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run test-more on ${{ matrix.platform }}
+        run: just package="${{ needs.delta.outputs.packages }}" test-more
+
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: target/nextest/default/junit.xml
+          flags: ${{ matrix.platform }}
+          report_type: test_results
+
+  # ARM64 coverage for Miri. ARM has a weaker memory model than x86_64, so Miri runs
+  # on ARM can surface atomic ordering and data-race bugs that pass on x86_64. Both
+  # Linux ARM and Windows ARM runners are exercised to mirror the x86_64 miri matrix.
+  miri-arm:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-24.04-arm, windows-11-arm]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run miri on ${{ matrix.platform }}
+        run: just package="${{ needs.delta.outputs.packages }}" miri
+
   # Miri with many seeds is very slow, so we only run it for select packages on Windows.
   # These jobs only run when their specific package is affected by changes.
+  # Gated behind the base `miri` and `miri-arm` jobs so a quick Miri failure short-circuits
+  # the much more expensive many-seeds run.
   miri-harder-events-once:
-    needs: [delta]
+    needs: [delta, miri, miri-arm]
     if: >-
       needs.delta.outputs.skip_all != 'true'
       && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'events_once'))
@@ -279,7 +336,7 @@ jobs:
         run: just package=events_once miri-harder ${{ matrix.shard }}
 
   miri-harder-infinity-pool:
-    needs: [delta]
+    needs: [delta, miri, miri-arm]
     if: >-
       needs.delta.outputs.skip_all != 'true'
       && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'infinity_pool'))
@@ -301,7 +358,7 @@ jobs:
         run: just package=infinity_pool miri-harder ${{ matrix.shard }}
 
   miri-harder-events:
-    needs: [delta]
+    needs: [delta, miri, miri-arm]
     if: >-
       needs.delta.outputs.skip_all != 'true'
       && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'events'))
@@ -323,7 +380,7 @@ jobs:
         run: just package=events miri-harder ${{ matrix.shard }}
 
   miri-harder-awaiter-set:
-    needs: [delta]
+    needs: [delta, miri, miri-arm]
     if: >-
       needs.delta.outputs.skip_all != 'true'
       && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'awaiter_set'))
@@ -366,7 +423,7 @@ jobs:
         run: just machete
 
   check-release:
-    needs: [delta]
+    needs: [delta, check-dev]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
@@ -386,7 +443,7 @@ jobs:
         run: just package="${{ needs.delta.outputs.packages }}" check release
 
   clippy-release:
-    needs: [delta]
+    needs: [delta, clippy-dev]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
@@ -426,7 +483,7 @@ jobs:
         run: just package="${{ needs.delta.outputs.packages }}" build release
 
   mutants:
-    needs: [delta]
+    needs: [delta, test-more]
     if: needs.delta.outputs.skip_all != 'true'
     timeout-minutes: 240
     strategy:

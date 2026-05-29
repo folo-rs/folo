@@ -30,6 +30,12 @@ Split from the monolithic `just validate-local` into individual jobs:
   - test-docs
   - **docs** — Multi-platform because conditional compilation affects generated documentation
   - miri
+  - **test-more-arm** — ARM64 coverage (ubuntu-24.04-arm, windows-11-arm)
+    - Mirrors `test-more` on ARM runners to catch architecture-specific bugs (atomic
+      ordering, platform-specific dependency behavior) that x86_64 runners cannot surface.
+  - **miri-arm** — ARM64 coverage for Miri (ubuntu-24.04-arm, windows-11-arm)
+    - ARM has a weaker memory model than x86_64, so Miri on ARM can surface atomic
+      ordering and data-race bugs that pass on x86_64. Mirrors the x86_64 `miri` matrix.
   - **miri-harder-events-once** / **miri-harder-infinity-pool** / **miri-harder-events** — Windows-only, sharded
     - Runs Miri with 64 seeds per test (`-Zmiri-many-seeds=..64`) for select packages
     - Sharded across parallel runners to reduce wall-clock time (4 shards for events_once,
@@ -57,8 +63,9 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
 A scheduled workflow that keeps GitHub Actions caches warm. GitHub evicts caches after
 7 days of inactivity, and a cold cache means every parallel validation job must independently
 compile all Rust dependencies from scratch (the setup-environment step becomes very expensive).
-This workflow runs once daily on all three platforms (ubuntu, macos, windows) to ensure the
-`shared-key: prerequisites` Rust cache is always populated. It also supports `workflow_dispatch`
+This workflow runs once daily on all five runner images (ubuntu-latest, windows-latest,
+macos-latest, ubuntu-24.04-arm, windows-11-arm) to ensure the
+`shared-key: prerequisites` Rust cache is always populated for both x86_64 and ARM64. It also supports `workflow_dispatch`
 for manual cache warming after toolchain updates.
 
 ## Design Decisions
@@ -75,11 +82,25 @@ for manual cache warming after toolchain updates.
    - Clear failure identification (specific check names in GitHub status)
    - Better resource utilization across GitHub runners
 
+   Expensive jobs are gated behind cheaper equivalents so a fast failure short-circuits
+   the expensive work and avoids burning runner time on code that already failed a
+   simpler check:
+   - `check-release` depends on `check-dev`
+   - `clippy-release` depends on `clippy-dev`
+   - `mutants` depends on `test-more` (mutation testing is meaningless if base tests fail)
+   - `miri-harder-*` depend on both `miri` and `miri-arm` (many-seeds runs are
+     orders of magnitude slower than a single Miri pass)
+
 3. **Platform matrix considerations**:
    - `format-check` is single-platform (Ubuntu) to save resources
    - `docs` and `machete` remain multi-platform due to conditional compilation differences
    - `miri-harder-*` jobs are Windows-only due to high cost; sharded across parallel runners
-   - All other checks run on 3 platforms (ubuntu, macos, windows)
+   - Most checks run on the 3 x86_64 platforms (ubuntu, macos, windows)
+   - `test-more-arm` and `miri-arm` extend coverage to ARM64 (ubuntu-24.04-arm,
+     windows-11-arm) for architecture-sensitive concerns. They are kept as separate
+     jobs rather than added to the main matrices so that ARM-specific failures are
+     immediately identifiable in the GitHub status checks and so the additional runners
+     can be scoped narrowly without inflating every check.
 
 4. **Timeouts**:
    - Default timeout for most jobs
