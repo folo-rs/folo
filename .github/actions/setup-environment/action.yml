@@ -42,7 +42,7 @@ runs:
 
           sudo apt update
           sudo apt install -y git git-lfs build-essential cmake gcc make curl libssl-dev pkg-config powershell valgrind
-        else
+        elif [ "$ARCH" = "arm64" ]; then
           sudo apt update
           sudo apt install -y git git-lfs build-essential cmake gcc make curl libssl-dev pkg-config valgrind
 
@@ -56,6 +56,11 @@ runs:
           sudo tar zxf /tmp/powershell.tar.gz -C /opt/microsoft/powershell/7
           sudo chmod +x /opt/microsoft/powershell/7/pwsh
           sudo ln -sf /opt/microsoft/powershell/7/pwsh /usr/bin/pwsh
+        else
+          echo "ERROR: Unsupported Linux architecture '$ARCH'." >&2
+          echo "Extend the setup-environment action to add a PowerShell install path" >&2
+          echo "for this architecture before adding a runner of this type to CI." >&2
+          exit 1
         fi
 
         # Set up Git LFS
