@@ -165,7 +165,7 @@ jobs:
       - name: Run clippy dev on ${{ matrix.platform }}
         run: just package="${{ needs.delta.outputs.packages }}" clippy dev
 
-  test-more:
+  test-more-x64:
     needs: [delta]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
@@ -234,7 +234,7 @@ jobs:
       - name: Run docs on ${{ matrix.platform }}
         run: just package="${{ needs.delta.outputs.packages }}" docs
 
-  miri:
+  miri-x64:
     needs: [delta, check-dev]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
@@ -311,10 +311,10 @@ jobs:
 
   # Miri with many seeds is very slow, so we only run it for select packages on Windows.
   # These jobs only run when their specific package is affected by changes.
-  # Gated behind the base `miri` and `miri-arm` jobs so a quick Miri failure short-circuits
+  # Gated behind the base `miri-x64` and `miri-arm` jobs so a quick Miri failure short-circuits
   # the much more expensive many-seeds run.
   miri-harder-events-once:
-    needs: [delta, miri, miri-arm]
+    needs: [delta, miri-x64, miri-arm]
     if: >-
       needs.delta.outputs.skip_all != 'true'
       && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'events_once'))
@@ -336,7 +336,7 @@ jobs:
         run: just package=events_once miri-harder ${{ matrix.shard }}
 
   miri-harder-infinity-pool:
-    needs: [delta, miri, miri-arm]
+    needs: [delta, miri-x64, miri-arm]
     if: >-
       needs.delta.outputs.skip_all != 'true'
       && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'infinity_pool'))
@@ -358,7 +358,7 @@ jobs:
         run: just package=infinity_pool miri-harder ${{ matrix.shard }}
 
   miri-harder-events:
-    needs: [delta, miri, miri-arm]
+    needs: [delta, miri-x64, miri-arm]
     if: >-
       needs.delta.outputs.skip_all != 'true'
       && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'events'))
@@ -380,7 +380,7 @@ jobs:
         run: just package=events miri-harder ${{ matrix.shard }}
 
   miri-harder-awaiter-set:
-    needs: [delta, miri, miri-arm]
+    needs: [delta, miri-x64, miri-arm]
     if: >-
       needs.delta.outputs.skip_all != 'true'
       && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'awaiter_set'))
@@ -483,7 +483,7 @@ jobs:
         run: just package="${{ needs.delta.outputs.packages }}" build release
 
   mutants:
-    needs: [delta, test-more]
+    needs: [delta, test-more-x64]
     if: needs.delta.outputs.skip_all != 'true'
     timeout-minutes: 240
     strategy:

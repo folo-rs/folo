@@ -26,19 +26,22 @@ Split from the monolithic `just validate-local` into individual jobs:
 - **Multi-platform jobs** (run on ubuntu-latest, macos-latest, windows-latest):
   - check-dev
   - clippy-dev
-  - test-more
+  - test-more-x64
   - test-docs
   - **docs** — Multi-platform because conditional compilation affects generated documentation
-  - miri
+  - miri-x64
   - **test-more-arm** — ARM64 coverage (ubuntu-24.04-arm, windows-11-arm)
     - Exercises ARM-specific code paths (anything gated behind
       `cfg(target_arch = "aarch64")` or similar) which x86_64 runners never compile
       or execute. Platform-neutral code is already validated by the x86_64 matrix.
+    - Paired with `test-more-x64`; both carry an explicit `-x64`/`-arm` suffix for
+      symmetry. Other jobs that have no ARM counterpart remain unsuffixed.
   - **miri-arm** — ARM64 coverage for Miri (ubuntu-24.04-arm, windows-11-arm)
     - Miri is an interpreter with its own memory model and is architecture-agnostic
       for platform-neutral code. We run it on ARM purely to subject ARM-gated code
       paths to Miri's UB detection — there is no value in running it on ARM for
       code that already compiles on x86_64.
+    - Paired with `miri-x64`; both carry an explicit `-x64`/`-arm` suffix for symmetry.
   - **miri-harder-events-once** / **miri-harder-infinity-pool** / **miri-harder-events** — Windows-only, sharded
     - Runs Miri with 64 seeds per test (`-Zmiri-many-seeds=..64`) for select packages
     - Sharded across parallel runners to reduce wall-clock time (4 shards for events_once,
@@ -92,10 +95,10 @@ for manual cache warming after toolchain updates.
    - `clippy-release` depends on `clippy-dev`
    - `build-release` depends on `check-dev` (no point linking a release binary if the
      dev `cargo check` already failed)
-   - `miri` and `miri-arm` depend on `check-dev` (Miri is much slower than `cargo check`;
+   - `miri-x64` and `miri-arm` depend on `check-dev` (Miri is much slower than `cargo check`;
      if the code does not even compile in dev mode, there is nothing for Miri to interpret)
-   - `mutants` depends on `test-more` (mutation testing is meaningless if base tests fail)
-   - `miri-harder-*` depend on both `miri` and `miri-arm` (many-seeds runs are
+   - `mutants` depends on `test-more-x64` (mutation testing is meaningless if base tests fail)
+   - `miri-harder-*` depend on both `miri-x64` and `miri-arm` (many-seeds runs are
      orders of magnitude slower than a single Miri pass)
 
 3. **Platform matrix considerations**:
