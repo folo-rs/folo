@@ -235,7 +235,7 @@ jobs:
         run: just package="${{ needs.delta.outputs.packages }}" docs
 
   miri:
-    needs: [delta]
+    needs: [delta, check-dev]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
@@ -290,7 +290,7 @@ jobs:
   # architecture-agnostic for platform-neutral code; we run it on ARM purely to exercise
   # cfg(target_arch = "aarch64") (and similar) code paths under Miri's UB detection.
   miri-arm:
-    needs: [delta]
+    needs: [delta, check-dev]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
@@ -463,7 +463,7 @@ jobs:
         run: just package="${{ needs.delta.outputs.packages }}" clippy release
 
   build-release:
-    needs: [delta]
+    needs: [delta, check-dev]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false

@@ -90,6 +90,10 @@ for manual cache warming after toolchain updates.
    simpler check:
    - `check-release` depends on `check-dev`
    - `clippy-release` depends on `clippy-dev`
+   - `build-release` depends on `check-dev` (no point linking a release binary if the
+     dev `cargo check` already failed)
+   - `miri` and `miri-arm` depend on `check-dev` (Miri is much slower than `cargo check`;
+     if the code does not even compile in dev mode, there is nothing for Miri to interpret)
    - `mutants` depends on `test-more` (mutation testing is meaningless if base tests fail)
    - `miri-harder-*` depend on both `miri` and `miri-arm` (many-seeds runs are
      orders of magnitude slower than a single Miri pass)
