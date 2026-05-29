@@ -254,9 +254,9 @@ jobs:
       - name: Run miri on ${{ matrix.platform }}
         run: just package="${{ needs.delta.outputs.packages }}" miri
 
-  # ARM64 coverage for test-more. Architecture-specific atomic/memory-ordering bugs
-  # or platform-specific behavior in dependencies will not show up on x86_64 runners,
-  # so we exercise the same test suite on Linux ARM and Windows ARM runners.
+  # ARM64 coverage for test-more. Exercises ARM-specific code paths (anything gated
+  # behind cfg(target_arch = "aarch64") or similar) which x86_64 runners never compile
+  # or execute.
   test-more-arm:
     needs: [delta]
     if: needs.delta.outputs.skip_all != 'true'
@@ -286,9 +286,9 @@ jobs:
           flags: ${{ matrix.platform }}
           report_type: test_results
 
-  # ARM64 coverage for Miri. ARM has a weaker memory model than x86_64, so Miri runs
-  # on ARM can surface atomic ordering and data-race bugs that pass on x86_64. Both
-  # Linux ARM and Windows ARM runners are exercised to mirror the x86_64 miri matrix.
+  # ARM64 coverage for Miri. Miri is an interpreter with its own memory model and is
+  # architecture-agnostic for platform-neutral code; we run it on ARM purely to exercise
+  # cfg(target_arch = "aarch64") (and similar) code paths under Miri's UB detection.
   miri-arm:
     needs: [delta]
     if: needs.delta.outputs.skip_all != 'true'

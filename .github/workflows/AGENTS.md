@@ -31,11 +31,14 @@ Split from the monolithic `just validate-local` into individual jobs:
   - **docs** — Multi-platform because conditional compilation affects generated documentation
   - miri
   - **test-more-arm** — ARM64 coverage (ubuntu-24.04-arm, windows-11-arm)
-    - Mirrors `test-more` on ARM runners to catch architecture-specific bugs (atomic
-      ordering, platform-specific dependency behavior) that x86_64 runners cannot surface.
+    - Exercises ARM-specific code paths (anything gated behind
+      `cfg(target_arch = "aarch64")` or similar) which x86_64 runners never compile
+      or execute. Platform-neutral code is already validated by the x86_64 matrix.
   - **miri-arm** — ARM64 coverage for Miri (ubuntu-24.04-arm, windows-11-arm)
-    - ARM has a weaker memory model than x86_64, so Miri on ARM can surface atomic
-      ordering and data-race bugs that pass on x86_64. Mirrors the x86_64 `miri` matrix.
+    - Miri is an interpreter with its own memory model and is architecture-agnostic
+      for platform-neutral code. We run it on ARM purely to subject ARM-gated code
+      paths to Miri's UB detection — there is no value in running it on ARM for
+      code that already compiles on x86_64.
   - **miri-harder-events-once** / **miri-harder-infinity-pool** / **miri-harder-events** — Windows-only, sharded
     - Runs Miri with 64 seeds per test (`-Zmiri-many-seeds=..64`) for select packages
     - Sharded across parallel runners to reduce wall-clock time (4 shards for events_once,
@@ -97,10 +100,10 @@ for manual cache warming after toolchain updates.
    - `miri-harder-*` jobs are Windows-only due to high cost; sharded across parallel runners
    - Most checks run on the 3 x86_64 platforms (ubuntu, macos, windows)
    - `test-more-arm` and `miri-arm` extend coverage to ARM64 (ubuntu-24.04-arm,
-     windows-11-arm) for architecture-sensitive concerns. They are kept as separate
-     jobs rather than added to the main matrices so that ARM-specific failures are
-     immediately identifiable in the GitHub status checks and so the additional runners
-     can be scoped narrowly without inflating every check.
+     windows-11-arm) solely to exercise ARM-gated code paths
+     (`cfg(target_arch = "aarch64")` and similar). Platform-neutral code is already
+     covered by the x86_64 matrices — Miri in particular is an interpreter with its
+     own memory model and is architecture-agnostic for platform-neutral code.
 
 4. **Timeouts**:
    - Default timeout for most jobs
