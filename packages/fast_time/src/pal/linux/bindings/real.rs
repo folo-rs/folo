@@ -20,8 +20,8 @@ impl Bindings for BuildTargetBindings {
     /// capture where absolute precision is less important than low overhead.
     ///
     /// The arithmetic is guaranteed not to overflow because:
-    /// - `tv_sec` represents seconds since an epoch and will not exceed the range of u128
-    ///   for any realistic timestamp within the lifespan of the universe.
+    /// - `tv_sec` represents seconds since an epoch and will not exceed the range of u64
+    ///   for any realistic timestamp (u64 nanoseconds spans roughly 584 years).
     /// - The multiplication by `1_000_000_000` converts seconds to nanoseconds.
     #[expect(
         clippy::cast_sign_loss,
@@ -29,7 +29,7 @@ impl Bindings for BuildTargetBindings {
         reason = "never going to happen with timestamps within real-universe ranges"
     )]
     #[inline]
-    fn clock_gettime_nanos(&self) -> u128 {
+    fn clock_gettime_nanos(&self) -> u64 {
         // SAFETY: All-zero is a valid initial value for this type.
         let mut ts: timespec = unsafe { mem::zeroed() };
 
@@ -38,7 +38,7 @@ impl Bindings for BuildTargetBindings {
 
         assert!(result == 0, "{}", io::Error::last_os_error());
 
-        ts.tv_sec as u128 * 1_000_000_000 + ts.tv_nsec as u128
+        ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
     }
 
     #[inline]
