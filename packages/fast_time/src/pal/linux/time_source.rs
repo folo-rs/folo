@@ -29,6 +29,19 @@ impl TimeSourceImpl {
             bindings,
         }
     }
+
+    /// Builds a time source backed by a fixed, controllable binding.
+    ///
+    /// The binding always reports `nanos` and `instant`, so `now()` is fully
+    /// deterministic: `platform_epoch == nanos` makes the computed elapsed
+    /// duration always zero, so `now()` returns exactly `instant` whether it
+    /// takes the cache fast path or the arithmetic slow path. This lets
+    /// Callgrind benchmarks pin a specific code path without depending on
+    /// wall-clock timing.
+    #[cfg(any(test, feature = "test-util"))]
+    pub(crate) fn fake(instant: Instant, nanos: u64) -> Self {
+        Self::new(BindingsFacade::fake(instant, nanos))
+    }
 }
 
 impl TimeSource for TimeSourceImpl {

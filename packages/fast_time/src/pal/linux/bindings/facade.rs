@@ -16,11 +16,26 @@ pub(crate) enum BindingsFacade {
 
     #[cfg(test)]
     Mock(Arc<MockBindings>),
+
+    // A fixed time source used to make Callgrind benchmarks deterministic: it
+    // always reports the same platform nanoseconds and the same `Instant`, so
+    // the cache hit/miss decision and the resulting `Instant` arithmetic do not
+    // depend on wall-clock timing.
+    #[cfg(any(test, feature = "test-util"))]
+    Fake {
+        nanos: u64,
+        instant: Instant,
+    },
 }
 
 impl BindingsFacade {
     pub(crate) const fn real() -> Self {
         Self::Real(&BuildTargetBindings)
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub(crate) fn fake(instant: Instant, nanos: u64) -> Self {
+        Self::Fake { nanos, instant }
     }
 }
 
@@ -31,6 +46,8 @@ impl Bindings for BindingsFacade {
             Self::Real(bindings) => bindings.clock_gettime_nanos(),
             #[cfg(test)]
             Self::Mock(bindings) => bindings.clock_gettime_nanos(),
+            #[cfg(any(test, feature = "test-util"))]
+            Self::Fake { nanos, .. } => *nanos,
         }
     }
 
@@ -40,6 +57,8 @@ impl Bindings for BindingsFacade {
             Self::Real(bindings) => bindings.now(),
             #[cfg(test)]
             Self::Mock(bindings) => bindings.now(),
+            #[cfg(any(test, feature = "test-util"))]
+            Self::Fake { instant, .. } => *instant,
         }
     }
 }
@@ -64,6 +83,12 @@ impl Debug for BindingsFacade {
             Self::Real(bindings) => bindings.fmt(f),
             #[cfg(test)]
             Self::Mock(bindings) => bindings.fmt(f),
+            #[cfg(any(test, feature = "test-util"))]
+            Self::Fake { nanos, instant } => f
+                .debug_struct("Fake")
+                .field("nanos", nanos)
+                .field("instant", instant)
+                .finish(),
         }
     }
 }

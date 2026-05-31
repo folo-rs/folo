@@ -151,6 +151,63 @@ impl Clock {
     }
 }
 
+/// Deterministic constructors for benchmarking and testing.
+///
+/// These build a [`Clock`] backed by a fixed, controllable time source so that
+/// Callgrind benchmarks measuring `now()`/`elapsed` produce stable
+/// instruction counts instead of numbers that depend on whether the underlying
+/// coarse clock happened to tick while the (Valgrind-slowed) process ran.
+///
+/// Only available with the `test-util` feature. Linux-only because the cache
+/// fast/slow path being pinned here is part of the Linux time source.
+#[cfg(all(any(test, feature = "test-util"), target_os = "linux", not(miri)))]
+impl Clock {
+    // An arbitrary non-zero platform timestamp. Because the fake binding reports
+    // the same value for the clock's epoch and for every `now()`, the computed
+    // elapsed duration is always zero, so `now()` returns exactly the clock's
+    // recorded epoch instant regardless of which code path it takes.
+    const FAKE_NANOS: u64 = 1_000_000_000;
+
+    fn fake_at(epoch: std::time::Instant) -> Self {
+        use crate::pal::TimeSourceImpl;
+
+        Self {
+            inner: TimeSourceImpl::fake(epoch, Self::FAKE_NANOS).into(),
+        }
+    }
+
+    /// Builds a clock plus an anchor whose [`Instant::elapsed`] measurement
+    /// deterministically takes the cache **fast path** (a cache hit).
+    ///
+    /// The cache is primed during construction, so the next `now()` observes a
+    /// matching platform timestamp and returns the cached instant — which
+    /// equals the returned anchor, so the elapsed duration is always zero.
+    #[must_use]
+    pub fn fake_cache_hit_with_anchor() -> (Self, Instant) {
+        let mut clock = Self::fake_at(std::time::Instant::now());
+        // Prime the cache so the measured `now()` hits the fast path.
+        let anchor = clock.now();
+        (clock, anchor)
+    }
+
+    /// Builds a clock plus an anchor whose [`Instant::elapsed`] measurement
+    /// deterministically takes the arithmetic **slow path** (a cache miss).
+    ///
+    /// The clock is left fresh (empty cache), so the measured `now()` recomputes
+    /// the instant from the epoch. With the fixed binding that recomputed value
+    /// equals the epoch instant, which is what we return as the anchor, so the
+    /// elapsed duration is always zero.
+    #[must_use]
+    pub fn fake_cache_miss_with_anchor() -> (Self, Instant) {
+        let epoch = std::time::Instant::now();
+        // A fresh clock has an empty cache, so the measured `now()` misses and
+        // recomputes the instant from `epoch` (elapsed is zero with the fixed
+        // binding), returning exactly `epoch`.
+        let clock = Self::fake_at(epoch);
+        (clock, epoch.into())
+    }
+}
+
 impl Default for Clock {
     fn default() -> Self {
         Self::new()
@@ -161,6 +218,8 @@ impl Default for Clock {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::panic::{RefUnwindSafe, UnwindSafe};
+    #[cfg(all(target_os = "linux", not(miri)))]
+    use std::time::Duration;
 
     use super::*;
 
@@ -239,5 +298,29 @@ mod tests {
             instant1.saturating_duration_since(instant2)
         };
         assert!(diff.as_millis() < 100);
+    }
+
+    // The fake constructors are only compiled on Linux (the cache fast/slow path
+    // they pin lives in the Linux time source).
+    #[cfg(all(target_os = "linux", not(miri)))]
+    #[test]
+    fn fake_cache_hit_with_anchor_elapsed_is_zero() {
+        let (mut clock, anchor) = Clock::fake_cache_hit_with_anchor();
+
+        // The measured `now()` must hit the primed cache and return exactly the
+        // anchor, so elapsed is zero regardless of wall-clock timing.
+        assert_eq!(anchor.elapsed(&mut clock), Duration::ZERO);
+        assert_eq!(anchor.elapsed(&mut clock), Duration::ZERO);
+    }
+
+    #[cfg(all(target_os = "linux", not(miri)))]
+    #[test]
+    fn fake_cache_miss_with_anchor_elapsed_is_zero() {
+        let (mut clock, anchor) = Clock::fake_cache_miss_with_anchor();
+
+        // The measured `now()` recomputes from the epoch via the slow path and
+        // returns exactly the anchor, so elapsed is zero.
+        assert_eq!(anchor.elapsed(&mut clock), Duration::ZERO);
+        assert_eq!(anchor.elapsed(&mut clock), Duration::ZERO);
     }
 }

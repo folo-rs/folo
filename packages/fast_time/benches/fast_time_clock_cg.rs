@@ -17,6 +17,21 @@
 //! The wall-clock benchmarks in `fast_time_timestamp_performance.rs` remain the
 //! source of truth for the actual end-to-end cost of `Clock::now()`. See
 //! `docs/callgrind-benchmarks.md` for the broader pairing rule.
+//!
+//! # Determinism
+//!
+//! The `instant_elapsed` scenarios drive `now()` through a fixed, controllable
+//! time source (`Clock::fake_*`, behind the `test-util` feature) so their
+//! instruction counts are deterministic. Measuring against the real
+//! `CLOCK_MONOTONIC_COARSE` would make the count depend on whether the coarse
+//! clock happened to tick while the (Valgrind-slowed) process ran — both the
+//! cache hit/miss decision and the `std::time::Instant` carry/borrow branches
+//! are timing-dependent, so the number would flip between runs.
+//!
+//! Enabling `test-util` adds one variant to the time-source binding enum, which
+//! costs a single extra dispatch branch on the real path. That makes the
+//! `clock_now` count here a few instructions higher than the shipping build;
+//! the offset is constant, so run-to-run comparisons remain meaningful.
 
 #![allow(
     missing_docs,
@@ -51,22 +66,19 @@ mod linux {
         Clock::new()
     }
 
-    fn make_clock_with_anchor() -> (Clock, Instant) {
-        // The anchor comes from a throwaway clock so that the clock we measure
-        // against stays *fresh* (its cache is empty). A fresh clock has
-        // `cache_key == 0`, which never matches a real platform timestamp, so
-        // the measured `now()` deterministically takes the arithmetic slow
-        // path.
-        //
-        // Priming the cache here (by calling `now()` on the measured clock)
-        // would make the measured `now()` hit the fast path only if
-        // `CLOCK_MONOTONIC_COARSE` did not tick between setup and measurement.
-        // Under Valgrind that depends on wall-clock time elapsed, which varies
-        // with machine load, so the instruction count would flip between runs.
-        let mut anchor_clock = Clock::new();
-        let anchor = anchor_clock.now();
-        let clock = Clock::new();
-        (clock, anchor)
+    // Deterministic cache-hit setup: the measured `now()` inside `elapsed`
+    // observes a primed cache and returns the cached instant, which equals the
+    // anchor. Using a fixed (fake) time source keeps the instruction count
+    // independent of whether `CLOCK_MONOTONIC_COARSE` ticked mid-run.
+    fn make_clock_with_anchor_cache_hit() -> (Clock, Instant) {
+        Clock::fake_cache_hit_with_anchor()
+    }
+
+    // Deterministic cache-miss setup: the measured `now()` runs against a fresh
+    // (empty) cache and recomputes via the arithmetic slow path, again with a
+    // fixed time source so the result is stable run-to-run.
+    fn make_clock_with_anchor_cache_miss() -> (Clock, Instant) {
+        Clock::fake_cache_miss_with_anchor()
     }
 
     fn make_two_instants() -> (Instant, Instant) {
@@ -87,10 +99,12 @@ mod linux {
     }
 
     // `Instant::elapsed` calls `now()` internally and then does arithmetic.
-    // The measured clock is fresh (empty cache), so `now()` always takes the
-    // deterministic arithmetic slow path — see `make_clock_with_anchor`.
+    // The two scenarios pin the cache fast path (hit) and arithmetic slow path
+    // (miss) explicitly, using a fixed time source so each measurement is
+    // deterministic rather than decided by wall-clock timing under Valgrind.
     #[library_benchmark]
-    #[bench::cache_miss(make_clock_with_anchor())]
+    #[bench::cache_hit(make_clock_with_anchor_cache_hit())]
+    #[bench::cache_miss(make_clock_with_anchor_cache_miss())]
     fn instant_elapsed(input: (Clock, Instant)) -> (Clock, Instant) {
         let (mut clock, anchor) = input;
         _ = black_box(black_box(&anchor).elapsed(black_box(&mut clock)));

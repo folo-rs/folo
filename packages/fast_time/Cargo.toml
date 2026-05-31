@@ -15,6 +15,9 @@ all-features = true
 
 [features]
 default = []
+# Enables deterministic fake-clock constructors (Clock::fake_*) for benchmarks
+# and tests. Only use this in dev-dependencies.
+test-util = []
 
 [dependencies]
 
@@ -26,6 +29,9 @@ windows = { workspace = true, features = ["Win32_System_SystemInformation"] }
 
 [dev-dependencies]
 criterion = { workspace = true }
+# Self-dependency with `test-util` so benchmarks can use the deterministic
+# Clock::fake_* constructors (feature unification enables it for dev targets).
+fast_time = { path = ".", features = ["test-util"] }
 mockall = { workspace = true }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
