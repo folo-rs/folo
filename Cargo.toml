@@ -11,7 +11,7 @@ rust-version = "1.91"
 
 [workspace.dependencies]
 all_the_time = { version = "0.4.20", path = "packages/all_the_time", default-features = false }
-alloc_tracker = { version = "0.5.24", path = "packages/alloc_tracker", default-features = false }
+alloc_tracker = { version = "0.5.25", path = "packages/alloc_tracker", default-features = false }
 arc-swap = { version = "1.7.0", default-features = false }
 argh = { version = "0.1.13", default-features = false, features = ["default"] }
 awaiter_set = { version = "0.1.6", path = "packages/awaiter_set", default-features = false }
@@ -27,11 +27,11 @@ event-listener = { version = "5.4.0", default-features = false, features = [
 events = { version = "0.7.6", path = "packages/events", default-features = false }
 events_once = { version = "0.5.27", path = "packages/events_once", default-features = false }
 fake_headers = { version = "0.0.5", default-features = false }
-fast_time = { version = "0.1.22", path = "packages/fast_time", default-features = false }
+fast_time = { version = "0.1.23", path = "packages/fast_time", default-features = false }
 foldhash = { version = "0.2.0", default-features = false, features = ["std"] }
 folo_ffi = { version = "0.1.15", path = "packages/folo_ffi", default-features = false }
 frozen-collections = { version = "0.8.0", default-features = false }
-future_deque = { version = "0.1.9", path = "packages/future_deque", default-features = false }
+future_deque = { version = "0.1.10", path = "packages/future_deque", default-features = false }
 futures = { version = "0.3.11", default-features = false, features = ["std"] }
 futures-core = { version = "0.3.31", default-features = false }
 # Keep this version in lockstep with the `gungraun-runner` install line in
@@ -55,13 +55,13 @@ libc = { version = "0.2.172", default-features = false }
 linked = { version = "1.0.13", path = "packages/linked", default-features = false }
 linked_macros = { version = "1.0.13", path = "packages/linked_macros", default-features = false }
 linked_macros_impl = { version = "1.0.13", path = "packages/linked_macros_impl", default-features = false }
-many_cpus = { version = "2.4.5", path = "packages/many_cpus", default-features = false }
+many_cpus = { version = "2.4.6", path = "packages/many_cpus", default-features = false }
 mockall = { version = "0.14.0", default-features = false }
 mutants = { version = "0.0.4", default-features = false }
 negative-impl = { version = "0.1.0", default-features = false }
 new_zealand = { version = "1.0.6", path = "packages/new_zealand", default-features = false }
-nm = { version = "0.1.36", path = "packages/nm", default-features = false }
-nm_otel = { version = "0.4.6", path = "packages/nm_otel", default-features = false }
+nm = { version = "0.1.37", path = "packages/nm", default-features = false }
+nm_otel = { version = "0.4.7", path = "packages/nm_otel", default-features = false }
 nonempty = { version = "0.12.0", default-features = false }
 num-integer = { version = "0.1.46", default-features = false }
 num-traits = { version = "0.2.19", default-features = false }
@@ -94,7 +94,7 @@ tokio = { version = "1.48.0", default-features = false }
 toml = { version = "1.1.2", default-features = false }
 tracing = { version = "0.1.30", default-features = false, features = ["std"] }
 trybuild = { version = "1.0.0", default-features = false }
-vicinal = { version = "0.1.24", path = "packages/vicinal", default-features = false }
+vicinal = { version = "0.1.25", path = "packages/vicinal", default-features = false }
 windows = { version = "0.62.0", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
