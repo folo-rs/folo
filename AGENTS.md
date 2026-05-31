@@ -901,6 +901,38 @@ and verified via `just package=<name> miri-harder`, which runs Miri with many ra
 highly effective at detecting data races, incorrect memory orderings, and other concurrency bugs
 that are nearly impossible to catch with single-threaded tests alone.
 
+# Property-based testing
+
+Property-based testing is a complement to (not a replacement for) hand-written unit tests. Use it
+when a primitive has a small operation vocabulary but a combinatorial state space — synchronization
+primitives, intrusive collections, and lock-free data structures are good candidates. The point is
+to discover sequences of operations that no human would think to write, especially around reentrant
+callbacks (wakers, drop guards) and concurrent transitions.
+
+We use the `proptest` crate. When adding a property test:
+
+* Define an explicit operation grammar (an `Op` enum). Keep the grammar small and orthogonal.
+* Build a stateful harness that mirrors the primitive's observable contract, and check invariants
+  after every operation, not just at the end of the sequence.
+* For primitives that interact with wakers, include reentrant actions in the grammar (e.g. waking
+  re-enters `set`/`reset`/`drop`) — this is where the highest-value bugs hide.
+* Bound the number of cases (`ProptestConfig { cases: ... }`) so CI time stays predictable, and set
+  `failure_persistence: None` so failed runs do not leave `.proptest-regressions` files in the
+  working tree.
+* Skip property tests under Miri via `#[cfg_attr(miri, ignore)]` — they are too slow to run under
+  Miri at meaningful case counts. Provide a handful of named regression tests alongside the
+  property test that encode the known-tricky scenarios and run under Miri.
+* Property tests run single-threaded. They are effective at finding reentrancy and lifecycle bugs
+  but do not exercise atomic ordering races or cross-thread wake delivery; pair them with the
+  multithreaded tests covered in the previous section for thread-safe primitives.
+
+The `events` crate uses a shared harness module
+(`packages/events/src/proptest_harness.rs`) parameterized over a small `ManualEvent` trait,
+with per-primitive entry points in
+`packages/events/src/local_manual_proptest.rs` (single-threaded `LocalManualResetEvent`) and
+`packages/events/src/manual_proptest.rs` (thread-safe `ManualResetEvent`). Both entry points
+share the same operation grammar, harness, and named regression tests.
+
 # parking_lot is forbidden — use std::sync primitives
 
 Do not use `parking_lot::Mutex`, `parking_lot::RwLock`, or other primitives from the `parking_lot`

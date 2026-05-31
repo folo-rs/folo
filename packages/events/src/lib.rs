@@ -91,6 +91,9 @@ mod local_manual;
 mod manual;
 
 #[cfg(test)]
+mod proptests;
+
+#[cfg(test)]
 mod test_helpers;
 
 #[cfg(test)]

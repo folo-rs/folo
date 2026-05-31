@@ -76,6 +76,9 @@ opentelemetry_sdk = { version = "0.32.1", default-features = false }
 pastey = { version = "0.2.3", default-features = false }
 pin-project = { version = "1.1.0", default-features = false }
 proc-macro2 = { version = "1.0.103", default-features = false }
+proptest = { version = "1.7", default-features = false, features = [
+    "std",
+] }
 quote = { version = "1.0.42", default-features = false }
 rand = { version = "0.10.1", default-features = false, features = ["std"] }
 rsevents = { version = "0.3.1", default-features = false }
