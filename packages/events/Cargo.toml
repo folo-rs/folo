@@ -38,6 +38,7 @@ many_cpus = { path = "../many_cpus" }
 mutants = { workspace = true }
 new_zealand = { workspace = true }
 par_bench = { path = "../par_bench", features = ["criterion"] }
+proptest = { workspace = true }
 rsevents = { workspace = true }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }
