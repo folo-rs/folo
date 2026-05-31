@@ -22,6 +22,62 @@ use crate::Magnitude;
 #[inline(never)]
 fn cold_path() {}
 
+/// Bucket count at or below which the target bucket is located with a linear
+/// scan; above it a binary search is used instead.
+///
+/// Real-world magnitude distributions typically land near the middle of the
+/// configured range, so the representative cost is a mid-range bucket hit. For
+/// small histograms a branch-predicted linear scan beats binary search (less
+/// setup, highly predictable branches); for large histograms the linear scan's
+/// per-bucket cost dominates and binary search wins decisively. Callgrind
+/// instruction counts for a mid-range bucket hit (`nm_observe_cg`, pull model):
+///
+/// ```text
+///   Buckets       Linear   Binary
+///   5  (small)       67       78
+///   32 (large)      165       94
+/// ```
+///
+/// The crossover sits around a dozen buckets, so this threshold keeps typical
+/// small and medium histograms on the cheaper linear path while large
+/// histograms avoid the linear blowup.
+const LINEAR_SCAN_MAX_BUCKETS: usize = 16;
+
+/// Locates the first bucket whose magnitude is greater than or equal to
+/// `magnitude`.
+///
+/// Returns `None` when `magnitude` exceeds every bucket boundary, i.e. it falls
+/// in the implicit overflow range. `bucket_magnitudes` must be sorted ascending,
+/// which is a histogram construction invariant.
+///
+/// We benchmarked a manual SIMD (AVX2/SSE4.2) branchless "count less-than"
+/// approach against the scalar linear scan and it lost across all scenarios:
+/// branch prediction is highly effective for sorted bucket lookups and the SIMD
+/// setup overhead (broadcast, compare, mask, popcnt) exceeds a well-predicted
+/// scalar loop. We therefore choose between a scalar linear scan and a scalar
+/// binary search based on bucket count (see [`LINEAR_SCAN_MAX_BUCKETS`]).
+#[inline]
+fn find_bucket_index(bucket_magnitudes: &[Magnitude], magnitude: Magnitude) -> Option<usize> {
+    if bucket_magnitudes.len() <= LINEAR_SCAN_MAX_BUCKETS {
+        bucket_magnitudes
+            .iter()
+            .position(|&bucket_magnitude| magnitude <= bucket_magnitude)
+    } else {
+        // `partition_point` returns the number of leading elements strictly less
+        // than `magnitude`, which is the index of the first element that is
+        // greater than or equal to `magnitude`. When every bucket is smaller it
+        // returns the slice length, signalling the overflow range.
+        let index =
+            bucket_magnitudes.partition_point(|&bucket_magnitude| bucket_magnitude < magnitude);
+
+        if index < bucket_magnitudes.len() {
+            Some(index)
+        } else {
+            None
+        }
+    }
+}
+
 /// Records the observations of an event.
 ///
 /// This variant is intended for single-threaded use, though may be shared on that
@@ -330,30 +386,9 @@ impl Observations for ObservationBag {
             return;
         }
 
-        // We benchmarked a manual SIMD (AVX2/SSE4.2) branchless "count less-than"
-        // approach against this scalar linear scan. The scalar version wins across
-        // all scenarios because branch prediction is highly effective for sorted
-        // bucket lookups and SIMD setup overhead (broadcast, compare, mask, popcnt)
-        // exceeds the cost of a well-predicted scalar loop:
-        //
-        //   Scenario                  SIMD     Scalar
-        //   small_5_hit_first         6.1 ns   1.2 ns
-        //   small_5_hit_last          5.9 ns   3.3 ns
-        //   large_32_hit_first       17.3 ns   1.3 ns
-        //   large_32_hit_last        17.6 ns   9.2 ns
-        //   large_32_miss            17.4 ns  10.6 ns
-        let Some(bucket_index) =
-            self.bucket_magnitudes
-                .iter()
-                .enumerate()
-                .find_map(|(i, &bucket_magnitude)| {
-                    if magnitude <= bucket_magnitude {
-                        Some(i)
-                    } else {
-                        None
-                    }
-                })
-        else {
+        // Locate the target bucket. See `find_bucket_index` for the search
+        // strategy and the SIMD-versus-scalar rationale.
+        let Some(bucket_index) = find_bucket_index(self.bucket_magnitudes, magnitude) else {
             // Magnitude exceeds the largest bucket - rare in well-configured
             // histograms.
             cold_path();
@@ -422,30 +457,9 @@ impl Observations for ObservationBagSync {
             return;
         }
 
-        // We benchmarked a manual SIMD (AVX2/SSE4.2) branchless "count less-than"
-        // approach against this scalar linear scan. The scalar version wins across
-        // all scenarios because branch prediction is highly effective for sorted
-        // bucket lookups and SIMD setup overhead (broadcast, compare, mask, popcnt)
-        // exceeds the cost of a well-predicted scalar loop:
-        //
-        //   Scenario                  SIMD     Scalar
-        //   small_5_hit_first         6.1 ns   1.2 ns
-        //   small_5_hit_last          5.9 ns   3.3 ns
-        //   large_32_hit_first       17.3 ns   1.3 ns
-        //   large_32_hit_last        17.6 ns   9.2 ns
-        //   large_32_miss            17.4 ns  10.6 ns
-        let Some(bucket_index) =
-            self.bucket_magnitudes
-                .iter()
-                .enumerate()
-                .find_map(|(i, &bucket_magnitude)| {
-                    if magnitude <= bucket_magnitude {
-                        Some(i)
-                    } else {
-                        None
-                    }
-                })
-        else {
+        // Locate the target bucket. See `find_bucket_index` for the search
+        // strategy and the SIMD-versus-scalar rationale.
+        let Some(bucket_index) = find_bucket_index(self.bucket_magnitudes, magnitude) else {
             // Magnitude exceeds the largest bucket - rare in well-configured
             // histograms.
             cold_path();
@@ -588,6 +602,57 @@ mod tests {
         let snapshot = observations.snapshot();
         assert_eq!(snapshot.count, 9);
         assert_eq!(snapshot.sum, -106);
+    }
+
+    #[test]
+    fn find_bucket_index_linear_and_binary_paths_agree() {
+        // A reference implementation of the lookup that is obviously correct.
+        // The production helper must agree with it for every input, regardless of
+        // whether it took the linear or the binary path.
+        fn reference(buckets: &[Magnitude], magnitude: Magnitude) -> Option<usize> {
+            buckets.iter().position(|&b| magnitude <= b)
+        }
+
+        // Slice lengths chosen to straddle the linear/binary threshold (16) on
+        // both sides, including the exact boundary. Strictly ascending boundaries
+        // mirror the histogram construction invariant; we include negatives and a
+        // gapped slice so "round up to the next bucket" is exercised.
+        let mut slices: Vec<Vec<Magnitude>> = Vec::new();
+        for len in [0_i64, 1, 16, 17, 18, 32] {
+            slices.push((0..len).collect());
+            slices.push((-len..0).collect());
+        }
+        slices.push((0..18).map(|i| i * 10).collect());
+        slices.push((-90..90).step_by(10).collect());
+
+        for buckets in &slices {
+            // Probe every boundary, the values immediately around each boundary,
+            // and the extremes. This pins down the `<` vs `<=` predicate and the
+            // overflow bound in both paths.
+            let mut probes = vec![Magnitude::MIN, Magnitude::MAX];
+            for &b in buckets {
+                probes.push(b);
+                probes.push(b.wrapping_sub(1));
+                probes.push(b.wrapping_add(1));
+            }
+
+            for &magnitude in &probes {
+                assert_eq!(
+                    find_bucket_index(buckets, magnitude),
+                    reference(buckets, magnitude),
+                    "mismatch for buckets {buckets:?} magnitude {magnitude}",
+                );
+            }
+        }
+
+        // A few explicit anchors documenting the expected contract.
+        let gapped: &[Magnitude] = &[
+            0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170,
+        ];
+        assert!(gapped.len() > LINEAR_SCAN_MAX_BUCKETS);
+        assert_eq!(find_bucket_index(gapped, 55), Some(6)); // first boundary >= 55 is 60
+        assert_eq!(find_bucket_index(gapped, 60), Some(6));
+        assert_eq!(find_bucket_index(gapped, 171), None); // above every boundary
     }
 
     #[test]

@@ -65,6 +65,14 @@ fn entrypoint(c: &mut Criterion) {
         .execute_criterion_on(&mut one_thread, &mut group, "small_histogram_zero_st_pull");
 
     Run::new()
+        .iter(|_| PULL_SMALL_HISTOGRAM.with(|x| x.observe(SMALL_HISTOGRAM_MIDDLE_BUCKET_VALUE)))
+        .execute_criterion_on(
+            &mut one_thread,
+            &mut group,
+            "small_histogram_middle_bucket_st_pull",
+        );
+
+    Run::new()
         .iter(|_| PULL_SMALL_HISTOGRAM.with(|x| x.observe(SMALL_HISTOGRAM_LAST_BUCKET_VALUE)))
         .execute_criterion_on(
             &mut one_thread,
@@ -75,6 +83,14 @@ fn entrypoint(c: &mut Criterion) {
     Run::new()
         .iter(|_| PULL_LARGE_HISTOGRAM.with(|x| x.observe(0)))
         .execute_criterion_on(&mut one_thread, &mut group, "large_histogram_zero_st_pull");
+
+    Run::new()
+        .iter(|_| PULL_LARGE_HISTOGRAM.with(|x| x.observe(LARGE_HISTOGRAM_MIDDLE_BUCKET_VALUE)))
+        .execute_criterion_on(
+            &mut one_thread,
+            &mut group,
+            "large_histogram_middle_bucket_st_pull",
+        );
 
     Run::new()
         .iter(|_| PULL_LARGE_HISTOGRAM.with(|x| x.observe(LARGE_HISTOGRAM_LAST_BUCKET_VALUE)))
@@ -109,6 +125,14 @@ fn entrypoint(c: &mut Criterion) {
         .execute_criterion_on(&mut one_thread, &mut group, "small_histogram_zero_st_push");
 
     Run::new()
+        .iter(|_| PUSH_SMALL_HISTOGRAM.with(|x| x.observe(SMALL_HISTOGRAM_MIDDLE_BUCKET_VALUE)))
+        .execute_criterion_on(
+            &mut one_thread,
+            &mut group,
+            "small_histogram_middle_bucket_st_push",
+        );
+
+    Run::new()
         .iter(|_| PUSH_SMALL_HISTOGRAM.with(|x| x.observe(SMALL_HISTOGRAM_LAST_BUCKET_VALUE)))
         .execute_criterion_on(
             &mut one_thread,
@@ -119,6 +143,14 @@ fn entrypoint(c: &mut Criterion) {
     Run::new()
         .iter(|_| PUSH_LARGE_HISTOGRAM.with(|x| x.observe(0)))
         .execute_criterion_on(&mut one_thread, &mut group, "large_histogram_zero_st_push");
+
+    Run::new()
+        .iter(|_| PUSH_LARGE_HISTOGRAM.with(|x| x.observe(LARGE_HISTOGRAM_MIDDLE_BUCKET_VALUE)))
+        .execute_criterion_on(
+            &mut one_thread,
+            &mut group,
+            "large_histogram_middle_bucket_st_push",
+        );
 
     Run::new()
         .iter(|_| PUSH_LARGE_HISTOGRAM.with(|x| x.observe(LARGE_HISTOGRAM_LAST_BUCKET_VALUE)))
@@ -268,6 +300,12 @@ const LARGE_HISTOGRAM_BUCKETS: &[Magnitude] = &[
 // range that `Magnitude::MAX` lands in).
 const SMALL_HISTOGRAM_LAST_BUCKET_VALUE: Magnitude = 10_000;
 const LARGE_HISTOGRAM_LAST_BUCKET_VALUE: Magnitude = 1_073_741_824;
+
+// A bucket boundary near the middle of each histogram. Real-world magnitude
+// distributions typically cluster in the middle of the configured range, so
+// this is the most representative case for the bucket search cost.
+const SMALL_HISTOGRAM_MIDDLE_BUCKET_VALUE: Magnitude = 100;
+const LARGE_HISTOGRAM_MIDDLE_BUCKET_VALUE: Magnitude = 32_768;
 
 thread_local! {
     static PULL_COUNTER: Event = Event::builder()

@@ -52,6 +52,13 @@ mod linux {
     const SMALL_HISTOGRAM_LAST_BUCKET_VALUE: Magnitude = 10_000;
     const LARGE_HISTOGRAM_LAST_BUCKET_VALUE: Magnitude = 1_073_741_824;
 
+    // A bucket boundary near the middle of each histogram. Real-world magnitude
+    // distributions typically cluster in the middle of the configured range, so
+    // this is the most representative case for the bucket search cost.
+    // Small: index 2 of 5 buckets. Large: index 16 of 32 buckets.
+    const SMALL_HISTOGRAM_MIDDLE_BUCKET_VALUE: Magnitude = 100;
+    const LARGE_HISTOGRAM_MIDDLE_BUCKET_VALUE: Magnitude = 32_768;
+
     // Distinct event names per case keep us safe in the unlikely scenario that
     // Gungraun does not fully isolate processes per case.
 
@@ -169,6 +176,10 @@ mod linux {
 
     #[library_benchmark]
     #[bench::hit_first(make_pull_small_histogram_with("cg_pull_small_histo_first", 0))]
+    #[bench::hit_middle(make_pull_small_histogram_with(
+        "cg_pull_small_histo_middle",
+        SMALL_HISTOGRAM_MIDDLE_BUCKET_VALUE,
+    ))]
     #[bench::hit_last(make_pull_small_histogram_with(
         "cg_pull_small_histo_last",
         SMALL_HISTOGRAM_LAST_BUCKET_VALUE,
@@ -182,6 +193,10 @@ mod linux {
 
     #[library_benchmark]
     #[bench::hit_first(make_pull_large_histogram_with("cg_pull_large_histo_first", 0))]
+    #[bench::hit_middle(make_pull_large_histogram_with(
+        "cg_pull_large_histo_middle",
+        LARGE_HISTOGRAM_MIDDLE_BUCKET_VALUE,
+    ))]
     #[bench::hit_last(make_pull_large_histogram_with(
         "cg_pull_large_histo_last",
         LARGE_HISTOGRAM_LAST_BUCKET_VALUE,
@@ -217,6 +232,10 @@ mod linux {
 
     #[library_benchmark]
     #[bench::hit_first(make_push_small_histogram_with("cg_push_small_histo_first", 0))]
+    #[bench::hit_middle(make_push_small_histogram_with(
+        "cg_push_small_histo_middle",
+        SMALL_HISTOGRAM_MIDDLE_BUCKET_VALUE,
+    ))]
     #[bench::hit_last(make_push_small_histogram_with(
         "cg_push_small_histo_last",
         SMALL_HISTOGRAM_LAST_BUCKET_VALUE,
@@ -232,6 +251,10 @@ mod linux {
 
     #[library_benchmark]
     #[bench::hit_first(make_push_large_histogram_with("cg_push_large_histo_first", 0))]
+    #[bench::hit_middle(make_push_large_histogram_with(
+        "cg_push_large_histo_middle",
+        LARGE_HISTOGRAM_MIDDLE_BUCKET_VALUE,
+    ))]
     #[bench::hit_last(make_push_large_histogram_with(
         "cg_push_large_histo_last",
         LARGE_HISTOGRAM_LAST_BUCKET_VALUE,
