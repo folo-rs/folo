@@ -13,7 +13,6 @@ use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use foldhash::HashMap;
 use nonempty::NonEmpty;
 
 #[cfg(any(test, feature = "test-util"))]
@@ -57,7 +56,7 @@ thread_local! {
     /// [`current()`][SystemHardware::current] singleton, so each thread holds exactly one entry
     /// here — the one for that singleton. Multiple entries per thread only arise in tests that
     /// construct additional (fake) instances.
-    static PIN_STATES: RefCell<HashMap<u64, ThreadState>> = RefCell::new(HashMap::default());
+    static PIN_STATES: RefCell<PinStateMap> = RefCell::new(PinStateMap::default());
 }
 
 /// Handle to system hardware, providing access to hardware information and tracking.
@@ -134,6 +133,46 @@ struct ThreadState {
     pinned_memory_region_id: Option<MemoryRegionId>,
 }
 
+/// A tiny associative map from `SystemHardware` instance ID to per-thread pin state.
+///
+/// This deliberately uses a linear-scan `Vec` instead of a `HashMap`. The standard choice
+/// would be a hash map, but it is the wrong tool here: in non-test builds this map holds
+/// exactly one entry per thread — the [`current()`][SystemHardware::current] singleton — and
+/// only a handful even in tests with fake instances. Hashing the `u64` key on every lookup
+/// (this is the hot read path of `region_cached` / `region_local`) costs more than comparing
+/// against one or two stored keys, and a `Vec` keeps the whole map inline without a hash-table
+/// control-byte probe. A `HashMap` would only pay off with many entries, which never happens.
+#[derive(Default)]
+struct PinStateMap {
+    entries: Vec<(u64, ThreadState)>,
+}
+
+impl PinStateMap {
+    /// Returns the pin state for the given instance ID, if present.
+    fn get(&self, instance_id: u64) -> Option<ThreadState> {
+        self.entries
+            .iter()
+            .find_map(|&(id, state)| (id == instance_id).then_some(state))
+    }
+
+    /// Inserts or updates the pin state for the given instance ID.
+    fn set(&mut self, instance_id: u64, state: ThreadState) {
+        if let Some(entry) = self.entries.iter_mut().find(|(id, _)| *id == instance_id) {
+            entry.1 = state;
+        } else {
+            self.entries.push((instance_id, state));
+        }
+    }
+
+    /// Removes the pin state for the given instance ID, if present.
+    fn remove(&mut self, instance_id: u64) {
+        if let Some(index) = self.entries.iter().position(|(id, _)| *id == instance_id) {
+            // Order is irrelevant: lookups match by instance ID, never by position.
+            _ = self.entries.swap_remove(index);
+        }
+    }
+}
+
 impl Drop for SystemHardwareInner {
     fn drop(&mut self) {
         // Remove this instance's pin state from the dropping thread's `PIN_STATES` map.
@@ -155,7 +194,7 @@ impl Drop for SystemHardwareInner {
         //    that case instead of panicking; there is simply nothing to clean up because the
         //    whole map is already gone.
         _ = PIN_STATES.try_with(|states| {
-            states.borrow_mut().remove(&self.instance_id);
+            states.borrow_mut().remove(self.instance_id);
         });
     }
 }
@@ -233,7 +272,7 @@ impl SystemHardware {
     /// Returns whether the current thread holds a `PIN_STATES` entry for the given instance ID.
     #[cfg(test)]
     pub(crate) fn current_thread_has_pin_state(instance_id: u64) -> bool {
-        PIN_STATES.with_borrow(|states| states.contains_key(&instance_id))
+        PIN_STATES.with_borrow(|states| states.get(instance_id).is_some())
     }
 
     fn from_platform(platform: PlatformFacade) -> Self {
@@ -655,21 +694,24 @@ impl SystemHardware {
         );
 
         PIN_STATES.with_borrow_mut(|states| {
-            let state = states.entry(self.inner.instance_id).or_default();
-            state.pinned_processor_id = processor_id;
-            state.pinned_memory_region_id = memory_region_id;
+            states.set(
+                self.inner.instance_id,
+                ThreadState {
+                    pinned_processor_id: processor_id,
+                    pinned_memory_region_id: memory_region_id,
+                },
+            );
         });
     }
 
     /// Gets the pinned processor ID for the current thread, if any.
     fn get_pinned_processor_id(&self) -> Option<ProcessorId> {
-        PIN_STATES.with_borrow(|states| states.get(&self.inner.instance_id)?.pinned_processor_id)
+        PIN_STATES.with_borrow(|states| states.get(self.inner.instance_id)?.pinned_processor_id)
     }
 
     /// Gets the pinned memory region ID for the current thread, if any.
     fn get_pinned_memory_region_id(&self) -> Option<MemoryRegionId> {
-        PIN_STATES
-            .with_borrow(|states| states.get(&self.inner.instance_id)?.pinned_memory_region_id)
+        PIN_STATES.with_borrow(|states| states.get(self.inner.instance_id)?.pinned_memory_region_id)
     }
 
     /// Gets a processor by ID, with fallback to any available processor if not found.
