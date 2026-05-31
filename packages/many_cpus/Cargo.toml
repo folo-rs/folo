@@ -49,6 +49,10 @@ par_bench = { path = "../par_bench", features = ["criterion"] }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }
 
+# Gungraun drives Valgrind-based Callgrind benchmarks; Linux-only.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
 [target.'cfg(windows)'.dev-dependencies]
 windows = { workspace = true, features = ["Win32_Security"] }
 
@@ -58,6 +62,10 @@ harness = false
 
 [[bench]]
 name = "many_cpus_hardware_tracker"
+harness = false
+
+[[bench]]
+name = "many_cpus_hardware_tracker_cg"
 harness = false
 
 [[bench]]

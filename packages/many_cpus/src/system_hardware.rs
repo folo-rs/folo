@@ -8,11 +8,11 @@
 use std::any::type_name;
 #[cfg(any(test, feature = "test-util"))]
 use std::borrow::Borrow;
+use std::cell::RefCell;
 use std::fmt;
-use std::sync::{Arc, OnceLock, RwLock};
-use std::thread::ThreadId;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 
-use foldhash::HashMap;
 use nonempty::NonEmpty;
 
 #[cfg(any(test, feature = "test-util"))]
@@ -26,6 +26,38 @@ use crate::{
 
 /// The real system hardware singleton, initialized on first access.
 static CURRENT_HARDWARE: OnceLock<SystemHardware> = OnceLock::new();
+
+/// Source of unique IDs for `SystemHardware` instances.
+///
+/// Each instance gets a distinct ID so that per-thread pin state (stored in the `PIN_STATES`
+/// thread-local) can be keyed by instance without different instances aliasing each other on
+/// the same thread. IDs are never reused.
+static NEXT_INSTANCE_ID: AtomicU64 = AtomicU64::new(0);
+
+thread_local! {
+    /// Per-thread pin state, keyed by `SystemHardware` instance ID.
+    ///
+    /// Pin state is inherently per-current-thread: a thread only ever pins itself
+    /// ([`update_pin_status`][SystemHardware::update_pin_status] writes the calling thread's
+    /// entry) and only ever reads its own state. Storing it in a thread-local rather than a
+    /// shared `RwLock<HashMap<ThreadId, _>>` removes the `thread::current().id()` lookup and the
+    /// lock acquire/release from every read on the hot path (e.g. `region_cached` / `region_local`
+    /// reads, which resolve the current memory region on every access).
+    ///
+    /// Keying by instance ID preserves isolation between the multiple `SystemHardware` instances
+    /// that coexist in tests (fakes), while clones share state because they share an instance ID.
+    /// Entries for dropped instances are removed by the `SystemHardwareInner` destructor on the
+    /// dropping thread; any entries left on other threads persist until the thread exits, which is
+    /// harmless because instance IDs are never reused.
+    ///
+    /// Only pinning inserts an entry (through
+    /// [`update_pin_status`][SystemHardware::update_pin_status]); the read paths only look entries
+    /// up. In non-test builds the only `SystemHardware` instance is the
+    /// [`current()`][SystemHardware::current] singleton, so each thread holds exactly one entry
+    /// here — the one for that singleton. Multiple entries per thread only arise in tests that
+    /// construct additional (fake) instances.
+    static PIN_STATES: RefCell<PinStateMap> = RefCell::new(PinStateMap::default());
+}
 
 /// Handle to system hardware, providing access to hardware information and tracking.
 ///
@@ -62,11 +94,10 @@ struct SystemHardwareInner {
     /// The platform abstraction layer implementation.
     platform: PlatformFacade,
 
-    /// Per-thread state tracked for this instance.
-    ///
-    /// We use `RwLock` because reads are far more common than writes, and we expect minimal
-    /// contention since each thread typically only accesses its own entry.
-    thread_states: RwLock<HashMap<ThreadId, ThreadState>>,
+    /// Unique ID of this instance, used to key its per-thread pin state in the `PIN_STATES`
+    /// thread-local. Clones share this ID (and therefore their pin state) because they share
+    /// the `Arc<SystemHardwareInner>`.
+    instance_id: u64,
 
     /// Processors indexed by processor ID for O(1) lookup.
     ///
@@ -93,13 +124,86 @@ struct SystemHardwareInner {
 }
 
 /// Per-thread state tracked within a hardware instance.
-#[derive(Clone, Default)]
+#[derive(Clone, Copy, Default)]
 struct ThreadState {
     /// The processor ID the thread is pinned to, if pinned to exactly one processor.
     pinned_processor_id: Option<ProcessorId>,
 
     /// The memory region ID the thread is pinned to, if all pinned processors share a region.
     pinned_memory_region_id: Option<MemoryRegionId>,
+}
+
+/// A tiny associative map from `SystemHardware` instance ID to per-thread pin state.
+///
+/// This deliberately uses a linear-scan `Vec` instead of a `HashMap`. The standard choice
+/// would be a hash map, but it is the wrong tool here: in non-test builds this map holds
+/// exactly one entry per thread — the [`current()`][SystemHardware::current] singleton — and
+/// only a handful even in tests with fake instances. Hashing the `u64` key on every lookup
+/// (this is the hot read path of `region_cached` / `region_local`) costs more than comparing
+/// against one or two stored keys, and a `Vec` keeps the whole map inline without a hash-table
+/// control-byte probe. A `HashMap` would only pay off with many entries, which never happens.
+#[derive(Default)]
+struct PinStateMap {
+    // A `SmallVec<[_; 1]>` inline slot looks like the obvious next step — store the single
+    // production entry inline and drop the heap indirection on the hot read. Measurement says
+    // otherwise: it was slightly slower (47 vs 45 instructions, 204 vs 173 estimated cycles on
+    // `current_memory_region_id` pinned). This map lives in a thread-local that is read
+    // repeatedly, so the `Vec`'s heap buffer stays hot in L1 and the indirection is an
+    // already-cached load, whereas `SmallVec` adds an inline-vs-spilled discriminant branch to
+    // every access that costs more than the load it removes. A plain `Vec` is faster and simpler.
+    entries: Vec<(u64, ThreadState)>,
+}
+
+impl PinStateMap {
+    /// Returns the pin state for the given instance ID, if present.
+    fn get(&self, instance_id: u64) -> Option<ThreadState> {
+        self.entries
+            .iter()
+            .find_map(|&(id, state)| (id == instance_id).then_some(state))
+    }
+
+    /// Inserts or updates the pin state for the given instance ID.
+    fn set(&mut self, instance_id: u64, state: ThreadState) {
+        if let Some(entry) = self.entries.iter_mut().find(|(id, _)| *id == instance_id) {
+            entry.1 = state;
+        } else {
+            self.entries.push((instance_id, state));
+        }
+    }
+
+    /// Removes the pin state for the given instance ID, if present.
+    fn remove(&mut self, instance_id: u64) {
+        if let Some(index) = self.entries.iter().position(|(id, _)| *id == instance_id) {
+            // Order is irrelevant: lookups match by instance ID, never by position.
+            _ = self.entries.swap_remove(index);
+        }
+    }
+}
+
+impl Drop for SystemHardwareInner {
+    fn drop(&mut self) {
+        // Remove this instance's pin state from the dropping thread's `PIN_STATES` map.
+        //
+        // This cleanup is "best-effort" in two specific senses, both of which are harmless:
+        //
+        // 1. We only reach the *current* thread's entry. If this instance was also pinned/read
+        //    from other threads, each of those threads holds its own `PIN_STATES` entry for this
+        //    instance ID that we cannot touch from here, so those entries linger until the
+        //    respective thread exits. This cannot cause incorrect behavior because instance IDs
+        //    are never reused (`NEXT_INSTANCE_ID` only ever increments), so a future instance can
+        //    never collide with a stale entry left by a previous one. The leftover memory is
+        //    bounded by the number of instances a thread has seen and is reclaimed at thread
+        //    exit. In production only the singleton instance exists and it lives for the whole
+        //    process, so this destructor effectively never runs there.
+        //
+        // 2. If the thread is itself being torn down, its `PIN_STATES` thread-local may already
+        //    have been destroyed by the time this destructor runs. `try_with` returns `Err` in
+        //    that case instead of panicking; there is simply nothing to clean up because the
+        //    whole map is already gone.
+        _ = PIN_STATES.try_with(|states| {
+            states.borrow_mut().remove(self.instance_id);
+        });
+    }
 }
 
 impl SystemHardware {
@@ -166,6 +270,18 @@ impl SystemHardware {
         Self::from_platform(PlatformFacade::Fallback(&BUILD_TARGET_PLATFORM))
     }
 
+    /// Returns the unique ID of this instance, for use in tests that inspect `PIN_STATES`.
+    #[cfg(test)]
+    pub(crate) fn instance_id(&self) -> u64 {
+        self.inner.instance_id
+    }
+
+    /// Returns whether the current thread holds a `PIN_STATES` entry for the given instance ID.
+    #[cfg(test)]
+    pub(crate) fn current_thread_has_pin_state(instance_id: u64) -> bool {
+        PIN_STATES.with_borrow(|states| states.get(instance_id).is_some())
+    }
+
     fn from_platform(platform: PlatformFacade) -> Self {
         let all_pal_processors = platform.get_all_processors();
         let max_processor_id = platform.max_processor_id();
@@ -186,7 +302,7 @@ impl SystemHardware {
         Self {
             inner: Arc::new(SystemHardwareInner {
                 platform,
-                thread_states: RwLock::new(HashMap::default()),
+                instance_id: NEXT_INSTANCE_ID.fetch_add(1, Ordering::Relaxed),
                 all_processors_slice: all_processors.into_boxed_slice(),
                 max_processor_id,
                 max_memory_region_id,
@@ -584,40 +700,25 @@ impl SystemHardware {
             "if processor is pinned, memory region is obviously also pinned"
         );
 
-        let thread_id = std::thread::current().id();
-        let mut states = self
-            .inner
-            .thread_states
-            .write()
-            .expect("thread state lock should never be poisoned");
-
-        let state = states.entry(thread_id).or_default();
-        state.pinned_processor_id = processor_id;
-        state.pinned_memory_region_id = memory_region_id;
+        PIN_STATES.with_borrow_mut(|states| {
+            states.set(
+                self.inner.instance_id,
+                ThreadState {
+                    pinned_processor_id: processor_id,
+                    pinned_memory_region_id: memory_region_id,
+                },
+            );
+        });
     }
 
     /// Gets the pinned processor ID for the current thread, if any.
     fn get_pinned_processor_id(&self) -> Option<ProcessorId> {
-        let thread_id = std::thread::current().id();
-        let states = self
-            .inner
-            .thread_states
-            .read()
-            .expect("thread state lock should never be poisoned");
-
-        states.get(&thread_id)?.pinned_processor_id
+        PIN_STATES.with_borrow(|states| states.get(self.inner.instance_id)?.pinned_processor_id)
     }
 
     /// Gets the pinned memory region ID for the current thread, if any.
     fn get_pinned_memory_region_id(&self) -> Option<MemoryRegionId> {
-        let thread_id = std::thread::current().id();
-        let states = self
-            .inner
-            .thread_states
-            .read()
-            .expect("thread state lock should never be poisoned");
-
-        states.get(&thread_id)?.pinned_memory_region_id
+        PIN_STATES.with_borrow(|states| states.get(self.inner.instance_id)?.pinned_memory_region_id)
     }
 
     /// Gets a processor by ID, with fallback to any available processor if not found.
@@ -796,6 +897,23 @@ mod tests {
     fn panic_if_pinned_processor_with_unpinned_memory_region() {
         let hardware = SystemHardware::current();
         hardware.update_pin_status(Some(0), None);
+    }
+
+    #[test]
+    fn drop_removes_pin_state_on_current_thread() {
+        let hardware = SystemHardware::fallback();
+        let instance_id = hardware.instance_id();
+
+        // No entry exists until the current thread records pin state for this instance.
+        assert!(!SystemHardware::current_thread_has_pin_state(instance_id));
+
+        hardware.update_pin_status(Some(0), Some(0));
+        assert!(SystemHardware::current_thread_has_pin_state(instance_id));
+
+        drop(hardware);
+
+        // The destructor removed this thread's entry for the dropped instance.
+        assert!(!SystemHardware::current_thread_has_pin_state(instance_id));
     }
 }
 
