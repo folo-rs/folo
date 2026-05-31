@@ -91,13 +91,7 @@ mod local_manual;
 mod manual;
 
 #[cfg(test)]
-mod local_manual_proptest;
-
-#[cfg(test)]
-mod manual_proptest;
-
-#[cfg(test)]
-mod proptest_harness;
+mod proptests;
 
 #[cfg(test)]
 mod test_helpers;
