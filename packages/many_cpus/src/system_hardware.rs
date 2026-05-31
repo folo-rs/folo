@@ -144,6 +144,13 @@ struct ThreadState {
 /// control-byte probe. A `HashMap` would only pay off with many entries, which never happens.
 #[derive(Default)]
 struct PinStateMap {
+    // A `SmallVec<[_; 1]>` inline slot looks like the obvious next step — store the single
+    // production entry inline and drop the heap indirection on the hot read. Measurement says
+    // otherwise: it was slightly slower (47 vs 45 instructions, 204 vs 173 estimated cycles on
+    // `current_memory_region_id` pinned). This map lives in a thread-local that is read
+    // repeatedly, so the `Vec`'s heap buffer stays hot in L1 and the indirection is an
+    // already-cached load, whereas `SmallVec` adds an inline-vs-spilled discriminant branch to
+    // every access that costs more than the load it removes. A plain `Vec` is faster and simpler.
     entries: Vec<(u64, ThreadState)>,
 }
 
