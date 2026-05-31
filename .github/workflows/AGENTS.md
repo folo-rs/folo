@@ -97,7 +97,12 @@ for manual cache warming after toolchain updates.
      dev `cargo check` already failed)
    - `miri-x64` and `miri-arm` depend on `check-dev` (Miri is much slower than `cargo check`;
      if the code does not even compile in dev mode, there is nothing for Miri to interpret)
+   - `miri-x64` also depends on `test-more-x64`, and `miri-arm` also depends on
+     `test-more-arm` (there is no point running the slow Miri interpreter unless the tests
+     already pass in their base configuration)
    - `mutants` depends on `test-more-x64` (mutation testing is meaningless if base tests fail)
+   - `careful` depends on `test-more-x64` (running the slow `cargo careful` test pass is
+     pointless unless the tests already pass in their base configuration)
    - `miri-harder-*` depend on both `miri-x64` and `miri-arm` (many-seeds runs are
      orders of magnitude slower than a single Miri pass)
 

@@ -238,7 +238,7 @@ jobs:
         run: just package="${{ needs.delta.outputs.packages }}" docs-default-features
 
   miri-x64:
-    needs: [delta, check-dev]
+    needs: [delta, check-dev, test-more-x64]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
@@ -293,7 +293,7 @@ jobs:
   # architecture-agnostic for platform-neutral code; we run it on ARM purely to exercise
   # cfg(target_arch = "aarch64") (and similar) code paths under Miri's UB detection.
   miri-arm:
-    needs: [delta, check-dev]
+    needs: [delta, check-dev, test-more-arm]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
@@ -549,7 +549,7 @@ jobs:
         run: just package="${{ needs.delta.outputs.packages }}" hack
 
   careful:
-    needs: [delta]
+    needs: [delta, test-more-x64]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
