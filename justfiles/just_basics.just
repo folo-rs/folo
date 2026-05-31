@@ -21,6 +21,15 @@ docs:
 
 [group('basics')]
 [script]
+docs-default-features:
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    $env:RUSTDOCFLAGS = "--cfg docsrs -D warnings"
+    cargo +$env:RUST_NIGHTLY doc {{ target_package }} --no-deps --locked
+
+[group('basics')]
+[script]
 docs-open:
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true

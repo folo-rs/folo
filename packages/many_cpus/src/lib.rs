@@ -285,7 +285,14 @@
 //! as a function parameter or struct field) instead of always calling `SystemHardware::current()`.
 //! This allows tests to substitute fake hardware while production code uses real hardware.
 //!
-//! See the [`fake`] module for detailed examples and API documentation.
+#![cfg_attr(
+    any(test, feature = "test-util"),
+    doc = "See the [`fake`] module for detailed examples and API documentation."
+)]
+#![cfg_attr(
+    not(any(test, feature = "test-util")),
+    doc = "See the `fake` module (available with the `test-util` feature) for detailed examples and API documentation."
+)]
 //!
 //! # Operating system compatibility
 //!

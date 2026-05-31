@@ -87,6 +87,7 @@ validate-local:
     just package="{{ package }}" test
     just package="{{ package }}" test-docs
     just package="{{ package }}" docs
+    just package="{{ package }}" docs-default-features
     just package="{{ package }}" miri
     just package="{{ package }}" machete
     just package="{{ package }}" default-features-check

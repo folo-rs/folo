@@ -234,6 +234,9 @@ jobs:
       - name: Run docs on ${{ matrix.platform }}
         run: just package="${{ needs.delta.outputs.packages }}" docs
 
+      - name: Run docs-default-features on ${{ matrix.platform }}
+        run: just package="${{ needs.delta.outputs.packages }}" docs-default-features
+
   miri-x64:
     needs: [delta, check-dev]
     if: needs.delta.outputs.skip_all != 'true'
