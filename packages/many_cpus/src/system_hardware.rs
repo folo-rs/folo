@@ -591,7 +591,13 @@ impl SystemHardware {
     #[cfg_attr(test, mutants::skip)] // Composition of tested methods.
     pub fn current_memory_region_id(&self) -> MemoryRegionId {
         self.get_pinned_memory_region_id().unwrap_or_else(|| {
-            let processor_id = self.current_processor_id();
+            // The thread is not memory-region pinned. A processor-pinned thread is
+            // always memory-region pinned too (enforced by `update_pin_status`), so
+            // it is also not processor pinned. We therefore skip `current_processor_id`
+            // and query the platform directly - going through `current_processor_id`
+            // would consult the `PIN_STATES` thread-local a second time only to find
+            // the same "not pinned" answer we already have.
+            let processor_id = self.inner.platform.current_processor_id();
             self.get_processor(processor_id).memory_region_id()
         })
     }
