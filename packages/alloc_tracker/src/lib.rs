@@ -16,13 +16,27 @@
 //! - [`Operation`] - Calculates mean memory allocation per operation
 //!
 //! Additionally, when the `panic_on_next_alloc` feature is enabled:
-//! - [`panic_on_next_alloc`] - Function to enable panic-on-next-allocation for debugging
+#![cfg_attr(
+    feature = "panic_on_next_alloc",
+    doc = "- [`panic_on_next_alloc`] - Function to enable panic-on-next-allocation for debugging"
+)]
+#![cfg_attr(
+    not(feature = "panic_on_next_alloc"),
+    doc = "- `panic_on_next_alloc` - Function to enable panic-on-next-allocation for debugging"
+)]
 //!
 //! This package is not meant for use in production, serving only as a development tool.
 //!
 //! # Features
 //!
-//! - `panic_on_next_alloc`: Enables the [`panic_on_next_alloc`] function for debugging
+#![cfg_attr(
+    feature = "panic_on_next_alloc",
+    doc = "- `panic_on_next_alloc`: Enables the [`panic_on_next_alloc`] function for debugging"
+)]
+#![cfg_attr(
+    not(feature = "panic_on_next_alloc"),
+    doc = "- `panic_on_next_alloc`: Enables the `panic_on_next_alloc` function for debugging"
+)]
 //!   unexpected allocations. This feature adds some overhead to allocations, so it is optional.
 //!  
 //! # Simple usage

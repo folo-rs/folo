@@ -125,7 +125,14 @@
 //!
 //! # Resource usage tracking
 //!
-//! When either the `alloc_tracker` or `all_the_time` features are enabled, the [`ResourceUsageExt`]
+#![cfg_attr(
+    any(feature = "alloc_tracker", feature = "all_the_time"),
+    doc = "When either the `alloc_tracker` or `all_the_time` features are enabled, the [`ResourceUsageExt`]"
+)]
+#![cfg_attr(
+    not(any(feature = "alloc_tracker", feature = "all_the_time")),
+    doc = "When either the `alloc_tracker` or `all_the_time` features are enabled, the `ResourceUsageExt`"
+)]
 //! extension trait becomes available, providing convenient resource usage tracking for benchmarks:
 //!
 //! ```ignore

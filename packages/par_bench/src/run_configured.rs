@@ -60,7 +60,14 @@ where
     /// returning the result.
     ///
     /// If you are executing the benchmark in a Criterion context, you may find it more convenient
-    /// to use [`execute_criterion_on()`][Self::execute_criterion_on].
+    #[cfg_attr(
+        any(test, feature = "criterion"),
+        doc = "to use [`execute_criterion_on()`][Self::execute_criterion_on]."
+    )]
+    #[cfg_attr(
+        not(any(test, feature = "criterion")),
+        doc = "to use `execute_criterion_on()`."
+    )]
     ///
     /// # Panics
     ///
