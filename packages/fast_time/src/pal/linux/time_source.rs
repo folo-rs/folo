@@ -6,10 +6,10 @@ use crate::pal::linux::{Bindings, BindingsFacade};
 #[derive(Clone, Debug)]
 pub(crate) struct TimeSourceImpl {
     rust_epoch: Instant,
-    platform_epoch: u128,
+    platform_epoch: u64,
 
     // If the platform time matches the cache key, we can use the cached Instant.
-    cache_key: u128,
+    cache_key: u64,
     cached: Instant,
 
     bindings: BindingsFacade,
@@ -44,9 +44,7 @@ impl TimeSource for TimeSourceImpl {
 
         let rust_time = self
             .rust_epoch
-            .checked_add(Duration::from_nanos(u64::try_from(elapsed_nanos).expect(
-                "unrealistically long duration, never going to happen with real clocks",
-            )))
+            .checked_add(Duration::from_nanos(elapsed_nanos))
             .expect("platform timestamp beyond the end of the universe - impossible");
 
         self.cache_key = platform_time;
