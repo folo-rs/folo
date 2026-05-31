@@ -52,8 +52,20 @@ mod linux {
     }
 
     fn make_clock_with_anchor() -> (Clock, Instant) {
-        let mut clock = Clock::new();
-        let anchor = clock.now();
+        // The anchor comes from a throwaway clock so that the clock we measure
+        // against stays *fresh* (its cache is empty). A fresh clock has
+        // `cache_key == 0`, which never matches a real platform timestamp, so
+        // the measured `now()` deterministically takes the arithmetic slow
+        // path.
+        //
+        // Priming the cache here (by calling `now()` on the measured clock)
+        // would make the measured `now()` hit the fast path only if
+        // `CLOCK_MONOTONIC_COARSE` did not tick between setup and measurement.
+        // Under Valgrind that depends on wall-clock time elapsed, which varies
+        // with machine load, so the instruction count would flip between runs.
+        let mut anchor_clock = Clock::new();
+        let anchor = anchor_clock.now();
+        let clock = Clock::new();
         (clock, anchor)
     }
 
@@ -75,8 +87,10 @@ mod linux {
     }
 
     // `Instant::elapsed` calls `now()` internally and then does arithmetic.
+    // The measured clock is fresh (empty cache), so `now()` always takes the
+    // deterministic arithmetic slow path — see `make_clock_with_anchor`.
     #[library_benchmark]
-    #[bench::after_one_tick(make_clock_with_anchor())]
+    #[bench::cache_miss(make_clock_with_anchor())]
     fn instant_elapsed(input: (Clock, Instant)) -> (Clock, Instant) {
         let (mut clock, anchor) = input;
         _ = black_box(black_box(&anchor).elapsed(black_box(&mut clock)));
