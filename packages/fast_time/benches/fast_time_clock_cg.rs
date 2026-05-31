@@ -17,6 +17,16 @@
 //! The wall-clock benchmarks in `fast_time_timestamp_performance.rs` remain the
 //! source of truth for the actual end-to-end cost of `Clock::now()`. See
 //! `docs/callgrind-benchmarks.md` for the broader pairing rule.
+//!
+//! # Flaky benchmark: `instant_elapsed`
+//!
+//! `instant_elapsed` is **timing-dependent and its instruction count is not
+//! stable** (observed 137/154/169). It calls the real
+//! `CLOCK_MONOTONIC_COARSE` time source, so both the cache hit/miss decision
+//! inside `now()` and the carry/borrow branches inside `std::time::Instant`
+//! arithmetic depend on whether the coarse clock happened to tick while the
+//! Valgrind-slowed process ran. Treat run-to-run differences in this specific
+//! benchmark as noise rather than regressions.
 
 #![allow(
     missing_docs,
@@ -75,6 +85,9 @@ mod linux {
     }
 
     // `Instant::elapsed` calls `now()` internally and then does arithmetic.
+    // NOTE: flaky — the instruction count varies run-to-run because it depends
+    // on whether the coarse clock ticked during the measured window (cache
+    // hit/miss plus Instant carry/borrow branches). See the module docs.
     #[library_benchmark]
     #[bench::after_one_tick(make_clock_with_anchor())]
     fn instant_elapsed(input: (Clock, Instant)) -> (Clock, Instant) {
