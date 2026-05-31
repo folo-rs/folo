@@ -130,10 +130,24 @@ struct ThreadState {
 
 impl Drop for SystemHardwareInner {
     fn drop(&mut self) {
-        // Best-effort cleanup of this instance's pin state on the dropping thread. Entries on
-        // other threads (rare for a dropped instance) persist until those threads exit, which is
-        // harmless because instance IDs are never reused. `try_with` guards against the
-        // thread-local already being destroyed during thread teardown.
+        // Remove this instance's pin state from the dropping thread's `PIN_STATES` map.
+        //
+        // This cleanup is "best-effort" in two specific senses, both of which are harmless:
+        //
+        // 1. We only reach the *current* thread's entry. If this instance was also pinned/read
+        //    from other threads, each of those threads holds its own `PIN_STATES` entry for this
+        //    instance ID that we cannot touch from here, so those entries linger until the
+        //    respective thread exits. This cannot cause incorrect behavior because instance IDs
+        //    are never reused (`NEXT_INSTANCE_ID` only ever increments), so a future instance can
+        //    never collide with a stale entry left by a previous one. The leftover memory is
+        //    bounded by the number of instances a thread has seen and is reclaimed at thread
+        //    exit. In production only the singleton instance exists and it lives for the whole
+        //    process, so this destructor effectively never runs there.
+        //
+        // 2. If the thread is itself being torn down, its `PIN_STATES` thread-local may already
+        //    have been destroyed by the time this destructor runs. `try_with` returns `Err` in
+        //    that case instead of panicking; there is simply nothing to clean up because the
+        //    whole map is already gone.
         _ = PIN_STATES.try_with(|states| {
             states.borrow_mut().remove(&self.instance_id);
         });
@@ -202,6 +216,18 @@ impl SystemHardware {
         use crate::pal::fallback::BUILD_TARGET_PLATFORM;
 
         Self::from_platform(PlatformFacade::Fallback(&BUILD_TARGET_PLATFORM))
+    }
+
+    /// Returns the unique ID of this instance, for use in tests that inspect `PIN_STATES`.
+    #[cfg(test)]
+    pub(crate) fn instance_id(&self) -> u64 {
+        self.inner.instance_id
+    }
+
+    /// Returns whether the current thread holds a `PIN_STATES` entry for the given instance ID.
+    #[cfg(test)]
+    pub(crate) fn current_thread_has_pin_state(instance_id: u64) -> bool {
+        PIN_STATES.with_borrow(|states| states.contains_key(&instance_id))
     }
 
     fn from_platform(platform: PlatformFacade) -> Self {
@@ -816,6 +842,23 @@ mod tests {
     fn panic_if_pinned_processor_with_unpinned_memory_region() {
         let hardware = SystemHardware::current();
         hardware.update_pin_status(Some(0), None);
+    }
+
+    #[test]
+    fn drop_removes_pin_state_on_current_thread() {
+        let hardware = SystemHardware::fallback();
+        let instance_id = hardware.instance_id();
+
+        // No entry exists until the current thread records pin state for this instance.
+        assert!(!SystemHardware::current_thread_has_pin_state(instance_id));
+
+        hardware.update_pin_status(Some(0), Some(0));
+        assert!(SystemHardware::current_thread_has_pin_state(instance_id));
+
+        drop(hardware);
+
+        // The destructor removed this thread's entry for the dropped instance.
+        assert!(!SystemHardware::current_thread_has_pin_state(instance_id));
     }
 }
 
