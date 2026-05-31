@@ -15,4 +15,37 @@ install-tools:
     rustup toolchain install $env:RUST_MSRV
     rustup toolchain install $env:RUST_NIGHTLY --component miri --component rustfmt --component rust-src --component llvm-tools-preview
 
-    cargo install cargo-machete cargo-nextest release-plz cargo-semver-checks cargo-audit cargo-hack cargo-mutants cargo-llvm-cov cargo-sort cargo-sort-derives cargo-udeps cargo-careful cargo-ensure-no-default-features cargo-delta --locked
+    cargo install cargo-machete cargo-nextest release-plz cargo-semver-checks cargo-audit cargo-hack cargo-llvm-cov cargo-sort cargo-sort-derives cargo-udeps cargo-careful cargo-ensure-no-default-features cargo-delta --locked
+
+    # cargo-mutants transitively depends on `winapi 0.2.8`, which only defines its
+    # types for `target_arch = "x86"` / `"x86_64"` and fails to compile on aarch64
+    # with errors like `cannot find type 'ULONG_PTR' in this scope`. Until that
+    # transitive dependency is updated upstream, skip the install on ARM. The CI
+    # `mutants` job only runs on x86_64 runners, so this only affects local dev on
+    # ARM machines (where running mutation testing locally is not supported).
+    $arch = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
+    if ($arch -ne [System.Runtime.InteropServices.Architecture]::Arm64) {
+        cargo install cargo-mutants --locked
+    } else {
+        Write-Host "Skipping cargo-mutants install on ARM64 (winapi 0.2.8 has no aarch64 support)."
+    }
+
+    # gungraun-runner drives Valgrind for Callgrind-based instruction-count benchmarks. Only
+    # useful on Linux (Valgrind is Linux-only); on Windows and macOS the Callgrind bench binaries
+    # are no-op stubs.
+    #
+    # The Callgrind bench binary is just a shim that forwards its CLI args (including the libtest
+    # --list / --format / --ignored flags that `cargo bench` and `nextest` use during target
+    # enumeration) to gungraun-runner via an encoded payload. Without gungraun-runner on $PATH,
+    # any invocation of a `*_cg` bench binary fails with "Failed to run benchmarks: No such
+    # file or directory", including the harmless --list call that nextest issues for `--benches`.
+    #
+    # The version is pinned to the exact patch matching the `gungraun = "=0.19.0"` workspace
+    # entry in the root Cargo.toml. gungraun-runner enforces strict string equality on the
+    # version (see `gungraun-runner::runner::compare_versions`), so any drift between the
+    # installed runner and the library causes `*_cg` benches to fail at runtime with
+    # VersionMismatch. Keep this line, the workspace Cargo.toml entry, and the install command
+    # in `docs/callgrind-benchmarks.md` in sync when bumping.
+    if ($IsLinux) {
+        cargo install gungraun-runner --version 0.19.0 --locked
+    }

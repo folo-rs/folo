@@ -2,7 +2,7 @@
 name = "all_the_time"
 description = "Processor time tracking utilities for benchmarks and performance analysis"
 publish = true
-version = "0.4.16"
+version = "0.4.20"
 
 authors.workspace = true
 edition.workspace = true
@@ -14,7 +14,7 @@ rust-version.workspace = true
 all-features = true
 
 [dependencies]
-cpu-time = "1.0.0"
+cpu-time = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -22,12 +22,14 @@ mutants = { workspace = true }
 static_assertions = { workspace = true }
 
 [[bench]]
-name = "all_the_time_bench_example"
+name = "all_the_time_example"
 harness = false
 
 [[bench]]
-name = "tracking_overhead"
+name = "all_the_time_tracking_overhead"
 harness = false
 
 [lints]
 workspace = true
+
+

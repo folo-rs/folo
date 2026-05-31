@@ -2,7 +2,7 @@
 name = "linked"
 description = "Create families of linked objects that can collaborate across threads while being internally single-threaded"
 publish = true
-version = "1.0.9"
+version = "1.0.13"
 
 authors.workspace = true
 edition.workspace = true
@@ -31,25 +31,39 @@ par_bench = { path = "../par_bench", features = ["criterion"] }
 seq-macro = { workspace = true }
 static_assertions = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
 [[bench]]
-name = "instances"
+name = "linked_instances"
 harness = false
 
 [[bench]]
-name = "instance_per_thread"
+name = "linked_instance_per_thread"
 harness = false
 
 [[bench]]
-name = "instance_per_thread_sync"
+name = "linked_instance_per_thread_sync"
 harness = false
 
 [[bench]]
-name = "static_thread_local_arc"
+name = "linked_static_thread_local_arc"
 harness = false
 
 [[bench]]
-name = "static_thread_local_rc"
+name = "linked_static_thread_local_rc"
+harness = false
+
+[[bench]]
+name = "linked_instance_per_thread_cg"
 harness = false
 
 [lints]
 workspace = true
+
+
+
+
+
+
+

@@ -2,7 +2,7 @@
 name = "events_once"
 description = "Efficient oneshot events (channels) with support for single-threaded events, object embedding, event pools and event lakes"
 publish = true
-version = "0.5.20"
+version = "0.5.27"
 
 authors.workspace = true
 edition.workspace = true
@@ -22,24 +22,36 @@ infinity_pool = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
-futures = { workspace = true }
+futures = { workspace = true, features = ["executor"] }
 oneshot = { workspace = true }
 pin-project = { workspace = true }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
 [lints]
 workspace = true
 
 [[bench]]
-name = "ev_once_local"
+name = "events_once_local"
 harness = false
 
 [[bench]]
-name = "ev_once_sync"
+name = "events_once_sync"
 harness = false
 
 [[bench]]
-name = "ev_once_vs_3p"
+name = "events_once_vs_3p"
 harness = false
+
+[[bench]]
+name = "events_once_cg"
+harness = false
+
+
+
+
+

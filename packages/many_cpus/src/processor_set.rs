@@ -844,6 +844,7 @@ mod tests {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests_fallback {
+    use std::num::NonZero;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, mpsc};
     use std::thread;
@@ -979,9 +980,7 @@ mod tests_fallback {
         let hw = SystemHardware::fallback();
         let all_set = hw.processors();
 
-        let expected_count = thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1);
+        let expected_count = thread::available_parallelism().map_or(1, NonZero::get);
 
         assert_eq!(all_set.len(), expected_count);
     }

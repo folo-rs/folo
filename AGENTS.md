@@ -10,8 +10,16 @@ list of available commands. Some relevant ones are:
 
 The `package` argument must be the first argument to any `just` command, if used. You can specify it on most commands to scope them down to a specific package instead of running them on the entire repo (which is slow).
 
-Avoid running `just bench`, as the benchmarks take a lot of time and `just test` will anyway run
-a single benchmark iteration to validate they are still working.
+Avoid running `just bench` (wall-clock Criterion benchmarks) without explicit confirmation: they
+take a lot of time, and the numbers are also noisy and machine-dependent — running them on a
+shared machine produces results that should not be acted on. `just test` already runs a single
+iteration of every Criterion benchmark to validate that they still execute.
+
+`just bench-cg` (Callgrind / Gungraun) is different: it runs each scenario once under Valgrind's
+CPU simulator, so the instruction counts and simulated cache numbers are deterministic and
+unaffected by other processes on the machine. It is safe to run `just bench-cg` (or
+`just package=foo bench-cg`) any time without asking — including as a smoke test of a new
+Callgrind benchmark. The same applies to the `bench-cycles` recipe in packages that still use it.
 
 We generally prefer using Just commands over raw Cargo commands if there is a suitable Just command
 defined in one of the *.just files.
@@ -78,6 +86,12 @@ types, we re-export them all at the parent, so while we have modules like
 constants, helper functions, or other items in these files — move them to dedicated files (e.g.
 `constants.rs`) for better filesystem organization.
 
+Inline `mod` blocks defined directly in `lib.rs` / `mod.rs` count as "re-exports" for the purpose
+of this rule as long as they only re-export items from other modules (no logic, no constants, no
+new type definitions). This is common for `#[doc(hidden)] pub mod __private { pub use ...; }` or
+similar grouping modules whose sole purpose is to gather and re-expose existing items under a
+distinct namespace.
+
 # Scripting
 
 You can assume PowerShell 7 (`pwsh`) is available on every operating system and environment.
@@ -94,6 +108,13 @@ There are many Clippy rules defined in the workspace-level `Cargo.toml`.
 Follow these even in doctests. Note that Clippy does not actually check doctests! You will need to
 manually check what Clippy rules we enable in the workspace-level `Cargo.toml` and follow them in
 the inline examples in API documentation.
+
+This applies whenever Clippy-relevant changes are made, including: (a) enabling a new lint, (b)
+migrating a pattern from one form to another to satisfy an existing lint, (c) running `cargo
+clippy --fix`. After any such change, sweep `///` and `//!` code blocks for the same pattern.
+Pay special attention to *mirrored* examples — a standalone `examples/<crate>_readme.rs` paired
+with code blocks in `lib.rs` and `README.md` — Clippy only sees the standalone example; the
+inline doctest and the README copy must be updated by hand.
 
 # Discarding values
 
@@ -254,6 +275,18 @@ let entity = unsafe {
 };
 ```
 
+# Reentrancy through callbacks
+
+User-supplied callbacks (`Waker::wake`, `Drop` impls, observer closures, etc.) can
+re-enter the data structure they were invoked from and silently corrupt invariants
+without violating any borrow-checker, type-system, or Miri rule. Never invoke a user
+callback while holding a borrow or lock on shared state, never `mem::take`/`swap`/
+`replace` shared state when the callback could re-enter through the original location,
+and document the reentrancy contract (with parity tests across thread-safe and
+single-threaded variants) on every public async primitive. See
+[docs/callback-safety.md](docs/callback-safety.md) for the full rationale, anti-patterns,
+and examples.
+
 # Whitespace
 
 There should be an empty line between functions.
@@ -320,6 +353,11 @@ pool_id: u64,
 It is good to create tests that verify expected panics/errors are returned. However, never
 check for a specific error/panic message - these are not part of the public API and create
 fragile tests. Just verify that an error of an expected type occurs or any panic occurs.
+
+For tests that must verify a panic but also continue running afterwards (e.g. to check that
+a data structure is still in a valid state), use `testing::assert_panics(|| ...)` instead of
+hand-rolling `catch_unwind(AssertUnwindSafe(...))`. When a canary substring check is warranted,
+use `testing::assert_panics_with(|| ..., |message| assert!(message.contains("canary")))`.
 
 # Keep the house in order
 
@@ -392,7 +430,100 @@ being benchmarked, to avoid unrealistic eager optimizations due to output values
 Benchmarks that are meant to be compared to each other must be in the same benchmark function
 and in the same benchmark group.
 
+Do not use `Box::pin(value)` on the measured path. It allocates a `Box` on the heap on every
+iteration, which can easily add 100-200 instructions (or 40-50% of the measurement) of pure
+allocator overhead that has nothing to do with the operation under test. Use
+`std::pin::pin!(value)` instead — it pins on the stack with zero allocation. Add a brief inline
+comment justifying the deviation from the usual `Box::pin` preference (e.g. "stack-pin to avoid
+allocator noise on the measured path"). This is an exception to the workspace-wide rule against
+the `pin!` macro.
+
+`Box::pin` remains correct in benchmark code that is NOT inside the measured region:
+
+* Criterion `iter_custom` setup (anything before `Instant::now()`).
+* The first ("payload preparation") callback of `iter_batched()`.
+* Gungraun setup functions referenced via `#[bench::id(setup_fn())]` — these run outside the
+  measured region and pass the result into the bench body by value.
+* Helper functions that must return `Pin<Box<T>>` across a function boundary (a stack pin would
+  dangle).
+* Intentional `Box::pin` baselines where the allocation IS what is being measured.
+
 Do not forget to register benchmarks in `Cargo.toml`.
+
+# Callgrind benchmarks
+
+For performance-critical hot paths, complement the Criterion benchmarks with Callgrind-based
+instruction-count benchmarks driven by Valgrind. These live alongside the Criterion benches in
+the same `packages/<pkg>/benches/` directory, with the file-suffix convention `_cg.rs` (short
+for Callgrind, to be honest about the fact that the numbers come from a simulated
+microarchitecture rather than the real CPU).
+
+The pairing is **asymmetric**: every Callgrind scenario must have an analogous Criterion
+scenario (so we have both wall-clock and instruction-count signals on the same operation). The
+reverse is not required — Criterion can legitimately stand alone for multithreaded contention,
+syscalls, allocation, or bulk throughput where instruction-count resolution adds no signal.
+
+See [docs/callgrind-benchmarks.md](docs/callgrind-benchmarks.md) for the full strategy,
+including: which operations warrant Callgrind coverage, scenario selection guidelines
+(default case, branching extremes, state/occupancy variants, size sensitivity, initialization
+vs steady state, sibling variants), the bench file template (including the file-scope lint
+suppression block required by Gungraun's macro expansions), Cargo.toml setup with the
+target-gated dependency, Gungraun syntax gotchas, the pairing convention, how to interpret
+results, and why design decisions motivated by a Callgrind delta should always be
+cross-validated against the Criterion counterpart (real CPUs can absorb or amplify a
+simulated cost by orders of magnitude).
+
+# `#[inline]` annotations
+
+`#[inline]` is a hint to the compiler to consider inlining a function. Throughout this
+section, "generic" includes any function that needs monomorphization — a function counts
+as generic if it takes type parameters of its own or if it is defined in a generic type
+or `impl`, even when the function itself takes no type parameters.
+
+Apply the first matching rule:
+
+1. **Apply `#[inline]` to non-generic functions exported from the crate that sit on a hot
+   path** based on your knowledge of how the API is used. Act on this knowledge alone,
+   accepting some documentation noise — without the annotation the compiler has no
+   opportunity to inline the function into downstream consumers, and we want to give it
+   that opportunity even if no current benchmark measurably benefits (a future workload
+   or customer case might).
+
+2. **Otherwise, only apply `#[inline]` if benchmarks or disassembly show a generic or
+   same-crate function on a hot path is not being inlined.** These are already inlining
+   candidates by default, so the annotation is an extra hint applied only when measurement
+   shows the default decision is wrong. Verify with `just package=<pkg> bench-cg` before
+   and after, comparing instruction counts; revert if the numbers do not move.
+
+3. **Do not use `#[inline(always)]` or `#[inline(never)]` without specific
+   justification.** These are stronger hints intended as advanced tuning knobs;
+   general-purpose code should not reach for them.
+
+# `#[inline]` annotations
+
+`#[inline]` is a hint to the compiler to consider inlining a function. Throughout this
+section, "generic" includes any function that needs monomorphization — a function counts
+as generic if it takes type parameters of its own or if it is defined in a generic type
+or `impl`, even when the function itself takes no type parameters.
+
+Apply the first matching rule:
+
+1. **Apply `#[inline]` to non-generic functions exported from the crate that sit on a hot
+   path** based on your knowledge of how the API is used. Act on this knowledge alone,
+   accepting some documentation noise — without the annotation the compiler has no
+   opportunity to inline the function into downstream consumers, and we want to give it
+   that opportunity even if no current benchmark measurably benefits (a future workload
+   or customer case might).
+
+2. **Otherwise, only apply `#[inline]` if benchmarks or disassembly show a generic or
+   same-crate function on a hot path is not being inlined.** These are already inlining
+   candidates by default, so the annotation is an extra hint applied only when measurement
+   shows the default decision is wrong. Verify with `just package=<pkg> bench-cg` before
+   and after, comparing instruction counts; revert if the numbers do not move.
+
+3. **Do not use `#[inline(always)]` or `#[inline(never)]` without specific
+   justification.** These are stronger hints intended as advanced tuning knobs;
+   general-purpose code should not reach for them.
 
 # YAML formatting
 
@@ -476,6 +607,13 @@ Ensure `Cargo.toml` contains:
 all-features = true
 ```
 
+Intra-doc links from ungated documentation to feature-gated items (modules, types, trait
+`impl`s that only exist under a non-default feature) break when docs are built without that
+feature. Never drop the link or paste a raw URL to dodge the warning — use the
+feature-conditional `#[cfg_attr(..., doc = "...")]` doc-line pattern instead. See
+[docs/api-docs.md](docs/api-docs.md) for the full rationale, anti-patterns, and examples. The
+`docs-default-features` validation step exists to catch this class of error.
+
 # Do not use `\n` in println!() statements
 
 To empty an empty line to the terminal, use use `println!();` instead of
@@ -493,6 +631,24 @@ used in test code (via `tick::ClockControl`).
 You may use events/signals for synchronization (e.g. `Barrier` or `events_once` events or message channels),
 as long as there are no delays or wait-loops in the test code itself.
 
+# Flaky test discoveries are recorded as issues
+
+If you stumble across a flaky test while working on something unrelated (for example a
+CI failure that is not caused by your change, or a doctest that violates the "no delays"
+rule above), file a GitHub issue so the discovery is not lost. Use `gh issue create` with
+a clear title and a body that includes:
+
+- the path and line range of the offending test,
+- the failure mode (which assertion / message / scenario triggers it),
+- a link to the run or PR where you noticed it,
+- a suggested fix if one is obvious.
+
+We do this for any flake — not just timing-related ones (e.g. order-sensitive,
+environment-sensitive, machine-load-sensitive). Recording these accidental discoveries
+lets us batch the cleanup later instead of losing the lead. Do not silently fix the
+flake as part of an unrelated change — the issue lets us track and prioritise it
+independently.
+
 # Tests must not hang
 
 When there is a danger that a test may hang (e.g. it contains a `.wait()`, `.recv()` or
@@ -504,6 +660,31 @@ Watchdogs are automatically disabled during mutation testing (`MUTATION_TESTING=
 variable). A mutation that causes a test to hang should be fixed by either redesigning the test
 to catch the mutation without blocking (e.g. adding `debug_assert!` checks) or by skipping the
 mutation if it is impractical to catch.
+
+# Threshold-based mutation protections are an anti-pattern
+
+When a mutation could make a test hang (for example, a mutation that turns an iterator's
+`next()` into an infinite source), it is tempting to add a `.take(N)` "safety bound" or a
+similar magic constant that caps consumption so the test cannot hang. Do not do this.
+Such thresholds are fragile in the same way time-based delays are fragile: they are easy
+to miss when tests evolve, and there is no principled way to verify that the chosen value
+is the "right" threshold for every future test scenario. The anti-pattern applies even
+when the threshold is numeric rather than time-based.
+
+Legitimate alternatives, in order of preference:
+
+1. **Meaningful-iteration assertion.** Rewrite the test so it asserts on the actual
+   produced values rather than just consuming them. Tools that naturally bound consumption
+   while verifying values are ideal — for example, `Iterator::eq(expected_array)` calls
+   `self.next()` at most `expected.len() + 1` times, returns `false` on the first value
+   mismatch, and detects both wrong values and wrong length. A correct implementation
+   matches the expected array; a mutation that yields wrong values or runs forever
+   short-circuits on the first comparison. The bound is implicit in the scenario data
+   (the expected length), not a hand-tuned safety margin.
+
+2. **Skip the mutation** with `#[cfg_attr(test, mutants::skip)]` and a comment explaining
+   why catching it is impractical (see the "Mutation testing coverage and skipping
+   mutations" section below for the criteria).
 
 # Named constants
 
@@ -525,6 +706,64 @@ fine to leave it inline.
 
 Document design elements, key decisions and architectural choices in inline comments in the
 files to which they apply. Use regular `//` comments, not API documentation comments.
+
+# Justify deviations from standard patterns
+
+When you reach for a hand-rolled construct or non-standard pattern in place of the obvious
+ecosystem default — for example, `hashbrown::HashTable` instead of `std::collections::HashMap`,
+a custom intrusive container instead of `Vec`/`VecDeque`, a bespoke synchronization primitive
+instead of `std::sync`, manual `Pin`/`UnsafeCell` plumbing instead of safe wrappers, an internal
+trait re-implementation instead of using a library trait — you must explain *why* in a comment
+next to the deviation.
+
+The justification should cover:
+
+* What standard pattern the reader would expect to see here and is not seeing.
+* Which alternatives were considered and ruled out, with the concrete reason each was rejected
+  (e.g. "unstable on Rust 1.95", "fails NLL borrow-check", "trait bound `X: Y` does not hold for
+  our key type", "allocates per call").
+* What the chosen variant buys us that the standard pattern does not.
+
+Without this, the next reader will reasonably assume the deviation is accidental or unnecessary
+and try to "fix" it back to the standard pattern. The comment is what prevents that wasted cycle.
+
+# Performance optimization principles
+
+When proposing or applying performance optimizations:
+
+* **Optimizations must be motivated by user-facing scenarios, not raw benchmark deltas.**
+  A Callgrind win on a synthetic micro-benchmark is not by itself sufficient justification. Ask:
+  *what real workload does this help, and is that workload a design target of this package?* If
+  the answer is "I would have to invent one", the change should usually not land.
+* **Prefer surgical interventions over architectural rewrites.** A 5-line `#[inline]`, a
+  single-field type change (`fn` → `Option<fn>`), or an `unreachable!()` → `unreachable_unchecked!()`
+  swap is the right shape of optimization PR when measurement points at a specific instruction
+  the compiler is emitting. Multi-file restructurings (changing in-memory representation,
+  monomorphizing on type traits, deferring initialization, swapping data structures) are an
+  order of magnitude harder to land and need correspondingly stronger motivation.
+* **Preserve defensive runtime checks even if they cost a handful of instructions.** A runtime
+  `unreachable!()`, `debug_assert!`, or `Option::expect` arm is often there to surface
+  thread-safety bugs, state-machine corruption, or other "this should never happen but if it
+  does we want to know" conditions. Do not remove these to save a `cmpq` — if you have a
+  measured need to remove the check, prefer the surgical alternative (`unreachable_unchecked!`,
+  `debug_assert!` instead of `assert!`, etc.) that keeps the contract documented.
+* **Stay idiomatic Rust.** Manually controlling memory representation (`repr(C)` for layout
+  stability, `alloc_zeroed` on hand-crafted layouts, explicit discriminant encoding) leans
+  toward "coding Rust as if it were C" and is rarely worth the resulting reader confusion
+  and soundness review burden. Trust the compiler's layout decisions unless there is a
+  concrete cross-language interop or ABI requirement that forces your hand.
+* **First-insert and teardown costs are usually not worth optimizing.** Most data structures
+  in this workspace target long-lived, steady-state workloads. Optimizations whose entire
+  value is in the construction or destruction path (first allocation, bulk drop, etc.)
+  rarely pay for the complexity they introduce.
+
+When filing a performance issue, state explicitly which of these criteria the proposal meets.
+If you have to invent a scenario to motivate it, the issue should probably not be filed.
+
+Some packages have package-scoped optimization guidance that refines these principles for
+their domain (e.g. `packages/events_once/AGENTS.md` codifies the relative priority of pooled,
+embedded and boxed events, and the expectation that `LocalEvent` beats `Event`). Always check
+for a package-local `AGENTS.md` when planning optimization work in a specific crate.
 
 # Hide async entrypoint in examples
 
@@ -609,6 +848,9 @@ This macro is special-purpose and not intended for general use. Instead, use
 If there is some reason `Box::pin(value)` would not work, you can use `std::pin::pin!(value)`
 as a last resort but leave a comment to justify why this is the case.
 
+Benchmarks are an exception: on the measured path, use `std::pin::pin!` to avoid allocator
+overhead distorting the measurement. See the "Benchmark design" section for details.
+
 # Multiple statements per command
 
 You can execute multiple statements per command in the terminal, separated by semicolons. Do not
@@ -690,6 +932,16 @@ with per-primitive entry points in
 `packages/events/src/local_manual_proptest.rs` (single-threaded `LocalManualResetEvent`) and
 `packages/events/src/manual_proptest.rs` (thread-safe `ManualResetEvent`). Both entry points
 share the same operation grammar, harness, and named regression tests.
+
+# parking_lot is forbidden — use std::sync primitives
+
+Do not use `parking_lot::Mutex`, `parking_lot::RwLock`, or other primitives from the `parking_lot`
+crate. They rely on OS-specific syscalls that Miri cannot model, so introducing them breaks our
+Miri-based correctness validation. Use `std::sync::Mutex`, `std::sync::RwLock`, and other
+std-provided synchronization primitives instead — these are Miri-compatible.
+
+This rule applies even when `parking_lot` would offer a measurable performance benefit: Miri
+coverage is more valuable than the fast-path savings.
 
 # Mutation testing coverage and skipping mutations
 

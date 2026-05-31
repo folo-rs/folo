@@ -2,7 +2,7 @@
 name = "many_cpus"
 description = "Efficiently schedule work and inspect the hardware environment on many-processor systems"
 publish = true
-version = "2.4.0"
+version = "2.4.6"
 
 authors.workspace = true
 edition.workspace = true
@@ -49,24 +49,36 @@ par_bench = { path = "../par_bench", features = ["criterion"] }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }
 
+# Gungraun drives Valgrind-based Callgrind benchmarks; Linux-only.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
 [target.'cfg(windows)'.dev-dependencies]
 windows = { workspace = true, features = ["Win32_Security"] }
 
 [[bench]]
-name = "hardware_info"
+name = "many_cpus_hardware_info"
 harness = false
 
 [[bench]]
-name = "hardware_tracker"
+name = "many_cpus_hardware_tracker"
 harness = false
 
 [[bench]]
-name = "pal_windows"
+name = "many_cpus_hardware_tracker_cg"
 harness = false
 
 [[bench]]
-name = "processor_set_builder"
+name = "many_cpus_pal_windows"
+harness = false
+
+[[bench]]
+name = "many_cpus_processor_set_builder"
 harness = false
 
 [lints]
 workspace = true
+
+
+
+

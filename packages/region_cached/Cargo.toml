@@ -2,7 +2,7 @@
 name = "region_cached"
 description = "Adds a logical layer of caching between processor L3 cache and main memory"
 publish = true
-version = "1.0.14"
+version = "1.0.20"
 
 authors.workspace = true
 edition.workspace = true
@@ -36,9 +36,17 @@ static_assertions = { workspace = true }
 testing = { path = "../testing" }
 tokio = { workspace = true, features = ["net", "rt-multi-thread"] }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
 [[bench]]
 name = "region_cached"
 harness = false
 
+[[bench]]
+name = "region_cached_cg"
+harness = false
+
 [lints]
 workspace = true
+

@@ -53,7 +53,7 @@
 //! processor set:
 //!
 //! ```rust
-//! // examples/spawn_on_all_processors.rs
+//! // examples/many_cpus_spawn_on_all_processors.rs
 //! # use many_cpus::SystemHardware;
 //! let threads = SystemHardware::current()
 //!     .processors()
@@ -79,7 +79,7 @@
 //! perform some processing on a shared data set:
 //!
 //! ```rust
-//! // examples/spawn_on_selected_processors.rs
+//! // examples/many_cpus_spawn_on_selected_processors.rs
 //! # use many_cpus::SystemHardware;
 //! # use new_zealand::nz;
 //! let hardware = SystemHardware::current();
@@ -109,7 +109,7 @@
 //! Functions are provided to easily inspect the current hardware environment:
 //!
 //! ```rust
-//! // examples/observe_processor.rs
+//! // examples/many_cpus_observe_processor.rs
 //! # use many_cpus::SystemHardware;
 //! # use std::{thread, time::Duration};
 //! let hardware = SystemHardware::current();
@@ -161,7 +161,7 @@
 //!   ignored by this package and cannot be used to spawn threads, though such processors are still
 //!   accounted for when inspecting hardware information such as "max processor ID".
 //!   The mechanisms for defining such limits are cgroups on Linux and job objects on Windows.
-//!   See `examples/obey_job_affinity_limits_windows.rs` for a Windows-specific example.
+//!   See `examples/many_cpus_obey_job_affinity_windows.rs` for a Windows-specific example.
 //! * Soft limits on which processors are allowed are ignored by default - specifying a processor
 //!   affinity via `taskset` on Linux, `start.exe /affinity 0xff` on Windows or similar mechanisms
 //!   does not affect the set of processors this package will use by default, though you can opt in to
@@ -170,7 +170,7 @@
 //!   count of the processor set returned by [`SystemHardware::processors()`].
 //! * Any other processor set can be opt-in quota-limited when building the processor set. For example, by calling `SystemHardware::current().all_processors().to_builder().enforce_resource_quota().take_all()`.
 //!
-//! See `examples/obey_job_resource_quota_limits_windows.rs` for a Windows-specific example of processor
+//! See `examples/many_cpus_obey_job_resource_quota_windows.rs` for a Windows-specific example of processor
 //! time quota enforcement.
 //!
 //! # Avoiding operating system quota penalties
@@ -239,7 +239,7 @@
 //! inheriting the allowed processor set in the `main()` entrypoint thread:
 //!
 //! ```rust
-//! // examples/spawn_on_inherited_processors.rs
+//! // examples/many_cpus_spawn_on_inherited_processors.rs
 //! # use std::{thread, time::Duration};
 //! # use many_cpus::SystemHardware;
 //! let hardware = SystemHardware::current();
@@ -247,8 +247,8 @@
 //! // The set of processors used here can be adjusted via OS mechanisms.
 //! //
 //! // For example, to select only processors 0 and 1:
-//! // Linux: `taskset 0x3 target/debug/examples/spawn_on_inherited_processors`
-//! // Windows: `start /affinity 0x3 target/debug/examples/spawn_on_inherited_processors.exe`
+//! // Linux: `taskset 0x3 target/debug/examples/many_cpus_spawn_on_inherited_processors`
+//! // Windows: `start /affinity 0x3 target/debug/examples/many_cpus_spawn_on_inherited_processors.exe`
 //! let inherited_processors = hardware
 //!     .processors()
 //!     .to_builder()
@@ -285,7 +285,14 @@
 //! as a function parameter or struct field) instead of always calling `SystemHardware::current()`.
 //! This allows tests to substitute fake hardware while production code uses real hardware.
 //!
-//! See the [`fake`] module for detailed examples and API documentation.
+#![cfg_attr(
+    any(test, feature = "test-util"),
+    doc = "See the [`fake`] module for detailed examples and API documentation."
+)]
+#![cfg_attr(
+    not(any(test, feature = "test-util")),
+    doc = "See the `fake` module (available with the `test-util` feature) for detailed examples and API documentation."
+)]
 //!
 //! # Operating system compatibility
 //!

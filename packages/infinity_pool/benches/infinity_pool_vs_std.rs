@@ -24,7 +24,7 @@ use alloc_tracker::Allocator;
 use criterion::{Criterion, criterion_group, criterion_main};
 use infinity_pool::*;
 use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();

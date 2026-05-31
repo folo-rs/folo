@@ -12,11 +12,13 @@ use crate::pal::windows::Bindings;
 pub(crate) struct BuildTargetBindings;
 
 impl Bindings for BuildTargetBindings {
+    #[inline]
     fn get_tick_count_64(&self) -> u64 {
         // SAFETY: No safety requirements.
         unsafe { GetTickCount64() }
     }
 
+    #[inline]
     fn now(&self) -> Instant {
         Instant::now()
     }

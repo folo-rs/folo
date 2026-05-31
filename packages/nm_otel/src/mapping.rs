@@ -1,8 +1,11 @@
 //! Mapping from nm metrics to OpenTelemetry instruments.
 
+use std::hash::BuildHasher;
 use std::sync::Arc;
 
-use foldhash::HashMap;
+use foldhash::fast::RandomState;
+use hashbrown::HashTable;
+use hashbrown::hash_table::Entry;
 use nm::{EventName, Magnitude, Report};
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::{Counter, Gauge, Meter};
@@ -34,10 +37,18 @@ struct EventInstruments {
     /// Different bucket bounds are distinguished by the `le` attribute, not by instrument name.
     bucket_counter: Option<Counter<u64>>,
 
-    /// Cached formatted bucket bounds for the `le` attribute (e.g. "10", "50", "+Inf").
+    /// Precomputed `[KeyValue; 1]` attribute slice for each histogram bucket.
+    ///
     /// Indexed by bucket index, matching the order from `histogram.magnitudes()`.
-    /// Uses `Arc<str>` to avoid cloning strings on every metric export.
-    bucket_bounds: Vec<Arc<str>>,
+    /// Building the full `KeyValue` once per bucket at registration time eliminates the
+    /// per-export `Arc<str>` clone and `KeyValue` construction that the export hot path
+    /// would otherwise perform on every call to `add_bucket_delta`.
+    ///
+    /// `[KeyValue; 1]` (not `KeyValue`) so the hot path can pass the attribute slice to
+    /// `Counter::add` as `&self.bucket_attrs[i]` without constructing a `&[KeyValue]`
+    /// reference each call. The fixed-size array's `&[KeyValue; 1]` deref-coerces to
+    /// `&[KeyValue]` directly.
+    bucket_attrs: Vec<[KeyValue; 1]>,
 }
 
 /// Manages OpenTelemetry instruments for nm metrics.
@@ -49,8 +60,14 @@ struct EventInstruments {
 pub(crate) struct InstrumentRegistry {
     meter: Meter,
 
+    // See the matching comment on `CollectionState::hasher` in `state.rs` for the design
+    // rationale. In short: we use `hashbrown::HashTable` instead of `HashMap` so the
+    // `entry(hash, eq, hasher)` API can clone `EventName` only on cache miss, which stable
+    // `HashMap` cannot do without double-hashing on hits. Hashing is still `foldhash`.
+    hasher: RandomState,
+
     /// Cached instruments per event name.
-    events: HashMap<EventName, EventInstruments>,
+    events: HashTable<(EventName, EventInstruments)>,
 }
 
 impl InstrumentRegistry {
@@ -58,38 +75,59 @@ impl InstrumentRegistry {
     pub(crate) fn new(meter: Meter) -> Self {
         Self {
             meter,
-            events: HashMap::default(),
+            hasher: RandomState::default(),
+            events: HashTable::new(),
         }
     }
 
     /// Gets or creates instruments for an event.
     ///
-    /// If histogram magnitudes are provided, the bucket counter and cached bucket bound
-    /// strings are also created. This avoids creating them for events without histogram data.
+    /// If histogram magnitudes are provided, the bucket counter and cached bucket attribute
+    /// arrays are also created. This avoids creating them for events without histogram data.
     fn instruments(
         &mut self,
         event_name: &EventName,
         magnitudes: Option<impl Iterator<Item = Magnitude>>,
     ) -> &EventInstruments {
         let meter = &self.meter;
-        let instruments = self.events.entry(event_name.clone()).or_insert_with(|| {
-            let sum_name = format!("{event_name}{SUM_SUFFIX}");
 
-            EventInstruments {
-                count_counter: meter.u64_counter(event_name.to_string()).build(),
-                sum_gauge: meter.i64_gauge(sum_name).build(),
-                bucket_counter: None,
-                bucket_bounds: Vec::new(),
+        let hash = self.hasher.hash_one(event_name);
+        let hasher = &self.hasher;
+        // See `CollectionState::event_state` for the per-closure breakdown; the same three-
+        // closure contract (lookup hash, equality, growth-time rehash) applies here.
+        let instruments = match self.events.entry(
+            hash,
+            |(existing, _)| existing == event_name,
+            |(existing, _)| hasher.hash_one(existing),
+        ) {
+            Entry::Occupied(occupied) => &mut occupied.into_mut().1,
+            Entry::Vacant(vacant) => {
+                let sum_name = format!("{event_name}{SUM_SUFFIX}");
+                let new_instruments = EventInstruments {
+                    count_counter: meter.u64_counter(event_name.to_string()).build(),
+                    sum_gauge: meter.i64_gauge(sum_name).build(),
+                    bucket_counter: None,
+                    bucket_attrs: Vec::new(),
+                };
+                // Cache miss — clone the key here so the hit path stays clone-free.
+                &mut vacant
+                    .insert((event_name.clone(), new_instruments))
+                    .into_mut()
+                    .1
             }
-        });
+        };
 
-        // Lazily create the bucket counter and cache bucket bounds if histogram data provided.
+        // Lazily create the bucket counter and cache bucket attributes if histogram data
+        // provided. Building the `KeyValue` once per bucket here eliminates per-export
+        // `Arc<str>` clone and `KeyValue::new` work in `add_bucket_delta`.
         if let Some(mags) = magnitudes
             && instruments.bucket_counter.is_none()
         {
             let bucket_name = format!("{event_name}{BUCKET_SUFFIX}");
             instruments.bucket_counter = Some(meter.u64_counter(bucket_name).build());
-            instruments.bucket_bounds = mags.map(format_bucket_bound).collect();
+            instruments.bucket_attrs = mags
+                .map(|m| [KeyValue::new(LE_ATTRIBUTE, format_bucket_bound(m))])
+                .collect();
         }
 
         instruments
@@ -108,11 +146,12 @@ pub(crate) fn export_report(
     for event in report.events() {
         let event_name = event.name();
         let event_state = state.event_state(event_name);
+        let histogram = event.histogram();
 
         // Get cached instruments for this event (creates them if first time seeing this event).
         // Pass histogram magnitudes if present so bucket counter and bounds can be created.
         let event_instruments =
-            instruments.instruments(event_name, event.histogram().map(nm::Histogram::magnitudes));
+            instruments.instruments(event_name, histogram.map(nm::Histogram::magnitudes));
 
         // Export count as counter (delta).
         let count_delta = event_state.count_delta(event.count());
@@ -122,21 +161,21 @@ pub(crate) fn export_report(
         event_instruments.sum_gauge.record(event.sum(), &[]);
 
         // Export histogram buckets if present.
-        if let Some(histogram) = event.histogram() {
+        if let Some(histogram) = histogram {
             let bucket_counter = event_instruments
                 .bucket_counter
                 .as_ref()
                 .expect("bucket counter was created during instruments() call");
 
-            let bucket_deltas =
-                event_state.histogram_deltas(histogram.magnitudes(), histogram.counts());
-
-            for (i, (_magnitude, _cumulative, delta)) in bucket_deltas.into_iter().enumerate() {
-                let le_value = event_instruments
-                    .bucket_bounds
+            for (i, (_magnitude, _cumulative, delta)) in event_state
+                .histogram_deltas(histogram.magnitudes(), histogram.counts())
+                .enumerate()
+            {
+                let attrs = event_instruments
+                    .bucket_attrs
                     .get(i)
-                    .expect("bucket_bounds length matches bucket_deltas length");
-                add_bucket_delta(bucket_counter, delta, le_value);
+                    .expect("bucket_attrs length matches histogram bucket count");
+                add_bucket_delta(bucket_counter, delta, attrs);
             }
         }
     }
@@ -155,13 +194,16 @@ fn add_count_delta(counter: &Counter<u64>, delta: u64) {
 
 /// Adds a bucket delta to a counter if positive.
 ///
+/// `attrs` is a fixed-size attribute array stored in the registry. `&[KeyValue; 1]`
+/// auto-coerces to `&[KeyValue]` at the `Counter::add` call site, so no per-call
+/// slice or `KeyValue` construction is required on the hot path.
+///
 /// This is a separate function to allow skipping equivalent mutations - adding 0 to a counter
 /// produces the same observable result as not calling add at all.
 #[cfg_attr(test, mutants::skip)]
-fn add_bucket_delta(counter: &Counter<u64>, delta: u64, le_value: &Arc<str>) {
+fn add_bucket_delta(counter: &Counter<u64>, delta: u64, attrs: &[KeyValue; 1]) {
     if delta > 0 {
-        let attributes = [KeyValue::new(LE_ATTRIBUTE, Arc::<str>::clone(le_value))];
-        counter.add(delta, &attributes);
+        counter.add(delta, attrs);
     }
 }
 
@@ -308,6 +350,54 @@ mod tests {
 
         let metrics = exporter.get_finished_metrics().unwrap();
         assert!(!metrics.is_empty());
+    }
+
+    // OpenTelemetry SDK uses system time calls not available under Miri isolation.
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn instrument_registry_preserves_entries_across_table_growth() {
+        // The underlying `HashTable` grows when capacity is exceeded, which calls the
+        // rehash closure passed to `entry()` on every existing entry. This test inserts
+        // enough events to force multiple grows and then re-exports the same events to
+        // verify that lookups still find the existing entries — otherwise entries would
+        // land in the wrong buckets after a grow and the second export would create
+        // duplicate `EventInstruments`, leaving the table with more than `NUM_EVENTS`
+        // entries.
+        const NUM_EVENTS: u64 = 64;
+
+        let (provider, _exporter) = create_test_provider();
+        let meter = provider.meter("test");
+
+        let mut state = CollectionState::new();
+        let mut instruments = InstrumentRegistry::new(meter);
+
+        // First pass: register every event, forcing the `HashTable` to grow.
+        let events: Vec<_> = (0..NUM_EVENTS)
+            .map(|i| EventMetrics::fake(format!("growth_event_{i}"), i.saturating_add(1), 0, None))
+            .collect();
+        let report = Report::fake(events);
+        export_report(&report, &mut state, &mut instruments);
+
+        let expected_len = usize::try_from(NUM_EVENTS).unwrap();
+        assert_eq!(instruments.events.len(), expected_len);
+
+        // Second pass with the same events: every lookup must hit the existing entry.
+        let events2: Vec<_> = (0..NUM_EVENTS)
+            .map(|i| {
+                EventMetrics::fake(
+                    format!("growth_event_{i}"),
+                    i.saturating_add(1).saturating_mul(2),
+                    0,
+                    None,
+                )
+            })
+            .collect();
+        let report2 = Report::fake(events2);
+        export_report(&report2, &mut state, &mut instruments);
+
+        // If the rehash closure produced inconsistent hashes for any existing entry,
+        // the second export would have inserted a duplicate instead of reusing it.
+        assert_eq!(instruments.events.len(), expected_len);
     }
 
     // OpenTelemetry SDK uses system time calls not available under Miri isolation.

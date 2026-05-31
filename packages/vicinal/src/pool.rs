@@ -176,6 +176,13 @@ impl PoolInner {
         // ensure_workers_spawned() will not add any new handles to the list after
         // we release the lock (or if it does, it will see the shutdown flag and
         // return early).
+        //
+        // The mutex is held only for the duration of the `mem::take` itself and is
+        // released before we begin joining. Worker threads may still be running user
+        // task code, but the join is not reentrant — no borrow of caller-owned
+        // shared state is held while we wait. A worker that calls back into the
+        // pool (for example to spawn additional workers) sees the shutdown flag and
+        // exits without touching the now-empty handle list.
         let handles = mem::take(&mut *self.worker_handles.lock().expect(NEVER_POISONED));
 
         for handle in handles {

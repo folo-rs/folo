@@ -19,6 +19,14 @@ pub(crate) trait FutureHandle<T> {
 /// (auto-remove on drop), while the Local variant uses local handles
 /// (auto-remove on drop via Rc-based pool reference).
 pub(crate) struct FutureDequeCore<T, H> {
+    // Shared parent waker, read by every slot's waker. This stays `Arc<Mutex<Waker>>`
+    // even for the `!Send` `LocalFutureDeque` variant — do not "optimize" it to a
+    // non-atomic `Rc<Cell<Option<Waker>>>` (or make `WakerMeta`'s `ref_count`/`activated`
+    // non-atomic) for the local variant. `std::task::Waker` is unconditionally
+    // `Send + Sync`, so a `!Send` future polled here can still clone the `Waker` it
+    // receives and wake it from another thread (see the `WakerCaptureFuture` /
+    // `concurrent_signals_during_active_poll` tests). That wake path reads this field and
+    // the `WakerMeta` atomics off-thread, so any non-atomic variant would be a data race.
     pub(crate) shared_parent: Arc<Mutex<Waker>>,
     slots: VecDeque<Slot<T, H>>,
 }
@@ -174,6 +182,16 @@ impl<T, H: FutureHandle<T>> FutureDequeCore<T, H> {
             };
 
             if let Poll::Ready(value) = poll_result {
+                // Replace the slot atomically before dropping the old `Slot::Pending`. The
+                // pool handle inside the old slot may invoke a user-supplied `Drop` impl on
+                // the wrapped future when `old` is dropped below (after `release_ref(meta)`).
+                // By the time that user code runs, the slot is already fully `Ready { value }`,
+                // so a reentrant observer (if one were possible) would see consistent state.
+                // `FutureDequeCore` is not exposed behind any shared interior mutability, so
+                // user code reachable through the future's drop cannot obtain a second
+                // `&mut FutureDequeCore` while we hold this borrow. The `shared_parent` mutex
+                // is also not held at this point (released above after cloning the parent
+                // waker), so a reentrant wake through the parent waker path does not deadlock.
                 let old = std::mem::replace(slot, Slot::Ready { value });
 
                 // Release the Slot's metadata reference. The handle is dropped as

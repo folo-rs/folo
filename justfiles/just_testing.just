@@ -13,6 +13,60 @@ bench TARGET="":
 
     cargo bench {{ target_package }} --all-features $target_selector --locked
 
+# Run Callgrind-based instruction-count benchmarks. Requires Linux (Valgrind)
+# and the `gungraun-runner` binary on PATH; both are installed by
+# `just install-tools`. Discovers any bench file whose name ends with `_cg`
+# (short for Callgrind) under `packages/<pkg>/benches/`. Callers on Windows
+# must invoke this through WSL themselves.
+[group('testing')]
+[script]
+bench-cg TARGET="":
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    if (-not $IsLinux) {
+        Write-Error "bench-cg requires Linux (Valgrind). On Windows, invoke through WSL from the repo root: wsl -e bash -l -c 'just bench-cg'"
+        exit 1
+    }
+
+    if (-not (Get-Command gungraun-runner -ErrorAction SilentlyContinue)) {
+        Write-Error "bench-cg requires the 'gungraun-runner' binary on PATH. Run 'just install-tools' to install it."
+        exit 1
+    }
+
+    $package_filter = "{{ package }}"
+    $target_filter = "{{ TARGET }}"
+
+    $packages = if ($package_filter -eq "") {
+        Get-ChildItem packages -Directory | ForEach-Object { $_.Name }
+    } else {
+        # Support space-separated package lists (e.g. from cargo-delta output).
+        $package_filter -split " " | Where-Object { $_ -ne "" }
+    }
+
+    $any_run = $false
+    foreach ($pkg in $packages) {
+        $benches_dir = Join-Path "packages" $pkg "benches"
+        if (-not (Test-Path $benches_dir)) { continue }
+
+        $bench_files = Get-ChildItem $benches_dir -Filter "*_cg.rs"
+        foreach ($bench_file in $bench_files) {
+            $bench_name = $bench_file.BaseName
+            if ($target_filter -ne "" -and $bench_name -ne $target_filter) { continue }
+
+            Write-Host "Running ${pkg}::${bench_name}" -ForegroundColor Cyan
+            cargo bench -p $pkg --bench $bench_name --all-features --locked
+            $any_run = $true
+        }
+    }
+
+    if (-not $any_run) {
+        $scope = if ($package_filter -eq "") { "the workspace" } else { "package(s) '$package_filter'" }
+        $target_clause = if ($target_filter -eq "") { "" } else { " matching target '$target_filter'" }
+        Write-Host "No Callgrind benchmarks found in $scope$target_clause." -ForegroundColor Yellow
+    }
+
+
 [group('testing')]
 miri FILTER="":
     cargo +{{ env_var('RUST_NIGHTLY') }} miri nextest run {{ target_package }} --no-fail-fast --all-features {{ FILTER }} --locked --no-tests=pass
@@ -92,9 +146,23 @@ test FILTER="":
 # Runs regular tests as well as doing one iteration of benchmarks.
 # We separate it from "test" because benchmarks are quite slow,
 # so we tend to only run them as part of a full validation pass.
+#
+# Tests go through nextest (parallel execution, junit reporting, retries, etc.). Benches
+# go through `cargo test --benches` instead: nextest's per-test discover-then-dispatch
+# model is incompatible with the Callgrind (`*_cg`) benches, whose `harness =
+# false` main() spawns Valgrind for the entire suite in one shot. `cargo test --benches`
+# invokes each bench binary's main() once with `--test`, which Criterion treats as
+# "run each bench once" and Gungraun treats as its normal one-shot Valgrind run. We only
+# care that the benches do not panic; their measurements are not consumed here.
+# Upstream tracking: https://github.com/gungraun/gungraun/pull/644.
 [group('testing')]
+[script]
 test-more FILTER="":
-    cargo +{{ env_var('RUST_MSRV') }} nextest run {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast --tests --benches
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    cargo +$env:RUST_MSRV nextest run {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast --tests
+    cargo +$env:RUST_MSRV test {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast --benches
 
 [group('testing')]
 [script]
@@ -190,7 +258,7 @@ run-examples:
         $excluded_examples = @(
             "nm_otel_console"     # This example runs an infinite loop by design
             "nm_otel_readme"      # This example runs an infinite loop by design
-            "panic_on_alloc_demo"  # This example intentionally panics to demonstrate functionality
+            "alloc_tracker_panic_on_alloc_demo"  # This example intentionally panics to demonstrate functionality
         )
         
         # Process .rs files

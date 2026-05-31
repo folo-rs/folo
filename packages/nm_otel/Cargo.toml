@@ -2,7 +2,7 @@
 name = "nm_otel"
 description = "OpenTelemetry bridge for nm metrics"
 publish = true
-version = "0.4.0"
+version = "0.4.7"
 
 authors.workspace = true
 edition.workspace = true
@@ -15,22 +15,43 @@ all-features = true
 
 [features]
 default = []
+test-util = ["nm/test-util"]
 
 [dependencies]
 foldhash = { workspace = true }
 futures = { workspace = true }
+hashbrown = { workspace = true, features = ["default-hasher", "inline-more"] }
 nm = { workspace = true }
 opentelemetry = { workspace = true, features = ["metrics"] }
 tick = { workspace = true }
 
 [dev-dependencies]
+alloc_tracker = { path = "../alloc_tracker" }
+criterion = { workspace = true }
+many_cpus = { workspace = true }
 mutants = { workspace = true }
+new_zealand = { workspace = true }
 nm = { path = "../nm", features = ["test-util"] }
+nm_otel = { path = ".", features = ["test-util"] }
 opentelemetry-stdout = { workspace = true, features = ["metrics"] }
 opentelemetry_sdk = { workspace = true, features = ["metrics", "testing"] }
+par_bench = { path = "../par_bench", features = ["alloc_tracker", "criterion"] }
 static_assertions = { workspace = true }
+testing = { path = "../testing" }
 tick = { workspace = true, features = ["tokio", "test-util"] }
-tokio = { workspace = true, features = ["rt", "macros", "time"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }
+
+# Gungraun drives Valgrind-based Callgrind benchmarks; Linux-only.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
+[[bench]]
+name = "nm_otel_export"
+harness = false
+
+[[bench]]
+name = "nm_otel_export_cg"
+harness = false
 
 [lints]
 workspace = true

@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::num::NonZero;
 use std::sync::OnceLock;
-use std::thread::ThreadId;
+use std::thread::{self, ThreadId};
 
 use nonempty::NonEmpty;
 
@@ -48,11 +48,7 @@ pub(crate) static BUILD_TARGET_PLATFORM: BuildTargetPlatform = BuildTargetPlatfo
 impl BuildTargetPlatform {
     #[expect(clippy::unused_self, reason = "matches Platform trait signature")]
     pub(crate) fn processor_count(&self) -> usize {
-        *PROCESSOR_COUNT.get_or_init(|| {
-            std::thread::available_parallelism()
-                .map(NonZero::get)
-                .unwrap_or(1)
-        })
+        *PROCESSOR_COUNT.get_or_init(|| thread::available_parallelism().map_or(1, NonZero::get))
     }
 
     fn get_processors(&self) -> NonEmpty<ProcessorFacade> {
@@ -145,7 +141,7 @@ impl Platform for BuildTargetPlatform {
             }
 
             // If not pinned or pinned to multiple processors, return the thread's natural ID.
-            Self::thread_processor_id(std::thread::current().id())
+            Self::thread_processor_id(thread::current().id())
         })
     }
 
@@ -292,7 +288,7 @@ mod tests {
     fn current_thread_processors_returns_all_when_unpinned() {
         // When a thread is not pinned, current_thread_processors() should return all
         // processor IDs available on the platform.
-        std::thread::spawn(|| {
+        thread::spawn(|| {
             let platform = BuildTargetPlatform;
 
             // Do not pin this thread - we want to test the unpinned case.
@@ -319,7 +315,7 @@ mod tests {
     fn current_processor_id_returns_pinned_processor_when_pinned_to_one() {
         // When a thread is pinned to exactly one processor, current_processor_id()
         // should return that processor's ID.
-        std::thread::spawn(|| {
+        thread::spawn(|| {
             let platform = BuildTargetPlatform;
             let processors = platform.get_processors();
             let first_processor = processors.first();

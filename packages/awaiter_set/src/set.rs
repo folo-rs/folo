@@ -152,6 +152,7 @@ impl AwaiterSet {
     }
 
     /// Returns `true` if the set contains no awaiters.
+    #[inline]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.head.is_null()
@@ -172,6 +173,7 @@ impl AwaiterSet {
     /// The awaiter must remain pinned and valid until it is removed
     /// from the set (via [`unregister()`][Self::unregister] or
     /// [`notify_one()`][Self::notify_one]).
+    #[inline]
     pub unsafe fn register(&mut self, awaiter: Pin<&mut Awaiter>, waker: Waker) {
         // SAFETY: We do not move the awaiter. Pin guarantees address
         // stability.
@@ -239,6 +241,7 @@ impl AwaiterSet {
     ///
     /// The awaiter must currently be registered with this set (or
     /// already notified by it).
+    #[inline]
     pub unsafe fn unregister(&mut self, awaiter: Pin<&mut Awaiter>) {
         // SAFETY: We do not move the awaiter.
         let awaiter = unsafe { awaiter.get_unchecked_mut() };
@@ -268,7 +271,16 @@ impl AwaiterSet {
         // `inner_ref` borrow has ended (its values were copied into `next`/`prev`),
         // so no other `Inner` reference is live.
         let inner = unsafe { awaiter.inner_mut() };
-        *inner = Inner::idle();
+        // Drop the waker; the link fields and generation are dead writes in IDLE
+        // (no code path reads them while the awaiter is idle) and `register` fully
+        // overwrites all of them on the next IDLE -> WAITING transition. Clearing
+        // `owning_set_id` in debug builds preserves the "0 = not in any set"
+        // sentinel for diagnostic clarity.
+        drop(inner.waker.take());
+        #[cfg(debug_assertions)]
+        {
+            inner.owning_set_id = 0;
+        }
         awaiter.set_lifecycle(IDLE, Ordering::Release);
     }
 
@@ -282,6 +294,7 @@ impl AwaiterSet {
     /// scope to prevent reentrancy deadlocks.
     ///
     /// Returns `None` if the set is empty.
+    #[inline]
     pub fn notify_one(&mut self) -> Option<Waker> {
         if self.head.is_null() {
             return None;
@@ -306,6 +319,7 @@ impl AwaiterSet {
     /// typically because the caller wants to exclude awaiters that
     /// a reentrant waker may register while the notification is in
     /// progress.
+    #[inline]
     pub fn advance_generation(&mut self) {
         self.generation = self.generation.wrapping_add(1);
     }
@@ -320,6 +334,7 @@ impl AwaiterSet {
     /// to the current generation, or when no generation has been
     /// opened yet (no [`advance_generation()`][Self::advance_generation]
     /// call has been made).
+    #[inline]
     pub fn notify_one_prior_generation(&mut self) -> Option<Waker> {
         if self.head.is_null() {
             return None;
@@ -370,16 +385,17 @@ impl AwaiterSet {
             self.unlink(prev, next);
         }
 
-        // Take the waker and clear the link fields before publishing
-        // the notification via the atomic lifecycle store.
+        // Take the waker (transferring ownership to the caller) before publishing
+        // the notification via the atomic lifecycle store. The link fields and
+        // generation are dead writes in NOTIFIED/IDLE (no code path reads them
+        // outside WAITING) and `register` fully overwrites all of them on the next
+        // IDLE -> WAITING transition. Clearing `owning_set_id` in debug builds
+        // preserves the "0 = not in any set" sentinel for diagnostic clarity.
         // SAFETY: Access is serialized by this `&mut self` lock scope; the previous
         // `inner_ref` borrow has ended (its values were copied into `next`/`prev`),
         // so no other `Inner` reference is live.
         let inner = unsafe { awaiter.inner_mut() };
         let waker = inner.waker.take();
-        inner.next = ptr::null_mut();
-        inner.prev = ptr::null_mut();
-        inner.generation = 0;
         #[cfg(debug_assertions)]
         {
             inner.owning_set_id = 0;

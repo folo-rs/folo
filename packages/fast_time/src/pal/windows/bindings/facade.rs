@@ -26,6 +26,7 @@ impl BindingsFacade {
 }
 
 impl Bindings for BindingsFacade {
+    #[inline]
     fn get_tick_count_64(&self) -> u64 {
         match self {
             Self::Real(bindings) => bindings.get_tick_count_64(),
@@ -34,6 +35,7 @@ impl Bindings for BindingsFacade {
         }
     }
 
+    #[inline]
     fn now(&self) -> Instant {
         match self {
             Self::Real(bindings) => bindings.now(),

@@ -1,7 +1,5 @@
 //! Benchmark comparing `fast_time::Clock::now()` with `std::time::Instant::now()`.
 
-#![expect(missing_docs, reason = "benchmarks do not require API documentation")]
-
 use std::hint::black_box;
 use std::time::Instant;
 

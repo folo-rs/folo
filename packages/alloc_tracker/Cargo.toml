@@ -2,7 +2,7 @@
 name = "alloc_tracker"
 description = "Memory allocation tracking utilities for benchmarks and performance analysis"
 publish = true
-version = "0.5.20"
+version = "0.5.25"
 
 authors.workspace = true
 edition.workspace = true
@@ -30,12 +30,14 @@ serial_test = { workspace = true }
 static_assertions = { workspace = true }
 
 [[bench]]
-name = "alloc_tracker_bench_example"
+name = "alloc_tracker_example"
 harness = false
 
 [[bench]]
-name = "tracking_overhead"
+name = "alloc_tracker_tracking_overhead"
 harness = false
 
 [lints]
 workspace = true
+
+

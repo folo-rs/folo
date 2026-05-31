@@ -206,7 +206,9 @@ impl Slab {
         // to act. We only ever create this one dropper for the object, so no double-drop can occur.
         let dropper = unsafe { Dropper::new(object_ptr) };
 
-        // Update the slot metadata to mark it as occupied and store the dropper.
+        // Update the slot metadata to mark it as occupied and store the dropper. The
+        // previous meta is `SlotMeta::Vacant` (no dropper), so this `mem::replace` does
+        // not invoke any user code as part of dropping the returned value.
         let previous_meta = mem::replace(slot_meta, SlotMeta::Occupied { _dropper: dropper });
 
         self.next_free_slot_index = match previous_meta {
@@ -330,6 +332,10 @@ impl Slab {
         // SAFETY: Forwarding safety requirements from the caller (object must be present in slab).
         let slot_meta = unsafe { self.slot_meta_mut(handle.index()) };
 
+        // Replace the slot meta with `Vacant` before reading out the object. The old
+        // meta would normally drop the user-supplied object via its dropper, but we
+        // `mem::forget` it below so no user code runs from this `mem::replace` — the
+        // object is handed to the caller instead.
         let old_meta = mem::replace(
             slot_meta,
             SlotMeta::Vacant {
@@ -648,6 +654,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
+    use testing::assert_panics;
 
     use super::*;
 
@@ -849,16 +856,13 @@ mod tests {
 
         let original_index = panicking_handle.index();
 
-        // Remove the object - this should panic during drop but still remove the object
-        let panic_result = catch_unwind(AssertUnwindSafe(|| {
+        // Remove the object - this should panic during drop but still remove the object.
+        assert_panics(|| {
             // SAFETY: panicking_handle is valid and from this slab
             unsafe {
                 slab.remove(panicking_handle);
             }
-        }));
-
-        // The removal should have panicked
-        assert!(panic_result.is_err());
+        });
 
         // But the slab should still be in a valid state:
         // 1. The object should be removed (count should be 0)
@@ -1748,7 +1752,7 @@ mod tests {
 
         DROP_COUNT.store(0, Ordering::SeqCst);
 
-        let drop_result = catch_unwind(AssertUnwindSafe(|| {
+        assert_panics(|| {
             let layout = SlabLayout::new(Layout::new::<AlwaysPanickingDrop>());
             let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
 
@@ -1765,10 +1769,7 @@ mod tests {
             assert_eq!(slab.len(), 4);
 
             // Slab drops here - should call drop() on all 4 objects even though they all panic
-        }));
-
-        // The slab drop should have panicked due to the panicking object drops
-        assert!(drop_result.is_err());
+        });
 
         // But all 4 objects should have had their drop() called
         assert_eq!(DROP_COUNT.load(Ordering::SeqCst), 4);

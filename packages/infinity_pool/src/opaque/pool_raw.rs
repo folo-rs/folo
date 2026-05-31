@@ -367,6 +367,7 @@ impl RawOpaquePool {
     ///
     /// The closure must correctly initialize the object. All fields that
     /// are not `MaybeUninit` must be initialized when the closure returns.
+    #[inline]
     pub unsafe fn insert_with_unchecked<T, F>(&mut self, f: F) -> RawPooledMut<T>
     where
         F: FnOnce(&mut MaybeUninit<T>),
@@ -488,14 +489,33 @@ impl RawOpaquePool {
         RawOpaquePoolIterator::new(self)
     }
 
-    /// Adds a new slab if needed.
+    /// Returns the index of a slab with a vacant slot, allocating a new slab if necessary.
+    ///
+    /// The fast path is a single cached lookup in the vacancy tracker. The cold path
+    /// — allocating a new slab when every existing slab is full — is outlined into
+    /// [`Self::allocate_slab_for_insert`] so the fast path stays small enough to inline
+    /// into the per-insert hot path of every `OpaquePool` variant.
     #[must_use]
+    #[inline]
     fn index_of_slab_to_insert_into(&mut self) -> usize {
         if let Some(index) = self.vacancy_tracker.next_vacancy() {
             // There is a vacancy, so use it.
             return index;
         }
 
+        self.allocate_slab_for_insert()
+    }
+
+    /// Allocates a new slab and returns its index.
+    ///
+    /// This is the cold path of [`Self::index_of_slab_to_insert_into`]: it only runs
+    /// when every existing slab is full. Marked `#[cold]` and `#[inline(never)]` to keep
+    /// the slab-allocation code (and its call into the global allocator) out of the
+    /// per-insert fast path's instruction-cache footprint.
+    #[cold]
+    #[inline(never)]
+    #[must_use]
+    fn allocate_slab_for_insert(&mut self) -> usize {
         // If we got here, there are no vacancies and we need to extend the pool.
         debug_assert_eq!(self.len(), self.capacity());
 

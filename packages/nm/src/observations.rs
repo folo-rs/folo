@@ -4,6 +4,24 @@ use std::sync::atomic::{self, AtomicI64, AtomicU64};
 
 use crate::Magnitude;
 
+/// Hints to the compiler that the calling branch is unlikely to be taken.
+///
+/// LLVM propagates the `#[cold]` attribute from the called function to the call
+/// site, biasing branch prediction and code layout so that the hot fall-through
+/// path is laid out in straight-line fashion. The cold branch target is moved
+/// to a far section to reduce icache pressure on the hot path.
+///
+/// Marked `#[inline(never)]` so the call is preserved at the call site even
+/// though the body is empty. If LLVM inlined the empty body away, the cold
+/// marker would vanish along with it and the surrounding branch would lose
+/// its cold biasing.
+///
+/// This is a temporary workaround until `std::hint::cold_path()` is
+/// stabilized. See `TODO.md` at the workspace root for the migration note.
+#[cold]
+#[inline(never)]
+fn cold_path() {}
+
 /// Records the observations of an event.
 ///
 /// This variant is intended for single-threaded use, though may be shared on that
@@ -15,6 +33,19 @@ pub(crate) struct ObservationBag {
 
     bucket_counts: Box<[Cell<u64>]>,
     bucket_magnitudes: &'static [Magnitude],
+
+    /// Bitmap indicating which buckets have been modified since the last `copy_from`.
+    ///
+    /// Bit `i` (for `i < DIRTY_BUCKETS_OVERFLOW_INDEX`) is set when bucket at index `i`
+    /// has been incremented by a non-zero observation. The highest bit
+    /// (`DIRTY_BUCKETS_OVERFLOW_INDEX`) is a catch-all that is set when any bucket at
+    /// that index or higher is modified. `copy_from` consumes (reads and clears) this
+    /// bitmap to skip stores for buckets that have not changed since the previous push.
+    ///
+    /// Observations with `count == 0` short-circuit before reaching the bucket-update
+    /// path, so the dirty bit is only set when the corresponding bucket count actually
+    /// changes.
+    dirty_buckets: Cell<u64>,
 }
 
 /// Records the observations of an event in a thread-safe manner.
@@ -62,6 +93,7 @@ impl ObservationBag {
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
             bucket_magnitudes,
+            dirty_buckets: Cell::new(0),
         };
 
         // Important type invariant used to ensure safety - the lengths of these two
@@ -74,7 +106,35 @@ impl ObservationBag {
 
         bag
     }
+
+    /// Returns the current count of observations recorded in this bag.
+    ///
+    /// The count is incremented monotonically by every observation (by the batch
+    /// size, which is non-zero for any data-changing observation). `MetricsPusher`
+    /// uses this as a dirty indicator to skip pushing pairs that have not received
+    /// new observations since the last push.
+    pub(crate) fn count(&self) -> u64 {
+        self.count.get()
+    }
+
+    /// Reads the dirty-bucket bitmap and clears it.
+    ///
+    /// Used by `ObservationBagSync::copy_from` to determine which buckets need to be
+    /// copied to the global bag without iterating over buckets that have not been
+    /// modified since the previous copy. See `dirty_buckets` for the bit encoding.
+    pub(crate) fn take_dirty_buckets(&self) -> u64 {
+        let bits = self.dirty_buckets.get();
+        self.dirty_buckets.set(0);
+        bits
+    }
 }
+
+/// Maximum bucket index that gets its own bit in the per-bag dirty bitmap. Bucket
+/// indices at or above this value are coalesced into the highest bit, which acts as
+/// a catch-all that causes `copy_from` to scan all buckets at or above the threshold.
+/// 64-bucket histograms are not anticipated in practice, so this is "good enough" for
+/// realistic workloads.
+const DIRTY_BUCKETS_OVERFLOW_INDEX: usize = 63;
 
 /// We use `Relaxed` ordering for all atomic operations to allow field access to be as
 /// fast as possible because we want to avoid any penalties on write accesses. This should be
@@ -122,14 +182,20 @@ impl ObservationBagSync {
         // We cannot merge bags with different bucket magnitudes.
         debug_assert_eq!(self.bucket_magnitudes, other.bucket_magnitudes);
 
-        // Extra sanity check for maximum paranoia.
-        debug_assert!(self.bucket_counts.len() == other.bucket_counts.len());
+        // Both bags derive `bucket_counts` length from `bucket_magnitudes` length at
+        // construction. We enforce length match in release builds because the unsafe
+        // iteration below depends on this invariant for soundness.
+        assert!(
+            self.bucket_counts.len() == other.bucket_counts.len(),
+            "bucket_counts length invariant must hold"
+        );
 
         for (i, other_bucket_count) in other.bucket_counts.iter().enumerate() {
-            let target = self
-                .bucket_counts
-                .get(i)
-                .expect("guarded by assertion above");
+            // SAFETY: The `assert!` above guarantees
+            // `self.bucket_counts.len() == other.bucket_counts.len()`, and `i` is produced
+            // by `enumerate()` over `other.bucket_counts`, so `i < other.bucket_counts.len()
+            // == self.bucket_counts.len()`. The index is therefore in bounds.
+            let target = unsafe { self.bucket_counts.get_unchecked(i) };
 
             target.fetch_add(
                 other_bucket_count.load(SYNC_BAG_ACCESS_ORDERING),
@@ -139,29 +205,108 @@ impl ObservationBagSync {
     }
 
     /// Replaces the data in the bag with the data from the local observation bag.
+    ///
+    /// Only buckets that have been modified in `data` since the previous `copy_from`
+    /// are stored; the rest are left as they were. Reads (and clears) `data`'s dirty
+    /// bitmap as part of the copy.
     pub(crate) fn copy_from(&self, data: &ObservationBag) {
         // We cannot replace with a snapshot with different bucket magnitudes.
         debug_assert_eq!(self.bucket_magnitudes, data.bucket_magnitudes);
 
-        // Extra sanity check for maximum paranoia.
-        debug_assert!(self.bucket_counts.len() == data.bucket_counts.len());
+        // Both bags derive `bucket_counts` length from `bucket_magnitudes` length at
+        // construction. We enforce length match in release builds because the unsafe
+        // iteration below depends on this invariant for soundness.
+        assert!(
+            self.bucket_counts.len() == data.bucket_counts.len(),
+            "bucket_counts length invariant must hold"
+        );
 
         self.count.store(data.count.get(), SYNC_BAG_ACCESS_ORDERING);
         self.sum.store(data.sum.get(), SYNC_BAG_ACCESS_ORDERING);
 
-        for (i, bucket_count) in data.bucket_counts.iter().enumerate() {
-            let target = self
-                .bucket_counts
-                .get(i)
-                .expect("guarded by assertion above");
+        let dirty = data.take_dirty_buckets();
+        let mut dirty = self.drain_overflow_buckets(data, dirty);
 
-            target.store(bucket_count.get(), SYNC_BAG_ACCESS_ORDERING);
+        // Iterate the remaining set bits one at a time.
+        while dirty != 0 {
+            let i = dirty.trailing_zeros() as usize;
+            dirty = clear_lowest_set_bit(dirty);
+
+            // SAFETY: Bit `i` (with `i < DIRTY_BUCKETS_OVERFLOW_INDEX`) is only set by
+            // `ObservationBag::insert` when a bucket at exactly index `i` was modified,
+            // which requires `data.bucket_counts.len() > i`. The access is therefore
+            // in bounds for `data.bucket_counts`.
+            let source = unsafe { data.bucket_counts.get_unchecked(i) };
+            // SAFETY: The `assert!` above guarantees
+            // `self.bucket_counts.len() == data.bucket_counts.len()`, so `i` is also
+            // in bounds for `self.bucket_counts`.
+            let target = unsafe { self.bucket_counts.get_unchecked(i) };
+            target.store(source.get(), SYNC_BAG_ACCESS_ORDERING);
         }
+    }
+
+    /// Copies buckets at indices `>= DIRTY_BUCKETS_OVERFLOW_INDEX` from `data` into
+    /// `self` when the overflow bit is set in `dirty`. Returns `dirty` with the
+    /// overflow bit cleared so the caller can iterate the remaining per-bucket bits.
+    ///
+    /// Mutation testing on this helper is suppressed because the mutations the
+    /// tool generates here (`&` -> `|`, `&` -> `^`, `&=` -> `|=` on the overflow
+    /// mask handling) all degrade to over-iteration of bucket stores. The
+    /// redundant stores copy `source` buckets that already match the destination,
+    /// leaving observable behavior unchanged in any state reachable through the
+    /// public API. Catching them would require reaching into private fields to
+    /// construct a state where `source.bucket_counts` and `self.bucket_counts`
+    /// disagree in buckets that were not marked dirty - a condition no normal
+    /// caller can produce. The function body is small and trivially reviewable.
+    #[cfg_attr(test, mutants::skip)]
+    fn drain_overflow_buckets(&self, data: &ObservationBag, dirty: u64) -> u64 {
+        // Caller (`copy_from`) asserts the length invariant we rely on below.
+        debug_assert_eq!(self.bucket_counts.len(), data.bucket_counts.len());
+
+        let overflow_mask = 1_u64 << DIRTY_BUCKETS_OVERFLOW_INDEX;
+        if dirty & overflow_mask == 0 {
+            return dirty;
+        }
+
+        for i in DIRTY_BUCKETS_OVERFLOW_INDEX..data.bucket_counts.len() {
+            // SAFETY: The loop bound is `data.bucket_counts.len()`, so `i` is in
+            // bounds for `data.bucket_counts`.
+            let source = unsafe { data.bucket_counts.get_unchecked(i) };
+            // SAFETY: The caller's `assert!` guarantees
+            // `self.bucket_counts.len() == data.bucket_counts.len()`, so `i` is
+            // also in bounds for `self.bucket_counts`.
+            let target = unsafe { self.bucket_counts.get_unchecked(i) };
+            target.store(source.get(), SYNC_BAG_ACCESS_ORDERING);
+        }
+
+        dirty & !overflow_mask
     }
 }
 
+/// Clears the lowest set bit of `value` (Brian Kernighan's bit-clear trick).
+///
+/// Extracted into a dedicated function so we can suppress mutation testing on it.
+/// Mutating the `&` to `|` produces a no-op (the bit-iteration loop never makes
+/// progress), which leads to an infinite loop in `copy_from`. Mutation testing
+/// runs with the watchdog disabled, so the hang manifests as a timeout rather
+/// than a normal test failure. The function is trivially correct.
+#[cfg_attr(test, mutants::skip)]
+const fn clear_lowest_set_bit(value: u64) -> u64 {
+    value & value.wrapping_sub(1)
+}
+
 impl Observations for ObservationBag {
+    #[inline]
     fn insert(&self, magnitude: Magnitude, count: usize) {
+        // No-op observations would not change any field anyway, but exiting early also
+        // ensures the dirty-bucket bitmap is not polluted with bits whose buckets did
+        // not actually change. That would force the next `copy_from` to perform stores
+        // for buckets that hold the same value as before.
+        if count == 0 {
+            cold_path();
+            return;
+        }
+
         // Crate policy is to not panic but instead to mangle data upon mathematical
         // challenges and edge cases that cannot be correctly handled. We apply this here
         // by using "as" yolo-casting. If it works, great. If not, too bad.
@@ -178,9 +323,13 @@ impl Observations for ObservationBag {
         self.count.set(self.count.get().wrapping_add(count_u64));
         self.sum.set(self.sum.get().wrapping_add(sum_increment));
 
-        // This may be none if we have no buckets (i.e. the event is a bare counter,
-        // no histogram).
-        //
+        // Counter events (no buckets) are a common API shape, not a rare case,
+        // so we exit here without a `cold_path` hint. Only the overflow branch
+        // below is marked cold.
+        if self.bucket_magnitudes.is_empty() {
+            return;
+        }
+
         // We benchmarked a manual SIMD (AVX2/SSE4.2) branchless "count less-than"
         // approach against this scalar linear scan. The scalar version wins across
         // all scenarios because branch prediction is highly effective for sorted
@@ -193,7 +342,7 @@ impl Observations for ObservationBag {
         //   large_32_hit_first       17.3 ns   1.3 ns
         //   large_32_hit_last        17.6 ns   9.2 ns
         //   large_32_miss            17.4 ns  10.6 ns
-        if let Some(bucket_index) =
+        let Some(bucket_index) =
             self.bucket_magnitudes
                 .iter()
                 .enumerate()
@@ -204,15 +353,26 @@ impl Observations for ObservationBag {
                         None
                     }
                 })
-        {
-            // We do this unsafely because we need minimal overhead in the hot path from
-            // collecting observations and this will be a very hot path.
-            //
-            // SAFETY: Type invariant: there are always the same number of bucket counts
-            // as there are bucket magnitudes.
-            let bucket_count = unsafe { self.bucket_counts.get_unchecked(bucket_index) };
-            bucket_count.set(bucket_count.get().wrapping_add(count_u64));
-        }
+        else {
+            // Magnitude exceeds the largest bucket - rare in well-configured
+            // histograms.
+            cold_path();
+            return;
+        };
+
+        // We do this unsafely because we need minimal overhead in the hot path from
+        // collecting observations and this will be a very hot path.
+        //
+        // SAFETY: Type invariant: there are always the same number of bucket counts
+        // as there are bucket magnitudes.
+        let bucket_count = unsafe { self.bucket_counts.get_unchecked(bucket_index) };
+        bucket_count.set(bucket_count.get().wrapping_add(count_u64));
+
+        // Mark this bucket as dirty so that the next `copy_from` knows to copy it.
+        // Bucket indices at or above the overflow threshold share the highest bit.
+        let dirty_bit = bucket_index.min(DIRTY_BUCKETS_OVERFLOW_INDEX);
+        self.dirty_buckets
+            .set(self.dirty_buckets.get() | (1_u64 << dirty_bit));
     }
 
     fn snapshot(&self) -> ObservationBagSnapshot {
@@ -236,6 +396,7 @@ impl Observations for ObservationBag {
 }
 
 impl Observations for ObservationBagSync {
+    #[inline]
     fn insert(&self, magnitude: Magnitude, count: usize) {
         // Crate policy is to not panic but instead to mangle data upon mathematical
         // challenges and edge cases that cannot be correctly handled. We apply this here
@@ -254,9 +415,13 @@ impl Observations for ObservationBagSync {
         self.count.fetch_add(count_u64, SYNC_BAG_ACCESS_ORDERING);
         self.sum.fetch_add(sum_increment, SYNC_BAG_ACCESS_ORDERING);
 
-        // This may be none if we have no buckets (i.e. the event is a bare counter,
-        // no histogram).
-        //
+        // Counter events (no buckets) are a common API shape, not a rare case,
+        // so we exit here without a `cold_path` hint. Only the overflow branch
+        // below is marked cold.
+        if self.bucket_magnitudes.is_empty() {
+            return;
+        }
+
         // We benchmarked a manual SIMD (AVX2/SSE4.2) branchless "count less-than"
         // approach against this scalar linear scan. The scalar version wins across
         // all scenarios because branch prediction is highly effective for sorted
@@ -269,7 +434,7 @@ impl Observations for ObservationBagSync {
         //   large_32_hit_first       17.3 ns   1.3 ns
         //   large_32_hit_last        17.6 ns   9.2 ns
         //   large_32_miss            17.4 ns  10.6 ns
-        if let Some(bucket_index) =
+        let Some(bucket_index) =
             self.bucket_magnitudes
                 .iter()
                 .enumerate()
@@ -280,15 +445,20 @@ impl Observations for ObservationBagSync {
                         None
                     }
                 })
-        {
-            // We do this unsafely because we need minimal overhead in the hot path from
-            // collecting observations and this will be a very hot path.
-            //
-            // SAFETY: Type invariant: there are always the same number of bucket counts
-            // as there are bucket magnitudes.
-            unsafe { self.bucket_counts.get_unchecked(bucket_index) }
-                .fetch_add(count_u64, SYNC_BAG_ACCESS_ORDERING);
-        }
+        else {
+            // Magnitude exceeds the largest bucket - rare in well-configured
+            // histograms.
+            cold_path();
+            return;
+        };
+
+        // We do this unsafely because we need minimal overhead in the hot path from
+        // collecting observations and this will be a very hot path.
+        //
+        // SAFETY: Type invariant: there are always the same number of bucket counts
+        // as there are bucket magnitudes.
+        unsafe { self.bucket_counts.get_unchecked(bucket_index) }
+            .fetch_add(count_u64, SYNC_BAG_ACCESS_ORDERING);
     }
 
     fn snapshot(&self) -> ObservationBagSnapshot {
@@ -686,6 +856,94 @@ mod tests {
         assert_eq!(snapshot_after.bucket_counts[3], 4); // le 10
         assert_eq!(snapshot_after.bucket_counts[4], 5); // le 100
         // Note: observations with magnitude 1000 do not go into any bucket.
+    }
+
+    #[test]
+    fn copy_from_handles_repeated_observations_on_same_bucket() {
+        // Observing the same bucket multiple times must leave that bucket dirty
+        // exactly once - the dirty bit is set via `|=`, so subsequent observations
+        // are idempotent with respect to the bitmap. A mutation that replaces `|`
+        // with `^` would XOR the bit off on the second observation, causing
+        // `copy_from` to skip the bucket even though its accumulated value changed.
+        let source = ObservationBag::new(&[10]);
+        let target = ObservationBagSync::new(&[10]);
+
+        source.insert(5, 1);
+        source.insert(5, 1);
+
+        target.copy_from(&source);
+
+        let snapshot = target.snapshot();
+        assert_eq!(snapshot.count, 2);
+        assert_eq!(snapshot.sum, 10);
+        assert_eq!(snapshot.bucket_counts[0], 2);
+    }
+
+    #[test]
+    fn copy_from_handles_overflow_bucket_indices() {
+        // Build a histogram with more than `DIRTY_BUCKETS_OVERFLOW_INDEX` buckets so
+        // that observations targeting the overflow region exercise the overflow
+        // catch-all branch in `copy_from`. We use 70 buckets at strictly increasing
+        // magnitudes so each insert lands in a distinct, known bucket.
+        const BUCKET_COUNT: usize = 70;
+        static MAGNITUDES: [Magnitude; BUCKET_COUNT] = {
+            let mut arr = [0_i64; BUCKET_COUNT];
+            let mut i = 0;
+            while i < BUCKET_COUNT {
+                #[expect(
+                    clippy::cast_possible_wrap,
+                    reason = "small bucket index, wrapping is not possible"
+                )]
+                let m = i as Magnitude;
+                arr[i] = m;
+                i += 1;
+            }
+            arr
+        };
+
+        let source = ObservationBag::new(&MAGNITUDES);
+        let target = ObservationBagSync::new(&MAGNITUDES);
+
+        // Observe one value below the overflow threshold and two at or above it,
+        // so that both the non-overflow loop and the overflow scan must run.
+        source.insert(MAGNITUDES[10], 1); // bucket 10 (below overflow)
+        source.insert(MAGNITUDES[63], 2); // bucket 63 (overflow boundary)
+        source.insert(MAGNITUDES[BUCKET_COUNT - 1], 3); // last bucket (above overflow)
+
+        target.copy_from(&source);
+
+        let snapshot = target.snapshot();
+        assert_eq!(snapshot.count, 6);
+        assert_eq!(snapshot.bucket_counts[10], 1);
+        assert_eq!(snapshot.bucket_counts[63], 2);
+        assert_eq!(snapshot.bucket_counts[BUCKET_COUNT - 1], 3);
+
+        // All other buckets must remain untouched - the overflow path must not
+        // bleed writes into buckets that were never observed.
+        for (i, &count) in snapshot.bucket_counts.iter().enumerate() {
+            let expected = match i {
+                10 => 1,
+                63 => 2,
+                i if i == BUCKET_COUNT - 1 => 3,
+                _ => 0,
+            };
+            assert_eq!(count, expected, "bucket {i} mismatch");
+        }
+    }
+
+    #[test]
+    fn insert_with_zero_count_does_not_mark_dirty() {
+        // A no-op observation must not pollute the dirty-bucket bitmap. Otherwise
+        // a later `copy_from` would perform a redundant atomic store for a bucket
+        // whose value never changed.
+        let bag = ObservationBag::new(&[10]);
+
+        bag.insert(5, 0);
+
+        assert_eq!(bag.count(), 0);
+        assert_eq!(bag.take_dirty_buckets(), 0);
+        let snapshot = bag.snapshot();
+        assert_eq!(snapshot.bucket_counts[0], 0);
     }
 
     // Multithreaded tests exercising concurrent access patterns on ObservationBagSync.

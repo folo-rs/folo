@@ -352,7 +352,7 @@ impl AutoResetEvent {
     /// ```
     #[must_use]
     pub unsafe fn embedded(place: Pin<&EmbeddedAutoResetEvent>) -> EmbeddedAutoResetEventRef {
-        let inner = NonNull::from(&place.get_ref().inner);
+        let inner = NonNull::from_ref(&place.get_ref().inner);
         EmbeddedAutoResetEventRef { inner }
     }
 
@@ -381,6 +381,7 @@ impl AutoResetEvent {
     ///     event.wait().await;
     /// }
     /// ```
+    #[inline]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn set(&self) {
         self.inner.set();
@@ -405,6 +406,7 @@ impl AutoResetEvent {
     /// // Signal was consumed.
     /// assert!(!event.try_wait());
     /// ```
+    #[inline]
     #[must_use]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_wait(&self) -> bool {
@@ -598,6 +600,7 @@ impl EmbeddedAutoResetEventRef {
     }
 
     /// Signals the event, releasing exactly one waiter.
+    #[inline]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn set(&self) {
         self.inner().set();
@@ -607,6 +610,7 @@ impl EmbeddedAutoResetEventRef {
     ///
     /// Returns `true` if the event was set, atomically transitioning it
     /// back to the unset state. Returns `false` if the event was not set.
+    #[inline]
     #[must_use]
     #[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder.
     pub fn try_wait(&self) -> bool {

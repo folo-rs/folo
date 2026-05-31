@@ -46,7 +46,7 @@
 //! # Example
 //!
 //! A simple scenario that merely copies memory from a foreign buffer to a local one
-//! (`benches/many_cpus_harness_demo.rs`):
+//! (`benches/many_cpus_benchmarking_harness_demo.rs`):
 //!
 //! ```rust ignore (benchmark)
 //! const COPY_BYTES_LEN: usize = 64 * 1024 * 1024;
@@ -340,8 +340,8 @@
 //!   same-processor execution modes
 //!
 //! For complete working examples, see:
-//! - `examples/shared_data_same_action.rs` - Multiple readers of shared `HashMap`
-//! - `examples/shared_data_different_actions.rs` - Producer-consumer channel communication
+//! - `examples/many_cpus_benchmarking_shared_data_same_action.rs` - Multiple readers of shared `HashMap`
+//! - `examples/many_cpus_benchmarking_shared_data_different_actions.rs` - Producer-consumer channel communication
 //!
 //! # Payload multiplier
 //!

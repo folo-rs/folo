@@ -180,7 +180,7 @@ fn entrypoint(c: &mut Criterion) {
     g.bench_function("oneshot_send_receive", |b| {
         b.iter(|| {
             let (sender, receiver) = black_box(oneshot::channel::<i32>());
-            let mut receiver = pin!(receiver);
+            let mut receiver = pin!(receiver.into_future());
 
             sender.send(black_box(42)).unwrap();
 
@@ -379,7 +379,7 @@ fn entrypoint(c: &mut Criterion) {
     g.bench_function("oneshot_send_receive_2poll", |b| {
         b.iter(|| {
             let (sender, receiver) = black_box(oneshot::channel::<i32>());
-            let mut receiver = pin!(receiver);
+            let mut receiver = pin!(receiver.into_future());
 
             let mut cx = task::Context::from_waker(Waker::noop());
 

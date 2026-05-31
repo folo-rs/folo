@@ -269,6 +269,7 @@ mod tests {
     use events_once::EventPool;
     use futures::executor::block_on;
     use static_assertions::assert_impl_all;
+    use testing::assert_panics;
 
     use crate::{Pool, Scheduler};
 
@@ -311,8 +312,6 @@ mod tests {
 
     #[test]
     fn spawn_captures_panic() {
-        use std::panic;
-
         let pool = Pool::new();
         let scheduler = pool.scheduler();
 
@@ -320,8 +319,7 @@ mod tests {
             panic!("test panic");
         });
 
-        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| block_on(handle)));
-        assert!(result.is_err());
+        assert_panics(|| block_on(handle));
     }
 
     #[test]

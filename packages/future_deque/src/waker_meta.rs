@@ -13,6 +13,11 @@ use infinity_pool::{PinnedPool, Pooled, PooledMut};
 // Each WakerMeta is reference-counted: one reference for the owning Slot, plus one per
 // outstanding waker clone. When the refcount reaches zero, the metadata is removed from
 // the pool and its slot is available for reuse.
+//
+// The atomic `ref_count`/`activated` and the `Arc<Mutex<Waker>>` parent are mandatory even
+// when this metadata backs a `!Send` `LocalFutureDeque`: the `std::task::Waker` built from
+// it is `Send + Sync` and may be cloned/woken/dropped from another thread. See the design
+// comment on `FutureDequeCore::shared_parent` for why a non-atomic local variant is unsound.
 pub(crate) struct WakerMeta {
     ref_count: AtomicUsize,
 

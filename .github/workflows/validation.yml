@@ -22,7 +22,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -33,6 +33,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: cargo-delta
+          # See setup-environment/action.yml for the rationale behind including
+          # the runner image version in the cache key.
+          env-vars: ImageVersion
 
       - name: Install cargo-delta
         run: cargo install cargo-delta --locked
@@ -98,7 +101,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -114,7 +117,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -134,7 +137,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -154,7 +157,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -162,7 +165,7 @@ jobs:
       - name: Run clippy dev on ${{ matrix.platform }}
         run: just package="${{ needs.delta.outputs.packages }}" clippy dev
 
-  test-more:
+  test-more-x64:
     needs: [delta]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
@@ -174,7 +177,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -184,7 +187,7 @@ jobs:
 
       - name: Upload test results to Codecov
         if: ${{ !cancelled() }}
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: target/nextest/default/junit.xml
@@ -203,7 +206,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -223,7 +226,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -231,8 +234,11 @@ jobs:
       - name: Run docs on ${{ matrix.platform }}
         run: just package="${{ needs.delta.outputs.packages }}" docs
 
-  miri:
-    needs: [delta]
+      - name: Run docs-default-features on ${{ matrix.platform }}
+        run: just package="${{ needs.delta.outputs.packages }}" docs-default-features
+
+  miri-x64:
+    needs: [delta, check-dev]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
@@ -243,7 +249,62 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run miri on ${{ matrix.platform }}
+        run: just package="${{ needs.delta.outputs.packages }}" miri
+
+  # ARM64 coverage for test-more. Exercises ARM-specific code paths (anything gated
+  # behind cfg(target_arch = "aarch64") or similar) which x86_64 runners never compile
+  # or execute.
+  test-more-arm:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-24.04-arm, windows-11-arm]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run test-more on ${{ matrix.platform }}
+        run: just package="${{ needs.delta.outputs.packages }}" test-more
+
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v6
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: target/nextest/default/junit.xml
+          flags: ${{ matrix.platform }}
+          report_type: test_results
+
+  # ARM64 coverage for Miri. Miri is an interpreter with its own memory model and is
+  # architecture-agnostic for platform-neutral code; we run it on ARM purely to exercise
+  # cfg(target_arch = "aarch64") (and similar) code paths under Miri's UB detection.
+  miri-arm:
+    needs: [delta, check-dev]
+    if: needs.delta.outputs.skip_all != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-24.04-arm, windows-11-arm]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -253,8 +314,10 @@ jobs:
 
   # Miri with many seeds is very slow, so we only run it for select packages on Windows.
   # These jobs only run when their specific package is affected by changes.
+  # Gated behind the base `miri-x64` and `miri-arm` jobs so a quick Miri failure short-circuits
+  # the much more expensive many-seeds run.
   miri-harder-events-once:
-    needs: [delta]
+    needs: [delta, miri-x64, miri-arm]
     if: >-
       needs.delta.outputs.skip_all != 'true'
       && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'events_once'))
@@ -267,7 +330,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -276,7 +339,7 @@ jobs:
         run: just package=events_once miri-harder ${{ matrix.shard }}
 
   miri-harder-infinity-pool:
-    needs: [delta]
+    needs: [delta, miri-x64, miri-arm]
     if: >-
       needs.delta.outputs.skip_all != 'true'
       && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'infinity_pool'))
@@ -289,7 +352,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -298,7 +361,7 @@ jobs:
         run: just package=infinity_pool miri-harder ${{ matrix.shard }}
 
   miri-harder-events:
-    needs: [delta]
+    needs: [delta, miri-x64, miri-arm]
     if: >-
       needs.delta.outputs.skip_all != 'true'
       && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'events'))
@@ -311,7 +374,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -320,7 +383,7 @@ jobs:
         run: just package=events miri-harder ${{ matrix.shard }}
 
   miri-harder-awaiter-set:
-    needs: [delta]
+    needs: [delta, miri-x64, miri-arm]
     if: >-
       needs.delta.outputs.skip_all != 'true'
       && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'awaiter_set'))
@@ -333,7 +396,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -354,7 +417,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -363,7 +426,7 @@ jobs:
         run: just machete
 
   check-release:
-    needs: [delta]
+    needs: [delta, check-dev]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
@@ -374,7 +437,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -383,7 +446,7 @@ jobs:
         run: just package="${{ needs.delta.outputs.packages }}" check release
 
   clippy-release:
-    needs: [delta]
+    needs: [delta, clippy-dev]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
@@ -394,7 +457,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -403,7 +466,7 @@ jobs:
         run: just package="${{ needs.delta.outputs.packages }}" clippy release
 
   build-release:
-    needs: [delta]
+    needs: [delta, check-dev]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
@@ -414,7 +477,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -423,7 +486,7 @@ jobs:
         run: just package="${{ needs.delta.outputs.packages }}" build release
 
   mutants:
-    needs: [delta]
+    needs: [delta, test-more-x64]
     if: needs.delta.outputs.skip_all != 'true'
     timeout-minutes: 240
     strategy:
@@ -435,7 +498,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -456,7 +519,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -477,7 +540,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -497,7 +560,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -517,7 +580,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -528,7 +591,7 @@ jobs:
           just coverage-report-ci
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5.5.2
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info

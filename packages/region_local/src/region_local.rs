@@ -314,6 +314,25 @@ where
     /// In single-threaded and write-heavy scenarios, `RwLock` is faster but those
     /// are not the scenarios we target - we expect the data to be local for long
     /// periods and read from many threads, with writes happening not so often.
+    //
+    // Do not try to skip this `load()` on warm reads by caching the loaded `Arc` in a
+    // per-thread cache. It has been investigated and rejected:
+    //
+    // * `RegionLocal<T>` must be `Sync` (it is used via `linked::InstancePerThreadSync`,
+    //   see the `non_static_sync` test), so the cache cannot be a `Cell`/`RefCell` field
+    //   on the instance — that would make the type `!Sync` and break a public contract.
+    // * A process-global `thread_local!` cache cannot be generic over `T` (a `static`
+    //   inside a generic fn is shared across monomorphizations), forcing type erasure to
+    //   `Arc<dyn Any>` plus a `HashMap<family_id, _>` lookup and a downcast per read —
+    //   roughly the same cost as the `ArcSwap` fast path we would be removing.
+    // * A generation-based freshness check is not even available here: unlike `region_cached`,
+    //   `region_local` has no version counter — `set_local` writes the new value directly into
+    //   this region's `ArcSwap`. A per-thread cache therefore has no cheap signal to learn that
+    //   another thread in the same region published a new value; the only way to find out is to
+    //   `load()` the `ArcSwap`, which is exactly the work the cache was meant to avoid.
+    //
+    // `ArcSwap` is purpose-built for this "many readers, rare writers" pattern; replacing
+    // it here measured as break-even at best.
     value: ArcSwapOption<RegionalValue<T>>,
 }
 
@@ -441,7 +460,7 @@ mod tests {
 
     use many_cpus::fake::{HardwareBuilder, ProcessorBuilder};
     use static_assertions::assert_impl_all;
-    use testing::with_watchdog;
+    use testing::{assert_panics, with_watchdog};
 
     use super::*;
     use crate::{RegionLocalExt, region_local};
@@ -688,12 +707,11 @@ mod tests {
             assert_eq!(local.get_local(), 42);
 
             // Second call with panicking closure.
-            let panic_result = panic::catch_unwind(AssertUnwindSafe(|| {
+            assert_panics(|| {
                 local.with_local(|_| {
                     panic!("User callback panicked!");
                 })
-            }));
-            assert!(panic_result.is_err());
+            });
 
             // Third call should still work and return the initialized value.
             assert_eq!(local.get_local(), 42);
@@ -712,12 +730,11 @@ mod tests {
             pin_to_processor(&hardware, 0);
 
             // First call with panicking closure should fail but not break state.
-            let panic_result = panic::catch_unwind(AssertUnwindSafe(|| {
+            assert_panics(|| {
                 local.with_local(|_| {
                     panic!("User callback panicked during initialization!");
                 })
-            }));
-            assert!(panic_result.is_err());
+            });
 
             // Second call should successfully initialize and work.
             assert_eq!(local.get_local(), 42);

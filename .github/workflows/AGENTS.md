@@ -26,10 +26,22 @@ Split from the monolithic `just validate-local` into individual jobs:
 - **Multi-platform jobs** (run on ubuntu-latest, macos-latest, windows-latest):
   - check-dev
   - clippy-dev
-  - test-more
+  - test-more-x64
   - test-docs
   - **docs** — Multi-platform because conditional compilation affects generated documentation
-  - miri
+  - miri-x64
+  - **test-more-arm** — ARM64 coverage (ubuntu-24.04-arm, windows-11-arm)
+    - Exercises ARM-specific code paths (anything gated behind
+      `cfg(target_arch = "aarch64")` or similar) which x86_64 runners never compile
+      or execute. Platform-neutral code is already validated by the x86_64 matrix.
+    - Paired with `test-more-x64`; both carry an explicit `-x64`/`-arm` suffix for
+      symmetry. Other jobs that have no ARM counterpart remain unsuffixed.
+  - **miri-arm** — ARM64 coverage for Miri (ubuntu-24.04-arm, windows-11-arm)
+    - Miri is an interpreter with its own memory model and is architecture-agnostic
+      for platform-neutral code. We run it on ARM purely to subject ARM-gated code
+      paths to Miri's UB detection — there is no value in running it on ARM for
+      code that already compiles on x86_64.
+    - Paired with `miri-x64`; both carry an explicit `-x64`/`-arm` suffix for symmetry.
   - **miri-harder-events-once** / **miri-harder-infinity-pool** / **miri-harder-events** — Windows-only, sharded
     - Runs Miri with 64 seeds per test (`-Zmiri-many-seeds=..64`) for select packages
     - Sharded across parallel runners to reduce wall-clock time (4 shards for events_once,
@@ -57,8 +69,9 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
 A scheduled workflow that keeps GitHub Actions caches warm. GitHub evicts caches after
 7 days of inactivity, and a cold cache means every parallel validation job must independently
 compile all Rust dependencies from scratch (the setup-environment step becomes very expensive).
-This workflow runs once daily on all three platforms (ubuntu, macos, windows) to ensure the
-`shared-key: prerequisites` Rust cache is always populated. It also supports `workflow_dispatch`
+This workflow runs once daily on all five runner images (ubuntu-latest, windows-latest,
+macos-latest, ubuntu-24.04-arm, windows-11-arm) to ensure the
+`shared-key: prerequisites` Rust cache is always populated for both x86_64 and ARM64. It also supports `workflow_dispatch`
 for manual cache warming after toolchain updates.
 
 ## Design Decisions
@@ -75,11 +88,29 @@ for manual cache warming after toolchain updates.
    - Clear failure identification (specific check names in GitHub status)
    - Better resource utilization across GitHub runners
 
+   Expensive jobs are gated behind cheaper equivalents so a fast failure short-circuits
+   the expensive work and avoids burning runner time on code that already failed a
+   simpler check:
+   - `check-release` depends on `check-dev`
+   - `clippy-release` depends on `clippy-dev`
+   - `build-release` depends on `check-dev` (no point linking a release binary if the
+     dev `cargo check` already failed)
+   - `miri-x64` and `miri-arm` depend on `check-dev` (Miri is much slower than `cargo check`;
+     if the code does not even compile in dev mode, there is nothing for Miri to interpret)
+   - `mutants` depends on `test-more-x64` (mutation testing is meaningless if base tests fail)
+   - `miri-harder-*` depend on both `miri-x64` and `miri-arm` (many-seeds runs are
+     orders of magnitude slower than a single Miri pass)
+
 3. **Platform matrix considerations**:
    - `format-check` is single-platform (Ubuntu) to save resources
    - `docs` and `machete` remain multi-platform due to conditional compilation differences
    - `miri-harder-*` jobs are Windows-only due to high cost; sharded across parallel runners
-   - All other checks run on 3 platforms (ubuntu, macos, windows)
+   - Most checks run on the 3 x86_64 platforms (ubuntu, macos, windows)
+   - `test-more-arm` and `miri-arm` extend coverage to ARM64 (ubuntu-24.04-arm,
+     windows-11-arm) solely to exercise ARM-gated code paths
+     (`cfg(target_arch = "aarch64")` and similar). Platform-neutral code is already
+     covered by the x86_64 matrices — Miri in particular is an interpreter with its
+     own memory model and is architecture-agnostic for platform-neutral code.
 
 4. **Timeouts**:
    - Default timeout for most jobs
@@ -88,6 +119,10 @@ for manual cache warming after toolchain updates.
 5. **Shared infrastructure**:
    - All jobs use the common `.github/actions/setup-environment` action
    - Rust cache uses `shared-key: prerequisites` for cross-job cache sharing
+   - Cache key includes the runner image version via `env-vars: ImageVersion`
+     so caches do not flow across runner image releases (cached binaries can
+     subtly depend on image-specific dylibs and system tools, even when the
+     lockfile and rust toolchain are identical)
    - `fail-fast: false` ensures all platform checks complete even if one fails
 
 ## Maintenance Notes
@@ -95,3 +130,14 @@ for manual cache warming after toolchain updates.
 - When adding new checks, consider platform-specific needs and appropriate timeouts
 - Keep inline comments for single-platform jobs to explain the rationale
 - Monitor job run times and adjust timeouts if needed
+
+## System dependencies
+
+The `setup-environment` action installs Valgrind on Linux runners and `gungraun-runner` (via
+`just install-tools`). Both are required for the Callgrind `*_cg` bench targets that
+live in `packages/*/benches/`. Even when those targets are not executed, `cargo test
+--benches` (which `test-more` uses) invokes each bench binary's `main()` once, which forwards
+its args to `gungraun-runner`. Without `gungraun-runner` on `$PATH` the call fails with
+`Failed to run benchmarks: No such file or directory`, which breaks `test-more` and
+`coverage`. The Callgrind bench binaries are compiled to no-op stubs on Windows and macOS via
+`#[cfg(not(target_os = "linux"))] fn main() {}`, so neither tool is required there.

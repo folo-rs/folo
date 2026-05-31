@@ -2,7 +2,7 @@
 name = "events"
 description = "Async manual-reset and auto-reset event primitives"
 publish = true
-version = "0.7.0"
+version = "0.7.6"
 
 authors.workspace = true
 edition.workspace = true
@@ -33,7 +33,7 @@ awaiter_set = { workspace = true }
 alloc_tracker = { path = "../alloc_tracker" }
 criterion = { workspace = true }
 event-listener = { workspace = true }
-futures = { workspace = true }
+futures = { workspace = true, features = ["executor"] }
 many_cpus = { path = "../many_cpus" }
 mutants = { workspace = true }
 new_zealand = { workspace = true }
@@ -44,13 +44,23 @@ static_assertions = { workspace = true }
 testing = { path = "../testing" }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
 [[bench]]
-name = "events_bench"
+name = "events_uncontended"
 harness = false
 
 [[bench]]
-name = "contended_bench"
+name = "events_contended"
+harness = false
+
+[[bench]]
+name = "events_cg"
 harness = false
 
 [lints]
 workspace = true
+
+
+

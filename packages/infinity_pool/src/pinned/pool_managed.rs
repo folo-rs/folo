@@ -170,7 +170,17 @@ where
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // All mutations are unviable - skip them to save time.
     pub fn insert(&self, value: T) -> PooledMut<T> {
-        let inner = self.inner.lock().expect(NEVER_POISONED).insert(value);
+        // SAFETY: `PinnedPool<T>` is a typed wrapper. The underlying opaque pool was
+        // constructed via `RawOpaquePool::with_layout_of::<T>()`, which records
+        // `Layout::new::<T>()` as the pool's object layout, and the wrapper never permits
+        // inserting any other type. The layout match required by `insert_unchecked` is
+        // therefore statically guaranteed.
+        let inner = unsafe {
+            self.inner
+                .lock()
+                .expect(NEVER_POISONED)
+                .insert_unchecked(value)
+        };
 
         // SAFETY: We apply the constraint `T: Send` as the safety requirements require.
         unsafe { PooledMut::new(inner, Arc::clone(&self.inner)) }
@@ -232,8 +242,11 @@ where
         // resume_unwind, so our state is never observed in a potentially
         // inconsistent state. The user's panic is re-thrown without tampering.
         let result = catch_unwind(AssertUnwindSafe(|| {
-            // SAFETY: Forwarding safety guarantees from caller.
-            unsafe { inner.insert_with(f) }
+            // SAFETY: `PinnedPool<T>` is a typed wrapper, so the layout match
+            // required by `insert_with_unchecked` is statically guaranteed.
+            // The closure-initialization requirement is forwarded from this
+            // method's own safety contract.
+            unsafe { inner.insert_with_unchecked(f) }
         }));
         drop(inner);
 

@@ -2,7 +2,7 @@
 name = "nm"
 description = "Minimalistic high-performance metrics collection in highly concurrent environments"
 publish = true
-version = "0.1.30"
+version = "0.1.37"
 
 authors.workspace = true
 edition.workspace = true
@@ -32,9 +32,22 @@ mutants = { workspace = true }
 par_bench = { path = "../par_bench", features = ["criterion"] }
 static_assertions = { workspace = true }
 
+# Gungraun drives Valgrind-based Callgrind benchmarks; Linux-only.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
 [lints]
 workspace = true
 
 [[bench]]
 name = "nm_performance"
 harness = false
+
+[[bench]]
+name = "nm_push_bulk"
+harness = false
+
+[[bench]]
+name = "nm_observe_cg"
+harness = false
+

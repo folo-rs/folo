@@ -29,7 +29,7 @@ use crate::{
 ///   ignored by this package and cannot be used to spawn threads, though such processors are still
 ///   accounted for when inspecting hardware information such as "max processor ID".
 ///   The mechanisms for defining such limits are cgroups on Linux and job objects on Windows.
-///   See `examples/obey_job_affinity_limits_windows.rs` for a Windows-specific example.
+///   See `examples/many_cpus_obey_job_affinity_windows.rs` for a Windows-specific example.
 /// * Soft limits on which processors are allowed are ignored by default - specifying a processor
 ///   affinity via `taskset` on Linux, `start.exe /affinity 0xff` on Windows or similar mechanisms
 ///   does not affect the set of processors this package will use by default, though you can opt in to
@@ -38,7 +38,7 @@ use crate::{
 ///   count of the processor set returned by [`SystemHardware::processors()`].
 /// * Any other processor set can be opt-in quota-limited when building the processor set. For example, by calling `SystemHardware::current().all_processors().to_builder().enforce_resource_quota().take_all()`.
 ///
-/// See `examples/obey_job_resource_quota_limits_windows.rs` for a Windows-specific example of processor
+/// See `examples/many_cpus_obey_job_resource_quota_windows.rs` for a Windows-specific example of processor
 /// time quota enforcement.
 ///
 /// # Avoiding operating system quota penalties
@@ -517,7 +517,7 @@ impl ProcessorSetBuilder {
                 }
 
                 all_processors
-                    .choose_multiple(&mut rng(), count.get())
+                    .sample(&mut rng(), count.get())
                     .cloned()
                     .collect_vec()
             }
@@ -557,7 +557,7 @@ impl ProcessorSetBuilder {
                     let choose_count = count.min(processors_in_region.len());
 
                     let region_processors = processors_in_region
-                        .choose_multiple(&mut rng(), choose_count)
+                        .sample(&mut rng(), choose_count)
                         .cloned();
 
                     processors.extend(region_processors);
@@ -586,7 +586,7 @@ impl ProcessorSetBuilder {
                 );
 
                 processors
-                    .choose_multiple(&mut rng(), count.get())
+                    .sample(&mut rng(), count.get())
                     .cloned()
                     .collect_vec()
             }
@@ -636,7 +636,7 @@ impl ProcessorSetBuilder {
 
                 candidates
                     .iter()
-                    .choose_multiple(&mut rng(), count.get())
+                    .sample(&mut rng(), count.get())
                     .into_iter()
                     .map(|(_, processors)| {
                         processors.iter().choose(&mut rng()).cloned().expect(
@@ -1897,6 +1897,7 @@ mod tests {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests_fallback {
     use std::num::NonZero;
+    use std::thread;
 
     use new_zealand::nz;
 
@@ -1931,9 +1932,7 @@ mod tests_fallback {
 
         let set = builder.take_all().unwrap();
 
-        let expected_count = std::thread::available_parallelism()
-            .map(NonZero::get)
-            .unwrap_or(1);
+        let expected_count = thread::available_parallelism().map_or(1, NonZero::get);
 
         assert_eq!(set.len(), expected_count);
     }
@@ -1946,9 +1945,7 @@ mod tests_fallback {
 
         let set = builder.performance_processors_only().take_all().unwrap();
 
-        let expected_count = std::thread::available_parallelism()
-            .map(NonZero::get)
-            .unwrap_or(1);
+        let expected_count = thread::available_parallelism().map_or(1, NonZero::get);
 
         assert_eq!(set.len(), expected_count);
     }
@@ -1961,9 +1958,7 @@ mod tests_fallback {
 
         let set = builder.same_memory_region().take_all().unwrap();
 
-        let expected_count = std::thread::available_parallelism()
-            .map(NonZero::get)
-            .unwrap_or(1);
+        let expected_count = thread::available_parallelism().map_or(1, NonZero::get);
 
         assert_eq!(set.len(), expected_count);
 
@@ -2001,8 +1996,6 @@ mod tests_fallback {
 
     #[test]
     fn where_available_for_current_thread() {
-        use std::thread;
-
         thread::spawn(|| {
             let hw = SystemHardware::fallback();
 
@@ -2034,9 +2027,7 @@ mod tests_fallback {
 
         // The fallback platform reports max_processor_time == processor_count.
         // Since quota is NOT enforced by default, we should get all processors.
-        let expected_count = std::thread::available_parallelism()
-            .map(NonZero::get)
-            .unwrap_or(1);
+        let expected_count = thread::available_parallelism().map_or(1, NonZero::get);
 
         assert_eq!(set.len(), expected_count);
     }

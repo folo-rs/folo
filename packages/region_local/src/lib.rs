@@ -156,7 +156,7 @@
 //!     );
 //!
 //! # #[cfg(doc)] // Only for show, do not run when testing.
-//!     thread::sleep(Duration::from_secs(60));
+//!     thread::sleep(Duration::from_mins(1));
 //! }
 //! ```
 //!

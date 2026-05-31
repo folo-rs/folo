@@ -261,39 +261,19 @@ impl ReportOperation {
     }
 
     /// Calculates the mean bytes allocated per iteration.
-    #[expect(
-        clippy::integer_division,
-        reason = "we accept loss of precision for mean calculation"
-    )]
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "division by zero is guarded by if-else"
-    )]
     #[must_use]
     pub fn mean_bytes(&self) -> u64 {
-        if self.total_iterations == 0 {
-            0
-        } else {
-            self.total_bytes_allocated / self.total_iterations
-        }
+        self.total_bytes_allocated
+            .checked_div(self.total_iterations)
+            .unwrap_or(0)
     }
 
     /// Calculates the mean number of allocations per iteration.
-    #[expect(
-        clippy::integer_division,
-        reason = "we accept loss of precision for mean calculation"
-    )]
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "division by zero is guarded by if-else"
-    )]
     #[must_use]
     pub fn mean_allocations(&self) -> u64 {
-        if self.total_iterations == 0 {
-            0
-        } else {
-            self.total_allocations_count / self.total_iterations
-        }
+        self.total_allocations_count
+            .checked_div(self.total_iterations)
+            .unwrap_or(0)
     }
 
     /// Calculates the mean bytes allocated per iteration.

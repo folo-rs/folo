@@ -187,7 +187,7 @@ where
         Self::new_in_inner(place_mut);
 
         // We cast away the MaybeUninit wrapper because it is now initialized.
-        let event = NonNull::from(place_mut).cast::<UnsafeCell<Self>>();
+        let event = NonNull::from_mut(place_mut).cast::<UnsafeCell<Self>>();
 
         (
             SenderCore::new(PtrRef::new(event)),
@@ -267,6 +267,7 @@ where
     /// Sets the value of the event and notifies the receiver's awaiter, if there is one.
     ///
     /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
+    #[inline]
     pub(crate) fn set(event_cell: &UnsafeCell<Self>, value: T) -> Result<(), Disconnected> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must
@@ -389,6 +390,7 @@ where
     /// Marks the event as having been disconnected early from the sender side.
     ///
     /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
+    #[inline]
     pub(crate) fn sender_dropped_without_set(
         event_cell: &UnsafeCell<Self>,
     ) -> Result<(), Disconnected> {
@@ -440,13 +442,12 @@ where
                 // SAFETY: We were in EVENT_AWAITING which guarantees there is a waker in there.
                 let waker = unsafe { awaiter_cell.assume_init_read() };
 
-                // Come and get it.
+                // Transition out of `EVENT_SIGNALING` before the wake so that a synchronously
+                // reentrant waker (one that polls the receiver inline) observes a terminal
+                // state instead of spinning in `poll_signaling`. This matches the ordering
+                // used by `set()` on the `EVENT_SET` path and prevents same-thread reentrancy
+                // deadlocks.
                 //
-                // As the event is multithreaded, the receiver may already have returned to us
-                // before we send this wake signal - that is fine. If that happens, this signal
-                // is simply a no-op.
-                waker.wake();
-
                 // It is legal to set DISCONNECTED here, permitting dealloc, even though we still
                 // hold an &event reference here, which ordinarily means it is still illegal to
                 // deallocate the object. However, the dangling reference in this method is an
@@ -455,6 +456,13 @@ where
                 event
                     .state
                     .store(EVENT_DISCONNECTED, atomic::Ordering::Release);
+
+                // Come and get it.
+                //
+                // As the event is multithreaded, the receiver may already have returned to us
+                // before we send this wake signal - that is fine. If that happens, this signal
+                // is simply a no-op.
+                waker.wake();
 
                 // The receiver is the last endpoint remaining, so it will clean up.
                 Ok(())
@@ -474,6 +482,7 @@ where
     ///
     /// If `Some` is returned, the caller is the last remaining endpoint and responsible
     /// for cleaning up the event.
+    #[inline]
     #[must_use]
     pub(crate) fn poll(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
         #[cfg(debug_assertions)]
@@ -778,6 +787,7 @@ where
     /// Returns `Ok(Some(value))` if the sender sender has already sent a value.
     /// Returns `Err` if the sender has already disconnected without sending a value.
     /// In both of these cases, the receiver must clean up the event now.
+    #[inline]
     pub(crate) fn final_poll(event_cell: &UnsafeCell<Self>) -> Result<Option<T>, Disconnected> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must
@@ -953,14 +963,16 @@ impl<T: Send + 'static> fmt::Debug for Event<T> {
 )]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::cell::RefCell;
     use std::panic::{AssertUnwindSafe, RefUnwindSafe, UnwindSafe, catch_unwind, resume_unwind};
+    use std::rc::Rc;
     use std::sync::Barrier;
     use std::task::Poll;
     use std::{task, thread};
 
     use futures::executor::block_on;
     use static_assertions::assert_impl_all;
-    use testing::with_watchdog;
+    use testing::{ReentrantWakerData, with_watchdog};
 
     use super::*;
     use crate::IntoValueError;
@@ -2038,6 +2050,68 @@ mod tests {
                 send_thread.join().unwrap();
                 drop_thread.join().unwrap();
             });
+        });
+    }
+
+    // Regression test for the synchronous reentrancy hazard in
+    // `sender_dropped_without_set`. A waker fired by the sender drop that
+    // synchronously polls the receiver must observe a terminal state
+    // (DISCONNECTED), not the transient SIGNALING state — otherwise the
+    // reentrant poll would spin in `poll_signaling` while the sender is
+    // blocked inside `wake()`, producing a same-thread deadlock.
+    #[test]
+    #[cfg_attr(miri, ignore)] // Custom raw waker is not Miri-compatible.
+    fn boxed_sender_drop_with_reentrant_waker_does_not_deadlock() {
+        type ObservedResult = Poll<Result<i32, Disconnected>>;
+
+        with_watchdog(|| {
+            let (sender, receiver) = Event::<i32>::boxed();
+            let receiver_holder: Rc<RefCell<Option<Pin<Box<_>>>>> =
+                Rc::new(RefCell::new(Some(Box::pin(receiver))));
+            let receiver_for_waker = Rc::clone(&receiver_holder);
+
+            let reentrant_observed: Rc<RefCell<Option<ObservedResult>>> =
+                Rc::new(RefCell::new(None));
+            let observed_for_waker = Rc::clone(&reentrant_observed);
+
+            let waker_data = ReentrantWakerData::new(move || {
+                // Synchronously poll the receiver from inside the waker.
+                // With the buggy ordering this would enter `poll_signaling`
+                // and spin while we are still blocked inside `wake()`.
+                let mut holder = receiver_for_waker.borrow_mut();
+                let receiver = holder.as_mut().expect("receiver still held");
+                let noop = Waker::noop();
+                let mut cx = task::Context::from_waker(noop);
+                let result = receiver.as_mut().poll(&mut cx);
+                *observed_for_waker.borrow_mut() = Some(result);
+            });
+            // SAFETY: `waker_data` outlives the waker and the test is single-threaded.
+            let waker = unsafe { waker_data.waker() };
+
+            // First poll transitions BOUND -> AWAITING and stores the
+            // reentrant waker.
+            {
+                let mut holder = receiver_holder.borrow_mut();
+                let receiver = holder.as_mut().expect("receiver still held");
+                let mut cx = task::Context::from_waker(&waker);
+                assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Pending));
+            }
+
+            // Drop the sender. This calls `sender_dropped_without_set`,
+            // which transitions AWAITING -> SIGNALING, then must
+            // transition to DISCONNECTED before invoking the waker so
+            // that the reentrant poll observes a terminal state.
+            drop(sender);
+
+            assert!(waker_data.was_woken());
+            let observed = reentrant_observed.borrow_mut().take();
+            assert!(
+                matches!(observed, Some(Poll::Ready(Err(Disconnected)))),
+                "reentrant poll should observe DISCONNECTED",
+            );
+
+            // Drop the receiver to release its half of the event.
+            drop(receiver_holder.borrow_mut().take());
         });
     }
 }

@@ -2,7 +2,7 @@
 name = "awaiter_set"
 description = "Zero-allocation awaiter tracking for async synchronization primitives"
 publish = true
-version = "0.1.0"
+version = "0.1.6"
 
 authors.workspace = true
 edition.workspace = true
@@ -18,9 +18,23 @@ all-features = true
 simple-mermaid = { workspace = true }
 
 [dev-dependencies]
-futures = { workspace = true }
+criterion = { workspace = true }
+futures = { workspace = true, features = ["executor"] }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
+[[bench]]
+name = "awaiter_set"
+harness = false
+
+[[bench]]
+name = "awaiter_set_cg"
+harness = false
+
 [lints]
 workspace = true
+
+

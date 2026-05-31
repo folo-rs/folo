@@ -24,7 +24,7 @@
 //! Publisher::builder()
 //!     .provider(my_meter_provider)
 //!     .clock(Clock::new_tokio())
-//!     .interval(Duration::from_secs(60))
+//!     .interval(Duration::from_mins(1))
 //!     .build()
 //!     .publish_forever()
 //!     .await;
@@ -77,3 +77,12 @@ mod publisher;
 mod state;
 
 pub use publisher::*;
+
+/// Internal types exposed for benchmarks and tests.
+///
+/// Not part of the public API; do not depend on these from production code.
+#[doc(hidden)]
+#[cfg(any(test, feature = "test-util"))]
+pub mod __private {
+    pub use crate::state::EventState;
+}

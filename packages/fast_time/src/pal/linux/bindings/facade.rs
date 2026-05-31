@@ -25,7 +25,8 @@ impl BindingsFacade {
 }
 
 impl Bindings for BindingsFacade {
-    fn clock_gettime_nanos(&self) -> u128 {
+    #[inline]
+    fn clock_gettime_nanos(&self) -> u64 {
         match self {
             Self::Real(bindings) => bindings.clock_gettime_nanos(),
             #[cfg(test)]
@@ -33,6 +34,7 @@ impl Bindings for BindingsFacade {
         }
     }
 
+    #[inline]
     fn now(&self) -> Instant {
         match self {
             Self::Real(bindings) => bindings.now(),

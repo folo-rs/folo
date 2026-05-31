@@ -50,6 +50,7 @@ impl PublishModelPrivate for Push {
         self.observations.snapshot()
     }
 
+    #[inline]
     fn insert(&self, magnitude: Magnitude, count: usize) {
         self.observations.insert(magnitude, count);
     }
@@ -73,6 +74,7 @@ impl PublishModelPrivate for Pull {
         self.observations.snapshot()
     }
 
+    #[inline]
     fn insert(&self, magnitude: Magnitude, count: usize) {
         self.observations.insert(magnitude, count);
     }
