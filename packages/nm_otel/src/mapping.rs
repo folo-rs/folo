@@ -146,11 +146,12 @@ pub(crate) fn export_report(
     for event in report.events() {
         let event_name = event.name();
         let event_state = state.event_state(event_name);
+        let histogram = event.histogram();
 
         // Get cached instruments for this event (creates them if first time seeing this event).
         // Pass histogram magnitudes if present so bucket counter and bounds can be created.
         let event_instruments =
-            instruments.instruments(event_name, event.histogram().map(nm::Histogram::magnitudes));
+            instruments.instruments(event_name, histogram.map(nm::Histogram::magnitudes));
 
         // Export count as counter (delta).
         let count_delta = event_state.count_delta(event.count());
@@ -160,7 +161,7 @@ pub(crate) fn export_report(
         event_instruments.sum_gauge.record(event.sum(), &[]);
 
         // Export histogram buckets if present.
-        if let Some(histogram) = event.histogram() {
+        if let Some(histogram) = histogram {
             let bucket_counter = event_instruments
                 .bucket_counter
                 .as_ref()
