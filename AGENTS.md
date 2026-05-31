@@ -607,6 +607,13 @@ Ensure `Cargo.toml` contains:
 all-features = true
 ```
 
+Intra-doc links from ungated documentation to feature-gated items (modules, types, trait
+`impl`s that only exist under a non-default feature) break when docs are built without that
+feature. Never drop the link or paste a raw URL to dodge the warning — use the
+feature-conditional `#[cfg_attr(..., doc = "...")]` doc-line pattern instead. See
+[docs/api-docs.md](docs/api-docs.md) for the full rationale, anti-patterns, and examples. The
+`docs-default-features` validation step exists to catch this class of error.
+
 # Do not use `\n` in println!() statements
 
 To empty an empty line to the terminal, use use `println!();` instead of

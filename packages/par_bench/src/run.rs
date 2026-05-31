@@ -92,7 +92,14 @@ impl Run {
     /// 5. Optionally set measurement wrappers with [`measure_wrapper()`](crate::configure::RunWithIterState::measure_wrapper)
     /// 6. **Required**: Set the benchmark function with [`iter()`](crate::configure::RunWithWrapperState::iter)
     /// 7. **Required**: Execute the run with either [`execute_on()`][crate::ConfiguredRun::execute_on]
-    ///    or [`execute_criterion_on()`][crate::ConfiguredRun::execute_criterion_on].
+    #[cfg_attr(
+        any(test, feature = "criterion"),
+        doc = "   or [`execute_criterion_on()`][crate::ConfiguredRun::execute_criterion_on]."
+    )]
+    #[cfg_attr(
+        not(any(test, feature = "criterion")),
+        doc = "   or `execute_criterion_on()` (available with the `criterion` feature)."
+    )]
     ///
     /// You can skip optional steps but cannot go back in the sequence.
     ///
