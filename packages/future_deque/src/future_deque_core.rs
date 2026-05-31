@@ -22,9 +22,9 @@ pub(crate) struct FutureDequeCore<T, H> {
     // Shared parent waker, read by every slot's waker. This stays `Arc<Mutex<Waker>>`
     // even for the `!Send` `LocalFutureDeque` variant — do not "optimize" it to a
     // non-atomic `Rc<Cell<Option<Waker>>>` (or make `WakerMeta`'s `ref_count`/`activated`
-    // non-atomic) for the local variant. `std::task::Waker` is unconditionally `Send +
-    // Sync`, so a `!Send` future polled here can still clone the `Waker` it receives and
-    // wake it from another thread (see the `WakerCaptureFuture` /
+    // non-atomic) for the local variant. `std::task::Waker` is unconditionally
+    // `Send + Sync`, so a `!Send` future polled here can still clone the `Waker` it
+    // receives and wake it from another thread (see the `WakerCaptureFuture` /
     // `concurrent_signals_during_active_poll` tests). That wake path reads this field and
     // the `WakerMeta` atomics off-thread, so any non-atomic variant would be a data race.
     pub(crate) shared_parent: Arc<Mutex<Waker>>,
