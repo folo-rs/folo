@@ -55,13 +55,13 @@ libc = { version = "0.2.172", default-features = false }
 linked = { version = "1.0.13", path = "packages/linked", default-features = false }
 linked_macros = { version = "1.0.13", path = "packages/linked_macros", default-features = false }
 linked_macros_impl = { version = "1.0.13", path = "packages/linked_macros_impl", default-features = false }
-many_cpus = { version = "2.4.6", path = "packages/many_cpus", default-features = false }
+many_cpus = { version = "2.4.7", path = "packages/many_cpus", default-features = false }
 mockall = { version = "0.14.0", default-features = false }
 mutants = { version = "0.0.4", default-features = false }
 negative-impl = { version = "0.1.0", default-features = false }
 new_zealand = { version = "1.0.6", path = "packages/new_zealand", default-features = false }
-nm = { version = "0.1.37", path = "packages/nm", default-features = false }
-nm_otel = { version = "0.4.7", path = "packages/nm_otel", default-features = false }
+nm = { version = "0.1.38", path = "packages/nm", default-features = false }
+nm_otel = { version = "0.4.8", path = "packages/nm_otel", default-features = false }
 nonempty = { version = "0.12.0", default-features = false }
 num-integer = { version = "0.1.46", default-features = false }
 num-traits = { version = "0.2.19", default-features = false }
@@ -94,7 +94,7 @@ tokio = { version = "1.48.0", default-features = false }
 toml = { version = "1.1.2", default-features = false }
 tracing = { version = "0.1.30", default-features = false, features = ["std"] }
 trybuild = { version = "1.0.0", default-features = false }
-vicinal = { version = "0.1.25", path = "packages/vicinal", default-features = false }
+vicinal = { version = "0.1.26", path = "packages/vicinal", default-features = false }
 windows = { version = "0.62.0", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
