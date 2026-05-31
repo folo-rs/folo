@@ -330,6 +330,13 @@ impl Observations for ObservationBag {
             return;
         }
 
+        // We deliberately keep this a linear scan rather than a binary search.
+        // Real histograms almost always have ten or fewer buckets, and for
+        // those sizes a branch-predicted linear scan is the cheapest option. A
+        // binary search only starts to win past ~16 buckets, which is an extreme
+        // edge case not worth optimizing for - so do not be tempted to "improve"
+        // this into a binary search.
+        //
         // We benchmarked a manual SIMD (AVX2/SSE4.2) branchless "count less-than"
         // approach against this scalar linear scan. The scalar version wins across
         // all scenarios because branch prediction is highly effective for sorted
@@ -422,6 +429,13 @@ impl Observations for ObservationBagSync {
             return;
         }
 
+        // We deliberately keep this a linear scan rather than a binary search.
+        // Real histograms almost always have ten or fewer buckets, and for
+        // those sizes a branch-predicted linear scan is the cheapest option. A
+        // binary search only starts to win past ~16 buckets, which is an extreme
+        // edge case not worth optimizing for - so do not be tempted to "improve"
+        // this into a binary search.
+        //
         // We benchmarked a manual SIMD (AVX2/SSE4.2) branchless "count less-than"
         // approach against this scalar linear scan. The scalar version wins across
         // all scenarios because branch prediction is highly effective for sorted
