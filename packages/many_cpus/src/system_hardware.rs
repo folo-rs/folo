@@ -49,8 +49,14 @@ thread_local! {
     /// that coexist in tests (fakes), while clones share state because they share an instance ID.
     /// Entries for dropped instances are removed by the `SystemHardwareInner` destructor on the
     /// dropping thread; any entries left on other threads persist until the thread exits, which is
-    /// harmless because instance IDs are never reused. In production only the singleton exists, so
-    /// each thread holds at most one entry.
+    /// harmless because instance IDs are never reused.
+    ///
+    /// Only pinning inserts an entry (through
+    /// [`update_pin_status`][SystemHardware::update_pin_status]); the read paths only look entries
+    /// up. In non-test builds the only `SystemHardware` instance is the
+    /// [`current()`][SystemHardware::current] singleton, so each thread holds exactly one entry
+    /// here — the one for that singleton. Multiple entries per thread only arise in tests that
+    /// construct additional (fake) instances.
     static PIN_STATES: RefCell<HashMap<u64, ThreadState>> = RefCell::new(HashMap::default());
 }
 
