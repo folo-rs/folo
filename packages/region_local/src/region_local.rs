@@ -325,11 +325,11 @@ where
     //   inside a generic fn is shared across monomorphizations), forcing type erasure to
     //   `Arc<dyn Any>` plus a `HashMap<family_id, _>` lookup and a downcast per read —
     //   roughly the same cost as the `ArcSwap` fast path we would be removing.
-    // * A generation-based freshness check is racy: `set_local` bumps `next_generation`
-    //   *before* it invalidates the regions, so a reader that stamps its cache with an
-    //   observed `next_generation` can install and keep serving a stale value, bypassing
-    //   invalidation entirely (only "a pinned thread sees its own writes" is guaranteed;
-    //   everything else is weakly consistent, but persistent staleness is still a bug).
+    // * A generation-based freshness check is not even available here: unlike `region_cached`,
+    //   `region_local` has no version counter — `set_local` writes the new value directly into
+    //   this region's `ArcSwap`. A per-thread cache therefore has no cheap signal to learn that
+    //   another thread in the same region published a new value; the only way to find out is to
+    //   `load()` the `ArcSwap`, which is exactly the work the cache was meant to avoid.
     //
     // `ArcSwap` is purpose-built for this "many readers, rare writers" pattern; replacing
     // it here measured as break-even at best.
