@@ -66,7 +66,7 @@ where
     )]
     #[cfg_attr(
         not(any(test, feature = "criterion")),
-        doc = "to use `execute_criterion_on()`."
+        doc = "to use `execute_criterion_on()` (available with the `criterion` feature)."
     )]
     ///
     /// # Panics

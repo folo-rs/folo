@@ -98,7 +98,7 @@ impl Run {
     )]
     #[cfg_attr(
         not(any(test, feature = "criterion")),
-        doc = "   or `execute_criterion_on()`."
+        doc = "   or `execute_criterion_on()` (available with the `criterion` feature)."
     )]
     ///
     /// You can skip optional steps but cannot go back in the sequence.
