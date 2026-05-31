@@ -507,6 +507,20 @@ impl<E: ManualEvent> Harness<E> {
                  (state {:?})",
                 slot.state,
             );
+            // `set()` is synchronous, so by the time control returns
+            // to the harness every snapshot waiter must have been
+            // invoked. A `MustBeReady` slot whose `wake_count` lags
+            // behind its frozen budget is a lost notification — even
+            // if the sequence never polls the future again. This
+            // catches "no lost notifications" violations directly,
+            // without needing a follow-up `Poll` op.
+            if slot.state == SlotState::MustBeReady {
+                assert_eq!(
+                    wake_count, budget,
+                    "slot {idx}: MustBeReady but wake_count {wake_count} < budget {budget} \
+                     (lost notification: set() returned without invoking this waker)",
+                );
+            }
         }
     }
 }
@@ -537,12 +551,17 @@ fn make_waker(tracker: &Rc<WakerTracker>) -> Waker {
     let data: *const () = raw.cast::<()>();
 
     // SAFETY: Validity — `data` was just produced from `Rc::into_raw`
-    // and owns a strong count; vtable functions maintain that count
-    // (`clone_fn` increments, `drop_fn` decrements). Aliasing — every
-    // vtable function constructs at most one shared reference to
-    // `WakerTracker` at a time and panics if invoked from a thread
-    // other than the creator, so no concurrent `&mut WakerTracker`
-    // can exist.
+    // and owns a strong count; the vtable maintains that count
+    // (`clone_fn` increments, `drop_fn` decrements), so the pointee
+    // stays alive for the duration of every outstanding `Waker`.
+    // Aliasing — vtable functions only ever construct shared
+    // `&WakerTracker` references, never `&mut`, so reentrant wakes
+    // may freely create additional shared references without
+    // violating Rust's aliasing rules. The `!Sync` interior (`Cell`
+    // and `RefCell`) is protected by `assert_creator_thread`, which
+    // pins every vtable invocation to the thread that created the
+    // tracker — preventing cross-thread observation of the
+    // single-threaded interior mutability primitives.
     unsafe { Waker::from_raw(RawWaker::new(data, &VTABLE)) }
 }
 
@@ -567,11 +586,13 @@ fn wake_by_ref_fn(data: *const ()) {
     assert_creator_thread(data);
     // SAFETY: Validity — `data` owns a strong count on a
     // `WakerTracker` (see `clone_fn` / `make_waker`), so the pointee
-    // is alive for the duration of this call. Aliasing — the public
-    // surface of `WakerTracker` is `&self`-only and backed by `Cell`
-    // and `RefCell`; `assert_creator_thread` ensures we are on the
-    // single thread that owns this tracker, so no concurrent
-    // `&mut WakerTracker` can exist.
+    // is alive for the duration of this call. Aliasing — we only
+    // construct a shared `&WakerTracker`; reentrant invocations may
+    // construct further shared references, which is sound. The
+    // `!Sync` interior (`Cell` and `RefCell`) is safe to touch here
+    // because `assert_creator_thread` confines this call to the
+    // tracker's creator thread, so no cross-thread observation
+    // occurs.
     let tracker = unsafe { &*data.cast::<WakerTracker>() };
     tracker
         .wake_count
@@ -600,11 +621,13 @@ fn drop_fn(data: *const ()) {
 /// is `Copy + Sync`, and the field is never mutated after
 /// construction.
 fn assert_creator_thread(data: *const ()) {
-    // SAFETY: `data` owns a strong count on a `WakerTracker` (see
-    // `make_waker`/`clone_fn`), so the pointee is alive. `ThreadId`
-    // is `Sync`, so reading the field from any thread is sound even
-    // though `WakerTracker` itself is not `Sync` — we touch no other
-    // field here.
+    // SAFETY: Validity — `data` owns a strong count on a
+    // `WakerTracker` (see `make_waker` / `clone_fn`), so the
+    // pointee is alive. Aliasing — we only construct a shared
+    // `&WakerTracker` and only read the `Sync` `ThreadId` field
+    // (never the `!Sync` `Cell`/`RefCell` fields), so this is sound
+    // even from a thread other than the creator and even when other
+    // shared references to the same tracker coexist.
     let tracker = unsafe { &*data.cast::<WakerTracker>() };
     assert_eq!(
         tracker.creator_thread,
