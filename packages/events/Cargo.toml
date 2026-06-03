@@ -2,7 +2,7 @@
 name = "events"
 description = "Async manual-reset and auto-reset event primitives"
 publish = true
-version = "0.7.6"
+version = "0.7.7"
 
 authors.workspace = true
 edition.workspace = true
