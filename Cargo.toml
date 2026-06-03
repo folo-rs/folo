@@ -102,7 +102,6 @@ windows = { version = "0.62.0", default-features = false, features = ["std"] }
 closure_returning_async_block = "warn"
 elided_lifetimes_in_paths = "warn"
 # Unstable: fuzzy_provenance_casts = "warn"
-let_underscore_drop = "warn"
 # Unstable: lossy_provenance_casts = "warn"
 missing_debug_implementations = "warn"
 missing_docs = "warn"
