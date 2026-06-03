@@ -31,7 +31,7 @@ impl Drop for CurrentDirGuard {
     fn drop(&mut self) {
         // Best-effort restoration; if this fails we are likely already unwinding from
         // another panic and there is nothing useful to do.
-        drop(std::env::set_current_dir(&self.original));
+        _ = std::env::set_current_dir(&self.original);
     }
 }
 

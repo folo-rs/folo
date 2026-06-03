@@ -721,4 +721,112 @@ serde = "=1.2.3"
 "#;
         assert_eq!(freeze(input).0, expected);
     }
+
+    // -- Defensive-branch coverage --------------------------------------------------------
+
+    #[test]
+    fn workspace_table_without_dependencies_processed_cleanly() {
+        // Exercises the `None` branch of `process_workspace_level` (the workspace exists
+        // but has no `dependencies` table).
+        let input = r#"
+[workspace]
+members = ["a", "b"]
+"#;
+        let (output, outcome) = freeze(input);
+        assert_eq!(output, input);
+        assert_eq!(outcome.frozen_count, 0);
+        assert_eq!(outcome.skipped_count, 0);
+    }
+
+    #[test]
+    fn target_entry_that_is_not_a_table_is_skipped() {
+        // Exercises the `continue` branch of `process_target_level` when a value directly
+        // under `[target]` is not table-like (a malformed but parseable case).
+        let input = r#"
+[target]
+stray = "value"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.172"
+"#;
+        let expected = r#"
+[target]
+stray = "value"
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.172"
+"#;
+        let (output, outcome) = freeze(input);
+        assert_eq!(output, expected);
+        assert_eq!(outcome.frozen_count, 1);
+    }
+
+    #[test]
+    fn detached_table_without_version_is_skipped() {
+        // Exercises the `None` branch of form-3 handling in `freeze_dependency_entry`
+        // (a detached dependency table that has no `version` field).
+        let input = r#"
+[dependencies.my_crate]
+path = "../my_crate"
+features = ["serde"]
+"#;
+        let (output, outcome) = freeze(input);
+        assert_eq!(output, input);
+        assert_eq!(outcome.frozen_count, 0);
+        assert_eq!(outcome.skipped_count, 0);
+    }
+
+    #[test]
+    fn non_string_non_table_dependency_entry_is_skipped() {
+        // Exercises the wildcard `_ => {}` arm of `freeze_dependency_entry` for entries
+        // that are neither bare strings, inline tables, nor detached tables. An integer
+        // value is not a valid Cargo dependency entry but is valid TOML, so we skip it
+        // defensively rather than error out.
+        let input = r#"
+[dependencies]
+weird = 123
+serde = "1.2.3"
+"#;
+        let expected = r#"
+[dependencies]
+weird = 123
+serde = "=1.2.3"
+"#;
+        let (output, outcome) = freeze(input);
+        assert_eq!(output, expected);
+        assert_eq!(outcome.frozen_count, 1);
+        assert_eq!(outcome.skipped_count, 0);
+    }
+
+    #[test]
+    fn freeze_version_in_item_handles_item_none() {
+        // Exercises the `Item::None` arm of `freeze_version_in_item`. This variant is
+        // never produced by `get_mut` on a real parsed document, so we exercise it
+        // directly to keep the defensive arm covered.
+        let mut item = Item::None;
+        let mut outcome = RunOutcome {
+            frozen_count: 0,
+            skipped_count: 0,
+        };
+        freeze_version_in_item("dep", &mut item, &mut outcome).unwrap();
+        assert_eq!(outcome.frozen_count, 0);
+        assert_eq!(outcome.skipped_count, 0);
+    }
+
+    #[test]
+    fn freeze_version_in_item_rejects_table_version() {
+        // Exercises the `Item::Table | Item::ArrayOfTables` arm of `freeze_version_in_item`
+        // — a `version` key that resolves to a nested table rather than a string. Real
+        // user-authored TOML can produce this with `[dependencies.serde.version]`.
+        let mut item = Item::Table(toml_edit::Table::new());
+        let mut outcome = RunOutcome {
+            frozen_count: 0,
+            skipped_count: 0,
+        };
+        let err = freeze_version_in_item("dep", &mut item, &mut outcome).unwrap_err();
+        match err {
+            RunError::UnexpectedVersionType { dep, .. } => assert_eq!(dep, "dep"),
+            other => panic!("expected UnexpectedVersionType, got {other:?}"),
+        }
+    }
 }
