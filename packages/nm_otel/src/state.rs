@@ -66,6 +66,13 @@ impl CollectionState {
 
 /// Previous state for a single event.
 #[derive(Debug, Default)]
+#[cfg_attr(
+    not(any(test, feature = "test-util")),
+    expect(
+        unreachable_pub,
+        reason = "exposed publicly only via the test-util `__private` module; otherwise crate-internal"
+    )
+)]
 pub struct EventState {
     /// Previous cumulative count.
     pub(crate) count: u64,
@@ -104,6 +111,13 @@ impl EventState {
     /// fixed for the lifetime of an event. The check fires either when an extra bucket
     /// is yielded beyond the established length, or when the source iterator is exhausted
     /// before all established buckets have been visited.
+    #[cfg_attr(
+        not(any(test, feature = "test-util")),
+        expect(
+            unreachable_pub,
+            reason = "exposed publicly only via the test-util `__private` module; otherwise crate-internal"
+        )
+    )]
     pub fn histogram_deltas<'a>(
         &'a mut self,
         magnitudes: impl IntoIterator<Item = Magnitude> + 'a,
