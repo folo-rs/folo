@@ -1,0 +1,28 @@
+[package]
+# Cargo has its own logic for naming and expects dashes. Okay.
+name = "cargo-freeze-deps"
+description = "A Cargo subcommand that freezes all floating dependency versions in a Cargo.toml file to their literal values"
+publish = true
+version = "0.1.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+argh = { workspace = true }
+semver = { workspace = true }
+toml_edit = { workspace = true, features = ["parse", "display"] }
+
+[dev-dependencies]
+mutants = { workspace = true }
+serial_test = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

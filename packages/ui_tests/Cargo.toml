@@ -13,7 +13,7 @@ rust-version.workspace = true
 development = ["new_zealand"]
 
 [dev-dependencies]
-new_zealand = { workspace = true }
+new_zealand = { path = "../new_zealand" }
 trybuild = { workspace = true }
 
 [lints]
