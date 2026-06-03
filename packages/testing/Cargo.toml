@@ -31,7 +31,7 @@ mutants = { workspace = true }
 static_assertions = { workspace = true }
 
 [target.'cfg(windows)'.dev-dependencies]
-new_zealand = { workspace = true }
+new_zealand = { path = "../new_zealand" }
 
 [lints]
 workspace = true

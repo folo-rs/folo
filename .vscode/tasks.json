@@ -87,6 +87,7 @@
                 "alloc_tracker",
                 "benchmarks",
                 "cargo-detect-package",
+                "cargo-freeze-deps",
                 "cpulist",
                 "events",
                 "events_once",

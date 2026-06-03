@@ -36,7 +36,7 @@ event-listener = { workspace = true }
 futures = { workspace = true, features = ["executor"] }
 many_cpus = { path = "../many_cpus" }
 mutants = { workspace = true }
-new_zealand = { workspace = true }
+new_zealand = { path = "../new_zealand" }
 par_bench = { path = "../par_bench", features = ["criterion"] }
 rsevents = { workspace = true }
 static_assertions = { workspace = true }

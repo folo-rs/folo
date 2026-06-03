@@ -28,9 +28,9 @@ tick = { workspace = true }
 [dev-dependencies]
 alloc_tracker = { path = "../alloc_tracker" }
 criterion = { workspace = true }
-many_cpus = { workspace = true }
+many_cpus = { path = "../many_cpus" }
 mutants = { workspace = true }
-new_zealand = { workspace = true }
+new_zealand = { path = "../new_zealand" }
 nm = { path = "../nm", features = ["test-util"] }
 nm_otel = { path = ".", features = ["test-util"] }
 opentelemetry-stdout = { workspace = true, features = ["metrics"] }
