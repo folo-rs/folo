@@ -221,7 +221,7 @@ fn format_bucket_bound(magnitude: Magnitude) -> Arc<str> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use nm_impl::TestFacade;
+    use nm::{EventMetrics, Histogram};
     use opentelemetry::metrics::MeterProvider;
     use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
 
@@ -257,8 +257,8 @@ mod tests {
         let mut state = CollectionState::new();
         let mut instruments = InstrumentRegistry::new(meter);
 
-        let event = TestFacade::event_metrics("test_event", 100, 5000, None);
-        let report = TestFacade::report(vec![event]);
+        let event = EventMetrics::fake("test_event", 100, 5000, None);
+        let report = Report::fake(vec![event]);
 
         export_report(&report, &mut state, &mut instruments);
 
@@ -281,9 +281,9 @@ mod tests {
         let mut state = CollectionState::new();
         let mut instruments = InstrumentRegistry::new(meter);
 
-        let histogram = TestFacade::histogram(BUCKETS, vec![5, 12, 8, 3], 2);
-        let event = TestFacade::event_metrics("latency_ms", 30, 4567, Some(histogram));
-        let report = TestFacade::report(vec![event]);
+        let histogram = Histogram::fake(BUCKETS, vec![5, 12, 8, 3], 2);
+        let event = EventMetrics::fake("latency_ms", 30, 4567, Some(histogram));
+        let report = Report::fake(vec![event]);
 
         export_report(&report, &mut state, &mut instruments);
 
@@ -306,9 +306,9 @@ mod tests {
         let mut instruments = InstrumentRegistry::new(meter);
 
         // First collection.
-        let histogram1 = TestFacade::histogram(BUCKETS, vec![5, 10], 2);
-        let event1 = TestFacade::event_metrics("test_event", 17, 100, Some(histogram1));
-        let report1 = TestFacade::report(vec![event1]);
+        let histogram1 = Histogram::fake(BUCKETS, vec![5, 10], 2);
+        let event1 = EventMetrics::fake("test_event", 17, 100, Some(histogram1));
+        let report1 = Report::fake(vec![event1]);
 
         export_report(&report1, &mut state, &mut instruments);
 
@@ -318,9 +318,9 @@ mod tests {
         assert_eq!(event_state.histogram_buckets, vec![5, 15, 17]); // Cumulative: 5, 15, 17.
 
         // Second collection with more data.
-        let histogram2 = TestFacade::histogram(BUCKETS, vec![8, 15], 4);
-        let event2 = TestFacade::event_metrics("test_event", 27, 200, Some(histogram2));
-        let report2 = TestFacade::report(vec![event2]);
+        let histogram2 = Histogram::fake(BUCKETS, vec![8, 15], 4);
+        let event2 = EventMetrics::fake("test_event", 27, 200, Some(histogram2));
+        let report2 = Report::fake(vec![event2]);
 
         export_report(&report2, &mut state, &mut instruments);
 
@@ -340,9 +340,9 @@ mod tests {
         let mut state = CollectionState::new();
         let mut instruments = InstrumentRegistry::new(meter);
 
-        let event1 = TestFacade::event_metrics("event_a", 10, 100, None);
-        let event2 = TestFacade::event_metrics("event_b", 20, 200, None);
-        let report = TestFacade::report(vec![event1, event2]);
+        let event1 = EventMetrics::fake("event_a", 10, 100, None);
+        let event2 = EventMetrics::fake("event_b", 20, 200, None);
+        let report = Report::fake(vec![event1, event2]);
 
         export_report(&report, &mut state, &mut instruments);
 
@@ -373,11 +373,9 @@ mod tests {
 
         // First pass: register every event, forcing the `HashTable` to grow.
         let events: Vec<_> = (0..NUM_EVENTS)
-            .map(|i| {
-                TestFacade::event_metrics(format!("growth_event_{i}"), i.saturating_add(1), 0, None)
-            })
+            .map(|i| EventMetrics::fake(format!("growth_event_{i}"), i.saturating_add(1), 0, None))
             .collect();
-        let report = TestFacade::report(events);
+        let report = Report::fake(events);
         export_report(&report, &mut state, &mut instruments);
 
         let expected_len = usize::try_from(NUM_EVENTS).unwrap();
@@ -386,7 +384,7 @@ mod tests {
         // Second pass with the same events: every lookup must hit the existing entry.
         let events2: Vec<_> = (0..NUM_EVENTS)
             .map(|i| {
-                TestFacade::event_metrics(
+                EventMetrics::fake(
                     format!("growth_event_{i}"),
                     i.saturating_add(1).saturating_mul(2),
                     0,
@@ -394,7 +392,7 @@ mod tests {
                 )
             })
             .collect();
-        let report2 = TestFacade::report(events2);
+        let report2 = Report::fake(events2);
         export_report(&report2, &mut state, &mut instruments);
 
         // If the rehash closure produced inconsistent hashes for any existing entry,
@@ -415,15 +413,15 @@ mod tests {
         let mut instruments = InstrumentRegistry::new(meter);
 
         // First collection establishes baseline.
-        let histogram1 = TestFacade::histogram(BUCKETS, vec![5, 10], 2);
-        let event1 = TestFacade::event_metrics("test_event", 100, 500, Some(histogram1));
-        let report1 = TestFacade::report(vec![event1]);
+        let histogram1 = Histogram::fake(BUCKETS, vec![5, 10], 2);
+        let event1 = EventMetrics::fake("test_event", 100, 500, Some(histogram1));
+        let report1 = Report::fake(vec![event1]);
         export_report(&report1, &mut state, &mut instruments);
 
         // Second collection with same count - zero delta.
-        let histogram2 = TestFacade::histogram(BUCKETS, vec![5, 10], 2);
-        let event2 = TestFacade::event_metrics("test_event", 100, 500, Some(histogram2));
-        let report2 = TestFacade::report(vec![event2]);
+        let histogram2 = Histogram::fake(BUCKETS, vec![5, 10], 2);
+        let event2 = EventMetrics::fake("test_event", 100, 500, Some(histogram2));
+        let report2 = Report::fake(vec![event2]);
 
         // This should complete without error even when delta is zero.
         export_report(&report2, &mut state, &mut instruments);
@@ -446,15 +444,15 @@ mod tests {
         let mut instruments = InstrumentRegistry::new(meter);
 
         // First collection establishes baseline.
-        let histogram1 = TestFacade::histogram(BUCKETS, vec![5, 10], 2);
-        let event1 = TestFacade::event_metrics("test_event", 10, 100, Some(histogram1));
-        let report1 = TestFacade::report(vec![event1]);
+        let histogram1 = Histogram::fake(BUCKETS, vec![5, 10], 2);
+        let event1 = EventMetrics::fake("test_event", 10, 100, Some(histogram1));
+        let report1 = Report::fake(vec![event1]);
         export_report(&report1, &mut state, &mut instruments);
 
         // Second collection with same histogram bucket counts - zero bucket deltas.
-        let histogram2 = TestFacade::histogram(BUCKETS, vec![5, 10], 2);
-        let event2 = TestFacade::event_metrics("test_event", 10, 100, Some(histogram2));
-        let report2 = TestFacade::report(vec![event2]);
+        let histogram2 = Histogram::fake(BUCKETS, vec![5, 10], 2);
+        let event2 = EventMetrics::fake("test_event", 10, 100, Some(histogram2));
+        let report2 = Report::fake(vec![event2]);
 
         // This should complete without error even when bucket deltas are zero.
         export_report(&report2, &mut state, &mut instruments);

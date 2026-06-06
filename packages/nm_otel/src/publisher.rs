@@ -230,7 +230,7 @@ impl Publisher {
     /// Runs a single export iteration using the supplied report.
     ///
     /// This bypasses [`Report::collect`] so callers can drive the export pipeline with
-    /// fabricated reports built via [`nm_impl::TestFacade::report`]. Available only under the
+    /// fabricated reports built via [`Report::fake`]. Available only under the
     /// `test-util` feature for use by benchmarks and tests.
     #[cfg(any(test, feature = "test-util"))]
     #[doc(hidden)]
@@ -258,8 +258,7 @@ impl Publisher {
 mod tests {
     use std::panic::{RefUnwindSafe, UnwindSafe};
 
-    use nm::Magnitude;
-    use nm_impl::TestFacade;
+    use nm::{EventMetrics, Histogram, Magnitude};
     use opentelemetry::KeyValue;
     use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData, ResourceMetrics};
     use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
@@ -397,9 +396,9 @@ mod tests {
         bucket_counts: Vec<u64>,
         plus_inf: u64,
     ) -> Report {
-        let histogram = TestFacade::histogram(FAKE_HISTOGRAM_MAGNITUDES, bucket_counts, plus_inf);
-        let event = TestFacade::event_metrics(FAKE_EVENT_NAME, count, sum, Some(histogram));
-        TestFacade::report(vec![event])
+        let histogram = Histogram::fake(FAKE_HISTOGRAM_MAGNITUDES, bucket_counts, plus_inf);
+        let event = EventMetrics::fake(FAKE_EVENT_NAME, count, sum, Some(histogram));
+        Report::fake(vec![event])
     }
 
     fn find_metric_value(

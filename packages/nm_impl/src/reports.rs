@@ -103,12 +103,17 @@ impl Report {
         self.events.iter()
     }
 
-    /// Internal constructor used by [`TestFacade::report`][1] to build a
-    /// `Report` from a pre-assembled list of [`EventMetrics`] without touching
-    /// the global event registry.
+    /// Constructs a `Report` from a pre-assembled list of [`EventMetrics`] without
+    /// touching the global event registry.
     ///
-    /// [1]: crate::TestFacade::report
-    pub(crate) fn from_parts(events: Vec<EventMetrics>) -> Self {
+    /// Intended for in-workspace tests and benchmarks that need to drive code paths
+    /// expecting a [`Report`] without observing real events. Gated behind the
+    /// `test-util` feature on `nm_impl` so it is never compiled into end-user
+    /// builds of [`nm`][crate]; the `nm` shell crate does not activate that feature.
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn fake(events: Vec<EventMetrics>) -> Self {
         Self {
             events: events.into_boxed_slice(),
         }
@@ -332,20 +337,38 @@ impl EventMetrics {
         self.histogram.as_ref()
     }
 
-    /// Internal constructor used by [`TestFacade::event_metrics`][1] to build
-    /// an `EventMetrics` from pre-computed values without touching the global
-    /// event registry. The caller is responsible for computing `mean`.
+    /// Constructs an `EventMetrics` from pre-computed values without touching the
+    /// global event registry. The mean is calculated as `sum / count` (rounded
+    /// down); when `count` is zero, the mean is zero.
     ///
-    /// [1]: crate::TestFacade::event_metrics
-    pub(crate) fn from_parts(
-        name: EventName,
+    /// Intended for in-workspace tests and benchmarks that need to fabricate
+    /// metric snapshots. Gated behind the `test-util` feature on `nm_impl` so it
+    /// is never compiled into end-user builds of [`nm`][crate]; the `nm` shell
+    /// crate does not activate that feature.
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn fake(
+        name: impl Into<EventName>,
         count: u64,
         sum: Magnitude,
-        mean: Magnitude,
         histogram: Option<Histogram>,
     ) -> Self {
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "NonZero protects against division by zero"
+        )]
+        #[expect(
+            clippy::integer_division,
+            reason = "we accept that we lose the remainder - 100% precision not required"
+        )]
+        let mean = Magnitude::try_from(count)
+            .ok()
+            .and_then(NonZero::new)
+            .map_or(0, |count| sum / count.get());
+
         Self {
-            name,
+            name: name.into(),
             count,
             sum,
             mean,
@@ -455,11 +478,21 @@ impl Histogram {
         self.magnitudes().zip(self.counts())
     }
 
-    /// Internal constructor used by [`TestFacade::histogram`][1] to build a
-    /// `Histogram` from raw parts without touching the global event registry.
+    /// Constructs a `Histogram` from raw parts without touching the global event
+    /// registry.
     ///
-    /// [1]: crate::TestFacade::histogram
-    pub(crate) fn from_parts(
+    /// `magnitudes` must be sorted in ascending order. `counts` must have the
+    /// same length as `magnitudes`. `plus_infinity_count` is the count for the
+    /// synthetic `Magnitude::MAX` bucket.
+    ///
+    /// Intended for in-workspace tests and benchmarks. Gated behind the
+    /// `test-util` feature on `nm_impl` so it is never compiled into end-user
+    /// builds of [`nm`][crate]; the `nm` shell crate does not activate that
+    /// feature.
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn fake(
         magnitudes: &'static [Magnitude],
         counts: Vec<u64>,
         plus_infinity_count: u64,
@@ -648,7 +681,6 @@ mod tests {
     use static_assertions::assert_impl_all;
 
     use super::*;
-    use crate::TestFacade;
 
     assert_impl_all!(Report: UnwindSafe, RefUnwindSafe);
     assert_impl_all!(EventMetrics: UnwindSafe, RefUnwindSafe);
@@ -1195,9 +1227,9 @@ mod tests {
     }
 
     #[test]
-    fn facade_event_metrics_calculates_mean_correctly() {
-        // TestFacade::event_metrics correctly calculates mean as sum / count.
-        let metrics = TestFacade::event_metrics("test_event", 10, 100, None);
+    fn event_metrics_fake_calculates_mean_correctly() {
+        // EventMetrics::fake correctly calculates mean as sum / count.
+        let metrics = EventMetrics::fake("test_event", 10, 100, None);
 
         assert_eq!(metrics.name(), "test_event");
         assert_eq!(metrics.count(), 10);
@@ -1207,16 +1239,16 @@ mod tests {
     }
 
     #[test]
-    fn facade_event_metrics_calculates_mean_with_different_values() {
-        let metrics = TestFacade::event_metrics("test_event", 25, 500, None);
+    fn event_metrics_fake_calculates_mean_with_different_values() {
+        let metrics = EventMetrics::fake("test_event", 25, 500, None);
 
         assert_eq!(metrics.mean(), 20); // 500 / 25 = 20
     }
 
     #[test]
-    fn facade_event_metrics_mean_zero_when_count_zero() {
+    fn event_metrics_fake_mean_zero_when_count_zero() {
         // When count is 0, mean is 0 (not NaN or panic).
-        let metrics = TestFacade::event_metrics("test_event", 0, 100, None);
+        let metrics = EventMetrics::fake("test_event", 0, 100, None);
 
         assert_eq!(metrics.count(), 0);
         assert_eq!(metrics.sum(), 100);
@@ -1224,12 +1256,12 @@ mod tests {
     }
 
     #[test]
-    fn facade_event_metrics_mean_handles_integer_division() {
+    fn event_metrics_fake_mean_handles_integer_division() {
         // Integer division correctly truncates the remainder.
         // This test specifically catches mutations that replace / with % or *.
         // - If / were replaced with %, result would be 1 (10 % 3 = 1)
         // - If / were replaced with *, result would be 30 (10 * 3 = 30)
-        let metrics = TestFacade::event_metrics("test_event", 3, 10, None);
+        let metrics = EventMetrics::fake("test_event", 3, 10, None);
 
         assert_eq!(metrics.mean(), 3); // 10 / 3 = 3 (remainder discarded)
     }

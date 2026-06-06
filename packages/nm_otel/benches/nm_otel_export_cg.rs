@@ -6,8 +6,8 @@
 //! per bucket and would be invisible under Criterion noise on a shared machine.
 //!
 //! All scenarios drive [`Publisher::run_one_iteration_with_report`] on a fabricated
-//! [`Report`] (built via [`nm_impl::TestFacade::report`] + [`nm_impl::TestFacade::histogram`] +
-//! [`nm_impl::TestFacade::event_metrics`]) so the measurement is decoupled from the global nm
+//! [`Report`] (built via [`Report::fake`] + [`Histogram::fake`] +
+//! [`EventMetrics::fake`]) so the measurement is decoupled from the global nm
 //! registry and reproducible run-to-run.
 //!
 //! Scenarios:
@@ -50,8 +50,7 @@ mod linux {
     use std::hint::black_box;
 
     use gungraun::prelude::*;
-    use nm::{Magnitude, Report};
-    use nm_impl::TestFacade;
+    use nm::{EventMetrics, Histogram, Magnitude, Report};
     use nm_otel::Publisher;
     use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
     use tick::Clock;
@@ -128,15 +127,15 @@ mod linux {
     }
 
     fn make_report(buckets: &'static [Magnitude], per_bucket: u64, plus_inf: u64) -> Report {
-        let histogram = TestFacade::histogram(buckets, vec![per_bucket; buckets.len()], plus_inf);
+        let histogram = Histogram::fake(buckets, vec![per_bucket; buckets.len()], plus_inf);
         // `count` and `sum` are not on the bucket hot path; pick values that match the
         // bucket sequence so deltas behave intuitively.
         let total_buckets = buckets.len().saturating_add(1);
         let total_buckets_u64 = u64::try_from(total_buckets).unwrap_or(u64::MAX);
         let count = per_bucket.saturating_mul(total_buckets_u64);
         let sum: Magnitude = 0;
-        let event = TestFacade::event_metrics(EVENT_NAME, count, sum, Some(histogram));
-        TestFacade::report(vec![event])
+        let event = EventMetrics::fake(EVENT_NAME, count, sum, Some(histogram));
+        Report::fake(vec![event])
     }
 
     /// Builds a publisher with one warmup export already applied.

@@ -25,7 +25,6 @@ mod pusher;
 mod registries;
 mod reports;
 mod sealed;
-mod test_facade;
 
 pub(crate) use constants::*;
 pub use data_types::*;
@@ -38,4 +37,3 @@ pub use pusher::*;
 pub(crate) use registries::*;
 pub use reports::*;
 pub(crate) use sealed::*;
-pub use test_facade::*;

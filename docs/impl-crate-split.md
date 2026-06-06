@@ -16,12 +16,13 @@ that ship benchmarks or integration tests as separate compilation units:
 - An external bench/test in a *different* package (e.g. `foo_otel` benchmarking the
   export path with fabricated reports) cannot reach `pub(crate)` items either.
 
-The historical workaround was the `test-util` Cargo feature: gate a public-but-internal
-constructor like `Report::fake` behind `#[cfg(any(test, feature = "test-util"))]`, then
-add `test-util` to every dev-dependency that needs it. This works but has real costs:
+The historical workaround was the `test-util` Cargo feature on the **public** crate:
+gate a public-but-internal constructor like `Report::fake` behind
+`#[cfg(any(test, feature = "test-util"))]` on `foo`, then add `test-util` to every
+dev-dependency that needs it. This works but has real costs:
 
-- The feature flag becomes part of the public API surface. Users see it on docs.rs
-  and may reasonably depend on it. Removing the flag is a breaking change.
+- The feature flag becomes part of the public API surface of `foo`. Users see it
+  on docs.rs and may reasonably depend on it. Removing the flag is a breaking change.
 - Documentation conditionally renders items based on enabled features, so the rendered
   API drifts depending on the build configuration.
 - Self-dev-dependencies (`foo = { path = ".", features = ["test-util"] }`) are an odd
@@ -30,6 +31,15 @@ add `test-util` to every dev-dependency that needs it. This works but has real c
 - Every public `fake`/`new_for_test` constructor must carry the `#[cfg(...)]` gate,
   the `#[doc(hidden)]` attribute, and a comment explaining its existence. This noise
   spreads through the implementation.
+
+Moving the `test-util` feature down to `foo_impl` (which is `[lib] doc = false`,
+`#![doc(hidden)]`, and documented as "do not depend on this directly") sidesteps
+the first two costs entirely: the feature is invisible to docs.rs of `foo`, never
+on `foo`'s public API surface, and never activated by `foo` itself. The remaining
+two costs — self-dev-dep wiring and per-item `#[cfg]` noise — go away because items
+can be plain `pub` in `foo_impl` and reached by external benches/tests directly.
+See "Test-only fabrication constructors" below for how this applies to the narrow
+case of fabrication helpers that still benefit from a feature gate.
 
 ## The split
 
@@ -48,9 +58,12 @@ The visibility model becomes:
   (no wildcards). Anything not on that list is not part of `foo`'s public API even
   though it is `pub` in `foo_impl`.
 - The implementation can use plain `pub` for things benches/tests need to reach
-  (no `#[cfg]` gates, no `#[doc(hidden)]` decorators, no feature flags).
+  outside the crate boundary (no `#[cfg]` gates, no `#[doc(hidden)]` decorators,
+  no feature flags). This is the central simplification the split unlocks.
 - Items that genuinely only need to be visible within the impl crate stay
   `pub(crate)` as usual.
+- The narrow exception to "no feature flags" is **test-only fabrication
+  constructors**: see "Test-only fabrication constructors" below.
 
 Concretely, `foo_impl` becomes a "private back door" that is *technically* public but
 documented as off-limits via:
@@ -94,8 +107,8 @@ artifact is the deciding factor, not what API surface it happens to need today.
 | --------------------------------- | ---------- | --------- |
 | `src/**` (implementation)         | `foo_impl` | The whole point of the split. |
 | Unit tests (`#[cfg(test)] mod tests` inside `src/**`) | `foo_impl` | They follow the code they test. |
-| `benches/**`                      | `foo_impl` | Benches are a maintainer tool; whoever runs them already knows the impl crate exists. Hosting them in `foo_impl` means a future bench can reach for `TestFacade` or other internal `pub` items without having to be relocated first. |
-| `tests/**` (integration tests)    | `foo_impl` | Same reasoning as benches: they are for maintainers, and proximity to `nm_impl` internals is occasionally needed. |
+| `benches/**`                      | `foo_impl` | Benches are a maintainer tool; whoever runs them already knows the impl crate exists. Hosting them in `foo_impl` means a future bench can reach for `test-util` fabrication constructors or other internal `pub` items without having to be relocated first. |
+| `tests/**` (integration tests)    | `foo_impl` | Same reasoning as benches: they are for maintainers, and proximity to `foo_impl` internals is occasionally needed. |
 | `examples/**` (user-facing)       | `foo`      | Examples are a form of end-user documentation. They must compile against the same public API a user gets from `cargo add foo`. Keeping them in the public crate is what enforces that they cannot accidentally reach for internals. |
 | Maintainer-only demo/dev binaries | `foo_impl/examples/` (optional) | If you do want a runnable internal demo (e.g. a load-generator, a profiling harness, a "wire up the internals to see what they do" app), put it under `foo_impl/examples/`. Treat it explicitly as "examples and dev apps for maintainers", a different category from end-user examples. |
 | Re-export smoke test              | `foo`      | The one and only `tests/` file in `foo`. It exists specifically to assert that the explicit re-export list in `foo/src/lib.rs` keeps reaching every advertised item. See step 10 below. |
@@ -107,58 +120,98 @@ Two principles fall out of the table:
    documentation, so they stay with the users. Benches and integration tests
    are maintainer tooling, so they stay with the maintainers.
 2. **Benches and integration tests living in `foo_impl` should still prefer
-   the public API.** Reach for `TestFacade` or other `foo_impl`-internal
-   items only when there is a specific reason — fabricating internal state
-   for a contract that the public API cannot express, or measuring a hot
-   path that the public API gates behind a slower entry point. When a bench
-   uses only `use foo::Event;` it is still measuring what the user pays;
-   the impl crate is just a convenient host.
+   the public API.** Reach for `test-util` fabrication constructors or other
+   `foo_impl`-internal items only when there is a specific reason —
+   fabricating internal state for a contract that the public API cannot
+   express, or measuring a hot path that the public API gates behind a slower
+   entry point. When a bench uses only `use foo::Event;` it is still measuring
+   what the user pays; the impl crate is just a convenient host.
 
-## The `TestFacade` pattern
+## Test-only fabrication constructors
 
-When the impl crate needs to expose constructors specifically for test/bench
-fabrication (replacing the old `Report::fake`, `EventMetrics::fake`, `Histogram::fake`
-constructors), gather them on a single `TestFacade` type:
+Some internal items only make sense in a test or benchmark context: constructors
+that fabricate data structures bypassing the real-world entry path (e.g. building
+a `Report` from a hand-assembled `Vec<EventMetrics>` without observing real
+events). Two competing concerns apply:
+
+1. They must be reachable from external benches/tests in other workspace crates,
+   which would otherwise force them to be `pub` in `foo_impl`.
+2. They are pure dead weight in production builds and should not bloat the
+   binary that real users ship.
+
+The convention is to put them directly on the type they fabricate, gated behind
+a `test-util` Cargo feature on `foo_impl`:
 
 ```rust
-// in foo_impl/src/test_facade.rs
+// in foo_impl/src/reports.rs
 
-#[derive(Debug)]
-#[non_exhaustive]
-pub struct TestFacade;
-
-impl TestFacade {
+impl Report {
+    /// Constructs a `Report` from pre-assembled parts without touching the
+    /// global event registry.
+    ///
+    /// Intended for in-workspace tests and benchmarks. Gated behind the
+    /// `test-util` feature on `foo_impl` so it is never compiled into end-user
+    /// builds of `foo`; the `foo` shell crate does not activate that feature.
+    #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
     #[must_use]
-    pub fn report(events: Vec<EventMetrics>) -> Report {
-        Report::from_parts(events)
+    pub fn fake(events: Vec<EventMetrics>) -> Self {
+        Self {
+            events: events.into_boxed_slice(),
+        }
     }
-
-    #[must_use]
-    pub fn event_metrics(/* ... */) -> EventMetrics { /* ... */ }
-
-    #[must_use]
-    pub fn histogram(/* ... */) -> Histogram { /* ... */ }
 }
 ```
 
-Conventions for `TestFacade`:
-
-- Lives in `foo_impl::test_facade` and is re-exported at the impl-crate root.
-- **Not** re-exported from `foo`. The whole point is that it stays out of the public API.
-- Use `#[non_exhaustive]` so adding a new associated function is not a breaking change.
-- Real "from parts" constructors stay `pub(crate)` on their owning types; `TestFacade`
-  is the only `pub` entry point. This keeps the type's own public API surface clean
-  and confines fabrication to one well-known location.
-
-Call sites become:
-
-```rust
-use foo_impl::TestFacade;
-
-let report = TestFacade::report(vec![TestFacade::event_metrics(...)]);
+```toml
+# foo_impl/Cargo.toml
+[features]
+test-util = []
 ```
 
-The `foo_impl` dependency is declared as a dev-dependency on the consumer crate.
+Why this is safe to call a feature here even though the broader pattern avoids
+them:
+
+- `foo_impl` is `[lib] doc = false`, `#![doc(hidden)]`, and documented as
+  "do not depend on this directly". The feature flag never appears on docs.rs
+  for `foo_impl` because `foo_impl` is not rendered.
+- `foo`'s `Cargo.toml` declares `foo_impl = { workspace = true }` without
+  activating the feature. End users running `cargo add foo` therefore never
+  get `fake` constructors compiled into their build.
+- In-workspace consumers (`foo_otel`, etc.) activate the feature in their
+  dev-dependencies: `foo_impl = { path = "../foo_impl", features = ["test-util"] }`.
+  Cargo's feature unification then makes `Report::fake` available across the
+  workspace's test/bench build graph.
+- The `cfg(any(test, feature = "test-util"))` form means `foo_impl`'s own
+  unit tests (`#[cfg(test)] mod tests`) automatically see the constructors
+  without anyone needing to opt the workspace into the feature.
+
+Call sites become natural and symmetric with the rest of the public API:
+
+```rust
+use foo::{EventMetrics, Histogram, Report};
+
+let report = Report::fake(vec![
+    EventMetrics::fake("event_a", 10, 100, None),
+    EventMetrics::fake("event_b", 20, 200, Some(Histogram::fake(...))),
+]);
+```
+
+Note that the call sites name the types through `foo` (the public crate), not
+through `foo_impl`. The `fake` constructors are inherent methods on the type,
+so they are reachable via any path that names the type — and `foo`'s re-exports
+expose the type, even though they don't advertise the `fake` constructor. The
+`foo_impl` dev-dependency is needed only as a Cargo manifest entry to activate
+the `test-util` feature; no `use foo_impl::*;` import is required in test code.
+
+### When to skip the feature flag
+
+The feature flag is the recommended default because it keeps fabrication code
+out of release binaries. If the fabrication helpers are trivial and the
+"out of release builds" purity isn't worth the extra Cargo manifest line for
+each consumer, plain `#[doc(hidden)] pub fn fake(...)` (with no `#[cfg]`) is
+also acceptable. The impl-crate-split convention is the primary isolation
+mechanism in either case; the feature flag is a secondary belt-and-suspenders.
 
 ## How to do the split
 
@@ -192,12 +245,18 @@ The `foo_impl` dependency is declared as a dev-dependency on the consumer crate.
    - Declare modules and re-export items just as the original `foo` lib.rs did.
 
 7. Convert any `#[cfg(any(test, feature = "test-util"))] pub fn fake(...)`
-   constructors to `pub(crate) fn from_parts(...)` constructors. Add a
-   `TestFacade` type (see above) that wraps them with `pub` associated functions.
+   constructors that already existed in `foo` so they live in `foo_impl` instead.
+   Add a `test-util = []` feature to `foo_impl/Cargo.toml`. Keep the
+   `cfg(any(test, feature = "test-util"))` gate, the `#[doc(hidden)]` attribute,
+   and the `pub fn fake(...)` signature directly on the type. See "Test-only
+   fabrication constructors" above for the full rationale.
 
-8. Update consumers (in-workspace dev-dependencies that were using `test-util`)
-   to declare `foo_impl = { path = "../foo_impl" }` as a dev-dependency and to
-   call `TestFacade::*` instead of `Type::fake(...)`.
+8. Update consumers (in-workspace dev-dependencies that were using `test-util`
+   on `foo`) to declare `foo_impl = { path = "../foo_impl", features = ["test-util"] }`
+   as a dev-dependency. Call sites continue to name types through `foo`
+   (e.g. `use foo::Report; Report::fake(...)`); no `use foo_impl::*;` import
+   is needed because `fake` is an inherent method on the type that `foo`
+   re-exports.
 
 9. Add `foo` itself as a dev-dependency of `foo_impl` so doctests written
    from the user's perspective (`use foo::Event;`) compile in `cargo test --doc
@@ -231,8 +290,13 @@ boundary. The two patterns can coexist within the same project:
 - `packages/nm/Cargo.toml` — thin shell manifest
 - `packages/nm/src/lib.rs` — preserved crate docs + explicit re-export list
 - `packages/nm/tests/nm_reexports.rs` — re-export smoke test
-- `packages/nm_impl/Cargo.toml` — impl manifest with `[lib] doc = false` and
-  the `nm` dev-dep for the doctest cycle
+- `packages/nm_impl/Cargo.toml` — impl manifest with `[lib] doc = false`, the
+  `test-util` feature for fabrication constructors, and the `nm` dev-dep for
+  the doctest cycle
 - `packages/nm_impl/src/lib.rs` — `#![doc(hidden)]` root
-- `packages/nm_impl/src/test_facade.rs` — `TestFacade` pattern
+- `packages/nm_impl/src/reports.rs` — `#[cfg(any(test, feature = "test-util"))]
+  #[doc(hidden)] pub fn fake(...)` constructors on `Report`, `EventMetrics`,
+  and `Histogram`
+- `packages/nm_otel/Cargo.toml` — example consumer dev-dep:
+  `nm_impl = { path = "../nm_impl", features = ["test-util"] }`
 - `packages/nm_impl/README.md` — "do not depend on this directly" notice

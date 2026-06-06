@@ -1,7 +1,7 @@
 //! Benchmarks for the nm-to-OpenTelemetry export path.
 //!
 //! Drives [`Publisher::run_one_iteration_with_report`] with a synthetic [`Report`] built
-//! from [`nm_impl::TestFacade::report`] so the steady-state export cost can be measured
+//! from [`Report::fake`] so the steady-state export cost can be measured
 //! without depending on the global `nm` registry. Memory allocations are tracked via
 //! `alloc_tracker` so changes in the export pipeline's allocation profile are visible
 //! at a glance.
@@ -14,8 +14,7 @@ use alloc_tracker::{Allocator, Session as AllocSession};
 use criterion::{Criterion, criterion_group, criterion_main};
 use many_cpus::SystemHardware;
 use new_zealand::nz;
-use nm::{Magnitude, Report};
-use nm_impl::TestFacade;
+use nm::{EventMetrics, Histogram, Magnitude, Report};
 use nm_otel::Publisher;
 use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
 use par_bench::{ResourceUsageExt, Run, ThreadPool};
@@ -88,13 +87,13 @@ fn make_fake_report(event_count: usize) -> Report {
     let events = (0..event_count)
         .map(|i| {
             let name = format!("bench_event_{i}");
-            let histogram = TestFacade::histogram(
+            let histogram = Histogram::fake(
                 HISTOGRAM_BUCKETS,
                 HISTOGRAM_NON_CUMULATIVE.to_vec(),
                 HISTOGRAM_PLUS_INFINITY,
             );
-            TestFacade::event_metrics(name, HISTOGRAM_COUNT, HISTOGRAM_SUM, Some(histogram))
+            EventMetrics::fake(name, HISTOGRAM_COUNT, HISTOGRAM_SUM, Some(histogram))
         })
         .collect();
-    TestFacade::report(events)
+    Report::fake(events)
 }
