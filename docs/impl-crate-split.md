@@ -77,6 +77,66 @@ documented as off-limits via:
 The fact that `foo_impl` is published is mechanical: Cargo cannot depend on an
 unpublished crate from a published one, and we want `foo` to actually publish.
 
+## Versioning: `foo` and `foo_impl` are released in lockstep
+
+`foo` and `foo_impl` are logically the same package. We do not maintain a SemVer
+boundary between them, and we do not want downstream consumers to ever end up
+with a mismatched pair (e.g. `foo 1.5.0` paired with `foo_impl 1.4.7`). Two
+mechanisms enforce lockstep versioning together:
+
+1. **`foo` exact-pins `foo_impl` in its `Cargo.toml`**, using the `=X.Y.Z`
+   constraint form:
+
+   ```toml
+   # foo/Cargo.toml
+   [dependencies]
+   # Exact-version pin: foo and foo_impl are logically the same package split
+   # into two crates for cargotechnical reasons. release-plz `version_group`
+   # keeps them in lockstep at release time; the `=` pin enforces at the Cargo
+   # manifest level that downstream consumers never end up with a mismatched
+   # pair.
+   foo_impl = { version = "=1.5.0", path = "../foo_impl", default-features = false }
+   ```
+
+   Note that `foo` declares the `foo_impl` dependency directly (not via
+   `workspace = true`). This is a deliberate deviation from the workspace-wide
+   convention of inheriting deps from `[workspace.dependencies]`: the
+   tight-coupling relationship is exactly what we want the reader of
+   `foo/Cargo.toml` to see at a glance, and inheriting via `workspace = true`
+   would hide it.
+
+2. **`release-plz.toml` puts both packages in the same `version_group`**, which
+   makes release-plz bump them in lockstep on every release cycle:
+
+   ```toml
+   # release-plz.toml
+   [[package]]
+   name = "foo"
+   version_group = "foo"
+
+   [[package]]
+   name = "foo_impl"
+   version_group = "foo"
+   ```
+
+   `version_group` is a release-plz feature, not a Cargo feature. It only acts
+   at release time. The `=` pin in `foo/Cargo.toml` is the Cargo-level
+   complement: even if a future change to `release-plz.toml` accidentally
+   dropped the group, the published `foo` would still refuse to install with a
+   different `foo_impl` version.
+
+When a release happens, release-plz updates the `=X.Y.Z` constraint in
+`foo/Cargo.toml` to point at the new `foo_impl` version automatically — there
+is no manual maintenance step. Bumping either package out of lockstep would
+require a deliberate manual edit and would be caught at the next release-plz
+check.
+
+The same lockstep treatment is **not** appropriate for ordinary "I depend on
+crate X" relationships, where a SemVer range gives Cargo room to satisfy
+multiple consumers. It is appropriate here precisely because `foo_impl` is not
+a real third-party dependency — it is `foo`'s own implementation under a
+different crate name.
+
 ## When to apply this pattern
 
 Apply this split when at least one of these holds:
@@ -235,34 +295,60 @@ mechanism in either case; the feature flag is a secondary belt-and-suspenders.
      that should be part of the public API. **Do not** use a wildcard re-export
      here — the explicit list is the contract.
 
-5. Replace `packages/foo/Cargo.toml` with a thin manifest that depends only on
-   `foo_impl = { workspace = true }` and any dev-dependencies needed for re-export
-   smoke tests.
+5. Replace `packages/foo/Cargo.toml` with a thin manifest. Declare `foo_impl`
+   as a direct path dependency with an exact-version pin and any dev-deps
+   needed for re-export smoke tests:
 
-6. Inside `foo_impl/src/lib.rs`:
+   ```toml
+   [dependencies]
+   foo_impl = { version = "=X.Y.Z", path = "../foo_impl", default-features = false }
+   ```
+
+   Do **not** inherit `foo_impl` from `[workspace.dependencies]` via
+   `workspace = true`. The whole point of declaring it here is to make the
+   tight coupling and the exact-version pin visible at the consumption site.
+   See "Versioning" above for the rationale.
+
+6. Add `version_group` entries for both packages to `release-plz.toml`:
+
+   ```toml
+   [[package]]
+   name = "foo"
+   version_group = "foo"
+
+   [[package]]
+   name = "foo_impl"
+   version_group = "foo"
+   ```
+
+   This makes release-plz bump both packages to the same version on every
+   release cycle, and update the `=X.Y.Z` pin in `foo/Cargo.toml`
+   automatically so it always points at the just-released `foo_impl`.
+
+7. Inside `foo_impl/src/lib.rs`:
    - Put `#![doc(hidden)]` at the top.
    - Add a brief crate-level doc comment that points to `foo`.
    - Declare modules and re-export items just as the original `foo` lib.rs did.
 
-7. Convert any `#[cfg(any(test, feature = "test-util"))] pub fn fake(...)`
+8. Convert any `#[cfg(any(test, feature = "test-util"))] pub fn fake(...)`
    constructors that already existed in `foo` so they live in `foo_impl` instead.
    Add a `test-util = []` feature to `foo_impl/Cargo.toml`. Keep the
    `cfg(any(test, feature = "test-util"))` gate, the `#[doc(hidden)]` attribute,
    and the `pub fn fake(...)` signature directly on the type. See "Test-only
    fabrication constructors" above for the full rationale.
 
-8. Update consumers (in-workspace dev-dependencies that were using `test-util`
+9. Update consumers (in-workspace dev-dependencies that were using `test-util`
    on `foo`) to declare `foo_impl = { path = "../foo_impl", features = ["test-util"] }`
    as a dev-dependency. Call sites continue to name types through `foo`
    (e.g. `use foo::Report; Report::fake(...)`); no `use foo_impl::*;` import
    is needed because `fake` is an inherent method on the type that `foo`
    re-exports.
 
-9. Add `foo` itself as a dev-dependency of `foo_impl` so doctests written
-   from the user's perspective (`use foo::Event;`) compile in `cargo test --doc
-   -p foo_impl`. This is an allowed dev-dependency-only cycle.
+10. Add `foo` itself as a dev-dependency of `foo_impl` so doctests written
+    from the user's perspective (`use foo::Event;`) compile in `cargo test --doc
+    -p foo_impl`. This is an allowed dev-dependency-only cycle.
 
-10. Add a small re-export smoke test in `packages/foo/tests/foo_reexports.rs`
+11. Add a small re-export smoke test in `packages/foo/tests/foo_reexports.rs`
     that pulls every re-exported item by name and exercises just enough of it
     to confirm the contract. This catches regressions if a re-export is
     accidentally dropped from the list in step 4.
@@ -287,7 +373,9 @@ boundary. The two patterns can coexist within the same project:
 
 `packages/nm` / `packages/nm_impl` is the canonical example. Concrete files to study:
 
-- `packages/nm/Cargo.toml` — thin shell manifest
+- `packages/nm/Cargo.toml` — thin shell manifest with the `=0.1.0` exact-version
+  pin on `nm_impl` declared as a direct path dependency (not via
+  `workspace = true`)
 - `packages/nm/src/lib.rs` — preserved crate docs + explicit re-export list
 - `packages/nm/tests/nm_reexports.rs` — re-export smoke test
 - `packages/nm_impl/Cargo.toml` — impl manifest with `[lib] doc = false`, the
@@ -300,3 +388,5 @@ boundary. The two patterns can coexist within the same project:
 - `packages/nm_otel/Cargo.toml` — example consumer dev-dep:
   `nm_impl = { path = "../nm_impl", features = ["test-util"] }`
 - `packages/nm_impl/README.md` — "do not depend on this directly" notice
+- `release-plz.toml` — `version_group = "nm"` entries for `nm` and `nm_impl`
+  that keep the two packages bumped in lockstep on every release

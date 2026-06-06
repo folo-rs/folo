@@ -14,7 +14,14 @@ rust-version.workspace = true
 all-features = true
 
 [dependencies]
-nm_impl = { workspace = true }
+# Exact-version pin on `nm_impl`: `nm` and `nm_impl` are logically the same
+# package split into two crates for cargotechnical reasons (see
+# `docs/impl-crate-split.md`). We do not maintain a SemVer boundary between
+# them. release-plz `version_group = "nm"` keeps their versions in lockstep
+# at release time; the `=` pin enforces at the Cargo manifest level that
+# downstream consumers never end up with a mismatched pair, and tells
+# `cargo update` that there is no acceptable alternate version.
+nm_impl = { version = "=0.1.0", path = "../nm_impl", default-features = false }
 
 [dev-dependencies]
 static_assertions = { workspace = true }
