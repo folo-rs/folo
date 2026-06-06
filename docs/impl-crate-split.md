@@ -369,9 +369,13 @@ boundary. The two patterns can coexist within the same project:
 - Use the `_impl` split for items that need to be visible to **external**
   benchmarks, tests, or other in-workspace crates.
 
-## Canonical example
+## Canonical examples
 
-`packages/nm` / `packages/nm_impl` is the canonical example. Concrete files to study:
+The pattern has been applied to two crate pairs in this workspace.
+
+### `nm` / `nm_impl`
+
+The original worked example. Concrete files to study:
 
 - `packages/nm/Cargo.toml` — thin shell manifest with the `=0.1.0` exact-version
   pin on `nm_impl` declared as a direct path dependency (not via
@@ -385,8 +389,39 @@ boundary. The two patterns can coexist within the same project:
 - `packages/nm_impl/src/reports.rs` — `#[cfg(any(test, feature = "test-util"))]
   #[doc(hidden)] pub fn fake(...)` constructors on `Report`, `EventMetrics`,
   and `Histogram`
-- `packages/nm_otel/Cargo.toml` — example consumer dev-dep:
-  `nm_impl = { path = "../nm_impl", features = ["test-util"] }`
 - `packages/nm_impl/README.md` — "do not depend on this directly" notice
 - `release-plz.toml` — `version_group = "nm"` entries for `nm` and `nm_impl`
   that keep the two packages bumped in lockstep on every release
+
+### `nm_otel` / `nm_otel_impl`
+
+The second worked example. Notable for showing what the pattern looks like
+without any `test-util` feature on the impl crate: the internal items that
+benches and tests need (`EventState`, `EventState::histogram_deltas`,
+`Publisher::run_one_iteration_with_report`) are plain `pub` in `nm_otel_impl`
+because they are either real internal collaborators of the production code
+path (not fabrication helpers) or trivial wrappers where the
+"keep fabrication out of release binaries" purity does not justify the gate.
+See "When to skip the feature flag" above.
+
+Concrete files to study:
+
+- `packages/nm_otel/Cargo.toml` — thin shell manifest with the `=0.1.0`
+  exact-version pin on `nm_otel_impl` declared as a direct path dependency.
+  Activates `nm_impl`'s `test-util` feature only via dev-deps that exercise
+  the re-export smoke test; the `nm_otel` library itself does not.
+- `packages/nm_otel/src/lib.rs` — preserved user-facing crate docs +
+  explicit `pub use nm_otel_impl::{Publisher, PublisherBuilder};`. No
+  `__private` module.
+- `packages/nm_otel/tests/nm_otel_reexports.rs` — re-export smoke test
+- `packages/nm_otel_impl/Cargo.toml` — impl manifest with `[lib] doc = false`,
+  the `nm_otel` dev-dep for the doctest cycle, and the `nm_impl` dev-dep with
+  `features = ["test-util"]` so the impl-hosted benches can fabricate input
+  reports via `Report::fake`.
+- `packages/nm_otel_impl/src/lib.rs` — `#![doc(hidden)]` root that
+  re-exports the public-API subset for the shell crate plus `EventState`
+  for the alloc-tracking test
+- `packages/nm_otel_impl/README.md` — "do not depend on this directly" notice
+- `release-plz.toml` — `version_group = "nm_otel"` entries for `nm_otel`
+  and `nm_otel_impl` that keep the two packages bumped in lockstep on
+  every release

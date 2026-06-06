@@ -33,7 +33,7 @@
 //!
 //! ## Exported metrics
 //!
-//! Each [`nm::Event`] is exported as one or more OpenTelemetry metrics:
+//! Each [`nm::Event`][nm-event] is exported as one or more OpenTelemetry metrics:
 //!
 //! | nm data | OpenTelemetry type | Metric name |
 //! |---------|--------------------|--------------|
@@ -64,25 +64,25 @@
 //!
 //! - `interval()` - how often to collect and export metrics (default: 60 seconds)
 //! - `meter_name()` - OpenTelemetry meter name (default: "nm")
-//! - `provider()` - any [`MeterProvider`][opentelemetry::metrics::MeterProvider] implementation
+//! - `provider()` - any [`MeterProvider`][otel-meter-provider] implementation
 //!
 //! ## Requirements
 //!
 //! The publisher runs as an infinite async task that should be spawned
-//! in your application's async runtime. Pass an appropriate [`tick::Clock`]
+//! in your application's async runtime. Pass an appropriate [`tick::Clock`][tick-clock]
 //! to the builder for your runtime (e.g., `Clock::new_tokio()` for Tokio).
+//!
+//! # Implementation
+//!
+//! The implementation lives in the [`nm_otel_impl`] crate. `nm_otel_impl` is published only
+//! to allow `nm_otel` to depend on it; users should not depend on `nm_otel_impl` directly.
+//! Items not re-exported here are internal to the workspace and may change at any time,
+//! including in patch releases.
+//!
+//! [`nm`]: https://crates.io/crates/nm
+//! [nm-event]: https://docs.rs/nm/latest/nm/struct.Event.html
+//! [otel-meter-provider]: https://docs.rs/opentelemetry/latest/opentelemetry/metrics/trait.MeterProvider.html
+//! [tick-clock]: https://docs.rs/tick/latest/tick/struct.Clock.html
+//! [`nm_otel_impl`]: https://crates.io/crates/nm_otel_impl
 
-mod mapping;
-mod publisher;
-mod state;
-
-pub use publisher::*;
-
-/// Internal types exposed for benchmarks and tests.
-///
-/// Not part of the public API; do not depend on these from production code.
-#[doc(hidden)]
-#[cfg(any(test, feature = "test-util"))]
-pub mod __private {
-    pub use crate::state::EventState;
-}
+pub use nm_otel_impl::{Publisher, PublisherBuilder};

@@ -13,48 +13,28 @@ rust-version.workspace = true
 [package.metadata.docs.rs]
 all-features = true
 
-[features]
-default = []
-# Exposes internal types via `nm_otel::__private` for benchmarks and other
-# in-workspace tests. Only use this in dev-dependencies.
-test-util = []
-
 [dependencies]
-foldhash = { workspace = true }
-futures = { workspace = true }
-hashbrown = { workspace = true, features = ["default-hasher", "inline-more"] }
-nm = { workspace = true }
-opentelemetry = { workspace = true, features = ["metrics"] }
-tick = { workspace = true }
+# Exact-version pin on `nm_otel_impl`: `nm_otel` and `nm_otel_impl` are logically
+# the same package split into two crates for cargotechnical reasons (see
+# `docs/impl-crate-split.md`). We do not maintain a SemVer boundary between
+# them. release-plz `version_group = "nm_otel"` keeps their versions in lockstep
+# at release time; the `=` pin enforces at the Cargo manifest level that
+# downstream consumers never end up with a mismatched pair, and tells
+# `cargo update` that there is no acceptable alternate version.
+nm_otel_impl = { version = "=0.1.0", path = "../nm_otel_impl", default-features = false }
 
 [dev-dependencies]
-alloc_tracker = { path = "../alloc_tracker" }
-criterion = { workspace = true }
-many_cpus = { path = "../many_cpus" }
-mutants = { workspace = true }
-new_zealand = { path = "../new_zealand" }
+# Needed so the re-export smoke test can exercise the public API end-to-end with
+# a real OpenTelemetry meter provider.
 nm = { path = "../nm" }
-nm_impl = { path = "../nm_impl", features = ["test-util"] }
-nm_otel = { path = ".", features = ["test-util"] }
+# The user-facing console example depends on these. They are not required by the
+# library itself.
+opentelemetry = { workspace = true, features = ["metrics"] }
 opentelemetry-stdout = { workspace = true, features = ["metrics"] }
 opentelemetry_sdk = { workspace = true, features = ["metrics", "testing"] }
-par_bench = { path = "../par_bench", features = ["alloc_tracker", "criterion"] }
 static_assertions = { workspace = true }
-testing = { path = "../testing" }
 tick = { workspace = true, features = ["tokio", "test-util"] }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }
-
-# Gungraun drives Valgrind-based Callgrind benchmarks; Linux-only.
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-gungraun = { workspace = true, features = ["default"] }
-
-[[bench]]
-name = "nm_otel_export"
-harness = false
-
-[[bench]]
-name = "nm_otel_export_cg"
-harness = false
 
 [lints]
 workspace = true

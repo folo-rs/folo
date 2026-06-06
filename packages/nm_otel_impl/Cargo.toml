@@ -1,0 +1,62 @@
+[package]
+name = "nm_otel_impl"
+description = "Implementation crate for `nm_otel` - do not reference directly"
+publish = true
+version = "0.1.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lib]
+# nm_otel_impl exists only to host the implementation of `nm_otel` and to expose
+# internal items to in-workspace tests/benches; user-facing documentation lives in
+# `nm_otel`.
+doc = false
+
+[dependencies]
+foldhash = { workspace = true }
+futures = { workspace = true }
+hashbrown = { workspace = true, features = ["default-hasher", "inline-more"] }
+nm = { workspace = true }
+opentelemetry = { workspace = true, features = ["metrics"] }
+tick = { workspace = true }
+
+[dev-dependencies]
+alloc_tracker = { path = "../alloc_tracker" }
+criterion = { workspace = true }
+many_cpus = { path = "../many_cpus" }
+mutants = { workspace = true }
+new_zealand = { path = "../new_zealand" }
+nm = { path = "../nm" }
+nm_impl = { path = "../nm_impl", features = ["test-util"] }
+# `nm_otel` is a dev-dep so doctests, examples, and benches can write
+# `use nm_otel::Publisher;` exactly as user code would, matching the documentation
+# rendered for `nm_otel`. This forms an allowed dev-dependency-only cycle.
+nm_otel = { path = "../nm_otel" }
+opentelemetry_sdk = { workspace = true, features = ["metrics", "testing"] }
+par_bench = { path = "../par_bench", features = ["alloc_tracker", "criterion"] }
+static_assertions = { workspace = true }
+testing = { path = "../testing" }
+tick = { workspace = true, features = ["tokio", "test-util"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }
+
+# Gungraun drives Valgrind-based Callgrind benchmarks; Linux-only.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
+[[bench]]
+name = "nm_otel_export"
+harness = false
+
+[[bench]]
+name = "nm_otel_export_cg"
+harness = false
+
+[lints]
+workspace = true

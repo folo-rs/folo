@@ -5,7 +5,7 @@
 //! the streaming refactor that replaced two intermediate `Vec` allocations per event.
 
 use alloc_tracker::{Allocator, Session};
-use nm_otel::__private::EventState;
+use nm_otel_impl::EventState;
 
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();

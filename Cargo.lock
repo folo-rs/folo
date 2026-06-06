@@ -1263,6 +1263,20 @@ dependencies = [
 name = "nm_otel"
 version = "0.4.9"
 dependencies = [
+ "nm",
+ "nm_otel_impl",
+ "opentelemetry",
+ "opentelemetry-stdout",
+ "opentelemetry_sdk",
+ "static_assertions",
+ "tick",
+ "tokio",
+]
+
+[[package]]
+name = "nm_otel_impl"
+version = "0.1.0"
+dependencies = [
  "alloc_tracker",
  "criterion",
  "foldhash 0.2.0",
@@ -1276,7 +1290,6 @@ dependencies = [
  "nm_impl",
  "nm_otel",
  "opentelemetry",
- "opentelemetry-stdout",
  "opentelemetry_sdk",
  "par_bench",
  "static_assertions",
