@@ -477,11 +477,16 @@ impl Histogram {
     /// Constructs a `Histogram` from raw parts without touching the global event
     /// registry.
     ///
-    /// `magnitudes` must be sorted in ascending order. `counts` must have the
-    /// same length as `magnitudes`. `plus_infinity_count` is the count for the
-    /// synthetic `Magnitude::MAX` bucket.
+    /// `magnitudes` must be sorted in strictly ascending order and must not contain
+    /// `Magnitude::MAX` (which is automatically synthesized as the terminal bucket).
+    /// `counts` must have the same length as `magnitudes`. `plus_infinity_count` is
+    /// the count for the synthetic `Magnitude::MAX` bucket.
     ///
     /// Intended for in-workspace tests and benchmarks.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any of the above preconditions are violated.
     #[cfg(any(test, feature = "test-util"))]
     #[doc(hidden)]
     #[must_use]
@@ -490,6 +495,29 @@ impl Histogram {
         counts: Vec<u64>,
         plus_infinity_count: u64,
     ) -> Self {
+        assert!(
+            counts.len() == magnitudes.len(),
+            "counts and magnitudes must have the same length"
+        );
+
+        if !magnitudes.is_empty() {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "windows() guarantees that we have exactly two elements"
+            )]
+            {
+                assert!(
+                    magnitudes.windows(2).all(|w| w[0] < w[1]),
+                    "magnitudes must be in strictly ascending order"
+                );
+            }
+
+            assert!(
+                !magnitudes.contains(&Magnitude::MAX),
+                "magnitudes must not contain Magnitude::MAX"
+            );
+        }
+
         Self {
             magnitudes,
             counts: counts.into_boxed_slice(),
@@ -1257,5 +1285,48 @@ mod tests {
         let metrics = EventMetrics::fake("test_event", 3, 10, None);
 
         assert_eq!(metrics.mean(), 3); // 10 / 3 = 3 (remainder discarded)
+    }
+
+    #[test]
+    fn histogram_fake_happy_path() {
+        let histogram = Histogram::fake(&[10, 50, 100], vec![3, 7, 2], 5);
+
+        let buckets: Vec<_> = histogram.buckets().collect();
+        assert_eq!(
+            buckets,
+            vec![(10, 3), (50, 7), (100, 2), (Magnitude::MAX, 5)]
+        );
+    }
+
+    #[test]
+    fn histogram_fake_empty_magnitudes_is_allowed() {
+        let histogram = Histogram::fake(&[], vec![], 42);
+
+        let buckets: Vec<_> = histogram.buckets().collect();
+        assert_eq!(buckets, vec![(Magnitude::MAX, 42)]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn histogram_fake_panics_on_length_mismatch() {
+        _ = Histogram::fake(&[10, 50, 100], vec![3, 7], 0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn histogram_fake_panics_on_unsorted_magnitudes() {
+        _ = Histogram::fake(&[10, 100, 50], vec![3, 7, 2], 0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn histogram_fake_panics_on_equal_magnitudes() {
+        _ = Histogram::fake(&[10, 10, 100], vec![3, 7, 2], 0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn histogram_fake_panics_on_magnitude_max_in_buckets() {
+        _ = Histogram::fake(&[10, 50, Magnitude::MAX], vec![3, 7, 2], 0);
     }
 }
