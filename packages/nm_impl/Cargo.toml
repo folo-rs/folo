@@ -1,8 +1,8 @@
 [package]
 name = "nm_impl"
-description = "Implementation crate for `nm` - do not reference directly"
+description = "Implementation crate for nm - do not reference directly"
 publish = true
-version = "0.1.0"
+version = "0.1.38"
 
 authors.workspace = true
 edition.workspace = true

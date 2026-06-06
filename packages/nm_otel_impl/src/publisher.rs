@@ -230,8 +230,10 @@ impl Publisher {
     /// Runs a single export iteration using the supplied report.
     ///
     /// This bypasses [`Report::collect`] so callers can drive the export pipeline with
-    /// fabricated reports built via [`Report::fake`]. Reachable only via `nm_otel_impl`;
-    /// the `nm_otel` shell crate does not re-export it.
+    /// fabricated reports built via `Report::fake`. Gated behind the `test-util`
+    /// feature so it is never compiled into end-user builds of `nm_otel`; the shell
+    /// crate does not activate that feature.
+    #[cfg(any(test, feature = "test-util"))]
     #[doc(hidden)]
     pub fn run_one_iteration_with_report(&mut self, report: &Report) {
         self.export(report);

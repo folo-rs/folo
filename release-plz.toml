@@ -46,8 +46,9 @@ name = "nm"
 
 # nm and nm_impl are logically the same package split into two crates for
 # cargotechnical reasons (see docs/impl-crate-split.md). They must always be
-# released at the same version; nm/Cargo.toml additionally pins the dep with
-# `=` so downstream consumers cannot end up with a mismatched pair.
+# released at the same version; the workspace Cargo.toml additionally pins
+# nm_impl with `=` so downstream consumers cannot end up with a mismatched
+# pair.
 version_group = "nm"
 
 [[package]]
@@ -63,9 +64,9 @@ name = "nm_otel"
 
 # nm_otel and nm_otel_impl are logically the same package split into two
 # crates for cargotechnical reasons (see docs/impl-crate-split.md). They must
-# always be released at the same version; nm_otel/Cargo.toml additionally pins
-# the dep with `=` so downstream consumers cannot end up with a mismatched
-# pair.
+# always be released at the same version; the workspace Cargo.toml additionally
+# pins nm_otel_impl with `=` so downstream consumers cannot end up with a
+# mismatched pair.
 version_group = "nm_otel"
 
 [[package]]

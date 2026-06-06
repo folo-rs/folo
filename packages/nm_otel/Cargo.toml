@@ -14,14 +14,7 @@ rust-version.workspace = true
 all-features = true
 
 [dependencies]
-# Exact-version pin on `nm_otel_impl`: `nm_otel` and `nm_otel_impl` are logically
-# the same package split into two crates for cargotechnical reasons (see
-# `docs/impl-crate-split.md`). We do not maintain a SemVer boundary between
-# them. release-plz `version_group = "nm_otel"` keeps their versions in lockstep
-# at release time; the `=` pin enforces at the Cargo manifest level that
-# downstream consumers never end up with a mismatched pair, and tells
-# `cargo update` that there is no acceptable alternate version.
-nm_otel_impl = { version = "=0.1.0", path = "../nm_otel_impl", default-features = false }
+nm_otel_impl = { workspace = true }
 
 [dev-dependencies]
 # Needed so the re-export smoke test can exercise the public API end-to-end with
