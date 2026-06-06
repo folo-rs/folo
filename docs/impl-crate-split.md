@@ -408,8 +408,9 @@ Concrete files to study:
 
 - `packages/nm_otel/Cargo.toml` — thin shell manifest with the `=0.1.0`
   exact-version pin on `nm_otel_impl` declared as a direct path dependency.
-  Activates `nm_impl`'s `test-util` feature only via dev-deps that exercise
-  the re-export smoke test; the `nm_otel` library itself does not.
+  Dev-deps cover only what the re-export smoke test and the examples need;
+  no `nm_impl` dep is required at this layer because nothing here fabricates
+  test inputs.
 - `packages/nm_otel/src/lib.rs` — preserved user-facing crate docs +
   explicit `pub use nm_otel_impl::{Publisher, PublisherBuilder};`. No
   `__private` module.
