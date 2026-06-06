@@ -107,9 +107,7 @@ impl Report {
     /// touching the global event registry.
     ///
     /// Intended for in-workspace tests and benchmarks that need to drive code paths
-    /// expecting a [`Report`] without observing real events. Gated behind the
-    /// `test-util` feature on `nm_impl` so it is never compiled into end-user
-    /// builds of [`nm`][crate]; the `nm` shell crate does not activate that feature.
+    /// expecting a [`Report`] without observing real events.
     #[cfg(any(test, feature = "test-util"))]
     #[doc(hidden)]
     #[must_use]
@@ -342,9 +340,7 @@ impl EventMetrics {
     /// down); when `count` is zero, the mean is zero.
     ///
     /// Intended for in-workspace tests and benchmarks that need to fabricate
-    /// metric snapshots. Gated behind the `test-util` feature on `nm_impl` so it
-    /// is never compiled into end-user builds of [`nm`][crate]; the `nm` shell
-    /// crate does not activate that feature.
+    /// metric snapshots.
     #[cfg(any(test, feature = "test-util"))]
     #[doc(hidden)]
     #[must_use]
@@ -485,10 +481,7 @@ impl Histogram {
     /// same length as `magnitudes`. `plus_infinity_count` is the count for the
     /// synthetic `Magnitude::MAX` bucket.
     ///
-    /// Intended for in-workspace tests and benchmarks. Gated behind the
-    /// `test-util` feature on `nm_impl` so it is never compiled into end-user
-    /// builds of [`nm`][crate]; the `nm` shell crate does not activate that
-    /// feature.
+    /// Intended for in-workspace tests and benchmarks.
     #[cfg(any(test, feature = "test-util"))]
     #[doc(hidden)]
     #[must_use]

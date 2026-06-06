@@ -190,10 +190,7 @@ impl Report {
     /// Constructs a `Report` from pre-assembled parts without touching the
     /// global event registry.
     ///
-    /// Intended for in-workspace tests and benchmarks. Gated behind the
-    /// `test-util` feature on `foo_impl` so it is never compiled into
-    /// end-user builds of `foo`; the `foo` shell crate does not activate
-    /// that feature.
+    /// Intended for in-workspace tests and benchmarks.
     #[cfg(any(test, feature = "test-util"))]
     #[doc(hidden)]
     #[must_use]
@@ -208,6 +205,9 @@ impl Report {
 ```toml
 # foo_impl/Cargo.toml
 [features]
+# Enables fabrication constructors for testing and benchmarking. The `foo`
+# shell crate does not activate this feature, so end-user builds never see
+# these items.
 test-util = []
 ```
 

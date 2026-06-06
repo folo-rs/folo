@@ -72,17 +72,9 @@
 //! in your application's async runtime. Pass an appropriate [`tick::Clock`][tick-clock]
 //! to the builder for your runtime (e.g., `Clock::new_tokio()` for Tokio).
 //!
-//! # Implementation
-//!
-//! The implementation lives in the [`nm_otel_impl`] crate. `nm_otel_impl` is published only
-//! to allow `nm_otel` to depend on it; users should not depend on `nm_otel_impl` directly.
-//! Items not re-exported here are internal to the workspace and may change at any time,
-//! including in patch releases.
-//!
 //! [`nm`]: https://crates.io/crates/nm
 //! [nm-event]: https://docs.rs/nm/latest/nm/struct.Event.html
 //! [otel-meter-provider]: https://docs.rs/opentelemetry/latest/opentelemetry/metrics/trait.MeterProvider.html
 //! [tick-clock]: https://docs.rs/tick/latest/tick/struct.Clock.html
-//! [`nm_otel_impl`]: https://crates.io/crates/nm_otel_impl
 
 pub use nm_otel_impl::{Publisher, PublisherBuilder};

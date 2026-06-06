@@ -263,14 +263,6 @@
 //! mangled data. For example, attempting to observe events with magnitudes near `i64::MAX`. There
 //! is no guarantee made about what the specific outcome will be in this case (though the panic
 //! policy above still applies). Do not stray near `i64` boundaries and you should be fine.
-//!
-//! # Implementation
-//!
-//! The implementation lives in the [`nm_impl`] crate. `nm_impl` is published only to allow
-//! `nm` to depend on it; users should not depend on `nm_impl` directly. Items not re-exported
-//! here are internal to the workspace and may change at any time, including in patch releases.
-//!
-//! [`nm_impl`]: https://crates.io/crates/nm_impl
 
 pub use nm_impl::{
     Event, EventBuilder, EventMetrics, EventName, Histogram, Magnitude, MetricsPusher,

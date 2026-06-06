@@ -27,14 +27,9 @@ development = ["criterion", "gungraun", "many_cpus", "par_bench"]
 doc = false
 
 [features]
-# Exposes `#[doc(hidden)] pub fn run_one_iteration_with_report(...)` on `Publisher`
-# for use by in-workspace benchmarks that need to drive the export pipeline with a
-# pre-built `Report` instead of collecting from the global registry.
-#
-# This feature is intentionally NOT activated by the `nm_otel` shell crate, so
-# end users who depend on `nm_otel` never see the fabrication-shaped method. Only
-# in-workspace dev-dependencies that need it (such as `nm_otel_impl`'s own
-# benches) should activate it.
+# Enables fabrication helpers for testing and benchmarking. The `nm_otel`
+# shell crate does not activate this feature, so end-user builds never see
+# these items.
 test-util = []
 
 [dependencies]

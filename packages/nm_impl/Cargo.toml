@@ -19,14 +19,9 @@ all-features = true
 doc = false
 
 [features]
-# Exposes `#[doc(hidden)] pub fn fake(...)` constructors on `Report`,
-# `EventMetrics`, and `Histogram` for use by in-workspace tests and benchmarks
-# that need to fabricate data without driving the global event registry.
-#
-# This feature is intentionally NOT activated by the `nm` shell crate, so
-# end users who depend on `nm` never see the fabrication constructors. Only
-# in-workspace dev-dependencies that need them (such as `nm_otel`'s tests
-# and benches) should activate it via `nm_impl = { ..., features = ["test-util"] }`.
+# Enables fabrication constructors for testing and benchmarking. The `nm`
+# shell crate does not activate this feature, so end-user builds never see
+# these items.
 test-util = []
 
 [dependencies]
