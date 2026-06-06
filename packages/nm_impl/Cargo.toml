@@ -19,10 +19,11 @@ all-features = true
 doc = false
 
 [features]
-# Enables fabrication constructors for testing and benchmarking. The `nm`
-# shell crate does not activate this feature, so end-user builds never see
-# these items.
-test-util = []
+# Internal-only API surface for in-workspace tests and benchmarks. Never
+# forwarded by the `nm` shell crate, so end-user builds never see these items.
+# See docs/impl-crate-split.md for the `test-util` vs `private-test-util`
+# distinction.
+private-test-util = []
 
 [dependencies]
 fast_time = { workspace = true }

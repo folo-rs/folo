@@ -1040,15 +1040,22 @@ reach internal types, constructors, or invariants, the preferred pattern is to s
 the crate into a thin public shell (`foo`) plus an implementation crate (`foo_impl`)
 that hosts everything. The shell re-exports a narrow, explicit list of items; the
 impl crate uses plain `pub` for anything benches/tests need to reach. This replaces
-the `test-util` Cargo feature anti-pattern (which leaks private surface into the
-documented public API).
+the public-feature anti-pattern of leaking private surface into a crate's documented
+API just so in-workspace consumers can reach it.
+
+Cargo features on `foo_impl` follow a strict naming rule: features named without a
+`private-` prefix (e.g. `test-util`, `tokio`, `metrics`) are part of the public API
+surface and are forwarded 1:1 from `foo` (e.g. `tokio = ["foo_impl/tokio"]`).
+Features named with the `private-` prefix (e.g. `private-test-util`) are
+internal-only, are never forwarded by `foo`, and are activated only by
+in-workspace dev-dependencies. The two kinds may coexist on the same impl crate.
 
 The canonical example is `packages/nm` (shell) + `packages/nm_impl` (implementation),
 with `packages/nm_otel` + `packages/nm_otel_impl` as a second worked example. For full
-details — when to apply the split, the optional `test-util` Cargo feature on the impl
-crate (for `*::fake(...)` fabrication constructors, when needed), the doctest-cycle
-dev-dependency, lockstep versioning, and the distinction from the in-crate `__private`
-module convention above — see [docs/impl-crate-split.md](docs/impl-crate-split.md).
+details — when to apply the split, the `private-test-util` Cargo feature for internal
+API surface, the doctest-cycle dev-dependency, lockstep versioning, and the
+distinction from the in-crate `__private` module convention above — see
+[docs/impl-crate-split.md](docs/impl-crate-split.md).
 
 # UI tests
 

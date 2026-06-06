@@ -5,8 +5,8 @@
 //! the per-bucket delta from this optimization is on the order of tens of instructions
 //! per bucket and would be invisible under Criterion noise on a shared machine.
 //!
-//! All scenarios drive [`Publisher::run_one_iteration_with_report`] on a fabricated
-//! [`Report`] (built via [`Report::fake`] + [`Histogram::fake`] +
+//! All scenarios drive [`Publisher::run_one_iteration_with_report`] on a pre-built
+//! [`Report`] (assembled via [`Report::fake`] + [`Histogram::fake`] +
 //! [`EventMetrics::fake`]) so the measurement is decoupled from the global nm
 //! registry and reproducible run-to-run.
 //!

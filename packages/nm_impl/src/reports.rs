@@ -108,7 +108,7 @@ impl Report {
     ///
     /// Intended for in-workspace tests and benchmarks that need to drive code paths
     /// expecting a [`Report`] without observing real events.
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(any(test, feature = "private-test-util"))]
     #[doc(hidden)]
     #[must_use]
     pub fn fake(events: Vec<EventMetrics>) -> Self {
@@ -339,9 +339,9 @@ impl EventMetrics {
     /// global event registry. The mean is calculated as `sum / count` (rounded
     /// down); when `count` is zero, the mean is zero.
     ///
-    /// Intended for in-workspace tests and benchmarks that need to fabricate
-    /// metric snapshots.
-    #[cfg(any(test, feature = "test-util"))]
+    /// Intended for in-workspace tests and benchmarks that need to build metric
+    /// snapshots without observing real events.
+    #[cfg(any(test, feature = "private-test-util"))]
     #[doc(hidden)]
     #[must_use]
     pub fn fake(
@@ -487,7 +487,7 @@ impl Histogram {
     /// # Panics
     ///
     /// Panics if any of the above preconditions are violated.
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(any(test, feature = "private-test-util"))]
     #[doc(hidden)]
     #[must_use]
     pub fn fake(
