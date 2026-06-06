@@ -85,6 +85,35 @@ Do **not** apply this split when:
 - All internal items only need to be reached by the crate's own unit tests
   (`#[cfg(test)] mod tests` inside the same file already sees `pub(crate)` items).
 
+## Where each kind of artifact lives
+
+The split changes which crate owns each kind of artifact. The audience of the
+artifact is the deciding factor, not what API surface it happens to need today.
+
+| Artifact                          | Home crate | Rationale |
+| --------------------------------- | ---------- | --------- |
+| `src/**` (implementation)         | `foo_impl` | The whole point of the split. |
+| Unit tests (`#[cfg(test)] mod tests` inside `src/**`) | `foo_impl` | They follow the code they test. |
+| `benches/**`                      | `foo_impl` | Benches are a maintainer tool; whoever runs them already knows the impl crate exists. Hosting them in `foo_impl` means a future bench can reach for `TestFacade` or other internal `pub` items without having to be relocated first. |
+| `tests/**` (integration tests)    | `foo_impl` | Same reasoning as benches: they are for maintainers, and proximity to `nm_impl` internals is occasionally needed. |
+| `examples/**` (user-facing)       | `foo`      | Examples are a form of end-user documentation. They must compile against the same public API a user gets from `cargo add foo`. Keeping them in the public crate is what enforces that they cannot accidentally reach for internals. |
+| Maintainer-only demo/dev binaries | `foo_impl/examples/` (optional) | If you do want a runnable internal demo (e.g. a load-generator, a profiling harness, a "wire up the internals to see what they do" app), put it under `foo_impl/examples/`. Treat it explicitly as "examples and dev apps for maintainers", a different category from end-user examples. |
+| Re-export smoke test              | `foo`      | The one and only `tests/` file in `foo`. It exists specifically to assert that the explicit re-export list in `foo/src/lib.rs` keeps reaching every advertised item. See step 10 below. |
+
+Two principles fall out of the table:
+
+1. **The split is along an audience boundary, not a language-feature boundary.**
+   `foo` is for users; `foo_impl` is for maintainers. Examples are user
+   documentation, so they stay with the users. Benches and integration tests
+   are maintainer tooling, so they stay with the maintainers.
+2. **Benches and integration tests living in `foo_impl` should still prefer
+   the public API.** Reach for `TestFacade` or other `foo_impl`-internal
+   items only when there is a specific reason — fabricating internal state
+   for a contract that the public API cannot express, or measuring a hot
+   path that the public API gates behind a slower entry point. When a bench
+   uses only `use foo::Event;` it is still measuring what the user pays;
+   the impl crate is just a convenient host.
+
 ## The `TestFacade` pattern
 
 When the impl crate needs to expose constructors specifically for test/bench
@@ -140,9 +169,11 @@ The `foo_impl` dependency is declared as a dev-dependency on the consumer crate.
 
 2. Add `foo_impl` to the workspace's `[workspace.dependencies]` table.
 
-3. Move every source file under `packages/foo/src/`, plus every `benches/` and
-   `tests/` file, into the matching folder under `packages/foo_impl/`. Use `git mv`
-   so history follows.
+3. Move every source file under `packages/foo/src/`, plus every `benches/`
+   and `tests/` file, into the matching folder under `packages/foo_impl/`.
+   Leave `packages/foo/examples/` where it is — examples stay with the
+   public crate (see the placement table above). Use `git mv` so history
+   follows.
 
 4. Replace `packages/foo/src/lib.rs` with a thin shell:
    - Preserve the entire crate-level `//!` documentation (this is what users will
