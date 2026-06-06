@@ -14,9 +14,9 @@ rust-version.workspace = true
 all-features = true
 
 # These dev-dependencies are consumed only by `[[bench]]` entries that declare
-# `required-features = ["test-util"]`. When udeps runs without `--all-features`,
-# the benches are skipped, so the dev-deps appear unused. Ignore them here to
-# silence false positives.
+# `required-features = ["private-test-util"]`. When udeps runs without
+# `--all-features`, the benches are skipped, so the dev-deps appear unused.
+# Ignore them here to silence false positives.
 [package.metadata.cargo-udeps.ignore]
 development = ["criterion", "gungraun", "many_cpus", "par_bench"]
 
@@ -27,10 +27,11 @@ development = ["criterion", "gungraun", "many_cpus", "par_bench"]
 doc = false
 
 [features]
-# Enables fabrication helpers for testing and benchmarking. The `nm_otel`
-# shell crate does not activate this feature, so end-user builds never see
-# these items.
-test-util = []
+# Internal-only fabrication helpers for in-workspace tests and benchmarks.
+# Never forwarded by the `nm_otel` shell crate, so end-user builds never see
+# these items. See docs/impl-crate-split.md for the `test-util` vs
+# `private-test-util` distinction.
+private-test-util = []
 
 [dependencies]
 foldhash = { workspace = true }
@@ -46,7 +47,7 @@ criterion = { workspace = true }
 many_cpus = { path = "../many_cpus" }
 mutants = { workspace = true }
 new_zealand = { path = "../new_zealand" }
-nm_impl = { path = "../nm_impl", features = ["test-util"] }
+nm_impl = { path = "../nm_impl", features = ["private-test-util"] }
 # `nm_otel` is a dev-dep so doctests, examples, and benches can write
 # `use nm_otel::Publisher;` exactly as user code would, matching the documentation
 # rendered for `nm_otel`. This forms an allowed dev-dependency-only cycle.
@@ -65,12 +66,12 @@ gungraun = { workspace = true, features = ["default"] }
 [[bench]]
 name = "nm_otel_export"
 harness = false
-required-features = ["test-util"]
+required-features = ["private-test-util"]
 
 [[bench]]
 name = "nm_otel_export_cg"
 harness = false
-required-features = ["test-util"]
+required-features = ["private-test-util"]
 
 [lints]
 workspace = true

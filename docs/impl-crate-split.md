@@ -123,8 +123,9 @@ Apply this split when at least one of these holds:
 - The crate has (or wants) benchmarks or external tests that need access to
   internal types, constructors, or invariants that should not be part of the
   public API.
-- The crate currently uses a `test-util` Cargo feature (or equivalent) on its
-  public API purely to expose internal items for in-workspace consumers.
+- The crate currently uses a Cargo feature on its public API purely to
+  expose internal items for in-workspace consumers (the historical
+  workaround for the same problem).
 - Another crate in the workspace needs to construct internal data structures
   for testing or benchmarking purposes.
 
@@ -148,7 +149,7 @@ happens to need today.
 | --------------------------------- | ---------- | --------- |
 | `src/**` (implementation)         | `foo_impl` | The whole point of the split. |
 | Unit tests (`#[cfg(test)] mod tests` inside `src/**`) | `foo_impl` | They follow the code they test. |
-| `benches/**`                      | `foo_impl` | Benches are a maintainer tool; whoever runs them already knows the impl crate exists. Hosting them in `foo_impl` means a future bench can reach for `test-util` fabrication constructors or other internal `pub` items without having to be relocated first. |
+| `benches/**`                      | `foo_impl` | Benches are a maintainer tool; whoever runs them already knows the impl crate exists. Hosting them in `foo_impl` means a future bench can reach for `private-test-util` fabrication constructors or other internal `pub` items without having to be relocated first. |
 | `tests/**` (integration tests)    | `foo_impl` | Same reasoning as benches: they are for maintainers, and proximity to `foo_impl` internals is occasionally needed. |
 | `examples/**` (user-facing)       | `foo`      | Examples are a form of end-user documentation. They must compile against the same public API a user gets from `cargo add foo`. Keeping them in the public crate is what enforces that they cannot accidentally reach for internals. |
 | Maintainer-only demo/dev binaries | `foo_impl/examples/` (optional) | If you do want a runnable internal demo (e.g. a load-generator, a profiling harness, a "wire up the internals to see what they do" app), put it under `foo_impl/examples/`. Treat it explicitly as "examples and dev apps for maintainers", a different category from end-user examples. |
@@ -161,27 +162,45 @@ Two principles fall out of the table:
    documentation, so they stay with the users. Benches and integration tests
    are maintainer tooling, so they stay with the maintainers.
 2. **Benches and integration tests living in `foo_impl` should still prefer
-   the public API.** Reach for `test-util` fabrication constructors or other
-   `foo_impl`-internal items only when there is a specific reason —
+   the public API.** Reach for `private-test-util` fabrication constructors or
+   other `foo_impl`-internal items only when there is a specific reason —
    fabricating internal state for a contract that the public API cannot
    express, or measuring a hot path that the public API gates behind a slower
    entry point. When a bench uses only `use foo::Event;` it is still measuring
    what the user pays; the impl crate is just a convenient host.
 
-## Test-only fabrication constructors
+## Cargo features on the impl crate
 
-Some internal items only make sense in a test or benchmark context: constructors
-that fabricate data structures bypassing the real-world entry path (e.g.
-building a `Report` from a hand-assembled `Vec<EventMetrics>` without observing
-real events). Two competing concerns apply:
+Two distinct kinds of Cargo feature may live on `foo_impl`, and they are named
+differently so they do not collide.
+
+| Feature kind          | Naming             | Forwarded by `foo`? | Audience |
+| --------------------- | ------------------ | ------------------- | -------- |
+| Public functional or testing feature | `test-util`, `metrics`, `tokio`, etc. (whatever the public-API name is) | Yes, 1:1. `foo` declares `feature-name = ["foo_impl/feature-name"]`. | End users of `foo`. |
+| Internal-only helpers | `private-test-util` (`private-*` prefix in general) | **No.** Never forwarded by `foo`. | In-workspace dev-dependencies only. |
+
+The `private-*` prefix mirrors the workspace's existing `__private` /
+`__private_*` "logically private but mechanically public" naming convention.
+
+A package may have either kind, both, or neither. The rule is just that the
+internal-only feature must be distinguishable by name from any public-API
+feature so the shell crate can forward the right things without accidentally
+exposing the wrong ones.
+
+## Internal-only test/bench helpers (`private-test-util`)
+
+Some internal items only make sense in a test or benchmark context:
+constructors that fabricate data structures bypassing the real-world entry
+path (e.g. building a `Report` from a hand-assembled `Vec<EventMetrics>`
+without observing real events). Two competing concerns apply:
 
 1. They must be reachable from external benches/tests in other workspace
    crates, which requires them to be `pub` in `foo_impl`.
 2. They are pure dead weight in production builds and should not bloat the
    binary that real users ship.
 
-The convention is to put them directly on the type they fabricate, gated behind
-a `test-util` Cargo feature on `foo_impl`:
+The convention is to put them directly on the type they fabricate, gated
+behind a `private-test-util` Cargo feature on `foo_impl`:
 
 ```rust
 // in foo_impl/src/reports.rs
@@ -191,7 +210,7 @@ impl Report {
     /// global event registry.
     ///
     /// Intended for in-workspace tests and benchmarks.
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(any(test, feature = "private-test-util"))]
     #[doc(hidden)]
     #[must_use]
     pub fn fake(events: Vec<EventMetrics>) -> Self {
@@ -205,39 +224,39 @@ impl Report {
 ```toml
 # foo_impl/Cargo.toml
 [features]
-# Enables fabrication constructors for testing and benchmarking. The `foo`
-# shell crate does not activate this feature, so end-user builds never see
+# Internal-only fabrication constructors for in-workspace tests and benchmarks.
+# Never forwarded by the `foo` shell crate, so end-user builds never see
 # these items.
-test-util = []
+private-test-util = []
 ```
 
-The `test-util` feature lives on `foo_impl`, not on `foo`. `foo_impl` is
-`[lib] doc = false`, `#![doc(hidden)]`, and documented as "do not depend on
-this directly", so the feature flag is invisible to docs.rs. The `foo` shell
-crate's `Cargo.toml` declares `foo_impl = { workspace = true }` without
-activating the feature, so end users running `cargo add foo` never get
-fabrication constructors compiled into their build. In-workspace consumers
-(`foo_otel` etc.) activate the feature on their own `foo_impl` dev-dependency:
+The `private-test-util` feature lives on `foo_impl` and is never declared on
+`foo`. The `foo` shell crate's `Cargo.toml` declares
+`foo_impl = { workspace = true }` without forwarding any private feature, so
+end users running `cargo add foo` never get fabrication constructors compiled
+into their build. In-workspace consumers (`foo_otel` etc.) activate the
+feature on their own `foo_impl` dev-dependency:
 
 ```toml
 [dev-dependencies]
-foo_impl = { path = "../foo_impl", features = ["test-util"] }
+foo_impl = { path = "../foo_impl", features = ["private-test-util"] }
 ```
 
 Cargo's feature unification then makes `Report::fake` available across the
-workspace's test/bench build graph. The `cfg(any(test, feature = "test-util"))`
-form means `foo_impl`'s own unit tests automatically see the constructors
-without anyone needing to opt the workspace into the feature.
+workspace's test/bench build graph. The
+`cfg(any(test, feature = "private-test-util"))` form means `foo_impl`'s own
+unit tests automatically see the constructors without anyone needing to opt
+the workspace into the feature.
 
 If `foo_impl`'s own benches use the feature-gated items, add
-`required-features = ["test-util"]` to those bench entries so Cargo skips
-them when the feature is off:
+`required-features = ["private-test-util"]` to those bench entries so Cargo
+skips them when the feature is off:
 
 ```toml
 [[bench]]
 name = "foo_internals"
 harness = false
-required-features = ["test-util"]
+required-features = ["private-test-util"]
 ```
 
 Call sites become natural and symmetric with the rest of the public API:
@@ -253,10 +272,39 @@ let report = Report::fake(vec![
 
 Call sites name the types through `foo` (the public crate), not through
 `foo_impl`. The `fake` constructors are inherent methods on the type, so they
-are reachable via any path that names the type — and `foo`'s re-exports expose
-the type, even though they do not advertise the `fake` constructor. The
-`foo_impl` dev-dependency exists only to activate the `test-util` feature; no
-`use foo_impl::*;` import is required in test code.
+are reachable via any path that names the type — and `foo`'s re-exports
+expose the type, even though they do not advertise the `fake` constructor.
+The `foo_impl` dev-dependency exists only to activate the `private-test-util`
+feature; no `use foo_impl::*;` import is required in test code.
+
+## Public testing APIs that the shell crate exposes (`test-util`)
+
+A separate, larger pattern applies when a crate has a *documented* testing
+aid intended for end users — for example, `many_cpus::fake::FakeHardware`,
+which downstream crates use to write tests against `many_cpus`. This is a
+public-API feature, gated by `test-util` (or whatever the public name is),
+and it must be reachable when users enable it:
+
+```toml
+# foo/Cargo.toml
+[features]
+test-util = ["foo_impl/test-util"]   # forward 1:1
+
+[dependencies]
+foo_impl = { workspace = true }
+```
+
+```toml
+# foo_impl/Cargo.toml
+[features]
+test-util         = []   # forwarded from `foo`
+private-test-util = []   # internal only
+```
+
+A crate may have *both* features simultaneously. They are independent: the
+public `test-util` items are advertised by `foo`'s documentation and become
+part of `foo`'s SemVer surface, while `private-test-util` items remain
+unreachable from `foo` and stay in the impl crate's internal scope.
 
 ## How to do the split
 
@@ -317,17 +365,26 @@ the type, even though they do not advertise the `fake` constructor. The
    - Declare modules and re-export items just as the original `foo` lib.rs
      did.
 
-8. Convert any `#[cfg(any(test, feature = "test-util"))] pub fn fake(...)`
-   constructors that already existed in `foo` so they live in `foo_impl`
-   instead. Add a `test-util = []` feature to `foo_impl/Cargo.toml`. Keep the
-   `cfg(any(test, feature = "test-util"))` gate, the `#[doc(hidden)]`
-   attribute, and the `pub fn fake(...)` signature directly on the type. See
-   "Test-only fabrication constructors" above for the full rationale. If
-   `foo_impl`'s own benches consume these items, set
-   `required-features = ["test-util"]` on the affected `[[bench]]` entries.
+8. Convert any internal-only fabrication constructors that already existed
+   in `foo` (typically gated behind a workspace-internal `test-util` feature)
+   so they live in `foo_impl` instead. Add a `private-test-util = []` feature
+   to `foo_impl/Cargo.toml`. Keep the `cfg(any(test, feature = "private-test-util"))`
+   gate, the `#[doc(hidden)]` attribute, and the `pub fn fake(...)` signature
+   directly on the type. See "Internal-only test/bench helpers
+   (`private-test-util`)" above for the full rationale. If `foo_impl`'s own
+   benches consume these items, set
+   `required-features = ["private-test-util"]` on the affected `[[bench]]`
+   entries.
 
-9. Update in-workspace consumers (dev-dependencies that were using `test-util`
-   on `foo`) to declare `foo_impl = { path = "../foo_impl", features = ["test-util"] }`
+   If `foo` *also* has a public-API testing feature (e.g. `many_cpus`'s
+   `test-util` exposing `fake::FakeHardware` for downstream user tests),
+   declare it on `foo_impl` under its own name and forward it 1:1 from `foo`
+   — see "Public testing APIs that the shell crate exposes (`test-util`)"
+   above.
+
+9. Update in-workspace consumers (dev-dependencies that previously activated
+   an internal feature on `foo` to reach these items) to instead declare
+   `foo_impl = { path = "../foo_impl", features = ["private-test-util"] }`
    as a dev-dependency. Call sites continue to name types through `foo`
    (e.g. `use foo::Report; Report::fake(...)`); no `use foo_impl::*;` import
    is needed because `fake` is an inherent method on the type that `foo`
@@ -372,12 +429,12 @@ The original worked example. Concrete files to study:
 - `packages/nm/src/lib.rs` — preserved crate docs + explicit re-export list.
 - `packages/nm/tests/nm_reexports.rs` — re-export smoke test.
 - `packages/nm_impl/Cargo.toml` — impl manifest with `[lib] doc = false`, the
-  `test-util` feature for fabrication constructors, and the `nm` dev-dep for
-  the doctest cycle.
+  `private-test-util` feature for fabrication constructors, and the `nm`
+  dev-dep for the doctest cycle.
 - `packages/nm_impl/src/lib.rs` — `#![doc(hidden)]` root.
-- `packages/nm_impl/src/reports.rs` — `#[cfg(any(test, feature = "test-util"))]
-  #[doc(hidden)] pub fn fake(...)` constructors on `Report`, `EventMetrics`,
-  and `Histogram`.
+- `packages/nm_impl/src/reports.rs` —
+  `#[cfg(any(test, feature = "private-test-util"))] #[doc(hidden)] pub fn fake(...)`
+  constructors on `Report`, `EventMetrics`, and `Histogram`.
 - `packages/nm_impl/README.md` — "do not depend on this directly" notice.
 - `release-plz.toml` — `version_group = "nm"` entries for `nm` and `nm_impl`.
 
@@ -391,11 +448,12 @@ The second worked example. Concrete files to study:
   explicit `pub use nm_otel_impl::{Publisher, PublisherBuilder};`.
 - `packages/nm_otel/tests/nm_otel_reexports.rs` — re-export smoke test.
 - `packages/nm_otel_impl/Cargo.toml` — impl manifest with `[lib] doc = false`,
-  the `test-util` feature gating `Publisher::run_one_iteration_with_report`,
-  the `nm_otel` dev-dep for the doctest cycle, and the `nm_impl` dev-dep with
-  `features = ["test-util"]` so the impl-hosted benches can fabricate input
-  reports via `Report::fake`. Both `[[bench]]` entries declare
-  `required-features = ["test-util"]`.
+  the `private-test-util` feature gating
+  `Publisher::run_one_iteration_with_report`, the `nm_otel` dev-dep for the
+  doctest cycle, and the `nm_impl` dev-dep with
+  `features = ["private-test-util"]` so the impl-hosted benches can fabricate
+  input reports via `Report::fake`. Both `[[bench]]` entries declare
+  `required-features = ["private-test-util"]`.
 - `packages/nm_otel_impl/src/lib.rs` — `#![doc(hidden)]` root that re-exports
   the public-API subset for the shell crate plus `EventState` for the
   alloc-tracking integration test.

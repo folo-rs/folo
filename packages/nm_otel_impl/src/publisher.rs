@@ -231,7 +231,7 @@ impl Publisher {
     ///
     /// This bypasses [`Report::collect`] so callers can drive the export pipeline with
     /// fabricated reports built via `Report::fake`.
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(any(test, feature = "private-test-util"))]
     #[doc(hidden)]
     pub fn run_one_iteration_with_report(&mut self, report: &Report) {
         self.export(report);
