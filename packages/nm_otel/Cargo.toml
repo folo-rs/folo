@@ -15,7 +15,9 @@ all-features = true
 
 [features]
 default = []
-test-util = ["nm/test-util"]
+# Exposes internal types via `nm_otel::__private` for benchmarks and other
+# in-workspace tests. Only use this in dev-dependencies.
+test-util = []
 
 [dependencies]
 foldhash = { workspace = true }
@@ -31,7 +33,8 @@ criterion = { workspace = true }
 many_cpus = { path = "../many_cpus" }
 mutants = { workspace = true }
 new_zealand = { path = "../new_zealand" }
-nm = { path = "../nm", features = ["test-util"] }
+nm = { path = "../nm" }
+nm_impl = { path = "../nm_impl" }
 nm_otel = { path = ".", features = ["test-util"] }
 opentelemetry-stdout = { workspace = true, features = ["metrics"] }
 opentelemetry_sdk = { workspace = true, features = ["metrics", "testing"] }

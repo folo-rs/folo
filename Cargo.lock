@@ -1238,6 +1238,14 @@ version = "1.0.6"
 name = "nm"
 version = "0.1.38"
 dependencies = [
+ "nm_impl",
+ "static_assertions",
+]
+
+[[package]]
+name = "nm_impl"
+version = "0.1.0"
+dependencies = [
  "criterion",
  "fast_time",
  "foldhash 0.2.0",
@@ -1245,6 +1253,7 @@ dependencies = [
  "many_cpus",
  "mutants 0.0.4",
  "new_zealand",
+ "nm",
  "num-traits",
  "par_bench",
  "static_assertions",
@@ -1264,6 +1273,7 @@ dependencies = [
  "mutants 0.0.4",
  "new_zealand",
  "nm",
+ "nm_impl",
  "nm_otel",
  "opentelemetry",
  "opentelemetry-stdout",

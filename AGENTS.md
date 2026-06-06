@@ -1033,6 +1033,22 @@ make logically private items public. This must be accompanied by two adjustments
   - For types, use a `private` module, e.g. `foo::private::Bar`.
   - For methods, use a `__private_` prefix, e.g. `Bar::__private_reset_counters()`.
 
+# `_impl` crate split for benches and external tests
+
+When a crate has benchmarks or external tests (other workspace crates) that need to
+reach internal types, constructors, or invariants, the preferred pattern is to split
+the crate into a thin public shell (`foo`) plus an implementation crate (`foo_impl`)
+that hosts everything. The shell re-exports a narrow, explicit list of items; the
+impl crate uses plain `pub` for anything benches/tests need to reach. This replaces
+the `test-util` Cargo feature anti-pattern (which leaks private surface into the
+documented public API).
+
+The canonical example is `packages/nm` (shell) + `packages/nm_impl` (implementation).
+For full details — when to apply the split, the `TestFacade` constructor pattern that
+replaces `*::fake(...)` constructors, the doctest-cycle dev-dependency, and the
+distinction from the in-crate `__private` module convention above — see
+[docs/impl-crate-split.md](docs/impl-crate-split.md).
+
 # UI tests
 
 UI tests all go in a workspace-scoped `ui_tests` package due to technical limitations. Follow
