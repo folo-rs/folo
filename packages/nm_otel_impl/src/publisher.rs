@@ -230,7 +230,8 @@ impl Publisher {
     /// Runs a single export iteration using the supplied report.
     ///
     /// This bypasses [`Report::collect`] so callers can drive the export pipeline with
-    /// fabricated reports built via `Report::fake`.
+    /// a pre-built [`Report`] (typically constructed via `Report::fake` in tests and
+    /// benchmarks).
     #[cfg(any(test, feature = "private-test-util"))]
     #[doc(hidden)]
     pub fn run_one_iteration_with_report(&mut self, report: &Report) {

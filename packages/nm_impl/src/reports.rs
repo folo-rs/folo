@@ -339,8 +339,8 @@ impl EventMetrics {
     /// global event registry. The mean is calculated as `sum / count` (rounded
     /// down); when `count` is zero, the mean is zero.
     ///
-    /// Intended for in-workspace tests and benchmarks that need to fabricate
-    /// metric snapshots.
+    /// Intended for in-workspace tests and benchmarks that need to build metric
+    /// snapshots without observing real events.
     #[cfg(any(test, feature = "private-test-util"))]
     #[doc(hidden)]
     #[must_use]

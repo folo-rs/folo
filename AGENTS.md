@@ -1045,7 +1045,7 @@ API just so in-workspace consumers can reach it.
 
 Cargo features on `foo_impl` follow a strict naming rule: features named without a
 `private-` prefix (e.g. `test-util`, `tokio`, `metrics`) are part of the public API
-surface and are forwarded 1:1 from `foo` (`feature = ["foo_impl/feature"]`).
+surface and are forwarded 1:1 from `foo` (e.g. `tokio = ["foo_impl/tokio"]`).
 Features named with the `private-` prefix (e.g. `private-test-util`) are
 internal-only, are never forwarded by `foo`, and are activated only by
 in-workspace dev-dependencies. The two kinds may coexist on the same impl crate.
@@ -1053,8 +1053,8 @@ in-workspace dev-dependencies. The two kinds may coexist on the same impl crate.
 The canonical example is `packages/nm` (shell) + `packages/nm_impl` (implementation),
 with `packages/nm_otel` + `packages/nm_otel_impl` as a second worked example. For full
 details — when to apply the split, the `private-test-util` Cargo feature for internal
-fabrication constructors, the doctest-cycle dev-dependency, lockstep versioning, and
-the distinction from the in-crate `__private` module convention above — see
+API surface, the doctest-cycle dev-dependency, lockstep versioning, and the
+distinction from the in-crate `__private` module convention above — see
 [docs/impl-crate-split.md](docs/impl-crate-split.md).
 
 # UI tests

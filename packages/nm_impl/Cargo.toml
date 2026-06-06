@@ -19,9 +19,9 @@ all-features = true
 doc = false
 
 [features]
-# Internal-only fabrication constructors for in-workspace tests and benchmarks.
-# Never forwarded by the `nm` shell crate, so end-user builds never see these
-# items. See docs/impl-crate-split.md for the `test-util` vs `private-test-util`
+# Internal-only API surface for in-workspace tests and benchmarks. Never
+# forwarded by the `nm` shell crate, so end-user builds never see these items.
+# See docs/impl-crate-split.md for the `test-util` vs `private-test-util`
 # distinction.
 private-test-util = []
 
