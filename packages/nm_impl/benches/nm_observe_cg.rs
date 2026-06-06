@@ -7,8 +7,8 @@
 //! and the most-traveled and worst-case histogram bucket positions
 //! (hit-first / hit-last / miss).
 //!
-//! Multi-threaded behavior is intentionally out of scope: see the existing
-//! Criterion + `par_bench` suite in `packages/nm/benches/` for that.
+//! Multi-threaded behavior is intentionally out of scope: see the sibling
+//! `nm_performance.rs` Criterion + `par_bench` suite for that.
 
 #![allow(
     missing_docs,

@@ -237,7 +237,7 @@ gungraun::main!(
 ```
 
 A complete worked example lives in
-[`packages/nm/benches/nm_observe_cg.rs`](../packages/nm/benches/nm_observe_cg.rs).
+[`packages/nm_impl/benches/nm_observe_cg.rs`](../packages/nm_impl/benches/nm_observe_cg.rs).
 
 #### Why `expect` instead of `allow`?
 

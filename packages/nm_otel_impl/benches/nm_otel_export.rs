@@ -1,8 +1,8 @@
 //! Benchmarks for the nm-to-OpenTelemetry export path.
 //!
 //! Drives [`Publisher::run_one_iteration_with_report`] with a synthetic [`Report`] built
-//! from [`nm::Report::fake`] so the steady-state export cost can be measured without
-//! depending on the global `nm` registry. Memory allocations are tracked via
+//! from [`Report::fake`] so the steady-state export cost can be measured
+//! without depending on the global `nm` registry. Memory allocations are tracked via
 //! `alloc_tracker` so changes in the export pipeline's allocation profile are visible
 //! at a glance.
 

@@ -6,8 +6,8 @@
 //! per bucket and would be invisible under Criterion noise on a shared machine.
 //!
 //! All scenarios drive [`Publisher::run_one_iteration_with_report`] on a fabricated
-//! [`Report`] (built via [`nm::Report::fake`] + [`nm::Histogram::fake`] +
-//! [`nm::EventMetrics::fake`]) so the measurement is decoupled from the global nm
+//! [`Report`] (built via [`Report::fake`] + [`Histogram::fake`] +
+//! [`EventMetrics::fake`]) so the measurement is decoupled from the global nm
 //! registry and reproducible run-to-run.
 //!
 //! Scenarios:

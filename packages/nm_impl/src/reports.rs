@@ -103,11 +103,13 @@ impl Report {
         self.events.iter()
     }
 
-    /// Creates a `Report` instance with fake data for testing purposes.
+    /// Constructs a `Report` from a pre-assembled list of [`EventMetrics`] without
+    /// touching the global event registry.
     ///
-    /// This constructor is only available with the `test-util` feature and allows
-    /// creating arbitrary test data without touching global state.
+    /// Intended for in-workspace tests and benchmarks that need to drive code paths
+    /// expecting a [`Report`] without observing real events.
     #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
     #[must_use]
     pub fn fake(events: Vec<EventMetrics>) -> Self {
         Self {
@@ -333,11 +335,14 @@ impl EventMetrics {
         self.histogram.as_ref()
     }
 
-    /// Creates an `EventMetrics` instance with fake data for testing purposes.
+    /// Constructs an `EventMetrics` from pre-computed values without touching the
+    /// global event registry. The mean is calculated as `sum / count` (rounded
+    /// down); when `count` is zero, the mean is zero.
     ///
-    /// This constructor is only available with the `test-util` feature and allows
-    /// creating arbitrary test data without touching global state.
+    /// Intended for in-workspace tests and benchmarks that need to fabricate
+    /// metric snapshots.
     #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
     #[must_use]
     pub fn fake(
         name: impl Into<EventName>,
@@ -469,21 +474,50 @@ impl Histogram {
         self.magnitudes().zip(self.counts())
     }
 
-    /// Creates a `Histogram` instance with fake data for testing purposes.
+    /// Constructs a `Histogram` from raw parts without touching the global event
+    /// registry.
     ///
-    /// This constructor is only available with the `test-util` feature and allows
-    /// creating arbitrary test data without touching global state.
+    /// `magnitudes` must be sorted in strictly ascending order and must not contain
+    /// `Magnitude::MAX` (which is automatically synthesized as the terminal bucket).
+    /// `counts` must have the same length as `magnitudes`. `plus_infinity_count` is
+    /// the count for the synthetic `Magnitude::MAX` bucket.
     ///
-    /// The `magnitudes` slice must be sorted in ascending order. The `counts` slice
-    /// must have the same length as `magnitudes`. The `plus_infinity_count` is the
-    /// count for the synthetic `Magnitude::MAX` bucket.
+    /// Intended for in-workspace tests and benchmarks.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any of the above preconditions are violated.
     #[cfg(any(test, feature = "test-util"))]
+    #[doc(hidden)]
     #[must_use]
     pub fn fake(
         magnitudes: &'static [Magnitude],
         counts: Vec<u64>,
         plus_infinity_count: u64,
     ) -> Self {
+        assert!(
+            counts.len() == magnitudes.len(),
+            "counts and magnitudes must have the same length"
+        );
+
+        if !magnitudes.is_empty() {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "windows() guarantees that we have exactly two elements"
+            )]
+            {
+                assert!(
+                    magnitudes.windows(2).all(|w| w[0] < w[1]),
+                    "magnitudes must be in strictly ascending order"
+                );
+            }
+
+            assert!(
+                !magnitudes.contains(&Magnitude::MAX),
+                "magnitudes must not contain Magnitude::MAX"
+            );
+        }
+
         Self {
             magnitudes,
             counts: counts.into_boxed_slice(),
@@ -1215,7 +1249,7 @@ mod tests {
 
     #[test]
     fn event_metrics_fake_calculates_mean_correctly() {
-        // Test that fake() correctly calculates mean as sum / count.
+        // EventMetrics::fake correctly calculates mean as sum / count.
         let metrics = EventMetrics::fake("test_event", 10, 100, None);
 
         assert_eq!(metrics.name(), "test_event");
@@ -1227,7 +1261,6 @@ mod tests {
 
     #[test]
     fn event_metrics_fake_calculates_mean_with_different_values() {
-        // Test with different values to ensure division is correct.
         let metrics = EventMetrics::fake("test_event", 25, 500, None);
 
         assert_eq!(metrics.mean(), 20); // 500 / 25 = 20
@@ -1235,7 +1268,7 @@ mod tests {
 
     #[test]
     fn event_metrics_fake_mean_zero_when_count_zero() {
-        // Test that when count is 0, mean is 0 (not NaN or panic).
+        // When count is 0, mean is 0 (not NaN or panic).
         let metrics = EventMetrics::fake("test_event", 0, 100, None);
 
         assert_eq!(metrics.count(), 0);
@@ -1245,12 +1278,55 @@ mod tests {
 
     #[test]
     fn event_metrics_fake_mean_handles_integer_division() {
-        // Test that integer division correctly truncates the remainder.
+        // Integer division correctly truncates the remainder.
         // This test specifically catches mutations that replace / with % or *.
         // - If / were replaced with %, result would be 1 (10 % 3 = 1)
         // - If / were replaced with *, result would be 30 (10 * 3 = 30)
         let metrics = EventMetrics::fake("test_event", 3, 10, None);
 
         assert_eq!(metrics.mean(), 3); // 10 / 3 = 3 (remainder discarded)
+    }
+
+    #[test]
+    fn histogram_fake_happy_path() {
+        let histogram = Histogram::fake(&[10, 50, 100], vec![3, 7, 2], 5);
+
+        let buckets: Vec<_> = histogram.buckets().collect();
+        assert_eq!(
+            buckets,
+            vec![(10, 3), (50, 7), (100, 2), (Magnitude::MAX, 5)]
+        );
+    }
+
+    #[test]
+    fn histogram_fake_empty_magnitudes_is_allowed() {
+        let histogram = Histogram::fake(&[], vec![], 42);
+
+        let buckets: Vec<_> = histogram.buckets().collect();
+        assert_eq!(buckets, vec![(Magnitude::MAX, 42)]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn histogram_fake_panics_on_length_mismatch() {
+        _ = Histogram::fake(&[10, 50, 100], vec![3, 7], 0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn histogram_fake_panics_on_unsorted_magnitudes() {
+        _ = Histogram::fake(&[10, 100, 50], vec![3, 7, 2], 0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn histogram_fake_panics_on_equal_magnitudes() {
+        _ = Histogram::fake(&[10, 10, 100], vec![3, 7, 2], 0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn histogram_fake_panics_on_magnitude_max_in_buckets() {
+        _ = Histogram::fake(&[10, 50, Magnitude::MAX], vec![3, 7, 2], 0);
     }
 }

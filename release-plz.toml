@@ -40,3 +40,39 @@ changelog_update = false
 # All the `linked*` packages are published under the same version, as they are
 # all the "logically same" package, just separated for cargotechnical reasons.
 version_group = "linked"
+
+[[package]]
+name = "nm"
+
+# nm and nm_impl are logically the same package split into two crates for
+# cargotechnical reasons (see docs/impl-crate-split.md). They must always be
+# released at the same version; the workspace Cargo.toml additionally pins
+# nm_impl with `=` so downstream consumers cannot end up with a mismatched
+# pair.
+version_group = "nm"
+
+[[package]]
+name = "nm_impl"
+
+# See the `nm` entry above. `nm_impl` is doc-hidden and "do not depend on
+# directly", so its version number is mainly a vehicle for keeping the pair
+# in lockstep — its release notes are not consumed by end users.
+version_group = "nm"
+
+[[package]]
+name = "nm_otel"
+
+# nm_otel and nm_otel_impl are logically the same package split into two
+# crates for cargotechnical reasons (see docs/impl-crate-split.md). They must
+# always be released at the same version; the workspace Cargo.toml additionally
+# pins nm_otel_impl with `=` so downstream consumers cannot end up with a
+# mismatched pair.
+version_group = "nm_otel"
+
+[[package]]
+name = "nm_otel_impl"
+
+# See the `nm_otel` entry above. `nm_otel_impl` is doc-hidden and "do not
+# depend on directly", so its version number is mainly a vehicle for keeping
+# the pair in lockstep — its release notes are not consumed by end users.
+version_group = "nm_otel"

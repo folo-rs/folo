@@ -1238,6 +1238,14 @@ version = "1.0.6"
 name = "nm"
 version = "0.1.38"
 dependencies = [
+ "nm_impl",
+ "static_assertions",
+]
+
+[[package]]
+name = "nm_impl"
+version = "0.1.38"
+dependencies = [
  "criterion",
  "fast_time",
  "foldhash 0.2.0",
@@ -1245,6 +1253,7 @@ dependencies = [
  "many_cpus",
  "mutants 0.0.4",
  "new_zealand",
+ "nm",
  "num-traits",
  "par_bench",
  "static_assertions",
@@ -1252,6 +1261,20 @@ dependencies = [
 
 [[package]]
 name = "nm_otel"
+version = "0.4.9"
+dependencies = [
+ "nm",
+ "nm_otel_impl",
+ "opentelemetry",
+ "opentelemetry-stdout",
+ "opentelemetry_sdk",
+ "static_assertions",
+ "tick",
+ "tokio",
+]
+
+[[package]]
+name = "nm_otel_impl"
 version = "0.4.9"
 dependencies = [
  "alloc_tracker",
@@ -1264,9 +1287,9 @@ dependencies = [
  "mutants 0.0.4",
  "new_zealand",
  "nm",
+ "nm_impl",
  "nm_otel",
  "opentelemetry",
- "opentelemetry-stdout",
  "opentelemetry_sdk",
  "par_bench",
  "static_assertions",

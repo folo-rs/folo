@@ -13,41 +13,11 @@ rust-version.workspace = true
 [package.metadata.docs.rs]
 all-features = true
 
-[features]
-default = []
-# Enables test-only constructors for Report, EventMetrics, and Histogram.
-# Only use this in dev-dependencies.
-test-util = []
-
 [dependencies]
-fast_time = { workspace = true }
-foldhash = { workspace = true }
-new_zealand = { workspace = true }
-num-traits = { workspace = true }
+nm_impl = { workspace = true }
 
 [dev-dependencies]
-criterion = { workspace = true }
-many_cpus = { path = "../many_cpus" }
-mutants = { workspace = true }
-par_bench = { path = "../par_bench", features = ["criterion"] }
 static_assertions = { workspace = true }
-
-# Gungraun drives Valgrind-based Callgrind benchmarks; Linux-only.
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-gungraun = { workspace = true, features = ["default"] }
 
 [lints]
 workspace = true
-
-[[bench]]
-name = "nm_performance"
-harness = false
-
-[[bench]]
-name = "nm_push_bulk"
-harness = false
-
-[[bench]]
-name = "nm_observe_cg"
-harness = false
-
