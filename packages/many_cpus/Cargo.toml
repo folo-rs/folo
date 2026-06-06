@@ -13,72 +13,26 @@ rust-version.workspace = true
 [package.metadata.docs.rs]
 all-features = true
 
+# `testing` is used by the Windows-only `*_obey_job_*` examples (inside
+# `#[cfg(windows)]` modules) but not by anything on Linux, so cargo-udeps
+# reports it as unused there.
+[package.metadata.cargo-udeps.ignore]
+development = ["testing"]
+
 [features]
 default = []
 # Enables test utilities including the fake platform for simulating hardware configurations.
-test-util = []
+test-util = ["many_cpus_impl/test-util"]
 
 [dependencies]
-cpulist = { workspace = true }
-derive_more = { workspace = true, features = ["as_ref", "display"] }
-foldhash = { workspace = true }
-itertools = { workspace = true }
-new_zealand = { workspace = true }
-nonempty = { workspace = true }
-rand = { workspace = true, features = ["thread_rng"] }
-
-[target.'cfg(unix)'.dependencies]
-libc = { workspace = true }
-
-[target.'cfg(windows)'.dependencies]
-folo_ffi = { workspace = true }
-heapless = { workspace = true }
-smallvec = { workspace = true }
-windows = { workspace = true, features = [
-    "Win32_System_JobObjects",
-    "Win32_System_Kernel",
-    "Win32_System_SystemInformation",
-    "Win32_System_Threading",
-] }
+many_cpus_impl = { workspace = true }
 
 [dev-dependencies]
-criterion = { workspace = true }
-mockall = { workspace = true }
-mutants = { workspace = true }
-par_bench = { path = "../par_bench", features = ["criterion"] }
+# Examples and the re-export smoke test need these to exercise the public API
+# end-to-end as a user of `many_cpus` would.
+new_zealand = { workspace = true }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }
 
-# Gungraun drives Valgrind-based Callgrind benchmarks; Linux-only.
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-gungraun = { workspace = true, features = ["default"] }
-
-[target.'cfg(windows)'.dev-dependencies]
-windows = { workspace = true, features = ["Win32_Security"] }
-
-[[bench]]
-name = "many_cpus_hardware_info"
-harness = false
-
-[[bench]]
-name = "many_cpus_hardware_tracker"
-harness = false
-
-[[bench]]
-name = "many_cpus_hardware_tracker_cg"
-harness = false
-
-[[bench]]
-name = "many_cpus_pal_windows"
-harness = false
-
-[[bench]]
-name = "many_cpus_processor_set_builder"
-harness = false
-
 [lints]
 workspace = true
-
-
-
-

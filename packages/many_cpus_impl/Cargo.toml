@@ -1,0 +1,91 @@
+[package]
+name = "many_cpus_impl"
+description = "Implementation crate for many_cpus - do not reference directly"
+publish = true
+version = "2.4.7"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lib]
+# many_cpus_impl exists only to host the implementation of `many_cpus` and to
+# expose internal items to in-workspace tests/benches; user-facing
+# documentation lives in `many_cpus`.
+doc = false
+
+[features]
+# Public testing utilities (fake hardware) forwarded 1:1 from `many_cpus`.
+# See docs/impl-crate-split.md for the `test-util` vs `private-test-util`
+# distinction.
+test-util = []
+
+[dependencies]
+cpulist = { workspace = true }
+derive_more = { workspace = true, features = ["as_ref", "display"] }
+foldhash = { workspace = true }
+itertools = { workspace = true }
+new_zealand = { workspace = true }
+nonempty = { workspace = true }
+rand = { workspace = true, features = ["thread_rng"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+folo_ffi = { workspace = true }
+heapless = { workspace = true }
+smallvec = { workspace = true }
+windows = { workspace = true, features = [
+    "Win32_System_JobObjects",
+    "Win32_System_Kernel",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+criterion = { workspace = true }
+# `many_cpus` is a dev-dep so doctests, examples, and benches can write
+# `use many_cpus::SystemHardware;` exactly as user code would, matching the
+# documentation rendered for `many_cpus`.
+many_cpus = { path = "../many_cpus", features = ["test-util"] }
+mockall = { workspace = true }
+mutants = { workspace = true }
+par_bench = { path = "../par_bench", features = ["criterion"] }
+static_assertions = { workspace = true }
+testing = { path = "../testing" }
+
+# Gungraun drives Valgrind-based Callgrind benchmarks; Linux-only.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows = { workspace = true, features = ["Win32_Security"] }
+
+[[bench]]
+name = "many_cpus_hardware_info"
+harness = false
+
+[[bench]]
+name = "many_cpus_hardware_tracker"
+harness = false
+
+[[bench]]
+name = "many_cpus_hardware_tracker_cg"
+harness = false
+
+[[bench]]
+name = "many_cpus_pal_windows"
+harness = false
+
+[[bench]]
+name = "many_cpus_processor_set_builder"
+harness = false
+
+[lints]
+workspace = true

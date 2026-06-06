@@ -57,6 +57,7 @@ linked = { version = "1.0.13", path = "packages/linked", default-features = fals
 linked_macros = { version = "1.0.13", path = "packages/linked_macros", default-features = false }
 linked_macros_impl = { version = "1.0.13", path = "packages/linked_macros_impl", default-features = false }
 many_cpus = { version = "2.4.7", path = "packages/many_cpus", default-features = false }
+many_cpus_impl = { version = "=2.4.7", path = "packages/many_cpus_impl", default-features = false }
 mockall = { version = "0.14.0", default-features = false }
 mutants = { version = "0.0.4", default-features = false }
 negative-impl = { version = "0.1.0", default-features = false }

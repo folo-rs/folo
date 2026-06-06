@@ -1,4 +1,4 @@
-//! Benchmarking Windows PAL internal logic via private API that bypasses the
+//! Benchmarking Windows PAL internal logic via internal API that bypasses the
 //! public API and allows operations to be performed without (full) caching.
 
 #![allow(
@@ -32,7 +32,7 @@ mod windows {
 
     use criterion::Criterion;
     use many_cpus::SystemHardware;
-    use many_cpus::pal::BUILD_TARGET_PLATFORM;
+    use many_cpus_impl::pal::BUILD_TARGET_PLATFORM;
     use new_zealand::nz;
     use par_bench::{Run, ThreadPool};
     use windows::Win32::System::SystemInformation::GROUP_AFFINITY;
@@ -44,11 +44,11 @@ mod windows {
         group.measurement_time(Duration::from_secs(30));
 
         group.bench_function("current_thread_processors", |b| {
-            b.iter(|| black_box(BUILD_TARGET_PLATFORM.__private_current_thread_processors()));
+            b.iter(|| black_box(BUILD_TARGET_PLATFORM.current_thread_processors_for_bench()));
         });
 
         group.bench_function("get_all_processors", |b| {
-            b.iter(|| BUILD_TARGET_PLATFORM.__private_get_all_processors());
+            b.iter(|| BUILD_TARGET_PLATFORM.get_all_processors_for_bench());
         });
 
         group.bench_function("affinity_mask_to_processor_id_1", |b| {
@@ -59,7 +59,7 @@ mod windows {
             };
 
             b.iter(|| {
-                black_box(BUILD_TARGET_PLATFORM.__private_affinity_mask_to_processor_id(&mask))
+                black_box(BUILD_TARGET_PLATFORM.affinity_mask_to_processor_ids_for_bench(&mask))
             });
         });
 
@@ -71,7 +71,7 @@ mod windows {
             };
 
             b.iter(|| {
-                black_box(BUILD_TARGET_PLATFORM.__private_affinity_mask_to_processor_id(&mask))
+                black_box(BUILD_TARGET_PLATFORM.affinity_mask_to_processor_ids_for_bench(&mask))
             });
         });
 

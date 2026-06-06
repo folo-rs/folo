@@ -42,6 +42,24 @@ changelog_update = false
 version_group = "linked"
 
 [[package]]
+name = "many_cpus"
+
+# many_cpus and many_cpus_impl are logically the same package split into two
+# crates for cargotechnical reasons (see docs/impl-crate-split.md). They must
+# always be released at the same version; the workspace Cargo.toml additionally
+# pins many_cpus_impl with `=` so downstream consumers cannot end up with a
+# mismatched pair.
+version_group = "many_cpus"
+
+[[package]]
+name = "many_cpus_impl"
+
+# See the `many_cpus` entry above. `many_cpus_impl` is doc-hidden and "do not
+# depend on directly", so its version number is mainly a vehicle for keeping
+# the pair in lockstep — its release notes are not consumed by end users.
+version_group = "many_cpus"
+
+[[package]]
 name = "nm"
 
 # nm and nm_impl are logically the same package split into two crates for
