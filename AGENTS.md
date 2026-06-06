@@ -1043,11 +1043,12 @@ impl crate uses plain `pub` for anything benches/tests need to reach. This repla
 the `test-util` Cargo feature anti-pattern (which leaks private surface into the
 documented public API).
 
-The canonical example is `packages/nm` (shell) + `packages/nm_impl` (implementation).
-For full details — when to apply the split, the `TestFacade` constructor pattern that
-replaces `*::fake(...)` constructors, the doctest-cycle dev-dependency, and the
-distinction from the in-crate `__private` module convention above — see
-[docs/impl-crate-split.md](docs/impl-crate-split.md).
+The canonical example is `packages/nm` (shell) + `packages/nm_impl` (implementation),
+with `packages/nm_otel` + `packages/nm_otel_impl` as a second worked example. For full
+details — when to apply the split, the optional `test-util` Cargo feature on the impl
+crate (for `*::fake(...)` fabrication constructors, when needed), the doctest-cycle
+dev-dependency, lockstep versioning, and the distinction from the in-crate `__private`
+module convention above — see [docs/impl-crate-split.md](docs/impl-crate-split.md).
 
 # UI tests
 
