@@ -44,7 +44,7 @@ mutants:
 
         # This is just a different type of bindings, skipped for same reason as `bindings` above.
         "-e"
-        (Escape-Wildcards "packages/many_cpus/src/pal/linux/filesystem/**")
+        (Escape-Wildcards "packages/many_cpus_impl/src/pal/linux/filesystem/**")
 
         # These packages are literally full of synchronization primitives, so 95% of mutations
         # will just cause tests to time out and never complete - pointless to try mutate this stuff.

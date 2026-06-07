@@ -1126,25 +1126,10 @@ checksum = "113b30b4cd05f7c06868fdb2854f66a7b9fece9a48425351cd532e810d74024f"
 name = "many_cpus"
 version = "2.4.7"
 dependencies = [
- "cpulist",
- "criterion",
- "derive_more",
- "foldhash 0.2.0",
- "folo_ffi",
- "gungraun",
- "heapless",
- "itertools 0.14.0",
- "libc",
- "mockall",
- "mutants 0.0.4",
+ "many_cpus_impl",
  "new_zealand",
- "nonempty",
- "par_bench",
- "rand 0.10.1",
- "smallvec",
  "static_assertions",
  "testing",
- "windows",
 ]
 
 [[package]]
@@ -1161,6 +1146,32 @@ dependencies = [
  "nonempty",
  "rand 0.10.1",
  "static_assertions",
+]
+
+[[package]]
+name = "many_cpus_impl"
+version = "2.4.7"
+dependencies = [
+ "cpulist",
+ "criterion",
+ "derive_more",
+ "foldhash 0.2.0",
+ "folo_ffi",
+ "gungraun",
+ "heapless",
+ "itertools 0.14.0",
+ "libc",
+ "many_cpus",
+ "mockall",
+ "mutants 0.0.4",
+ "new_zealand",
+ "nonempty",
+ "par_bench",
+ "rand 0.10.1",
+ "smallvec",
+ "static_assertions",
+ "testing",
+ "windows",
 ]
 
 [[package]]

@@ -768,26 +768,26 @@ impl BuildTargetPlatform {
         cpu_ratio * system_processor_count
     }
 
-    // Exposed for benchmarking only, not part of public API surface.
+    // Exposed so benches can call into the PAL directly, bypassing higher-level caching.
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Just for benchmarking, not real code.
-    pub fn __private_current_thread_processors(&self) -> NonEmpty<ProcessorId> {
+    pub fn current_thread_processors_for_bench(&self) -> NonEmpty<ProcessorId> {
         self.current_thread_processors()
     }
 
-    // Exposed for benchmarking only, not part of public API surface.
+    // Exposed so benches can call into the PAL directly, bypassing higher-level caching.
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Just for benchmarking, not real code.
-    pub fn __private_affinity_mask_to_processor_id(
+    pub fn affinity_mask_to_processor_ids_for_bench(
         &self,
         mask: &GROUP_AFFINITY,
     ) -> heapless::Vec<ProcessorId, PROCESSOR_GROUP_MAX_SIZE> {
         self.affinity_mask_to_processor_ids(mask)
     }
 
-    // Exposed for benchmarking only, not part of public API surface.
+    // Exposed so benches can call into the PAL directly, bypassing higher-level caching.
     #[cfg_attr(test, mutants::skip)] // Just for benchmarking, not real code.
-    pub fn __private_get_all_processors(&self) {
+    pub fn get_all_processors_for_bench(&self) {
         black_box(self.get_all_processors());
     }
 }

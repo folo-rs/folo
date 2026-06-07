@@ -420,7 +420,7 @@ boundary. The two patterns coexist:
 
 ## Canonical examples
 
-The pattern has been applied to two crate pairs in this workspace.
+The pattern has been applied to three crate pairs in this workspace.
 
 ### `nm` / `nm_impl`
 
@@ -462,3 +462,46 @@ The second worked example. Concrete files to study:
 - `packages/nm_otel_impl/README.md` — "do not depend on this directly" notice.
 - `release-plz.toml` — `version_group = "nm_otel"` entries for `nm_otel` and
   `nm_otel_impl`.
+
+### `many_cpus` / `many_cpus_impl`
+
+The third worked example, and the first split that combines a forwarded
+public `test-util` feature with internal benches that reach into the PAL.
+Concrete files to study:
+
+- `packages/many_cpus/Cargo.toml` — thin shell manifest with
+  `many_cpus_impl = { workspace = true }` and
+  `test-util = ["many_cpus_impl/test-util"]` forwarding the public testing
+  aid to the impl crate.
+- `packages/many_cpus/src/lib.rs` — preserved user-facing crate docs +
+  explicit re-export list, plus
+  `#[cfg(any(test, feature = "test-util"))] pub use many_cpus_impl::fake;`
+  to forward the public testing module behind the same feature gate users
+  enable on the shell.
+- `packages/many_cpus/tests/many_cpus_reexports.rs` — re-export smoke test
+  that covers both the unconditional public surface and the
+  `test-util`-gated `fake` module.
+- `packages/many_cpus_impl/Cargo.toml` — impl manifest with `[lib] doc = false`
+  and the public-API `test-util` feature; no `private-test-util` feature is
+  declared because the bench-only helpers do not need feature-gating (see
+  next bullet).
+- `packages/many_cpus_impl/src/pal/windows/platform.rs` —
+  `pub fn current_thread_processors_for_bench`,
+  `pub fn get_all_processors_for_bench`, and
+  `pub fn affinity_mask_to_processor_ids_for_bench` wrappers on
+  `BuildTargetPlatform`. These are plain `pub fn` rather than feature-gated,
+  because the entire impl crate is `#![doc(hidden)]` and "do not depend on
+  directly", so end users never see them; the `_for_bench` name suffix
+  signals the intent at the call site.
+- `packages/many_cpus_impl/benches/many_cpus_pal_windows.rs` — consumes those
+  helpers via `use many_cpus_impl::pal::BUILD_TARGET_PLATFORM;`, bypassing
+  the high-level public API to measure the PAL primitives directly.
+- `packages/many_cpus_impl/src/lib.rs` — `#![doc(hidden)]` root that
+  re-exports the public-API subset plus `pub mod pal;` (no `#[doc(hidden)]`
+  needed on the module — the crate root already hides everything from
+  docs.rs).
+- `packages/many_cpus_impl/README.md` — "do not depend on this directly"
+  notice.
+- `release-plz.toml` — `version_group = "many_cpus"` entries for `many_cpus`
+  and `many_cpus_impl`.
+

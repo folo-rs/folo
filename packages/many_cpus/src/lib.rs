@@ -336,23 +336,10 @@
     html_favicon_url = "https://raw.githubusercontent.com/folo-rs/folo/refs/heads/main/packages/many_cpus/icon.ico"
 )]
 
-mod primitive_types;
-mod processor;
-mod processor_set;
-mod processor_set_builder;
-mod resource_quota;
-mod system_hardware;
+pub use many_cpus_impl::{
+    EfficiencyClass, MemoryRegionId, Processor, ProcessorId, ProcessorSet, ProcessorSetBuilder,
+    ResourceQuota, SystemHardware,
+};
 
 #[cfg(any(test, feature = "test-util"))]
-pub mod fake;
-
-pub use primitive_types::*;
-pub use processor::*;
-pub use processor_set::*;
-pub use processor_set_builder::*;
-pub use resource_quota::*;
-pub use system_hardware::*;
-
-// No documented public API but we have benchmarks that reach in via undocumented private API.
-#[doc(hidden)]
-pub mod pal;
+pub use many_cpus_impl::fake;
