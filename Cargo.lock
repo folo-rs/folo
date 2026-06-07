@@ -195,9 +195,9 @@ dependencies = [
 
 [[package]]
 name = "bitflags"
-version = "2.12.1"
+version = "2.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84d7ced0ae9557296835c32bf1b1e02b44c746701f898460fb000d7eaa84f00a"
+checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "bumpalo"
@@ -276,9 +276,9 @@ dependencies = [
 
 [[package]]
 name = "chrono"
-version = "0.4.44"
+version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c673075a2e0e5f4a1dde27ce9dee1ea4558c7ffe648f576438a20ca1d2acc4b0"
+checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "num-traits",
 ]
@@ -1118,13 +1118,13 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.31"
+version = "0.4.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "113b30b4cd05f7c06868fdb2854f66a7b9fece9a48425351cd532e810d74024f"
+checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
 
 [[package]]
 name = "many_cpus"
-version = "2.4.7"
+version = "2.4.8"
 dependencies = [
  "many_cpus_impl",
  "new_zealand",
@@ -1134,7 +1134,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus_benchmarking"
-version = "0.1.51"
+version = "0.1.52"
 dependencies = [
  "cpulist",
  "criterion",
@@ -1150,7 +1150,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus_impl"
-version = "2.4.7"
+version = "2.4.8"
 dependencies = [
  "cpulist",
  "criterion",
@@ -1247,7 +1247,7 @@ version = "1.0.6"
 
 [[package]]
 name = "nm"
-version = "0.1.38"
+version = "0.1.39"
 dependencies = [
  "nm_impl",
  "static_assertions",
@@ -1255,7 +1255,7 @@ dependencies = [
 
 [[package]]
 name = "nm_impl"
-version = "0.1.38"
+version = "0.1.39"
 dependencies = [
  "criterion",
  "fast_time",
@@ -1272,7 +1272,7 @@ dependencies = [
 
 [[package]]
 name = "nm_otel"
-version = "0.4.9"
+version = "0.4.10"
 dependencies = [
  "nm",
  "nm_otel_impl",
@@ -1286,7 +1286,7 @@ dependencies = [
 
 [[package]]
 name = "nm_otel_impl"
-version = "0.4.9"
+version = "0.4.10"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -1345,9 +1345,9 @@ dependencies = [
 
 [[package]]
 name = "ohno"
-version = "0.3.2"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82a7fa4809797026017b08adb583cf85b8e1ca2861935871f6ed62d41174469f"
+checksum = "82948d54d99b956d012ec2b909ed4331f7064a0726942cc04f8e7ec48ebae9e8"
 dependencies = [
  "ohno_macros",
  "typeid",
@@ -1355,9 +1355,9 @@ dependencies = [
 
 [[package]]
 name = "ohno_macros"
-version = "0.3.0"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c13afa6566040d0a66174d23ddd75fdee2c93e205cd57ff9abbecfb709014f6b"
+checksum = "b562701c8ca9747dcece39363bdd78fe1e5abe946b6c8e3a2e47282b32149959"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1435,7 +1435,7 @@ dependencies = [
 
 [[package]]
 name = "par_bench"
-version = "0.2.41"
+version = "0.2.42"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -1735,7 +1735,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "region_cached"
-version = "1.0.21"
+version = "1.0.22"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1757,7 +1757,7 @@ dependencies = [
 
 [[package]]
 name = "region_local"
-version = "1.0.21"
+version = "1.0.22"
 dependencies = [
  "arc-swap",
  "axum",
@@ -2069,9 +2069,9 @@ dependencies = [
 
 [[package]]
 name = "thread_aware"
-version = "0.7.0"
+version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "069b90c4193bb78bb9094d2625a25e6c4eb8ec634ea15650095f0fe66c17e77a"
+checksum = "02e040c858ab748794884b3fd0842e6a9fe8f0a31d8c9ce709eb934dffc2158f"
 
 [[package]]
 name = "threadpool"
@@ -2084,9 +2084,9 @@ dependencies = [
 
 [[package]]
 name = "tick"
-version = "0.3.0"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3947972f25827823c4d2cc8a6fea4f5b85d1e5a666ed8a91b9a34df87b4bbbeb"
+checksum = "4d9ea844350038ecc3a1b5a59185419b48298ea143b2468efd2ac87f4465edf0"
 dependencies = [
  "futures-core",
  "pin-project-lite",
@@ -2291,7 +2291,7 @@ checksum = "9fa66022bbd1ab992fad72bdedcfd07a0023b6f5ecc83d50121e39e3a3caed41"
 
 [[package]]
 name = "vicinal"
-version = "0.1.26"
+version = "0.1.27"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
