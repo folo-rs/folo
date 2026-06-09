@@ -126,13 +126,13 @@ library_benchmark_group!(
 The Criterion benchmark `region_local/read/get_local_warm` corresponds
 one-to-one with the Callgrind benchmark `read::read_get_local_warm`.
 
-The set of Callgrind subgroup names in a `_cg.rs` file must match the set
-of Criterion subgroup names in the paired `.rs` file. A Callgrind file
-may omit subgroups that do not warrant instruction-count coverage (for
-example multithreaded contention or allocation-throughput scenarios where
-Callgrind adds no signal), but it must not introduce subgroup names that
-do not appear in the Criterion file. This keeps the two views of the
-same package navigable side-by-side.
+The set of Callgrind subgroup names in a `_cg.rs` file must be a subset
+of the Criterion subgroup names in the paired `.rs` file. A Callgrind
+file may omit subgroups that do not warrant instruction-count coverage
+(for example multithreaded contention or allocation-throughput scenarios
+where Callgrind adds no signal), but it must not introduce subgroup
+names that do not appear in the Criterion file. This keeps the two
+views of the same package navigable side-by-side.
 
 Within a matched subgroup, individual Callgrind benchmark functions need
 not correspond 1:1 to Criterion bench functions — Callgrind frequently

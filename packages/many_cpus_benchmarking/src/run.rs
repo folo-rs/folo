@@ -21,10 +21,11 @@ use crate::{Payload, WorkDistribution};
 /// Executes a number of benchmark runs for a specific payload type, using the specified work
 /// distribution modes.
 ///
-/// `group_prefix` is prepended to the payload type name to form the Criterion benchmark group
-/// name (`<group_prefix>/<TypeName>`). Pass the file basename of the calling bench file (e.g.
-/// `"benchmarks_effects_of_memory"` from `benchmarks_effects_of_memory.rs`) so the group name
-/// follows the workspace benchmark naming conventions in `docs/naming.md`.
+/// `group_prefix` is prepended to the unqualified payload type name (the last `::` segment of
+/// the full type path) to form the Criterion benchmark group name (`<group_prefix>/<TypeName>`).
+/// Pass the file basename of the calling bench file (e.g. `"benchmarks_effects_of_memory"` from
+/// `benchmarks_effects_of_memory.rs`) so the group name follows the workspace benchmark naming
+/// conventions in `docs/naming.md`.
 ///
 /// `BATCH_SIZE` indicates the maximum number of iterations that can be prepared at the same time.
 /// It is optimal to prepare all iterations at once, to get the most consistent and noise-free

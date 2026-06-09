@@ -5,10 +5,10 @@
 //!
 //! The scenarios cover the operations that make up the value proposition
 //! of the crate: the full send-receive lifecycle (for boxed, pooled,
-//! embedded and laked events), the partial-state hot paths that an event
-//! exercises in real code (set / poll, against connected / disconnected
-//! peers), and the two cancellation paths (sender dropped from BOUND /
-//! AWAITING state).
+//! embedded and lake-rented events), the partial-state hot paths that an
+//! event exercises in real code (set / poll, against connected /
+//! disconnected peers), and the two cancellation paths (sender dropped
+//! from BOUND / AWAITING state).
 
 #![allow(
     missing_docs,
