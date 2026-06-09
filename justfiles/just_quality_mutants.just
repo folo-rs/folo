@@ -1,6 +1,6 @@
 [group('quality')]
 [script]
-mutants:
+mutants SHARD="":
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
@@ -87,6 +87,42 @@ mutants:
     $args += "--jobs"
     # Experimentally determined heuristics.
     $args += [int]([Math]::Floor([Environment]::ProcessorCount / 6)) + 1
+
+    # Optional sharding lets CI split mutation testing across multiple parallel runners.
+    # We accept the same 1-based "N/M" format as `miri-harder` for consistency with the
+    # existing workspace convention (so `1/8 .. 8/8` for 8 shards), and convert to
+    # cargo-mutants' native 0-based form (`0/N .. (N-1)/N`) before invoking the tool.
+    # Without a SHARD argument, cargo-mutants runs every mutant in a single job (the
+    # original behavior).
+    $shard = "{{ SHARD }}"
+    if ($shard -ne "") {
+        $parts = $shard -split "/"
+
+        if ($parts.Length -ne 2) {
+            Write-Error "Invalid SHARD value '$shard'. Expected format 'N/M'."
+            exit 1
+        }
+
+        $shardIndex = 0
+        $shardCount = 0
+        if (-not [int]::TryParse($parts[0], [ref]$shardIndex) -or -not [int]::TryParse($parts[1], [ref]$shardCount)) {
+            Write-Error "Invalid SHARD value '$shard'. N and M must be integers in 'N/M'."
+            exit 1
+        }
+
+        if ($shardCount -le 0) {
+            Write-Error "Invalid SHARD value '$shard'. M must be a positive integer in 'N/M'."
+            exit 1
+        }
+
+        if ($shardIndex -lt 1 -or $shardIndex -gt $shardCount) {
+            Write-Error "Invalid SHARD value '$shard'. N must satisfy 1 <= N <= M in 'N/M'."
+            exit 1
+        }
+
+        $args += "--shard"
+        $args += ("{0}/{1}" -f ($shardIndex - 1), $shardCount)
+    }
 
     # We must use Invoke-Expression to preserve the quotes around the wildcarded arguments on Linux.
     $expanded_args = [String]::join(" ", $args)
