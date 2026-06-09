@@ -20,7 +20,7 @@ criterion_main!(benches);
 const EXPECTED_VALUE: u64 = 0x1122334411223344;
 
 fn entrypoint(c: &mut Criterion) {
-    let mut group = c.benchmark_group("variable_access");
+    let mut group = c.benchmark_group("benchmarks_variable_access/normal");
 
     group.bench_function("static_immutable", |b| {
         b.iter(|| {
@@ -190,7 +190,7 @@ fn entrypoint(c: &mut Criterion) {
 
     // We put the extra slow ones in their own group just for better comparability in charts,
     // otherwise they blow out the scale so the rest are invisible.
-    let mut group = c.benchmark_group("variable_access_slow");
+    let mut group = c.benchmark_group("benchmarks_variable_access/slow");
 
     let local_arc_weak: ArcWeak<u64> = black_box(Arc::downgrade(&local_arc));
 

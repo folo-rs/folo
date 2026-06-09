@@ -21,6 +21,12 @@ use crate::{Payload, WorkDistribution};
 /// Executes a number of benchmark runs for a specific payload type, using the specified work
 /// distribution modes.
 ///
+/// `group_prefix` is prepended to the unqualified payload type name (the last `::` segment of
+/// the full type path) to form the Criterion benchmark group name (`<group_prefix>/<TypeName>`).
+/// Pass the file basename of the calling bench file (e.g. `"benchmarks_effects_of_memory"` from
+/// `benchmarks_effects_of_memory.rs`) so the group name follows the workspace benchmark naming
+/// conventions in `docs/naming.md`.
+///
 /// `BATCH_SIZE` indicates the maximum number of iterations that can be prepared at the same time.
 /// It is optimal to prepare all iterations at once, to get the most consistent and noise-free
 /// results. However, there is only a limited amount of memory available, making that impractical.
@@ -29,9 +35,12 @@ use crate::{Payload, WorkDistribution};
 /// this is merely an upper bound.
 pub fn execute_runs<P: Payload, const BATCH_SIZE: u64>(
     c: &mut Criterion,
+    group_prefix: &str,
     work_distributions: &[WorkDistribution],
 ) {
-    let mut g = c.benchmark_group(type_name::<P>());
+    let full_type_name = type_name::<P>();
+    let short_type_name = full_type_name.rsplit("::").next().unwrap_or(full_type_name);
+    let mut g = c.benchmark_group(format!("{group_prefix}/{short_type_name}"));
 
     // Many-processor benchmarks can be slow and clearing processor caches adds extra overhead
     // between iterations, so to get stable and consistent data it is worth taking some time.

@@ -28,7 +28,7 @@ fn entrypoint(c: &mut Criterion) {
         .take(nz!(2))
         .map(|x| ThreadPool::new(&x));
 
-    let mut group = c.benchmark_group("ProcessorSetBuilder");
+    let mut group = c.benchmark_group("many_cpus_processor_set_builder/processor_set_builder");
 
     // Results from this are really unstable for whatever reason. Give it more time to stabilize.
     group.measurement_time(Duration::from_secs(30));

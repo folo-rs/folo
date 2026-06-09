@@ -450,6 +450,12 @@ the `pin!` macro.
 
 Do not forget to register benchmarks in `Cargo.toml`.
 
+Benchmark file names, Criterion group names, and Callgrind group/function names
+follow strict conventions documented in [docs/naming.md](docs/naming.md):
+the file basename prefixes Criterion group names, Callgrind files require a
+paired Criterion file, and Callgrind identifiers mirror Criterion ones with
+`/` substituted by `_`.
+
 # Callgrind benchmarks
 
 For performance-critical hot paths, complement the Criterion benchmarks with Callgrind-based
@@ -1123,6 +1129,9 @@ Avoid unnecessary and repetitive prefixes and suffixes.
 For example:
 
 * Builder methods are just a noun. It is `FooBuilder::bar(value)` not `FooBuilder::with_bar(value)`.
+
+See [docs/naming.md](docs/naming.md) for benchmark-specific naming
+conventions (file basenames, Criterion group names, Callgrind pairing).
 
 # Memory allocation is the root of all evil
 

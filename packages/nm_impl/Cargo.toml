@@ -57,5 +57,5 @@ name = "nm_push_bulk"
 harness = false
 
 [[bench]]
-name = "nm_observe_cg"
+name = "nm_performance_cg"
 harness = false

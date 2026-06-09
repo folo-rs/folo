@@ -18,10 +18,10 @@
 //! source of truth for the actual end-to-end cost of `Clock::now()`. See
 //! `docs/callgrind-benchmarks.md` for the broader pairing rule.
 //!
-//! # Flaky benchmark: `instant_elapsed`
+//! # Flaky benchmark: `timestamp_capture_instant_elapsed`
 //!
-//! `instant_elapsed` is **timing-dependent and its instruction count is not
-//! stable** (observed 137/154/169). It calls the real
+//! `timestamp_capture_instant_elapsed` is **timing-dependent and its instruction
+//! count is not stable** (observed 137/154/169). It calls the real
 //! `CLOCK_MONOTONIC_COARSE` time source, so both the cache hit/miss decision
 //! inside `now()` and the carry/borrow branches inside `std::time::Instant`
 //! arithmetic depend on whether the coarse clock happened to tick while the
@@ -75,11 +75,11 @@ mod linux {
     }
 
     // Headline measurement: the user-space wrapper around the kernel time
-    // source. Compare against `std_now` below to see how much wrapper the
-    // standard library adds.
+    // source. Compare against `timestamp_capture_std_now` below to see how much
+    // wrapper the standard library adds.
     #[library_benchmark]
     #[bench::fresh(make_clock())]
-    fn clock_now(mut clock: Clock) -> Clock {
+    fn timestamp_capture_clock_now(mut clock: Clock) -> Clock {
         _ = black_box(black_box(&mut clock).now());
         clock
     }
@@ -90,7 +90,7 @@ mod linux {
     // hit/miss plus Instant carry/borrow branches). See the module docs.
     #[library_benchmark]
     #[bench::after_one_tick(make_clock_with_anchor())]
-    fn instant_elapsed(input: (Clock, Instant)) -> (Clock, Instant) {
+    fn timestamp_capture_instant_elapsed(input: (Clock, Instant)) -> (Clock, Instant) {
         let (mut clock, anchor) = input;
         _ = black_box(black_box(&anchor).elapsed(black_box(&mut clock)));
         (clock, anchor)
@@ -100,27 +100,29 @@ mod linux {
     // overhead that `elapsed` adds on top of `now`.
     #[library_benchmark]
     #[bench::two_instants(make_two_instants())]
-    fn instant_saturating_duration_since(input: (Instant, Instant)) -> (Instant, Instant) {
+    fn timestamp_capture_instant_saturating_duration_since(
+        input: (Instant, Instant),
+    ) -> (Instant, Instant) {
         let (first, second) = input;
         _ = black_box(black_box(&second).saturating_duration_since(black_box(first)));
         (first, second)
     }
 
     // Sibling comparison: how many wrapper instructions does `std::time::Instant::now()`
-    // add on top of its own syscall? The delta against `clock_now` is the value
-    // proposition of `fast_time` (no allocator, no monotonic-correction logic).
+    // add on top of its own syscall? The delta against `timestamp_capture_clock_now`
+    // is the value proposition of `fast_time` (no allocator, no monotonic-correction logic).
     #[library_benchmark]
-    fn std_now() {
+    fn timestamp_capture_std_now() {
         _ = black_box(StdInstant::now());
     }
 
     library_benchmark_group!(
-        name = clock_group,
+        name = timestamp_capture,
         benchmarks = [
-            clock_now,
-            instant_elapsed,
-            instant_saturating_duration_since,
-            std_now,
+            timestamp_capture_clock_now,
+            timestamp_capture_instant_elapsed,
+            timestamp_capture_instant_saturating_duration_since,
+            timestamp_capture_std_now,
         ]
     );
 }
@@ -128,7 +130,7 @@ mod linux {
 #[cfg(target_os = "linux")]
 use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
 #[cfg(target_os = "linux")]
-pub use linux::clock_group;
+pub use linux::timestamp_capture;
 
 #[cfg(target_os = "linux")]
 gungraun::main!(
@@ -137,5 +139,5 @@ gungraun::main!(
             .args(["--branch-sim=yes"])
             .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
     );
-    library_benchmark_groups = clock_group
+    library_benchmark_groups = timestamp_capture
 );

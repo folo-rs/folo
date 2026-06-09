@@ -1,9 +1,9 @@
 //! Callgrind benchmarks for the `linked` crate's `InstancePerThread`
 //! handle hot path.
 //!
-//! Paired with `linked_instance_per_thread.rs` (the `instance_per_thread::Ref`
-//! and `instance_per_thread::Ref::access` Criterion groups) which cover
-//! the same operations under wall-clock measurement.
+//! Paired with `linked_instance_per_thread.rs` (the `acquire` and `access`
+//! Criterion subgroups) which cover the same operations under wall-clock
+//! measurement.
 //!
 //! Scenarios isolate the per-call cost of acquiring and using thread-
 //! local handles so each can be tracked at instruction-level granularity:
@@ -11,11 +11,11 @@
 //! * `acquire_first_touch` — first acquire on the thread; allocates the
 //!   thread-local instance.
 //! * `acquire_cached` — subsequent acquire; hits the thread-local cache.
-//! * `ref_clone` — clone an existing `Ref<T>`.
-//! * `ref_field_access` — deref through a `Ref<T>` and access a field.
-//! * `std_thread_local_access_first_touch` — `thread_local!` `LazyCell`
+//! * `acquire_clone` — clone an existing `Ref<T>`.
+//! * `access_field_access` — deref through a `Ref<T>` and access a field.
+//! * `access_vs_std_thread_local_first_touch` — `thread_local!` `LazyCell`
 //!   first-touch baseline.
-//! * `std_thread_local_access_primed` — `thread_local!` `LazyCell`
+//! * `access_vs_std_thread_local_primed` — `thread_local!` `LazyCell`
 //!   cached-access baseline.
 
 #![allow(
@@ -144,24 +144,22 @@ mod linux {
         (state, handle)
     }
 
-    // ---------- Ref operations ----------
-
     #[library_benchmark]
     #[bench::ready(make_ref())]
-    fn ref_clone(state: RefState) -> (RefState, Ref<TestSubject>) {
+    fn acquire_clone(state: RefState) -> (RefState, Ref<TestSubject>) {
         let cloned = black_box(&state.handle).clone();
         (state, cloned)
     }
 
+    // ---------- Access paths ----------
+
     #[library_benchmark]
     #[bench::ready(make_ref())]
-    fn ref_field_access(state: RefState) -> RefState {
+    fn access_field_access(state: RefState) -> RefState {
         let count = Arc::weak_count(&black_box(&state.handle).shared_state);
         _ = black_box(count);
         state
     }
-
-    // ---------- Baseline ----------
 
     // Setup primes the std thread_local LazyCell so the bench measures the
     // cached access path, matching the primed `acquire_cached` benchmark.
@@ -170,28 +168,27 @@ mod linux {
     }
 
     #[library_benchmark]
-    fn std_thread_local_access_first_touch() -> usize {
+    fn access_vs_std_thread_local_first_touch() -> usize {
         STD_THREAD_LOCAL.with(|local| Arc::weak_count(&local.shared_state))
     }
 
     #[library_benchmark]
     #[bench::primed(prime_std_thread_local())]
-    fn std_thread_local_access_primed(_: ()) -> usize {
+    fn access_vs_std_thread_local_primed(_: ()) -> usize {
         STD_THREAD_LOCAL.with(|local| Arc::weak_count(&local.shared_state))
     }
 
     library_benchmark_group!(
-        name = acquire_group,
-        benchmarks = [acquire_first_touch, acquire_cached]
+        name = acquire,
+        benchmarks = [acquire_first_touch, acquire_cached, acquire_clone]
     );
 
-    library_benchmark_group!(name = ref_group, benchmarks = [ref_clone, ref_field_access]);
-
     library_benchmark_group!(
-        name = baseline_group,
+        name = access,
         benchmarks = [
-            std_thread_local_access_first_touch,
-            std_thread_local_access_primed,
+            access_field_access,
+            access_vs_std_thread_local_first_touch,
+            access_vs_std_thread_local_primed,
         ]
     );
 }
@@ -199,7 +196,7 @@ mod linux {
 #[cfg(target_os = "linux")]
 use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
 #[cfg(target_os = "linux")]
-pub use linux::{acquire_group, baseline_group, ref_group};
+pub use linux::{access, acquire};
 
 #[cfg(target_os = "linux")]
 gungraun::main!(
@@ -208,5 +205,5 @@ gungraun::main!(
             .args(["--branch-sim=yes"])
             .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
     );
-    library_benchmark_groups = acquire_group, ref_group, baseline_group
+    library_benchmark_groups = acquire, access
 );

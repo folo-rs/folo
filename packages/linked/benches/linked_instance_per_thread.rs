@@ -52,7 +52,7 @@ fn local(c: &mut Criterion) {
     let mut one_thread =
         ThreadPool::new(SystemHardware::current().processors().take(nz!(1)).unwrap());
 
-    let mut g = c.benchmark_group("instance_per_thread::create");
+    let mut g = c.benchmark_group("linked_instance_per_thread/create");
 
     Run::new()
         .prepare_iter(|_| TestSubject::new())
@@ -72,7 +72,7 @@ fn local_ref(c: &mut Criterion) {
     let mut one_thread =
         ThreadPool::new(SystemHardware::current().processors().take(nz!(1)).unwrap());
 
-    let mut g = c.benchmark_group("instance_per_thread::Ref");
+    let mut g = c.benchmark_group("linked_instance_per_thread/acquire");
 
     let per_thread = InstancePerThread::new(TestSubject::new());
 
@@ -103,7 +103,7 @@ fn local_ref_multithreaded(c: &mut Criterion) {
     let mut two_threads = TWO_PROCESSORS.as_ref().map(ThreadPool::new);
 
     if let Some(ref mut two_threads) = two_threads {
-        let mut g = c.benchmark_group("instance_per_thread::Ref::two-threaded");
+        let mut g = c.benchmark_group("linked_instance_per_thread/acquire_two_threaded");
 
         let per_thread = InstancePerThread::new(TestSubject::new());
 
@@ -134,7 +134,7 @@ fn local_ref_access(c: &mut Criterion) {
         ThreadPool::new(SystemHardware::current().processors().take(nz!(1)).unwrap());
     let mut two_threads = TWO_PROCESSORS.as_ref().map(ThreadPool::new);
 
-    let mut g = c.benchmark_group("instance_per_thread::Ref::access");
+    let mut g = c.benchmark_group("linked_instance_per_thread/access");
 
     let per_thread = InstancePerThread::new(TestSubject::new());
 

@@ -22,6 +22,7 @@ fn entrypoint(c: &mut Criterion) {
     // the non-initializer worker would wait forever for initialization that never happens.
     execute_runs::<SharedHashMapRead<1024, 10>, 100>(
         c,
+        "many_cpus_benchmarking_shared_data_same_action",
         WorkDistribution::all_with_unique_processors_without_self(),
     );
 }

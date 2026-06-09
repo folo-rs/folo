@@ -2,9 +2,9 @@
 //!
 //! Paired Criterion (wall-clock) coverage lives in two sibling files:
 //!
-//! * `infinity_pool_vs_std.rs` (the `ip_vs_std` Criterion group) covers
-//!   the insert/drop scenarios here under a comprehensive churn pattern.
-//! * `infinity_pool_focused.rs` (the `focused` Criterion group) covers
+//! * `infinity_pool_vs_std.rs` (the `churn_insertion` Criterion subgroup)
+//!   covers the insert/drop scenarios here under a comprehensive churn pattern.
+//! * `infinity_pool_focused.rs` (the `focused` Criterion subgroup) covers
 //!   the remaining scenarios as elementary single-op measurements:
 //!   deref, multi-layout `BlindPool` insert, raw bulk drop, and iter.
 //!
@@ -12,20 +12,20 @@
 //! can be tracked at instruction-level granularity, separated from the
 //! adjacent churn-loop overhead the Criterion bench measures:
 //!
-//! * `pinned_pool_insert_into_empty` — first insert; allocates a slab.
-//! * `pinned_pool_insert_into_10k` — Nth insert; reuses an open slab.
-//! * `pinned_pool_drop_handle_from_10k` — drop a handle, freeing one slot.
-//! * `pinned_pool_deref_handle` — deref through a handle.
+//! * `focused_pinned_pool_insert_into_empty` — first insert; allocates a slab.
+//! * `focused_pinned_pool_insert_into_10k` — Nth insert; reuses an open slab.
+//! * `focused_pinned_pool_drop_handle_from_10k` — drop a handle, freeing one slot.
+//! * `focused_pinned_pool_deref_handle` — deref through a handle.
 //!
 //! Sibling variants compare the thread-safe path against single-thread
 //! and untyped pools, and against `Arc::pin` and `Box::pin` baselines:
 //!
-//! * `local_pinned_pool_insert_into_10k` — single-threaded path.
-//! * `blind_pool_insert_into_10k` — untyped path with 1 distinct layout.
-//! * `blind_pool_insert_with_5_layouts` — untyped path with 5 distinct
+//! * `focused_local_pinned_pool_insert_into_10k` — single-threaded path.
+//! * `focused_blind_pool_insert_into_10k` — untyped path with 1 distinct layout.
+//! * `focused_blind_pool_insert_with_5_layouts` — untyped path with 5 distinct
 //!   layouts; isolates the layout-dispatch cost.
-//! * `arc_pin_baseline_insert` — `Arc::pin` for comparison.
-//! * `box_pin_baseline_insert` — `Box::pin` for comparison.
+//! * `focused_arc_pin_baseline_insert` — `Arc::pin` for comparison.
+//! * `focused_box_pin_baseline_insert` — `Box::pin` for comparison.
 //!
 //! The `OpaquePool` family wraps the same inner `RawOpaquePool` as the
 //! `PinnedPool` family, but differs on two axes the typed variants do
@@ -35,34 +35,34 @@
 //! API does not name the stored type. The sibling scenarios isolate
 //! these costs at instruction-level granularity:
 //!
-//! * `opaque_pool_insert_into_10k` — `OpaquePool::insert` (`Arc` + `Mutex` +
-//!   layout-check); paired with the `OpaquePool` bench in the `ip_vs_std`
-//!   Criterion group.
-//! * `local_opaque_pool_insert_into_10k` — `LocalOpaquePool::insert`
+//! * `focused_opaque_pool_insert_into_10k` — `OpaquePool::insert` (`Arc` + `Mutex` +
+//!   layout-check); paired with the `OpaquePool` bench in the
+//!   `infinity_pool_vs_std/churn_insertion` Criterion subgroup.
+//! * `focused_local_opaque_pool_insert_into_10k` — `LocalOpaquePool::insert`
 //!   (`Rc` + `RefCell` + layout-check); paired with the `LocalOpaquePool`
-//!   bench in the `ip_vs_std` Criterion group.
-//! * `raw_opaque_pool_insert_into_10k` — `RawOpaquePool::insert` (layout
+//!   bench in the `infinity_pool_vs_std/churn_insertion` Criterion subgroup.
+//! * `focused_raw_opaque_pool_insert_into_10k` — `RawOpaquePool::insert` (layout
 //!   check only, no ref count); paired with the `RawOpaquePool` bench in
-//!   the `ip_vs_std` Criterion group.
-//! * `opaque_pool_drop_handle_from_10k` — drop a `PooledMut<u64>`,
+//!   the `infinity_pool_vs_std/churn_insertion` Criterion subgroup.
+//! * `focused_opaque_pool_drop_handle_from_10k` — drop a `PooledMut<u64>`,
 //!   exercising the `Arc`-clone drop path through the inner pool's mutex.
-//! * `local_opaque_pool_drop_handle_from_10k` — drop a `LocalPooledMut<u64>`,
+//! * `focused_local_opaque_pool_drop_handle_from_10k` — drop a `LocalPooledMut<u64>`,
 //!   exercising the `Rc`-clone drop path through the inner pool's `RefCell`.
-//! * `raw_opaque_pool_remove_from_10k` — explicit `unsafe pool.remove(handle)`
+//! * `focused_raw_opaque_pool_remove_from_10k` — explicit `unsafe pool.remove(handle)`
 //!   on a populated `RawOpaquePool`; raw handles have no `Drop`, so the
 //!   measurement isolates the unguarded slot-release cost.
 //!
 //! Iteration and bulk-drop scenarios exercise the per-slot scan paths
 //! that are not visible through insert/remove micro-benchmarks:
 //!
-//! * `pinned_pool_iter_full_10k` — dense iteration over 10k occupied slots.
-//! * `pinned_pool_iter_sparse_10k` — sparse iteration: 1250 of 10000 slots
+//! * `focused_pinned_pool_iter_full_10k` — dense iteration over 10k occupied slots.
+//! * `focused_pinned_pool_iter_sparse_10k` — sparse iteration: 1250 of 10000 slots
 //!   occupied, exposes the per-empty-slot scan overhead.
-//! * `raw_pinned_pool_drop_full_with_10k_u64` — drop a `RawPinnedPool`
+//! * `focused_raw_pinned_pool_drop_full_with_10k_u64` — drop a `RawPinnedPool`
 //!   populated with 10k `u64` values; raw handles have no `Drop`, so the
 //!   measurement isolates the slab's per-slot drop-scan cost for a payload
 //!   that does not need drop.
-//! * `raw_pinned_pool_drop_full_with_10k_string` — same shape with a payload
+//! * `focused_raw_pinned_pool_drop_full_with_10k_string` — same shape with a payload
 //!   that does need drop, so the per-slot dropper indirection runs and each
 //!   `String` allocation is freed.
 //!
@@ -197,10 +197,10 @@ mod linux {
         pool
     }
 
-    // State for the `raw_opaque_pool_remove_from_10k` bench: a populated raw
+    // State for the `focused_raw_opaque_pool_remove_from_10k` bench: a populated raw
     // pool plus a freshly-inserted extra handle that the bench removes via
     // `unsafe pool.remove(handle)`. Mirrors the `PinnedPoolWithExtraHandle`
-    // shape used by `pinned_pool_drop_handle_from_10k`.
+    // shape used by `focused_pinned_pool_drop_handle_from_10k`.
     struct RawOpaquePoolWithExtraHandle {
         pool: RawOpaquePool,
         extra: RawPooledMut<u64>,
@@ -215,7 +215,7 @@ mod linux {
         RawOpaquePoolWithExtraHandle { pool, extra }
     }
 
-    // State for `opaque_pool_drop_handle_from_10k`. Mirrors the pinned-pool
+    // State for `focused_opaque_pool_drop_handle_from_10k`. Mirrors the pinned-pool
     // variant: anchors keep the pool fully populated, and the bench drops
     // the `extra` handle so the measurement isolates the per-handle drop
     // path through the Arc + Mutex inner pool.
@@ -236,7 +236,7 @@ mod linux {
         }
     }
 
-    // State for `local_opaque_pool_drop_handle_from_10k`. Mirrors the
+    // State for `focused_local_opaque_pool_drop_handle_from_10k`. Mirrors the
     // managed-opaque variant but exercises the single-threaded Rc + RefCell
     // drop path instead of the Arc + Mutex one.
     struct LocalOpaquePoolWithExtraHandle {
@@ -256,7 +256,7 @@ mod linux {
         }
     }
 
-    // State for the `blind_pool_insert_with_5_layouts` bench. The pool holds
+    // State for the `focused_blind_pool_insert_with_5_layouts` bench. The pool holds
     // anchors for five distinct layouts so the dispatch path performs a
     // multi-key lookup. The five wrapper types below have sizes 1, 2, 4, 8,
     // and 24 bytes respectively, giving distinct `LayoutKey`s (which are
@@ -399,21 +399,25 @@ mod linux {
 
     #[library_benchmark]
     #[bench::empty(make_empty_pinned_pool())]
-    fn pinned_pool_insert_into_empty(pool: PinnedPool<u64>) -> (PinnedPool<u64>, PooledMut<u64>) {
+    fn focused_pinned_pool_insert_into_empty(
+        pool: PinnedPool<u64>,
+    ) -> (PinnedPool<u64>, PooledMut<u64>) {
         let handle = black_box(&pool).insert(black_box(42_u64));
         (pool, handle)
     }
 
     #[library_benchmark]
     #[bench::populated(make_populated_pinned_pool())]
-    fn pinned_pool_insert_into_10k(state: PinnedPoolState) -> (PinnedPoolState, PooledMut<u64>) {
+    fn focused_pinned_pool_insert_into_10k(
+        state: PinnedPoolState,
+    ) -> (PinnedPoolState, PooledMut<u64>) {
         let handle = black_box(&state.pool).insert(black_box(ANCHOR_COUNT));
         (state, handle)
     }
 
     #[library_benchmark]
     #[bench::populated(make_populated_local_pinned_pool())]
-    fn local_pinned_pool_insert_into_10k(
+    fn focused_local_pinned_pool_insert_into_10k(
         state: LocalPinnedPoolState,
     ) -> (LocalPinnedPoolState, infinity_pool::LocalPooledMut<u64>) {
         let handle = black_box(&state.pool).insert(black_box(ANCHOR_COUNT));
@@ -422,14 +426,16 @@ mod linux {
 
     #[library_benchmark]
     #[bench::populated(make_populated_blind_pool())]
-    fn blind_pool_insert_into_10k(state: BlindPoolState) -> (BlindPoolState, BlindPooledMut<u64>) {
+    fn focused_blind_pool_insert_into_10k(
+        state: BlindPoolState,
+    ) -> (BlindPoolState, BlindPooledMut<u64>) {
         let handle = black_box(&state.pool).insert::<u64>(black_box(ANCHOR_COUNT));
         (state, handle)
     }
 
     #[library_benchmark]
     #[bench::five_layouts(make_blind_pool_with_5_layouts())]
-    fn blind_pool_insert_with_5_layouts(
+    fn focused_blind_pool_insert_with_5_layouts(
         state: BlindPoolFiveLayoutsState,
     ) -> (BlindPoolFiveLayoutsState, BlindPooledMut<L4>) {
         // Insert into the L4 (u64-sized) layout — the fourth of five present.
@@ -440,7 +446,9 @@ mod linux {
 
     #[library_benchmark]
     #[bench::populated(make_populated_opaque_pool())]
-    fn opaque_pool_insert_into_10k(state: OpaquePoolState) -> (OpaquePoolState, PooledMut<u64>) {
+    fn focused_opaque_pool_insert_into_10k(
+        state: OpaquePoolState,
+    ) -> (OpaquePoolState, PooledMut<u64>) {
         // Exercises the managed (Arc + Mutex) opaque insert path with the
         // runtime layout assertion that the typed `PinnedPool` wrapper
         // bypasses via `insert_unchecked`.
@@ -450,7 +458,7 @@ mod linux {
 
     #[library_benchmark]
     #[bench::populated(make_populated_local_opaque_pool())]
-    fn local_opaque_pool_insert_into_10k(
+    fn focused_local_opaque_pool_insert_into_10k(
         state: LocalOpaquePoolState,
     ) -> (LocalOpaquePoolState, LocalPooledMut<u64>) {
         // Exercises the single-threaded (Rc + RefCell) opaque insert path
@@ -462,7 +470,7 @@ mod linux {
 
     #[library_benchmark]
     #[bench::populated(make_populated_raw_opaque_pool())]
-    fn raw_opaque_pool_insert_into_10k(
+    fn focused_raw_opaque_pool_insert_into_10k(
         mut pool: RawOpaquePool,
     ) -> (RawOpaquePool, RawPooledMut<u64>) {
         // Exercises the raw opaque insert path: no ref-counting, no
@@ -476,7 +484,7 @@ mod linux {
 
     #[library_benchmark]
     #[bench::with_extra(make_pinned_pool_with_extra_handle())]
-    fn pinned_pool_drop_handle_from_10k(
+    fn focused_pinned_pool_drop_handle_from_10k(
         state: PinnedPoolWithExtraHandle,
     ) -> (PinnedPool<u64>, Vec<PooledMut<u64>>) {
         let PinnedPoolWithExtraHandle {
@@ -490,13 +498,13 @@ mod linux {
 
     #[library_benchmark]
     #[bench::with_extra(make_opaque_pool_with_extra_handle())]
-    fn opaque_pool_drop_handle_from_10k(
+    fn focused_opaque_pool_drop_handle_from_10k(
         state: OpaquePoolWithExtraHandle,
     ) -> (OpaquePool, Vec<PooledMut<u64>>) {
         // Drops a `PooledMut<u64>` whose `Drop` impl removes the slot
         // through the `Arc<Mutex<RawOpaquePoolThreadSafe>>` inner pool.
         // Isolates the managed-opaque per-handle drop cost relative to
-        // the typed `pinned_pool_drop_handle_from_10k` baseline.
+        // the typed `focused_pinned_pool_drop_handle_from_10k` baseline.
         let OpaquePoolWithExtraHandle {
             pool,
             anchors,
@@ -508,7 +516,7 @@ mod linux {
 
     #[library_benchmark]
     #[bench::with_extra(make_local_opaque_pool_with_extra_handle())]
-    fn local_opaque_pool_drop_handle_from_10k(
+    fn focused_local_opaque_pool_drop_handle_from_10k(
         state: LocalOpaquePoolWithExtraHandle,
     ) -> (LocalOpaquePool, Vec<LocalPooledMut<u64>>) {
         // Drops a `LocalPooledMut<u64>` whose `Drop` impl removes the slot
@@ -525,7 +533,9 @@ mod linux {
 
     #[library_benchmark]
     #[bench::with_extra(make_raw_opaque_pool_with_extra_handle())]
-    fn raw_opaque_pool_remove_from_10k(state: RawOpaquePoolWithExtraHandle) -> RawOpaquePool {
+    fn focused_raw_opaque_pool_remove_from_10k(
+        state: RawOpaquePoolWithExtraHandle,
+    ) -> RawOpaquePool {
         // Explicitly removes a `RawPooledMut<u64>` from a populated raw
         // pool. `RawPooledMut` has no `Drop`, so the measurement isolates
         // the unguarded slot-release path with no ref-count or
@@ -542,7 +552,7 @@ mod linux {
 
     #[library_benchmark]
     #[bench::u64_no_drop(make_raw_pinned_pool_u64_bulk())]
-    fn raw_pinned_pool_drop_full_with_10k_u64(pool: RawPinnedPool<u64>) {
+    fn focused_raw_pinned_pool_drop_full_with_10k_u64(pool: RawPinnedPool<u64>) {
         // Drops the pool. Isolates the slab's per-slot drop-scan cost for
         // a payload that does not need drop — the per-slot
         // `drop_in_place::<u64>` is a no-op the compiler elides, but the
@@ -553,7 +563,7 @@ mod linux {
 
     #[library_benchmark]
     #[bench::string_with_drop(make_raw_pinned_pool_string_bulk())]
-    fn raw_pinned_pool_drop_full_with_10k_string(pool: RawPinnedPool<String>) {
+    fn focused_raw_pinned_pool_drop_full_with_10k_string(pool: RawPinnedPool<String>) {
         // Drops the pool. Each slot's `String` allocation is freed via the
         // per-slot type-erased dropper invocation, on top of the same
         // per-slot scan and `catch_unwind` setup.
@@ -564,7 +574,7 @@ mod linux {
 
     #[library_benchmark]
     #[bench::populated(make_populated_pinned_pool())]
-    fn pinned_pool_iter_full_10k(state: PinnedPoolState) -> PinnedPoolState {
+    fn focused_pinned_pool_iter_full_10k(state: PinnedPoolState) -> PinnedPoolState {
         // Dense iteration over 10k occupied slots. Each yielded pointer is
         // black-boxed to defeat the iter-elision pass.
         state.pool.with_iter(|iter| {
@@ -577,7 +587,7 @@ mod linux {
 
     #[library_benchmark]
     #[bench::sparse(make_sparse_pinned_pool())]
-    fn pinned_pool_iter_sparse_10k(state: SparsePinnedPoolState) -> SparsePinnedPoolState {
+    fn focused_pinned_pool_iter_sparse_10k(state: SparsePinnedPoolState) -> SparsePinnedPoolState {
         // Sparse iteration: 1250 surviving handles scattered across the
         // slabs allocated for the 10 000 inserts. Exposes the per-empty-slot
         // scan cost.
@@ -593,7 +603,9 @@ mod linux {
 
     #[library_benchmark]
     #[bench::populated(make_pinned_pool_for_deref())]
-    fn pinned_pool_deref_handle(state: PinnedPoolWithExtraHandle) -> PinnedPoolWithExtraHandle {
+    fn focused_pinned_pool_deref_handle(
+        state: PinnedPoolWithExtraHandle,
+    ) -> PinnedPoolWithExtraHandle {
         let value: &u64 = &state.extra;
         _ = black_box(*value);
         state
@@ -602,55 +614,45 @@ mod linux {
     // ---------- Baselines ----------
 
     #[library_benchmark]
-    fn arc_pin_baseline_insert() -> Pin<Arc<u64>> {
+    fn focused_arc_pin_baseline_insert() -> Pin<Arc<u64>> {
         Arc::pin(black_box(42_u64))
     }
 
     #[library_benchmark]
-    fn box_pin_baseline_insert() -> Pin<Box<u64>> {
+    fn focused_box_pin_baseline_insert() -> Pin<Box<u64>> {
         Box::pin(black_box(42_u64))
     }
 
     library_benchmark_group!(
-        name = insert_group,
+        name = focused,
         benchmarks = [
-            pinned_pool_insert_into_empty,
-            pinned_pool_insert_into_10k,
-            local_pinned_pool_insert_into_10k,
-            blind_pool_insert_into_10k,
-            blind_pool_insert_with_5_layouts,
-            opaque_pool_insert_into_10k,
-            local_opaque_pool_insert_into_10k,
-            raw_opaque_pool_insert_into_10k,
-            arc_pin_baseline_insert,
-            box_pin_baseline_insert,
+            focused_pinned_pool_insert_into_empty,
+            focused_pinned_pool_insert_into_10k,
+            focused_pinned_pool_drop_handle_from_10k,
+            focused_pinned_pool_iter_full_10k,
+            focused_pinned_pool_iter_sparse_10k,
+            focused_pinned_pool_deref_handle,
+            focused_local_pinned_pool_insert_into_10k,
+            focused_blind_pool_insert_into_10k,
+            focused_blind_pool_insert_with_5_layouts,
+            focused_opaque_pool_insert_into_10k,
+            focused_opaque_pool_drop_handle_from_10k,
+            focused_local_opaque_pool_insert_into_10k,
+            focused_local_opaque_pool_drop_handle_from_10k,
+            focused_raw_opaque_pool_insert_into_10k,
+            focused_raw_opaque_pool_remove_from_10k,
+            focused_raw_pinned_pool_drop_full_with_10k_u64,
+            focused_raw_pinned_pool_drop_full_with_10k_string,
+            focused_arc_pin_baseline_insert,
+            focused_box_pin_baseline_insert,
         ]
     );
-
-    library_benchmark_group!(
-        name = drop_group,
-        benchmarks = [
-            pinned_pool_drop_handle_from_10k,
-            opaque_pool_drop_handle_from_10k,
-            local_opaque_pool_drop_handle_from_10k,
-            raw_opaque_pool_remove_from_10k,
-            raw_pinned_pool_drop_full_with_10k_u64,
-            raw_pinned_pool_drop_full_with_10k_string,
-        ]
-    );
-
-    library_benchmark_group!(
-        name = iter_group,
-        benchmarks = [pinned_pool_iter_full_10k, pinned_pool_iter_sparse_10k]
-    );
-
-    library_benchmark_group!(name = deref_group, benchmarks = [pinned_pool_deref_handle]);
 }
 
 #[cfg(target_os = "linux")]
 use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
 #[cfg(target_os = "linux")]
-pub use linux::{deref_group, drop_group, insert_group, iter_group};
+pub use linux::focused;
 
 #[cfg(target_os = "linux")]
 gungraun::main!(
@@ -659,5 +661,5 @@ gungraun::main!(
             .args(["--branch-sim=yes"])
             .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
     );
-    library_benchmark_groups = insert_group, drop_group, iter_group, deref_group
+    library_benchmark_groups = focused
 );

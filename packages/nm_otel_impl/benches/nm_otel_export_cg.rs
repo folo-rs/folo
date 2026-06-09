@@ -187,19 +187,19 @@ mod linux {
     #[bench::small_steady_state(setup_small_steady_state())]
     #[bench::small_no_delta(setup_small_no_delta())]
     #[bench::large_steady_state(setup_large_steady_state())]
-    fn export(inputs: ExportInputs) -> ExportInputs {
+    fn export_run_one_iteration(inputs: ExportInputs) -> ExportInputs {
         let (mut publisher, report) = inputs;
         publisher.run_one_iteration_with_report(black_box(&report));
         (publisher, report)
     }
 
-    library_benchmark_group!(name = export_group, benchmarks = [export]);
+    library_benchmark_group!(name = export, benchmarks = [export_run_one_iteration]);
 }
 
 #[cfg(target_os = "linux")]
 use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
 #[cfg(target_os = "linux")]
-pub use linux::export_group;
+pub use linux::export;
 
 #[cfg(target_os = "linux")]
 gungraun::main!(
@@ -208,5 +208,5 @@ gungraun::main!(
             .args(["--branch-sim=yes"])
             .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
     );
-    library_benchmark_groups = export_group
+    library_benchmark_groups = export
 );

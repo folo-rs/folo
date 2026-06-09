@@ -146,21 +146,21 @@ mod linux {
 
     #[library_benchmark]
     #[bench::empty(empty_local())]
-    fn push_back_empty(mut deque: LocalFutureDeque<u64>) -> LocalFutureDeque<u64> {
+    fn local_push_back_empty(mut deque: LocalFutureDeque<u64>) -> LocalFutureDeque<u64> {
         deque.push_back(CountdownFuture::new(0, 42));
         deque
     }
 
     #[library_benchmark]
     #[bench::populated(populated_local_pending())]
-    fn push_back_into_100(mut deque: LocalFutureDeque<u64>) -> LocalFutureDeque<u64> {
+    fn local_push_back_into_100(mut deque: LocalFutureDeque<u64>) -> LocalFutureDeque<u64> {
         deque.push_back(CountdownFuture::new(0, 42));
         deque
     }
 
     #[library_benchmark]
     #[bench::one_ready(single_ready_local_with_waker())]
-    fn poll_front_one_ready(
+    fn local_poll_front_one_ready(
         input: (LocalFutureDeque<u64>, &'static Waker),
     ) -> LocalFutureDeque<u64> {
         let (mut deque, waker) = input;
@@ -171,7 +171,7 @@ mod linux {
 
     #[library_benchmark]
     #[bench::pending_100(populated_local_pending_with_waker())]
-    fn poll_front_pending_100(
+    fn local_poll_front_pending_100(
         input: (LocalFutureDeque<u64>, &'static Waker),
     ) -> LocalFutureDeque<u64> {
         let (mut deque, waker) = input;
@@ -215,17 +215,17 @@ mod linux {
     }
 
     library_benchmark_group!(
-        name = local_group,
+        name = local,
         benchmarks = [
-            push_back_empty,
-            push_back_into_100,
-            poll_front_one_ready,
-            poll_front_pending_100
+            local_push_back_empty,
+            local_push_back_into_100,
+            local_poll_front_one_ready,
+            local_poll_front_pending_100
         ]
     );
 
     library_benchmark_group!(
-        name = sync_group,
+        name = sync,
         benchmarks = [
             sync_push_back_empty,
             sync_push_back_into_100,
@@ -238,7 +238,7 @@ mod linux {
 #[cfg(target_os = "linux")]
 use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
 #[cfg(target_os = "linux")]
-pub use linux::{local_group, sync_group};
+pub use linux::{local, sync};
 
 #[cfg(target_os = "linux")]
 gungraun::main!(
@@ -247,5 +247,5 @@ gungraun::main!(
             .args(["--branch-sim=yes"])
             .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
     );
-    library_benchmark_groups = local_group, sync_group
+    library_benchmark_groups = local, sync
 );

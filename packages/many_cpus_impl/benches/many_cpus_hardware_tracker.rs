@@ -16,7 +16,7 @@ criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 
 fn entrypoint(c: &mut Criterion) {
-    let mut group = c.benchmark_group("SystemHardware");
+    let mut group = c.benchmark_group("many_cpus_hardware_tracker/current");
 
     let hw = SystemHardware::current();
 

@@ -77,7 +77,7 @@ mod linux {
     }
 
     library_benchmark_group!(
-        name = read_group,
+        name = current,
         benchmarks = [
             current_memory_region_id_unpinned,
             current_memory_region_id_pinned,
@@ -89,7 +89,7 @@ mod linux {
 #[cfg(target_os = "linux")]
 use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
 #[cfg(target_os = "linux")]
-pub use linux::read_group;
+pub use linux::current;
 
 #[cfg(target_os = "linux")]
 gungraun::main!(
@@ -98,5 +98,5 @@ gungraun::main!(
             .args(["--branch-sim=yes"])
             .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
     );
-    library_benchmark_groups = read_group
+    library_benchmark_groups = current
 );

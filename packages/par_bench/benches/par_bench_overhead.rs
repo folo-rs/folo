@@ -21,7 +21,7 @@ criterion_main!(benches);
 fn par_bench_overhead(c: &mut Criterion) {
     let mut thread_pool = ThreadPool::new(SystemHardware::current().processors());
 
-    let mut group = c.benchmark_group("overhead");
+    let mut group = c.benchmark_group("par_bench_overhead/overhead");
 
     // A new benchmark run is constructed for every call into this callback,
     // as per the standard mechanism for using par_bench with Criterion.

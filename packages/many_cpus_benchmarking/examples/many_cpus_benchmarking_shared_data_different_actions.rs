@@ -24,6 +24,7 @@ fn entrypoint(c: &mut Criterion) {
     // Use a smaller batch size since channel operations are relatively fast
     execute_runs::<ProducerConsumerChannels, 500>(
         c,
+        "many_cpus_benchmarking_shared_data_different_actions",
         WorkDistribution::all_with_unique_processors(),
     );
 }

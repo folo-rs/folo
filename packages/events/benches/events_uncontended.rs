@@ -64,7 +64,7 @@ fn entrypoint(c: &mut Criterion) {
 
 /// Measures the overhead of creating a heap-allocated event object.
 fn creation_boxed(c: &mut Criterion, allocs: &AllocSession) {
-    let mut group = c.benchmark_group("creation_boxed");
+    let mut group = c.benchmark_group("events_uncontended/creation_boxed");
 
     let op = allocs.operation("creation_boxed/events/ManualResetEvent");
     group.bench_function("events/ManualResetEvent", |b| {
@@ -119,7 +119,7 @@ fn creation_boxed(c: &mut Criterion, allocs: &AllocSession) {
 
 /// Measures the overhead of creating an embedded (zero-alloc) event object.
 fn creation_embedded(c: &mut Criterion, allocs: &AllocSession) {
-    let mut group = c.benchmark_group("creation_embedded");
+    let mut group = c.benchmark_group("events_uncontended/creation_embedded");
 
     let op = allocs.operation("creation_embedded/events/ManualResetEvent");
     group.bench_function("events/embedded/ManualResetEvent", |b| {
@@ -224,7 +224,7 @@ fn creation_embedded(c: &mut Criterion, allocs: &AllocSession) {
 /// The `rsevents` equivalents use blocking `wait()` on pre-set events, which
 /// returns immediately on the fast path without parking the thread.
 fn signal_round_trip(c: &mut Criterion, allocs: &AllocSession) {
-    let mut group = c.benchmark_group("signal_round_trip");
+    let mut group = c.benchmark_group("events_uncontended/signal_round_trip");
 
     let op = allocs.operation("signal_round_trip/events/ManualResetEvent");
     group.bench_function("events/ManualResetEvent", |b| {
@@ -383,7 +383,7 @@ fn signal_round_trip(c: &mut Criterion, allocs: &AllocSession) {
 /// Futures are pinned on the stack via the `pin!()` macro, avoiding heap
 /// allocations from `Box::pin()`.
 fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
-    let mut group = c.benchmark_group("async_poll_ready");
+    let mut group = c.benchmark_group("events_uncontended/async_poll_ready");
     let waker = Waker::noop();
 
     let op = allocs.operation("async_poll_ready/events/ManualResetEvent");
@@ -542,7 +542,7 @@ const MANY_WAITER_COUNT: usize = 100;
 /// * `clear()` drops futures in place, unlinking them from the waiter
 ///   list.
 fn many_waiters(c: &mut Criterion, allocs: &AllocSession) {
-    let mut group = c.benchmark_group("many_waiters");
+    let mut group = c.benchmark_group("events_uncontended/many_waiters");
     let waker = Waker::noop();
 
     let op = allocs.operation("many_waiters/events/ManualResetEvent");

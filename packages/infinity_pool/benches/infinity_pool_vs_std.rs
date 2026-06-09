@@ -43,7 +43,7 @@ const BATCH_COUNT: u64 = 10_000;
 fn churn_insertion_benchmark(c: &mut Criterion) {
     let allocs = alloc_tracker::Session::new();
 
-    let mut group = c.benchmark_group("ip_vs_std");
+    let mut group = c.benchmark_group("infinity_pool_vs_std/churn_insertion");
 
     // Criterion's default 5 seconds just goes not give the precision we need, we get constant
     // plus or minus 10% noise that just prevents any sort of fine-tuning.

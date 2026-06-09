@@ -20,7 +20,7 @@ criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 
 fn entrypoint(c: &mut Criterion) {
-    let mut group = c.benchmark_group("atomic_increments");
+    let mut group = c.benchmark_group("par_bench_manual/atomic_increments");
 
     let mut single_thread_pool = ThreadPool::new(
         SystemHardware::current()

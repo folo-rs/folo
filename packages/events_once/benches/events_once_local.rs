@@ -15,7 +15,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use events_once::{EmbeddedLocalEvent, LocalEvent};
 
 fn entrypoint(c: &mut Criterion) {
-    let mut g = c.benchmark_group("ev_once_local");
+    let mut g = c.benchmark_group("events_once_local/local");
 
     g.bench_function("send_receive", |b| {
         b.iter_custom(|iterations| {

@@ -72,7 +72,7 @@ mod linux {
     // set, so try_wait succeeds every time without any state mutation.
     #[library_benchmark]
     #[bench::set(make_set_manual())]
-    fn manual_try_wait(event: ManualResetEvent) -> ManualResetEvent {
+    fn signal_round_trip_sync_manual_try_wait(event: ManualResetEvent) -> ManualResetEvent {
         _ = black_box(black_box(&event).try_wait());
         event
     }
@@ -83,7 +83,7 @@ mod linux {
     // events/AutoResetEvent`.
     #[library_benchmark]
     #[bench::fresh(make_fresh_auto())]
-    fn auto_set_then_try_wait(event: AutoResetEvent) -> AutoResetEvent {
+    fn signal_round_trip_sync_auto_set_then_try_wait(event: AutoResetEvent) -> AutoResetEvent {
         black_box(&event).set();
         _ = black_box(black_box(&event).try_wait());
         event
@@ -93,34 +93,38 @@ mod linux {
 
     #[library_benchmark]
     #[bench::set(make_set_local_manual())]
-    fn local_manual_try_wait(event: LocalManualResetEvent) -> LocalManualResetEvent {
+    fn signal_round_trip_local_manual_try_wait(
+        event: LocalManualResetEvent,
+    ) -> LocalManualResetEvent {
         _ = black_box(black_box(&event).try_wait());
         event
     }
 
     #[library_benchmark]
     #[bench::fresh(make_fresh_local_auto())]
-    fn local_auto_set_then_try_wait(event: LocalAutoResetEvent) -> LocalAutoResetEvent {
+    fn signal_round_trip_local_auto_set_then_try_wait(
+        event: LocalAutoResetEvent,
+    ) -> LocalAutoResetEvent {
         black_box(&event).set();
         _ = black_box(black_box(&event).try_wait());
         event
     }
 
     library_benchmark_group!(
-        name = sync_group,
-        benchmarks = [manual_try_wait, auto_set_then_try_wait]
-    );
-
-    library_benchmark_group!(
-        name = local_group,
-        benchmarks = [local_manual_try_wait, local_auto_set_then_try_wait]
+        name = signal_round_trip,
+        benchmarks = [
+            signal_round_trip_sync_manual_try_wait,
+            signal_round_trip_sync_auto_set_then_try_wait,
+            signal_round_trip_local_manual_try_wait,
+            signal_round_trip_local_auto_set_then_try_wait,
+        ]
     );
 }
 
 #[cfg(target_os = "linux")]
 use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
 #[cfg(target_os = "linux")]
-pub use linux::{local_group, sync_group};
+pub use linux::signal_round_trip;
 
 #[cfg(target_os = "linux")]
 gungraun::main!(
@@ -129,5 +133,5 @@ gungraun::main!(
             .args(["--branch-sim=yes"])
             .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
     );
-    library_benchmark_groups = sync_group, local_group
+    library_benchmark_groups = signal_round_trip
 );

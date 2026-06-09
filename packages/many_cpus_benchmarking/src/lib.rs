@@ -98,7 +98,7 @@
 //!
 //! ```rust ignore (benchmark)
 //! fn entrypoint(c: &mut Criterion) {
-//!     execute_runs::<CopyBytes, 1>(c, WorkDistribution::all());
+//!     execute_runs::<CopyBytes, 1>(c, "my_benchmark", WorkDistribution::all());
 //! }
 //! ```
 //!
@@ -197,6 +197,7 @@
 //!     // Focus on distribution modes that use different processors
 //!     execute_runs::<SharedDataSameAction, 100>(
 //!         c,
+//!         "shared_reads",
 //!         WorkDistribution::all_with_unique_processors_without_self()
 //!     );
 //! }
@@ -313,6 +314,7 @@
 //!     // All distribution modes are relevant for different worker roles
 //!     execute_runs::<ProducerConsumerPattern, 200>(
 //!         c,
+//!         "producer_consumer",
 //!         WorkDistribution::all_with_unique_processors()
 //!     );
 //! }
