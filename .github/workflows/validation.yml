@@ -488,11 +488,12 @@ jobs:
   mutants:
     needs: [delta, test-more-x64]
     if: needs.delta.outputs.skip_all != 'true'
-    timeout-minutes: 240
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         platform: [ubuntu-latest, windows-latest]
+        shard: [1/8, 2/8, 3/8, 4/8, 5/8, 6/8, 7/8, 8/8]
 
     runs-on: ${{ matrix.platform }}
 
@@ -503,8 +504,8 @@ jobs:
       - name: Setup environment
         uses: ./.github/actions/setup-environment
 
-      - name: Run mutants on ${{ matrix.platform }}
-        run: just package="${{ needs.delta.outputs.packages }}" mutants
+      - name: Run mutants on ${{ matrix.platform }} (shard ${{ matrix.shard }})
+        run: just package="${{ needs.delta.outputs.packages }}" mutants ${{ matrix.shard }}
 
   run-examples:
     needs: [delta]
