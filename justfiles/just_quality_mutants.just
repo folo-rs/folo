@@ -1,8 +1,10 @@
 [group('quality')]
 [script]
-mutants SHARD="":
+mutants SHARD="" CAREFUL='false':
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
+
+    $careful = '{{ CAREFUL }}' -eq 'true'
 
     function Escape-Wildcards ($s) {
         if ($IsWindows) {
@@ -85,8 +87,15 @@ mutants SHARD="":
     }
 
     $args += "--jobs"
-    # Experimentally determined heuristics.
-    $args += [int]([Math]::Floor([Environment]::ProcessorCount / 6)) + 1
+    if ($careful) {
+        # In careful mode, only one mutation is tested at a time. Combined with
+        # `RUST_TEST_THREADS=1` set below, this ensures that exactly one test runs at any
+        # given moment across the entire mutation testing run.
+        $args += "1"
+    } else {
+        # Experimentally determined heuristics.
+        $args += [int]([Math]::Floor([Environment]::ProcessorCount / 6)) + 1
+    }
 
     # Optional sharding lets CI split mutation testing across multiple parallel runners.
     # We accept the same 1-based "N/M" format as `miri-harder` for consistency with the
@@ -153,6 +162,14 @@ mutants SHARD="":
     # This allows mutations that cause infinite loops to hang as expected.
     $env:MUTATION_TESTING = "1"
 
+    if ($careful) {
+        # Force libtest to run a single test at a time within each `cargo test` invocation.
+        # Combined with `--jobs 1` above, this ensures that exactly one test runs at any
+        # given moment, which helps diagnose tests that are sensitive to concurrent
+        # execution or otherwise interact in unexpected ways.
+        $env:RUST_TEST_THREADS = "1"
+    }
+
     # --baseline=skip - We assume that regular tests have already been executed
     #     and are not failing, for mutation speedup.
     # --no-shuffle - We do not care about shuffling, that is something rarely useful.
@@ -165,3 +182,7 @@ mutants SHARD="":
     #     skipped or the test improved).
     Invoke-Expression "cargo mutants {{ target_package }} --baseline=skip --timeout=60 --no-shuffle --caught --unviable $expanded_args"
     exit $LASTEXITCODE
+
+# Run mutation tests with no parallelism: one mutation at a time, one test at a time within each mutation. Slow but useful for investigating flaky or concurrency-sensitive tests.
+[group('quality')]
+mutants-careful: (mutants "" "true")
