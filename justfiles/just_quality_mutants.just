@@ -134,10 +134,6 @@ mutants CAREFUL='false':
         $env:RUST_TEST_THREADS = "1"
     }
 
-    # In careful mode tests run serially, so a single mutation's test pass takes much longer
-    # than the parallel default. Bump the per-mutation timeout accordingly.
-    $timeout = if ($careful) { 600 } else { 60 }
-
     # --baseline=skip - We assume that regular tests have already been executed
     #     and are not failing, for mutation speedup.
     # --no-shuffle - We do not care about shuffling, that is something rarely useful.
@@ -148,7 +144,7 @@ mutants CAREFUL='false':
     #     but short enough to call a timeout and timeout and avoid things going on forever.
     #     This should only be reached if a mutation causes a serious issue (and may need to be
     #     skipped or the test improved).
-    Invoke-Expression "cargo mutants {{ target_package }} --baseline=skip --timeout=$timeout --no-shuffle --caught --unviable $expanded_args"
+    Invoke-Expression "cargo mutants {{ target_package }} --baseline=skip --timeout=60 --no-shuffle --caught --unviable $expanded_args"
     exit $LASTEXITCODE
 
 # Run mutation tests with no parallelism: one mutation at a time, one test at a time within each mutation. Slow but useful for investigating flaky or concurrency-sensitive tests.
