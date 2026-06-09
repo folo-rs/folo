@@ -21,7 +21,7 @@ criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 
 fn entrypoint(c: &mut Criterion) {
-    let mut group = c.benchmark_group("alloc_tracker_overhead");
+    let mut group = c.benchmark_group("alloc_tracker_tracking_overhead/overhead");
 
     // Baseline measurement - no tracking at all
     group.bench_function("baseline_empty", |b| {

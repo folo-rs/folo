@@ -49,7 +49,7 @@ fn entrypoint(c: &mut Criterion) {
         ThreadPool::new(SystemHardware::current().processors().take(nz!(1)).unwrap());
     let mut two_threads = TWO_PROCESSORS.as_ref().map(ThreadPool::new);
 
-    let mut g = c.benchmark_group("instances::get");
+    let mut g = c.benchmark_group("linked_instances/get");
 
     Run::new()
         .iter(|_| Arc::weak_count(&TARGET.get().shared_state))
@@ -63,7 +63,7 @@ fn entrypoint(c: &mut Criterion) {
 
     g.finish();
 
-    let mut g = c.benchmark_group("instances::get_1000");
+    let mut g = c.benchmark_group("linked_instances/get_1000");
 
     ::linked::__private_clear_linked_variables_global();
 

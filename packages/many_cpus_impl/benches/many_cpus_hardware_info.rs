@@ -14,7 +14,7 @@ criterion_main!(benches);
 fn entrypoint(c: &mut Criterion) {
     let hw = SystemHardware::current();
 
-    let mut group = c.benchmark_group("SystemHardware_HardwareInfo");
+    let mut group = c.benchmark_group("many_cpus_hardware_info/hardware_info");
 
     // Mostly pointless since all the accessors just load from cached values.
     // Just here to detect anomalies if we do something strange and it gets slow.

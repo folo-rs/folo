@@ -90,7 +90,7 @@ thread_local! {
 }
 
 fn entrypoint(c: &mut Criterion) {
-    let mut group = c.benchmark_group("nm_push_bulk");
+    let mut group = c.benchmark_group("nm_push_bulk/push_bulk");
 
     // Warm up the thread-locals so that the lazy initialization (registering 1000
     // events with the local registry) does not contaminate the first measured iteration.

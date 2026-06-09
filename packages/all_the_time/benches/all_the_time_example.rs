@@ -20,7 +20,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 
 fn entrypoint(c: &mut Criterion) {
     let cpu_time = Session::new();
-    let mut group = c.benchmark_group("all_the_time");
+    let mut group = c.benchmark_group("all_the_time_example/example");
 
     let cell = Cell::new(1234);
     let read_cell_op = cpu_time.operation("read_cell");

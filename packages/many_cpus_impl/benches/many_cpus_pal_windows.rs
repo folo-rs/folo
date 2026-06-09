@@ -38,7 +38,7 @@ mod windows {
     use windows::Win32::System::SystemInformation::GROUP_AFFINITY;
 
     pub(crate) fn entrypoint(c: &mut Criterion) {
-        let mut group = c.benchmark_group("Pal_Windows");
+        let mut group = c.benchmark_group("many_cpus_pal_windows/pal");
 
         // The results are quite jittery. Give it some time to stabilize.
         group.measurement_time(Duration::from_secs(30));

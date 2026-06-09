@@ -33,7 +33,7 @@ fn entrypoint(c: &mut Criterion) {
 /// This measures contention on the internal synchronization when
 /// multiple threads access the event state concurrently.
 fn contended_auto_reset(c: &mut Criterion) {
-    let mut group = c.benchmark_group("contended_auto_reset");
+    let mut group = c.benchmark_group("events_contended/auto_reset");
 
     let processors = SystemHardware::current().processors();
 
@@ -92,7 +92,7 @@ fn contended_auto_reset(c: &mut Criterion) {
 /// same event. This measures contention on the internal
 /// synchronization.
 fn contended_manual_reset(c: &mut Criterion) {
-    let mut group = c.benchmark_group("contended_manual_reset");
+    let mut group = c.benchmark_group("events_contended/manual_reset");
 
     let processors = SystemHardware::current().processors();
 

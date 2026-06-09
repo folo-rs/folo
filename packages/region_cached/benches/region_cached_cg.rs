@@ -1,21 +1,21 @@
 //! Callgrind benchmarks for the `region_cached` crate.
 //!
-//! Paired with `region_cached.rs` (the `region_cached` Criterion group)
+//! Paired with `region_cached.rs` (the `read` and `write` Criterion subgroups)
 //! which covers the same operations under wall-clock measurement plus
 //! multi-threaded and cross-region contention scenarios.
 //!
 //! Scenarios isolate the per-call cost of cache reads and writes so
 //! each can be tracked at instruction-level granularity:
 //!
-//! * `get_cached_first_touch` — first read; initializes the per-thread
+//! * `read_get_cached_first_touch` — first read; initializes the per-thread
 //!   cache snapshot and the region-aware infrastructure.
-//! * `get_cached_warm` — subsequent read; hits the cache.
-//! * `with_cached_warm` — closure-form read on a warm cache.
-//! * `set_global_first_touch` — first write; pays the same one-shot
-//!   initialization cost as `get_cached_first_touch`.
-//! * `set_global_warm` — subsequent write; updates the global snapshot
+//! * `read_get_cached_warm` — subsequent read; hits the cache.
+//! * `read_with_cached_warm` — closure-form read on a warm cache.
+//! * `read_std_thread_local_get_warm` — `thread_local!` `Cell` baseline.
+//! * `write_set_global_first_touch` — first write; pays the same one-shot
+//!   initialization cost as `read_get_cached_first_touch`.
+//! * `write_set_global_warm` — subsequent write; updates the global snapshot
 //!   without paying initialization cost.
-//! * `std_thread_local_get_warm` — `thread_local!` `Cell` baseline.
 //!
 //! Multi-threaded contention is intentionally out of scope; Callgrind
 //! cannot model cache-coherence traffic meaningfully, and the
@@ -90,63 +90,63 @@ mod linux {
     // ---------- Read paths ----------
 
     #[library_benchmark]
-    fn get_cached_first_touch() -> u32 {
+    fn read_get_cached_first_touch() -> u32 {
         FIRST_TOUCH_VALUE.get_cached()
     }
 
     #[library_benchmark]
     #[bench::warm(warm_get_cache())]
-    fn get_cached_warm(_: ()) -> u32 {
+    fn read_get_cached_warm(_: ()) -> u32 {
         WARM_VALUE.get_cached()
     }
 
     #[library_benchmark]
     #[bench::warm(warm_with_cache())]
-    fn with_cached_warm(_: ()) -> u32 {
+    fn read_with_cached_warm(_: ()) -> u32 {
         WITH_VALUE.with_cached(|v| *v)
     }
 
     // ---------- Write path ----------
 
     #[library_benchmark]
-    fn set_global_first_touch() {
+    fn write_set_global_first_touch() {
         SET_FIRST_TOUCH_VALUE.set_global(black_box(566));
     }
 
     #[library_benchmark]
     #[bench::warm(warm_set_global())]
-    fn set_global_warm(_: ()) {
+    fn write_set_global_warm(_: ()) {
         SET_WARM_VALUE.set_global(black_box(566));
     }
 
-    // ---------- Baseline ----------
+    // ---------- Comparison baseline (logically part of `read`) ----------
 
     #[library_benchmark]
     #[bench::warm(warm_std_thread_local())]
-    fn std_thread_local_get_warm(_: ()) -> u32 {
+    fn read_std_thread_local_get_warm(_: ()) -> u32 {
         STD_VALUE.with(Cell::get)
     }
 
     library_benchmark_group!(
-        name = read_group,
-        benchmarks = [get_cached_first_touch, get_cached_warm, with_cached_warm]
+        name = read,
+        benchmarks = [
+            read_get_cached_first_touch,
+            read_get_cached_warm,
+            read_with_cached_warm,
+            read_std_thread_local_get_warm,
+        ]
     );
 
     library_benchmark_group!(
-        name = write_group,
-        benchmarks = [set_global_first_touch, set_global_warm]
-    );
-
-    library_benchmark_group!(
-        name = baseline_group,
-        benchmarks = [std_thread_local_get_warm]
+        name = write,
+        benchmarks = [write_set_global_first_touch, write_set_global_warm]
     );
 }
 
 #[cfg(target_os = "linux")]
 use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
 #[cfg(target_os = "linux")]
-pub use linux::{baseline_group, read_group, write_group};
+pub use linux::{read, write};
 
 #[cfg(target_os = "linux")]
 gungraun::main!(
@@ -155,5 +155,5 @@ gungraun::main!(
             .args(["--branch-sim=yes"])
             .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
     );
-    library_benchmark_groups = read_group, write_group, baseline_group
+    library_benchmark_groups = read, write
 );

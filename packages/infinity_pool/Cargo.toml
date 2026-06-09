@@ -41,7 +41,7 @@ name = "infinity_pool_focused"
 harness = false
 
 [[bench]]
-name = "infinity_pool_cg"
+name = "infinity_pool_focused_cg"
 harness = false
 
 [lints]

@@ -19,7 +19,7 @@ static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 fn entrypoint(c: &mut Criterion) {
     let allocs = Session::new();
 
-    let mut group = c.benchmark_group("alloc_tracker");
+    let mut group = c.benchmark_group("alloc_tracker_example/example");
 
     let string_op = allocs.operation("string_formatting");
     group.bench_function("string_formatting", |b| {

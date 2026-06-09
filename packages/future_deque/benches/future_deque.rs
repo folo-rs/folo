@@ -43,7 +43,7 @@ const ACTIVE_RATIO_LOW: usize = 10;
 const ACTIVE_RATIO_HIGH: usize = 900;
 
 fn bench_local_future_deque(c: &mut Criterion) {
-    let mut group = c.benchmark_group("local_future_deque");
+    let mut group = c.benchmark_group("future_deque/local");
 
     group.bench_function("few_items_all_active", |b| {
         b.iter(|| {
@@ -98,7 +98,7 @@ fn bench_local_future_deque(c: &mut Criterion) {
 }
 
 fn bench_future_deque(c: &mut Criterion) {
-    let mut group = c.benchmark_group("future_deque");
+    let mut group = c.benchmark_group("future_deque/sync");
 
     group.bench_function("few_items_all_active", |b| {
         b.iter(|| {

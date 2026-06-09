@@ -44,7 +44,7 @@ fn entrypoint(c: &mut Criterion) {
             .unwrap(),
     );
 
-    let mut group = c.benchmark_group("nm_otel_export");
+    let mut group = c.benchmark_group("nm_otel_export/export");
 
     Run::new()
         .prepare_thread(|_| {

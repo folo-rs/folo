@@ -50,7 +50,7 @@ fn entrypoint(c: &mut Criterion) {
 /// started, allowing the awaiter and set to be reused across all
 /// iterations of one sample.
 fn register_unregister(c: &mut Criterion) {
-    let mut group = c.benchmark_group("register_unregister");
+    let mut group = c.benchmark_group("awaiter_set/register_unregister");
 
     group.bench_function("empty", |b| {
         b.iter_custom(|iters| {
@@ -107,7 +107,7 @@ fn register_unregister(c: &mut Criterion) {
 /// Net state change per iteration is zero, allowing reuse across the
 /// whole sample.
 fn register_notify_take(c: &mut Criterion) {
-    let mut group = c.benchmark_group("register_notify_take");
+    let mut group = c.benchmark_group("awaiter_set/register_notify_take");
 
     group.bench_function("empty", |b| {
         b.iter_custom(|iters| {
@@ -135,7 +135,7 @@ fn register_notify_take(c: &mut Criterion) {
 /// invariant across iterations, so the set and awaiter are constructed
 /// once per sample.
 fn is_empty(c: &mut Criterion) {
-    let mut group = c.benchmark_group("is_empty");
+    let mut group = c.benchmark_group("awaiter_set/is_empty");
 
     group.bench_function("empty", |b| {
         b.iter_custom(|iters| {
@@ -177,7 +177,7 @@ fn is_empty(c: &mut Criterion) {
 /// (the awaiter is now in a prior generation), notify it, then take
 /// the notification to reset state for the next iteration.
 fn notify_one_prior_generation(c: &mut Criterion) {
-    let mut group = c.benchmark_group("notify_one_prior_generation");
+    let mut group = c.benchmark_group("awaiter_set/notify_one_prior_generation");
 
     group.bench_function("eligible", |b| {
         b.iter_custom(|iters| {

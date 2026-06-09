@@ -39,10 +39,12 @@ mod windows {
     };
 
     pub(crate) fn entrypoint(c: &mut Criterion) {
-        execute_runs::<AllocDefaultHeap, 1000>(c, WorkDistribution::all());
-        execute_runs::<AllocPerThreadHeap, 1000>(c, WorkDistribution::all());
-        execute_runs::<AllocPerThreadHeapThreadSafe, 1000>(c, WorkDistribution::all());
-        execute_runs::<AllocPerMemoryRegionHeap, 1000>(c, WorkDistribution::all());
+        let prefix = "benchmarks_effects_of_memory_windows";
+
+        execute_runs::<AllocDefaultHeap, 1000>(c, prefix, WorkDistribution::all());
+        execute_runs::<AllocPerThreadHeap, 1000>(c, prefix, WorkDistribution::all());
+        execute_runs::<AllocPerThreadHeapThreadSafe, 1000>(c, prefix, WorkDistribution::all());
+        execute_runs::<AllocPerMemoryRegionHeap, 1000>(c, prefix, WorkDistribution::all());
     }
 
     const CHUNK_SIZE: usize = 1024; // 1 KB

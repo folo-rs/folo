@@ -1,21 +1,21 @@
 //! Callgrind benchmarks for the `region_local` crate.
 //!
-//! Paired with `region_local.rs` (the `region_local` Criterion group)
+//! Paired with `region_local.rs` (the `read` and `write` Criterion subgroups)
 //! which covers the same operations under wall-clock measurement plus
 //! multi-threaded and cross-region contention scenarios.
 //!
 //! Scenarios isolate the per-call cost of region-local reads and
 //! writes so each can be tracked at instruction-level granularity:
 //!
-//! * `get_local_first_touch` — first read; initializes the per-thread
+//! * `read_get_local_first_touch` — first read; initializes the per-thread
 //!   snapshot and the region-aware infrastructure.
-//! * `get_local_warm` — subsequent read; hits the cached snapshot.
-//! * `with_local_warm` — closure-form read on a warm snapshot.
-//! * `set_local_first_touch` — first write; pays the same one-shot
+//! * `read_get_local_warm` — subsequent read; hits the cached snapshot.
+//! * `read_with_local_warm` — closure-form read on a warm snapshot.
+//! * `read_std_thread_local_get_warm` — `thread_local!` `Cell` baseline.
+//! * `write_set_local_first_touch` — first write; pays the same one-shot
 //!   initialization cost as the first read.
-//! * `set_local_warm` — subsequent write; updates the per-region
+//! * `write_set_local_warm` — subsequent write; updates the per-region
 //!   storage without paying initialization cost.
-//! * `std_thread_local_get_warm` — `thread_local!` `Cell` baseline.
 //!
 //! Multi-threaded contention is intentionally out of scope; Callgrind
 //! cannot model cache-coherence traffic meaningfully, and the
@@ -86,63 +86,63 @@ mod linux {
     // ---------- Read paths ----------
 
     #[library_benchmark]
-    fn get_local_first_touch() -> u32 {
+    fn read_get_local_first_touch() -> u32 {
         FIRST_TOUCH_VALUE.get_local()
     }
 
     #[library_benchmark]
     #[bench::warm(warm_get_local())]
-    fn get_local_warm(_: ()) -> u32 {
+    fn read_get_local_warm(_: ()) -> u32 {
         WARM_VALUE.get_local()
     }
 
     #[library_benchmark]
     #[bench::warm(warm_with_local())]
-    fn with_local_warm(_: ()) -> u32 {
+    fn read_with_local_warm(_: ()) -> u32 {
         WITH_VALUE.with_local(|v| *v)
     }
 
     // ---------- Write path ----------
 
     #[library_benchmark]
-    fn set_local_first_touch() {
+    fn write_set_local_first_touch() {
         SET_FIRST_TOUCH_VALUE.set_local(black_box(566));
     }
 
     #[library_benchmark]
     #[bench::warm(warm_set_local())]
-    fn set_local_warm(_: ()) {
+    fn write_set_local_warm(_: ()) {
         SET_WARM_VALUE.set_local(black_box(566));
     }
 
-    // ---------- Baseline ----------
+    // ---------- Comparison baseline (logically part of `read`) ----------
 
     #[library_benchmark]
     #[bench::warm(warm_std_thread_local())]
-    fn std_thread_local_get_warm(_: ()) -> u32 {
+    fn read_std_thread_local_get_warm(_: ()) -> u32 {
         STD_VALUE.with(Cell::get)
     }
 
     library_benchmark_group!(
-        name = read_group,
-        benchmarks = [get_local_first_touch, get_local_warm, with_local_warm]
+        name = read,
+        benchmarks = [
+            read_get_local_first_touch,
+            read_get_local_warm,
+            read_with_local_warm,
+            read_std_thread_local_get_warm,
+        ]
     );
 
     library_benchmark_group!(
-        name = write_group,
-        benchmarks = [set_local_first_touch, set_local_warm]
-    );
-
-    library_benchmark_group!(
-        name = baseline_group,
-        benchmarks = [std_thread_local_get_warm]
+        name = write,
+        benchmarks = [write_set_local_first_touch, write_set_local_warm]
     );
 }
 
 #[cfg(target_os = "linux")]
 use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
 #[cfg(target_os = "linux")]
-pub use linux::{baseline_group, read_group, write_group};
+pub use linux::{read, write};
 
 #[cfg(target_os = "linux")]
 gungraun::main!(
@@ -151,5 +151,5 @@ gungraun::main!(
             .args(["--branch-sim=yes"])
             .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
     );
-    library_benchmark_groups = read_group, write_group, baseline_group
+    library_benchmark_groups = read, write
 );

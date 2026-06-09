@@ -16,7 +16,11 @@ criterion_main!(benches);
 
 fn entrypoint(c: &mut Criterion) {
     // We use a BATCH_SIZE of 10, which means 10 * 64 = 640 MB of memory used per worker pair.
-    execute_runs::<CopyBytes, 10>(c, WorkDistribution::all());
+    execute_runs::<CopyBytes, 10>(
+        c,
+        "many_cpus_benchmarking_harness_demo",
+        WorkDistribution::all(),
+    );
 }
 
 const COPY_BYTES_LEN: usize = 64 * 1024 * 1024;

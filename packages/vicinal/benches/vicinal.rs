@@ -35,7 +35,7 @@ fn entrypoint(c: &mut Criterion) {
     let allocs = AllocSession::new();
     let times = TimeSession::new();
 
-    let mut g = c.benchmark_group("vicinal");
+    let mut g = c.benchmark_group("vicinal/spawn");
 
     let spawn_single_alloc = allocs.operation("spawn_single");
     let spawn_single_time = times.operation("spawn_single");
@@ -298,7 +298,7 @@ fn entrypoint(c: &mut Criterion) {
 
     // Benchmark group for fire-and-forget variants with EventPool<()> completion signaling.
     // This group includes both regular spawn (with event) and spawn_and_forget for fair comparison.
-    let mut g = c.benchmark_group("vicinal_fire_and_forget");
+    let mut g = c.benchmark_group("vicinal/fire_and_forget");
 
     let spawn_with_event_single_alloc = allocs.operation("spawn_with_event_single");
     let spawn_with_event_single_time = times.operation("spawn_with_event_single");

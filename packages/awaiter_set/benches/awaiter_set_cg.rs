@@ -6,12 +6,12 @@
 //! Scenarios isolate the individual operations that make up the awaiter
 //! lifecycle so each can be tracked at instruction-level granularity:
 //!
-//! * `register_into_empty` — first registration into a fresh set.
-//! * `register_appending_to_10` — registration onto a populated tail.
-//! * `notify_one_singleton` — pop the only awaiter, set becomes empty.
-//! * `unregister_only` — unlink the only awaiter, set becomes empty.
-//! * `take_notification_when_notified` — `take_notification` CAS success.
-//! * `take_notification_when_waiting` — `take_notification` CAS failure.
+//! * `register_unregister_register_into_empty` — first registration into a fresh set.
+//! * `register_unregister_register_appending_to_10` — registration onto a populated tail.
+//! * `register_unregister_unregister_only` — unlink the only awaiter, set becomes empty.
+//! * `register_notify_take_notify_one_singleton` — pop the only awaiter, set becomes empty.
+//! * `register_notify_take_take_notification_when_notified` — `take_notification` CAS success.
+//! * `register_notify_take_take_notification_when_waiting` — `take_notification` CAS failure.
 //! * `is_empty_when_empty` — null-head fast path on an empty set.
 //! * `is_empty_when_populated` — null-head check on a populated set.
 //! * `notify_one_prior_generation_eligible` — pop an awaiter that
@@ -127,7 +127,7 @@ mod linux {
 
     #[library_benchmark]
     #[bench::empty(make_empty_solo())]
-    fn register_into_empty(mut state: SoloState) -> SoloState {
+    fn register_unregister_register_into_empty(mut state: SoloState) -> SoloState {
         // SAFETY: The awaiter is heap-pinned, kept alive in the returned
         // state until after the measured region, and not currently
         // registered.
@@ -141,7 +141,7 @@ mod linux {
 
     #[library_benchmark]
     #[bench::with_10(make_populated_10())]
-    fn register_appending_to_10(mut state: PopulatedState) -> PopulatedState {
+    fn register_unregister_register_appending_to_10(mut state: PopulatedState) -> PopulatedState {
         // SAFETY: `state.target` is heap-pinned, kept alive in the returned
         // state, and not currently registered.
         unsafe {
@@ -152,20 +152,9 @@ mod linux {
         state
     }
 
-    // ---------- Removal via notification ----------
-
     #[library_benchmark]
     #[bench::singleton(make_registered_solo())]
-    fn notify_one_singleton(mut state: SoloState) -> SoloState {
-        drop(black_box(state.set.notify_one()));
-        state
-    }
-
-    // ---------- Removal via unregister ----------
-
-    #[library_benchmark]
-    #[bench::singleton(make_registered_solo())]
-    fn unregister_only(mut state: SoloState) -> SoloState {
+    fn register_unregister_unregister_only(mut state: SoloState) -> SoloState {
         // SAFETY: The awaiter is registered with this set (per setup) and
         // remains pinned and alive in the returned state.
         unsafe {
@@ -174,23 +163,26 @@ mod linux {
         state
     }
 
-    // ---------- Atomic-only paths ----------
+    #[library_benchmark]
+    #[bench::singleton(make_registered_solo())]
+    fn register_notify_take_notify_one_singleton(mut state: SoloState) -> SoloState {
+        drop(black_box(state.set.notify_one()));
+        state
+    }
 
     #[library_benchmark]
     #[bench::notified(make_notified_solo())]
-    fn take_notification_when_notified(state: SoloState) -> SoloState {
+    fn register_notify_take_take_notification_when_notified(state: SoloState) -> SoloState {
         _ = black_box(state.awaiter.as_ref().take_notification());
         state
     }
 
     #[library_benchmark]
     #[bench::waiting(make_registered_solo())]
-    fn take_notification_when_waiting(state: SoloState) -> SoloState {
+    fn register_notify_take_take_notification_when_waiting(state: SoloState) -> SoloState {
         _ = black_box(state.awaiter.as_ref().take_notification());
         state
     }
-
-    // ---------- Emptiness check ----------
 
     #[library_benchmark]
     #[bench::empty(make_empty_solo())]
@@ -205,8 +197,6 @@ mod linux {
         _ = black_box(black_box(&state.set).is_empty());
         state
     }
-
-    // ---------- Generation-bounded notification ----------
 
     // Sets up a registered awaiter that belongs to a prior generation,
     // so `notify_one_prior_generation` is eligible to pop it.
@@ -224,37 +214,38 @@ mod linux {
     }
 
     library_benchmark_group!(
-        name = register_group,
-        benchmarks = [register_into_empty, register_appending_to_10]
-    );
-
-    library_benchmark_group!(
-        name = removal_group,
+        name = register_unregister,
         benchmarks = [
-            notify_one_singleton,
-            unregister_only,
-            notify_one_prior_generation_eligible,
+            register_unregister_register_into_empty,
+            register_unregister_register_appending_to_10,
+            register_unregister_unregister_only,
         ]
     );
 
     library_benchmark_group!(
-        name = atomic_group,
+        name = register_notify_take,
         benchmarks = [
-            take_notification_when_notified,
-            take_notification_when_waiting,
+            register_notify_take_notify_one_singleton,
+            register_notify_take_take_notification_when_notified,
+            register_notify_take_take_notification_when_waiting,
         ]
     );
 
     library_benchmark_group!(
-        name = inspection_group,
+        name = is_empty,
         benchmarks = [is_empty_when_empty, is_empty_when_populated]
+    );
+
+    library_benchmark_group!(
+        name = notify_one_prior_generation,
+        benchmarks = [notify_one_prior_generation_eligible]
     );
 }
 
 #[cfg(target_os = "linux")]
 use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
 #[cfg(target_os = "linux")]
-pub use linux::{atomic_group, inspection_group, register_group, removal_group};
+pub use linux::{is_empty, notify_one_prior_generation, register_notify_take, register_unregister};
 
 #[cfg(target_os = "linux")]
 gungraun::main!(
@@ -263,5 +254,9 @@ gungraun::main!(
             .args(["--branch-sim=yes"])
             .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
     );
-    library_benchmark_groups = register_group, removal_group, atomic_group, inspection_group
+    library_benchmark_groups =
+        register_unregister,
+        register_notify_take,
+        is_empty,
+        notify_one_prior_generation
 );

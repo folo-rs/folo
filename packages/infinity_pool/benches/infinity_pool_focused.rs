@@ -59,7 +59,7 @@ fn focused(c: &mut Criterion) {
 /// into a populated pool. The deref is non-mutating, so the same pool
 /// and handle are reused across all iterations of a sample.
 fn deref_handle(c: &mut Criterion) {
-    let mut group = c.benchmark_group("focused");
+    let mut group = c.benchmark_group("infinity_pool_focused/focused");
 
     group.bench_function("deref_handle", |b| {
         b.iter_custom(|iters| {
@@ -92,7 +92,7 @@ fn deref_handle(c: &mut Criterion) {
 /// handle is returned alongside the pool and anchors so its drop runs
 /// after timing stops — the routine measures only the insert path.
 fn blind_insert_with_5_layouts(c: &mut Criterion) {
-    let mut group = c.benchmark_group("focused");
+    let mut group = c.benchmark_group("infinity_pool_focused/focused");
 
     group.bench_function("blind_insert_with_5_layouts", |b| {
         b.iter_batched(
@@ -115,7 +115,7 @@ fn blind_insert_with_5_layouts(c: &mut Criterion) {
 /// `LargeInput` keeps the batch small so peak memory stays bounded
 /// (each setup input holds ~80 KB of payload plus slab metadata).
 fn raw_drop_full_u64(c: &mut Criterion) {
-    let mut group = c.benchmark_group("focused");
+    let mut group = c.benchmark_group("infinity_pool_focused/focused");
 
     group.bench_function("raw_drop_full_u64", |b| {
         b.iter_batched(
@@ -135,7 +135,7 @@ fn raw_drop_full_u64(c: &mut Criterion) {
 /// caps the batch size so the bench does not measure under allocator
 /// pressure caused by many fully populated `String` pools coexisting.
 fn raw_drop_full_string(c: &mut Criterion) {
-    let mut group = c.benchmark_group("focused");
+    let mut group = c.benchmark_group("infinity_pool_focused/focused");
 
     group.bench_function("raw_drop_full_string", |b| {
         b.iter_batched(
@@ -152,7 +152,7 @@ fn raw_drop_full_string(c: &mut Criterion) {
 /// over a fully populated 10 000-item `PinnedPool`. Iteration is
 /// non-mutating, so the same pool is reused across iterations.
 fn iter_full(c: &mut Criterion) {
-    let mut group = c.benchmark_group("focused");
+    let mut group = c.benchmark_group("infinity_pool_focused/focused");
 
     group.bench_function("iter_full", |b| {
         b.iter_custom(|iters| {
@@ -185,7 +185,7 @@ fn iter_full(c: &mut Criterion) {
 /// per-empty-slot scan cost. Iteration is non-mutating, so state is
 /// reused across all iterations.
 fn iter_sparse(c: &mut Criterion) {
-    let mut group = c.benchmark_group("focused");
+    let mut group = c.benchmark_group("infinity_pool_focused/focused");
 
     group.bench_function("iter_sparse", |b| {
         b.iter_custom(|iters| {

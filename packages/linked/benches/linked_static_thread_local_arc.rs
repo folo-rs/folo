@@ -47,7 +47,7 @@ fn entrypoint(c: &mut Criterion) {
         ThreadPool::new(SystemHardware::current().processors().take(nz!(1)).unwrap());
     let mut two_threads = TWO_PROCESSORS.as_ref().map(ThreadPool::new);
 
-    let mut g = c.benchmark_group("thread_local_arc::access_one_threaded");
+    let mut g = c.benchmark_group("linked_static_thread_local_arc/access_one_threaded");
 
     Run::new()
         .iter(|_| TARGET.with(|val| Arc::weak_count(&val.shared_state)))
@@ -70,7 +70,7 @@ fn entrypoint(c: &mut Criterion) {
     g.finish();
 
     if let Some(ref mut two_threads) = two_threads {
-        let mut g = c.benchmark_group("thread_local_arc::access_two_threaded");
+        let mut g = c.benchmark_group("linked_static_thread_local_arc/access_two_threaded");
 
         Run::new()
             .iter(|_| TARGET.with(|val| Arc::weak_count(&val.shared_state)))

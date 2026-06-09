@@ -48,7 +48,11 @@ name = "events_once_vs_3p"
 harness = false
 
 [[bench]]
-name = "events_once_cg"
+name = "events_once_local_cg"
+harness = false
+
+[[bench]]
+name = "events_once_sync_cg"
 harness = false
 
 

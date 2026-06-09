@@ -33,7 +33,7 @@ impl Payload for MyBenchmark {
 
 // Run benchmarks with different work distribution modes
 fn benchmark(c: &mut criterion::Criterion) {
-    execute_runs::<MyBenchmark, 1>(c, WorkDistribution::all());
+    execute_runs::<MyBenchmark, 1>(c, "many_cpus_benchmarking_readme", WorkDistribution::all());
 }
 ```
 

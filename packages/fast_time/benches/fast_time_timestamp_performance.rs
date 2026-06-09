@@ -8,7 +8,7 @@ use fast_time::Clock;
 
 /// Benchmark group comparing timestamp capture performance.
 fn timestamp_comparison(c: &mut Criterion) {
-    let mut group = c.benchmark_group("timestamp_capture");
+    let mut group = c.benchmark_group("fast_time_timestamp_performance/timestamp_capture");
 
     // Setup for fast_time clock
     let mut clock = Clock::new();

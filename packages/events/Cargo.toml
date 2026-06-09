@@ -55,7 +55,7 @@ name = "events_contended"
 harness = false
 
 [[bench]]
-name = "events_cg"
+name = "events_uncontended_cg"
 harness = false
 
 [lints]

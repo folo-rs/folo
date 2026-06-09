@@ -44,7 +44,7 @@ fn entrypoint(c: &mut Criterion) {
         .take(nz!(2))
         .map(|x| ThreadPool::new(&x));
 
-    let mut group = c.benchmark_group("region_cached");
+    let mut group = c.benchmark_group("region_cached/read");
 
     // We intentionally do NOT use the thread pool here because thread pool threads are
     // always pinned and this is specifically to measure performance on an unpinned thread.
@@ -56,16 +56,6 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    // We intentionally do NOT use the thread pool here because thread pool threads are
-    // always pinned and this is specifically to measure performance on an unpinned thread.
-    group.bench_function("set_unpin", |b| {
-        b.iter(|| {
-            region_cached!(static VALUE: u32 = 99942);
-
-            VALUE.set_global(black_box(566));
-        });
-    });
-
     Run::new()
         .iter(|_| {
             region_cached!(static VALUE: u32 = 99942);
@@ -73,14 +63,6 @@ fn entrypoint(c: &mut Criterion) {
             VALUE.get_cached()
         })
         .execute_criterion_on(&mut one_thread, &mut group, "get_pin");
-
-    Run::new()
-        .iter(|_| {
-            region_cached!(static VALUE: u32 = 99942);
-
-            VALUE.set_global(black_box(566));
-        })
-        .execute_criterion_on(&mut one_thread, &mut group, "set_pin");
 
     // Two threads perform "get" in a loop.
     if let Some(ref mut thread_pool) = two_threads_same_region {
@@ -107,7 +89,29 @@ fn entrypoint(c: &mut Criterion) {
 
     group.finish();
 
-    let mut group = c.benchmark_group("region_cached_get_set_pin");
+    let mut group = c.benchmark_group("region_cached/write");
+
+    // We intentionally do NOT use the thread pool here because thread pool threads are
+    // always pinned and this is specifically to measure performance on an unpinned thread.
+    group.bench_function("set_unpin", |b| {
+        b.iter(|| {
+            region_cached!(static VALUE: u32 = 99942);
+
+            VALUE.set_global(black_box(566));
+        });
+    });
+
+    Run::new()
+        .iter(|_| {
+            region_cached!(static VALUE: u32 = 99942);
+
+            VALUE.set_global(black_box(566));
+        })
+        .execute_criterion_on(&mut one_thread, &mut group, "set_pin");
+
+    group.finish();
+
+    let mut group = c.benchmark_group("region_cached/get_set_pin");
 
     if let Some(ref mut thread_pool) = two_threads_same_region {
         // One thread performs "get" in a loop, another performs "set" in a loop.

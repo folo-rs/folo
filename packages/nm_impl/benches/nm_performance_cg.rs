@@ -129,18 +129,18 @@ mod linux {
         (event, pusher, magnitude)
     }
 
-    // ---------- Pull model ----------
+    // ---------- Pull model (observation) ----------
 
     #[library_benchmark]
     #[bench::observe_once(make_pull_counter("cg_pull_counter_once"))]
-    fn pull_counter_observe_once(event: Event) -> Event {
+    fn observation_pull_counter_observe_once(event: Event) -> Event {
         black_box(&event).observe_once();
         event
     }
 
     #[library_benchmark]
     #[bench::observe_value(make_pull_counter("cg_pull_counter_value"))]
-    fn pull_counter_observe_value(event: Event) -> Event {
+    fn observation_pull_counter_observe_value(event: Event) -> Event {
         black_box(&event).observe(black_box(42));
         event
     }
@@ -161,7 +161,7 @@ mod linux {
         args = [1_usize, 10_usize, 100_usize, 1_000_usize, 10_000_usize],
         setup = make_pull_counter_batch,
     )]
-    fn pull_counter_observe_batch(input: (Event, usize)) -> Event {
+    fn observation_pull_counter_observe_batch(input: (Event, usize)) -> Event {
         let (event, n) = input;
         black_box(&event).batch(black_box(n)).observe_once();
         event
@@ -174,7 +174,7 @@ mod linux {
         SMALL_HISTOGRAM_LAST_BUCKET_VALUE,
     ))]
     #[bench::miss(make_pull_small_histogram_with("cg_pull_small_histo_miss", Magnitude::MAX))]
-    fn pull_small_histogram_observe(input: (Event, Magnitude)) -> Event {
+    fn observation_pull_small_histogram_observe(input: (Event, Magnitude)) -> Event {
         let (event, magnitude) = input;
         black_box(&event).observe(black_box(magnitude));
         event
@@ -187,17 +187,17 @@ mod linux {
         LARGE_HISTOGRAM_LAST_BUCKET_VALUE,
     ))]
     #[bench::miss(make_pull_large_histogram_with("cg_pull_large_histo_miss", Magnitude::MAX))]
-    fn pull_large_histogram_observe(input: (Event, Magnitude)) -> Event {
+    fn observation_pull_large_histogram_observe(input: (Event, Magnitude)) -> Event {
         let (event, magnitude) = input;
         black_box(&event).observe(black_box(magnitude));
         event
     }
 
-    // ---------- Push model ----------
+    // ---------- Push model (observation) ----------
 
     #[library_benchmark]
     #[bench::observe_once(make_push_counter("cg_push_counter_once"))]
-    fn push_counter_observe_once(
+    fn observation_push_counter_observe_once(
         input: (Event<Push>, MetricsPusher),
     ) -> (Event<Push>, MetricsPusher) {
         let (event, pusher) = input;
@@ -207,7 +207,7 @@ mod linux {
 
     #[library_benchmark]
     #[bench::observe_value(make_push_counter("cg_push_counter_value"))]
-    fn push_counter_observe_value(
+    fn observation_push_counter_observe_value(
         input: (Event<Push>, MetricsPusher),
     ) -> (Event<Push>, MetricsPusher) {
         let (event, pusher) = input;
@@ -222,7 +222,7 @@ mod linux {
         SMALL_HISTOGRAM_LAST_BUCKET_VALUE,
     ))]
     #[bench::miss(make_push_small_histogram_with("cg_push_small_histo_miss", Magnitude::MAX))]
-    fn push_small_histogram_observe(
+    fn observation_push_small_histogram_observe(
         input: (Event<Push>, MetricsPusher, Magnitude),
     ) -> (Event<Push>, MetricsPusher) {
         let (event, pusher, magnitude) = input;
@@ -237,7 +237,7 @@ mod linux {
         LARGE_HISTOGRAM_LAST_BUCKET_VALUE,
     ))]
     #[bench::miss(make_push_large_histogram_with("cg_push_large_histo_miss", Magnitude::MAX))]
-    fn push_large_histogram_observe(
+    fn observation_push_large_histogram_observe(
         input: (Event<Push>, MetricsPusher, Magnitude),
     ) -> (Event<Push>, MetricsPusher) {
         let (event, pusher, magnitude) = input;
@@ -349,7 +349,7 @@ mod linux {
 
     #[library_benchmark]
     #[bench::eight_events(make_collect_state())]
-    fn collect(state: AggregateState) -> AggregateState {
+    fn collection_report_collect(state: AggregateState) -> AggregateState {
         drop(black_box(Report::collect()));
         state
     }
@@ -357,39 +357,35 @@ mod linux {
     #[library_benchmark]
     #[bench::dirty(make_push_dirty_state())]
     #[bench::idle(make_push_idle_state())]
-    fn push(state: AggregateState) -> AggregateState {
+    fn push_metrics_pusher_push(state: AggregateState) -> AggregateState {
         state.pusher.push();
         state
     }
 
     library_benchmark_group!(
-        name = pull_group,
+        name = observation,
         benchmarks = [
-            pull_counter_observe_once,
-            pull_counter_observe_value,
-            pull_counter_observe_batch,
-            pull_small_histogram_observe,
-            pull_large_histogram_observe,
+            observation_pull_counter_observe_once,
+            observation_pull_counter_observe_value,
+            observation_pull_counter_observe_batch,
+            observation_pull_small_histogram_observe,
+            observation_pull_large_histogram_observe,
+            observation_push_counter_observe_once,
+            observation_push_counter_observe_value,
+            observation_push_small_histogram_observe,
+            observation_push_large_histogram_observe,
         ]
     );
 
-    library_benchmark_group!(
-        name = push_group,
-        benchmarks = [
-            push_counter_observe_once,
-            push_counter_observe_value,
-            push_small_histogram_observe,
-            push_large_histogram_observe,
-        ]
-    );
+    library_benchmark_group!(name = collection, benchmarks = [collection_report_collect]);
 
-    library_benchmark_group!(name = aggregate_group, benchmarks = [collect, push]);
+    library_benchmark_group!(name = push, benchmarks = [push_metrics_pusher_push]);
 }
 
 #[cfg(target_os = "linux")]
 use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
 #[cfg(target_os = "linux")]
-pub use linux::{aggregate_group, pull_group, push_group};
+pub use linux::{collection, observation, push};
 
 #[cfg(target_os = "linux")]
 gungraun::main!(
@@ -398,5 +394,5 @@ gungraun::main!(
             .args(["--branch-sim=yes"])
             .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
     );
-    library_benchmark_groups = pull_group, push_group, aggregate_group
+    library_benchmark_groups = observation, collection, push
 );

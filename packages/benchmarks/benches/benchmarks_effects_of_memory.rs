@@ -58,11 +58,18 @@ use real_constants::*;
 use test_constants::*;
 
 fn entrypoint(c: &mut Criterion) {
+    let prefix = "benchmarks_effects_of_memory";
+
     // This payload is only 10K items, so we use a large batch size as it fits well in memory.
-    execute_runs::<ChannelExchange, 1000>(c, WorkDistribution::all_with_unique_processors());
+    execute_runs::<ChannelExchange, 1000>(
+        c,
+        prefix,
+        WorkDistribution::all_with_unique_processors(),
+    );
 
     execute_runs::<HashMapRead<SMALL_MAP_ENTRY_COUNT, 1>, SMALL_MAP_BATCH_SIZE>(
         c,
+        prefix,
         // We do not care about "self" because the workers both perform the same work anyway, so
         // it does not matter whether the payload is exchanged or not.
         WorkDistribution::all_with_unique_processors_without_self(),
@@ -70,6 +77,7 @@ fn entrypoint(c: &mut Criterion) {
 
     execute_runs::<HashMapBothRead<SMALL_MAP_ENTRY_COUNT, 1>, SMALL_MAP_BATCH_SIZE>(
         c,
+        prefix,
         // We do not care about "self" because the workers allocate roles dynamically at runtime,
         // so it does not matter whether the payload is exchanged or not.
         WorkDistribution::all_with_unique_processors_without_self(),
@@ -77,6 +85,7 @@ fn entrypoint(c: &mut Criterion) {
 
     execute_runs::<FzHashMapRead<SMALL_MAP_ENTRY_COUNT, 1>, SMALL_MAP_BATCH_SIZE>(
         c,
+        prefix,
         WorkDistribution::all_with_unique_processors(),
     );
 
@@ -91,11 +100,13 @@ fn entrypoint(c: &mut Criterion) {
     // processors, resulting in cache misses that should slow things down even if same-region.
     execute_runs::<FzHashMapRead<SMALL_MAP_ENTRY_COUNT, 10>, SMALL_MAP_BATCH_SIZE>(
         c,
+        prefix,
         WorkDistribution::all_with_unique_processors(),
     );
 
     execute_runs::<FzScalarMapRead<SMALL_MAP_ENTRY_COUNT, 1>, SMALL_MAP_BATCH_SIZE>(
         c,
+        prefix,
         WorkDistribution::all_with_unique_processors(),
     );
 
@@ -110,6 +121,7 @@ fn entrypoint(c: &mut Criterion) {
     // processors, resulting in cache misses that should slow things down even if same-region.
     execute_runs::<FzScalarMapRead<SMALL_MAP_ENTRY_COUNT, 10>, SMALL_MAP_BATCH_SIZE>(
         c,
+        prefix,
         WorkDistribution::all_with_unique_processors(),
     );
 
@@ -118,20 +130,23 @@ fn entrypoint(c: &mut Criterion) {
     // is unusual compared to the others. Maybe related, maybe not.
     //
     // We use a large batch size, as the payload is quite small (10K headers) and fits well in memory.
-    execute_runs::<HttpHeadersParse, 1000>(c, WorkDistribution::all());
+    execute_runs::<HttpHeadersParse, 1000>(c, prefix, WorkDistribution::all());
 
     execute_runs::<SccMapRead<SMALL_MAP_ENTRY_COUNT, 1>, SMALL_MAP_BATCH_SIZE>(
         c,
+        prefix,
         WorkDistribution::all_with_unique_processors(),
     );
 
     execute_runs::<SccMapBothRead<SMALL_MAP_ENTRY_COUNT, 1>, SMALL_MAP_BATCH_SIZE>(
         c,
+        prefix,
         WorkDistribution::all_with_unique_processors(),
     );
 
     execute_runs::<SccMapSharedReadWrite<SMALL_MAP_ENTRY_COUNT, 1>, SMALL_MAP_BATCH_SIZE>(
         c,
+        prefix,
         // We do not care about "self" because the workers allocate roles dynamically at runtime,
         // so it does not matter whether the payload is exchanged or not.
         WorkDistribution::all_without_self(),
@@ -141,6 +156,7 @@ fn entrypoint(c: &mut Criterion) {
     // point of this scenario - to show what happens when data that does not fit in caches.
     execute_runs::<SccMapSharedReadWrite<LARGE_MAP_ENTRY_COUNT, 1>, LARGE_MAP_BATCH_SIZE>(
         c,
+        prefix,
         // We do not care about "self" because the workers allocate roles dynamically at runtime,
         // so it does not matter whether the payload is exchanged or not.
         WorkDistribution::all_without_self(),

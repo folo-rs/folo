@@ -30,7 +30,7 @@ fn entrypoint(c: &mut Criterion) {
         .take(nz!(2))
         .map(|x| ThreadPool::new(&x));
 
-    let mut group = c.benchmark_group("nm_observation");
+    let mut group = c.benchmark_group("nm_performance/observation");
 
     Run::new()
         .iter(|_| PULL_COUNTER.with(Event::observe_once))
@@ -201,7 +201,7 @@ fn entrypoint(c: &mut Criterion) {
 
     group.finish();
 
-    let mut group = c.benchmark_group("nm_collection");
+    let mut group = c.benchmark_group("nm_performance/collection");
 
     Run::new()
         .iter(|_| drop(black_box(Report::collect())))
@@ -216,7 +216,7 @@ fn entrypoint(c: &mut Criterion) {
 
     group.finish();
 
-    let mut group = c.benchmark_group("nm_push");
+    let mut group = c.benchmark_group("nm_performance/push");
 
     Run::new()
         .iter(|_| PUSHER.with(MetricsPusher::push))
@@ -231,7 +231,7 @@ fn entrypoint(c: &mut Criterion) {
 
     group.finish();
 
-    let mut group = c.benchmark_group("nm_timing");
+    let mut group = c.benchmark_group("nm_performance/timing");
 
     Run::new()
         .iter(|_| PULL_COUNTER.with(|x| x.observe_duration_millis(|| black_box(()))))
