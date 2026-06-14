@@ -55,7 +55,10 @@ builtin like `exit 7`, because the runner no longer goes through a shell. Resolv
 so the mock writes where the harvester reads. Because the engine runs without a
 shell, the config `command` embeds the binary path POSIX-single-quoted (so it
 survives shell-word tokenization as one argument) and TOML-escaped (so Windows
-backslashes survive the TOML string).
+backslashes survive the TOML string). Like every other crate root that uses
+`#[cfg_attr(coverage_nightly, coverage(off))]`, the mock engine must declare
+`#![cfg_attr(coverage_nightly, feature(coverage_attribute))]` at its top, or the
+coverage job fails to compile it (E0658).
 
 ## End-to-end tests and the current directory
 
@@ -64,6 +67,15 @@ tempdir, so it must be `#[serial]` (from `serial_test`). On Windows a `TempDir`
 cannot be dropped while it is the current directory, so restore the original CWD
 **before** running assertions and before the tempdir is dropped. Prefer setting
 `[project] id` in the test config rather than relying on the CWD basename.
+
+Each test also pins `CARGO_TARGET_DIR` to its own tempdir `target/` for the
+duration of `run` (via `TargetDirGuard`). The coverage job runs
+`cargo llvm-cov nextest`, which redirects every build and bin into one shared
+`target/llvm-cov-target`; without the pin, the harvester (which collects every
+fresh `gungraun/**/summary.json` within an mtime window) would pick up summaries
+written by other tests sharing that directory and miscount records. The env
+mutation is sound only because **every** test in the file is `#[serial]`, so the
+process environment is never accessed concurrently — keep new tests `#[serial]`.
 
 ## Fixture-golden canaries
 
