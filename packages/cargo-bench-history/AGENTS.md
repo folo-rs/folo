@@ -94,14 +94,17 @@ cannot be dropped while it is the current directory, so restore the original CWD
 
 Each test also points the harvest at its own tempdir `target/` for the duration
 of `run`, by passing an explicit target root through the `run_with_target_root`
-entry. The coverage job runs `cargo llvm-cov nextest`, which redirects every
-build and bin into one shared `target/llvm-cov-target`; without the override, the
-harvester (which collects every fresh `gungraun/**/summary.json` within an mtime
-window) would resolve `CARGO_TARGET_DIR` to that shared directory and pick up
-summaries written by other tests, miscounting records. Threading the root through
-the API keeps the test hermetic **without mutating the process environment** — do
-not reintroduce a `set_var("CARGO_TARGET_DIR", …)` guard. The production `run`
-entry passes `None` and resolves the root from the environment as usual.
+entry. `run` injects that resolved root into every engine's environment as
+`CARGO_TARGET_DIR`, so the engine writes exactly where the harvest scans. This
+matters under the coverage job, which runs `cargo llvm-cov nextest` and redirects
+every build and bin into one shared `target/llvm-cov-target`: that ambient
+`CARGO_TARGET_DIR` would otherwise make the mock engine (which honors it) write
+its summaries into the shared directory while the overridden harvester looked in
+the tempdir, harvesting nothing. Pinning both ends to the same root keeps each
+test hermetic **without mutating the process environment** — do not reintroduce a
+`set_var("CARGO_TARGET_DIR", …)` guard. The production `run` entry passes `None`,
+resolves the root from the environment as usual, and injects that same value so
+the real engine and harvest never diverge either.
 
 ## Fixture-golden canaries
 

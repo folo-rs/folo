@@ -312,6 +312,10 @@ For each configured engine, `run`:
    `cargo bench` invocation. Callgrind → `GUNGRAUN_SAVE_SUMMARY=pretty-json`;
    Criterion → nothing needed. An optional `extra_args` escape hatch covers
    engines/modes with no env knob (e.g. `cargo-criterion --message-format`).
+   * **Target directory pinning:** the tool also injects `CARGO_TARGET_DIR` set
+     to the target root it will harvest, so the engine's output always lands
+     where the harvest scans — even when an ambient `CARGO_TARGET_DIR` (such as
+     the one `cargo llvm-cov` sets) would otherwise redirect it elsewhere.
    * **WSL propagation:** the tool cannot reliably detect whether a command
      crosses into WSL (it may be an opaque `just …` wrapper), so it does **not**
      try. Instead, for every env var it injects it **unconditionally appends that

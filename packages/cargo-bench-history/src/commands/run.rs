@@ -5,7 +5,7 @@
 //! [`tick::Clock`], so the whole flow is exercised in-process with fakes. The
 //! public [`execute`] wires the real adapters and is what the binary runs.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
@@ -50,6 +50,10 @@ pub(crate) struct RunDeps<'a, R, P, O, S> {
     pub(crate) tool_version: &'a str,
     /// Unique identifier distinguishing this run's stored objects.
     pub(crate) run_id: &'a str,
+    /// Cargo target directory that engines write to and the harvest scans. It is
+    /// injected into each engine's environment as `CARGO_TARGET_DIR` so the
+    /// engine's output always lands where the harvest looks for it.
+    pub(crate) target_root: &'a Path,
 }
 
 /// The real `run`: wire the production adapters and orchestrate.
@@ -74,7 +78,8 @@ pub(crate) async fn execute(
 
     let runner = TokioBenchRunner;
     let probe = SystemProbe;
-    let output = FsBenchOutputSource::new(target_root.unwrap_or_else(resolve_target_root));
+    let target_root = target_root.unwrap_or_else(resolve_target_root);
+    let output = FsBenchOutputSource::new(target_root.clone());
     let clock = Clock::new_tokio();
     let env = |name: &str| std::env::var(name).ok();
     let run_id = generate_run_id(&clock);
@@ -90,6 +95,7 @@ pub(crate) async fn execute(
         project_id: &project_id,
         tool_version: env!("CARGO_PKG_VERSION"),
         run_id: &run_id,
+        target_root: &target_root,
     };
 
     execute_run(options, &deps).await
@@ -192,7 +198,14 @@ where
         .expect("engine name was taken from the configuration map");
 
     let run_start = deps.clock.system_time();
-    let injected = injected_env(engine);
+    let mut injected = injected_env(engine);
+    // Pin the engine's output location to the directory the harvest scans, so the
+    // two never diverge — notably when an ambient `CARGO_TARGET_DIR` (such as the
+    // one `cargo llvm-cov` sets) differs from the root this run resolved.
+    injected.push((
+        "CARGO_TARGET_DIR".to_owned(),
+        deps.target_root.to_string_lossy().into_owned(),
+    ));
     let argv = build_command_line(
         &engine_config.command,
         &engine_config.extra_args,
@@ -216,7 +229,7 @@ where
     for summary in &raw {
         let record =
             parse_callgrind_summary(&summary.content).map_err(|error| RunError::Parse {
-                message: error.to_string(),
+                message: format!("{}: {error}", summary.path.display()),
             })?;
         records.push(record);
     }
@@ -523,10 +536,14 @@ mod tests {
         );
     }
 
+    /// One engine invocation's injected environment, recorded by [`FakeRunner`].
+    type RecordedEnv = Vec<(String, String)>;
+
     #[derive(Clone)]
     struct FakeRunner {
         status: EngineStatus,
         calls: Arc<Mutex<Vec<Vec<String>>>>,
+        envs: Arc<Mutex<Vec<RecordedEnv>>>,
     }
 
     impl FakeRunner {
@@ -537,6 +554,7 @@ mod tests {
                     code: Some(0),
                 },
                 calls: Arc::default(),
+                envs: Arc::default(),
             }
         }
 
@@ -547,11 +565,16 @@ mod tests {
                     code: Some(code),
                 },
                 calls: Arc::default(),
+                envs: Arc::default(),
             }
         }
 
         fn last_command(&self) -> Option<Vec<String>> {
             self.calls.lock().unwrap().last().cloned()
+        }
+
+        fn last_env(&self) -> Option<Vec<(String, String)>> {
+            self.envs.lock().unwrap().last().cloned()
         }
     }
 
@@ -559,9 +582,10 @@ mod tests {
         async fn run_engine(
             &self,
             argv: &[String],
-            _env: &[(String, String)],
+            env: &[(String, String)],
         ) -> io::Result<EngineStatus> {
             self.calls.lock().unwrap().push(argv.to_vec());
+            self.envs.lock().unwrap().push(env.to_vec());
             Ok(self.status)
         }
     }
@@ -677,6 +701,7 @@ mod tests {
             project_id: "folo",
             tool_version: "0.0.1",
             run_id: "test-run",
+            target_root: Path::new("target"),
         };
         block_on(execute_run(options, &deps))
     }
@@ -869,6 +894,35 @@ mod tests {
     }
 
     #[test]
+    fn engine_environment_pins_the_target_directory() {
+        let runner = FakeRunner::succeeding();
+
+        drive(
+            &RunOptions::default(),
+            &callgrind_config(),
+            &runner,
+            &FakeProbe::new(),
+            &FakeOutput::default(),
+            &MemoryStorage::new(),
+        )
+        .unwrap();
+
+        let env = runner
+            .last_env()
+            .expect("an environment should have been recorded");
+        // The engine receives the callgrind summary flag plus the resolved target
+        // directory, so its output lands exactly where the harvest scans.
+        assert!(
+            env.contains(&("GUNGRAUN_SAVE_SUMMARY".to_owned(), "pretty-json".to_owned())),
+            "{env:?}"
+        );
+        assert!(
+            env.contains(&("CARGO_TARGET_DIR".to_owned(), "target".to_owned())),
+            "{env:?}"
+        );
+    }
+
+    #[test]
     fn malformed_summary_is_a_parse_error() {
         let storage = MemoryStorage::new();
         let error = drive(
@@ -884,6 +938,9 @@ mod tests {
         match error {
             RunError::Parse { message } => {
                 assert!(message.contains("Callgrind"), "{message}");
+                // The offending file is named so multi-summary failures are
+                // actionable.
+                assert!(message.contains("summary.json"), "{message}");
             }
             other => panic!("expected parse error, got {other:?}"),
         }

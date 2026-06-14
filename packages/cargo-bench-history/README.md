@@ -39,15 +39,21 @@ cargo bench-history analyze [--since DATE] [--system SYSTEM]
   result set. `--timestamp` overrides the effective time when backfilling history
   for an old commit; everything after `--` is forwarded verbatim to each engine
   command (use `--engine` to target a single engine).
-* `install` generates a starter `.cargo/bench_history.toml` if absent. *(Planned;
-  not yet implemented.)*
-* `analyze` downloads a partition and reports notable patterns; `--fail-on-regression`
-  enables CI gating. *(Planned; not yet implemented.)*
+* `install` generates a starter `.cargo/bench_history.toml` if absent, printing
+  its path and next steps; an existing file is never overwritten.
+* `analyze` downloads a partition and reports notable patterns;
+  `--fail-on-regression` enables CI gating.
 
 ## Status
 
-Iteration 1 is implemented: `run` executes Callgrind (via Gungraun), harvests its
-`summary.json` output, and stores one immutable result set per run in local
-storage. The `install` and `analyze` subcommands parse but currently report
-themselves as recognized-but-not-yet-implemented; later iterations fill them in.
-See `DESIGN.md` for the full design and iteration plan.
+Iterations 1–3 are implemented:
+
+* `run` executes Callgrind (via Gungraun), harvests its `summary.json` output, and
+  stores one immutable result set per run in local storage.
+* `analyze` loads a project's stored history and reports rolling-baseline
+  regressions/improvements in `text`, `json`, or `markdown`, with optional
+  `--fail-on-regression` CI gating.
+* `install` writes a starter `.cargo/bench_history.toml` when one is absent.
+
+See `DESIGN.md` for the full design and iteration plan (Azure blob storage and a
+Criterion adapter are the remaining iterations).

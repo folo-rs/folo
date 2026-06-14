@@ -84,7 +84,11 @@ impl Storage for LocalStorage {
 
     async fn list(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
         let mut keys = Vec::new();
-        let mut stack = vec![self.root.clone()];
+        // Start the walk at the deepest directory the prefix implies, so listing a
+        // single partition never scans unrelated ones. Correctness still rests on
+        // the `starts_with` filter below; the start directory is only an
+        // optimization that can never skip a matching key.
+        let mut stack = vec![self.walk_root(prefix)];
 
         while let Some(dir) = stack.pop() {
             let mut entries = match tokio::fs::read_dir(&dir).await {
@@ -107,6 +111,26 @@ impl Storage for LocalStorage {
         keys.retain(|key| key.starts_with(prefix));
         keys.sort();
         Ok(keys)
+    }
+}
+
+impl LocalStorage {
+    /// The directory a `list(prefix)` walk should start from: the storage root
+    /// joined with the prefix's leading run of complete (`/`-terminated) path
+    /// segments. A trailing partial segment is excluded so it is matched by the
+    /// `starts_with` filter instead. Descent stops at the first non-ordinary
+    /// segment, leaving such (never-stored) prefixes to match nothing.
+    fn walk_root(&self, prefix: &str) -> PathBuf {
+        let mut dir = self.root.clone();
+        if let Some((parents, _partial)) = prefix.rsplit_once('/') {
+            for segment in parents.split('/') {
+                if !is_plain_segment(segment) {
+                    break;
+                }
+                dir.push(segment);
+            }
+        }
+        dir
     }
 }
 
@@ -227,6 +251,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn walk_root_descends_through_complete_segments_only() {
+        let storage = LocalStorage::new("root");
+        let root = PathBuf::from("root");
+        // Trailing complete segment -> descend into it.
+        assert_eq!(storage.walk_root("v1/proj/"), root.join("v1").join("proj"));
+        // Trailing partial segment -> stop at its parent, filter handles the rest.
+        assert_eq!(
+            storage.walk_root("v1/proj/cal"),
+            root.join("v1").join("proj")
+        );
+        // A single segment with no `/` cannot be narrowed.
+        assert_eq!(storage.walk_root("v1"), root);
+        assert_eq!(storage.walk_root(""), root);
+        // Descent halts at the first non-ordinary segment.
+        assert_eq!(storage.walk_root("v1/../x/"), root.join("v1"));
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn list_with_a_partial_segment_prefix_filters_precisely() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path());
+        storage.put("v1/proj/a.json", b"1").await.unwrap();
+        storage.put("v1/proj/b.json", b"2").await.unwrap();
+        storage.put("v1/other/c.json", b"3").await.unwrap();
+
+        // The prefix ends mid-segment, so the walk starts at `v1/proj` and the
+        // filter keeps only the key that actually begins with `v1/proj/a`.
+        let keys = storage.list("v1/proj/a").await.unwrap();
+
+        assert_eq!(keys, vec!["v1/proj/a.json".to_owned()]);
+    }
+
     #[tokio::test]
     #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
     async fn list_missing_root_is_empty() {
@@ -287,7 +345,9 @@ mod tests {
         std::fs::write(&file_root, "x").unwrap();
         let storage = LocalStorage::new(&file_root);
 
-        let error = storage.list("v1/").await.unwrap_err();
+        // Listing the whole store opens the root directly; a file root yields a
+        // "not a directory" error rather than a benign "missing partition".
+        let error = storage.list("").await.unwrap_err();
 
         assert!(matches!(error, StorageError::Io(_)), "{error:?}");
     }
