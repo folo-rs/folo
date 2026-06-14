@@ -1,0 +1,34 @@
+[package]
+# Cargo has its own logic for naming and expects dashes. Okay.
+name = "cargo-bench-history"
+description = "A Cargo tool that maintains a long-lived history of benchmark results and analyzes it for trends"
+publish = false
+version = "0.0.1"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+argh = { workspace = true }
+jiff = { workspace = true, features = ["serde", "std"] }
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true, features = ["std"] }
+tick = { workspace = true, features = ["tokio"] }
+tokio = { workspace = true, features = ["fs", "macros", "process", "rt-multi-thread"] }
+toml = { workspace = true, features = ["parse", "serde"] }
+
+[dev-dependencies]
+futures = { workspace = true, features = ["executor"] }
+mutants = { workspace = true }
+serial_test = { workspace = true }
+tempfile = { workspace = true }
+tick = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

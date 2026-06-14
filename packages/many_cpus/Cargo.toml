@@ -30,7 +30,7 @@ many_cpus_impl = { workspace = true }
 [dev-dependencies]
 # Examples and the re-export smoke test need these to exercise the public API
 # end-to-end as a user of `many_cpus` would.
-new_zealand = { workspace = true }
+new_zealand = { path = "../new_zealand" }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }
 

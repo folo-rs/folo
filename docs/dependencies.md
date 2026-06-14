@@ -17,3 +17,11 @@ justified reason to do so. Features should be opt-in, not opt-out.
 Do not use `version = "1.2.3"` or `workspace = true` when adding a package from
 the same workspace as a dev-dependency. Within the same workspace, dev-dependencies
 must always be `path = "../foo"` style path-references.
+
+## Lockfile
+
+The committed `Cargo.lock` should track the latest compatible versions of all
+dependencies. Refreshing it with `cargo generate-lockfile` is encouraged, and the
+incidental transitive-dependency updates this pulls in are welcome — keep them
+rather than reverting to a narrower set of changes.
+

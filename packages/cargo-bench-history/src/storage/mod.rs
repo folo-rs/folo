@@ -1,0 +1,156 @@
+//! The storage abstraction: an immutable, list-by-prefix object store that both a
+//! local filesystem and (later) a blob container implement identically.
+
+mod local;
+
+pub use local::LocalStorage;
+
+use std::error::Error;
+use std::fmt;
+use std::future::Future;
+use std::io;
+
+/// An object store of immutable, key-addressed result sets.
+///
+/// The model — flat string keys, write-once objects, and list-by-prefix — is the
+/// lowest common denominator of a filesystem and a blob container, so every
+/// backend implements this trait with no special-casing by callers.
+pub trait Storage: fmt::Debug + Send + Sync {
+    /// Writes `bytes` at `key`, creating any intermediate structure as needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError::Io`] if the object cannot be written.
+    fn put(&self, key: &str, bytes: &[u8]) -> impl Future<Output = Result<(), StorageError>>;
+
+    /// Reads the object stored at `key`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError::NotFound`] if no object exists at `key`, or
+    /// [`StorageError::Io`] if it cannot be read.
+    fn get(&self, key: &str) -> impl Future<Output = Result<Vec<u8>, StorageError>>;
+
+    /// Lists the keys of all objects whose key starts with `prefix`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError::Io`] if the listing cannot be produced.
+    fn list(&self, prefix: &str) -> impl Future<Output = Result<Vec<String>, StorageError>>;
+}
+
+/// An error from a [`Storage`] operation.
+#[non_exhaustive]
+#[derive(Debug)]
+pub enum StorageError {
+    /// No object exists at the requested key.
+    NotFound {
+        /// The key that was not found.
+        key: String,
+    },
+    /// An underlying I/O error occurred.
+    Io(io::Error),
+}
+
+impl fmt::Display for StorageError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotFound { key } => write!(f, "object not found: {key}"),
+            Self::Io(error) => write!(f, "storage I/O error: {error}"),
+        }
+    }
+}
+
+impl Error for StorageError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::NotFound { .. } => None,
+            Self::Io(error) => Some(error),
+        }
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn not_found_display_includes_key() {
+        let error = StorageError::NotFound {
+            key: "v1/x".to_owned(),
+        };
+        assert_eq!(error.to_string(), "object not found: v1/x");
+    }
+
+    #[test]
+    fn io_display_and_source() {
+        let error = StorageError::Io(io::Error::other("disk gone"));
+        assert!(error.to_string().contains("disk gone"));
+        assert!(error.source().is_some());
+    }
+
+    #[test]
+    fn not_found_has_no_source() {
+        let error = StorageError::NotFound {
+            key: "k".to_owned(),
+        };
+        assert!(error.source().is_none());
+    }
+}
+
+/// An in-memory [`Storage`] for tests: write-once keys held in a sorted map.
+///
+/// Its async methods complete synchronously (no real I/O), so orchestration tests
+/// can drive them with a reactor-free `block_on` and remain Miri-safe.
+#[cfg(test)]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct MemoryStorage {
+    objects: std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<String, Vec<u8>>>>,
+}
+
+#[cfg(test)]
+impl MemoryStorage {
+    /// Creates an empty in-memory store.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns the stored keys in sorted order.
+    pub(crate) fn keys(&self) -> Vec<String> {
+        self.objects.lock().unwrap().keys().cloned().collect()
+    }
+}
+
+#[cfg(test)]
+impl Storage for MemoryStorage {
+    async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
+        self.objects
+            .lock()
+            .unwrap()
+            .insert(key.to_owned(), bytes.to_vec());
+        Ok(())
+    }
+
+    async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError> {
+        self.objects
+            .lock()
+            .unwrap()
+            .get(key)
+            .cloned()
+            .ok_or_else(|| StorageError::NotFound {
+                key: key.to_owned(),
+            })
+    }
+
+    async fn list(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
+        Ok(self
+            .objects
+            .lock()
+            .unwrap()
+            .keys()
+            .filter(|key| key.starts_with(prefix))
+            .cloned()
+            .collect())
+    }
+}
