@@ -2,11 +2,11 @@
 //! filesystem. Object keys map to relative paths under a configured root.
 
 use std::io;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use tokio::io::AsyncWriteExt;
 
-use super::{Storage, StorageError};
+use super::{Storage, StorageError, is_plain_segment};
 
 /// A [`Storage`] that persists objects as files under a root directory.
 #[derive(Clone, Debug)]
@@ -38,13 +38,6 @@ impl LocalStorage {
         }
         Ok(path)
     }
-}
-
-/// Returns `true` only if `segment` is a single ordinary path component, so it
-/// can never escape or rebind the storage root when pushed onto a path.
-fn is_plain_segment(segment: &str) -> bool {
-    let mut components = Path::new(segment).components();
-    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
 
 impl Storage for LocalStorage {

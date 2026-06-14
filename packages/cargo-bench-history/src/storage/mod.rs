@@ -9,6 +9,7 @@ use std::error::Error;
 use std::fmt;
 use std::future::Future;
 use std::io;
+use std::path::{Component, Path};
 
 /// An object store of immutable, key-addressed result sets.
 ///
@@ -88,6 +89,39 @@ impl Error for StorageError {
             Self::Io(error) => Some(error),
         }
     }
+}
+
+/// Returns `true` only if `segment` is a single ordinary path component, so it
+/// can never escape or rebind a storage root when appended to a key.
+pub(crate) fn is_plain_segment(segment: &str) -> bool {
+    let mut components = Path::new(segment).components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
+}
+
+/// Validates that `key` is a well-formed object key: a `/`-separated sequence of
+/// ordinary path segments. Rejects empty, `.`, `..`, and platform-absolute
+/// segments, which could otherwise escape or rebind a filesystem storage root.
+///
+/// Both backends share this so the in-memory fake rejects exactly the keys the
+/// real [`LocalStorage`] would, keeping fake-driven tests honest.
+///
+/// # Errors
+///
+/// Returns [`StorageError::InvalidKey`] if any segment of `key` is not a single
+/// ordinary path component.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the only caller, MemoryStorage, is test-only")
+)]
+pub(crate) fn validate_key(key: &str) -> Result<(), StorageError> {
+    for segment in key.split('/') {
+        if !is_plain_segment(segment) {
+            return Err(StorageError::InvalidKey {
+                key: key.to_owned(),
+            });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -179,6 +213,25 @@ mod tests {
         // The original value is preserved (write-once).
         assert_eq!(block_on(storage.get("dup")).unwrap(), b"1");
     }
+
+    #[test]
+    fn memory_storage_rejects_the_same_malformed_keys_as_local_storage() {
+        let storage = MemoryStorage::new();
+        // Empty, `.`, `..`, and absolute segments could escape a filesystem root,
+        // so the fake must reject them exactly as `LocalStorage` does.
+        for bad in ["v1/../escape", "v1//gap", "v1/./here", "", "/v1/abs"] {
+            let put = block_on(storage.put(bad, b"x")).unwrap_err();
+            assert!(
+                matches!(put, StorageError::InvalidKey { .. }),
+                "put {bad:?}: {put:?}"
+            );
+            let get = block_on(storage.get(bad)).unwrap_err();
+            assert!(
+                matches!(get, StorageError::InvalidKey { .. }),
+                "get {bad:?}: {get:?}"
+            );
+        }
+    }
 }
 
 /// An in-memory [`Storage`] for tests: write-once keys held in a sorted map.
@@ -207,6 +260,7 @@ impl MemoryStorage {
 #[cfg(test)]
 impl Storage for MemoryStorage {
     async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
+        validate_key(key)?;
         let mut objects = self.objects.lock().unwrap();
         if objects.contains_key(key) {
             return Err(StorageError::AlreadyExists {
@@ -218,6 +272,7 @@ impl Storage for MemoryStorage {
     }
 
     async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError> {
+        validate_key(key)?;
         self.objects
             .lock()
             .unwrap()

@@ -53,7 +53,15 @@ pub(crate) struct RunDeps<'a, R, P, O, S> {
 }
 
 /// The real `run`: wire the production adapters and orchestrate.
-pub(crate) async fn execute(options: &RunOptions) -> Result<RunOutcome, RunError> {
+///
+/// `target_root` overrides the cargo target directory the harvest scans.
+/// Production passes `None`, resolving the root from `CARGO_TARGET_DIR` (or the
+/// `target/` default). Tests pass an explicit root so the harvest is hermetic
+/// without mutating the process environment.
+pub(crate) async fn execute(
+    options: &RunOptions,
+    target_root: Option<PathBuf>,
+) -> Result<RunOutcome, RunError> {
     let config_path = options
         .config_path
         .clone()
@@ -66,7 +74,7 @@ pub(crate) async fn execute(options: &RunOptions) -> Result<RunOutcome, RunError
 
     let runner = TokioBenchRunner;
     let probe = SystemProbe;
-    let output = FsBenchOutputSource::new(resolve_target_root());
+    let output = FsBenchOutputSource::new(target_root.unwrap_or_else(resolve_target_root));
     let clock = Clock::new_tokio();
     let env = |name: &str| std::env::var(name).ok();
     let run_id = generate_run_id(&clock);
@@ -387,7 +395,13 @@ fn timestamp_from(time: SystemTime) -> Timestamp {
 
 /// The cargo target directory, honoring `CARGO_TARGET_DIR`.
 fn resolve_target_root() -> PathBuf {
-    std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| PathBuf::from("target"), PathBuf::from)
+    target_root_from(std::env::var_os("CARGO_TARGET_DIR"))
+}
+
+/// Resolves the cargo target directory from an optional `CARGO_TARGET_DIR` value,
+/// falling back to the conventional `target/` directory when it is unset.
+fn target_root_from(configured: Option<std::ffi::OsString>) -> PathBuf {
+    configured.map_or_else(|| PathBuf::from("target"), PathBuf::from)
 }
 
 /// Generates a run identifier unique within a partition.
@@ -448,6 +462,30 @@ mod tests {
         let first = generate_run_id(&clock);
         let second = generate_run_id(&clock);
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn target_root_falls_back_to_the_conventional_directory() {
+        assert_eq!(target_root_from(None), PathBuf::from("target"));
+    }
+
+    #[test]
+    fn target_root_honors_an_explicit_cargo_target_dir() {
+        let configured = std::ffi::OsString::from("/custom/out");
+        assert_eq!(
+            target_root_from(Some(configured)),
+            PathBuf::from("/custom/out")
+        );
+    }
+
+    #[test]
+    fn resolve_target_root_matches_the_ambient_environment() {
+        // Resolving never panics and agrees with `target_root_from` for whatever
+        // `CARGO_TARGET_DIR` happens to be set (or unset) in this process.
+        assert_eq!(
+            resolve_target_root(),
+            target_root_from(std::env::var_os("CARGO_TARGET_DIR"))
+        );
     }
 
     #[test]

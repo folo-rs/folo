@@ -13,7 +13,7 @@ use argh::FromArgs;
 use cargo_bench_history::{
     BenchmarkId, CiInfo, Cli, Command, GitInfo, Metric, MetricKind, ResultRecord, ResultSet,
     RunContext, RunError, RunOutcome, SCHEMA_VERSION, Timestamps, ToolchainInfo, default_template,
-    parse_config, run,
+    parse_config, run, run_with_target_root,
 };
 use jiff::Timestamp;
 use serial_test::serial;
@@ -209,6 +209,26 @@ async fn install_honors_an_explicit_config_path() {
     assert!(
         workspace.read(".cargo/bench_history.toml").is_none(),
         "the default path should be left alone"
+    );
+}
+
+#[tokio::test]
+#[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot do.
+#[serial]
+async fn run_entry_dispatches_without_a_target_root_override() {
+    // The production `run` entry passes no target-root override; drive `install`
+    // (which ignores it) through it so the public default path is exercised.
+    let workspace = Workspace::empty();
+    let original = std::env::current_dir().unwrap();
+    std::env::set_current_dir(workspace.root()).unwrap();
+
+    let result = run(&command_from(&["install"])).await;
+
+    std::env::set_current_dir(&original).unwrap();
+    result.unwrap();
+    assert!(
+        workspace.read(".cargo/bench_history.toml").is_some(),
+        "install via the production entry should write the default config"
     );
 }
 
@@ -751,18 +771,17 @@ impl Workspace {
         let original = std::env::current_dir().unwrap();
         std::env::set_current_dir(self.root()).unwrap();
 
-        // Pin the target root to this workspace's own `target/` for the duration of
-        // the run so a shared ambient `CARGO_TARGET_DIR` (as `cargo llvm-cov` sets
-        // during coverage runs) cannot make the harvester pick up summaries written
-        // by other tests sharing that directory.
-        let target_dir_guard = TargetDirGuard::set(self.root().join("target"));
-
-        let result = run(&command_from(args)).await;
+        // Point the harvest at this workspace's own `target/` explicitly, so a
+        // shared ambient `CARGO_TARGET_DIR` (as `cargo llvm-cov` sets during
+        // coverage runs) cannot make the harvester pick up summaries written by
+        // other tests sharing that directory. Passing the root through the API
+        // keeps the test hermetic without mutating the process environment.
+        let target_root = self.root().join("target");
+        let result = run_with_target_root(&command_from(args), Some(target_root)).await;
 
         // Restore the working directory before any assertion (and before the temp
         // dir is dropped, which on Windows fails while it is the current directory).
         std::env::set_current_dir(&original).unwrap();
-        drop(target_dir_guard);
         result
     }
 
@@ -831,37 +850,6 @@ impl Workspace {
         self.seed_callgrind("2024-01-02", "c2", 100.0);
         self.seed_callgrind("2024-01-03", "c3", 100.0);
         self.seed_callgrind("2024-01-04", "c4", 130.0);
-    }
-}
-
-/// Pins `CARGO_TARGET_DIR` to a chosen path for the lifetime of the guard,
-/// restoring the previous value on drop. This isolates each test's harvest tree
-/// from any ambient `CARGO_TARGET_DIR` (notably the shared directory that
-/// `cargo llvm-cov` redirects builds and bins into during coverage runs).
-struct TargetDirGuard {
-    previous: Option<std::ffi::OsString>,
-}
-
-impl TargetDirGuard {
-    fn set(path: PathBuf) -> Self {
-        let previous = std::env::var_os("CARGO_TARGET_DIR");
-        // SAFETY: every test in this file is `#[serial]`, so the process
-        // environment is never read or written concurrently from another thread.
-        unsafe {
-            std::env::set_var("CARGO_TARGET_DIR", path);
-        }
-        Self { previous }
-    }
-}
-
-impl Drop for TargetDirGuard {
-    fn drop(&mut self) {
-        match &self.previous {
-            // SAFETY: see `TargetDirGuard::set` — guarded by file-wide `#[serial]`.
-            Some(value) => unsafe { std::env::set_var("CARGO_TARGET_DIR", value) },
-            // SAFETY: see `TargetDirGuard::set` — guarded by file-wide `#[serial]`.
-            None => unsafe { std::env::remove_var("CARGO_TARGET_DIR") },
-        }
     }
 }
 

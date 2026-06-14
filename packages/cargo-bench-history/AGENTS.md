@@ -92,14 +92,16 @@ cannot be dropped while it is the current directory, so restore the original CWD
 **before** running assertions and before the tempdir is dropped. Prefer setting
 `[project] id` in the test config rather than relying on the CWD basename.
 
-Each test also pins `CARGO_TARGET_DIR` to its own tempdir `target/` for the
-duration of `run` (via `TargetDirGuard`). The coverage job runs
-`cargo llvm-cov nextest`, which redirects every build and bin into one shared
-`target/llvm-cov-target`; without the pin, the harvester (which collects every
-fresh `gungraun/**/summary.json` within an mtime window) would pick up summaries
-written by other tests sharing that directory and miscount records. The env
-mutation is sound only because **every** test in the file is `#[serial]`, so the
-process environment is never accessed concurrently — keep new tests `#[serial]`.
+Each test also points the harvest at its own tempdir `target/` for the duration
+of `run`, by passing an explicit target root through the `run_with_target_root`
+entry. The coverage job runs `cargo llvm-cov nextest`, which redirects every
+build and bin into one shared `target/llvm-cov-target`; without the override, the
+harvester (which collects every fresh `gungraun/**/summary.json` within an mtime
+window) would resolve `CARGO_TARGET_DIR` to that shared directory and pick up
+summaries written by other tests, miscounting records. Threading the root through
+the API keeps the test hermetic **without mutating the process environment** — do
+not reintroduce a `set_var("CARGO_TARGET_DIR", …)` guard. The production `run`
+entry passes `None` and resolves the root from the environment as usual.
 
 ## Fixture-golden canaries
 
