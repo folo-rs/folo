@@ -5,7 +5,7 @@
 //! [`tick::Clock`], so the whole flow is exercised in-process with fakes. The
 //! public [`execute`] wires the real adapters and is what the binary runs.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
@@ -15,7 +15,7 @@ use tick::Clock;
 use crate::bench::{injected_env, parse_callgrind_summary};
 use crate::bench_output::{BenchOutputSource, FsBenchOutputSource};
 use crate::comparability::{ComparabilityKey, EngineSystem, resolve_target_triple};
-use crate::config::{Config, StorageConfig, load_config};
+use crate::config::{Config, load_config};
 use crate::context::{
     CiInfo, RunContext, Timestamps, ToolchainInfo, detect_ci, resolve_effective_time,
 };
@@ -24,7 +24,8 @@ use crate::host::RustcInfo;
 use crate::model::ResultSet;
 use crate::probe::{EnvironmentProbe, SystemProbe};
 use crate::process::{BenchRunner, TokioBenchRunner};
-use crate::storage::{LocalStorage, Storage};
+use crate::storage::Storage;
+use crate::wiring::{build_local_storage, default_config_path, resolve_project_id};
 use crate::{RunError, RunOptions, RunOutcome};
 
 /// The injected collaborators an orchestrated run operates against.
@@ -249,9 +250,11 @@ where
     let short_commit = shared.git.info.short_commit.as_deref().unwrap_or("unknown");
     let object_key = key.object_key(effective.as_second(), short_commit, deps.run_id);
 
-    let json = result_set.to_json().map_err(|error| RunError::Parse {
-        message: error.to_string(),
-    })?;
+    // A freshly built result set is composed of plain structs and finite counts,
+    // so serialization cannot fail.
+    let json = result_set
+        .to_json()
+        .expect("a freshly built result set always serializes to JSON");
     deps.storage.put(&object_key, json.as_bytes()).await?;
 
     Ok(EngineSummary {
@@ -382,33 +385,9 @@ fn timestamp_from(time: SystemTime) -> Timestamp {
     Timestamp::try_from(time).expect("system time is within the supported timestamp range")
 }
 
-/// The default configuration path, relative to the working directory.
-fn default_config_path() -> PathBuf {
-    PathBuf::from(".cargo").join("bench_history.toml")
-}
-
 /// The cargo target directory, honoring `CARGO_TARGET_DIR`.
 fn resolve_target_root() -> PathBuf {
     std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| PathBuf::from("target"), PathBuf::from)
-}
-
-/// Resolves the project identity: explicit config value, else the directory name.
-fn resolve_project_id(config: &Config, workspace_dir: &Path) -> String {
-    if let Some(id) = &config.project.id {
-        return id.clone();
-    }
-    workspace_dir
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("project")
-        .to_owned()
-}
-
-/// Builds the configured storage backend.
-fn build_local_storage(config: &Config) -> LocalStorage {
-    match &config.storage {
-        StorageConfig::Local { path } => LocalStorage::new(path.clone()),
-    }
 }
 
 /// Generates a run identifier unique within a partition.
@@ -975,19 +954,5 @@ mod tests {
         assert!(unbalanced.contains("valid shell"), "{unbalanced}");
         let empty = build_command_line("   ", &[], &[]).unwrap_err();
         assert!(empty.contains("empty"), "{empty}");
-    }
-
-    #[test]
-    fn resolve_project_id_prefers_explicit_then_directory_name() {
-        let explicit =
-            config_with("[project]\nid = \"explicit\"\n[engines.callgrind]\ncommand = \"x\"\n");
-        assert_eq!(
-            resolve_project_id(&explicit, Path::new("/work/folo")),
-            "explicit"
-        );
-        assert_eq!(
-            resolve_project_id(&callgrind_config(), Path::new("/work/folo")),
-            "folo"
-        );
     }
 }

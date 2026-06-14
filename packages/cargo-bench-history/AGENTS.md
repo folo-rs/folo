@@ -24,6 +24,25 @@ driven in tests by fakes, never by real IO:
 When you add a new IO edge, follow the same pattern: a port trait with an
 `impl Future` return (RPITIT, no `async_trait`), a real adapter, and a fake.
 
+## The `analyze` command
+
+`analyze::execute` builds the real `LocalStorage` and delegates to
+`analyze::analyze_with`, which is generic over the `Storage` port so tests drive
+it with `MemoryStorage` + `futures::executor::block_on` (Miri-safe, no Tokio).
+Everything below the storage load is pure and synchronous:
+
+* `analyze::series` reconstructs one series per `(location, benchmark, metric)`
+  ordered by effective time (then object key as a deterministic tie-break).
+  `--since` filters at the object level — whole runs before the cutoff are
+  dropped — so the reported run count and every series share one window.
+* `analyze::findings` is the rolling-baseline regression detector (median
+  baseline over a bounded window, MAD-aware threshold, severity tiers). Keep it
+  deterministic and cover boundaries with named value-asserting tests, not
+  threshold guards.
+* `analyze::report` renders text/json/markdown. Rendering is infallible: the
+  report is plain structs of finite numbers, so the JSON path uses `.expect`
+  rather than threading a serialization error nobody can trigger.
+
 ## Time is injected — never read the wall clock or sleep
 
 All time comes from an injected `tick::Clock`. Production uses

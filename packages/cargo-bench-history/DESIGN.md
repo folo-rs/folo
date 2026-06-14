@@ -1,8 +1,9 @@
 # cargo-bench-history — Design & Implementation Plan
 
-Status: design approved; iteration 1 (`run` for Callgrind + local storage)
-implemented. Items still marked **R** are non-blocking recommendations open to
-revision during implementation. The resolved design decisions are logged in
+Status: design approved; iterations 1 (`run` for Callgrind + local storage) and 2
+(`analyze` rolling-baseline regression over local Callgrind history) implemented.
+Items still marked **R** are non-blocking recommendations open to revision during
+implementation. The resolved design decisions are logged in
 [§13 Decisions & open items](#13-decisions--open-items).
 
 ## 1. Purpose
@@ -369,11 +370,18 @@ Generate an example `.cargo/bench_history.toml` if absent; print its path and
 next steps. Never overwrite an existing file (report and exit success).
 
 ### 8.4 `cargo bench-history analyze`
-Download a partition (default: current project/system/machine; flags to target
-any stored set or time range), build per-benchmark/per-metric series ordered by
-effective time (§6), run the finding algorithms (§9), print a report.
-* `--since <date>`, `--system`, `--machine-key`, `--metric`, `--format
-  text|json|markdown`, `--fail-on regression` (CI gating, opt-in).
+Download a partition (default: current project; flags to target any stored set or
+time range), build per-benchmark/per-metric series ordered by effective time (§6),
+run the finding algorithms (§9), print a report.
+* `--since <date>` (RFC 3339 timestamp or bare `YYYY-MM-DD`, interpreted at UTC
+  midnight), `--system`, `--metric`, `--format text|json|markdown`,
+  `--fail-on-regression` (CI gating, opt-in; non-zero exit when a regression is
+  found).
+* `--since` filters at the object level: a run whose effective time predates the
+  cutoff is excluded wholesale, so the reported run count and every series share
+  the same window.
+* `--machine-key` arrives with hardware partitioning in the Criterion iteration
+  (§9 #2/#3); Callgrind history is hardware-independent (`synthetic` partition).
 
 ## 9. Analysis algorithms
 
@@ -392,10 +400,11 @@ toolchain/OS so the engine can segment. Findings (severity-ranked):
    sign over a long window → “incrementally slower over 12 months”.
 
 **Decided:** implement #1 (rolling-baseline regression) end-to-end for iteration
-3 (simplest, immediately useful), with the series/finding abstraction designed so
-#2 and #3 are additive. All math is pure/deterministic → unit-test with proptest
-+ named regression cases, no real-time delays (Miri-friendly, per workspace
-conventions).
+2 (simplest, immediately useful), with the series/finding abstraction designed so
+#2 and #3 are additive. All math is pure/deterministic → unit-tested with a
+named, Miri-safe case matrix (flat-never-flags, lone-outlier-flags, severity-tier
+boundaries, window-limiting, deterministic tie-breaks), with no real-time delays
+(per workspace conventions).
 
 ## 10. Crate architecture
 

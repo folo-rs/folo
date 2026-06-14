@@ -46,18 +46,25 @@ async fn main() -> ExitCode {
         }
     };
 
-    match run(&cli.into_command()).await {
-        Ok(RunOutcome::Completed { message }) => {
-            println!("{message}");
-            ExitCode::SUCCESS
-        }
-        Ok(RunOutcome::NotImplemented { command }) => {
-            println!("`{command}` is recognized but not yet implemented");
-            ExitCode::SUCCESS
-        }
+    let outcome = match run(&cli.into_command()).await {
+        Ok(outcome) => outcome,
         Err(error) => {
             eprintln!("Error: {error}");
-            ExitCode::FAILURE
+            return ExitCode::FAILURE;
         }
+    };
+
+    match &outcome {
+        RunOutcome::Completed { message } => println!("{message}"),
+        RunOutcome::NotImplemented { command } => {
+            println!("`{command}` is recognized but not yet implemented");
+        }
+        RunOutcome::Analyzed { report, .. } => println!("{report}"),
+    }
+
+    if outcome.is_success() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
 }

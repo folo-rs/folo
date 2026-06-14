@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 
 use argh::FromArgs;
 use cargo_bench_history::{
-    Cli, Command, MetricKind, ResultRecord, ResultSet, RunError, RunOutcome, SCHEMA_VERSION,
-    default_template, parse_config, run,
+    BenchmarkId, CiInfo, Cli, Command, GitInfo, Metric, MetricKind, ResultRecord, ResultSet,
+    RunContext, RunError, RunOutcome, SCHEMA_VERSION, Timestamps, ToolchainInfo, default_template,
+    parse_config, run,
 };
 use jiff::Timestamp;
 use serial_test::serial;
@@ -150,12 +151,212 @@ async fn install_is_recognized_but_not_implemented() {
     assert_eq!(outcome, RunOutcome::NotImplemented { command: "install" });
 }
 
+// ===========================================================================
+// Real-adapter `analyze` scenarios.
+//
+// These seed a project's history directly into the local store (the same layout
+// `run` writes), then drive `analyze` through the lib entry against the real
+// `LocalStorage` adapter. No engine is launched. They are `#[serial]` (CWD) and
+// miri-ignored (real filesystem).
+// ===========================================================================
+
+/// An empty history analyzes cleanly and reports nothing.
 #[tokio::test]
-#[cfg_attr(miri, ignore)] // Spawns a real process, which Miri cannot do.
+#[cfg_attr(miri, ignore)]
 #[serial]
-async fn analyze_is_recognized_but_not_implemented() {
-    let outcome = run(&command_from(&["analyze"])).await.unwrap();
-    assert_eq!(outcome, RunOutcome::NotImplemented { command: "analyze" });
+async fn analyze_empty_history_reports_no_changes() {
+    let workspace = Workspace::new(&storage_only_config());
+
+    let outcome = workspace
+        .drive(&["analyze"])
+        .await
+        .expect("analysis should succeed");
+    let RunOutcome::Analyzed {
+        report,
+        regressions,
+        ..
+    } = outcome
+    else {
+        panic!("expected an analyzed outcome, got {outcome:?}");
+    };
+    assert_eq!(regressions, 0);
+    assert!(report.contains("No notable changes detected."), "{report}");
+}
+
+/// A rising history is flagged as a regression end to end.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_detects_regression_in_seeded_history() {
+    let workspace = Workspace::new(&storage_only_config());
+    workspace.seed_rising_callgrind_history();
+
+    let outcome = workspace
+        .drive(&["analyze"])
+        .await
+        .expect("analysis should succeed");
+    let RunOutcome::Analyzed {
+        report,
+        regressions,
+        ..
+    } = outcome
+    else {
+        panic!("expected an analyzed outcome, got {outcome:?}");
+    };
+    assert_eq!(regressions, 1);
+    assert!(report.contains("regression"), "{report}");
+    assert!(report.contains("nm::observe/pull/Ir"), "{report}");
+}
+
+/// `--fail-on-regression` makes a flagged regression an unsuccessful outcome.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_fail_on_regression_yields_failure() {
+    let workspace = Workspace::new(&storage_only_config());
+    workspace.seed_rising_callgrind_history();
+
+    let outcome = workspace
+        .drive(&["analyze", "--fail-on-regression"])
+        .await
+        .expect("analysis should succeed");
+    assert!(
+        !outcome.is_success(),
+        "a gated regression must be unsuccessful: {outcome:?}"
+    );
+}
+
+/// Without the gate, a flagged regression is still a successful outcome.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_regression_without_gate_is_successful() {
+    let workspace = Workspace::new(&storage_only_config());
+    workspace.seed_rising_callgrind_history();
+
+    let outcome = workspace
+        .drive(&["analyze"])
+        .await
+        .expect("analysis should succeed");
+    assert!(outcome.is_success(), "{outcome:?}");
+}
+
+/// `--format json` renders a structured, parseable report.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_json_format_is_structured() {
+    let workspace = Workspace::new(&storage_only_config());
+    workspace.seed_rising_callgrind_history();
+
+    let outcome = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis should succeed");
+    let RunOutcome::Analyzed { report, .. } = outcome else {
+        panic!("expected an analyzed outcome, got {outcome:?}");
+    };
+    let parsed: serde_json::Value =
+        serde_json::from_str(&report).expect("the json report should parse");
+    assert_eq!(parsed["project"], "testproj");
+    assert_eq!(parsed["regressions"], 1);
+    assert_eq!(parsed["findings"][0]["direction"], "regression");
+}
+
+/// `--format markdown` renders a findings table.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_markdown_format_renders_table() {
+    let workspace = Workspace::new(&storage_only_config());
+    workspace.seed_rising_callgrind_history();
+
+    let outcome = workspace
+        .drive(&["analyze", "--format", "markdown"])
+        .await
+        .expect("analysis should succeed");
+    let RunOutcome::Analyzed { report, .. } = outcome else {
+        panic!("expected an analyzed outcome, got {outcome:?}");
+    };
+    assert!(
+        report.contains("# Benchmark history analysis: testproj"),
+        "{report}"
+    );
+    assert!(report.contains("| Severity | Direction |"), "{report}");
+}
+
+/// `--since` excludes points before the cutoff, so an early spike is dropped and
+/// the remaining flat history shows no change.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_since_filters_old_points() {
+    let workspace = Workspace::new(&storage_only_config());
+    // A flat recent history (no change), preceded long ago by an unrelated point.
+    workspace.seed_callgrind("2020-01-01", "c0", 999.0);
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.seed_callgrind("2024-01-02", "c2", 100.0);
+    workspace.seed_callgrind("2024-01-03", "c3", 100.0);
+
+    let outcome = workspace
+        .drive(&["analyze", "--since", "2024-01-01", "--format", "json"])
+        .await
+        .expect("analysis should succeed");
+    let RunOutcome::Analyzed { report, .. } = outcome else {
+        panic!("expected an analyzed outcome, got {outcome:?}");
+    };
+    let parsed: serde_json::Value =
+        serde_json::from_str(&report).expect("the json report should parse");
+    assert_eq!(
+        parsed["runs"], 3,
+        "the pre-cutoff point is excluded: {report}"
+    );
+    assert_eq!(parsed["regressions"], 0, "{report}");
+}
+
+/// `--system` restricts analysis to one engine's partition.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_system_filters_partition() {
+    let workspace = Workspace::new(&storage_only_config());
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    // A criterion-partition object that the callgrind filter must skip.
+    workspace.seed(
+        "v1/testproj/criterion/x86_64-pc-windows-msvc/abc123/1-c1-r1.json",
+        &ir_result_set(1, "c1", 100.0),
+    );
+
+    let outcome = workspace
+        .drive(&["analyze", "--system", "callgrind", "--format", "json"])
+        .await
+        .expect("analysis should succeed");
+    let RunOutcome::Analyzed { report, .. } = outcome else {
+        panic!("expected an analyzed outcome, got {outcome:?}");
+    };
+    let parsed: serde_json::Value =
+        serde_json::from_str(&report).expect("the json report should parse");
+    assert_eq!(
+        parsed["runs"], 1,
+        "only the callgrind object is loaded: {report}"
+    );
+}
+
+/// An unknown `--format` is reported as an analysis error.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_rejects_unknown_format() {
+    let workspace = Workspace::new(&storage_only_config());
+
+    let error = workspace
+        .drive(&["analyze", "--format", "yaml"])
+        .await
+        .expect_err("an unknown format should be rejected");
+    let RunError::Analyze { message } = error else {
+        panic!("expected an analyze error, got {error:?}");
+    };
+    assert!(message.contains("unknown report format"), "{message}");
 }
 
 // ===========================================================================
@@ -528,6 +729,36 @@ impl Workspace {
         );
         objects.pop().unwrap()
     }
+
+    /// Writes `set` to `key` (a `/`-separated object key) under the local store,
+    /// mirroring the layout `run` produces.
+    fn seed(&self, key: &str, set: &ResultSet) {
+        let mut path = self.root().join("store");
+        for part in key.split('/') {
+            path.push(part);
+        }
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, set.to_json().unwrap()).unwrap();
+    }
+
+    /// Seeds one Callgrind result set with an `Ir` value at the given `date`
+    /// (`YYYY-MM-DD`, taken at UTC midnight) and abbreviated `commit`.
+    fn seed_callgrind(&self, date: &str, commit: &str, value: f64) {
+        let effective: Timestamp = format!("{date}T00:00:00Z").parse().unwrap();
+        let key = format!(
+            "v1/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{}-{commit}-run.json",
+            effective.as_second()
+        );
+        self.seed(&key, &ir_result_set(effective.as_second(), commit, value));
+    }
+
+    /// Seeds a flat history followed by a clear upward step — a regression.
+    fn seed_rising_callgrind_history(&self) {
+        self.seed_callgrind("2024-01-01", "c1", 100.0);
+        self.seed_callgrind("2024-01-02", "c2", 100.0);
+        self.seed_callgrind("2024-01-03", "c3", 100.0);
+        self.seed_callgrind("2024-01-04", "c4", 130.0);
+    }
 }
 
 /// Pins `CARGO_TARGET_DIR` to a chosen path for the lifetime of the guard,
@@ -589,6 +820,43 @@ fn mock_command(args: &str) -> String {
 /// Windows path's backslashes survive as literal characters.
 fn toml_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// A configuration with local storage but no engines, used by `analyze` tests
+/// that seed history directly and never launch an engine.
+fn storage_only_config() -> String {
+    "[project]\n\
+     id = \"testproj\"\n\n\
+     [storage.local]\n\
+     path = \"./store\"\n"
+        .to_owned()
+}
+
+/// Builds a Callgrind result set with a single `Ir` metric at `value`, stamped
+/// with the given effective second and abbreviated `commit`.
+fn ir_result_set(effective: i64, commit: &str, value: f64) -> ResultSet {
+    let time = Timestamp::from_second(effective).expect("seconds within range");
+    let mut git = GitInfo::default();
+    git.commit = Some(format!("{commit}full"));
+    git.short_commit = Some(commit.to_owned());
+    git.branch = Some("main".to_owned());
+    let context = RunContext::new(
+        Timestamps::new(time, time, time),
+        git,
+        CiInfo::default(),
+        ToolchainInfo::default(),
+        TOOL_VERSION.to_owned(),
+    );
+    let record = ResultRecord::new(
+        BenchmarkId::new("nm::observe".to_owned(), Some("pull".to_owned()), None),
+        vec![Metric::new(
+            "Ir".to_owned(),
+            MetricKind::InstructionCount,
+            value,
+            Some("count".to_owned()),
+        )],
+    );
+    ResultSet::new(context, vec![record])
 }
 
 /// A single-engine Callgrind configuration whose command is `command`.

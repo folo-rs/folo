@@ -111,6 +111,10 @@ struct AnalyzeCommand {
     #[argh(option)]
     system: Option<String>,
 
+    /// restrict analysis to a single metric name (for example, Ir).
+    #[argh(option)]
+    metric: Option<String>,
+
     /// output format (text, json, or markdown).
     #[argh(option)]
     format: Option<String>,
@@ -126,6 +130,7 @@ impl AnalyzeCommand {
             config_path: self.config,
             since: self.since,
             system: self.system,
+            metric: self.metric,
             format: self.format,
             fail_on_regression: self.fail_on_regression,
         }

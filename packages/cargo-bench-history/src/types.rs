@@ -75,6 +75,8 @@ pub struct AnalyzeOptions {
     pub since: Option<String>,
     /// Restrict analysis to a single engine system, if set.
     pub system: Option<String>,
+    /// Restrict analysis to a single metric name, if set.
+    pub metric: Option<String>,
     /// Output format selector, if set.
     pub format: Option<String>,
     /// Exit with failure if a regression is detected.
@@ -99,6 +101,34 @@ pub enum RunOutcome {
         /// The name of the command that is not yet implemented.
         command: &'static str,
     },
+    /// The `analyze` command produced a findings report.
+    Analyzed {
+        /// The rendered findings report for the requested output format.
+        report: String,
+        /// Number of flagged regressions across all analyzed series.
+        regressions: usize,
+        /// Whether `--fail-on-regression` was set; with a non-zero
+        /// `regressions` count it makes the command exit unsuccessfully.
+        fail_on_regression: bool,
+    },
+}
+
+impl RunOutcome {
+    /// Whether the command should be considered successful (exit code zero).
+    ///
+    /// Every outcome is successful except an [`Analyzed`](Self::Analyzed) report
+    /// that flagged at least one regression while `--fail-on-regression` was set.
+    #[must_use]
+    pub fn is_success(&self) -> bool {
+        match self {
+            Self::Completed { .. } | Self::NotImplemented { .. } => true,
+            Self::Analyzed {
+                regressions,
+                fail_on_regression,
+                ..
+            } => !(*fail_on_regression && *regressions > 0),
+        }
+    }
 }
 
 /// An error from [`run`](crate::run).
@@ -137,6 +167,11 @@ pub enum RunError {
         /// Human-readable description of the parse failure.
         message: String,
     },
+    /// Analyzing stored history failed (bad filter, malformed stored object).
+    Analyze {
+        /// Human-readable description of the analysis failure.
+        message: String,
+    },
     /// An underlying I/O operation (process, probe, or harvest) failed.
     Io(io::Error),
 }
@@ -155,6 +190,7 @@ impl fmt::Display for RunError {
                 write!(f, "engine {engine:?} has an invalid command: {message}")
             }
             Self::Parse { message } => write!(f, "failed to parse benchmark output: {message}"),
+            Self::Analyze { message } => write!(f, "failed to analyze history: {message}"),
             Self::Io(error) => write!(f, "I/O error: {error}"),
         }
     }
@@ -169,7 +205,8 @@ impl Error for RunError {
             Self::NoEngine { .. }
             | Self::Engine { .. }
             | Self::Command { .. }
-            | Self::Parse { .. } => None,
+            | Self::Parse { .. }
+            | Self::Analyze { .. } => None,
         }
     }
 }
@@ -251,6 +288,22 @@ mod tests {
     }
 
     #[test]
+    fn analyze_error_is_displayed_and_has_no_source() {
+        let error = RunError::Analyze {
+            message: "unknown report format".to_owned(),
+        };
+        assert!(
+            error.to_string().contains("failed to analyze history"),
+            "{error}"
+        );
+        assert!(
+            error.to_string().contains("unknown report format"),
+            "{error}"
+        );
+        assert!(error.source().is_none());
+    }
+
+    #[test]
     fn command_error_is_displayed_and_has_no_source() {
         let error = RunError::Command {
             engine: "callgrind".to_owned(),
@@ -266,5 +319,45 @@ mod tests {
         let error = RunError::from(io::Error::other("broken pipe"));
         assert!(error.to_string().contains("I/O error"));
         assert!(error.source().is_some());
+    }
+
+    #[test]
+    fn completed_and_not_implemented_outcomes_are_successful() {
+        assert!(
+            RunOutcome::Completed {
+                message: "done".to_owned(),
+            }
+            .is_success()
+        );
+        assert!(RunOutcome::NotImplemented { command: "analyze" }.is_success());
+    }
+
+    #[test]
+    fn analyzed_outcome_fails_only_when_gated_and_regressed() {
+        let gated_with_regression = RunOutcome::Analyzed {
+            report: "r".to_owned(),
+            regressions: 1,
+            fail_on_regression: true,
+        };
+        assert!(!gated_with_regression.is_success());
+
+        // A regression without the gate, or the gate without a regression, both
+        // still succeed.
+        assert!(
+            RunOutcome::Analyzed {
+                report: "r".to_owned(),
+                regressions: 3,
+                fail_on_regression: false,
+            }
+            .is_success()
+        );
+        assert!(
+            RunOutcome::Analyzed {
+                report: "r".to_owned(),
+                regressions: 0,
+                fail_on_regression: true,
+            }
+            .is_success()
+        );
     }
 }
