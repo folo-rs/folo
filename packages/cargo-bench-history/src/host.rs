@@ -88,4 +88,10 @@ LLVM version: 20.1.0
     fn empty_output_yields_no_facts() {
         assert_eq!(parse_rustc_verbose(""), RustcInfo::default());
     }
+
+    #[test]
+    fn empty_release_and_host_values_are_ignored() {
+        let info = parse_rustc_verbose("release:\nhost:\n");
+        assert_eq!(info, RustcInfo::default());
+    }
 }

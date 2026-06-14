@@ -6,8 +6,6 @@
 
 pub(crate) mod callgrind;
 
-use std::collections::HashSet;
-
 pub(crate) use callgrind::parse_callgrind_summary;
 
 use crate::comparability::EngineSystem;
@@ -36,33 +34,51 @@ pub(crate) fn injected_env(engine: EngineSystem) -> Vec<(String, String)> {
 /// boundary, preserving any existing entries.
 ///
 /// The tool cannot reliably detect whether a command crosses into WSL (it may be
-/// an opaque wrapper such as `just bench-cg`), so it always appends the injected
-/// variable names with the `/u` "up" flag. This is inert when no boundary is
-/// crossed and correct when one is. Returns `None` when there is nothing to set.
+/// an opaque wrapper such as `just bench-cg`), so every injected variable must
+/// carry the `/u` "up" flag that shares it in the Windows→WSL direction. An
+/// injected name already listed in `WSLENV` has the `u` flag added to its
+/// existing flags if missing, rather than being left without it; other entries
+/// are preserved verbatim. This is inert when no boundary is crossed and correct
+/// when one is. Returns `None` when there is nothing to set.
 pub(crate) fn merge_wslenv(existing: Option<&str>, injected_names: &[&str]) -> Option<String> {
-    let mut entries: Vec<String> = Vec::new();
-    let mut present: HashSet<&str> = HashSet::new();
+    let mut entries: Vec<(String, String)> = Vec::new();
 
     if let Some(existing) = existing {
         for entry in existing.split(':').filter(|entry| !entry.is_empty()) {
-            let name = entry.split('/').next().unwrap_or(entry);
-            present.insert(name);
-            entries.push(entry.to_owned());
+            let (name, flags) = entry.split_once('/').map_or_else(
+                || (entry.to_owned(), String::new()),
+                |(name, flags)| (name.to_owned(), flags.to_owned()),
+            );
+            entries.push((name, flags));
         }
     }
 
-    for name in injected_names {
-        if present.contains(name) {
-            continue;
+    for injected in injected_names {
+        if let Some((_, flags)) = entries.iter_mut().find(|(name, _)| name == injected) {
+            if !flags.contains('u') {
+                flags.push('u');
+            }
+        } else {
+            entries.push(((*injected).to_owned(), "u".to_owned()));
         }
-        entries.push(format!("{name}/u"));
     }
 
     if entries.is_empty() {
-        None
-    } else {
-        Some(entries.join(":"))
+        return None;
     }
+
+    let rendered = entries
+        .iter()
+        .map(|(name, flags)| {
+            if flags.is_empty() {
+                name.clone()
+            } else {
+                format!("{name}/{flags}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(":");
+    Some(rendered)
 }
 
 #[cfg(test)]
@@ -105,6 +121,30 @@ mod tests {
         assert_eq!(
             merge_wslenv(Some("GUNGRAUN_SAVE_SUMMARY/u"), &["GUNGRAUN_SAVE_SUMMARY"]),
             Some("GUNGRAUN_SAVE_SUMMARY/u".to_owned())
+        );
+    }
+
+    #[test]
+    fn merge_wslenv_adds_up_flag_to_existing_entry_without_it() {
+        assert_eq!(
+            merge_wslenv(Some("GUNGRAUN_SAVE_SUMMARY/l"), &["GUNGRAUN_SAVE_SUMMARY"]),
+            Some("GUNGRAUN_SAVE_SUMMARY/lu".to_owned())
+        );
+    }
+
+    #[test]
+    fn merge_wslenv_adds_up_flag_to_existing_flagless_entry() {
+        assert_eq!(
+            merge_wslenv(Some("GUNGRAUN_SAVE_SUMMARY"), &["GUNGRAUN_SAVE_SUMMARY"]),
+            Some("GUNGRAUN_SAVE_SUMMARY/u".to_owned())
+        );
+    }
+
+    #[test]
+    fn merge_wslenv_preserves_unrelated_flagless_entries() {
+        assert_eq!(
+            merge_wslenv(Some("PATH"), &["GUNGRAUN_SAVE_SUMMARY"]),
+            Some("PATH:GUNGRAUN_SAVE_SUMMARY/u".to_owned())
         );
     }
 

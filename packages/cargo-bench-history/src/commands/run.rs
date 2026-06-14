@@ -533,6 +533,15 @@ mod tests {
                 ],
             }
         }
+
+        fn with_malformed_summary() -> Self {
+            Self {
+                summaries: vec![RawSummary {
+                    path: PathBuf::from("a/summary.json"),
+                    content: "{ not valid json".to_owned(),
+                }],
+            }
+        }
     }
 
     impl BenchOutputSource for FakeOutput {
@@ -765,6 +774,39 @@ mod tests {
         .unwrap();
 
         assert_eq!(runner.last_command().as_deref(), Some("noop -p nm"));
+    }
+
+    #[test]
+    fn malformed_summary_is_a_parse_error() {
+        let storage = MemoryStorage::new();
+        let error = drive(
+            &RunOptions::default(),
+            &callgrind_config(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            &FakeOutput::with_malformed_summary(),
+            &storage,
+        )
+        .unwrap_err();
+
+        match error {
+            RunError::Parse { message } => {
+                assert!(message.contains("Callgrind"), "{message}");
+            }
+            other => panic!("expected parse error, got {other:?}"),
+        }
+        assert!(storage.keys().is_empty());
+    }
+
+    #[test]
+    fn resolve_engines_errors_when_none_configured() {
+        let error = resolve_engines(&config_with(""), None).unwrap_err();
+        match error {
+            RunError::NoEngine { message } => {
+                assert!(message.contains("no engines are configured"), "{message}");
+            }
+            other => panic!("expected no-engine error, got {other:?}"),
+        }
     }
 
     #[test]

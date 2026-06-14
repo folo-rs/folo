@@ -190,4 +190,21 @@ mod tests {
 
         assert!(summaries.is_empty());
     }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn unreadable_output_tree_reports_error() {
+        let dir = tempdir().unwrap();
+        // Place a FILE where the gungraun output directory is expected so the
+        // recursive read_dir fails with a non-NotFound I/O error.
+        std::fs::write(dir.path().join(GUNGRAUN_DIR), "not a directory").unwrap();
+        let source = FsBenchOutputSource::new(dir.path());
+
+        let error = source
+            .collect(EngineSystem::Callgrind, SystemTime::UNIX_EPOCH)
+            .await
+            .unwrap_err();
+
+        assert_ne!(error.kind(), io::ErrorKind::NotFound, "{error}");
+    }
 }

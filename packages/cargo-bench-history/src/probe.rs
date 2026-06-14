@@ -47,15 +47,23 @@ impl EnvironmentProbe for SystemProbe {
     }
 
     async fn toolchain(&self) -> io::Result<RustcInfo> {
-        let mut info = match capture("rustc", &["-vV"]).await {
-            Ok(output) if output.status.success() => parse_rustc_verbose(&output.stdout),
-            _ => RustcInfo::default(),
-        };
-        if info.host.is_none() {
-            info.host = Some(fallback_host_triple());
-        }
-        Ok(info)
+        let output = capture("rustc", &["-vV"]).await.ok();
+        let rustc_output = output
+            .as_ref()
+            .filter(|output| output.status.success())
+            .map(|output| output.stdout.as_str());
+        Ok(resolve_toolchain(rustc_output))
     }
+}
+
+/// Builds the toolchain facts from optional `rustc -vV` output, filling in a
+/// platform-derived host triple when `rustc` did not report one.
+fn resolve_toolchain(rustc_output: Option<&str>) -> RustcInfo {
+    let mut info = rustc_output.map_or_else(RustcInfo::default, parse_rustc_verbose);
+    if info.host.is_none() {
+        info.host = Some(fallback_host_triple());
+    }
+    info
 }
 
 /// Captures one git field, yielding the empty string on any failure.
@@ -71,8 +79,12 @@ async fn git_field(args: &[&str]) -> String {
 fn fallback_host_triple() -> String {
     use std::env::consts;
 
-    let arch = consts::ARCH;
-    match consts::OS {
+    host_triple_for(consts::ARCH, consts::OS)
+}
+
+/// Maps an `(arch, os)` pair to a conventional Rust target triple (pure).
+fn host_triple_for(arch: &str, os: &str) -> String {
+    match os {
         "windows" => format!("{arch}-pc-windows-msvc"),
         "macos" => format!("{arch}-apple-darwin"),
         "linux" => format!("{arch}-unknown-linux-gnu"),
@@ -85,7 +97,7 @@ fn fallback_host_triple() -> String {
 mod tests {
     use std::env::consts;
 
-    use super::fallback_host_triple;
+    use super::{fallback_host_triple, host_triple_for, resolve_toolchain};
 
     #[test]
     fn fallback_host_triple_describes_the_running_platform() {
@@ -99,5 +111,40 @@ mod tests {
         } else if cfg!(target_os = "linux") {
             assert!(triple.ends_with("-unknown-linux-gnu"), "{triple}");
         }
+    }
+
+    #[test]
+    fn host_triple_for_covers_each_platform() {
+        assert_eq!(
+            host_triple_for("x86_64", "windows"),
+            "x86_64-pc-windows-msvc"
+        );
+        assert_eq!(host_triple_for("aarch64", "macos"), "aarch64-apple-darwin");
+        assert_eq!(
+            host_triple_for("x86_64", "linux"),
+            "x86_64-unknown-linux-gnu"
+        );
+        assert_eq!(host_triple_for("riscv64", "redox"), "riscv64-unknown-redox");
+    }
+
+    #[test]
+    fn resolve_toolchain_parses_rustc_output() {
+        let info = resolve_toolchain(Some("release: 1.91.0\nhost: x86_64-unknown-linux-gnu\n"));
+        assert_eq!(info.version.as_deref(), Some("1.91.0"));
+        assert_eq!(info.host.as_deref(), Some("x86_64-unknown-linux-gnu"));
+    }
+
+    #[test]
+    fn resolve_toolchain_without_output_falls_back_to_platform_host() {
+        let info = resolve_toolchain(None);
+        assert_eq!(info.version, None);
+        assert_eq!(info.host, Some(fallback_host_triple()));
+    }
+
+    #[test]
+    fn resolve_toolchain_fills_missing_host_from_platform() {
+        let info = resolve_toolchain(Some("release: 1.91.0\n"));
+        assert_eq!(info.version.as_deref(), Some("1.91.0"));
+        assert_eq!(info.host, Some(fallback_host_triple()));
     }
 }

@@ -315,4 +315,55 @@ mod tests {
         let error = parse_callgrind_summary("{ not json").unwrap_err();
         assert!(matches!(error, CallgrindParseError::Json(_)));
     }
+
+    #[test]
+    fn error_display_and_source() {
+        let json_error = parse_callgrind_summary("{ not json").unwrap_err();
+        assert!(
+            json_error.to_string().contains("failed to parse Callgrind"),
+            "{json_error}"
+        );
+        assert!(json_error.source().is_some());
+
+        let version_error = CallgrindParseError::UnsupportedVersion("9".to_owned());
+        assert!(
+            version_error.to_string().contains("\"9\""),
+            "{version_error}"
+        );
+        assert!(version_error.source().is_none());
+    }
+
+    fn summary_json(callgrind_body: &str) -> String {
+        format!(
+            "{{\"version\":\"6\",\"module_path\":\"m\",\"function_name\":\"f\",\
+             \"profiles\":[{{\"summaries\":{{\"total\":{{\"summary\":{callgrind_body}}}}}}}]}}"
+        )
+    }
+
+    #[test]
+    fn skips_profile_without_callgrind_summary() {
+        let record = parse_callgrind_summary(&summary_json("{}")).unwrap();
+        assert!(record.metrics.is_empty());
+    }
+
+    #[test]
+    fn skips_metric_present_only_in_baseline() {
+        let body = "{\"Callgrind\":{\"Ir\":{\"metrics\":{}}}}";
+        let record = parse_callgrind_summary(&summary_json(body)).unwrap();
+        assert!(record.metrics.is_empty());
+    }
+
+    #[test]
+    fn reads_new_value_from_both_pair() {
+        let body = "{\"Callgrind\":{\"Ir\":{\"metrics\":{\"Both\":[{\"Int\":10},{\"Int\":9}]}}}}";
+        let record = parse_callgrind_summary(&summary_json(body)).unwrap();
+        assert_eq!(metric(&record, "Ir").value, 10.0);
+    }
+
+    #[test]
+    fn reads_float_metric_value() {
+        let body = "{\"Callgrind\":{\"Ir\":{\"metrics\":{\"Left\":{\"Float\":1.5}}}}}";
+        let record = parse_callgrind_summary(&summary_json(body)).unwrap();
+        assert_eq!(metric(&record, "Ir").value, 1.5);
+    }
 }

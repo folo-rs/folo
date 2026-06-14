@@ -211,6 +211,19 @@ mod tests {
     }
 
     #[test]
+    fn engine_error_without_code_renders_message() {
+        let error = RunError::Engine {
+            engine: "callgrind".to_owned(),
+            code: None,
+        };
+        assert!(
+            error.to_string().contains("without an exit code"),
+            "{error}"
+        );
+        assert!(error.source().is_none());
+    }
+
+    #[test]
     fn parse_and_no_engine_errors_have_no_source() {
         let parse = RunError::Parse {
             message: "bad".to_owned(),

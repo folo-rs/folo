@@ -155,6 +155,13 @@ mod tests {
     }
 
     #[test]
+    fn cli_is_debug_formatted() {
+        let cli =
+            Cli::from_args(&["cargo-bench-history"], &["run"]).expect("arguments should parse");
+        assert!(format!("{cli:?}").contains("Run"), "{cli:?}");
+    }
+
+    #[test]
     fn run_collects_options_and_passthrough() {
         let command = parse(&["run", "--engine", "callgrind", "--", "-p", "nm"]);
         let Command::Run(options) = command else {

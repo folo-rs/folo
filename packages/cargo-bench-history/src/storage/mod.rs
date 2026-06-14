@@ -48,6 +48,12 @@ pub enum StorageError {
         /// The key that was not found.
         key: String,
     },
+    /// The key was not a valid storage key (it contained an empty, `.`, or `..`
+    /// segment that could escape the storage root).
+    InvalidKey {
+        /// The rejected key.
+        key: String,
+    },
     /// An underlying I/O error occurred.
     Io(io::Error),
 }
@@ -56,6 +62,7 @@ impl fmt::Display for StorageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotFound { key } => write!(f, "object not found: {key}"),
+            Self::InvalidKey { key } => write!(f, "invalid storage key: {key}"),
             Self::Io(error) => write!(f, "storage I/O error: {error}"),
         }
     }
@@ -64,7 +71,7 @@ impl fmt::Display for StorageError {
 impl Error for StorageError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::NotFound { .. } => None,
+            Self::NotFound { .. } | Self::InvalidKey { .. } => None,
             Self::Io(error) => Some(error),
         }
     }
@@ -73,6 +80,8 @@ impl Error for StorageError {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use futures::executor::block_on;
+
     use super::*;
 
     #[test]
@@ -96,6 +105,52 @@ mod tests {
             key: "k".to_owned(),
         };
         assert!(error.source().is_none());
+    }
+
+    #[test]
+    fn invalid_key_display_and_no_source() {
+        let error = StorageError::InvalidKey {
+            key: "v1/../escape".to_owned(),
+        };
+        assert!(error.to_string().contains("v1/../escape"), "{error}");
+        assert!(error.source().is_none());
+    }
+
+    #[test]
+    fn memory_storage_put_get_keys_and_list() {
+        let storage = MemoryStorage::new();
+        block_on(storage.put("v1/a/1.json", b"1")).unwrap();
+        block_on(storage.put("v1/a/2.json", b"2")).unwrap();
+        block_on(storage.put("v1/b/3.json", b"3")).unwrap();
+
+        assert_eq!(block_on(storage.get("v1/a/1.json")).unwrap(), b"1");
+        assert_eq!(
+            storage.keys(),
+            vec![
+                "v1/a/1.json".to_owned(),
+                "v1/a/2.json".to_owned(),
+                "v1/b/3.json".to_owned(),
+            ]
+        );
+        assert_eq!(
+            block_on(storage.list("v1/a/")).unwrap(),
+            vec!["v1/a/1.json".to_owned(), "v1/a/2.json".to_owned()]
+        );
+    }
+
+    #[test]
+    fn memory_storage_get_missing_is_not_found() {
+        let storage = MemoryStorage::new();
+        let error = block_on(storage.get("absent")).unwrap_err();
+        assert!(matches!(error, StorageError::NotFound { .. }));
+    }
+
+    #[test]
+    #[should_panic(expected = "write-once")]
+    fn memory_storage_rejects_duplicate_key() {
+        let storage = MemoryStorage::new();
+        block_on(storage.put("dup", b"1")).unwrap();
+        block_on(storage.put("dup", b"2")).unwrap();
     }
 }
 
@@ -125,10 +180,12 @@ impl MemoryStorage {
 #[cfg(test)]
 impl Storage for MemoryStorage {
     async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
-        self.objects
-            .lock()
-            .unwrap()
-            .insert(key.to_owned(), bytes.to_vec());
+        let mut objects = self.objects.lock().unwrap();
+        assert!(
+            !objects.contains_key(key),
+            "MemoryStorage is write-once; key already exists: {key}"
+        );
+        objects.insert(key.to_owned(), bytes.to_vec());
         Ok(())
     }
 

@@ -1,8 +1,9 @@
 # cargo-bench-history — Design & Implementation Plan
 
-Status: design approved; implementation pending. Items still marked **R** are
-non-blocking recommendations open to revision during implementation. The
-resolved design decisions are logged in [§13 Decisions & open items](#13-decisions--open-items).
+Status: design approved; iteration 1 (`run` for Callgrind + local storage)
+implemented. Items still marked **R** are non-blocking recommendations open to
+revision during implementation. The resolved design decisions are logged in
+[§13 Decisions & open items](#13-decisions--open-items).
 
 ## 1. Purpose
 

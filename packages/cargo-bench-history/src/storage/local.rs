@@ -19,18 +19,25 @@ impl LocalStorage {
         Self { root: root.into() }
     }
 
-    fn key_path(&self, key: &str) -> PathBuf {
+    /// Maps an object key to a path under the root, rejecting keys whose segments
+    /// could escape it (empty, `.`, or `..`).
+    fn key_path(&self, key: &str) -> Result<PathBuf, StorageError> {
         let mut path = self.root.clone();
         for segment in key.split('/') {
+            if segment.is_empty() || segment == "." || segment == ".." {
+                return Err(StorageError::InvalidKey {
+                    key: key.to_owned(),
+                });
+            }
             path.push(segment);
         }
-        path
+        Ok(path)
     }
 }
 
 impl Storage for LocalStorage {
     async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
-        let path = self.key_path(key);
+        let path = self.key_path(key)?;
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
@@ -42,7 +49,7 @@ impl Storage for LocalStorage {
     }
 
     async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError> {
-        let path = self.key_path(key);
+        let path = self.key_path(key)?;
         match tokio::fs::read(&path).await {
             Ok(bytes) => Ok(bytes),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Err(StorageError::NotFound {
@@ -122,7 +129,7 @@ mod tests {
 
         match error {
             StorageError::NotFound { key } => assert_eq!(key, "v1/missing.json"),
-            StorageError::Io(error) => panic!("unexpected io error: {error}"),
+            other => panic!("unexpected error: {other:?}"),
         }
     }
 
@@ -153,5 +160,72 @@ mod tests {
         let keys = storage.list("v1/").await.unwrap();
 
         assert!(keys.is_empty());
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn put_rejects_traversal_key() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path());
+
+        let error = storage.put("v1/../escape.json", b"x").await.unwrap_err();
+
+        assert!(
+            matches!(error, StorageError::InvalidKey { .. }),
+            "{error:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn get_rejects_traversal_key() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path());
+
+        let error = storage.get("../secret").await.unwrap_err();
+
+        assert!(
+            matches!(error, StorageError::InvalidKey { .. }),
+            "{error:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn get_on_a_directory_reports_io_error() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path());
+        storage.put("v1/a/1.json", b"1").await.unwrap();
+
+        // Reading the directory "v1/a" as a file is a non-NotFound I/O error.
+        let error = storage.get("v1/a").await.unwrap_err();
+
+        assert!(matches!(error, StorageError::Io(_)), "{error:?}");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn list_on_a_file_root_reports_io_error() {
+        let dir = tempdir().unwrap();
+        let file_root = dir.path().join("not-a-dir");
+        std::fs::write(&file_root, "x").unwrap();
+        let storage = LocalStorage::new(&file_root);
+
+        let error = storage.list("v1/").await.unwrap_err();
+
+        assert!(matches!(error, StorageError::Io(_)), "{error:?}");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn put_blocked_by_an_existing_file_reports_io_error() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path());
+        storage.put("v1/a", b"file").await.unwrap();
+
+        // "v1/a" is a file, so creating it as a parent directory fails.
+        let error = storage.put("v1/a/b.json", b"x").await.unwrap_err();
+
+        assert!(matches!(error, StorageError::Io(_)), "{error:?}");
     }
 }

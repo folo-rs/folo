@@ -12,9 +12,10 @@
 //! per-benchmark series ordered by effective time and looks for regressions and
 //! drift.
 //!
-//! This Phase 0 foundation provides the data model, configuration, comparability
-//! and storage building blocks; the command handlers are stubs that later
-//! iterations fill in.
+//! The `run` command executes the configured benchmark engines (Callgrind via
+//! Gungraun in this iteration), harvests their machine-readable output, and
+//! stores one immutable result set per run in local storage. The `install` and
+//! `analyze` command handlers are stubs that later iterations fill in.
 
 mod bench;
 mod bench_output;
