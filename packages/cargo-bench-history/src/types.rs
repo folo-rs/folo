@@ -125,6 +125,13 @@ pub enum RunError {
         /// The process exit code, if one was reported.
         code: Option<i32>,
     },
+    /// A configured engine command could not be tokenized into an argv.
+    Command {
+        /// The engine whose command is malformed.
+        engine: String,
+        /// Human-readable description of the tokenization failure.
+        message: String,
+    },
     /// A harvested benchmark summary could not be parsed.
     Parse {
         /// Human-readable description of the parse failure.
@@ -144,6 +151,9 @@ impl fmt::Display for RunError {
                 Some(code) => write!(f, "engine {engine:?} failed with exit code {code}"),
                 None => write!(f, "engine {engine:?} terminated without an exit code"),
             },
+            Self::Command { engine, message } => {
+                write!(f, "engine {engine:?} has an invalid command: {message}")
+            }
             Self::Parse { message } => write!(f, "failed to parse benchmark output: {message}"),
             Self::Io(error) => write!(f, "I/O error: {error}"),
         }
@@ -156,7 +166,10 @@ impl Error for RunError {
             Self::Config(error) => Some(error),
             Self::Storage(error) => Some(error),
             Self::Io(error) => Some(error),
-            Self::NoEngine { .. } | Self::Engine { .. } | Self::Parse { .. } => None,
+            Self::NoEngine { .. }
+            | Self::Engine { .. }
+            | Self::Command { .. }
+            | Self::Parse { .. } => None,
         }
     }
 }

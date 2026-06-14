@@ -71,7 +71,11 @@ impl Storage for LocalStorage {
             }
             Err(error) => return Err(StorageError::Io(error)),
         };
-        file.write_all(bytes).await.map_err(StorageError::Io)
+        file.write_all(bytes).await.map_err(StorageError::Io)?;
+        // Tokio's `File` does not flush its buffer on drop, so an explicit
+        // flush is required to guarantee the bytes reach the filesystem before
+        // a subsequent `get` reads them back.
+        file.flush().await.map_err(StorageError::Io)
     }
 
     async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError> {

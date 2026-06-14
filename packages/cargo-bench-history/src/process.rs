@@ -12,15 +12,16 @@ use crate::bench::merge_wslenv;
 
 /// Launches an engine's benchmark command with injected environment variables.
 pub(crate) trait BenchRunner {
-    /// Runs `command_line` through the platform shell with `env` applied, letting
-    /// the child inherit stdio so benchmark progress streams to the terminal.
+    /// Runs `argv` directly (no shell) with `env` applied, letting the child
+    /// inherit stdio so benchmark progress streams to the terminal. `argv[0]` is
+    /// the program and the remainder are its arguments, each passed verbatim.
     ///
     /// # Errors
     ///
     /// Returns an error if the process cannot be spawned or awaited.
     fn run_engine(
         &self,
-        command_line: &str,
+        argv: &[String],
         env: &[(String, String)],
     ) -> impl Future<Output = io::Result<EngineStatus>>;
 }
@@ -60,10 +61,10 @@ pub(crate) struct TokioBenchRunner;
 impl BenchRunner for TokioBenchRunner {
     async fn run_engine(
         &self,
-        command_line: &str,
+        argv: &[String],
         env: &[(String, String)],
     ) -> io::Result<EngineStatus> {
-        let mut command = shell_command(command_line);
+        let mut command = engine_command(argv);
 
         for (name, value) in env {
             command.env(name, value);
@@ -97,27 +98,31 @@ pub(crate) async fn capture(program: &str, args: &[&str]) -> io::Result<CommandO
     })
 }
 
-/// Builds a platform shell command that runs `command_line` verbatim.
-fn shell_command(command_line: &str) -> tokio::process::Command {
-    if cfg!(windows) {
-        let mut command = tokio::process::Command::new("cmd");
-        command.arg("/C").arg(command_line);
-        command
-    } else {
-        let mut command = tokio::process::Command::new("sh");
-        command.arg("-c").arg(command_line);
-        command
-    }
+/// Builds a process command that runs `argv` directly, without a shell.
+///
+/// `argv[0]` is the program and the remainder are its arguments, each passed
+/// verbatim — no shell tokenization, quoting, or metacharacter interpretation,
+/// so forwarded arguments containing spaces or quotes survive intact.
+fn engine_command(argv: &[String]) -> tokio::process::Command {
+    let (program, args) = argv
+        .split_first()
+        .expect("engine argv is non-empty; build_command_line rejects empty commands");
+    let mut command = tokio::process::Command::new(program);
+    command.args(args);
+    command
 }
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use super::shell_command;
+    use super::engine_command;
 
     #[test]
-    fn shell_command_wraps_the_line_for_the_platform() {
-        let command = shell_command("echo hi");
+    fn engine_command_runs_argv_directly() {
+        // A forwarded argument with a space stays a single argument, proving no
+        // shell re-tokenization happens.
+        let argv = vec!["echo".to_owned(), "hi there".to_owned()];
+        let command = engine_command(&argv);
         let std = command.as_std();
         let program = std.get_program().to_string_lossy().into_owned();
         let args: Vec<String> = std
@@ -125,12 +130,7 @@ mod tests {
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
 
-        if cfg!(windows) {
-            assert_eq!(program, "cmd");
-            assert_eq!(args, vec!["/C".to_owned(), "echo hi".to_owned()]);
-        } else {
-            assert_eq!(program, "sh");
-            assert_eq!(args, vec!["-c".to_owned(), "echo hi".to_owned()]);
-        }
+        assert_eq!(program, "echo");
+        assert_eq!(args, vec!["hi there".to_owned()]);
     }
 }

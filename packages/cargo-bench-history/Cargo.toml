@@ -14,11 +14,20 @@ rust-version.workspace = true
 [package.metadata.docs.rs]
 all-features = true
 
+# A minimal stand-in for a benchmark engine, used by integration tests to drive
+# `run` end to end: it writes Gungraun summary fixtures into the target tree and
+# exits with a configurable code, exercising the real harvest and exit-code
+# paths without invoking a real (and slow) benchmark engine.
+[[bin]]
+name = "cargo-bench-history-mock-engine"
+path = "tests/support/mock_engine.rs"
+
 [dependencies]
 argh = { workspace = true }
 jiff = { workspace = true, features = ["serde", "std"] }
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["std"] }
+shlex = { workspace = true, features = ["std"] }
 tick = { workspace = true, features = ["tokio"] }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt-multi-thread"] }
 toml = { workspace = true, features = ["parse", "serde"] }

@@ -10,8 +10,10 @@ synchronous and pushes async only to the IO edges, each modelled as a small
 The orchestrator (`commands::run::execute_run`) is generic over its ports and is
 driven in tests by fakes, never by real IO:
 
-* `process::BenchRunner` — real `TokioBenchRunner` (shells the engine command);
-  fake `FakeRunner` records the invocation and reports a canned exit status.
+* `process::BenchRunner` — real `TokioBenchRunner` runs the engine command's
+  argv directly (no shell — the configured command is tokenized with POSIX
+  shell-word rules and spawned, so forwarded arguments are passed verbatim);
+  fake `FakeRunner` records the argv and reports a canned exit status.
 * `probe::EnvironmentProbe` — real `SystemProbe` (shells `git`/`rustc`); fake
   `FakeProbe` returns canned `GitSnapshot`/`RustcInfo`.
 * `bench_output::BenchOutputSource` — real `FsBenchOutputSource` (walks
@@ -38,6 +40,22 @@ never insert real-time delays in tests.
   runtime must be `#[tokio::test]` (or `#[test]` for `std::fs`) **and**
   `#[cfg_attr(miri, ignore)]` with a comment saying why. These are the 13 tests
   Miri skips.
+
+## Mock engine for end-to-end tests
+
+The integration tests drive `run` against the **real** process/filesystem/storage
+adapters, so they need a real program to launch as the "engine". That program is
+`tests/support/mock_engine.rs`, declared as a `[[bin]]`
+(`cargo-bench-history-mock-engine`); tests reference it via
+`env!("CARGO_BIN_EXE_cargo-bench-history-mock-engine")`. It writes the committed
+Gungraun summary fixtures into `<target-root>/gungraun/GROUP/summary.json` (so the
+harvester finds fresh output) and exits with a chosen code — never use a shell
+builtin like `exit 7`, because the runner no longer goes through a shell. Resolve
+`<target-root>` the same way the harvester does (`CARGO_TARGET_DIR` or `target`),
+so the mock writes where the harvester reads. Because the engine runs without a
+shell, the config `command` embeds the binary path POSIX-single-quoted (so it
+survives shell-word tokenization as one argument) and TOML-escaped (so Windows
+backslashes survive the TOML string).
 
 ## End-to-end tests and the current directory
 

@@ -17,10 +17,10 @@ use cargo_bench_history::{
 use jiff::Timestamp;
 use serial_test::serial;
 
-/// A committed Gungraun summary with no `id` (unparametrized), `Ir` = 36.
-const SINGLE_SUMMARY: &str = include_str!("fixtures/callgrind/single_unparametrized.summary.json");
-/// A committed Gungraun summary with `id` = `two_instants`, `Ir` = 87.
-const PARAMETRIZED_SUMMARY: &str = include_str!("fixtures/callgrind/parametrized.summary.json");
+/// The mock engine binary path, provided by Cargo for the `[[bin]]` target. It
+/// writes Gungraun summary fixtures into the target tree and exits with a chosen
+/// code, standing in for a real benchmark engine.
+const MOCK_ENGINE: &str = env!("CARGO_BIN_EXE_cargo-bench-history-mock-engine");
 
 /// The tool version recorded with each run. The integration test compiles within
 /// the package, so its `CARGO_PKG_VERSION` matches the version `run` records.
@@ -164,8 +164,7 @@ async fn analyze_is_recognized_but_not_implemented() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn run_callgrind_end_to_end_stores_results() {
-    let workspace = Workspace::new(&callgrind_config("exit 0"));
-    workspace.place_callgrind_summary("grp", SINGLE_SUMMARY);
+    let workspace = Workspace::new(&callgrind_config(&mock_command("--summary grp=single")));
 
     let outcome = workspace
         .drive(&[
@@ -219,9 +218,9 @@ async fn run_callgrind_end_to_end_stores_results() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn run_stores_a_record_per_summary() {
-    let workspace = Workspace::new(&callgrind_config("exit 0"));
-    workspace.place_callgrind_summary("a", SINGLE_SUMMARY);
-    workspace.place_callgrind_summary("b", PARAMETRIZED_SUMMARY);
+    let workspace = Workspace::new(&callgrind_config(&mock_command(
+        "--summary a=single --summary b=parametrized",
+    )));
 
     let outcome = workspace.drive(&["run"]).await.expect("run should succeed");
     let RunOutcome::Completed { message } = outcome else {
@@ -252,8 +251,7 @@ async fn run_stores_a_record_per_summary() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn run_no_store_harvests_without_storing() {
-    let workspace = Workspace::new(&callgrind_config("exit 0"));
-    workspace.place_callgrind_summary("grp", SINGLE_SUMMARY);
+    let workspace = Workspace::new(&callgrind_config(&mock_command("--summary grp=single")));
 
     let outcome = workspace
         .drive(&["run", "--no-store"])
@@ -277,7 +275,7 @@ async fn run_no_store_harvests_without_storing() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn run_propagates_nonzero_engine_exit() {
-    let workspace = Workspace::new(&callgrind_config("exit 7"));
+    let workspace = Workspace::new(&callgrind_config(&mock_command("--exit-code 7")));
 
     let error = workspace
         .drive(&["run"])
@@ -300,7 +298,7 @@ async fn run_propagates_nonzero_engine_exit() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn run_rejects_unknown_requested_engine() {
-    let workspace = Workspace::new(&callgrind_config("exit 0"));
+    let workspace = Workspace::new(&callgrind_config(&mock_command("")));
 
     let error = workspace
         .drive(&["run", "--engine", "dhat"])
@@ -317,7 +315,7 @@ async fn run_rejects_unknown_requested_engine() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn run_rejects_unconfigured_requested_engine() {
-    let workspace = Workspace::new(&callgrind_config("exit 0"));
+    let workspace = Workspace::new(&callgrind_config(&mock_command("")));
 
     let error = workspace
         .drive(&["run", "--engine", "criterion"])
@@ -334,7 +332,7 @@ async fn run_rejects_unconfigured_requested_engine() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn run_rejects_unsupported_requested_engine() {
-    let workspace = Workspace::new(&criterion_config("exit 0"));
+    let workspace = Workspace::new(&criterion_config(&mock_command("")));
 
     let error = workspace
         .drive(&["run", "--engine", "criterion"])
@@ -352,8 +350,7 @@ async fn run_rejects_unsupported_requested_engine() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn run_skips_unsupported_configured_engine() {
-    let workspace = Workspace::new(CALLGRIND_AND_CRITERION_CONFIG);
-    workspace.place_callgrind_summary("grp", SINGLE_SUMMARY);
+    let workspace = Workspace::new(&callgrind_and_criterion_config());
 
     let outcome = workspace.drive(&["run"]).await.expect("run should succeed");
     let RunOutcome::Completed { message } = outcome else {
@@ -371,8 +368,7 @@ async fn run_skips_unsupported_configured_engine() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn run_explicit_callgrind_selection_stores_results() {
-    let workspace = Workspace::new(&callgrind_config("exit 0"));
-    workspace.place_callgrind_summary("grp", SINGLE_SUMMARY);
+    let workspace = Workspace::new(&callgrind_config(&mock_command("--summary grp=single")));
 
     let outcome = workspace
         .drive(&["run", "--engine", "callgrind"])
@@ -389,8 +385,8 @@ async fn run_explicit_callgrind_selection_stores_results() {
 async fn run_uses_explicit_config_path() {
     // Only the custom path holds a configuration; the default discovery path is
     // absent, so a successful run proves `--config` was honored.
-    let workspace = Workspace::with_config_at("config/bench.toml", &callgrind_config("exit 0"));
-    workspace.place_callgrind_summary("grp", SINGLE_SUMMARY);
+    let config = callgrind_config(&mock_command("--summary grp=single"));
+    let workspace = Workspace::with_config_at("config/bench.toml", &config);
 
     let outcome = workspace
         .drive(&["run", "--config", "config/bench.toml"])
@@ -405,17 +401,15 @@ async fn run_uses_explicit_config_path() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn two_runs_store_two_distinct_objects() {
-    let workspace = Workspace::new(&callgrind_config("exit 0"));
+    let workspace = Workspace::new(&callgrind_config(&mock_command("--summary grp=single")));
 
-    workspace.place_callgrind_summary("grp", SINGLE_SUMMARY);
     workspace
         .drive(&["run"])
         .await
         .expect("first run should succeed");
 
-    // Refresh the summary so its modification time stays inside the second run's
-    // harvest window.
-    workspace.place_callgrind_summary("grp", SINGLE_SUMMARY);
+    // The engine rewrites the summary on each run, so its modification time stays
+    // inside the second run's harvest window.
     workspace
         .drive(&["run"])
         .await
@@ -465,14 +459,6 @@ impl Workspace {
 
     fn root(&self) -> &Path {
         self.dir.path()
-    }
-
-    /// Writes `content` as a Callgrind `summary.json` under a fresh target group,
-    /// giving it a current modification time inside the harvester's window.
-    fn place_callgrind_summary(&self, group: &str, content: &str) {
-        let dir = self.root().join("target").join("gungraun").join(group);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("summary.json"), content).unwrap();
     }
 
     /// Drives `run` with `args` from inside this workspace.
@@ -534,6 +520,26 @@ fn ir_of(record: &ResultRecord) -> f64 {
         .value
 }
 
+/// Builds a config `command` line that invokes the mock engine with `args`.
+///
+/// The engine path is POSIX single-quoted so shell-word tokenization treats it
+/// as a single argument even when it contains spaces or backslashes (as on
+/// Windows); `args` is appended verbatim.
+fn mock_command(args: &str) -> String {
+    let quoted = format!("'{}'", MOCK_ENGINE.replace('\'', r"'\''"));
+    if args.is_empty() {
+        quoted
+    } else {
+        format!("{quoted} {args}")
+    }
+}
+
+/// Escapes a string for embedding in a TOML basic (double-quoted) string, so a
+/// Windows path's backslashes survive as literal characters.
+fn toml_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 /// A single-engine Callgrind configuration whose command is `command`.
 fn callgrind_config(command: &str) -> String {
     format!(
@@ -542,7 +548,8 @@ fn callgrind_config(command: &str) -> String {
          [storage.local]\n\
          path = \"./store\"\n\n\
          [engines.callgrind]\n\
-         command = \"{command}\"\n"
+         command = \"{}\"\n",
+        toml_escape(command)
     )
 }
 
@@ -554,25 +561,27 @@ fn criterion_config(command: &str) -> String {
          [storage.local]\n\
          path = \"./store\"\n\n\
          [engines.criterion]\n\
-         command = \"{command}\"\n"
+         command = \"{}\"\n",
+        toml_escape(command)
     )
 }
 
 /// A configuration with both a supported (callgrind) and an unsupported
 /// (criterion) engine; the criterion command never runs because it is skipped.
-const CALLGRIND_AND_CRITERION_CONFIG: &str = "\
-[project]
-id = \"testproj\"
-
-[storage.local]
-path = \"./store\"
-
-[engines.callgrind]
-command = \"exit 0\"
-
-[engines.criterion]
-command = \"exit 99\"
-";
+fn callgrind_and_criterion_config() -> String {
+    format!(
+        "[project]\n\
+         id = \"testproj\"\n\n\
+         [storage.local]\n\
+         path = \"./store\"\n\n\
+         [engines.callgrind]\n\
+         command = \"{}\"\n\n\
+         [engines.criterion]\n\
+         command = \"{}\"\n",
+        toml_escape(&mock_command("--summary grp=single")),
+        toml_escape(&mock_command("--exit-code 99"))
+    )
+}
 
 fn collect_json_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {

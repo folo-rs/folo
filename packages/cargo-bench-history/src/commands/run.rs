@@ -6,6 +6,7 @@
 //! public [`execute`] wires the real adapters and is what the binary runs.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use jiff::Timestamp;
@@ -183,13 +184,17 @@ where
 
     let run_start = deps.clock.system_time();
     let injected = injected_env(engine);
-    let command_line = build_command_line(
+    let argv = build_command_line(
         &engine_config.command,
         &engine_config.extra_args,
         &options.passthrough,
-    );
+    )
+    .map_err(|message| RunError::Command {
+        engine: name.to_owned(),
+        message,
+    })?;
 
-    let status = deps.runner.run_engine(&command_line, &injected).await?;
+    let status = deps.runner.run_engine(&argv, &injected).await?;
     if !status.success {
         return Err(RunError::Engine {
             engine: name.to_owned(),
@@ -323,16 +328,27 @@ fn is_supported(engine: EngineSystem) -> bool {
     matches!(engine, EngineSystem::Callgrind)
 }
 
-/// Joins the engine command with its configured and forwarded arguments.
-fn build_command_line(command: &str, extra_args: &[String], passthrough: &[String]) -> String {
-    let mut parts = vec![command];
-    parts.extend(extra_args.iter().map(String::as_str));
-    parts.extend(passthrough.iter().map(String::as_str));
-    parts
-        .into_iter()
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
+/// Tokenizes the engine command and appends its configured and forwarded
+/// arguments verbatim, producing a full argv for direct (shell-free) execution.
+///
+/// The configured `command` is split with POSIX shell-word rules (honoring
+/// quotes), then `extra_args` and `passthrough` are appended as-is — each is
+/// already a discrete argument and is forwarded without re-tokenization, so
+/// values containing spaces or quotes are preserved exactly. Returns an error if
+/// `command` is not validly quoted or yields no program to run.
+fn build_command_line(
+    command: &str,
+    extra_args: &[String],
+    passthrough: &[String],
+) -> Result<Vec<String>, String> {
+    let mut argv = shlex::split(command)
+        .ok_or_else(|| format!("command {command:?} is not a valid shell-quoted string"))?;
+    if argv.is_empty() {
+        return Err("command is empty".to_owned());
+    }
+    argv.extend(extra_args.iter().cloned());
+    argv.extend(passthrough.iter().cloned());
+    Ok(argv)
 }
 
 /// Builds the human-readable run summary.
@@ -395,13 +411,21 @@ fn build_local_storage(config: &Config) -> LocalStorage {
     }
 }
 
-/// Generates a run identifier unique within a partition (process id + clock nanos).
+/// Generates a run identifier unique within a partition.
+///
+/// Combines the process id, clock nanoseconds, and a process-global monotonic
+/// sequence number so that back-to-back runs in the same process never collide
+/// even when the system clock has coarse resolution (which would otherwise let
+/// `{pid}-{nanos}` repeat and trip the write-once storage contract).
 fn generate_run_id(clock: &Clock) -> String {
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
     let nanos = clock
         .system_time()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |since| since.as_nanos());
-    format!("{}-{nanos}", std::process::id())
+    let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("{}-{nanos}-{sequence}", std::process::id())
 }
 
 #[cfg(test)]
@@ -436,10 +460,21 @@ mod tests {
             .expect("frozen instant is within range")
     }
 
+    #[test]
+    fn run_ids_are_unique_even_with_an_identical_clock_reading() {
+        // A frozen clock returns the same instant on every read, so the pid and
+        // nanos components are identical; the monotonic sequence is what keeps
+        // back-to-back run ids (and thus object keys) from colliding.
+        let clock = Clock::new_frozen_at(frozen_time());
+        let first = generate_run_id(&clock);
+        let second = generate_run_id(&clock);
+        assert_ne!(first, second);
+    }
+
     #[derive(Clone)]
     struct FakeRunner {
         status: EngineStatus,
-        calls: Arc<Mutex<Vec<String>>>,
+        calls: Arc<Mutex<Vec<Vec<String>>>>,
     }
 
     impl FakeRunner {
@@ -463,7 +498,7 @@ mod tests {
             }
         }
 
-        fn last_command(&self) -> Option<String> {
+        fn last_command(&self) -> Option<Vec<String>> {
             self.calls.lock().unwrap().last().cloned()
         }
     }
@@ -471,10 +506,10 @@ mod tests {
     impl BenchRunner for FakeRunner {
         async fn run_engine(
             &self,
-            command_line: &str,
+            argv: &[String],
             _env: &[(String, String)],
         ) -> io::Result<EngineStatus> {
-            self.calls.lock().unwrap().push(command_line.to_owned());
+            self.calls.lock().unwrap().push(argv.to_vec());
             Ok(self.status)
         }
     }
@@ -773,7 +808,12 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(runner.last_command().as_deref(), Some("noop -p nm"));
+        assert_eq!(
+            runner
+                .last_command()
+                .expect("a command should have been recorded"),
+            ["noop", "-p", "nm"]
+        );
     }
 
     #[test]
@@ -851,16 +891,29 @@ mod tests {
     }
 
     #[test]
-    fn build_command_line_appends_and_filters_empties() {
+    fn build_command_line_tokenizes_and_appends_verbatim() {
         assert_eq!(
-            build_command_line("just bench-cg", &[], &["-p".to_owned(), "nm".to_owned()]),
-            "just bench-cg -p nm"
+            build_command_line("just bench-cg", &[], &["-p".to_owned(), "nm".to_owned()]).unwrap(),
+            ["just", "bench-cg", "-p", "nm"]
         );
         assert_eq!(
-            build_command_line("cargo bench", &["--quiet".to_owned()], &[]),
-            "cargo bench --quiet"
+            build_command_line("cargo bench", &["--quiet".to_owned()], &[]).unwrap(),
+            ["cargo", "bench", "--quiet"]
         );
-        assert_eq!(build_command_line("noop", &[String::new()], &[]), "noop");
+        // A quoted segment in the configured command is one argument, and a
+        // forwarded argument with spaces is appended verbatim (not re-tokenized).
+        assert_eq!(
+            build_command_line("prog \"a b\"", &[], &["c d".to_owned()]).unwrap(),
+            ["prog", "a b", "c d"]
+        );
+    }
+
+    #[test]
+    fn build_command_line_rejects_malformed_and_empty_commands() {
+        let unbalanced = build_command_line("prog \"unterminated", &[], &[]).unwrap_err();
+        assert!(unbalanced.contains("valid shell"), "{unbalanced}");
+        let empty = build_command_line("   ", &[], &[]).unwrap_err();
+        assert!(empty.contains("empty"), "{empty}");
     }
 
     #[test]

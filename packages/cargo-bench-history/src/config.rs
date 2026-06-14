@@ -71,7 +71,12 @@ pub enum StorageConfig {
 #[non_exhaustive]
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct EngineConfig {
-    /// The shell command to run (e.g. `just bench-cg`).
+    /// The command that runs the engine's benches (e.g. `just bench-cg`).
+    ///
+    /// It is tokenized with POSIX shell-word rules (so quoted arguments are
+    /// honored) and run directly, without a shell — shell features such as
+    /// pipes, redirects, `&&`, and environment-variable expansion are not
+    /// available. The first token is the program; the rest are its arguments.
     pub command: String,
     /// Extra arguments appended to the command (escape hatch; usually empty).
     #[serde(default)]
