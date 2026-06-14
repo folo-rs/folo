@@ -56,9 +56,6 @@ async fn main() -> ExitCode {
 
     match &outcome {
         RunOutcome::Completed { message } => println!("{message}"),
-        RunOutcome::NotImplemented { command } => {
-            println!("`{command}` is recognized but not yet implemented");
-        }
         RunOutcome::Analyzed { report, .. } => println!("{report}"),
     }
 

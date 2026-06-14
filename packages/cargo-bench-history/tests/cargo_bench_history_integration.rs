@@ -140,15 +140,76 @@ fn binary_parse_error_exits_failure_on_stderr() {
 }
 
 // ===========================================================================
-// Dispatch of not-yet-implemented subcommands.
+// Real-adapter `install` scenarios.
 // ===========================================================================
 
 #[tokio::test]
-#[cfg_attr(miri, ignore)] // Spawns a real process, which Miri cannot do.
+#[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot do.
 #[serial]
-async fn install_is_recognized_but_not_implemented() {
-    let outcome = run(&command_from(&["install"])).await.unwrap();
-    assert_eq!(outcome, RunOutcome::NotImplemented { command: "install" });
+async fn install_writes_config_to_the_default_path() {
+    let workspace = Workspace::empty();
+
+    let outcome = workspace.drive(&["install"]).await.unwrap();
+
+    let RunOutcome::Completed { message } = outcome else {
+        panic!("install should complete: {outcome:?}");
+    };
+    assert!(
+        message.contains("Wrote a starter configuration"),
+        "{message}"
+    );
+    assert!(message.contains("Next steps"), "{message}");
+    assert_eq!(
+        workspace.read(".cargo/bench_history.toml").as_deref(),
+        Some(default_template()),
+        "the default template should be written verbatim"
+    );
+}
+
+#[tokio::test]
+#[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot do.
+#[serial]
+async fn install_never_overwrites_an_existing_config() {
+    let workspace = Workspace::empty();
+    workspace.drive(&["install"]).await.unwrap();
+
+    // Hand-edit the generated file, then install again: it must be untouched.
+    let edited = format!("{}\n# hand-edited\n", default_template());
+    std::fs::write(workspace.root().join(".cargo/bench_history.toml"), &edited).unwrap();
+
+    let outcome = workspace.drive(&["install"]).await.unwrap();
+
+    let RunOutcome::Completed { message } = outcome else {
+        panic!("install should complete: {outcome:?}");
+    };
+    assert!(message.contains("already exists"), "{message}");
+    assert_eq!(
+        workspace.read(".cargo/bench_history.toml").as_deref(),
+        Some(edited.as_str()),
+        "the hand-edited file must be left unchanged"
+    );
+}
+
+#[tokio::test]
+#[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot do.
+#[serial]
+async fn install_honors_an_explicit_config_path() {
+    let workspace = Workspace::empty();
+
+    workspace
+        .drive(&["install", "--config", "config/custom.toml"])
+        .await
+        .unwrap();
+
+    assert_eq!(
+        workspace.read("config/custom.toml").as_deref(),
+        Some(default_template()),
+        "the template should be written to the requested path"
+    );
+    assert!(
+        workspace.read(".cargo/bench_history.toml").is_none(),
+        "the default path should be left alone"
+    );
 }
 
 // ===========================================================================
@@ -658,6 +719,13 @@ impl Workspace {
         workspace
     }
 
+    /// Creates an empty workspace with no configuration file written.
+    fn empty() -> Self {
+        Self {
+            dir: tempfile::tempdir().expect("temp dir should be created"),
+        }
+    }
+
     /// Creates a workspace with `config` at a non-default `relative` path.
     fn with_config_at(relative: &str, config: &str) -> Self {
         let workspace = Self {
@@ -671,6 +739,11 @@ impl Workspace {
 
     fn root(&self) -> &Path {
         self.dir.path()
+    }
+
+    /// Reads a file relative to the workspace root, if it exists.
+    fn read(&self, relative: &str) -> Option<String> {
+        std::fs::read_to_string(self.root().join(relative)).ok()
     }
 
     /// Drives `run` with `args` from inside this workspace.

@@ -96,11 +96,6 @@ pub enum RunOutcome {
         /// Human-readable summary of what happened.
         message: String,
     },
-    /// The command is recognized but not yet implemented.
-    NotImplemented {
-        /// The name of the command that is not yet implemented.
-        command: &'static str,
-    },
     /// The `analyze` command produced a findings report.
     Analyzed {
         /// The rendered findings report for the requested output format.
@@ -121,7 +116,7 @@ impl RunOutcome {
     #[must_use]
     pub fn is_success(&self) -> bool {
         match self {
-            Self::Completed { .. } | Self::NotImplemented { .. } => true,
+            Self::Completed { .. } => true,
             Self::Analyzed {
                 regressions,
                 fail_on_regression,
@@ -322,14 +317,13 @@ mod tests {
     }
 
     #[test]
-    fn completed_and_not_implemented_outcomes_are_successful() {
+    fn completed_outcome_is_successful() {
         assert!(
             RunOutcome::Completed {
                 message: "done".to_owned(),
             }
             .is_success()
         );
-        assert!(RunOutcome::NotImplemented { command: "analyze" }.is_success());
     }
 
     #[test]

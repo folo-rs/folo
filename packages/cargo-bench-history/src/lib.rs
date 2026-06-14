@@ -15,8 +15,8 @@
 //! The `run` command executes the configured benchmark engines (Callgrind via
 //! Gungraun in this iteration), harvests their machine-readable output, and
 //! stores one immutable result set per run in local storage. The `analyze`
-//! command reconstructs each benchmark's series and reports notable changes; the
-//! `install` command handler is a stub that a later iteration fills in.
+//! command reconstructs each benchmark's series and reports notable changes, and
+//! the `install` command writes a starter configuration file.
 
 mod analyze;
 mod bench;
@@ -25,6 +25,7 @@ mod cli;
 mod commands;
 mod comparability;
 mod config;
+mod config_writer;
 mod context;
 mod dispatch;
 mod git;

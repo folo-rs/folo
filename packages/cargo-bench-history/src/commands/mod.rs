@@ -1,5 +1,5 @@
-//! Command handlers. The `run` and `analyze` commands have full implementations;
-//! `install` is a stub that later iterations fill in.
+//! Command handlers, one per subcommand. Each handler is asynchronous and is
+//! dispatched from [`run`](crate::run).
 
 mod install;
 mod run;

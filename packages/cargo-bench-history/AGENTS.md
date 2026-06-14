@@ -20,6 +20,11 @@ driven in tests by fakes, never by real IO:
   `target/gungraun/**/summary.json`); fake `FakeOutput` returns in-memory
   `RawSummary` values.
 * `storage::Storage` — real `LocalStorage`; fake `MemoryStorage`.
+* `config_writer::ConfigWriter` — real `TokioConfigWriter` (creates parent dirs,
+  `create_new` so an existing file is never clobbered); fake `MemoryConfigWriter`.
+  Used by `commands::install::execute_install`. Its real adapter's IO error paths
+  are covered by `#[cfg_attr(miri, ignore)]` real-filesystem tests in
+  `config_writer::real_writer_tests` (blocked parent, interior-NUL open error).
 
 When you add a new IO edge, follow the same pattern: a port trait with an
 `impl Future` return (RPITIT, no `async_trait`), a real adapter, and a fake.

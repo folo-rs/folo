@@ -6,9 +6,8 @@ use crate::{Command, RunError, RunOutcome};
 
 /// Executes a parsed command.
 ///
-/// The `run` and `analyze` handlers are asynchronous (they drive IO over the
-/// configured storage); `install` remains a synchronous stub that reports
-/// `RunOutcome::NotImplemented` until a later iteration fills it in.
+/// Every handler is asynchronous: `run` and `analyze` drive IO over the
+/// configured storage, and `install` writes a configuration file.
 ///
 /// # Errors
 ///
@@ -18,7 +17,7 @@ use crate::{Command, RunError, RunOutcome};
 pub async fn run(command: &Command) -> Result<RunOutcome, RunError> {
     match command {
         Command::Run(options) => commands::run(options).await,
-        Command::Install(options) => commands::install(options),
+        Command::Install(options) => commands::install(options).await,
         Command::Analyze(options) => commands::analyze(options).await,
     }
 }
