@@ -37,6 +37,7 @@ fn command_from(args: &[&str]) -> Command {
 // ===========================================================================
 
 #[test]
+#[serial]
 fn run_forwards_passthrough_after_separator() {
     let Command::Run(options) = command_from(&["run", "--engine", "callgrind", "--", "-p", "nm"])
     else {
@@ -47,24 +48,28 @@ fn run_forwards_passthrough_after_separator() {
 }
 
 #[test]
+#[serial]
 fn default_template_parses_with_two_engines() {
     let config = parse_config(default_template()).expect("template should parse");
     assert_eq!(config.engines.len(), 2);
 }
 
 #[test]
+#[serial]
 fn unknown_subcommand_is_rejected() {
     Cli::from_args(&["cargo-bench-history"], &["frobnicate"])
         .expect_err("an unknown subcommand should be rejected");
 }
 
 #[test]
+#[serial]
 fn run_rejects_unknown_flag() {
     Cli::from_args(&["cargo-bench-history"], &["run", "--frobnicate"])
         .expect_err("an unknown flag should be rejected");
 }
 
 #[test]
+#[serial]
 fn help_request_lists_subcommands() {
     let early_exit = Cli::from_args(&["cargo-bench-history"], &["--help"])
         .expect_err("help is reported as an early exit");
@@ -90,6 +95,7 @@ fn help_request_lists_subcommands() {
 
 #[test]
 #[cfg_attr(miri, ignore)] // Spawns a real process, which Miri cannot do.
+#[serial]
 fn binary_help_exits_success_on_stdout() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_cargo-bench-history"))
         .arg("--help")
@@ -108,6 +114,7 @@ fn binary_help_exits_success_on_stdout() {
 
 #[test]
 #[cfg_attr(miri, ignore)] // Spawns a real process, which Miri cannot do.
+#[serial]
 fn binary_parse_error_exits_failure_on_stderr() {
     // An unknown flag is a parse error whose usage text still mentions `--help`;
     // the exit code must come from the parse status, not a substring match.
@@ -137,6 +144,7 @@ fn binary_parse_error_exits_failure_on_stderr() {
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)] // Spawns a real process, which Miri cannot do.
+#[serial]
 async fn install_is_recognized_but_not_implemented() {
     let outcome = run(&command_from(&["install"])).await.unwrap();
     assert_eq!(outcome, RunOutcome::NotImplemented { command: "install" });
@@ -144,6 +152,7 @@ async fn install_is_recognized_but_not_implemented() {
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)] // Spawns a real process, which Miri cannot do.
+#[serial]
 async fn analyze_is_recognized_but_not_implemented() {
     let outcome = run(&command_from(&["analyze"])).await.unwrap();
     assert_eq!(outcome, RunOutcome::NotImplemented { command: "analyze" });
@@ -154,8 +163,10 @@ async fn analyze_is_recognized_but_not_implemented() {
 //
 // Each drives `run` against the real process/filesystem/storage adapters from
 // within a temporary workspace. They are `#[serial]` because they mutate the
-// process-wide current directory, and miri-ignored because they spawn processes
-// and touch the filesystem.
+// process-wide current directory and `CARGO_TARGET_DIR`, and miri-ignored because
+// they spawn processes and touch the filesystem. Every test in this file is
+// `#[serial]` so that the environment is never accessed concurrently (see
+// `TargetDirGuard`).
 // ===========================================================================
 
 /// End-to-end happy path: a successful no-op engine command, one harvested
@@ -465,10 +476,19 @@ impl Workspace {
     async fn drive(&self, args: &[&str]) -> Result<RunOutcome, RunError> {
         let original = std::env::current_dir().unwrap();
         std::env::set_current_dir(self.root()).unwrap();
+
+        // Pin the target root to this workspace's own `target/` for the duration of
+        // the run so a shared ambient `CARGO_TARGET_DIR` (as `cargo llvm-cov` sets
+        // during coverage runs) cannot make the harvester pick up summaries written
+        // by other tests sharing that directory.
+        let target_dir_guard = TargetDirGuard::set(self.root().join("target"));
+
         let result = run(&command_from(args)).await;
+
         // Restore the working directory before any assertion (and before the temp
         // dir is dropped, which on Windows fails while it is the current directory).
         std::env::set_current_dir(&original).unwrap();
+        drop(target_dir_guard);
         result
     }
 
@@ -507,6 +527,37 @@ impl Workspace {
             objects.len()
         );
         objects.pop().unwrap()
+    }
+}
+
+/// Pins `CARGO_TARGET_DIR` to a chosen path for the lifetime of the guard,
+/// restoring the previous value on drop. This isolates each test's harvest tree
+/// from any ambient `CARGO_TARGET_DIR` (notably the shared directory that
+/// `cargo llvm-cov` redirects builds and bins into during coverage runs).
+struct TargetDirGuard {
+    previous: Option<std::ffi::OsString>,
+}
+
+impl TargetDirGuard {
+    fn set(path: PathBuf) -> Self {
+        let previous = std::env::var_os("CARGO_TARGET_DIR");
+        // SAFETY: every test in this file is `#[serial]`, so the process
+        // environment is never read or written concurrently from another thread.
+        unsafe {
+            std::env::set_var("CARGO_TARGET_DIR", path);
+        }
+        Self { previous }
+    }
+}
+
+impl Drop for TargetDirGuard {
+    fn drop(&mut self) {
+        match &self.previous {
+            // SAFETY: see `TargetDirGuard::set` — guarded by file-wide `#[serial]`.
+            Some(value) => unsafe { std::env::set_var("CARGO_TARGET_DIR", value) },
+            // SAFETY: see `TargetDirGuard::set` — guarded by file-wide `#[serial]`.
+            None => unsafe { std::env::remove_var("CARGO_TARGET_DIR") },
+        }
     }
 }
 

@@ -10,6 +10,7 @@
 //! `parametrized` (id `two_instants`, `Ir` = 87). Summaries are written to
 //! `<target-root>/gungraun/GROUP/summary.json`, where `<target-root>` honors
 //! `CARGO_TARGET_DIR` exactly as the harvester does.
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
 use std::path::PathBuf;
 use std::process::ExitCode;
