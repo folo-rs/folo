@@ -114,9 +114,10 @@ mod linux {
     //
     // Across all lifecycle benches the receiver is stack-pinned via
     // `std::pin::pin!` rather than `Box::pin` so that the measured iteration
-    // reflects event mechanics rather than allocator overhead. See AGENTS.md
-    // "Benchmark design" for the rationale (the cost of a `Box::pin` per
-    // iteration is 40-50% of the measured count).
+    // reflects event mechanics rather than allocator overhead. See
+    // `docs/benchmarks.md` ("Stack pin vs. `Box::pin` on the measured path")
+    // for the rationale (the cost of a `Box::pin` per iteration is 40-50% of
+    // the measured count).
 
     #[library_benchmark]
     fn sync_lifecycle_boxed() {

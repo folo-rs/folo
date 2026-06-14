@@ -1,7 +1,9 @@
 # Selective validation with cargo-delta
 
-When working on a feature branch, you can use `cargo-delta` to validate only the packages that
-are impacted by your changes, rather than running full workspace validation.
+You can use `cargo-delta` to validate only the packages that are impacted by your changes,
+rather than running full workspace validation or manually trying to identify impacted packages.
+
+Mostly this is used in GitHub workflows, as on local PC it tends to be obvious what is impacted.
 
 ## How it works
 

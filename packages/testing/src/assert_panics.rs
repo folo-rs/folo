@@ -54,8 +54,8 @@ where
 /// further assertions about state after the panic. The inspector receives
 /// the panic message and can perform additional assertions on it — typically
 /// a canary substring check for a stable keyword inherent to the scenario
-/// (see the "Canary substrings" exception in `AGENTS.md`). Avoid asserting
-/// on the full message.
+/// (see the "Canary substrings" exception in `docs/testing.md`). Avoid
+/// asserting on the full message.
 ///
 /// If the panic payload is neither `&'static str` nor `String`, the
 /// inspector receives an empty string. Standard `panic!()` invocations

@@ -1,1153 +1,242 @@
-# Standard commands
+# Workspace conventions
 
-We use the Just command runner for many common commands - look inside *.just files to see the
-list of available commands. Some relevant ones are:
+This file is the table of contents for the workspace-wide conventions of this
+repository. The actual conventions live in topical chapter files under `docs/`
+— this file's job is to tell you which chapter to open for any given task.
 
-* `just build` - build the entire workspace
-* `just package=many_cpus build` - build a single package (most commands accept a `package` parameter)
-* `just test` - test the entire workspace; this does NOT run doctests, use `just test-docs` for that
-* `just docs` - build API documentation
+## How to use this file
 
-The `package` argument must be the first argument to any `just` command, if used. You can specify it on most commands to scope them down to a specific package instead of running them on the entire repo (which is slow).
+1. Identify what kind of work you are about to do (write a test? add an `unsafe`
+   block? tweak a benchmark? refactor a module?).
+2. Find the matching entry in the chapter list below and open the linked file.
 
-Avoid running `just bench` (wall-clock Criterion benchmarks) without explicit confirmation: they
-take a lot of time, and the numbers are also noisy and machine-dependent — running them on a
-shared machine produces results that should not be acted on. `just test` already runs a single
-iteration of every Criterion benchmark to validate that they still execute.
+## Meta-principles
 
-`just bench-cg` (Callgrind / Gungraun) is different: it runs each scenario once under Valgrind's
-CPU simulator, so the instruction counts and simulated cache numbers are deterministic and
-unaffected by other processes on the machine. It is safe to run `just bench-cg` (or
-`just package=foo bench-cg`) any time without asking — including as a smoke test of a new
-Callgrind benchmark. The same applies to the `bench-cycles` recipe in packages that still use it.
+A few principles apply to *every* change and are short enough to live here
+directly:
 
-We generally prefer using Just commands over raw Cargo commands if there is a suitable Just command
-defined in one of the *.just files.
+* **Zero warnings allowed.** Fix all warnings that validation generates. Never
+  silence a warning without a `reason` field justifying it.
+* **Keep the house in order.** Do not only focus on the immediate task at hand
+  but also consider how it affects the codebase around it. If the change you
+  are working on affords more simplicity, better organization or greater reuse,
+  take action to perform the refactoring needed to achieve that. If the change
+  you are working on makes some logic or tests obsolete, clean up.
+* **Adjust patterns, fix entire classes of problems.** If you are asked to do a
+  thing to one instance of a problem in a file, check for other instances. You
+  must solve the entire class of problems at once, not expect each instance to
+  be pointed out to you in instructions.
+* **Do not execute `just release`** — this is a critical tool reserved for
+  human use.
+* **Check for a package-local `AGENTS.md`** before doing nontrivial work in a
+  specific crate (e.g. `packages/events_once/AGENTS.md`). Package-local
+  guidance refines and sometimes overrides the workspace-wide rules.
 
-Do not execute `just release` - this is a critical tool reserved for human use.
+## Chapters
 
-Do not use VS Code tasks, relying instead on `just` and, if necessary, `cargo` commands.
+### [docs/build-and-tooling.md](docs/build-and-tooling.md)
 
-# Validating changes
+Day-to-day mechanics: `just` commands, building, testing, validation, the
+Windows + WSL multiplatform workflow, PowerShell scripting, and rules for
+`*.just` recipes.
 
-Validate changes via `just validate-local`. This runs a number of different checks and will
-uncover most issues. If you only touched a few packages, scope it to them via `package=foo`.
+**Open this when**: running any build/test/lint/docs command; validating a
+change; writing or editing a `[script]` block in a justfile; searching the
+workspace; running a command on some "other" operating system from the one you
+are on.
 
-We operate under a "zero warnings allowed" requirement - fix all warnings that validation generates.
+### [docs/cargo-delta.md](docs/cargo-delta.md)
 
-# Multiplatform codebase
+The `cargo-delta` workflow for validating only the packages affected by a
+feature branch's diff (instead of the whole workspace). Only used in GitHub
+workflows, though technically it also works on local PC (but we typically
+already know what our changes affect, so do not need it on local PC).
 
-This is a multiplatform codebase. In some packages you will find folders named `linux` and
-`windows`, which contain platform-specific code. When modifying files of one platform, you
-make the equivalent modifications in the other.
+**Open this when**: configuring or debugging `delta.toml` or the delta-build
+GitHub workflow integration.
 
-When running on a local PC, the operating systme is Windows. When running in GitHub, the operating
-system is Linux.
+### [docs/code-style.md](docs/code-style.md)
 
-On local PC, you can invoke any Linux commands using the syntax `wsl -e bash -l -c "command"`.
-For example, to run the standard validation on both Windows and Linux, execute:
+General Rust style conventions: 100-column lines, imports, naming, comments,
+language, whitespace, lint suppressions, closure-clone scoping, variable
+shadowing, named constants, wildcard re-exports, YAML formatting, `println!`
+rules.
 
-1. `just validate-local`
-2. `wsl -e bash -l -c "just validate-local"`
+**Open this when**: writing any Rust code; reviewing a diff for style;
+resolving a Clippy lint where multiple valid forms exist; naming a constant,
+builder method, or variable.
 
-# Facades and abstractions
+### [docs/file-organization.md](docs/file-organization.md)
 
-Some packages like `many_cpus` use a platform abstraction layer (PAL), where an abstraction like
-`trait Platform` defined in `packages/many_cpus/src/pal/abstractions/**` has multiple different
-implementations:
+How files, modules, and visibility are structured: small files, flat public
+APIs, `lib.rs`/`mod.rs` discipline, file contents flow, `pub(crate)`, and the
+`__private` macro-visibility pattern.
 
-1. A Windows implementation (`packages/many_cpus/src/pal/windows/**`)
-2. A Linux implementation (`packages/many_cpus/src/pal/linux/**`)
-3. A mock implementation (`packages/many_cpus/src/pal/mocks.rs`)
+**Open this when**: creating, moving, or splitting files/modules/packages;
+choosing a visibility modifier; exposing internals to a published macro.
 
-Logic code will consume this abstraction via facade types, which can either call into the real
-implementation of the build target platform (Windows or Linux) or the mock implementation (only
-when building in test mode). The facades are defined in `packages/many_cpus/src/pal/facade/**` and
-only exist to be minimal pass-through layers to allow swapping in the mock implementation in tests.
+### [docs/dependencies.md](docs/dependencies.md)
 
-When modifying the API of the PAL, you are expected to make the API changes in the
-abstraction, facade and implementation types at the same time, as the API surface must match.
+How dependencies are declared in `Cargo.toml`: alphabetical ordering, the
+no-default-features policy, and the rule that intra-workspace dev-dependencies
+must be `path = "../foo"` references.
 
-The same pattern may also be used elsewhere (e.g. inside the PAL implementations as a second layer
-of abstraction, or in other packages).
+**Open this when**: adding, removing, or reordering a dependency in a
+`Cargo.toml`; taking a dev-dependency on another workspace crate; deciding
+whether to enable default features.
 
-# Filesystem structure
+### [docs/feature-flags.md](docs/feature-flags.md)
 
-We prefer many smaller files over few large files, typically only packing implementation details
-and unit tests into the same file but keeping separate API-visible types in separate files (even
-if only API-visible inside the same crate).
+Conditional compilation: gating test-only code with `#[cfg(test)]`, gating
+optional functionality behind Cargo features, and enabling feature-gated code
+(and its dependencies) in `test` builds via `#[cfg(any(test, feature = "..."))]`.
 
-We prefer to keep the public API relatively flat - even if we create separate Rust modules for
-types, we re-export them all at the parent, so while we have modules like
-`packages/many_cpus/src/hardware_tracker.rs` the type itself is exported at the crate root as
-`many_cpus::HardwareTracker` instead of at the module as `many_cpus::hardware_tracker::HardwareTracker`.
+**Open this when**: marking code `#[cfg(test)]`; adding or consuming a Cargo
+feature; deciding how a feature gate should behave under `cargo test`.
 
-`lib.rs` and `mod.rs` files should only contain API documentation and re-exports. Do not define
-constants, helper functions, or other items in these files — move them to dedicated files (e.g.
-`constants.rs`) for better filesystem organization.
+### [docs/api-documentation.md](docs/api-documentation.md)
 
-Inline `mod` blocks defined directly in `lib.rs` / `mod.rs` count as "re-exports" for the purpose
-of this rule as long as they only re-export items from other modules (no logic, no constants, no
-new type definitions). This is common for `#[doc(hidden)] pub mod __private { pub use ...; }` or
-similar grouping modules whose sole purpose is to gather and re-expose existing items under a
-distinct namespace.
+How to write `///` and `//!` comments, README examples, Mermaid diagrams,
+feature-gated documentation, and the `#[cfg_attr(..., doc = "...")]` pattern
+for intra-doc links to feature-gated items.
 
-# Scripting
+**Open this when**: writing or editing API documentation; updating a
+`README.md`; adding a diagram; rustdoc fails with `unresolved link` because a
+linked item exists only under a non-default feature; the
+`docs-default-features` validation step flags a broken link.
 
-You can assume PowerShell 7 (`pwsh`) is available on every operating system and environment.
+### [docs/examples.md](docs/examples.md)
 
-Prefer PowerShell 7 commands to Bash commands, as they are more likely to work. You
-will not always be on Linux, so Bash commands might not always work.
+Conventions for inline doctest examples and stand-alone `examples/` binaries:
+separating scenarios into distinct blocks or functions, the
+`Box::pin` vs. `pin!` rule, and the production-code-quality expectation.
 
-# Code style
+**Open this when**: writing or editing an example (inline or stand-alone);
+structuring a multi-scenario example.
 
-We limit line length to 100, including API documentation and comments.
+### [docs/testing.md](docs/testing.md)
 
-There are many Clippy rules defined in the workspace-level `Cargo.toml`.
+The full testing playbook: panic/error assertions, the ban on real-time delays
+and on `parking_lot`, watchdogs, the threshold-based-mutation anti-pattern,
+Miri compatibility, multithreaded synchronization tests, `static_assertions`
+for trait contracts, mutation-testing skip criteria, UI tests, and coverage
+exclusion.
 
-Follow these even in doctests. Note that Clippy does not actually check doctests! You will need to
-manually check what Clippy rules we enable in the workspace-level `Cargo.toml` and follow them in
-the inline examples in API documentation.
+**Open this when**: writing or modifying a test (unit, integration, doctest);
+hitting a hang, Miri failure, or uncaught mutation; asserting that a panic or
+error occurs; marking code as not-relevant-for-coverage; discovering a flaky
+test.
 
-This applies whenever Clippy-relevant changes are made, including: (a) enabling a new lint, (b)
-migrating a pattern from one form to another to satisfy an existing lint, (c) running `cargo
-clippy --fix`. After any such change, sweep `///` and `//!` code blocks for the same pattern.
-Pay special attention to *mirrored* examples — a standalone `examples/<crate>_readme.rs` paired
-with code blocks in `lib.rs` and `README.md` — Clippy only sees the standalone example; the
-inline doctest and the README copy must be updated by hand.
+### [docs/benchmarks.md](docs/benchmarks.md)
 
-# Discarding values
+Criterion benchmark design (single-threaded by default, elementary operations,
+`black_box`) plus the `Box::pin` → `pin!` exception on the measured path, and
+a pointer to the Callgrind chapter. Cross-links to `naming.md`.
 
-Use `_ = expr;` to discard values, not `let _ = expr;`. The `let` keyword is unnecessary and
-triggers `clippy::let_underscore_must_use`. Use `drop(expr)` when you want to explicitly drop a
-value that has a destructor.
+**Open this when**: adding or modifying any file in `packages/<pkg>/benches/`;
+deciding how to pin a future inside an `iter` closure.
 
-# Cloning into closures
+### [docs/callgrind-benchmarks.md](docs/callgrind-benchmarks.md)
 
-When cloning a variable to move it into a closure, create a separate scope for the clone instead
-of polluting the parent scope with renamed variables. This applies to all closure types: async
-blocks, thread spawns, and regular closures.
+Deep reference for Callgrind / Gungraun instruction-count benchmarks: which
+operations to cover, scenario selection, the bench file template, Cargo.toml
+setup, Gungraun syntax gotchas, the Criterion-pairing convention, and how to
+interpret results.
 
-Bad:
+**Open this when**: adding a `*_cg.rs` benchmark file or deciding whether a hot
+path warrants Callgrind coverage.
 
-```rust
-let handle = mutex.clone();
-spawn(async move { handle.something(); });
-```
+### [docs/naming.md](docs/naming.md)
 
-Good:
+Naming conventions for benchmark files, Criterion groups, and Callgrind
+identifiers — the rules that keep wall-clock and instruction-count benchmarks
+in lockstep and prevent name collisions in `target/.../deps/`.
 
-```rust
-spawn({
-    let mutex = mutex.clone();
-    async move {
-        mutex.something();
-    }
-});
-```
+**Open this when**: naming a new benchmark file, group, or function; pairing a
+Callgrind file with its Criterion counterpart.
 
-The same pattern applies to thread spawning:
+### [docs/error-handling.md](docs/error-handling.md)
 
-```rust
-thread::spawn({
-    let set = Arc::clone(&set);
-    move || {
-        set.do_work();
-    }
-});
-```
+The `unwrap()` / `expect()` rules in both test and production code, checked
+arithmetic, `Drop`-time invariant checks with `thread::panicking()` guards,
+and the `NonZero<usize>` preference for non-zero numeric parameters.
 
-# Variable shadowing for type conversions
+**Open this when**: choosing between `unwrap`, `expect`, `?`, or explicit
+error handling; auditing arithmetic that could overflow; writing a `Drop` impl
+that validates invariants; designing a numeric parameter that must be
+non-zero.
 
-When converting a variable to a different form (e.g. removing a `Pin` wrapper, dereferencing a
-pointer to a reference, or re-pinning a reference), prefer shadowing the original variable name
-instead of inventing a new abbreviated name. This keeps the code readable and avoids cryptic
-short names like `aw`, `aw_ref`, or `raw`.
+### [docs/unsafe-code.md](docs/unsafe-code.md)
 
-Good:
+Safety-comment conventions for `unsafe` blocks: the validity + aliasing
+requirements when creating references from raw pointers, where safety comments
+go, and the one-unsafe-call-per-block rule.
 
-```rust
-let awaiter = unsafe { awaiter.get_unchecked_mut() };
-let awaiter = ptr::from_mut(awaiter);
-let awaiter = unsafe { &*awaiter };
-```
+**Open this when**: writing or auditing an `unsafe` block; constructing a
+reference from a raw pointer; writing a safety comment.
 
-Bad:
+### [docs/unwind-safety.md](docs/unwind-safety.md)
 
-```rust
-let aw = unsafe { awaiter.get_unchecked_mut() };
-let raw = ptr::from_mut(aw);
-let aw_ref = unsafe { &*raw };
-```
+The `UnwindSafe`/`RefUnwindSafe` contracts: public API types must be unwind-safe
+(verified with `static_assertions`), the exception for types guarding user data,
+the `PhantomData<Cell<()>>` `!Sync` marker pattern and its ref-unwind-safety
+side-effect, manual `Send`/`Sync` impls and the `'static`-bound rustc bug, and
+`ohno::error`-generated error types.
 
-Only use a different name when both forms are needed simultaneously in the same scope.
+**Open this when**: adding or auditing an `impl UnwindSafe`, `impl RefUnwindSafe`,
+`impl Send`, or `impl Sync`; deciding whether a type may cross a `catch_unwind()`
+boundary; picking the right `PhantomData<...>` marker; a `static_assertions`
+unwind-safety assertion fails.
 
-# Language
+### [docs/performance.md](docs/performance.md)
 
-Use proper English grammar, spelling and punctuation.
+Workspace-wide performance principles: when to add `#[inline]`, the bias
+toward surgical interventions over architectural rewrites, preserving
+defensive runtime checks, staying idiomatic Rust, deprioritizing
+first-insert/teardown optimizations, the no-allocation-on-the-hot-path
+reminder, and the rule on justifying deviations from standard ecosystem
+patterns.
 
-Titles are normal sentences, do not capitalize every word in a title.
+**Open this when**: considering an `#[inline]` annotation; proposing or
+reviewing a performance optimization PR or issue; tempted to reach for a
+hand-rolled construct instead of an ecosystem default.
 
-Sentences end with punctuation:
+### [docs/pal.md](docs/pal.md)
 
-* This is wrong: "//! // Create a pool for storing u64 values"
-* This is correct: "//! Create a pool for storing u64 values."
+The platform abstraction layer (PAL) pattern: trait-based abstraction, Windows
++ Linux + mock implementations, and the facade pass-through layer used by
+packages like `many_cpus`.
 
-Comments are regular sentences and END WITH A PERIOD or other punctuation.
+**Open this when**: working in a package that has a `pal/`, `facade/`, or
+`mocks.rs` layout; adding, changing, or removing a PAL abstraction.
 
-Do not forget proper language in tests, doctests and examples.
+### [docs/callback-safety.md](docs/callback-safety.md)
 
-Do not use contractions, that is not professional English. Use "do not" instead of "don't", etc.
+The reentrancy / callback-safety rules: no callbacks under borrows of shared
+state, no `mem::take`/`swap`/`replace` of shared state when a callback can
+re-enter, and the `# Reentrancy` documentation requirement on public async
+primitives.
 
-# Use of unwrap() and expect()
+**Open this when**: writing or modifying code that invokes user-supplied
+callbacks (`Waker::wake`, `Drop` impls, observer closures, stored `FnOnce`
+values); adding a new async primitive that needs a reentrancy contract.
 
-Use `unwrap()` in test code and only in test code. Do not use `expect()` in test code.
+### [docs/impl-crate-split.md](docs/impl-crate-split.md)
 
-You may use `expect()` in non-test code but only if there is a reason to believe that the expectation
-will never fail. That is, we do not use `expect()` as an assertion, we use it to cut off unreachable
-code paths. The message inside `expect()` should explain why we can be certain that code path is
-unreachable - it is not an error message saying what went wrong!
+The `_impl` crate split pattern for exposing internal surface to in-workspace
+benches and tests: when to apply it, the `private-test-util` Cargo feature
+naming rule, doctest-cycle dev-dependencies, lockstep versioning, and how the
+split differs from the in-crate `__private` macro-visibility convention.
 
-State clearly in the `expect()` message why the expectation is guaranteed to hold. Do not use words
-like "should" - if it only "should" hold, then you have failed to establish a guarantee!
+**Open this when**: deciding whether a crate needs to be split into a shell +
+`_impl` pair; configuring features on an `_impl` crate; setting up
+dev-dependencies for tests or benches that need internal surface.
 
-Using `assert!()` or other panic-inducing macros in non-test code is fine as long as it is documented
-in API documentation (in a `# Panics` section). Treat the `assert!()` message the same as the
-message for `expect!()` - it should justify why we expect the assertion to hold. If we do not
-expect the assertion to hold but are merely fulfilling an API contract to panic, no assert message
-is to be used. Similarly, do not use assertion messages in tests.
+### [docs/git-workflow.md](docs/git-workflow.md)
 
-# Safety comments
+Conventions for PRs and the release process from the contributor side: using
+`--body-file` with `gh pr create`, replying to and resolving review comment
+threads, and the no-version-bumps-on-feature-branches rule.
 
-Safety comments must explain how we satisfy the safety requirements of the unsafe function we are
-calling. The API documentation of an unsafe function has a "Safety" section that poses a challenge
-and the safety comment is the response - the two must be paired and correspond to each other.
-
-Safety comments are not there just to re-state the requirements or make generic claims, they must
-specifically explain how we satisfy the safety requirements of the function we are calling (e.g.
-by referencing an assertion, a type invariant, earlier logic or other mechanism).
-
-When creating a reference from a raw pointer (`unsafe { &*ptr }`, `unsafe { &mut *ptr }`,
-`NonNull::as_ref`, `NonNull::as_mut`, etc.), the safety comment must address BOTH:
-
-1. **Validity** — the pointer is non-null, properly aligned, points to an initialized value of
-   the correct type, and the pointee outlives the new reference.
-2. **Aliasing** — explain why no conflicting reference exists for the duration of the new borrow:
-   - For `&T`: no `&mut T` to the same memory may exist concurrently.
-   - For `&mut T`: no other `&T` or `&mut T` to the same memory may exist concurrently. This
-     includes references on other threads.
-
-Documenting only validity is insufficient. Rust's aliasing rules are equally strict and equally
-easy to violate, especially when constructing references from raw pointers stored across function
-calls or threads. Justify aliasing by referencing locks held, single-threaded ownership,
-`!Send`/`!Sync` markers, scope-bounded borrows, atomic-only access, or other concrete mechanisms.
-
-Safety comments are also required in examples and doctests that use `unsafe` blocks.
-
-Safety comments (whether single- or multiline) go above the line with the `unsafe` block. To be
-clear, they are associated with a specific `unsafe` block, not with a function call. Example:
-
-```rust
-/// SAFETY: We ensured above that the pointer is valid and aligned for the type `T`.
-unsafe {
-    unsafe_function(pointer);
-}
-```
-
-Each `unsafe` block is expected to only have one call to an unsafe function, and should not have 
-nontrivial safe code inside it.
-
-Good example - only unsafe code in the unsafe block:
-
-```rust
-/// SAFETY: We ensured above that the pointer is valid and aligned for the type `T`.
-let entity = Entity::from(unsafe {
-    unsafe_function(pointer)
-});
-```
-
-Bad example - `unsafe` block includes safe code:
-
-```rust
-/// SAFETY: We ensured above that the pointer is valid and aligned for the type `T`.
-let entity = unsafe {
-    Entity::from(unsafe_function(pointer))
-};
-```
-
-# Reentrancy through callbacks
-
-User-supplied callbacks (`Waker::wake`, `Drop` impls, observer closures, etc.) can
-re-enter the data structure they were invoked from and silently corrupt invariants
-without violating any borrow-checker, type-system, or Miri rule. Never invoke a user
-callback while holding a borrow or lock on shared state, never `mem::take`/`swap`/
-`replace` shared state when the callback could re-enter through the original location,
-and document the reentrancy contract (with parity tests across thread-safe and
-single-threaded variants) on every public async primitive. See
-[docs/callback-safety.md](docs/callback-safety.md) for the full rationale, anti-patterns,
-and examples.
-
-# Whitespace
-
-There should be an empty line between functions.
-
-# Non-zero integers
-
-Whenever a numeric value must be non-zero, prefer `NonZero<usize>` over `usize`,
-in both private APIs/logic and public APIs. Prefer `NonZero<usize>` over `NonZeroUsize`.
-
-# File contents flow
-
-Bigger and more important types go higher in the file, smaller and less important types go lower.
-
-Public API types go higher in the file, private types go lower.
-
-The implementation of a type should stay close to the definition of the type (e.g. `impl` blocks
-of a type follow the `struct` block).
-
-# Visibility
-
-Types, fields, functions and methods should have the minimum required visibility, only being
-visible in the same file by default if not part of the public API surface.
-
-Use `pub(crate)` only when a type actually needs to be accessible in other files of the same crate.
-
-# Diagrams
-
-Mermaid diagrams are encouraged in API documentation where they make sense.
-
-Each diagram should be a separate file in a `crate/docs/diagrams` folder, with the file
-extension `.mermaid`. The file name should match the diagram name used in the documentation.
-
-Rendering Mermaid diagrams in Rust API documentation requires the `simple-mermaid` package to
-be referenced. The syntax for embedding a Mermaid diagram is
-`#![doc = mermaid!("../doc/region_cached.mermaid")]`. See existing examples for a detailed
-reference (e.g. the `region_local` package).
-
-# Comments must add value not re-state the code
-
-Comments that merely restate the obvious are not desired. Comments should add value by explaining
-why something is done, what it accomplishes, or how it works. Avoid comments that simply repeat
-what the code does.
-
-Do not use section separator comments (e.g. `// --- Section ---` or `// ======= Title =======`)
-to create visual "chapters" in code. Code organization should be clear from naming and structure.
-
-Bad comment:
-
-```rust
-/// Unique identifier for this pool instance.
-pool_id: u64,
-```
-
-Good comment:
-
-```rust
-/// We need to uniquely identify each pool to ensure that memory is not returned to the
-/// wrong pool. If the pool ID does not match when returning memory, we panic.
-pool_id: u64,
-```
-
-# Testing for panics and errors
-
-It is good to create tests that verify expected panics/errors are returned. However, never
-check for a specific error/panic message - these are not part of the public API and create
-fragile tests. Just verify that an error of an expected type occurs or any panic occurs.
-
-For tests that must verify a panic but also continue running afterwards (e.g. to check that
-a data structure is still in a valid state), use `testing::assert_panics(|| ...)` instead of
-hand-rolling `catch_unwind(AssertUnwindSafe(...))`. When a canary substring check is warranted,
-use `testing::assert_panics_with(|| ..., |message| assert!(message.contains("canary")))`.
-
-# Keep the house in order
-
-Do not only focus on the immediate task at hand but also consider how it affects the codebase
-around it.
-
-If the change you are working on affords more simplicity, better organization or greater reuse,
-take action to perform the refactoring needed to achieve that. If the change you are working on
-makes some logic or tests obsolete, clean up.
-
-Code should be well covered with unit tests, public APIs should be documented and include inline
-examples. The most important scenarios should be covered by stand-alone example binaries.
-
-Performance-critical code should include Criterion benchmarks to help detect regressions.
-
-# Document the contract, not the implementation
-
-API documentation on types and functions should describe the API contract (i.e. the inputs,
-the outputs and the behavior) not how it is implemented. Do not discuss implementation details
-like private helper types or reference the internal field structure of a type in API documentation.
-
-Specific things that are implementation details and do NOT belong in API documentation:
-
-* Internal data structures (e.g. "uses an intrusive linked list").
-* Internal ordering guarantees (e.g. "FIFO") unless they are part of the API contract.
-* What fields a node or struct contains internally.
-* Whether a future is `Unpin` or not (obvious from the type's auto-trait inference).
-
-# Keep API documentation summary lines short
-
-The first line of each `///` doc comment is used as the summary in rustdoc type and method tables.
-Keep this first line short and concise so it does not wrap to the next line in the generated
-documentation. Move detailed descriptions to subsequent paragraphs after a blank `///` line.
-
-# Lint suppressions
-
-It is fine to suppress Clippy and compiler lints in the code if it is justified. All suppressions
-must have a `reason` field to justify them.
-
-Prefer `expect` over `allow` suppressions, except when applying a broadly-scoped suppression that
-applies to a whole file or module using inner attributes, in which case "allow" is preferred.
-
-# Panic in drop()
-
-It is OK to verify that type invariants still hold in `drop()` and panic if some have been violated,
-e.g. when an item is not in a valid state to be dropped. However, all such assertions must be
-guarded with a `thread::panicking()` check to ensure that the panic does not occur when already
-unwinding for another panic - we do not want to double-panic as that mangles the errors.
-
-# Benchmark design
-
-Unless otherwise prompted, create single-threaded synchronous Criterion benchmarks. Use benchmark
-groups to group related benchmarks that make sense to compare to each other.
-
-Focus on benchmarking elementary operations, do not create benchmarks with lots of long-winded
-logic. We generally want to benchmark a single API call or at most a sequence of closely coupled
-API calls.
-
-Only the functionality being benchmarked should be inside the `.iter()` closure, with the data setup
-being either done outside (if not per-iteration) or using the first "payload preparation" callback
-of `iter_batched()` (if per-iteration).
-
-If multithreaded benchmarks are truly appropriate, use `bench_on_threadpool()` for them. When using
-this for multithreaded benchmarks, also run any single-threaded benchmarks
-via `bench_on_threadpool()` to ensure that overheads are comparable.
-
-Inside the benchmark closure, use `std::hint::black_box()` to consume output values from the code
-being benchmarked, to avoid unrealistic eager optimizations due to output values that are discarded.
-
-Benchmarks that are meant to be compared to each other must be in the same benchmark function
-and in the same benchmark group.
-
-Do not use `Box::pin(value)` on the measured path. It allocates a `Box` on the heap on every
-iteration, which can easily add 100-200 instructions (or 40-50% of the measurement) of pure
-allocator overhead that has nothing to do with the operation under test. Use
-`std::pin::pin!(value)` instead — it pins on the stack with zero allocation. Add a brief inline
-comment justifying the deviation from the usual `Box::pin` preference (e.g. "stack-pin to avoid
-allocator noise on the measured path"). This is an exception to the workspace-wide rule against
-the `pin!` macro.
-
-`Box::pin` remains correct in benchmark code that is NOT inside the measured region:
-
-* Criterion `iter_custom` setup (anything before `Instant::now()`).
-* The first ("payload preparation") callback of `iter_batched()`.
-* Gungraun setup functions referenced via `#[bench::id(setup_fn())]` — these run outside the
-  measured region and pass the result into the bench body by value.
-* Helper functions that must return `Pin<Box<T>>` across a function boundary (a stack pin would
-  dangle).
-* Intentional `Box::pin` baselines where the allocation IS what is being measured.
-
-Do not forget to register benchmarks in `Cargo.toml`.
-
-Benchmark file names, Criterion group names, and Callgrind group/function names
-follow strict conventions documented in [docs/naming.md](docs/naming.md):
-the file basename prefixes Criterion group names, Callgrind files require a
-paired Criterion file, and Callgrind identifiers mirror Criterion ones with
-`/` substituted by `_`.
-
-# Callgrind benchmarks
-
-For performance-critical hot paths, complement the Criterion benchmarks with Callgrind-based
-instruction-count benchmarks driven by Valgrind. These live alongside the Criterion benches in
-the same `packages/<pkg>/benches/` directory, with the file-suffix convention `_cg.rs` (short
-for Callgrind, to be honest about the fact that the numbers come from a simulated
-microarchitecture rather than the real CPU).
-
-The pairing is **asymmetric**: every Callgrind scenario must have an analogous Criterion
-scenario (so we have both wall-clock and instruction-count signals on the same operation). The
-reverse is not required — Criterion can legitimately stand alone for multithreaded contention,
-syscalls, allocation, or bulk throughput where instruction-count resolution adds no signal.
-
-See [docs/callgrind-benchmarks.md](docs/callgrind-benchmarks.md) for the full strategy,
-including: which operations warrant Callgrind coverage, scenario selection guidelines
-(default case, branching extremes, state/occupancy variants, size sensitivity, initialization
-vs steady state, sibling variants), the bench file template (including the file-scope lint
-suppression block required by Gungraun's macro expansions), Cargo.toml setup with the
-target-gated dependency, Gungraun syntax gotchas, the pairing convention, how to interpret
-results, and why design decisions motivated by a Callgrind delta should always be
-cross-validated against the Criterion counterpart (real CPUs can absorb or amplify a
-simulated cost by orders of magnitude).
-
-# `#[inline]` annotations
-
-`#[inline]` is a hint to the compiler to consider inlining a function. Throughout this
-section, "generic" includes any function that needs monomorphization — a function counts
-as generic if it takes type parameters of its own or if it is defined in a generic type
-or `impl`, even when the function itself takes no type parameters.
-
-Apply the first matching rule:
-
-1. **Apply `#[inline]` to non-generic functions exported from the crate that sit on a hot
-   path** based on your knowledge of how the API is used. Act on this knowledge alone,
-   accepting some documentation noise — without the annotation the compiler has no
-   opportunity to inline the function into downstream consumers, and we want to give it
-   that opportunity even if no current benchmark measurably benefits (a future workload
-   or customer case might).
-
-2. **Otherwise, only apply `#[inline]` if benchmarks or disassembly show a generic or
-   same-crate function on a hot path is not being inlined.** These are already inlining
-   candidates by default, so the annotation is an extra hint applied only when measurement
-   shows the default decision is wrong. Verify with `just package=<pkg> bench-cg` before
-   and after, comparing instruction counts; revert if the numbers do not move.
-
-3. **Do not use `#[inline(always)]` or `#[inline(never)]` without specific
-   justification.** These are stronger hints intended as advanced tuning knobs;
-   general-purpose code should not reach for them.
-
-# `#[inline]` annotations
-
-`#[inline]` is a hint to the compiler to consider inlining a function. Throughout this
-section, "generic" includes any function that needs monomorphization — a function counts
-as generic if it takes type parameters of its own or if it is defined in a generic type
-or `impl`, even when the function itself takes no type parameters.
-
-Apply the first matching rule:
-
-1. **Apply `#[inline]` to non-generic functions exported from the crate that sit on a hot
-   path** based on your knowledge of how the API is used. Act on this knowledge alone,
-   accepting some documentation noise — without the annotation the compiler has no
-   opportunity to inline the function into downstream consumers, and we want to give it
-   that opportunity even if no current benchmark measurably benefits (a future workload
-   or customer case might).
-
-2. **Otherwise, only apply `#[inline]` if benchmarks or disassembly show a generic or
-   same-crate function on a hot path is not being inlined.** These are already inlining
-   candidates by default, so the annotation is an extra hint applied only when measurement
-   shows the default decision is wrong. Verify with `just package=<pkg> bench-cg` before
-   and after, comparing instruction counts; revert if the numbers do not move.
-
-3. **Do not use `#[inline(always)]` or `#[inline(never)]` without specific
-   justification.** These are stronger hints intended as advanced tuning knobs;
-   general-purpose code should not reach for them.
-
-# YAML formatting
-
-Prefer not using quotes around strings, unless the string starts with special characters.
-
-Example of desired formatting:
-
-```yaml
-regular_field: just some text
-special_field: ':::starts with special characters, needs quoting'
-```
-
-# Use imports and do not reference types via absolute paths
-
-Types we reference should be imported via `use` statements. Unless there is a specific need
-to disambiguate between similarly named types, do not use absolute paths to types.
-
-This is good:
-
-```rust
-use std::time::Instant;
-
-fn foo(i: Instant) {}
-```
-
-This is bad:
-
-```rust
-fn foo(i: std::time::Instant) { }
-```
-
-Referencing types in `std` via absolute paths for no reason is especially sinful.
-
-It is fine to rely on the Rust prelude - no need to explicitly import types from the Rust prelude.
-
-`use` statements go at the top of the file or module, not inside functions.
-
-Do not `use super::` except in unit tests. Instead, use the full path `use crate::` style.
-
-Prefer importing types at the highest level they are visible. For example, if a type is defined
-in `src/session.rs` but also re-exported at the crate root, you should import it from the crate
-root.
-
-Wrong:
-
-```rust
-use crate::session::AllocationTrackingSession;
-```
-
-Correct:
-
-```rust
-use crate::AllocationTrackingSession;
-```
-
-Exceptions:
-
-* Refer to `std::alloc::System` by full path because the short form of this causes AI hallucinations.
-
-# Dependencies in cargo.toml
-
-Dependencies are sorted alphabetically by name of the package.
-
-# Default features
-
-Do not define default features in `Cargo.toml` unless there is a specific, justified reason
-to do so. Features should be opt-in, not opt-out.
-
-# Feature-gated documentation
-
-Use `#![cfg_attr(docsrs, feature(doc_cfg))]` at the crate root. The `doc_cfg` feature
-now includes automatic inference of feature gates from `#[cfg(feature = "...")]` attributes,
-so per-item `#[cfg_attr(docsrs, doc(cfg(...)))]` annotations are not needed.
-
-Do not use `doc_auto_cfg` — it has been removed and merged into `doc_cfg`.
-
-Ensure `Cargo.toml` contains:
-
-```toml
-[package.metadata.docs.rs]
-all-features = true
-```
-
-Intra-doc links from ungated documentation to feature-gated items (modules, types, trait
-`impl`s that only exist under a non-default feature) break when docs are built without that
-feature. Never drop the link or paste a raw URL to dodge the warning — use the
-feature-conditional `#[cfg_attr(..., doc = "...")]` doc-line pattern instead. See
-[docs/api-docs.md](docs/api-docs.md) for the full rationale, anti-patterns, and examples. The
-`docs-default-features` validation step exists to catch this class of error.
-
-# Do not use `\n` in println!() statements
-
-To empty an empty line to the terminal, use use `println!();` instead of
-embedding `\n` in another printed line.
-
-# Delays are forbidden in test code
-
-There should never be any delay/sleep on the successful path in tests - every test must be
-near-instantaneous and time-based synchronization is forbidden.
-
-To be clear, any form of "sleep" or "delay" that uses a real-time clock is forbidden in test code.
-If the type can be made to use a `tick::Clock` then a clock using a simulated time source may be
-used in test code (via `tick::ClockControl`).
-
-You may use events/signals for synchronization (e.g. `Barrier` or `events_once` events or message channels),
-as long as there are no delays or wait-loops in the test code itself.
-
-# Flaky test discoveries are recorded as issues
-
-If you stumble across a flaky test while working on something unrelated (for example a
-CI failure that is not caused by your change, or a doctest that violates the "no delays"
-rule above), file a GitHub issue so the discovery is not lost. Use `gh issue create` with
-a clear title and a body that includes:
-
-- the path and line range of the offending test,
-- the failure mode (which assertion / message / scenario triggers it),
-- a link to the run or PR where you noticed it,
-- a suggested fix if one is obvious.
-
-We do this for any flake — not just timing-related ones (e.g. order-sensitive,
-environment-sensitive, machine-load-sensitive). Recording these accidental discoveries
-lets us batch the cleanup later instead of losing the lead. Do not silently fix the
-flake as part of an unrelated change — the issue lets us track and prioritise it
-independently.
-
-# Tests must not hang
-
-When there is a danger that a test may hang (e.g. it contains a `.wait()`, `.recv()` or
-similar call), you must use `testing::with_watchdog(|| { ... })` to wrap the test body with
-a timeout. Do not implement custom watchdog timers — always use the existing watchdog from
-the `testing` package.
-
-Watchdogs are automatically disabled during mutation testing (`MUTATION_TESTING=1` environment
-variable). A mutation that causes a test to hang should be fixed by either redesigning the test
-to catch the mutation without blocking (e.g. adding `debug_assert!` checks) or by skipping the
-mutation if it is impractical to catch.
-
-# Threshold-based mutation protections are an anti-pattern
-
-When a mutation could make a test hang (for example, a mutation that turns an iterator's
-`next()` into an infinite source), it is tempting to add a `.take(N)` "safety bound" or a
-similar magic constant that caps consumption so the test cannot hang. Do not do this.
-Such thresholds are fragile in the same way time-based delays are fragile: they are easy
-to miss when tests evolve, and there is no principled way to verify that the chosen value
-is the "right" threshold for every future test scenario. The anti-pattern applies even
-when the threshold is numeric rather than time-based.
-
-Legitimate alternatives, in order of preference:
-
-1. **Meaningful-iteration assertion.** Rewrite the test so it asserts on the actual
-   produced values rather than just consuming them. Tools that naturally bound consumption
-   while verifying values are ideal — for example, `Iterator::eq(expected_array)` calls
-   `self.next()` at most `expected.len() + 1` times, returns `false` on the first value
-   mismatch, and detects both wrong values and wrong length. A correct implementation
-   matches the expected array; a mutation that yields wrong values or runs forever
-   short-circuits on the first comparison. The bound is implicit in the scenario data
-   (the expected length), not a hand-tuned safety margin.
-
-2. **Skip the mutation** with `#[cfg_attr(test, mutants::skip)]` and a comment explaining
-   why catching it is impractical (see the "Mutation testing coverage and skipping
-   mutations" section below for the criteria).
-
-# Named constants
-
-Avoid magic values in the code and use named constants instead. It does not matter how many
-times the magic value is present, even one instance is enough to warrant a named constant.
-
-This includes zero. `0` is just as much a magic value as `1` or `42` when it represents a
-domain concept (e.g. an initial state, a sentinel index, an empty bitfield, the absence of
-flags). Define a named constant (`IDLE`, `EMPTY`, `NONE`, `ROOT`, etc.) and use it instead.
-Numeric `0` only stays unadorned when it is literally arithmetic (e.g. `for i in 0..n`,
-`x.saturating_sub(0)`, `Vec::with_capacity(0)`).
-
-If constants are only used in one function, put them at the top of that function.
-
-The exception is example code - if a magic value is only used once in an example, it is
-fine to leave it inline.
-
-# Design documentation
-
-Document design elements, key decisions and architectural choices in inline comments in the
-files to which they apply. Use regular `//` comments, not API documentation comments.
-
-# Justify deviations from standard patterns
-
-When you reach for a hand-rolled construct or non-standard pattern in place of the obvious
-ecosystem default — for example, `hashbrown::HashTable` instead of `std::collections::HashMap`,
-a custom intrusive container instead of `Vec`/`VecDeque`, a bespoke synchronization primitive
-instead of `std::sync`, manual `Pin`/`UnsafeCell` plumbing instead of safe wrappers, an internal
-trait re-implementation instead of using a library trait — you must explain *why* in a comment
-next to the deviation.
-
-The justification should cover:
-
-* What standard pattern the reader would expect to see here and is not seeing.
-* Which alternatives were considered and ruled out, with the concrete reason each was rejected
-  (e.g. "unstable on Rust 1.95", "fails NLL borrow-check", "trait bound `X: Y` does not hold for
-  our key type", "allocates per call").
-* What the chosen variant buys us that the standard pattern does not.
-
-Without this, the next reader will reasonably assume the deviation is accidental or unnecessary
-and try to "fix" it back to the standard pattern. The comment is what prevents that wasted cycle.
-
-# Performance optimization principles
-
-When proposing or applying performance optimizations:
-
-* **Optimizations must be motivated by user-facing scenarios, not raw benchmark deltas.**
-  A Callgrind win on a synthetic micro-benchmark is not by itself sufficient justification. Ask:
-  *what real workload does this help, and is that workload a design target of this package?* If
-  the answer is "I would have to invent one", the change should usually not land.
-* **Prefer surgical interventions over architectural rewrites.** A 5-line `#[inline]`, a
-  single-field type change (`fn` → `Option<fn>`), or an `unreachable!()` → `unreachable_unchecked!()`
-  swap is the right shape of optimization PR when measurement points at a specific instruction
-  the compiler is emitting. Multi-file restructurings (changing in-memory representation,
-  monomorphizing on type traits, deferring initialization, swapping data structures) are an
-  order of magnitude harder to land and need correspondingly stronger motivation.
-* **Preserve defensive runtime checks even if they cost a handful of instructions.** A runtime
-  `unreachable!()`, `debug_assert!`, or `Option::expect` arm is often there to surface
-  thread-safety bugs, state-machine corruption, or other "this should never happen but if it
-  does we want to know" conditions. Do not remove these to save a `cmpq` — if you have a
-  measured need to remove the check, prefer the surgical alternative (`unreachable_unchecked!`,
-  `debug_assert!` instead of `assert!`, etc.) that keeps the contract documented.
-* **Stay idiomatic Rust.** Manually controlling memory representation (`repr(C)` for layout
-  stability, `alloc_zeroed` on hand-crafted layouts, explicit discriminant encoding) leans
-  toward "coding Rust as if it were C" and is rarely worth the resulting reader confusion
-  and soundness review burden. Trust the compiler's layout decisions unless there is a
-  concrete cross-language interop or ABI requirement that forces your hand.
-* **First-insert and teardown costs are usually not worth optimizing.** Most data structures
-  in this workspace target long-lived, steady-state workloads. Optimizations whose entire
-  value is in the construction or destruction path (first allocation, bulk drop, etc.)
-  rarely pay for the complexity they introduce.
-
-When filing a performance issue, state explicitly which of these criteria the proposal meets.
-If you have to invent a scenario to motivate it, the issue should probably not be filed.
-
-Some packages have package-scoped optimization guidance that refines these principles for
-their domain (e.g. `packages/events_once/AGENTS.md` codifies the relative priority of pooled,
-embedded and boxed events, and the expectation that `LocalEvent` beats `Event`). Always check
-for a package-local `AGENTS.md` when planning optimization work in a specific crate.
-
-# Hide async entrypoint in examples
-
-In inline code examples that use `.await`, do not render the async
-entrypoint/wrapper in generated API documentation.
-
-Example:
-
-```rust
-use events::once::Event;
-# use futures::executor::block_on;
-
-# block_on(async {
-let event = get_event();
-let message = event.await;
-
-assert_eq!(message, "Hello, World!");
-# });
-```
-
-# Re-export defaults to wildcard
-
-We prefer to re-export public types from private modules
-using a wildcard import. There is no need to name the types separately.
-
-Good:
-
-```rust
-pub use events::*;
-```
-
-Bad:
-
-```rust
-pub use events::{Event, LocalEvent, EventPool, LocalEventPool};
-```
-
-# Prefer pub(crate) over pub(other)
-
-We do not use `pub(super)` and other fine-grained visibility modifiers. A type is either private
-to a module, public, or public within the whole crate.
-
-# Checked arithmetic
-
-Unless there is a specific reason to use saturating/wrapping arithmetic, use checked arithmetic
-(`.checked_add()` and similar) and handle the error case. Do not use regular unchecked arithmetic
-(`+`, `-`, `*`, `/`, `%`) as it can overflow and panic.
-
-It is fine to `.expect()` success if there is some reason to believe overflow can never happen,
-e.g. because it is guarded by an assertion or because it would require some data structure to
-exceed the size of virtual memory. If very confident that an overflow can never occur, it is
-fine to use wrapping arithmetic via explicit `.wrapping_add()` methods.
-
-This only applies to non-test code - in tests and benchmarks, it is fine to use whatever arithmetic
-is most convenient.
-
-# Examples show good practices
-
-Examples are production code. Use proper patterns and practices - examples are not tests, where
-looser rules can be allowed.
-
-# Inline examples separate scenarios into separate code blocks
-
-If you create inline (doctest) examples that showcase multiple scenarios/variations, separate each
-variant into its own code block with a short individual description instead of showing examples of
-multiple scenarios in one code block.
-
-# Stand-alone examples separate scenarios into functions
-
-If you create stand-alone example files that showcase multiple scenarios/variations, separate each
-variant into its own function instead of having everything in a giant `main()` function.
-
-# Replacing text in code files
-
-Prefer applying diffs over generating regex-replace commands for the terminal.
-
-# Avoid the `pin!` macro in tests and examples
-
-This macro is special-purpose and not intended for general use. Instead, use
-`Box::pin(value)` to pin a value in examples.
-
-If there is some reason `Box::pin(value)` would not work, you can use `std::pin::pin!(value)`
-as a last resort but leave a comment to justify why this is the case.
-
-Benchmarks are an exception: on the measured path, use `std::pin::pin!` to avoid allocator
-overhead distorting the measurement. See the "Benchmark design" section for details.
-
-# Multiple statements per command
-
-You can execute multiple statements per command in the terminal, separated by semicolons. Do not
-waste time executing one command at a time when you can execute multiple commands in one go.
-
-```powershell
-mv src/old.rs src/new.rs; cargo fmt; cargo clippy --fix --allow-dirty --allow-staged; cargo test
-```
-
-# Examples for README.md files
-
-In each package with a `README.md` file, there should be a corresponding
-`examples/package_name_readme.rs` file that contains the Rust code present in the example.
-This is important to verify that the example actually works.
-
-If the two are out of sync, use the `package_name_readme.rs` as the authoritative source
-and update the `README.md` file to match it.
-
-It is fine to disable Clippy rules in the `package_name_readme.rs` file, as it
-is not production code and often needs to take shortcuts to be short and simple.
-
-# Memory allocation is the root of all evil
-
-Avoid algorithms that allocate memory at runtime when an allocation-free alternative is available.
-
-# Miri and platform compatibility
-
-Tests that talk to the real operating system generally fail to execute under Miri. This is fine and
-expected. However, a Miri test run must still succeed with a clean result! If there are tests that
-cannot be executed under Miri, they should be excluded via `#[cfg_attr(miri, ignore))]` (plus a comment
-justifying why it is correct to exclude them).
-
-Naturally, if it is possible to redesign a test so it does not rely on the operating system, that
-is even better. However, this is not always possible.
-
-Miri is too slow when running tests with large data sets (anything with 100s or 1000s of items).
-Exclude such tests from running under Miri.
-
-Doctests are not executed under Miri. There is no need to make doctests Miri-compatible.
-
-# Testing atomic operations and custom synchronization
-
-Any code that uses atomic operations, custom wakers, or other synchronization primitives must
-include tests that exercise real multithreaded scenarios (e.g. signaling completion from another
-thread via `events_once::Event`). These tests should be Miri-compatible (no OS-specific calls)
-and verified via `just package=<name> miri-harder`, which runs Miri with many random seeds
-(`-Zmiri-many-seeds=..64`). The combination of true multithreaded tests and miri-harder is
-highly effective at detecting data races, incorrect memory orderings, and other concurrency bugs
-that are nearly impossible to catch with single-threaded tests alone.
-
-# parking_lot is forbidden — use std::sync primitives
-
-Do not use `parking_lot::Mutex`, `parking_lot::RwLock`, or other primitives from the `parking_lot`
-crate. They rely on OS-specific syscalls that Miri cannot model, so introducing them breaks our
-Miri-based correctness validation. Use `std::sync::Mutex`, `std::sync::RwLock`, and other
-std-provided synchronization primitives instead — these are Miri-compatible.
-
-This rule applies even when `parking_lot` would offer a measurable performance benefit: Miri
-coverage is more valuable than the fast-path savings.
-
-# Mutation testing coverage and skipping mutations
-
-We expect all mutations to either be unviable or to be caught. Uncaught mutations and mutants that
-time out are anomalies that must be corrected.
-
-It is acceptable to skip mutations if they are impractical to test. Some justifiable reasons are:
-
-* Detecting the mutation requires real timing logic to be used. We intentionally do not permit any
-  timing-dependent code in our test cases. However, if circumstances allow, we can use the `tick`
-  crate with its simulated clock to create timing-dependent logic that can be tested without real
-  time passing.
-* Detecting the mutation requires detecting that a thing is not happening (e.g. detecting that an object
-  is never dropped or that some code never executes). This can sometimes be impossible without relying
-  on real-time timeouts (which would violate the above expectation).
-* The mutation is in a defensive branch for defense in depth and can never be reached due to higher layers
-  of the API preventing the situation from arising.
-* The mutation is in trivial forwarder code (e.g. a facade that chooses between a real and mock implementation).
-
-To skip a mutation, use the `#[cfg_attr(test, mutants::skip)]` style and leave a comment to justify
-why we are skipping it.
-
-Before skipping a mutation, consider how to catch it. Beyond simply improving test coverage, the
-following techniques may help:
-
-* Adding `debug_assert!()` statements to strategic places, verifying that logical invariants still hold.
-
-# Adjust patterns, fix entire classes of problems
-
-If you are asked to do a thing to one instance of a problem in a file, check for other instances.
-You must solve the entire class of problems at once, not expect each instance to be pointed
-out to you in instructions.
-
-# Documentation is about today, not about yesterday
-
-Both inline and API documentation must describe the current facts, not history from previous
-designs or iterations. Do not make comparisons with mechanisms that no longer exist in the API.
-
-# Test-only code requires cfg(test)
-
-If there are functions that are only used in tests, mark them (and their `use` statements)
-with `#[cfg(test)]`. Do not just suppress "dead code" warnings.
-
-# Feature-gated code should also be enabled by `test` build
-
-If code is feature-gated, it should always also be enabled in test builds:
-`#[cfg(any(test, feature = "foo"))]`
-
-When a feature gate controls a dependency (e.g. `dep:futures-core` behind `futures-stream`),
-ensure the dependency is also listed as a dev-dependency so it is available in test builds
-without requiring the feature to be explicitly activated.
-
-# There are many files in the workspace
-
-Avoid running large "process all files" commands directly in the workspace root. Use at least
-one level of subdirectory.
-
-# Dev-dependencies within workspace packages must be path dependencies
-
-Do not use `version = "1.2.3"` or `workspace = true` when adding a package from the same workspace as a dev-dependency. Within the same workspace, dev-dependencies must always be `path = "../foo"` style path-references.
-
-# Test presence of traits via static assertions
-
-Use `static_assertions::assert_impl_all!` and `static_assertions::assert_not_impl_any!` to check
-for the presence or absence of traits where the API documentation makes claims about them,
-for example in terms of being thread-mobile (Send + !Sync), thread-safe (Send + Sync)
-or single-threaded (neither).
-
-If generic type parameters are involved, these assertions should use some arbitrarily selected typical
-types that may be encountered in user code.
-
-# Unwind safety
-
-All public API types must implement `UnwindSafe` and `RefUnwindSafe` so they can be passed
-through `catch_unwind()` boundaries. Verify this with static assertions:
-
-```rust
-static_assertions::assert_impl_all!(MyType: UnwindSafe, RefUnwindSafe);
-```
-
-If a type cannot reasonably be made unwind-safe (e.g. it wraps a lock guard), pin the negative
-contract with `assert_not_impl_any!` and a comment explaining why.
-
-**Exception: types that guard user data** (e.g. mutex guards, lock types wrapping `UnsafeCell<T>`)
-should NOT implement `UnwindSafe` or `RefUnwindSafe`. User code can panic while holding the lock,
-leaving the guarded data in an inconsistent state. Let the compiler's auto-trait inference
-correctly mark these types as `!UnwindSafe`. Do not add manual `impl UnwindSafe` for such types.
-
-When a `!Sync` marker is needed, use `PhantomData<Cell<()>>`. The `Cell<()>` type is natively
-`Send + !Sync`, so no `unsafe impl Send` is required. Since `Cell` wraps `UnsafeCell` which is
-`!RefUnwindSafe`, a manual `impl RefUnwindSafe` is needed on the containing type. This is sound
-only if all other fields are also ref-unwind-safe — verify this before adding the impl. Do not
-use `PhantomData<*mut ()>` with `unsafe impl Send` — while this achieves the same `!Sync` effect,
-it triggers a rustc bug where async generator auto-trait inference cannot prove `Send` when the
-type parameter is a trait object (`dyn Trait`).
-
-More broadly, never put a `'static` bound on an `unsafe impl Send` or `unsafe impl Sync`. If
-the struct definition already requires `T: 'static`, the bound is redundant on the impl and
-repeating it triggers the same rustc bug (rust-lang/rust#110338). The higher-ranked region
-solver fails to prove `'static` when the type parameter is a trait object. Since the struct
-bound already enforces `'static` at construction time, omitting it from the impl is safe.
-
-When auto-derivation fails due to interior mutability types like `UnsafeCell`, `RefCell`, or
-`NonNull<UnsafeCell<...>>`, add manual `impl UnwindSafe`/`impl RefUnwindSafe` with a comment
-justifying why the type's invariants prevent observing inconsistent state during unwind.
-
-Error types generated by `#[ohno::error]` contain an `OhnoCore` field with
-`Arc<dyn Error + Send + Sync>`, which is `!UnwindSafe` because `Arc<T>` requires
-`T: RefUnwindSafe` and trait objects are `!RefUnwindSafe`. As long as the error type does not
-expose any mutation methods, add `impl UnwindSafe` and `impl RefUnwindSafe` for it. If a
-mutation method is later added, the manual impl must be re-evaluated.
-
-# Macros may need public-private visibility
-
-For purpose of accessing members of types or modules from published macros, it is permissible to
-make logically private items public. This must be accompanied by two adjustments:
-
-* The item must be marked with `#[doc(hidden)]` to prevent it from being included in the
-  public API documentation. This is our signal that it is not an officially supported public API.
-* The path to the item must include the keyword "private". The preferred forms are:
-  - For types, use a `private` module, e.g. `foo::private::Bar`.
-  - For methods, use a `__private_` prefix, e.g. `Bar::__private_reset_counters()`.
-
-# `_impl` crate split for benches and external tests
-
-When a crate has benchmarks or external tests (other workspace crates) that need to
-reach internal types, constructors, or invariants, the preferred pattern is to split
-the crate into a thin public shell (`foo`) plus an implementation crate (`foo_impl`)
-that hosts everything. The shell re-exports a narrow, explicit list of items; the
-impl crate uses plain `pub` for anything benches/tests need to reach. This replaces
-the public-feature anti-pattern of leaking private surface into a crate's documented
-API just so in-workspace consumers can reach it.
-
-Cargo features on `foo_impl` follow a strict naming rule: features named without a
-`private-` prefix (e.g. `test-util`, `tokio`, `metrics`) are part of the public API
-surface and are forwarded 1:1 from `foo` (e.g. `tokio = ["foo_impl/tokio"]`).
-Features named with the `private-` prefix (e.g. `private-test-util`) are
-internal-only, are never forwarded by `foo`, and are activated only by
-in-workspace dev-dependencies. The two kinds may coexist on the same impl crate.
-
-The canonical example is `packages/nm` (shell) + `packages/nm_impl` (implementation),
-with `packages/nm_otel` + `packages/nm_otel_impl` as a second worked example. For full
-details — when to apply the split, the `private-test-util` Cargo feature for internal
-API surface, the doctest-cycle dev-dependency, lockstep versioning, and the
-distinction from the in-crate `__private` module convention above — see
-[docs/impl-crate-split.md](docs/impl-crate-split.md).
-
-# UI tests
-
-UI tests all go in a workspace-scoped `ui_tests` package due to technical limitations. Follow
-inline documentation in this package to understand more.
-
-Package dependencies of UI tests must be excluded from `udeps` scanner logic via `Cargo.toml` in
-`ui_tests`. See existing examples in this file.
-
-# Do not check for specific panic or error messages
-
-Tests that use `#[should_panic]` or use `Display` output of error types must not check for specific
-panic or error messages - these messages are not an API contract and may change at any time.
-
-Exceptions where checking for a specific message is acceptable:
-
-* **Canary substrings**: checking that a panic message contains a stable keyword (e.g.
-  `#[should_panic(expected = "overflow")]`) when the keyword is inherent to the scenario and
-  unlikely to be removed by refactoring.
-* **Pass-through verification**: checking the exact panic message when the test verifies that a
-  panic is forwarded without tampering (e.g. through `catch_unwind` + `resume_unwind`).
-
-This only pertains to error messages - non-error outputs of `Display` should still be tested.
-
-# Type names
-
-Do not hardcode type names in string literals. Instead use `type_name::<Self>()` or similar.
-
-# PowerShell scripts in justfiles must consider exit codes
-
-Every PowerShell script in a .just file (i.e. every `[script]` block) must start with the following:
-
-```powershell
-$ErrorActionPreference = "Stop"
-$PSNativeCommandUseErrorActionPreference = $true
-```
-
-This ensures that commands that produce nonzero exit codes are correctly considered errors and fail the script.
-
-# Test coverage
-
-In some circumstances, we may need to mark parts of code as intentionally not covered by tests. For example:
-
-* Tests themselves - the tooling measures test code as well as real code. We only care about real code, so all
-  unit test modules and mock/fake test utilities (anything `#[cfg(test)]`) need to be excluded. Integration tests
-  in `tests/` are automatically excluded, though - no need to worry about those.
-* Defensive branches that can never be reached due to defense in depth layering.
-* Code that is only ever executed on a const context, as const context is not covered in coverage measurements.
-* When code has no API contract to test (e.g. `fmt::Debug` implementations which may contractually write anything).
-* Facade types whose only purpose is to redirect calls to either a real or mock implementation - not worth testing.
-
-To exclude code from coverage measurement, mark it with `#[cfg_attr(coverage_nightly, coverage(off))]`. This
-also requires `#![cfg_attr(coverage_nightly, feature(coverage_attribute))]` on the crate level.
-
-Note that `coverage(off)` applies to entire functions, not to individual branches. Defensive branches inside
-a function (e.g. `debug_assert!(false)` for structurally unreachable states) cannot be excluded from coverage
-measurement. Accept these as known gaps rather than trying to restructure the code to work around them.
-
-When excluding code for any other reason than "it is test code", leave a comment to explain why.
-
-# Keep names simple and unadorned
-
-Avoid unnecessary and repetitive prefixes and suffixes.
-
-For example:
-
-* Builder methods are just a noun. It is `FooBuilder::bar(value)` not `FooBuilder::with_bar(value)`.
-
-See [docs/naming.md](docs/naming.md) for benchmark-specific naming
-conventions (file basenames, Criterion group names, Callgrind pairing).
-
-# Memory allocation is the root of all evil
-
-Avoid algorithms that allocate memory at runtime when an allocation-free alternative is available.
-
-# Creating GitHub pull requests
-
-When creating PRs with `gh pr create`, do not pass the `--body` flag with an inline string because
-PowerShell mangles backticks and special characters. Instead, write the PR body to a temporary file
-and use `--body-file path/to/file.md`.
-
-# Addressing pull request review comments
-
-When addressing PR review comments, reply to each comment thread with the disposition (what you
-did to address it) and mark the thread as resolved after pushing the commit that addresses it.
-
-# Version bumps
-
-Do not bump crate versions in feature branches. Version bumps are handled by the release process.
+**Open this when**: creating a pull request; addressing review comments;
+tempted to edit a `Cargo.toml` version field on a feature branch.
