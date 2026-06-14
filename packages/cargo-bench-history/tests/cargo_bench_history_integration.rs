@@ -81,6 +81,57 @@ fn help_request_lists_subcommands() {
 }
 
 // ===========================================================================
+// Binary entry point: exit codes and output stream routing.
+//
+// These spawn the built binary to verify that `main` distinguishes a `--help`
+// early exit (success, stdout) from a parse error (failure, stderr), rather than
+// inferring success from the presence of the word "help" in the output.
+// ===========================================================================
+
+#[test]
+#[cfg_attr(miri, ignore)] // Spawns a real process, which Miri cannot do.
+fn binary_help_exits_success_on_stdout() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_cargo-bench-history"))
+        .arg("--help")
+        .output()
+        .expect("binary should run");
+
+    assert!(output.status.success(), "--help should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("run"), "help should reach stdout: {stdout}");
+    assert!(
+        output.stderr.is_empty(),
+        "help should not write to stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Spawns a real process, which Miri cannot do.
+fn binary_parse_error_exits_failure_on_stderr() {
+    // An unknown flag is a parse error whose usage text still mentions `--help`;
+    // the exit code must come from the parse status, not a substring match.
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_cargo-bench-history"))
+        .args(["run", "--frobnicate"])
+        .output()
+        .expect("binary should run");
+
+    assert!(
+        !output.status.success(),
+        "a parse error should exit non-zero"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "a parse error should not write to stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        !output.stderr.is_empty(),
+        "a parse error should write a diagnostic to stderr"
+    );
+}
+
+// ===========================================================================
 // Dispatch of not-yet-implemented subcommands.
 // ===========================================================================
 

@@ -20,7 +20,7 @@ jiff = { workspace = true, features = ["serde", "std"] }
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["std"] }
 tick = { workspace = true, features = ["tokio"] }
-tokio = { workspace = true, features = ["fs", "macros", "process", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt-multi-thread"] }
 toml = { workspace = true, features = ["parse", "serde"] }
 
 [dev-dependencies]

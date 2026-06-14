@@ -2,7 +2,9 @@
 //! filesystem. Object keys map to relative paths under a configured root.
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+
+use tokio::io::AsyncWriteExt;
 
 use super::{Storage, StorageError};
 
@@ -19,12 +21,15 @@ impl LocalStorage {
         Self { root: root.into() }
     }
 
-    /// Maps an object key to a path under the root, rejecting keys whose segments
-    /// could escape it (empty, `.`, or `..`).
+    /// Maps an object key to a path under the root, rejecting any segment that
+    /// is not a single ordinary path component. This excludes empty, `.`, and
+    /// `..` segments as well as platform-absolute segments (e.g. a Windows
+    /// `C:\\...` or UNC `\\\\server\\share` segment, which `PathBuf::push` would
+    /// otherwise treat as absolute and use to discard the configured root).
     fn key_path(&self, key: &str) -> Result<PathBuf, StorageError> {
         let mut path = self.root.clone();
         for segment in key.split('/') {
-            if segment.is_empty() || segment == "." || segment == ".." {
+            if !is_plain_segment(segment) {
                 return Err(StorageError::InvalidKey {
                     key: key.to_owned(),
                 });
@@ -35,6 +40,13 @@ impl LocalStorage {
     }
 }
 
+/// Returns `true` only if `segment` is a single ordinary path component, so it
+/// can never escape or rebind the storage root when pushed onto a path.
+fn is_plain_segment(segment: &str) -> bool {
+    let mut components = Path::new(segment).components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
+}
+
 impl Storage for LocalStorage {
     async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
         let path = self.key_path(key)?;
@@ -43,9 +55,23 @@ impl Storage for LocalStorage {
                 .await
                 .map_err(StorageError::Io)?;
         }
-        tokio::fs::write(&path, bytes)
+        // `create_new` makes the write fail rather than clobber an existing
+        // object, upholding the write-once storage contract.
+        let mut file = match tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
             .await
-            .map_err(StorageError::Io)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                return Err(StorageError::AlreadyExists {
+                    key: key.to_owned(),
+                });
+            }
+            Err(error) => return Err(StorageError::Io(error)),
+        };
+        file.write_all(bytes).await.map_err(StorageError::Io)
     }
 
     async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError> {
@@ -117,6 +143,45 @@ mod tests {
         let bytes = storage.get("v1/folo/run.json").await.unwrap();
 
         assert_eq!(bytes, b"payload");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn put_is_write_once() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path());
+
+        storage.put("v1/folo/run.json", b"first").await.unwrap();
+        let error = storage
+            .put("v1/folo/run.json", b"second")
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(error, StorageError::AlreadyExists { .. }),
+            "{error:?}"
+        );
+        // The original object is left untouched.
+        assert_eq!(storage.get("v1/folo/run.json").await.unwrap(), b"first");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn put_rejects_windows_absolute_segment() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path());
+
+        // A drive-absolute segment would otherwise rebind the path away from root.
+        let error = storage
+            .put("v1/C:\\Windows\\System32\\evil", b"x")
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(error, StorageError::InvalidKey { .. }),
+            "{error:?}"
+        );
     }
 
     #[tokio::test]

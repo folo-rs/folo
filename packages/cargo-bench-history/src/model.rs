@@ -75,16 +75,19 @@ impl ResultRecord {
 ///
 /// Two runs contribute to the same series if and only if their `BenchmarkId`
 /// values are equal, so the components must be reproducible across runs. For
-/// Callgrind this is the Gungraun `module_path` (optionally with an `id`); for
-/// Criterion it is the `group_id` / `function_id` / `value` triple.
+/// Callgrind these are the Gungraun `module_path`, `function_name`, and optional
+/// `id`; for Criterion they are the `group_id`, `function_id`, and `value_str`.
 #[non_exhaustive]
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct BenchmarkId {
-    /// Primary grouping component (Gungraun `module_path` or Criterion `group_id`).
+    /// Primary grouping component (Callgrind Gungraun `module_path`; Criterion
+    /// `group_id`).
     pub group: String,
-    /// Optional finer-grained component (Criterion `function_id`, Gungraun `id`).
+    /// Finer-grained component (Callgrind Gungraun `function_name`; Criterion
+    /// `function_id`).
     pub case: Option<String>,
-    /// Optional parameter/value component (Criterion `value_str`).
+    /// Optional parameter/value component (Callgrind Gungraun `id`; Criterion
+    /// `value_str`).
     pub value: Option<String>,
 }
 

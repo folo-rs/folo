@@ -31,11 +31,17 @@ async fn main() -> ExitCode {
     let cli: Cli = match Cli::from_args(&[program_name], str_args.get(1..).unwrap_or(&[])) {
         Ok(cli) => cli,
         Err(early_exit) => {
-            println!("{}", early_exit.output);
-            return if early_exit.output.contains("help") {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::FAILURE
+            // `status` is `Ok` for a `--help`/usage request (print to stdout, exit
+            // success) and `Err` for a parse error (print to stderr, exit failure).
+            return match early_exit.status {
+                Ok(()) => {
+                    println!("{}", early_exit.output);
+                    ExitCode::SUCCESS
+                }
+                Err(()) => {
+                    eprintln!("{}", early_exit.output);
+                    ExitCode::FAILURE
+                }
             };
         }
     };

@@ -18,16 +18,21 @@ use std::io;
 pub trait Storage: fmt::Debug + Send + Sync {
     /// Writes `bytes` at `key`, creating any intermediate structure as needed.
     ///
+    /// Storage is write-once: an existing object is never overwritten.
+    ///
     /// # Errors
     ///
-    /// Returns [`StorageError::Io`] if the object cannot be written.
+    /// Returns [`StorageError::InvalidKey`] if `key` is malformed,
+    /// [`StorageError::AlreadyExists`] if an object is already stored at `key`,
+    /// or [`StorageError::Io`] if the object cannot be written.
     fn put(&self, key: &str, bytes: &[u8]) -> impl Future<Output = Result<(), StorageError>>;
 
     /// Reads the object stored at `key`.
     ///
     /// # Errors
     ///
-    /// Returns [`StorageError::NotFound`] if no object exists at `key`, or
+    /// Returns [`StorageError::InvalidKey`] if `key` is malformed,
+    /// [`StorageError::NotFound`] if no object exists at `key`, or
     /// [`StorageError::Io`] if it cannot be read.
     fn get(&self, key: &str) -> impl Future<Output = Result<Vec<u8>, StorageError>>;
 
@@ -49,9 +54,16 @@ pub enum StorageError {
         key: String,
     },
     /// The key was not a valid storage key (it contained an empty, `.`, or `..`
-    /// segment that could escape the storage root).
+    /// segment, or a platform-absolute segment, that could escape the storage
+    /// root).
     InvalidKey {
         /// The rejected key.
+        key: String,
+    },
+    /// An object already exists at the requested key. Storage is write-once, so
+    /// an existing object is never overwritten.
+    AlreadyExists {
+        /// The key that was already occupied.
         key: String,
     },
     /// An underlying I/O error occurred.
@@ -63,6 +75,7 @@ impl fmt::Display for StorageError {
         match self {
             Self::NotFound { key } => write!(f, "object not found: {key}"),
             Self::InvalidKey { key } => write!(f, "invalid storage key: {key}"),
+            Self::AlreadyExists { key } => write!(f, "object already exists: {key}"),
             Self::Io(error) => write!(f, "storage I/O error: {error}"),
         }
     }
@@ -71,7 +84,7 @@ impl fmt::Display for StorageError {
 impl Error for StorageError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::NotFound { .. } | Self::InvalidKey { .. } => None,
+            Self::NotFound { .. } | Self::InvalidKey { .. } | Self::AlreadyExists { .. } => None,
             Self::Io(error) => Some(error),
         }
     }
@@ -117,6 +130,15 @@ mod tests {
     }
 
     #[test]
+    fn already_exists_display_and_no_source() {
+        let error = StorageError::AlreadyExists {
+            key: "v1/dup".to_owned(),
+        };
+        assert!(error.to_string().contains("v1/dup"), "{error}");
+        assert!(error.source().is_none());
+    }
+
+    #[test]
     fn memory_storage_put_get_keys_and_list() {
         let storage = MemoryStorage::new();
         block_on(storage.put("v1/a/1.json", b"1")).unwrap();
@@ -146,11 +168,16 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "write-once")]
     fn memory_storage_rejects_duplicate_key() {
         let storage = MemoryStorage::new();
         block_on(storage.put("dup", b"1")).unwrap();
-        block_on(storage.put("dup", b"2")).unwrap();
+        let error = block_on(storage.put("dup", b"2")).unwrap_err();
+        assert!(
+            matches!(error, StorageError::AlreadyExists { .. }),
+            "{error:?}"
+        );
+        // The original value is preserved (write-once).
+        assert_eq!(block_on(storage.get("dup")).unwrap(), b"1");
     }
 }
 
@@ -181,10 +208,11 @@ impl MemoryStorage {
 impl Storage for MemoryStorage {
     async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
         let mut objects = self.objects.lock().unwrap();
-        assert!(
-            !objects.contains_key(key),
-            "MemoryStorage is write-once; key already exists: {key}"
-        );
+        if objects.contains_key(key) {
+            return Err(StorageError::AlreadyExists {
+                key: key.to_owned(),
+            });
+        }
         objects.insert(key.to_owned(), bytes.to_vec());
         Ok(())
     }
