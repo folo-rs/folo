@@ -188,6 +188,18 @@ mod tests {
     }
 
     #[test]
+    fn install_captures_config_path() {
+        let command = parse(&["install", "--config", "custom/bench.toml"]);
+        let Command::Install(options) = command else {
+            panic!("expected install command");
+        };
+        assert_eq!(
+            options.config_path,
+            Some(PathBuf::from("custom/bench.toml"))
+        );
+    }
+
+    #[test]
     fn analyze_collects_switches() {
         let command = parse(&["analyze", "--fail-on-regression"]);
         let Command::Analyze(options) = command else {

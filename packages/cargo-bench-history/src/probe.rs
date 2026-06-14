@@ -34,6 +34,7 @@ pub(crate) trait EnvironmentProbe {
 pub(crate) struct SystemProbe;
 
 impl EnvironmentProbe for SystemProbe {
+    #[cfg_attr(test, mutants::skip)] // Shells out to `git`; the parsing it delegates to is tested.
     async fn git(&self) -> io::Result<GitSnapshot> {
         let commit = git_field(&["rev-parse", "HEAD"]).await;
         let short = git_field(&["rev-parse", "--short", "HEAD"]).await;
@@ -46,6 +47,7 @@ impl EnvironmentProbe for SystemProbe {
         ))
     }
 
+    #[cfg_attr(test, mutants::skip)] // Shells out to `rustc`; the parsing it delegates to is tested.
     async fn toolchain(&self) -> io::Result<RustcInfo> {
         let output = capture("rustc", &["-vV"]).await.ok();
         let rustc_output = output
@@ -67,6 +69,7 @@ fn resolve_toolchain(rustc_output: Option<&str>) -> RustcInfo {
 }
 
 /// Captures one git field, yielding the empty string on any failure.
+#[cfg_attr(test, mutants::skip)] // Shells out to `git`; environment IO with no pure logic to assert.
 async fn git_field(args: &[&str]) -> String {
     match capture("git", args).await {
         Ok(output) if output.status.success() => output.stdout,

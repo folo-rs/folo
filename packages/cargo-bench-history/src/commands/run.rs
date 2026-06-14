@@ -471,6 +471,41 @@ mod tests {
         assert_ne!(first, second);
     }
 
+    #[test]
+    fn timestamp_from_preserves_the_instant() {
+        let timestamp = timestamp_from(frozen_time());
+        let expected = Timestamp::from_second(i64::try_from(FROZEN_UNIX).unwrap()).unwrap();
+        assert_eq!(timestamp, expected);
+    }
+
+    #[test]
+    fn build_message_brackets_labels_only_when_present() {
+        let labels = vec!["callgrind: 1 stored".to_owned()];
+        let with_labels = build_message(false, 1, 1, &labels, &[]);
+        assert!(
+            with_labels.contains("[callgrind: 1 stored]"),
+            "{with_labels}"
+        );
+
+        let without_labels = build_message(false, 0, 0, &[], &[]);
+        assert!(!without_labels.contains('['), "{without_labels}");
+    }
+
+    #[test]
+    fn build_message_reports_skipped_engines() {
+        let stored = build_message(false, 0, 0, &[], &["criterion".to_owned()]);
+        assert!(
+            stored.contains("Skipped unsupported engine(s): criterion."),
+            "{stored}"
+        );
+
+        let no_store = build_message(true, 0, 3, &[], &[]);
+        assert!(
+            no_store.contains("nothing stored (--no-store)"),
+            "{no_store}"
+        );
+    }
+
     #[derive(Clone)]
     struct FakeRunner {
         status: EngineStatus,

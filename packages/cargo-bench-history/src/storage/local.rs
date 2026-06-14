@@ -169,6 +169,20 @@ mod tests {
         assert_eq!(storage.get("v1/folo/run.json").await.unwrap(), b"first");
     }
 
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn put_maps_a_non_existence_open_error_to_io() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path());
+
+        // An interior NUL passes the plain-segment check but the OS rejects it at
+        // open time with `InvalidInput` (not `AlreadyExists`), so it must surface
+        // through the generic IO arm rather than the write-once arm.
+        let error = storage.put("bad\0name", b"x").await.unwrap_err();
+
+        assert!(matches!(error, StorageError::Io(_)), "{error:?}");
+    }
+
     #[cfg(windows)]
     #[tokio::test]
     #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
