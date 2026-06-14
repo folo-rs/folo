@@ -251,6 +251,17 @@ mod tests {
     }
 
     #[test]
+    fn command_error_is_displayed_and_has_no_source() {
+        let error = RunError::Command {
+            engine: "callgrind".to_owned(),
+            message: "command is empty".to_owned(),
+        };
+        assert!(error.to_string().contains("invalid command"), "{error}");
+        assert!(error.to_string().contains("command is empty"), "{error}");
+        assert!(error.source().is_none());
+    }
+
+    #[test]
     fn io_error_is_displayed_and_sourced() {
         let error = RunError::from(io::Error::other("broken pipe"));
         assert!(error.to_string().contains("I/O error"));

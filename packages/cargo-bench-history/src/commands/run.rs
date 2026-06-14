@@ -839,6 +839,32 @@ mod tests {
     }
 
     #[test]
+    fn malformed_engine_command_is_a_command_error() {
+        // The TOML value `prog "unterminated` has an unbalanced quote, so
+        // tokenization fails before the engine is ever spawned.
+        let config = config_with("[engines.callgrind]\ncommand = \"prog \\\"unterminated\"\n");
+        let storage = MemoryStorage::new();
+        let error = drive(
+            &RunOptions::default(),
+            &config,
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            &FakeOutput::default(),
+            &storage,
+        )
+        .unwrap_err();
+
+        match error {
+            RunError::Command { engine, message } => {
+                assert_eq!(engine, "callgrind");
+                assert!(message.contains("valid shell"), "{message}");
+            }
+            other => panic!("expected command error, got {other:?}"),
+        }
+        assert!(storage.keys().is_empty());
+    }
+
+    #[test]
     fn resolve_engines_errors_when_none_configured() {
         let error = resolve_engines(&config_with(""), None).unwrap_err();
         match error {
