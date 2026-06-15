@@ -128,4 +128,17 @@ mod tests {
         assert!(existed.contains("already exists"), "{existed}");
         assert!(existed.contains("bench_history.toml"), "{existed}");
     }
+
+    #[test]
+    fn install_message_has_no_incidental_indentation() {
+        // The `\n\` string-continuation escape strips the source indentation of
+        // each continued line, so no rendered line should start with whitespace.
+        let message = install_message(&PathBuf::from(".cargo/bench_history.toml"), true);
+        for line in message.lines() {
+            assert!(
+                !line.starts_with([' ', '\t']),
+                "a rendered line is indented: {line:?}"
+            );
+        }
+    }
 }

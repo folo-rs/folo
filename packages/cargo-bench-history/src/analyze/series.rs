@@ -65,11 +65,15 @@ pub(crate) struct SeriesFilter<'a> {
 
 /// Parses the comparable [`Location`] from a storage object key.
 ///
-/// Keys have the form `v1/{project}/{system}/{triple}/{machine}/{file}`; any key
-/// that does not have at least those six non-empty segments is ignored (returns
+/// Keys have the form `v1/{project}/{system}/{triple}/{machine}/{file}` — exactly
+/// six non-empty segments. Any key that does not match that shape exactly (wrong
+/// version, too few or too many segments, or an empty segment) is ignored (returns
 /// `None`) rather than misattributed to a series.
 pub(crate) fn location_from_key(key: &str) -> Option<Location> {
     let parts: Vec<&str> = key.split('/').collect();
+    if parts.len() != 6 {
+        return None;
+    }
     if *parts.first()? != "v1" {
         return None;
     }
@@ -215,6 +219,9 @@ mod tests {
         assert!(location_from_key("v1/folo//t/m/f.json").is_none());
         assert!(location_from_key("v1/folo/callgrind//m/f.json").is_none());
         assert!(location_from_key("v1/folo/callgrind/t//f.json").is_none());
+        // A deeper key (more than six segments) is rejected rather than treating
+        // an interior directory as the file segment and misattributing the run.
+        assert!(location_from_key("v1/folo/callgrind/t/m/sub/f.json").is_none());
     }
 
     #[test]
