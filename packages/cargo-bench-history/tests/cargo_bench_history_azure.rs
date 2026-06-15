@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use argh::FromArgs;
+use azure_core::http::Url;
 use cargo_bench_history::{Cli, Command, RunError, RunOutcome, run_with_target_root};
 use serial_test::serial;
 
@@ -49,17 +50,12 @@ fn azurite_endpoint() -> String {
 /// degrade into skipping every network test.
 fn azurite_available() -> bool {
     let endpoint = azurite_endpoint();
-    let reachable = endpoint
-        .strip_prefix("http://")
-        .or_else(|| endpoint.strip_prefix("https://"))
-        .and_then(|rest| rest.split('/').next())
-        .and_then(|authority| {
-            let host_port = if authority.contains(':') {
-                authority.to_owned()
-            } else {
-                format!("{authority}:10000")
-            };
-            host_port.to_socket_addrs().ok()
+    let reachable = Url::parse(&endpoint)
+        .ok()
+        .and_then(|url| {
+            let host = url.host_str().unwrap_or("127.0.0.1").to_owned();
+            let port = url.port().unwrap_or(10000);
+            (host.as_str(), port).to_socket_addrs().ok()
         })
         .into_iter()
         .flatten()
