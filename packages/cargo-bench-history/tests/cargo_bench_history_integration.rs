@@ -440,6 +440,175 @@ async fn analyze_rejects_unknown_format() {
     assert!(message.contains("unknown report format"), "{message}");
 }
 
+/// `--metric` narrows analysis to one metric: a regression in another metric is
+/// invisible when the filter selects a flat one.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_metric_filter_excludes_other_metrics() {
+    let workspace = Workspace::new(&storage_only_config());
+    // `Ir` stays flat while `EstimatedCycles` climbs into a regression.
+    for (date, commit, cycles) in [
+        ("2024-01-01", "c1", 100.0),
+        ("2024-01-02", "c2", 100.0),
+        ("2024-01-03", "c3", 100.0),
+        ("2024-01-04", "c4", 130.0),
+    ] {
+        workspace.seed_metrics(
+            date,
+            commit,
+            vec![
+                Metric::new(
+                    "Ir".to_owned(),
+                    MetricKind::InstructionCount,
+                    50.0,
+                    Some("count".to_owned()),
+                ),
+                Metric::new(
+                    "EstimatedCycles".to_owned(),
+                    MetricKind::EstimatedCycles,
+                    cycles,
+                    Some("count".to_owned()),
+                ),
+            ],
+        );
+    }
+
+    // Unfiltered, the cycles climb flags as a regression.
+    let RunOutcome::Analyzed { regressions, .. } =
+        workspace.drive(&["analyze"]).await.expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(regressions, 1, "the cycles climb should flag unfiltered");
+
+    // Restricting to the flat `Ir` metric hides it.
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--metric", "Ir"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(regressions, 0, "the Ir series is flat: {report}");
+}
+
+/// Cache hit counts are higher-is-better, so a sustained drop is a regression
+/// end to end (guards the metric-polarity logic through the real pipeline).
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_falling_cache_hits_is_a_regression() {
+    let workspace = Workspace::new(&storage_only_config());
+    for (date, commit, hits) in [
+        ("2024-01-01", "c1", 1000.0),
+        ("2024-01-02", "c2", 1000.0),
+        ("2024-01-03", "c3", 1000.0),
+        ("2024-01-04", "c4", 700.0),
+    ] {
+        workspace.seed_metrics(
+            date,
+            commit,
+            vec![Metric::new(
+                "L1hits".to_owned(),
+                MetricKind::CacheEvents,
+                hits,
+                Some("count".to_owned()),
+            )],
+        );
+    }
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(regressions, 1, "fewer cache hits is a regression: {report}");
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(parsed["findings"][0]["direction"], "regression");
+    assert_eq!(parsed["findings"][0]["kind"], "cache_events");
+}
+
+/// Conversely, a rise in cache hits is an improvement, not a regression.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_rising_cache_hits_is_an_improvement() {
+    let workspace = Workspace::new(&storage_only_config());
+    for (date, commit, hits) in [
+        ("2024-01-01", "c1", 700.0),
+        ("2024-01-02", "c2", 700.0),
+        ("2024-01-03", "c3", 700.0),
+        ("2024-01-04", "c4", 1000.0),
+    ] {
+        workspace.seed_metrics(
+            date,
+            commit,
+            vec![Metric::new(
+                "LLhits".to_owned(),
+                MetricKind::CacheEvents,
+                hits,
+                Some("count".to_owned()),
+            )],
+        );
+    }
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(regressions, 0, "more cache hits is not a regression: {report}");
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(parsed["findings"][0]["direction"], "improvement");
+}
+
+/// A falling instruction count is reported as an improvement, not a regression.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_reports_improvement_without_regression() {
+    let workspace = Workspace::new(&storage_only_config());
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.seed_callgrind("2024-01-02", "c2", 100.0);
+    workspace.seed_callgrind("2024-01-03", "c3", 100.0);
+    workspace.seed_callgrind("2024-01-04", "c4", 70.0);
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(
+        regressions, 0,
+        "a drop in instructions is not a regression: {report}"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(parsed["findings"][0]["direction"], "improvement");
+}
+
 // ===========================================================================
 // Real-adapter `run` scenarios.
 //
@@ -844,6 +1013,18 @@ impl Workspace {
         self.seed(&key, &ir_result_set(effective.as_second(), commit, value));
     }
 
+    /// Seeds one Callgrind result set carrying `metrics` for benchmark
+    /// `nm::observe/pull` at the given `date` (`YYYY-MM-DD`, UTC midnight) and
+    /// abbreviated `commit`.
+    fn seed_metrics(&self, date: &str, commit: &str, metrics: Vec<Metric>) {
+        let effective: Timestamp = format!("{date}T00:00:00Z").parse().unwrap();
+        let key = format!(
+            "v1/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{}-{commit}-run.json",
+            effective.as_second()
+        );
+        self.seed(&key, &result_set_with(effective.as_second(), commit, metrics));
+    }
+
     /// Seeds a flat history followed by a clear upward step — a regression.
     fn seed_rising_callgrind_history(&self) {
         self.seed_callgrind("2024-01-01", "c1", 100.0);
@@ -893,9 +1074,9 @@ fn storage_only_config() -> String {
         .to_owned()
 }
 
-/// Builds a Callgrind result set with a single `Ir` metric at `value`, stamped
-/// with the given effective second and abbreviated `commit`.
-fn ir_result_set(effective: i64, commit: &str, value: f64) -> ResultSet {
+/// Builds a Callgrind result set for benchmark `nm::observe/pull` carrying the
+/// given `metrics`, stamped with the effective second and abbreviated `commit`.
+fn result_set_with(effective: i64, commit: &str, metrics: Vec<Metric>) -> ResultSet {
     let time = Timestamp::from_second(effective).expect("seconds within range");
     let mut git = GitInfo::default();
     git.commit = Some(format!("{commit}full"));
@@ -910,14 +1091,24 @@ fn ir_result_set(effective: i64, commit: &str, value: f64) -> ResultSet {
     );
     let record = ResultRecord::new(
         BenchmarkId::new("nm::observe".to_owned(), Some("pull".to_owned()), None),
+        metrics,
+    );
+    ResultSet::new(context, vec![record])
+}
+
+/// Builds a Callgrind result set with a single `Ir` metric at `value`, stamped
+/// with the given effective second and abbreviated `commit`.
+fn ir_result_set(effective: i64, commit: &str, value: f64) -> ResultSet {
+    result_set_with(
+        effective,
+        commit,
         vec![Metric::new(
             "Ir".to_owned(),
             MetricKind::InstructionCount,
             value,
             Some("count".to_owned()),
         )],
-    );
-    ResultSet::new(context, vec![record])
+    )
 }
 
 /// A single-engine Callgrind configuration whose command is `command`.
