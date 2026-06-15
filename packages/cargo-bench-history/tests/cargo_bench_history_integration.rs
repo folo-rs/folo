@@ -475,8 +475,10 @@ async fn analyze_metric_filter_excludes_other_metrics() {
     }
 
     // Unfiltered, the cycles climb flags as a regression.
-    let RunOutcome::Analyzed { regressions, .. } =
-        workspace.drive(&["analyze"]).await.expect("analysis succeeds")
+    let RunOutcome::Analyzed { regressions, .. } = workspace
+        .drive(&["analyze"])
+        .await
+        .expect("analysis succeeds")
     else {
         panic!("expected an analyzed outcome");
     };
@@ -574,7 +576,10 @@ async fn analyze_rising_cache_hits_is_an_improvement() {
     else {
         panic!("expected an analyzed outcome");
     };
-    assert_eq!(regressions, 0, "more cache hits is not a regression: {report}");
+    assert_eq!(
+        regressions, 0,
+        "more cache hits is not a regression: {report}"
+    );
     let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
     assert_eq!(parsed["findings"][0]["direction"], "improvement");
 }
@@ -1022,7 +1027,10 @@ impl Workspace {
             "v1/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{}-{commit}-run.json",
             effective.as_second()
         );
-        self.seed(&key, &result_set_with(effective.as_second(), commit, metrics));
+        self.seed(
+            &key,
+            &result_set_with(effective.as_second(), commit, metrics),
+        );
     }
 
     /// Seeds a flat history followed by a clear upward step — a regression.
