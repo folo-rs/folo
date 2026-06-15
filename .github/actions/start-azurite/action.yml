@@ -5,16 +5,26 @@ description: >-
   the emulator runs directly on the host (not as a service container, which
   cannot reliably bind Azurite to a reachable address).
 
+inputs:
+  azurite-version:
+    description: >-
+      Azurite npm version to install. Pinned by default so the `test-azure` job
+      is reproducible and unaffected by upstream releases.
+    required: false
+    default: "3.35.0"
+
 runs:
   using: composite
   steps:
     - name: Install and start Azurite
       shell: bash
+      env:
+        AZURITE_VERSION: ${{ inputs.azurite-version }}
       run: |
         set -euo pipefail
 
-        echo "Installing Azurite..."
-        npm install -g azurite
+        echo "Installing Azurite ${AZURITE_VERSION}..."
+        npm install -g "azurite@${AZURITE_VERSION}"
 
         echo "Starting Azurite blob service on 127.0.0.1:10000..."
         nohup azurite-blob \
