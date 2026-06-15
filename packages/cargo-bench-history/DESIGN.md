@@ -265,12 +265,26 @@ no `async_trait` dependency, and `run`/`analyze` stay backend-agnostic by holdin
 * **AzureBlobStorage** (iteration 4): `azure_storage_blob` (+ `azure_identity`),
   behind an **optional `azure` Cargo feature** so default builds and Miri stay
   light and dependency-free; the feature compiles on Windows, Linux **and
-  macOS**. Auth: **`DefaultAzureCredential` is the primary path** — one mechanism
-  covers CI managed identity / workload-identity federation, local `az login`,
-  and env-based service principals, with no secrets in config. Connection string
-  / SAS remain optional alternatives behind a config discriminator. Tested in
-  regular CI against the **Azurite emulator** (not real cloud, not `#[ignore]`) —
-  network access means `#[cfg_attr(miri, ignore)]` only.
+  macOS**. Auth is resolved once in `from_config`, in priority order:
+  1. **self-signed account SAS** (`account_key`) — the signing math lives in
+     `storage::sas` (HMAC-SHA256 via the pure-Rust RustCrypto `hmac`/`sha2`
+     crates) and is the path used for **Azurite** in CI and for SAS-based
+     production access. The token is baked into the endpoint URL's query, so the
+     client passes **no credential** and Azurite's plain-HTTP endpoint is
+     accepted.
+  2. **verbatim `sas_token`** — a pre-signed SAS supplied in config, used as-is.
+  3. **Microsoft Entra ID** (`DeveloperToolsCredential`) — the secret-free
+     production default (CI managed identity / workload-identity federation,
+     local `az login`, env service principals); requires an **HTTPS** endpoint.
+
+  The shipped azure-sdk-for-rust v1.0.0 removed connection-string parsing,
+  `StorageSharedKeyCredential`, and `DefaultAzureCredential`, which is why the
+  account-SAS path is self-signed rather than delegated to the SDK. Tested in
+  regular CI against the **Azurite emulator** (not real cloud, not `#[ignore]`);
+  the network tests **self-skip** when no emulator is reachable and are
+  `#[cfg_attr(miri, ignore)]`. Account-key construction reads the wall clock for
+  the SAS expiry, so those pure tests are Miri-ignored too — the signing math is
+  still covered under Miri by `storage::sas`'s fixed-expiry golden vector.
 * An in-memory `Storage` fake (in `#[cfg(test)]`) backs the Miri-safe
   orchestration tests; it mirrors the same key/prefix semantics as `LocalStorage`.
 
@@ -519,9 +533,10 @@ persists) and adds macOS; mapped to your original numbering:
    regression over local Callgrind history; text report (+ `--fail-on`).
 3. **`install`** (your 4) — generate `.cargo/bench_history.toml`, point the user
    to it.
-4. **Azure blob** (your 5) — `azure` feature, `AzureBlobStorage`,
-   `DefaultAzureCredential`; `run`/`analyze` become storage-agnostic; verify the
-   feature builds and runs on Windows, Linux and macOS.
+4. **Azure blob** (your 5) — `azure` feature, `AzureBlobStorage`, self-signed
+   account SAS (Azurite/CI + SAS production) / verbatim SAS / Entra ID;
+   `run`/`analyze` become storage-agnostic; verify the feature builds and runs on
+   Windows, Linux and macOS.
 5. **Criterion** (your 6) — adapter (estimates.json), machine-key computation +
    partition (Windows/Linux/macOS hardware PAL), noise-aware thresholds; add
    change-point/drift findings.
@@ -544,9 +559,12 @@ Each iteration ships with tests and docs and leaves the tool runnable.
    step, not a fork).
 5. **`analyze` v1 finding** — *Decided:* rolling-baseline regression first;
    change-point and drift plug in afterward.
-6. **Azure auth** — *Decided:* `DefaultAzureCredential` is the primary path
-   (managed identity / workload-identity / `az login` / env service principal,
-   no secrets in config); connection string and SAS are optional alternatives.
+6. **Azure auth** — *Decided:* resolved in priority order — self-signed account
+   SAS (`account_key`, the Azurite/CI and SAS-production path, HMAC-signed by
+   `storage::sas`), verbatim `sas_token`, then Microsoft Entra ID
+   (`DeveloperToolsCredential`, the secret-free production default). The account
+   SAS is self-signed because azure-sdk-for-rust v1.0.0 dropped connection
+   strings, `StorageSharedKeyCredential`, and `DefaultAzureCredential` (§7).
 7. **Date/time dependency** — *Decided:* `jiff` for timestamps and `--since`
    parsing.
 8. **`run` invocation** — *Decided:* per-engine user-provided commands declared
@@ -591,7 +609,15 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     `/u` up-flag). Inert outside WSL, correct across the boundary (§8.1).
 17. **Cloud-storage testing** — *Decided:* Azure backend is exercised in regular CI
     against the **Azurite emulator** (not real cloud, not `#[ignore]`; only
-    `#[cfg_attr(miri, ignore)]` for the network edge).
+    `#[cfg_attr(miri, ignore)]` for the network edge). The emulator runs directly
+    on the runner host (started by the `start-azurite` composite action) in a
+    Linux-only, package-gated `test-azure` job rather than as a service container,
+    which cannot reliably bind Azurite to a reachable address. The network tests
+    **self-skip** when no emulator is reachable so the multi-platform
+    `--all-features` jobs stay green; `BENCH_HISTORY_REQUIRE_AZURITE=1` (set only
+    in `test-azure`) turns an unreachable emulator into a hard failure so it can
+    never silently skip. That job also collects coverage so the `azure.rs` network
+    paths reach Codecov.
 18. **Integration testing** — *Decided:* integration tests invoke the **library
     entry** (`Cli::from_args(argv).into_command()` → `run()`), matching the
     workspace pattern (no `assert_cmd`); a table-driven CLI-flag matrix runs over

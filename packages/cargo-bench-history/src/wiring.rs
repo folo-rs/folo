@@ -4,8 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::config::{Config, StorageConfig};
-use crate::storage::LocalStorage;
+use crate::config::Config;
 
 /// The default configuration path, relative to the working directory.
 pub(crate) fn default_config_path() -> PathBuf {
@@ -22,13 +21,6 @@ pub(crate) fn resolve_project_id(config: &Config, workspace_dir: &Path) -> Strin
         .and_then(|name| name.to_str())
         .unwrap_or("project")
         .to_owned()
-}
-
-/// Builds the configured storage backend.
-pub(crate) fn build_local_storage(config: &Config) -> LocalStorage {
-    match &config.storage {
-        StorageConfig::Local { path } => LocalStorage::new(path.clone()),
-    }
 }
 
 #[cfg(test)]
@@ -71,15 +63,5 @@ mod tests {
     fn resolve_project_id_falls_back_when_directory_name_is_unavailable() {
         let config = config_with("[engines.callgrind]\ncommand = \"x\"\n");
         assert_eq!(resolve_project_id(&config, Path::new("/")), "project");
-    }
-
-    #[test]
-    fn build_local_storage_uses_the_configured_path() {
-        let config = config_with("[engines.callgrind]\ncommand = \"x\"\n");
-        let storage = build_local_storage(&config);
-        assert!(
-            format!("{storage:?}").contains("data"),
-            "storage should be rooted at the configured path: {storage:?}"
-        );
     }
 }

@@ -68,6 +68,23 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
 - **hack** — `timeout-minutes: 90`
   - Tests all feature combinations with `cargo hack --feature-powerset`
 
+- **test-azure** — Linux-only, package-gated to `cargo-bench-history`
+  - Runs the `azure`-feature tests against a live Azurite blob emulator and also
+    collects coverage so the `azure.rs` network paths reach Codecov.
+  - The `azure` feature is off by default and its network paths **self-skip** when
+    no emulator is reachable, so the multi-platform `--all-features` jobs
+    (`test-more`, `coverage`) stay green without one. They run for real only in
+    this job: Azurite is provisioned on the runner host (via the `start-azurite`
+    composite action) and `BENCH_HISTORY_REQUIRE_AZURITE=1` turns an unreachable
+    emulator into a hard failure so it can never silently skip every test.
+  - The multi-platform `coverage` job runs without an emulator and therefore
+    cannot cover `azure.rs`; this job uploads an `azure`-flagged lcov report that
+    Codecov merges with it (a line covered in any upload counts as covered).
+  - Linux-only because Azurite runs directly on the host: GitHub service
+    containers cannot reliably bind the emulator to a reachable address (the
+    default image binds `127.0.0.1` inside the container and the service syntax
+    cannot override the command), so the host-process approach is used instead.
+
 ### cache-warmup.yml
 
 A scheduled workflow that keeps GitHub Actions caches warm. GitHub evicts caches after
@@ -150,3 +167,9 @@ its args to `gungraun-runner`. Without `gungraun-runner` on `$PATH` the call fai
 `Failed to run benchmarks: No such file or directory`, which breaks `test-more` and
 `coverage`. The Callgrind bench binaries are compiled to no-op stubs on Windows and macOS via
 `#[cfg(not(target_os = "linux"))] fn main() {}`, so neither tool is required there.
+
+The `start-azurite` composite action (`.github/actions/start-azurite`) installs the Azurite
+blob emulator via `npm install -g azurite` and starts it on the runner host at
+`127.0.0.1:10000`, blocking until the port accepts connections. It is Linux-only (uses bash and
+`/dev/tcp`) and is used only by the `test-azure` job to back the `cargo-bench-history` `azure`
+feature tests. Node.js/npm are preinstalled on the GitHub-hosted Ubuntu runners.

@@ -1,0 +1,703 @@
+//! [`AzureBlobStorage`]: a [`Storage`] backed by an Azure Blob Storage container.
+//!
+//! Object keys map directly to blob names, so the key model is identical to
+//! [`LocalStorage`](super::local::LocalStorage): write-once objects and
+//! list-by-prefix, with no special-casing by callers. Hierarchical keys become
+//! real `/`-separated blob names (the blob URL is built segment by segment so the
+//! separators are never percent-encoded), which makes prefix listing line up with
+//! the partition layout.
+//!
+//! Authentication is resolved once at construction, in priority order: a
+//! self-signed account SAS (`account_key`), a verbatim SAS token (`sas_token`),
+//! or Microsoft Entra ID. SAS modes carry their token in the endpoint URL's query
+//! and pass no credential (so the emulator's plain-HTTP endpoint is accepted);
+//! Entra mode passes a token credential and requires HTTPS.
+
+use std::fmt;
+use std::io;
+use std::sync::Arc;
+
+use azure_core::credentials::TokenCredential;
+use azure_core::error::ErrorKind;
+use azure_core::http::{RequestContent, StatusCode, Url};
+use azure_identity::DeveloperToolsCredential;
+use azure_storage_blob::models::{
+    BlobClientUploadOptions, BlobContainerClientListBlobsOptions, StorageErrorCode,
+};
+use azure_storage_blob::{BlobClient, BlobContainerClient};
+use futures::TryStreamExt as _;
+use jiff::tz::TimeZone;
+use jiff::{Timestamp, ToSpan as _};
+
+use super::sas::{AccountSasParams, account_sas_query};
+use super::{Storage, StorageError, validate_key};
+
+/// The SAS permissions a self-signed token grants: read, write, delete, list,
+/// add, create — everything the backend needs to create the container on demand
+/// and write, read, and enumerate objects.
+const SAS_PERMISSIONS: &str = "rwdlac";
+
+/// The SAS resource types a self-signed token covers: service, container, object.
+const SAS_RESOURCE_TYPES: &str = "sco";
+
+/// A [`Storage`] that persists objects as blobs in an Azure Blob container.
+#[derive(Clone)]
+pub(crate) struct AzureBlobStorage {
+    /// The container endpoint URL. For SAS authentication the signed query is
+    /// already applied here and preserved across every derived blob URL.
+    container_endpoint: Url,
+    /// The token credential for Entra ID authentication, or `None` when a SAS
+    /// query on `container_endpoint` carries the authentication instead.
+    credential: Option<Arc<dyn TokenCredential>>,
+}
+
+impl fmt::Debug for AzureBlobStorage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Redact the query string: for SAS authentication it contains the
+        // signature, which must never reach logs.
+        let mut endpoint = self.container_endpoint.clone();
+        endpoint.set_query(None);
+        f.debug_struct("AzureBlobStorage")
+            .field("endpoint", &endpoint.as_str())
+            .field("entra", &self.credential.is_some())
+            .finish()
+    }
+}
+
+impl AzureBlobStorage {
+    /// Builds an Azure backend from its configured parameters.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError::Config`] if both `account_key` and `sas_token` are
+    /// set, if the endpoint is not a valid base URL, if Entra authentication is
+    /// selected without an HTTPS endpoint, or if an account SAS cannot be signed.
+    pub(crate) fn from_config(
+        account: &str,
+        container: &str,
+        endpoint: Option<String>,
+        account_key: Option<String>,
+        sas_token: Option<String>,
+    ) -> Result<Self, StorageError> {
+        if account_key.is_some() && sas_token.is_some() {
+            return Err(config_error(
+                "set only one of `account_key` or `sas_token` for Azure storage",
+            ));
+        }
+
+        let endpoint =
+            endpoint.unwrap_or_else(|| format!("https://{account}.blob.core.windows.net"));
+        let mut container_endpoint = Url::parse(&endpoint).map_err(|error| {
+            config_error(format!("invalid Azure endpoint {endpoint:?}: {error}"))
+        })?;
+        container_endpoint
+            .path_segments_mut()
+            .map_err(|()| {
+                config_error(format!("Azure endpoint {endpoint:?} cannot be a base URL"))
+            })?
+            .pop_if_empty()
+            .push(container);
+
+        let credential = if let Some(account_key) = account_key {
+            let query = account_sas_query(&AccountSasParams {
+                account,
+                account_key_base64: &account_key,
+                permissions: SAS_PERMISSIONS,
+                resource_types: SAS_RESOURCE_TYPES,
+                expiry: &account_sas_expiry(),
+                protocol: sas_protocol(&container_endpoint),
+            })
+            .map_err(|error| config_error(format!("could not sign account SAS: {error}")))?;
+            container_endpoint.set_query(Some(&query));
+            None
+        } else if let Some(sas_token) = sas_token {
+            container_endpoint.set_query(Some(sas_token.trim_start_matches('?')));
+            None
+        } else {
+            if container_endpoint.scheme() != "https" {
+                return Err(config_error(
+                    "Azure Entra ID authentication requires an https endpoint",
+                ));
+            }
+            let credential: Arc<dyn TokenCredential> = DeveloperToolsCredential::new(None)
+                .map_err(|error| {
+                    config_error(format!("could not initialize Entra ID credential: {error}"))
+                })?;
+            Some(credential)
+        };
+
+        Ok(Self {
+            container_endpoint,
+            credential,
+        })
+    }
+
+    /// Builds a client for the blob named `key`, constructing the URL one path
+    /// segment at a time so `/` separators in the key stay literal.
+    fn blob_client(&self, key: &str) -> Result<BlobClient, StorageError> {
+        let mut url = self.container_endpoint.clone();
+        url.path_segments_mut()
+            .map_err(|()| io_error("Azure endpoint cannot be a base URL"))?
+            .extend(key.split('/'));
+        BlobClient::new(url, self.credential.clone(), None).map_err(|error| azure_io(&error))
+    }
+
+    /// Builds a client for the configured container.
+    fn container_client(&self) -> Result<BlobContainerClient, StorageError> {
+        BlobContainerClient::new(
+            self.container_endpoint.clone(),
+            self.credential.clone(),
+            None,
+        )
+        .map_err(|error| azure_io(&error))
+    }
+
+    /// Creates the container, treating an already-existing container as success.
+    async fn ensure_container(&self) -> Result<(), StorageError> {
+        let client = self.container_client()?;
+        match client.create(None).await {
+            Ok(_) => Ok(()),
+            Err(error) if matches!(classify(&error), Fault::AlreadyExists) => Ok(()),
+            Err(error) => Err(azure_io(&error)),
+        }
+    }
+}
+
+impl Storage for AzureBlobStorage {
+    async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
+        validate_key(key)?;
+        let client = self.blob_client(key)?;
+        match upload(&client, bytes).await {
+            Ok(()) => Ok(()),
+            Err(error) if matches!(classify(&error), Fault::ContainerMissing) => {
+                // The container does not exist yet; create it and retry once.
+                self.ensure_container().await?;
+                upload(&client, bytes)
+                    .await
+                    .map_err(|error| map_error(&error, key))
+            }
+            Err(error) => Err(map_error(&error, key)),
+        }
+    }
+
+    async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError> {
+        validate_key(key)?;
+        let client = self.blob_client(key)?;
+        match client.download(None).await {
+            Ok(response) => {
+                let bytes = response
+                    .body
+                    .collect()
+                    .await
+                    .map_err(|error| azure_io(&error))?;
+                Ok(bytes.to_vec())
+            }
+            Err(error) if matches!(classify(&error), Fault::NotFound | Fault::ContainerMissing) => {
+                Err(StorageError::NotFound {
+                    key: key.to_owned(),
+                })
+            }
+            Err(error) => Err(azure_io(&error)),
+        }
+    }
+
+    async fn list(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
+        let client = self.container_client()?;
+        let mut pager = client
+            .list_blobs(Some(BlobContainerClientListBlobsOptions {
+                prefix: Some(prefix.to_owned()),
+                ..Default::default()
+            }))
+            .map_err(|error| azure_io(&error))?;
+
+        let mut keys = Vec::new();
+        loop {
+            match pager.try_next().await {
+                Ok(Some(item)) => {
+                    if let Some(name) = item.name {
+                        keys.push(name);
+                    }
+                }
+                Ok(None) => break,
+                // A missing container holds no objects, mirroring a missing local
+                // storage root listing as empty rather than erroring.
+                Err(error) if matches!(classify(&error), Fault::ContainerMissing) => {
+                    return Ok(Vec::new());
+                }
+                Err(error) => return Err(azure_io(&error)),
+            }
+        }
+        keys.sort();
+        Ok(keys)
+    }
+}
+
+/// Uploads `bytes` write-once (failing if the blob already exists).
+async fn upload(client: &BlobClient, bytes: &[u8]) -> azure_core::Result<()> {
+    client
+        .upload(
+            RequestContent::from(bytes.to_vec()),
+            Some(BlobClientUploadOptions::default().if_not_exists()),
+        )
+        .await?;
+    Ok(())
+}
+
+/// The SAS expiry, a fixed lifetime from now, formatted as `YYYY-MM-DDThh:mm:ssZ`.
+fn account_sas_expiry() -> String {
+    let expiry = Timestamp::now()
+        .checked_add(24.hours())
+        .expect("the current time plus a fixed lifetime is representable");
+    expiry
+        .to_zoned(TimeZone::UTC)
+        .strftime("%Y-%m-%dT%H:%M:%SZ")
+        .to_string()
+}
+
+/// The SAS signed protocol for `endpoint`: `https` for a secure endpoint, or
+/// `https,http` for a plain-HTTP endpoint such as the Azurite emulator.
+fn sas_protocol(endpoint: &Url) -> &'static str {
+    if endpoint.scheme() == "https" {
+        "https"
+    } else {
+        "https,http"
+    }
+}
+
+/// The kind of fault an Azure error represents, in terms the storage model cares
+/// about.
+#[derive(Clone, Copy)]
+enum Fault {
+    /// The requested blob does not exist.
+    NotFound,
+    /// The container does not exist.
+    ContainerMissing,
+    /// The blob already exists (a write-once conflict).
+    AlreadyExists,
+    /// Any other failure.
+    Other,
+}
+
+/// Classifies an Azure error by HTTP status and storage error code.
+fn classify(error: &azure_core::Error) -> Fault {
+    let code = match error.kind() {
+        ErrorKind::HttpResponse { error_code, .. } => error_code.as_deref(),
+        _ => None,
+    };
+    if code == Some(StorageErrorCode::ContainerNotFound.as_ref()) {
+        return Fault::ContainerMissing;
+    }
+    match error.http_status() {
+        Some(StatusCode::NotFound) => Fault::NotFound,
+        Some(StatusCode::Conflict | StatusCode::PreconditionFailed) => Fault::AlreadyExists,
+        _ => Fault::Other,
+    }
+}
+
+/// Maps an Azure error to a [`StorageError`] for the object identified by `key`.
+fn map_error(error: &azure_core::Error, key: &str) -> StorageError {
+    match classify(error) {
+        Fault::NotFound | Fault::ContainerMissing => StorageError::NotFound {
+            key: key.to_owned(),
+        },
+        Fault::AlreadyExists => StorageError::AlreadyExists {
+            key: key.to_owned(),
+        },
+        Fault::Other => azure_io(error),
+    }
+}
+
+/// Wraps an Azure error as a generic storage I/O error.
+fn azure_io(error: &azure_core::Error) -> StorageError {
+    StorageError::Io(io::Error::other(format!("Azure Blob error: {error}")))
+}
+
+/// Builds a generic storage I/O error from a static message.
+fn io_error(message: &'static str) -> StorageError {
+    StorageError::Io(io::Error::other(message))
+}
+
+/// Builds a storage configuration error.
+fn config_error(message: impl Into<String>) -> StorageError {
+    StorageError::Config {
+        message: message.into(),
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+
+    /// The well-known Azurite development account key (public, fixed, not secret).
+    const AZURITE_KEY: &str =
+        "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
+
+    #[test]
+    #[cfg_attr(miri, ignore = "reads the wall clock to compute the SAS expiry")]
+    fn account_key_mode_bakes_a_sas_query_and_uses_no_credential() {
+        let storage = AzureBlobStorage::from_config(
+            "devstoreaccount1",
+            "bench-history",
+            Some("http://127.0.0.1:10000/devstoreaccount1".to_owned()),
+            Some(AZURITE_KEY.to_owned()),
+            None,
+        )
+        .unwrap();
+
+        assert!(storage.credential.is_none());
+        let query = storage
+            .container_endpoint
+            .query()
+            .expect("SAS query present");
+        assert!(query.contains("sig="), "{query}");
+        assert!(query.contains("spr=https%2Chttp"), "{query}");
+        assert_eq!(
+            storage.container_endpoint.path(),
+            "/devstoreaccount1/bench-history"
+        );
+    }
+
+    #[test]
+    fn sas_token_mode_uses_the_token_verbatim() {
+        let storage = AzureBlobStorage::from_config(
+            "prod",
+            "history",
+            Some("https://prod.blob.core.windows.net".to_owned()),
+            None,
+            Some("?sv=2021-08-06&sig=abc".to_owned()),
+        )
+        .unwrap();
+
+        assert!(storage.credential.is_none());
+        // The leading `?` is stripped; the rest is used as the query verbatim.
+        assert_eq!(
+            storage.container_endpoint.query(),
+            Some("sv=2021-08-06&sig=abc")
+        );
+    }
+
+    #[test]
+    fn entra_mode_uses_a_credential_and_default_endpoint() {
+        let storage = AzureBlobStorage::from_config("prod", "history", None, None, None).unwrap();
+
+        assert!(storage.credential.is_some());
+        assert_eq!(storage.container_endpoint.query(), None);
+        assert_eq!(
+            storage.container_endpoint.as_str(),
+            "https://prod.blob.core.windows.net/history"
+        );
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "reads the wall clock to compute the SAS expiry")]
+    fn blob_client_keeps_slash_separators_literal() {
+        let storage = AzureBlobStorage::from_config(
+            "devstoreaccount1",
+            "bench-history",
+            Some("http://127.0.0.1:10000/devstoreaccount1".to_owned()),
+            Some(AZURITE_KEY.to_owned()),
+            None,
+        )
+        .unwrap();
+
+        let client = storage.blob_client("v1/proj/callgrind/run.json").unwrap();
+        assert_eq!(
+            client.url().path(),
+            "/devstoreaccount1/bench-history/v1/proj/callgrind/run.json"
+        );
+        // The SAS query is carried over to the blob URL.
+        assert!(client.url().query().is_some());
+    }
+
+    #[test]
+    fn both_auth_modes_set_is_a_config_error() {
+        let error = AzureBlobStorage::from_config(
+            "prod",
+            "history",
+            None,
+            Some(AZURITE_KEY.to_owned()),
+            Some("sig=abc".to_owned()),
+        )
+        .unwrap_err();
+        assert!(matches!(error, StorageError::Config { .. }), "{error:?}");
+    }
+
+    #[test]
+    fn entra_over_http_is_a_config_error() {
+        let error = AzureBlobStorage::from_config(
+            "prod",
+            "history",
+            Some("http://insecure.example/account".to_owned()),
+            None,
+            None,
+        )
+        .unwrap_err();
+        match error {
+            StorageError::Config { message } => {
+                assert!(message.contains("https"), "{message}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_endpoint_is_a_config_error() {
+        let error = AzureBlobStorage::from_config(
+            "prod",
+            "history",
+            Some("not a url".to_owned()),
+            Some(AZURITE_KEY.to_owned()),
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(error, StorageError::Config { .. }), "{error:?}");
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "reads the wall clock to compute the SAS expiry")]
+    fn invalid_account_key_is_a_config_error() {
+        let error = AzureBlobStorage::from_config(
+            "devstoreaccount1",
+            "bench-history",
+            Some("http://127.0.0.1:10000/devstoreaccount1".to_owned()),
+            Some("not valid base64!!!".to_owned()),
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(error, StorageError::Config { .. }), "{error:?}");
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "reads the wall clock to compute the SAS expiry")]
+    fn https_endpoint_signs_with_https_only_protocol() {
+        let storage = AzureBlobStorage::from_config(
+            "prod",
+            "history",
+            Some("https://prod.blob.core.windows.net".to_owned()),
+            Some(AZURITE_KEY.to_owned()),
+            None,
+        )
+        .unwrap();
+        let query = storage.container_endpoint.query().unwrap();
+        assert!(
+            query.contains("spr=https&") || query.ends_with("spr=https"),
+            "{query}"
+        );
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "reads the wall clock to compute the SAS expiry")]
+    fn debug_redacts_the_sas_query() {
+        let storage = AzureBlobStorage::from_config(
+            "devstoreaccount1",
+            "bench-history",
+            Some("http://127.0.0.1:10000/devstoreaccount1".to_owned()),
+            Some(AZURITE_KEY.to_owned()),
+            None,
+        )
+        .unwrap();
+        let rendered = format!("{storage:?}");
+        assert!(
+            !rendered.contains("sig="),
+            "must not leak signature: {rendered}"
+        );
+        assert!(rendered.contains("bench-history"), "{rendered}");
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "reads the wall clock to compute the SAS expiry")]
+    fn trailing_slash_endpoint_does_not_double_up_segments() {
+        let storage = AzureBlobStorage::from_config(
+            "devstoreaccount1",
+            "bench-history",
+            Some("http://127.0.0.1:10000/devstoreaccount1/".to_owned()),
+            Some(AZURITE_KEY.to_owned()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            storage.container_endpoint.path(),
+            "/devstoreaccount1/bench-history"
+        );
+    }
+
+    // =======================================================================
+    // Network tests against a live Azurite emulator.
+    //
+    // These exercise the real put/get/list paths and the error classification
+    // that pure tests cannot reach. They require an Azurite blob endpoint (the
+    // CI `azure` job provides one; see the package AGENTS.md for running them
+    // locally) and so are network-bound: ignored under Miri and serialized.
+    // Each test uses a freshly named container, so they never share state even
+    // against a shared emulator.
+    // =======================================================================
+
+    use std::net::{TcpStream, ToSocketAddrs as _};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
+
+    use serial_test::serial;
+
+    /// The Azurite blob endpoint, overridable for a non-default emulator.
+    fn azurite_endpoint() -> String {
+        std::env::var("AZURITE_BLOB_ENDPOINT")
+            .unwrap_or_else(|_| "http://127.0.0.1:10000/devstoreaccount1".to_owned())
+    }
+
+    /// A fresh, valid container name (lowercase, 3-63 chars) unique to one test.
+    fn unique_container() -> String {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let nanos = Timestamp::now().as_nanosecond();
+        format!("bh-test-{nanos}-{n}")
+    }
+
+    /// Whether an Azurite blob endpoint is reachable via a short TCP connect.
+    ///
+    /// The `azure` feature enables these tests under `--all-features`, where the
+    /// runner usually has no emulator. A reachability probe lets the test self-skip
+    /// there while still running for real wherever Azurite is provided.
+    fn azurite_reachable() -> bool {
+        let endpoint = azurite_endpoint();
+        let Ok(url) = Url::parse(&endpoint) else {
+            return false;
+        };
+        let host = url.host_str().unwrap_or("127.0.0.1").to_owned();
+        let port = url.port().unwrap_or(10000);
+        let Ok(addrs) = (host.as_str(), port).to_socket_addrs() else {
+            return false;
+        };
+        addrs
+            .into_iter()
+            .any(|addr| TcpStream::connect_timeout(&addr, Duration::from_secs(2)).is_ok())
+    }
+
+    /// An account-key backend for a fresh container, or `None` to skip when no
+    /// emulator is reachable.
+    ///
+    /// Setting `BENCH_HISTORY_REQUIRE_AZURITE` turns an unreachable emulator into
+    /// a hard failure, so the dedicated CI job that provisions Azurite cannot
+    /// silently degrade into skipping every network test.
+    fn azurite_storage_or_skip() -> Option<AzureBlobStorage> {
+        if !azurite_reachable() {
+            assert!(
+                std::env::var_os("BENCH_HISTORY_REQUIRE_AZURITE").is_none(),
+                "BENCH_HISTORY_REQUIRE_AZURITE is set but no Azurite emulator is reachable at {}",
+                azurite_endpoint()
+            );
+            eprintln!(
+                "skipping Azurite network test: no emulator reachable at {}",
+                azurite_endpoint()
+            );
+            return None;
+        }
+        let storage = AzureBlobStorage::from_config(
+            "devstoreaccount1",
+            &unique_container(),
+            Some(azurite_endpoint()),
+            Some(AZURITE_KEY.to_owned()),
+            None,
+        )
+        .expect("Azurite storage should build");
+        Some(storage)
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)]
+    #[serial]
+    async fn put_creates_the_container_then_get_and_list_round_trip() {
+        let Some(storage) = azurite_storage_or_skip() else {
+            return;
+        };
+
+        // The very first put hits a container that does not exist yet, so this
+        // also covers the create-on-demand retry path.
+        storage.put("v1/proj/a/1.json", b"first").await.unwrap();
+        storage.put("v1/proj/a/2.json", b"second").await.unwrap();
+        storage.put("v1/proj/b/3.json", b"third").await.unwrap();
+
+        assert_eq!(storage.get("v1/proj/a/1.json").await.unwrap(), b"first");
+
+        let listed = storage.list("v1/proj/a/").await.unwrap();
+        assert_eq!(
+            listed,
+            vec!["v1/proj/a/1.json".to_owned(), "v1/proj/a/2.json".to_owned()]
+        );
+
+        let all = storage.list("v1/proj/").await.unwrap();
+        assert_eq!(all.len(), 3, "{all:?}");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)]
+    #[serial]
+    async fn get_missing_blob_in_existing_container_reports_not_found() {
+        let Some(storage) = azurite_storage_or_skip() else {
+            return;
+        };
+        // Create the container (and an unrelated blob) so the missing-blob case
+        // is a blob-level 404, not a missing container.
+        storage.put("v1/present.json", b"x").await.unwrap();
+
+        let error = storage.get("v1/absent.json").await.unwrap_err();
+        assert!(matches!(error, StorageError::NotFound { .. }), "{error:?}");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)]
+    #[serial]
+    async fn get_in_missing_container_reports_not_found() {
+        let Some(storage) = azurite_storage_or_skip() else {
+            return;
+        };
+        // No put, so the container does not exist: a get must still resolve to a
+        // plain not-found rather than an I/O error.
+        let error = storage.get("v1/absent.json").await.unwrap_err();
+        assert!(matches!(error, StorageError::NotFound { .. }), "{error:?}");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)]
+    #[serial]
+    async fn put_is_write_once() {
+        let Some(storage) = azurite_storage_or_skip() else {
+            return;
+        };
+        storage.put("v1/once.json", b"original").await.unwrap();
+
+        let error = storage
+            .put("v1/once.json", b"replacement")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, StorageError::AlreadyExists { .. }),
+            "{error:?}"
+        );
+        // The original value is preserved.
+        assert_eq!(storage.get("v1/once.json").await.unwrap(), b"original");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)]
+    #[serial]
+    async fn list_on_missing_container_is_empty() {
+        let Some(storage) = azurite_storage_or_skip() else {
+            return;
+        };
+        // A container that was never created lists as empty, mirroring a missing
+        // local storage root.
+        assert!(storage.list("v1/").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)]
+    #[serial]
+    async fn list_with_a_non_matching_prefix_is_empty() {
+        let Some(storage) = azurite_storage_or_skip() else {
+            return;
+        };
+        storage.put("v1/proj/a.json", b"x").await.unwrap();
+        assert!(storage.list("v1/other/").await.unwrap().is_empty());
+    }
+}

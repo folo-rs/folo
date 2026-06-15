@@ -20,6 +20,19 @@ const DEFAULT_TEMPLATE: &str = "\
 [storage.local]
 path = \"./bench-history\"
 
+# To store results in Azure Blob Storage instead, replace the [storage.local]
+# section above with an [storage.azure] section. The `azure` build feature must
+# be enabled. Authentication is, in priority order: a self-signed account SAS
+# (set `account_key`), a pre-made SAS token (set `sas_token`), or Microsoft Entra
+# ID (set neither, requires an HTTPS endpoint).
+#
+# [storage.azure]
+# account = \"mystorageaccount\"
+# container = \"bench-history\"
+# endpoint = \"https://mystorageaccount.blob.core.windows.net\"  # optional
+# account_key = \"...\"   # optional: base64 account key, self-signs an account SAS
+# sas_token = \"...\"     # optional: a pre-made SAS query string, used verbatim
+
 # Declare the command that launches each engine's benches in this workspace.
 # Omit an engine section entirely to leave that engine unused here.
 
@@ -64,6 +77,31 @@ pub enum StorageConfig {
     Local {
         /// Root directory for the stored partitions.
         path: PathBuf,
+    },
+    /// Store result sets in an Azure Blob Storage container.
+    ///
+    /// Available only when the crate is built with the `azure` feature; the
+    /// variant always parses so configuration is portable, but building the
+    /// backend without the feature is an error.
+    Azure {
+        /// The storage account name (e.g. `devstoreaccount1` for Azurite).
+        account: String,
+        /// The blob container that holds the result-set objects.
+        container: String,
+        /// The blob service endpoint. Defaults to
+        /// `https://{account}.blob.core.windows.net`; set it explicitly to reach
+        /// an emulator such as Azurite (e.g.
+        /// `http://127.0.0.1:10000/devstoreaccount1`).
+        #[serde(default)]
+        endpoint: Option<String>,
+        /// A base64 storage account key. When set, the backend self-signs an
+        /// account SAS to authenticate (the mode used against Azurite).
+        #[serde(default)]
+        account_key: Option<String>,
+        /// A pre-made SAS token (a URL query string). When set, it is used
+        /// verbatim to authenticate. Mutually exclusive with `account_key`.
+        #[serde(default)]
+        sas_token: Option<String>,
     },
 }
 
@@ -166,8 +204,77 @@ mod tests {
     #[test]
     fn default_template_uses_local_storage() {
         let config = parse_config(default_template()).unwrap();
-        let StorageConfig::Local { path } = config.storage;
+        let StorageConfig::Local { path } = config.storage else {
+            panic!("expected local storage, got {:?}", config.storage);
+        };
         assert_eq!(path, PathBuf::from("./bench-history"));
+    }
+
+    #[test]
+    fn azure_storage_with_account_key_is_parsed() {
+        let text = "\
+[storage.azure]
+account = \"devstoreaccount1\"
+container = \"bench-history\"
+endpoint = \"http://127.0.0.1:10000/devstoreaccount1\"
+account_key = \"a2V5\"
+";
+        let config = parse_config(text).unwrap();
+        let StorageConfig::Azure {
+            account,
+            container,
+            endpoint,
+            account_key,
+            sas_token,
+        } = config.storage
+        else {
+            panic!("expected azure storage, got {:?}", config.storage);
+        };
+        assert_eq!(account, "devstoreaccount1");
+        assert_eq!(container, "bench-history");
+        assert_eq!(
+            endpoint.as_deref(),
+            Some("http://127.0.0.1:10000/devstoreaccount1")
+        );
+        assert_eq!(account_key.as_deref(), Some("a2V5"));
+        assert_eq!(sas_token, None);
+    }
+
+    #[test]
+    fn azure_storage_defaults_optional_fields_to_none() {
+        let text = "\
+[storage.azure]
+account = \"prod\"
+container = \"history\"
+";
+        let config = parse_config(text).unwrap();
+        let StorageConfig::Azure {
+            endpoint,
+            account_key,
+            sas_token,
+            ..
+        } = config.storage
+        else {
+            panic!("expected azure storage, got {:?}", config.storage);
+        };
+        assert_eq!(endpoint, None);
+        assert_eq!(account_key, None);
+        assert_eq!(sas_token, None);
+    }
+
+    #[test]
+    fn azure_storage_with_sas_token_is_parsed() {
+        let text = "\
+[storage.azure]
+account = \"prod\"
+container = \"history\"
+sas_token = \"sv=2021-08-06&sig=abc\"
+";
+        let config = parse_config(text).unwrap();
+        let StorageConfig::Azure { sas_token, .. } = config.storage else {
+            panic!("expected azure storage, got {:?}", config.storage);
+        };
+        assert_eq!(sas_token.as_deref(), Some("sv=2021-08-06&sig=abc"));
     }
 
     #[test]

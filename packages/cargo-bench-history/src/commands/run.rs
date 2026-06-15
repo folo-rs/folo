@@ -24,8 +24,8 @@ use crate::host::RustcInfo;
 use crate::model::ResultSet;
 use crate::probe::{EnvironmentProbe, SystemProbe};
 use crate::process::{BenchRunner, TokioBenchRunner};
-use crate::storage::Storage;
-use crate::wiring::{build_local_storage, default_config_path, resolve_project_id};
+use crate::storage::{Storage, build_storage};
+use crate::wiring::{default_config_path, resolve_project_id};
 use crate::{RunError, RunOptions, RunOutcome};
 
 /// The injected collaborators an orchestrated run operates against.
@@ -74,7 +74,7 @@ pub(crate) async fn execute(
 
     let workspace_dir = std::env::current_dir().map_err(RunError::Io)?;
     let project_id = resolve_project_id(&config, &workspace_dir);
-    let storage = build_local_storage(&config);
+    let storage = build_storage(&config)?;
 
     let runner = TokioBenchRunner;
     let probe = SystemProbe;

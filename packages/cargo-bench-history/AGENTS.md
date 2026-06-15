@@ -19,7 +19,9 @@ driven in tests by fakes, never by real IO:
 * `bench_output::BenchOutputSource` — real `FsBenchOutputSource` (walks
   `target/gungraun/**/summary.json`); fake `FakeOutput` returns in-memory
   `RawSummary` values.
-* `storage::Storage` — real `LocalStorage`; fake `MemoryStorage`.
+* `storage::Storage` — real `LocalStorage` and (behind the `azure` feature)
+  `AzureBlobStorage`, selected at runtime by the `StorageFacade` enum that
+  `build_storage` returns; fake `MemoryStorage`.
 * `config_writer::ConfigWriter` — real `TokioConfigWriter` (creates parent dirs,
   `create_new` so an existing file is never clobbered); fake `MemoryConfigWriter`.
   Used by `commands::install::execute_install`. Its real adapter's IO error paths
@@ -60,10 +62,13 @@ never insert real-time delays in tests.
 * Pure logic and fake-driven orchestration tests are plain `#[test]` using
   `futures::executor::block_on` plus a frozen clock — no Tokio runtime, no IO —
   so they run under Miri.
-* Any test that touches the real filesystem, spawns a process, or starts a Tokio
-  runtime must be `#[tokio::test]` (or `#[test]` for `std::fs`) **and**
-  `#[cfg_attr(miri, ignore)]` with a comment saying why. These are the 13 tests
-  Miri skips.
+* Any test that touches the real filesystem, spawns a process, starts a Tokio
+  runtime, or reads the wall clock must be `#[tokio::test]` (or `#[test]` for
+  `std::fs`) **and** `#[cfg_attr(miri, ignore = "…")]` with a reason. This covers
+  the real-IO end-to-end tests, the Azurite network tests, and the account-key
+  `AzureBlobStorage` tests (building an account SAS reads the clock for its
+  expiry; the pure SAS signing math is still covered under Miri by the
+  fixed-expiry golden vector in `storage::sas`).
 
 ## Mock engine for end-to-end tests
 
@@ -122,3 +127,47 @@ This is inert outside WSL and makes the injected env cross the Windows→Linux
 boundary regardless of how the command launches, so we never try to detect
 whether a command crosses into WSL. The golden rule still holds as guidance: run
 the tool in the same OS as the benches.
+
+## Azure Blob storage (`azure` feature)
+
+The `azure` feature adds `AzureBlobStorage`, a `Storage` backed by an Azure Blob
+container. It is **off by default** so the common build stays light; enabling it
+pulls in the Azure SDK and the RustCrypto `hmac`/`sha2` crates used to self-sign
+SAS tokens. Object keys map 1:1 to `/`-separated blob names, so the key model is
+identical to `LocalStorage` (write-once, list-by-prefix).
+
+Authentication is resolved once in `AzureBlobStorage::from_config`, in priority
+order: a self-signed account SAS (`account_key`), a verbatim `sas_token`, or
+Microsoft Entra ID (`DeveloperToolsCredential`). SAS modes carry the token in the
+endpoint URL's query and pass no credential, so the emulator's plain-HTTP
+endpoint is accepted; Entra mode passes a token credential and requires HTTPS.
+The account-SAS signer lives in `storage::sas` and is verified against a pinned
+golden signature — do not "fix" that test by editing the expected value.
+
+### Running the Azurite tests locally
+
+The network tests (`storage::azure::tests` and the `cargo_bench_history_azure`
+integration file) talk to a live [Azurite](https://github.com/Azure/Azurite)
+blob emulator. They **self-skip** when no emulator is reachable, so a normal
+`--all-features` run stays green without one; they run for real once Azurite is
+up. To run them:
+
+```powershell
+npm install -g azurite
+# On Windows azurite-blob is a .cmd, so launch it through cmd:
+cmd /c azurite-blob --blobHost 127.0.0.1 --blobPort 10000 --inMemoryPersistence --skipApiVersionCheck --silent --loose
+# then, in another shell:
+cargo test -p cargo-bench-history --features azure
+```
+
+* `AZURITE_BLOB_ENDPOINT` overrides the default
+  `http://127.0.0.1:10000/devstoreaccount1` endpoint.
+* `BENCH_HISTORY_REQUIRE_AZURITE=1` turns an unreachable emulator into a hard
+  failure instead of a skip. CI sets it in the dedicated `test-azure` job so a
+  misconfigured emulator can never silently degrade into skipping every test.
+
+In CI these tests run only in the Linux-only `test-azure` job (see
+`.github/workflows/validation.yml`), which starts Azurite on the runner host via
+the `start-azurite` composite action and also collects coverage so the
+`azure.rs` network paths reach Codecov (the multi-platform `coverage` job runs
+without an emulator and so cannot cover them).

@@ -1,8 +1,14 @@
 //! The storage abstraction: an immutable, list-by-prefix object store that both a
 //! local filesystem and (later) a blob container implement identically.
 
+#[cfg(feature = "azure")]
+mod azure;
+mod facade;
 mod local;
+#[cfg(feature = "azure")]
+mod sas;
 
+pub(crate) use facade::build_storage;
 pub use local::LocalStorage;
 
 use std::error::Error;
@@ -67,6 +73,12 @@ pub enum StorageError {
         /// The key that was already occupied.
         key: String,
     },
+    /// The storage backend is misconfigured (e.g. conflicting Azure
+    /// authentication settings, or a backend the build does not support).
+    Config {
+        /// Human-readable description of the misconfiguration.
+        message: String,
+    },
     /// An underlying I/O error occurred.
     Io(io::Error),
 }
@@ -77,6 +89,7 @@ impl fmt::Display for StorageError {
             Self::NotFound { key } => write!(f, "object not found: {key}"),
             Self::InvalidKey { key } => write!(f, "invalid storage key: {key}"),
             Self::AlreadyExists { key } => write!(f, "object already exists: {key}"),
+            Self::Config { message } => write!(f, "storage configuration error: {message}"),
             Self::Io(error) => write!(f, "storage I/O error: {error}"),
         }
     }
@@ -85,7 +98,10 @@ impl fmt::Display for StorageError {
 impl Error for StorageError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::NotFound { .. } | Self::InvalidKey { .. } | Self::AlreadyExists { .. } => None,
+            Self::NotFound { .. }
+            | Self::InvalidKey { .. }
+            | Self::AlreadyExists { .. }
+            | Self::Config { .. } => None,
             Self::Io(error) => Some(error),
         }
     }
@@ -110,8 +126,11 @@ pub(crate) fn is_plain_segment(segment: &str) -> bool {
 /// Returns [`StorageError::InvalidKey`] if any segment of `key` is not a single
 /// ordinary path component.
 #[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the only caller, MemoryStorage, is test-only")
+    not(any(test, feature = "azure")),
+    expect(
+        dead_code,
+        reason = "outside the azure feature the only caller, MemoryStorage, is test-only"
+    )
 )]
 pub(crate) fn validate_key(key: &str) -> Result<(), StorageError> {
     for segment in key.split('/') {
@@ -169,6 +188,16 @@ mod tests {
             key: "v1/dup".to_owned(),
         };
         assert!(error.to_string().contains("v1/dup"), "{error}");
+        assert!(error.source().is_none());
+    }
+
+    #[test]
+    fn config_display_and_no_source() {
+        let error = StorageError::Config {
+            message: "both keys set".to_owned(),
+        };
+        assert!(error.to_string().contains("both keys set"), "{error}");
+        assert!(error.to_string().contains("configuration"), "{error}");
         assert!(error.source().is_none());
     }
 

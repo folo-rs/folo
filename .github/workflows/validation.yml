@@ -597,3 +597,49 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
           fail_ci_if_error: true
+
+  # Azure Blob storage backend tests against the Azurite emulator.
+  #
+  # The `azure` feature is off by default, and its network paths self-skip when no
+  # emulator is reachable (so the multi-platform `--all-features` jobs stay green
+  # without one). They run for real only here: Azurite is provisioned on the host
+  # and BENCH_HISTORY_REQUIRE_AZURITE turns an unreachable emulator into a hard
+  # failure, so a misconfigured emulator can never silently degrade into skipping
+  # every test. This job also collects coverage so the azure.rs network paths
+  # reach Codecov — the multi-platform `coverage` job runs without an emulator and
+  # therefore cannot cover them; Codecov merges this azure-flagged upload with it.
+  #
+  # Linux-only and package-gated: Azurite runs directly on the runner host via npm
+  # (service containers cannot reliably bind it to a reachable address), and the
+  # job is only relevant when cargo-bench-history is affected.
+  test-azure:
+    needs: [delta]
+    if: >-
+      needs.delta.outputs.skip_all != 'true'
+      && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'cargo-bench-history'))
+    runs-on: ubuntu-latest
+    env:
+      BENCH_HISTORY_REQUIRE_AZURITE: "1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Start Azurite
+        uses: ./.github/actions/start-azurite
+
+      - name: Generate azure coverage on ubuntu-latest
+        run: |
+          just package=cargo-bench-history coverage-measure
+          just coverage-report-ci
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info
+          flags: azure
+          fail_ci_if_error: true

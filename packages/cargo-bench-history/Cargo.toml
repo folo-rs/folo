@@ -22,11 +22,32 @@ all-features = true
 name = "cargo-bench-history-mock-engine"
 path = "tests/support/mock_engine.rs"
 
+[features]
+# Azure Blob Storage backend. Off by default so the common build stays light;
+# enabling it pulls in the Azure SDK and the crypto crates used to self-sign SAS
+# tokens (for Azurite in CI and for SAS-authenticated production access).
+azure = [
+    "dep:azure_core",
+    "dep:azure_identity",
+    "dep:azure_storage_blob",
+    "dep:base64",
+    "dep:futures",
+    "dep:hmac",
+    "dep:sha2",
+]
+
 [dependencies]
 argh = { workspace = true }
+azure_core = { workspace = true, optional = true }
+azure_identity = { workspace = true, optional = true, features = ["default"] }
+azure_storage_blob = { workspace = true, optional = true, features = ["default"] }
+base64 = { workspace = true, optional = true, features = ["std"] }
+futures = { workspace = true, optional = true }
+hmac = { workspace = true, optional = true }
 jiff = { workspace = true, features = ["serde", "std"] }
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["std"] }
+sha2 = { workspace = true, optional = true }
 shlex = { workspace = true, features = ["std"] }
 tick = { workspace = true, features = ["tokio"] }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt-multi-thread"] }

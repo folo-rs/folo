@@ -17,8 +17,8 @@ use jiff::tz::TimeZone;
 use crate::comparability::EngineSystem;
 use crate::config::load_config;
 use crate::model::ResultSet;
-use crate::storage::Storage;
-use crate::wiring::{build_local_storage, default_config_path, resolve_project_id};
+use crate::storage::{Storage, build_storage};
+use crate::wiring::{default_config_path, resolve_project_id};
 use crate::{AnalyzeOptions, RunError, RunOutcome};
 
 use findings::{RegressionConfig, find_changes};
@@ -35,7 +35,7 @@ pub(crate) async fn execute(options: &AnalyzeOptions) -> Result<RunOutcome, RunE
 
     let workspace_dir = std::env::current_dir().map_err(RunError::Io)?;
     let project_id = resolve_project_id(&config, &workspace_dir);
-    let storage = build_local_storage(&config);
+    let storage = build_storage(&config)?;
 
     analyze_with(&storage, &project_id, options).await
 }
