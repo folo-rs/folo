@@ -111,18 +111,27 @@ pub struct ComparabilityKey {
 
 impl ComparabilityKey {
     /// Creates a comparability key.
+    ///
+    /// The path-forming components (`project`, `target_triple`, `machine_key`) are
+    /// sanitized so that every segment is a single, well-formed path component:
+    /// any character that is not ASCII alphanumeric, `-`, `_`, or `.` is replaced
+    /// with `_`, and a segment that would otherwise be empty or consist only of
+    /// dots becomes `_`. This keeps a stray `/` (or other surprising input) from
+    /// silently splitting the storage key into the wrong number of segments —
+    /// which `analyze` would then fail to attribute — by mangling the value rather
+    /// than rejecting the run.
     #[must_use]
     pub fn new(
-        project: String,
+        project: &str,
         system: EngineSystem,
-        target_triple: String,
-        machine_key: Option<String>,
+        target_triple: &str,
+        machine_key: Option<&str>,
     ) -> Self {
         Self {
-            project,
+            project: sanitize_segment(project),
             system,
-            target_triple,
-            machine_key,
+            target_triple: sanitize_segment(target_triple),
+            machine_key: machine_key.map(sanitize_segment),
         }
     }
 
@@ -142,11 +151,41 @@ impl ComparabilityKey {
     ///
     /// Named by **effective** time so that backfilled points sort into their
     /// historical position: `{prefix}/{effective_unix}-{short_commit}-{run_id}.json`.
+    ///
+    /// `short_commit` and `run_id` are sanitized the same way as the partition
+    /// components so the file name always forms a single key segment.
     #[must_use]
     pub fn object_key(&self, effective_unix: i64, short_commit: &str, run_id: &str) -> String {
         let prefix = self.partition_prefix();
+        let short_commit = sanitize_segment(short_commit);
+        let run_id = sanitize_segment(run_id);
         format!("{prefix}/{effective_unix}-{short_commit}-{run_id}.json")
     }
+}
+
+/// Replaces every character that is not safe in a single path segment with `_`,
+/// mapping an otherwise-empty or all-dots result to `_`.
+///
+/// "Safe" is the conservative set `[A-Za-z0-9._-]`, which is valid both as a
+/// filesystem path component (for local storage) and as an Azure blob name part.
+/// Mangling rather than rejecting means the tool never refuses a run merely
+/// because its project, triple, or machine key contains an awkward character.
+#[must_use]
+pub(crate) fn sanitize_segment(raw: &str) -> String {
+    let mangled: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if mangled.is_empty() || mangled.chars().all(|c| c == '.') {
+        return "_".to_owned();
+    }
+    mangled
 }
 
 #[cfg(test)]
@@ -192,9 +231,9 @@ mod tests {
     #[test]
     fn synthetic_partition_for_hardware_independent_engine() {
         let key = ComparabilityKey::new(
-            "folo".to_owned(),
+            "folo",
             EngineSystem::Callgrind,
-            "x86_64-unknown-linux-gnu".to_owned(),
+            "x86_64-unknown-linux-gnu",
             None,
         );
         assert_eq!(
@@ -206,10 +245,10 @@ mod tests {
     #[test]
     fn machine_key_appears_in_partition() {
         let key = ComparabilityKey::new(
-            "folo".to_owned(),
+            "folo",
             EngineSystem::Criterion,
-            "x86_64-pc-windows-msvc".to_owned(),
-            Some("abc123".to_owned()),
+            "x86_64-pc-windows-msvc",
+            Some("abc123"),
         );
         assert_eq!(
             key.partition_prefix(),
@@ -220,9 +259,9 @@ mod tests {
     #[test]
     fn object_key_is_named_by_effective_time() {
         let key = ComparabilityKey::new(
-            "folo".to_owned(),
+            "folo",
             EngineSystem::Callgrind,
-            "x86_64-unknown-linux-gnu".to_owned(),
+            "x86_64-unknown-linux-gnu",
             None,
         );
         assert_eq!(
@@ -243,5 +282,63 @@ mod tests {
             assert_eq!(EngineSystem::from_name(engine.as_str()), Some(engine));
         }
         assert_eq!(EngineSystem::from_name("dhat"), None);
+    }
+
+    #[test]
+    fn sanitize_segment_keeps_safe_characters() {
+        assert_eq!(
+            sanitize_segment("x86_64-unknown-linux-gnu"),
+            "x86_64-unknown-linux-gnu"
+        );
+        assert_eq!(sanitize_segment("my.project-1"), "my.project-1");
+    }
+
+    #[test]
+    fn sanitize_segment_replaces_separators_and_specials() {
+        assert_eq!(sanitize_segment("team/app"), "team_app");
+        assert_eq!(sanitize_segment(r"team\app"), "team_app");
+        assert_eq!(sanitize_segment("weird:name"), "weird_name");
+        assert_eq!(sanitize_segment("with space"), "with_space");
+        assert_eq!(sanitize_segment("café"), "caf_");
+    }
+
+    #[test]
+    fn sanitize_segment_maps_empty_and_dot_only_to_underscore() {
+        assert_eq!(sanitize_segment(""), "_");
+        assert_eq!(sanitize_segment("."), "_");
+        assert_eq!(sanitize_segment(".."), "_");
+    }
+
+    #[test]
+    fn new_sanitizes_partition_components() {
+        let key = ComparabilityKey::new(
+            "team/app",
+            EngineSystem::Criterion,
+            "weird/triple",
+            Some("machine/one"),
+        );
+        assert_eq!(
+            key.partition_prefix(),
+            "v1/team_app/criterion/weird_triple/machine_one"
+        );
+        // The partition prefix has exactly the five canonical segments.
+        assert_eq!(key.partition_prefix().split('/').count(), 5);
+    }
+
+    #[test]
+    fn object_key_sanitizes_commit_and_run_id() {
+        let key = ComparabilityKey::new(
+            "folo",
+            EngineSystem::Callgrind,
+            "x86_64-unknown-linux-gnu",
+            None,
+        );
+        let object = key.object_key(1_700_000_000, "dead/beef", "run/7");
+        assert_eq!(
+            object,
+            "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/1700000000-dead_beef-run_7.json"
+        );
+        // Exactly the six canonical key segments survive sanitization.
+        assert_eq!(object.split('/').count(), 6);
     }
 }

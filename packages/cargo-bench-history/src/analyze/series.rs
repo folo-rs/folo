@@ -165,6 +165,7 @@ mod tests {
     )]
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
+    use crate::comparability::{ComparabilityKey, EngineSystem};
     use crate::context::{CiInfo, GitInfo, RunContext, Timestamps, ToolchainInfo};
     use crate::model::{Metric, ResultRecord};
 
@@ -176,6 +177,17 @@ mod tests {
 
     /// Builds a stored result set with one record carrying one `Ir` metric.
     fn result_set(effective: Timestamp, commit: &str, value: f64) -> ResultSet {
+        result_set_for_package(effective, commit, value, None)
+    }
+
+    /// Builds a stored result set whose single record is scoped to `package`,
+    /// keeping every other identity component fixed.
+    fn result_set_for_package(
+        effective: Timestamp,
+        commit: &str,
+        value: f64,
+        package: Option<&str>,
+    ) -> ResultSet {
         let context = RunContext::new(
             Timestamps::new(effective, effective, effective),
             GitInfo {
@@ -189,7 +201,12 @@ mod tests {
             "0.0.1".to_owned(),
         );
         let record = ResultRecord::new(
-            BenchmarkId::new("group".to_owned(), Some("case".to_owned()), None),
+            BenchmarkId::new(
+                package.map(ToOwned::to_owned),
+                "group".to_owned(),
+                Some("case".to_owned()),
+                None,
+            ),
             vec![Metric::new(
                 "Ir".to_owned(),
                 MetricKind::InstructionCount,
@@ -272,6 +289,46 @@ mod tests {
 
         let series = build_series(&objects, &SeriesFilter::default());
         assert_eq!(series.len(), 2, "different triples are different series");
+    }
+
+    #[test]
+    fn build_series_separates_packages() {
+        // Two records share group/case/metric and location but belong to different
+        // packages, so they must form two series rather than silently merging.
+        let objects = vec![
+            (
+                key_for(100, "aaa", "r1"),
+                result_set_for_package(ts(100), "aaa", 10.0, Some("foo")),
+            ),
+            (
+                key_for(200, "bbb", "r2"),
+                result_set_for_package(ts(200), "bbb", 20.0, Some("bar")),
+            ),
+        ];
+
+        let series = build_series(&objects, &SeriesFilter::default());
+        assert_eq!(series.len(), 2, "different packages are different series");
+    }
+
+    #[test]
+    fn build_series_attributes_a_key_with_a_sanitized_project() {
+        // A project containing a stray separator is mangled into a single segment
+        // when the key is built, so the resulting key still parses and the run is
+        // attributed (rather than silently dropped by `location_from_key`).
+        let key = ComparabilityKey::new(
+            "team/app",
+            EngineSystem::Callgrind,
+            "x86_64-unknown-linux-gnu",
+            None,
+        )
+        .object_key(100, "aaa", "r1");
+        assert!(
+            location_from_key(&key).is_some(),
+            "sanitized key should remain attributable: {key}"
+        );
+
+        let objects = vec![(key, result_set(ts(100), "aaa", 10.0))];
+        assert_eq!(build_series(&objects, &SeriesFilter::default()).len(), 1);
     }
 
     #[test]

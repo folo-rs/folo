@@ -1,6 +1,8 @@
 //! The data model: a benchmark run reduced to a stable identity and a set of
 //! named numeric metrics, plus the immutable result set stored per run.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 use crate::RunContext;
@@ -74,12 +76,32 @@ impl ResultRecord {
 /// Stable identity of a benchmark series.
 ///
 /// Two runs contribute to the same series if and only if their `BenchmarkId`
-/// values are equal, so the components must be reproducible across runs. For
-/// Callgrind these are the Gungraun `module_path`, `function_name`, and optional
-/// `id`; for Criterion they are the `group_id`, `function_id`, and `value_str`.
+/// values are equal, so the components must be reproducible across runs *and*
+/// uniquely identify the benchmark within its project.
+///
+/// The components are kept as separate fields (rather than a single opaque
+/// string) so that callers can render the identity at whatever granularity suits
+/// them — the full [`qualified`](Self::qualified) form for disambiguation, or the
+/// compact [`short`](Self::short) tail for dense listings.
+///
+/// `package` scopes the identity to the workspace package the benchmark belongs
+/// to. Without it, two equally named bench targets in different packages (for
+/// example `foo/benches/a.rs` and `bar/benches/a.rs`, each defining the same
+/// function) would share a `module_path` and silently merge into one series.
+/// For Callgrind it is the final component of the Gungraun `package_dir`; for
+/// Criterion it is the package the benchmark binary belongs to. It is optional so
+/// that summaries lacking the information degrade gracefully rather than fail.
+///
+/// The remaining components are, for Callgrind, the Gungraun `module_path`,
+/// `function_name`, and optional `id`; for Criterion they are the `group_id`,
+/// `function_id`, and `value_str`.
 #[non_exhaustive]
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct BenchmarkId {
+    /// Workspace package the benchmark belongs to, scoping the identity so that
+    /// equally named bench targets in different packages stay distinct.
+    #[serde(default)]
+    pub package: Option<String>,
     /// Primary grouping component (Callgrind Gungraun `module_path`; Criterion
     /// `group_id`).
     pub group: String,
@@ -94,8 +116,64 @@ pub struct BenchmarkId {
 impl BenchmarkId {
     /// Creates a benchmark identity from its components.
     #[must_use]
-    pub fn new(group: String, case: Option<String>, value: Option<String>) -> Self {
-        Self { group, case, value }
+    pub fn new(
+        package: Option<String>,
+        group: String,
+        case: Option<String>,
+        value: Option<String>,
+    ) -> Self {
+        Self {
+            package,
+            group,
+            case,
+            value,
+        }
+    }
+
+    /// The fully qualified identity: every present component joined by `/`,
+    /// scoped by the package. This form uniquely identifies the series and is
+    /// what reports use so that cross-package collisions stay visible.
+    #[must_use]
+    pub fn qualified(&self) -> String {
+        let mut parts: Vec<&str> = Vec::with_capacity(4);
+        if let Some(package) = &self.package {
+            parts.push(package);
+        }
+        parts.push(&self.group);
+        if let Some(case) = &self.case {
+            parts.push(case);
+        }
+        if let Some(value) = &self.value {
+            parts.push(value);
+        }
+        parts.join("/")
+    }
+
+    /// A compact, human-friendly label: the function/case (or the last segment of
+    /// `group` when no case is present), suffixed by the parameter value if any.
+    ///
+    /// This drops the package and module path for readability, so it may be
+    /// ambiguous across packages; use [`qualified`](Self::qualified) when a unique
+    /// label is required.
+    #[must_use]
+    pub fn short(&self) -> String {
+        let head = self.case.as_deref().unwrap_or_else(|| {
+            self.group
+                .rsplit("::")
+                .next()
+                .filter(|segment| !segment.is_empty())
+                .unwrap_or(&self.group)
+        });
+        match &self.value {
+            Some(value) => format!("{head}/{value}"),
+            None => head.to_owned(),
+        }
+    }
+}
+
+impl fmt::Display for BenchmarkId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.qualified())
     }
 }
 
@@ -170,7 +248,12 @@ mod tests {
     #[test]
     fn result_set_json_roundtrip() {
         let record = ResultRecord::new(
-            BenchmarkId::new("nm::observe".to_owned(), Some("pull".to_owned()), None),
+            BenchmarkId::new(
+                Some("nm".to_owned()),
+                "nm::observe".to_owned(),
+                Some("pull".to_owned()),
+                None,
+            ),
             vec![Metric::new(
                 "instructions".to_owned(),
                 MetricKind::InstructionCount,
@@ -190,5 +273,82 @@ mod tests {
     fn metric_kind_serializes_snake_case() {
         let json = serde_json::to_string(&MetricKind::InstructionCount).unwrap();
         assert_eq!(json, "\"instruction_count\"");
+    }
+
+    #[test]
+    fn package_distinguishes_otherwise_equal_ids() {
+        let foo = BenchmarkId::new(
+            Some("foo".to_owned()),
+            "a::bench".to_owned(),
+            Some("run".to_owned()),
+            None,
+        );
+        let bar = BenchmarkId::new(
+            Some("bar".to_owned()),
+            "a::bench".to_owned(),
+            Some("run".to_owned()),
+            None,
+        );
+
+        assert_ne!(foo, bar);
+    }
+
+    #[test]
+    fn ids_sort_by_package_first() {
+        let bar = BenchmarkId::new(Some("bar".to_owned()), "z".to_owned(), None, None);
+        let foo = BenchmarkId::new(Some("foo".to_owned()), "a".to_owned(), None, None);
+
+        let mut ids = vec![foo.clone(), bar.clone()];
+        ids.sort();
+
+        assert_eq!(ids, vec![bar, foo]);
+    }
+
+    #[test]
+    fn qualified_joins_present_components() {
+        let id = BenchmarkId::new(
+            Some("fast_time".to_owned()),
+            "a::group".to_owned(),
+            Some("capture".to_owned()),
+            Some("two_instants".to_owned()),
+        );
+        assert_eq!(id.qualified(), "fast_time/a::group/capture/two_instants");
+        assert_eq!(id.to_string(), id.qualified());
+    }
+
+    #[test]
+    fn qualified_omits_absent_components() {
+        let id = BenchmarkId::new(None, "a::group".to_owned(), None, None);
+        assert_eq!(id.qualified(), "a::group");
+    }
+
+    #[test]
+    fn short_uses_case_and_value() {
+        let id = BenchmarkId::new(
+            Some("fast_time".to_owned()),
+            "a::group".to_owned(),
+            Some("capture".to_owned()),
+            Some("two_instants".to_owned()),
+        );
+        assert_eq!(id.short(), "capture/two_instants");
+    }
+
+    #[test]
+    fn short_falls_back_to_last_group_segment() {
+        let id = BenchmarkId::new(
+            Some("fast_time".to_owned()),
+            "a::group".to_owned(),
+            None,
+            None,
+        );
+        assert_eq!(id.short(), "group");
+    }
+
+    #[test]
+    fn deserializes_legacy_id_without_package() {
+        let id: BenchmarkId =
+            serde_json::from_str(r#"{"group":"a::group","case":"capture","value":null}"#).unwrap();
+        assert_eq!(id.package, None);
+        assert_eq!(id.group, "a::group");
     }
 }

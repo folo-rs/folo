@@ -191,16 +191,11 @@ fn direction_label(direction: Direction) -> &'static str {
     }
 }
 
-/// Renders a benchmark identity as `group/case/value`, omitting absent parts.
+/// Renders a benchmark identity as `package/group/case/value`, omitting absent
+/// parts. The package-qualified form keeps benchmarks with the same `module_path`
+/// in different packages distinguishable in reports.
 fn describe_id(id: &BenchmarkId) -> String {
-    let mut parts = vec![id.group.clone()];
-    if let Some(case) = &id.case {
-        parts.push(case.clone());
-    }
-    if let Some(value) = &id.value {
-        parts.push(value.clone());
-    }
-    parts.join("/")
+    id.qualified()
 }
 
 /// Formats a measured value, dropping the fraction for integer-valued counts.
@@ -238,7 +233,12 @@ mod tests {
     fn regression() -> Finding {
         Finding {
             location: location(),
-            id: BenchmarkId::new("nm::observe".to_owned(), Some("pull".to_owned()), None),
+            id: BenchmarkId::new(
+                Some("nm".to_owned()),
+                "nm::observe".to_owned(),
+                Some("pull".to_owned()),
+                None,
+            ),
             metric: "Ir".to_owned(),
             kind: MetricKind::InstructionCount,
             direction: Direction::Regression,
@@ -368,6 +368,7 @@ mod tests {
         let finding = &parsed["findings"][0];
         // Flattened Location and BenchmarkId fields appear inline.
         assert_eq!(finding["system"], "callgrind");
+        assert_eq!(finding["package"], "nm");
         assert_eq!(finding["group"], "nm::observe");
         assert_eq!(finding["direction"], "regression");
         assert_eq!(finding["severity"], "major");
@@ -382,12 +383,13 @@ mod tests {
     #[test]
     fn describe_id_joins_present_parts() {
         let id = BenchmarkId::new(
+            Some("pkg".to_owned()),
             "group".to_owned(),
             Some("case".to_owned()),
             Some("value".to_owned()),
         );
-        assert_eq!(describe_id(&id), "group/case/value");
-        let bare = BenchmarkId::new("group".to_owned(), None, None);
+        assert_eq!(describe_id(&id), "pkg/group/case/value");
+        let bare = BenchmarkId::new(None, "group".to_owned(), None, None);
         assert_eq!(describe_id(&bare), "group");
     }
 }

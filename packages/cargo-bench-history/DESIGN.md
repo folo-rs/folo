@@ -107,9 +107,14 @@ flowchart LR
   ST -->|analyze| SE[Series engine] --> F[Findings report]
 ```
 
-* **BenchmarkId** — stable identity of a series. Callgrind: `module_path`
-  (+ `id`). Criterion: `group_id / function_id / value_str`. Renaming a
-  benchmark starts a new series (documented caveat; see §13).
+* **BenchmarkId** — stable identity of a series, scoped by the workspace
+  `package` so that equally named bench targets in different packages (for
+  example `foo/benches/a.rs` and `bar/benches/a.rs`) never collide into one
+  series. Callgrind: `package` (Gungraun `package_dir` basename) + `module_path`
+  + `function_name` (+ `id`). Criterion: `package` + `group_id` / `function_id` /
+  `value_str`. Components are kept separate so reports can render the full
+  `qualified()` form or a compact `short()` tail. Renaming a benchmark starts a
+  new series (documented caveat; see §13).
 * **Metric** — `{ name, unit, value: f64, kind }` where `kind ∈ {Wallclock,
   InstructionCount, CacheHits, EstimatedCycles, Branches, …}`. Criterion also
   carries the confidence interval and std-dev so analysis can be noise-aware.
@@ -193,6 +198,14 @@ and blob storage, no read-modify-write races in concurrent CI):
 `analyze` lists a partition prefix and downloads every `*.json`; `run` writes one
 new object (named by **effective** time, so backfilled points sort into their
 historical position). No mutation, no locking.
+
+Each path segment (`<project>`, `<target_triple>`, `<machine_key>`, and the
+`<short_sha>`/`<run_uuid>` parts of the file name) is **sanitized** before the key
+is built: any character outside `[A-Za-z0-9._-]` becomes `_`, and an
+otherwise-empty or all-dots segment becomes `_`. This keeps a stray `/` (e.g. a
+`project.id` of `team/app`) from silently splitting the key into the wrong number
+of segments — which `analyze` would then drop as unattributable — by mangling the
+value rather than rejecting the run.
 
 ## 5. Machine key (hardware fingerprint)
 

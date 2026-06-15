@@ -713,6 +713,45 @@ async fn run_stores_a_record_per_summary() {
     assert_eq!(ir_of(unparametrized), 36.0);
 }
 
+/// Two bench targets that share a `module_path` but live in different packages
+/// stay distinct: their records differ only in `package`, so they never collapse
+/// into one series. Without the package component they would silently merge.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn run_distinguishes_same_module_path_across_packages() {
+    let workspace = Workspace::new(&callgrind_config(&mock_command(
+        "--summary a=single --summary b=single-alt-pkg",
+    )));
+
+    let outcome = workspace.drive(&["run"]).await.expect("run should succeed");
+    let RunOutcome::Completed { message } = outcome else {
+        panic!("expected completion, got {outcome:?}");
+    };
+    assert!(message.contains("covering 2"), "{message}");
+
+    let (_, set) = workspace.single_object();
+    assert_eq!(set.results.len(), 2);
+
+    // Both records share group, case, and value; only the package differs.
+    let groups: Vec<&str> = set.results.iter().map(|r| r.id.group.as_str()).collect();
+    assert_eq!(
+        groups[0], groups[1],
+        "the colliding module_path is identical"
+    );
+
+    let mut packages: Vec<Option<&str>> = set
+        .results
+        .iter()
+        .map(|r| r.id.package.as_deref())
+        .collect();
+    packages.sort_unstable();
+    assert_eq!(packages, vec![Some("fast_time"), Some("other_pkg")]);
+
+    // The identities differ, so analyze would build two series rather than one.
+    assert_ne!(set.results[0].id, set.results[1].id);
+}
+
 /// `--no-store` still harvests the output but writes nothing to storage.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
@@ -1098,7 +1137,12 @@ fn result_set_with(effective: i64, commit: &str, metrics: Vec<Metric>) -> Result
         TOOL_VERSION.to_owned(),
     );
     let record = ResultRecord::new(
-        BenchmarkId::new("nm::observe".to_owned(), Some("pull".to_owned()), None),
+        BenchmarkId::new(
+            Some("nm".to_owned()),
+            "nm::observe".to_owned(),
+            Some("pull".to_owned()),
+            None,
+        ),
         metrics,
     );
     ResultSet::new(context, vec![record])

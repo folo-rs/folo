@@ -184,7 +184,12 @@ mod tests {
             "0.0.1".to_owned(),
         );
         let record = ResultRecord::new(
-            BenchmarkId::new("nm::observe".to_owned(), Some("pull".to_owned()), None),
+            BenchmarkId::new(
+                Some("nm".to_owned()),
+                "nm::observe".to_owned(),
+                Some("pull".to_owned()),
+                None,
+            ),
             vec![Metric::new(
                 "Ir".to_owned(),
                 MetricKind::InstructionCount,

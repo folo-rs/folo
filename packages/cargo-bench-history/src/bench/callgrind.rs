@@ -74,6 +74,10 @@ fn parse_summary(json: &str) -> Result<Summary, CallgrindParseError> {
 /// Maps a parsed summary to a [`ResultRecord`] (pure).
 fn summary_to_record(summary: &Summary) -> ResultRecord {
     let id = BenchmarkId::new(
+        summary
+            .package_dir
+            .as_deref()
+            .and_then(package_name_from_dir),
         summary.module_path.clone(),
         Some(summary.function_name.clone()),
         summary.id.clone(),
@@ -103,6 +107,22 @@ fn summary_to_record(summary: &Summary) -> ResultRecord {
     ResultRecord::new(id, metrics)
 }
 
+/// Extracts the package name from a Gungraun `package_dir` path.
+///
+/// The directory is an absolute path whose final component is the package
+/// directory name (for example `/mnt/c/Source/folo/packages/fast_time` ->
+/// `fast_time`). Only the final component is used because the full path is
+/// machine-specific (it differs between, say, a WSL guest and a CI runner) and
+/// would break comparability across machines. Both `/` and `\` are treated as
+/// separators so Windows-style paths resolve correctly, and trailing separators
+/// are ignored. Returns `None` when no non-empty component remains.
+fn package_name_from_dir(package_dir: &str) -> Option<String> {
+    package_dir
+        .rsplit(['/', '\\'])
+        .find(|segment| !segment.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 /// Maps a Callgrind event-kind name to the metric category the tool tracks.
 ///
 /// Returns `None` for events that are not tracked (derived rates, raw cache
@@ -124,6 +144,8 @@ struct Summary {
     module_path: String,
     function_name: String,
     id: Option<String>,
+    #[serde(default)]
+    package_dir: Option<String>,
     profiles: Vec<Profile>,
 }
 
@@ -227,12 +249,19 @@ mod tests {
         assert_eq!(
             record.id,
             BenchmarkId::new(
+                Some("fast_time".to_owned()),
                 "fast_time_timestamp_performance_cg::timestamp_capture::timestamp_capture_std_now"
                     .to_owned(),
                 Some("timestamp_capture_std_now".to_owned()),
                 None,
             )
         );
+    }
+
+    #[test]
+    fn parses_package_from_package_dir() {
+        let record = parse_callgrind_summary(SINGLE_FIXTURE).unwrap();
+        assert_eq!(record.id.package.as_deref(), Some("fast_time"));
     }
 
     #[test]
@@ -338,6 +367,46 @@ mod tests {
             "{{\"version\":\"6\",\"module_path\":\"m\",\"function_name\":\"f\",\
              \"profiles\":[{{\"summaries\":{{\"total\":{{\"summary\":{callgrind_body}}}}}}}]}}"
         )
+    }
+
+    fn summary_with_package_dir(package_dir: &str) -> String {
+        format!(
+            "{{\"version\":\"6\",\"module_path\":\"a::bench\",\"function_name\":\"f\",\
+             \"package_dir\":\"{package_dir}\",\
+             \"profiles\":[{{\"summaries\":{{\"total\":{{\"summary\":{{}}}}}}}}]}}"
+        )
+    }
+
+    #[test]
+    fn package_name_from_dir_extracts_final_component() {
+        assert_eq!(
+            package_name_from_dir("/mnt/c/Source/folo/packages/fast_time"),
+            Some("fast_time".to_owned())
+        );
+        assert_eq!(package_name_from_dir("/a/b/pkg/"), Some("pkg".to_owned()));
+        assert_eq!(package_name_from_dir(r"C:\x\pkg"), Some("pkg".to_owned()));
+        assert_eq!(package_name_from_dir("/a\\b\\pkg"), Some("pkg".to_owned()));
+        assert_eq!(package_name_from_dir("pkg"), Some("pkg".to_owned()));
+        assert_eq!(package_name_from_dir(""), None);
+        assert_eq!(package_name_from_dir("/"), None);
+    }
+
+    #[test]
+    fn summary_without_package_dir_has_no_package() {
+        let record = parse_callgrind_summary(&summary_json("{}")).unwrap();
+        assert_eq!(record.id.package, None);
+    }
+
+    #[test]
+    fn same_module_path_in_different_packages_yields_distinct_ids() {
+        let foo = parse_callgrind_summary(&summary_with_package_dir("/work/packages/foo")).unwrap();
+        let bar = parse_callgrind_summary(&summary_with_package_dir("/work/packages/bar")).unwrap();
+
+        assert_eq!(foo.id.group, bar.id.group);
+        assert_eq!(foo.id.case, bar.id.case);
+        assert_ne!(foo.id, bar.id);
+        assert_eq!(foo.id.package.as_deref(), Some("foo"));
+        assert_eq!(bar.id.package.as_deref(), Some("bar"));
     }
 
     #[test]

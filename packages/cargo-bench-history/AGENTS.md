@@ -89,6 +89,16 @@ backslashes survive the TOML string). Like every other crate root that uses
 `#![cfg_attr(coverage_nightly, feature(coverage_attribute))]` at its top, or the
 coverage job fails to compile it (E0658).
 
+The mock engine accepts `--summary GROUP=KIND` (repeatable). `KIND` is `single`
+(unparametrized, `Ir` = 36, package `fast_time`), `parametrized` (id
+`two_instants`, `Ir` = 87), or `single-alt-pkg` — the `single` fixture with its
+`package_dir` swapped for a different package while the `module_path`/
+`function_name` stay identical. `single-alt-pkg` exists to simulate two equally
+named bench targets in different packages: their `BenchmarkId`s differ only in
+`package`, so they must stay distinct series rather than silently merge. If the
+parser ever stops folding `package_dir` into the identity, the
+`run_distinguishes_same_module_path_across_packages` test fails.
+
 ## End-to-end tests and the current directory
 
 The real-adapter end-to-end test changes the process current directory into a

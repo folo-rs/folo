@@ -267,7 +267,7 @@ where
 
     // Callgrind is hardware-independent, so its partition uses no machine key.
     // Hardware fingerprinting arrives with the Criterion adapter.
-    let key = ComparabilityKey::new(deps.project_id.to_owned(), engine, target_triple, None);
+    let key = ComparabilityKey::new(deps.project_id, engine, &target_triple, None);
     let short_commit = shared.git.info.short_commit.as_deref().unwrap_or("unknown");
     let object_key = key.object_key(effective.as_second(), short_commit, deps.run_id);
 

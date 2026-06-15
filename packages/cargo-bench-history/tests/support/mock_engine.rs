@@ -6,10 +6,15 @@
 //! exit-code handling can be exercised). It performs no real benchmarking.
 //!
 //! Usage: `cargo-bench-history-mock-engine [--exit-code N] [--summary GROUP=KIND]...`
-//! where `KIND` is `single` (an unparametrized summary, `Ir` = 36) or
-//! `parametrized` (id `two_instants`, `Ir` = 87). Summaries are written to
-//! `<target-root>/gungraun/GROUP/summary.json`, where `<target-root>` honors
-//! `CARGO_TARGET_DIR` exactly as the harvester does.
+//! where `KIND` is one of:
+//! * `single` — an unparametrized summary, `Ir` = 36, package `fast_time`.
+//! * `parametrized` — id `two_instants`, `Ir` = 87, package `fast_time`.
+//! * `single-alt-pkg` — identical to `single` (same `module_path`/`function_name`)
+//!   but reporting a different `package_dir`, so its `BenchmarkId` differs only in
+//!   package. Used to exercise cross-package bench-name collisions.
+//!
+//! Summaries are written to `<target-root>/gungraun/GROUP/summary.json`, where
+//! `<target-root>` honors `CARGO_TARGET_DIR` exactly as the harvester does.
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
 use std::path::PathBuf;
@@ -21,10 +26,16 @@ const SINGLE_SUMMARY: &str =
 /// A committed Gungraun summary with `id` = `two_instants`, `Ir` = 87.
 const PARAMETRIZED_SUMMARY: &str = include_str!("../fixtures/callgrind/parametrized.summary.json");
 
+/// The `package_dir` value of the committed single summary.
+const SINGLE_PACKAGE_DIR: &str = "\"/mnt/c/Source/folo/packages/fast_time\"";
+/// A different `package_dir` that keeps the `module_path` unchanged, simulating an
+/// equally named bench target in another package.
+const ALT_PACKAGE_DIR: &str = "\"/work/packages/other_pkg\"";
+
 #[cfg_attr(coverage_nightly, coverage(off))]
 fn main() -> ExitCode {
     let mut exit_code: u8 = 0;
-    let mut summaries: Vec<(String, &'static str)> = Vec::new();
+    let mut summaries: Vec<(String, String)> = Vec::new();
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -39,8 +50,9 @@ fn main() -> ExitCode {
                     .split_once('=')
                     .expect("--summary value must be GROUP=KIND");
                 let content = match kind {
-                    "single" => SINGLE_SUMMARY,
-                    "parametrized" => PARAMETRIZED_SUMMARY,
+                    "single" => SINGLE_SUMMARY.to_owned(),
+                    "parametrized" => PARAMETRIZED_SUMMARY.to_owned(),
+                    "single-alt-pkg" => SINGLE_SUMMARY.replace(SINGLE_PACKAGE_DIR, ALT_PACKAGE_DIR),
                     other => panic!("unknown summary kind {other:?}"),
                 };
                 summaries.push((group.to_owned(), content));

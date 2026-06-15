@@ -292,7 +292,7 @@ mod tests {
                 target_triple: "t".to_owned(),
                 machine: "synthetic".to_owned(),
             },
-            id: BenchmarkId::new("group".to_owned(), Some("case".to_owned()), None),
+            id: BenchmarkId::new(None, "group".to_owned(), Some("case".to_owned()), None),
             metric: "Ir".to_owned(),
             kind: MetricKind::InstructionCount,
             points,
