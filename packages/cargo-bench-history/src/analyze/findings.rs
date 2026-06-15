@@ -1,9 +1,11 @@
 //! The finding algorithms: compare the latest point of each series against a
 //! rolling baseline of its recent history and flag statistically notable moves.
 //!
-//! Every metric this tool records is "lower is better" (instruction counts, cycle
-//! estimates, cache misses, wall time), so a latest value above the baseline is a
+//! Most metrics this tool records are "lower is better" (instruction counts, cycle
+//! estimates, branch counts, wall time), so a latest value above the baseline is a
 //! [`Direction::Regression`] and one below it is a [`Direction::Improvement`].
+//! Cache *hit* counts are the exception — more hits means fewer cache misses, so
+//! for that metric the polarity is inverted.
 
 use serde::Serialize;
 
@@ -146,14 +148,30 @@ fn classify_severity(relative_delta: f64) -> Severity {
     }
 }
 
-/// The direction of a change, given the signed delta from the baseline.
+/// Whether a larger value of `kind` indicates better performance.
 ///
-/// A non-positive delta is an improvement (metrics are "lower is better"). The
-/// caller only reaches this with a delta beyond the noise threshold, so the exact
-/// zero case never arises in practice; it is defined as an improvement so the
-/// classification is total.
-fn direction_of(delta: f64) -> Direction {
-    if delta > 0.0 {
+/// Cache hit counts are the sole "higher is better" metric (more hits means fewer
+/// misses); every other metric — wall time, instruction counts, estimated cycles,
+/// branch counts — is lower-is-better.
+fn higher_is_better(kind: MetricKind) -> bool {
+    matches!(kind, MetricKind::CacheEvents)
+}
+
+/// The direction of a change, given the signed delta from the baseline and the
+/// metric's polarity.
+///
+/// For a lower-is-better metric a positive delta is a regression; for a
+/// higher-is-better metric (cache hits) the polarity is inverted. The caller only
+/// reaches this with a delta beyond the noise threshold, so the exact zero case
+/// never arises in practice; it is defined as an improvement so the classification
+/// is total.
+fn direction_of(delta: f64, kind: MetricKind) -> Direction {
+    let worse = if higher_is_better(kind) {
+        delta < 0.0
+    } else {
+        delta > 0.0
+    };
+    if worse {
         Direction::Regression
     } else {
         Direction::Improvement
@@ -195,7 +213,7 @@ pub(crate) fn evaluate_series(series: &Series, config: &RegressionConfig) -> Opt
     } else {
         delta / baseline
     };
-    let direction = direction_of(delta);
+    let direction = direction_of(delta, series.kind);
 
     Some(Finding {
         location: series.location.clone(),
@@ -281,6 +299,14 @@ mod tests {
         }
     }
 
+    /// Builds a series like [`series_of`] but tagged with a specific metric kind,
+    /// so polarity-dependent direction logic can be exercised.
+    fn series_of_kind(values: &[f64], kind: MetricKind) -> Series {
+        let mut series = series_of(values);
+        series.kind = kind;
+        series
+    }
+
     #[test]
     fn median_of_odd_and_even_counts() {
         assert_eq!(median(&[3.0, 1.0, 2.0]), Some(2.0));
@@ -314,10 +340,57 @@ mod tests {
 
     #[test]
     fn direction_of_treats_zero_and_negative_as_improvement() {
-        assert_eq!(direction_of(1.0), Direction::Regression);
-        assert_eq!(direction_of(-1.0), Direction::Improvement);
+        assert_eq!(
+            direction_of(1.0, MetricKind::InstructionCount),
+            Direction::Regression
+        );
+        assert_eq!(
+            direction_of(-1.0, MetricKind::InstructionCount),
+            Direction::Improvement
+        );
         // The boundary is improvement: only a strictly positive move regresses.
-        assert_eq!(direction_of(0.0), Direction::Improvement);
+        assert_eq!(
+            direction_of(0.0, MetricKind::InstructionCount),
+            Direction::Improvement
+        );
+    }
+
+    #[test]
+    fn direction_of_inverts_for_higher_is_better_metrics() {
+        // Cache hits are higher-is-better: more hits improves, fewer regresses.
+        assert_eq!(
+            direction_of(1.0, MetricKind::CacheEvents),
+            Direction::Improvement
+        );
+        assert_eq!(
+            direction_of(-1.0, MetricKind::CacheEvents),
+            Direction::Regression
+        );
+        // The boundary stays improvement so the classification is total.
+        assert_eq!(
+            direction_of(0.0, MetricKind::CacheEvents),
+            Direction::Improvement
+        );
+    }
+
+    #[test]
+    fn fewer_cache_hits_is_a_regression() {
+        // Cache hits are higher-is-better, so a drop below the baseline regresses.
+        let series = series_of_kind(&[100.0, 100.0, 100.0, 70.0], MetricKind::CacheEvents);
+        let finding = evaluate_series(&series, &RegressionConfig::default()).expect("a regression");
+        assert_eq!(finding.direction, Direction::Regression);
+        assert!(finding.is_regression());
+        assert_eq!(finding.delta, -30.0);
+    }
+
+    #[test]
+    fn more_cache_hits_is_an_improvement() {
+        let series = series_of_kind(&[100.0, 100.0, 100.0, 130.0], MetricKind::CacheEvents);
+        let finding =
+            evaluate_series(&series, &RegressionConfig::default()).expect("an improvement");
+        assert_eq!(finding.direction, Direction::Improvement);
+        assert!(!finding.is_regression());
+        assert_eq!(finding.delta, 30.0);
     }
 
     #[test]

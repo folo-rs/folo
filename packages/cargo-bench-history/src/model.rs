@@ -137,7 +137,7 @@ pub enum MetricKind {
     InstructionCount,
     /// Estimated CPU cycles from the Callgrind cache model.
     EstimatedCycles,
-    /// Cache hit/miss counts (Callgrind).
+    /// Cache hit counts (Callgrind); higher is better.
     CacheEvents,
     /// Branch / branch-miss counts (Callgrind).
     Branches,
