@@ -200,4 +200,19 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.to_string(), "account key is not valid base64");
     }
+
+    #[test]
+    fn sas_error_exposes_the_underlying_base64_error_as_source() {
+        use std::error::Error as _;
+
+        let error = signature(&AccountSasParams {
+            account_key_base64: "not valid base64!!!",
+            ..golden_params()
+        })
+        .unwrap_err();
+        let source = error
+            .source()
+            .expect("InvalidAccountKey wraps the underlying base64 decode error");
+        assert!(source.downcast_ref::<base64::DecodeError>().is_some());
+    }
 }

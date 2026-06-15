@@ -171,3 +171,13 @@ In CI these tests run only in the Linux-only `test-azure` job (see
 the `start-azurite` composite action and also collects coverage so the
 `azure.rs` network paths reach Codecov (the multi-platform `coverage` job runs
 without an emulator and so cannot cover them).
+
+### Mutation testing
+
+The `mutants` CI jobs run without Azurite, so the SDK-delegating IO methods
+(`put`/`get`/`list`/`ensure_container`/the `upload` helper) — whose only coverage
+is the Azurite round-trip tests — carry `#[cfg_attr(test, mutants::skip)]`, the
+same pattern `probe.rs` uses for its `git`/`rustc` shell-outs. The pure logic
+those methods lean on (`classify`, `map_error`, the `storage::sas` signer, and
+`account_sas_expiry`) has dedicated unit tests and stays under mutation testing,
+so the error-mapping and signing behavior is still mutation-covered.

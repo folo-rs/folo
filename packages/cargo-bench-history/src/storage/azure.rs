@@ -153,6 +153,7 @@ impl AzureBlobStorage {
     }
 
     /// Creates the container, treating an already-existing container as success.
+    #[cfg_attr(test, mutants::skip)] // Delegates to the Azure SDK; verified by the Azurite round-trip tests, which mutation testing cannot run.
     async fn ensure_container(&self) -> Result<(), StorageError> {
         let client = self.container_client()?;
         match client.create(None).await {
@@ -164,6 +165,7 @@ impl AzureBlobStorage {
 }
 
 impl Storage for AzureBlobStorage {
+    #[cfg_attr(test, mutants::skip)] // Delegates to the Azure SDK; verified by the Azurite round-trip tests, which mutation testing cannot run.
     async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
         validate_key(key)?;
         let client = self.blob_client(key)?;
@@ -180,6 +182,7 @@ impl Storage for AzureBlobStorage {
         }
     }
 
+    #[cfg_attr(test, mutants::skip)] // Delegates to the Azure SDK; verified by the Azurite round-trip tests, which mutation testing cannot run.
     async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError> {
         validate_key(key)?;
         let client = self.blob_client(key)?;
@@ -201,6 +204,7 @@ impl Storage for AzureBlobStorage {
         }
     }
 
+    #[cfg_attr(test, mutants::skip)] // Delegates to the Azure SDK; verified by the Azurite round-trip tests, which mutation testing cannot run.
     async fn list(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
         let client = self.container_client()?;
         let mut pager = client
@@ -233,6 +237,7 @@ impl Storage for AzureBlobStorage {
 }
 
 /// Uploads `bytes` write-once (failing if the blob already exists).
+#[cfg_attr(test, mutants::skip)] // Delegates to the Azure SDK; verified by the Azurite round-trip tests, which mutation testing cannot run.
 async fn upload(client: &BlobClient, bytes: &[u8]) -> azure_core::Result<()> {
     client
         .upload(
@@ -332,6 +337,87 @@ mod tests {
     /// The well-known Azurite development account key (public, fixed, not secret).
     const AZURITE_KEY: &str =
         "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
+
+    /// Builds an Azure HTTP-response error with the given status and storage
+    /// error code, mirroring what the SDK surfaces for a failed request.
+    fn http_error(status: StatusCode, error_code: Option<&str>) -> azure_core::Error {
+        ErrorKind::HttpResponse {
+            status,
+            error_code: error_code.map(str::to_owned),
+            raw_response: None,
+        }
+        .into_error()
+    }
+
+    #[test]
+    fn classify_maps_container_not_found_code_to_container_missing() {
+        let error = http_error(
+            StatusCode::NotFound,
+            Some(StorageErrorCode::ContainerNotFound.as_ref()),
+        );
+        assert!(matches!(classify(&error), Fault::ContainerMissing));
+    }
+
+    #[test]
+    fn classify_maps_not_found_status_without_container_code_to_not_found() {
+        let error = http_error(StatusCode::NotFound, None);
+        assert!(matches!(classify(&error), Fault::NotFound));
+    }
+
+    #[test]
+    fn classify_maps_conflict_status_to_already_exists() {
+        let error = http_error(StatusCode::Conflict, None);
+        assert!(matches!(classify(&error), Fault::AlreadyExists));
+    }
+
+    #[test]
+    fn classify_maps_precondition_failed_status_to_already_exists() {
+        let error = http_error(StatusCode::PreconditionFailed, None);
+        assert!(matches!(classify(&error), Fault::AlreadyExists));
+    }
+
+    #[test]
+    fn classify_maps_other_status_to_other() {
+        let error = http_error(StatusCode::InternalServerError, None);
+        assert!(matches!(classify(&error), Fault::Other));
+    }
+
+    #[test]
+    fn classify_maps_non_http_error_to_other() {
+        let error = ErrorKind::Io.into_error();
+        assert!(matches!(classify(&error), Fault::Other));
+    }
+
+    #[test]
+    fn map_error_distinguishes_not_found_already_exists_and_io() {
+        let key = "object";
+        assert!(matches!(
+            map_error(&http_error(StatusCode::NotFound, None), key),
+            StorageError::NotFound { .. }
+        ));
+        assert!(matches!(
+            map_error(&http_error(StatusCode::Conflict, None), key),
+            StorageError::AlreadyExists { .. }
+        ));
+        assert!(matches!(
+            map_error(&http_error(StatusCode::InternalServerError, None), key),
+            StorageError::Io(_)
+        ));
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "reads the wall clock to compute the SAS expiry")]
+    fn account_sas_expiry_is_a_future_fixed_width_utc_timestamp() {
+        let expiry = account_sas_expiry();
+        let parsed: Timestamp = expiry.parse().expect("expiry is a valid RFC3339 timestamp");
+        assert!(
+            parsed > Timestamp::now(),
+            "expiry {expiry} should be in the future"
+        );
+        // The SAS string-to-sign requires the fixed-width `YYYY-MM-DDThh:mm:ssZ` form.
+        assert_eq!(expiry.len(), "2030-01-01T00:00:00Z".len(), "{expiry}");
+        assert!(expiry.ends_with('Z'), "{expiry}");
+    }
 
     #[test]
     #[cfg_attr(miri, ignore = "reads the wall clock to compute the SAS expiry")]
