@@ -119,6 +119,15 @@ mod tests {
         path
     }
 
+    fn set_mtime(path: &std::path::Path, when: SystemTime) {
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(when)
+            .unwrap();
+    }
+
     #[tokio::test]
     #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
     async fn collects_fresh_summaries_recursively() {
@@ -146,12 +155,7 @@ mod tests {
 
         // Backdate the file well beyond the mtime slack so it is unambiguously stale.
         let long_ago = SystemTime::now() - Duration::from_hours(1);
-        std::fs::File::options()
-            .write(true)
-            .open(&stale)
-            .unwrap()
-            .set_modified(long_ago)
-            .unwrap();
+        set_mtime(&stale, long_ago);
 
         let source = FsBenchOutputSource::new(dir.path());
         let summaries = source
@@ -160,6 +164,31 @@ mod tests {
             .unwrap();
 
         assert!(summaries.is_empty(), "stale summary should be excluded");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn slack_window_includes_just_inside_and_excludes_just_outside() {
+        let dir = tempdir().unwrap();
+        let inside = write_summary(dir.path(), "fresh/summary.json", "inside");
+        let outside = write_summary(dir.path(), "stale/summary.json", "outside");
+
+        // The harvest admits files whose mtime is no older than `since - 2s`; the
+        // slack absorbs coarse filesystem mtime resolution. Stamp one summary 1s
+        // before `since` (inside the band → kept) and one 3s before (past it →
+        // dropped), pinning both the slack magnitude and the boundary's inclusivity.
+        let since = SystemTime::now();
+        set_mtime(&inside, since - Duration::from_secs(1));
+        set_mtime(&outside, since - Duration::from_secs(3));
+
+        let source = FsBenchOutputSource::new(dir.path());
+        let summaries = source
+            .collect(EngineSystem::Callgrind, since)
+            .await
+            .unwrap();
+
+        let contents: Vec<&str> = summaries.iter().map(|s| s.content.as_str()).collect();
+        assert_eq!(contents, vec!["inside"]);
     }
 
     #[tokio::test]

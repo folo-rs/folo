@@ -334,6 +334,8 @@ fn config_error(message: impl Into<String>) -> StorageError {
 mod tests {
     use super::*;
 
+    use futures::executor::block_on;
+
     /// The well-known Azurite development account key (public, fixed, not secret).
     const AZURITE_KEY: &str =
         "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
@@ -606,6 +608,27 @@ mod tests {
             storage.container_endpoint.path(),
             "/devstoreaccount1/bench-history"
         );
+    }
+
+    #[test]
+    fn put_and_get_reject_keys_that_escape_the_prefix() {
+        // The Azure IO methods delegate to the SDK (and are mutation-skipped), but
+        // each first runs the pure `validate_key` guard before any network call.
+        // `block_on` drives that guard to completion without an emulator or a Tokio
+        // runtime: the future resolves to the rejection before it awaits anything.
+        let storage = AzureBlobStorage::from_config(
+            "prod",
+            "history",
+            Some("https://prod.blob.core.windows.net".to_owned()),
+            None,
+            Some("?sv=2021-08-06&sig=abc".to_owned()),
+        )
+        .unwrap();
+
+        let put = block_on(storage.put("../bad", b"x")).unwrap_err();
+        assert!(matches!(put, StorageError::InvalidKey { .. }), "{put:?}");
+        let get = block_on(storage.get("../bad")).unwrap_err();
+        assert!(matches!(get, StorageError::InvalidKey { .. }), "{get:?}");
     }
 
     // =======================================================================

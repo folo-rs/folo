@@ -457,6 +457,22 @@ mod tests {
     }
 
     #[test]
+    fn noisy_baseline_flags_a_move_beyond_the_mad_threshold() {
+        // Same noisy baseline as above (80,120,80,120 → median 100, MAD 20, MAD
+        // threshold 60), but the latest jumps to 180. Here the MAD-scaled threshold
+        // (60), not the 1.0 relative floor, is the one delta=80 must clear — so this
+        // exercises the realistic "regression on a noisy series" detection path. The
+        // move is +80% of baseline, so it ranks Major.
+        let series = series_of(&[80.0, 120.0, 80.0, 120.0, 180.0]);
+        let finding = evaluate_series(&series, &RegressionConfig::default()).expect("a regression");
+        assert_eq!(finding.direction, Direction::Regression);
+        assert_eq!(finding.severity, Severity::Major);
+        assert_eq!(finding.baseline, 100.0);
+        assert_eq!(finding.latest, 180.0);
+        assert_eq!(finding.delta, 80.0);
+    }
+
+    #[test]
     fn window_limits_baseline_to_recent_points() {
         // An ancient cheap run must not drag the baseline: with window 5 the
         // baseline is the last five priors (all 100), so latest 130 flags.
