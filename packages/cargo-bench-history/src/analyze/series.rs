@@ -77,11 +77,17 @@ pub(crate) fn location_from_key(key: &str) -> Option<Location> {
     if *parts.first()? != "v1" {
         return None;
     }
+    let project = *parts.get(1)?;
     let system = *parts.get(2)?;
     let triple = *parts.get(3)?;
     let machine = *parts.get(4)?;
     let file = *parts.get(5)?;
-    if system.is_empty() || triple.is_empty() || machine.is_empty() || file.is_empty() {
+    if project.is_empty()
+        || system.is_empty()
+        || triple.is_empty()
+        || machine.is_empty()
+        || file.is_empty()
+    {
         return None;
     }
     Some(Location {
@@ -216,6 +222,7 @@ mod tests {
         assert!(location_from_key("v1/folo/callgrind").is_none());
         assert!(location_from_key("v1/folo/callgrind/t/m/").is_none());
         // A single empty segment in any position is rejected, never misattributed.
+        assert!(location_from_key("v1//callgrind/t/m/f.json").is_none());
         assert!(location_from_key("v1/folo//t/m/f.json").is_none());
         assert!(location_from_key("v1/folo/callgrind//m/f.json").is_none());
         assert!(location_from_key("v1/folo/callgrind/t//f.json").is_none());
