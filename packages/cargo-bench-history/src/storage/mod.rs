@@ -1,5 +1,6 @@
 //! The storage abstraction: an immutable, list-by-prefix object store that both a
-//! local filesystem and (later) a blob container implement identically.
+//! local filesystem and an Azure Blob container (behind the `azure` feature)
+//! implement identically.
 
 #[cfg(feature = "azure")]
 mod azure;

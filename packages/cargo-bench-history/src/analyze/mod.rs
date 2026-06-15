@@ -3,7 +3,7 @@
 //!
 //! Like `run`, the pure logic (series reconstruction, finding detection, report
 //! rendering) is sync and Miri-safe; only loading the stored objects touches an
-//! async [`Storage`]. [`execute`] wires the real local storage, while
+//! async [`Storage`]. [`execute`] wires the configured storage backend, while
 //! [`analyze_with`] is the storage-generic orchestrator the in-memory tests drive.
 
 mod findings;
@@ -25,7 +25,7 @@ use findings::{RegressionConfig, find_changes};
 use report::{ReportFormat, ReportInput, render};
 use series::{SeriesFilter, build_series};
 
-/// The real `analyze`: load configuration, wire local storage, and orchestrate.
+/// The real `analyze`: load configuration, wire the configured storage, and orchestrate.
 pub(crate) async fn execute(options: &AnalyzeOptions) -> Result<RunOutcome, RunError> {
     let config_path = options
         .config_path

@@ -4,8 +4,9 @@
 //! Maintain a long-lived history of benchmark results and analyze it for trends
 //! that snapshot-only tooling cannot see.
 //!
-//! The tool stores one immutable result set per benchmark run (locally or, later,
-//! in cloud blob storage), partitioned only by the factors that make results
+//! The tool stores one immutable result set per benchmark run — on the local
+//! filesystem or, with the `azure` feature, in an Azure Blob container —
+//! partitioned only by the factors that make results
 //! fundamentally incomparable — project, engine system, target triple, and (for
 //! hardware-dependent engines) a machine key — so that everything else stays
 //! visible as a step in the timeline. The `analyze` command then reconstructs
@@ -13,8 +14,8 @@
 //! drift.
 //!
 //! The `run` command executes the configured benchmark engines (Callgrind via
-//! Gungraun in this iteration), harvests their machine-readable output, and
-//! stores one immutable result set per run in local storage. The `analyze`
+//! Gungraun), harvests their machine-readable output, and stores one immutable
+//! result set per run through the configured storage backend. The `analyze`
 //! command reconstructs each benchmark's series and reports notable changes, and
 //! the `install` command writes a starter configuration file.
 

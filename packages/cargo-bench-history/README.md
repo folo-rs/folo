@@ -10,9 +10,9 @@ data".
 
 Most benchmark tooling only reports the current run, or at best compares against
 the previous local run. `cargo-bench-history` instead stores **every** run as an
-immutable record (locally or, later, in cloud blob storage) and reconstructs
-per-benchmark series ordered by an *effective* timestamp, so historical trends
-become analyzable.
+immutable record (on the local filesystem or, with the `azure` feature, in an
+Azure Blob container) and reconstructs per-benchmark series ordered by an
+*effective* timestamp, so historical trends become analyzable.
 
 Results are partitioned only by what makes them fundamentally incomparable —
 project, engine system, target triple, and (for hardware-dependent engines) a
@@ -46,14 +46,16 @@ cargo bench-history analyze [--since DATE] [--system SYSTEM]
 
 ## Status
 
-Iterations 1–3 are implemented:
+Implemented:
 
 * `run` executes Callgrind (via Gungraun), harvests its `summary.json` output, and
-  stores one immutable result set per run in local storage.
+  stores one immutable result set per run.
 * `analyze` loads a project's stored history and reports rolling-baseline
   regressions/improvements in `text`, `json`, or `markdown`, with optional
   `--fail-on-regression` CI gating.
 * `install` writes a starter `.cargo/bench_history.toml` when one is absent.
+* Storage backends: the local filesystem, or Azure Blob storage behind the
+  `azure` feature.
 
-See `DESIGN.md` for the full design and iteration plan (Azure blob storage and a
-Criterion adapter are the remaining iterations).
+See `DESIGN.md` for the full design and iteration plan; a Criterion adapter and
+machine-key partitioning for hardware-dependent engines are the remaining work.
