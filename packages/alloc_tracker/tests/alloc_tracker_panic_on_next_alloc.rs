@@ -42,11 +42,14 @@ fn panic_on_next_alloc_can_be_controlled() {
 fn panic_on_next_alloc_resets_automatically() {
     use std::panic;
 
-    // Enable panic on next allocation
-    panic_on_next_alloc(true);
-
-    // First allocation should panic
+    // The flag is armed inside the closure, immediately before the allocation that
+    // is expected to consume it. Because the one-shot flag is consumed by the very
+    // next allocation anywhere in the process, arming it earlier would let an
+    // allocation performed by `catch_unwind`'s own setup consume it first, making
+    // the panic escape the caught region. Instrumented standard libraries (for
+    // example under `cargo careful`) are prone to such incidental allocations.
     let result = panic::catch_unwind(|| {
+        panic_on_next_alloc(true);
         #[expect(
             clippy::useless_vec,
             reason = "we need actual allocation to test the feature"
