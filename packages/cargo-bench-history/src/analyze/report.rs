@@ -1,11 +1,17 @@
 //! Rendering analysis results into a human- or machine-readable report.
 //!
 //! Three formats are offered: a compact `text` summary for terminals, a
-//! `markdown` table for pasting into pull requests, and a `json` document for
+//! `markdown` document for pasting into pull requests, and a `json` document for
 //! programmatic consumption.
+//!
+//! A report covers one or more *discriminant sets* (engine / triple / machine
+//! partitions). The top level carries the project-wide totals and the globally
+//! ranked findings, and a per-set breakdown follows so each comparable partition
+//! reads as its own section.
 
 use serde::Serialize;
 
+use crate::analyze::discriminant::DiscriminantSet;
 use crate::analyze::findings::{Direction, Finding, Severity};
 use crate::model::BenchmarkId;
 
@@ -16,7 +22,7 @@ pub(crate) enum ReportFormat {
     Text,
     /// A machine-readable JSON document.
     Json,
-    /// A Markdown summary with a findings table.
+    /// A Markdown summary with a findings table per set.
     Markdown,
 }
 
@@ -32,17 +38,57 @@ impl ReportFormat {
     }
 }
 
+/// One discriminant set's slice of the report.
+#[derive(Clone, Debug)]
+pub(crate) struct SetSummary<'a> {
+    /// The comparable partition this slice covers.
+    pub(crate) set: &'a DiscriminantSet,
+    /// Number of stored runs loaded for this set.
+    pub(crate) runs: usize,
+    /// Number of distinct series compared in this set.
+    pub(crate) series: usize,
+    /// The set's findings, in the same global ranking as the top level.
+    pub(crate) findings: Vec<&'a Finding>,
+}
+
 /// The inputs a report is rendered from.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct ReportInput<'a> {
     /// The project the history belongs to.
     pub(crate) project: &'a str,
-    /// Number of stored runs that were loaded.
+    /// Total stored runs loaded across every set.
     pub(crate) runs: usize,
-    /// Number of distinct series that were compared.
+    /// Total distinct series compared across every set.
     pub(crate) series: usize,
-    /// The findings, already ranked most-notable first.
+    /// Every set's findings, globally ranked most-notable first.
     pub(crate) findings: &'a [Finding],
+    /// The per-set breakdown, one entry per set that contributed data.
+    pub(crate) sets: &'a [SetSummary<'a>],
+}
+
+/// The JSON shape of a per-set slice.
+#[derive(Serialize)]
+struct JsonSet<'a> {
+    /// Engine identifier.
+    engine: &'a str,
+    /// Resolved target triple.
+    target_triple: &'a str,
+    /// Operating-system facet derived from the triple.
+    os: &'a str,
+    /// CPU-architecture facet derived from the triple.
+    architecture: &'a str,
+    /// Machine partition (`synthetic` for hardware-independent engines).
+    machine: &'a str,
+    /// Stored runs loaded for this set.
+    runs: usize,
+    /// Distinct series compared in this set.
+    series: usize,
+    /// Flagged regressions in this set.
+    regressions: usize,
+    /// Flagged improvements in this set.
+    improvements: usize,
+    /// This set's findings, ranked most-notable first.
+    findings: Vec<&'a Finding>,
 }
 
 /// The JSON shape of a rendered report.
@@ -50,16 +96,18 @@ pub(crate) struct ReportInput<'a> {
 struct JsonReport<'a> {
     /// The project the history belongs to.
     project: &'a str,
-    /// Number of stored runs that were loaded.
+    /// Total stored runs loaded.
     runs: usize,
-    /// Number of distinct series that were compared.
+    /// Total distinct series compared.
     series: usize,
     /// Number of flagged regressions.
     regressions: usize,
     /// Number of flagged improvements.
     improvements: usize,
-    /// The findings, ranked most-notable first.
+    /// Every set's findings, globally ranked.
     findings: &'a [Finding],
+    /// The per-set breakdown.
+    sets: Vec<JsonSet<'a>>,
 }
 
 /// Renders `input` in the requested `format`.
@@ -72,7 +120,15 @@ pub(crate) fn render(input: &ReportInput<'_>, format: ReportFormat) -> String {
 }
 
 /// Counts findings matching `direction`.
-fn count_direction(findings: &[Finding], direction: Direction) -> usize {
+fn count_direction(findings: &[&Finding], direction: Direction) -> usize {
+    findings
+        .iter()
+        .filter(|finding| finding.direction == direction)
+        .count()
+}
+
+/// Counts top-level findings matching `direction`.
+fn count_top(findings: &[Finding], direction: Direction) -> usize {
     findings
         .iter()
         .filter(|finding| finding.direction == direction)
@@ -84,9 +140,14 @@ fn finish(lines: &[String]) -> String {
     format!("{}\n", lines.join("\n"))
 }
 
+/// A one-line label for a set, naming its partition and derived facets.
+fn set_label(set: &DiscriminantSet) -> String {
+    format!("{set} (os={} arch={})", set.os(), set.architecture())
+}
+
 fn render_text(input: &ReportInput<'_>) -> String {
-    let regressions = count_direction(input.findings, Direction::Regression);
-    let improvements = count_direction(input.findings, Direction::Improvement);
+    let regressions = count_top(input.findings, Direction::Regression);
+    let improvements = count_top(input.findings, Direction::Improvement);
 
     let mut lines = vec![
         format!("Analyzed project {}", input.project),
@@ -101,27 +162,32 @@ fn render_text(input: &ReportInput<'_>) -> String {
         return finish(&lines);
     }
 
-    lines.push(String::new());
-    lines.push("Findings:".to_owned());
-    for finding in input.findings {
-        lines.push(format!(
-            "  [{}] {} {} {}/{}: {} -> {} ({})",
-            severity_label(finding.severity),
-            direction_label(finding.direction),
-            finding.location.system,
-            describe_id(&finding.id),
-            finding.metric,
-            format_value(finding.baseline),
-            format_value(finding.latest),
-            format_percent(finding.relative_delta),
-        ));
+    for summary in input.sets {
+        if summary.findings.is_empty() {
+            continue;
+        }
+        lines.push(String::new());
+        lines.push(format!("Set {}", set_label(summary.set)));
+        for finding in &summary.findings {
+            lines.push(format!(
+                "  [{}] {} {} {}/{}: {} -> {} ({})",
+                severity_label(finding.severity),
+                direction_label(finding.direction),
+                finding.set.engine,
+                describe_id(&finding.id),
+                finding.metric,
+                format_value(finding.baseline),
+                format_value(finding.latest),
+                format_percent(finding.relative_delta),
+            ));
+        }
     }
     finish(&lines)
 }
 
 fn render_markdown(input: &ReportInput<'_>) -> String {
-    let regressions = count_direction(input.findings, Direction::Regression);
-    let improvements = count_direction(input.findings, Direction::Improvement);
+    let regressions = count_top(input.findings, Direction::Regression);
+    let improvements = count_top(input.findings, Direction::Improvement);
 
     let mut lines = vec![
         format!("# Benchmark history analysis: {}", input.project),
@@ -138,36 +204,66 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
         return finish(&lines);
     }
 
-    lines.push(String::new());
-    lines.push(
-        "| Severity | Direction | System | Benchmark | Metric | Baseline | Latest | Change |"
-            .to_owned(),
-    );
-    lines.push("| --- | --- | --- | --- | --- | --- | --- | --- |".to_owned());
-    for finding in input.findings {
+    for summary in input.sets {
+        if summary.findings.is_empty() {
+            continue;
+        }
+        lines.push(String::new());
         lines.push(format!(
-            "| {} | {} | {} | {} | {} | {} | {} | {} |",
-            severity_label(finding.severity),
-            direction_label(finding.direction),
-            finding.location.system,
-            describe_id(&finding.id),
-            finding.metric,
-            format_value(finding.baseline),
-            format_value(finding.latest),
-            format_percent(finding.relative_delta),
+            "## {} (os={}, arch={})",
+            summary.set,
+            summary.set.os(),
+            summary.set.architecture()
         ));
+        lines.push(String::new());
+        lines.push(
+            "| Severity | Direction | Engine | Benchmark | Metric | Baseline | Latest | Change |"
+                .to_owned(),
+        );
+        lines.push("| --- | --- | --- | --- | --- | --- | --- | --- |".to_owned());
+        for finding in &summary.findings {
+            lines.push(format!(
+                "| {} | {} | {} | {} | {} | {} | {} | {} |",
+                severity_label(finding.severity),
+                direction_label(finding.direction),
+                finding.set.engine,
+                describe_id(&finding.id),
+                finding.metric,
+                format_value(finding.baseline),
+                format_value(finding.latest),
+                format_percent(finding.relative_delta),
+            ));
+        }
     }
     finish(&lines)
 }
 
 fn render_json(input: &ReportInput<'_>) -> String {
+    let sets = input
+        .sets
+        .iter()
+        .map(|summary| JsonSet {
+            engine: &summary.set.engine,
+            target_triple: &summary.set.target_triple,
+            os: summary.set.os(),
+            architecture: summary.set.architecture(),
+            machine: &summary.set.machine,
+            runs: summary.runs,
+            series: summary.series,
+            regressions: count_direction(&summary.findings, Direction::Regression),
+            improvements: count_direction(&summary.findings, Direction::Improvement),
+            findings: summary.findings.clone(),
+        })
+        .collect();
+
     let report = JsonReport {
         project: input.project,
         runs: input.runs,
         series: input.series,
-        regressions: count_direction(input.findings, Direction::Regression),
-        improvements: count_direction(input.findings, Direction::Improvement),
+        regressions: count_top(input.findings, Direction::Regression),
+        improvements: count_top(input.findings, Direction::Improvement),
         findings: input.findings,
+        sets,
     };
     // The report is built from plain structs whose only numbers are finite (or
     // serialized as `null` by serde_json), so serialization cannot fail.
@@ -217,14 +313,13 @@ fn format_percent(relative_delta: f64) -> String {
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
-    use crate::analyze::series::Location;
     use crate::model::MetricKind;
 
     use super::*;
 
-    fn location() -> Location {
-        Location {
-            system: "callgrind".to_owned(),
+    fn discriminant_set() -> DiscriminantSet {
+        DiscriminantSet {
+            engine: "callgrind".to_owned(),
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
             machine: "synthetic".to_owned(),
         }
@@ -232,7 +327,7 @@ mod tests {
 
     fn regression() -> Finding {
         Finding {
-            location: location(),
+            set: discriminant_set(),
             id: BenchmarkId::new(
                 Some("nm".to_owned()),
                 "nm::observe".to_owned(),
@@ -248,6 +343,28 @@ mod tests {
             delta: 30.0,
             relative_delta: 0.30,
             commit: Some("deadbee".to_owned()),
+        }
+    }
+
+    /// Wraps a findings slice into a single-set report over `set`.
+    fn single_set_input<'a>(
+        project: &'a str,
+        set: &'a DiscriminantSet,
+        findings: &'a [Finding],
+        summaries: &'a mut Vec<SetSummary<'a>>,
+    ) -> ReportInput<'a> {
+        summaries.push(SetSummary {
+            set,
+            runs: findings.len().saturating_add(3),
+            series: findings.len().max(1),
+            findings: findings.iter().collect(),
+        });
+        ReportInput {
+            project,
+            runs: findings.len().saturating_add(3),
+            series: findings.len().max(1),
+            findings,
+            sets: summaries,
         }
     }
 
@@ -270,6 +387,7 @@ mod tests {
             runs: 3,
             series: 1,
             findings: &[],
+            sets: &[],
         };
         let report = render(&input, ReportFormat::Text);
         assert!(report.contains("Analyzed project folo"), "{report}");
@@ -279,15 +397,13 @@ mod tests {
 
     #[test]
     fn text_report_lists_a_finding() {
+        let set = discriminant_set();
         let findings = vec![regression()];
-        let input = ReportInput {
-            project: "folo",
-            runs: 4,
-            series: 1,
-            findings: &findings,
-        };
+        let mut summaries = Vec::new();
+        let input = single_set_input("folo", &set, &findings, &mut summaries);
         let report = render(&input, ReportFormat::Text);
         assert!(report.contains("regressions: 1"), "{report}");
+        assert!(report.contains("Set callgrind/"), "{report}");
         assert!(report.contains("[major] regression"), "{report}");
         assert!(report.contains("nm::observe/pull/Ir"), "{report}");
         assert!(report.contains("100 -> 130"), "{report}");
@@ -296,6 +412,7 @@ mod tests {
 
     #[test]
     fn report_renders_every_severity_and_direction_label() {
+        let set = discriminant_set();
         let mut moderate = regression();
         moderate.severity = Severity::Moderate;
         let mut improvement = regression();
@@ -304,12 +421,8 @@ mod tests {
         improvement.delta = -5.0;
         improvement.relative_delta = -0.05;
         let findings = vec![regression(), moderate, improvement];
-        let input = ReportInput {
-            project: "folo",
-            runs: 6,
-            series: 3,
-            findings: &findings,
-        };
+        let mut summaries = Vec::new();
+        let input = single_set_input("folo", &set, &findings, &mut summaries);
 
         let text = render(&input, ReportFormat::Text);
         assert!(text.contains("[major] regression"), "{text}");
@@ -322,17 +435,20 @@ mod tests {
     }
 
     #[test]
-    fn markdown_report_renders_a_table() {
+    fn markdown_report_renders_a_table_per_set() {
+        let set = discriminant_set();
         let findings = vec![regression()];
-        let input = ReportInput {
-            project: "folo",
-            runs: 4,
-            series: 1,
-            findings: &findings,
-        };
+        let mut summaries = Vec::new();
+        let input = single_set_input("folo", &set, &findings, &mut summaries);
         let report = render(&input, ReportFormat::Markdown);
         assert!(
             report.contains("# Benchmark history analysis: folo"),
+            "{report}"
+        );
+        assert!(
+            report.contains(
+                "## callgrind/x86_64-unknown-linux-gnu/synthetic (os=linux, arch=x86_64)"
+            ),
             "{report}"
         );
         assert!(report.contains("| Severity | Direction |"), "{report}");
@@ -346,6 +462,7 @@ mod tests {
             runs: 0,
             series: 0,
             findings: &[],
+            sets: &[],
         };
         let report = render(&input, ReportFormat::Markdown);
         assert!(report.contains("No notable changes detected."), "{report}");
@@ -353,25 +470,28 @@ mod tests {
 
     #[test]
     fn json_report_is_structured() {
+        let set = discriminant_set();
         let findings = vec![regression()];
-        let input = ReportInput {
-            project: "folo",
-            runs: 4,
-            series: 1,
-            findings: &findings,
-        };
+        let mut summaries = Vec::new();
+        let input = single_set_input("folo", &set, &findings, &mut summaries);
         let report = render(&input, ReportFormat::Json);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["project"], "folo");
         assert_eq!(parsed["regressions"], 1);
         assert_eq!(parsed["improvements"], 0);
         let finding = &parsed["findings"][0];
-        // Flattened Location and BenchmarkId fields appear inline.
-        assert_eq!(finding["system"], "callgrind");
+        // Flattened DiscriminantSet and BenchmarkId fields appear inline.
+        assert_eq!(finding["engine"], "callgrind");
         assert_eq!(finding["package"], "nm");
         assert_eq!(finding["group"], "nm::observe");
         assert_eq!(finding["direction"], "regression");
         assert_eq!(finding["severity"], "major");
+        // The per-set breakdown carries the derived facets.
+        let set_json = &parsed["sets"][0];
+        assert_eq!(set_json["engine"], "callgrind");
+        assert_eq!(set_json["os"], "linux");
+        assert_eq!(set_json["architecture"], "x86_64");
+        assert_eq!(set_json["regressions"], 1);
     }
 
     #[test]

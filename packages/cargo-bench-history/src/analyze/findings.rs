@@ -9,7 +9,8 @@
 
 use serde::Serialize;
 
-use crate::analyze::series::{Location, Series};
+use crate::analyze::discriminant::DiscriminantSet;
+use crate::analyze::series::Series;
 use crate::model::{BenchmarkId, MetricKind};
 
 /// Number of recent points (immediately before the latest) the baseline spans.
@@ -72,9 +73,9 @@ pub(crate) enum Severity {
 /// One flagged change: where it is, what moved, and by how much.
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct Finding {
-    /// The comparable location the series belongs to.
+    /// The comparable discriminant set the series belongs to.
     #[serde(flatten)]
-    pub(crate) location: Location,
+    pub(crate) set: DiscriminantSet,
     /// The benchmark identity.
     #[serde(flatten)]
     pub(crate) id: BenchmarkId,
@@ -216,7 +217,7 @@ pub(crate) fn evaluate_series(series: &Series, config: &RegressionConfig) -> Opt
     let direction = direction_of(delta, series.kind);
 
     Some(Finding {
-        location: series.location.clone(),
+        set: series.set.clone(),
         id: series.id.clone(),
         metric: series.metric.clone(),
         kind: series.kind,
@@ -233,7 +234,7 @@ pub(crate) fn evaluate_series(series: &Series, config: &RegressionConfig) -> Opt
 /// Evaluates every series and returns the findings, ranked most-notable first.
 ///
 /// Findings are ordered by descending severity, then descending relative move,
-/// then by a deterministic identity tie-break (location, benchmark, metric) so the
+/// then by a deterministic identity tie-break (set, benchmark, metric) so the
 /// output is stable across runs.
 pub(crate) fn find_changes(series: &[Series], config: &RegressionConfig) -> Vec<Finding> {
     let mut findings: Vec<Finding> = series
@@ -250,7 +251,7 @@ pub(crate) fn find_changes(series: &[Series], config: &RegressionConfig) -> Vec<
                     .abs()
                     .total_cmp(&left.relative_delta.abs())
             })
-            .then_with(|| left.location.cmp(&right.location))
+            .then_with(|| left.set.cmp(&right.set))
             .then_with(|| left.id.cmp(&right.id))
             .then_with(|| left.metric.cmp(&right.metric))
     });
@@ -268,17 +269,20 @@ mod tests {
 
     use jiff::Timestamp;
 
+    use crate::analyze::discriminant::DiscriminantSet;
     use crate::analyze::series::SeriesPoint;
     use crate::model::MetricKind;
 
     use super::*;
 
-    /// Builds a series whose points carry the given values at ascending times.
+    /// Builds a series whose points carry the given values in topological order.
     fn series_of(values: &[f64]) -> Series {
         let points = values
             .iter()
             .enumerate()
             .map(|(index, &value)| SeriesPoint {
+                topo_index: index,
+                dirty: false,
                 effective: Timestamp::from_second(i64::try_from(index).unwrap())
                     .expect("seconds within range"),
                 object_key: format!("v2/p/callgrind/t/synthetic/commit{index}/clean.json"),
@@ -287,8 +291,8 @@ mod tests {
             })
             .collect();
         Series {
-            location: Location {
-                system: "callgrind".to_owned(),
+            set: DiscriminantSet {
+                engine: "callgrind".to_owned(),
                 target_triple: "t".to_owned(),
                 machine: "synthetic".to_owned(),
             },

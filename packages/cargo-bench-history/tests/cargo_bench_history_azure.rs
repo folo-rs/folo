@@ -119,6 +119,11 @@ fn azure_config(command: &str) -> String {
 }
 
 /// A hermetic workspace that stores to Azurite rather than the local filesystem.
+///
+/// It is a clean git repository: `analyze` resolves a series' timeline from git
+/// topology, so it requires a repository, and the directories a run touches
+/// (`.cargo`, `target`) are git-ignored so the real probe records clean (not
+/// dirty) runs against the committed code.
 struct AzureWorkspace {
     dir: tempfile::TempDir,
 }
@@ -131,7 +136,43 @@ impl AzureWorkspace {
         let cargo_dir = workspace.dir.path().join(".cargo");
         std::fs::create_dir_all(&cargo_dir).unwrap();
         std::fs::write(cargo_dir.join("bench_history.toml"), config).unwrap();
+        std::fs::write(
+            workspace.dir.path().join(".gitignore"),
+            "/.cargo/\n/target/\n",
+        )
+        .unwrap();
+        workspace.git(&["init", "-b", "master"]);
+        workspace.git(&["config", "user.email", "test@example.invalid"]);
+        workspace.git(&["config", "user.name", "Bench History Test"]);
+        workspace.git(&["config", "commit.gpgsign", "false"]);
+        workspace.git(&["add", ".gitignore"]);
+        workspace.git(&["commit", "-m", "root"]);
         workspace
+    }
+
+    /// Runs `git -C <root> <args>`, asserting success.
+    fn git(&self, args: &[&str]) -> std::process::Output {
+        let root = self.dir.path().to_string_lossy().into_owned();
+        let mut full: Vec<&str> = vec!["-C", root.as_str()];
+        full.extend_from_slice(args);
+        let output = std::process::Command::new("git")
+            .args(&full)
+            .output()
+            .expect("git should be available");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    }
+
+    /// Creates an empty commit so a subsequent clean run lands on a fresh commit
+    /// directory (a clean run is keyed solely by its commit, so each point in a
+    /// history needs its own commit).
+    fn commit(&self, message: &str) {
+        self.git(&["commit", "--allow-empty", "-m", message]);
     }
 
     /// Drives a command with `args` from inside this workspace, pointing the
@@ -179,6 +220,9 @@ async fn run_then_analyze_round_trips_through_azurite() {
         .drive(&["run", "--timestamp", "2024-01-01T00:00:00Z"])
         .await
         .expect("first run should store to Azurite");
+    // A clean run is keyed by its commit, so the second point needs its own
+    // commit; otherwise it would collide with the first on the same clean key.
+    workspace.commit("second");
     workspace
         .drive(&["run", "--timestamp", "2024-01-02T00:00:00Z"])
         .await

@@ -76,14 +76,31 @@ pub struct InstallOptions {
 pub struct AnalyzeOptions {
     /// Path to the configuration file, if overridden.
     pub config_path: Option<PathBuf>,
+    /// Repository to resolve git topology from; defaults to the working directory.
+    pub repo: Option<PathBuf>,
+    /// Target ref whose history is analyzed; defaults to `HEAD`.
+    pub branch: Option<String>,
+    /// Base ref the target's history is split at; defaults to the detected (or
+    /// configured) default branch.
+    pub base: Option<String>,
+    /// Exclude dirty (uncommitted-tree) snapshots from the target side.
+    pub no_dirty: bool,
     /// Only consider runs on or after this date, if set.
     pub since: Option<String>,
-    /// Restrict analysis to a single engine system, if set.
-    pub system: Option<String>,
+    /// Restrict analysis to a single engine (criterion or callgrind), if set.
+    pub engine: Option<String>,
+    /// Restrict analysis to a single operating-system facet, if set.
+    pub os: Option<String>,
+    /// Restrict analysis to a single CPU-architecture facet, if set.
+    pub architecture: Option<String>,
+    /// Restrict analysis to a single machine partition, if set.
+    pub machine_key: Option<String>,
     /// Restrict analysis to a single metric name, if set.
     pub metric: Option<String>,
     /// Output format selector, if set.
     pub format: Option<String>,
+    /// List the discriminant sets present in storage instead of analyzing.
+    pub list_discriminants: bool,
     /// Exit with failure if a regression is detected.
     pub fail_on_regression: bool,
 }

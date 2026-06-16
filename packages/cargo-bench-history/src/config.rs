@@ -16,6 +16,7 @@ const DEFAULT_TEMPLATE: &str = "\
 
 # [project]
 # id = \"my-project\"            # defaults to the workspace directory name
+# default_branch = \"main\"      # base branch for `analyze`; auto-detected by default
 
 [storage.local]
 path = \"./bench-history\"
@@ -75,6 +76,9 @@ pub struct Config {
 pub struct ProjectConfig {
     /// Explicit project id; when absent the workspace directory name is used.
     pub id: Option<String>,
+    /// The repository's default (integration) branch, used by `analyze` as the
+    /// base ref when neither `--base` nor a detectable `origin/HEAD` resolves it.
+    pub default_branch: Option<String>,
 }
 
 /// Machine-fingerprint overrides for hardware-dependent engines.
@@ -315,6 +319,26 @@ path = \"./data\"
 ";
         let config = parse_config(text).unwrap();
         assert_eq!(config.project.id.as_deref(), Some("folo"));
+    }
+
+    #[test]
+    fn project_default_branch_is_parsed_and_defaults_to_none() {
+        assert_eq!(
+            parse_config(default_template())
+                .unwrap()
+                .project
+                .default_branch,
+            None
+        );
+        let text = "\
+[project]
+default_branch = \"trunk\"
+
+[storage.local]
+path = \"./data\"
+";
+        let config = parse_config(text).unwrap();
+        assert_eq!(config.project.default_branch.as_deref(), Some("trunk"));
     }
 
     #[test]

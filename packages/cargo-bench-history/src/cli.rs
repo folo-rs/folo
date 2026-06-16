@@ -115,13 +115,41 @@ struct AnalyzeCommand {
     #[argh(option)]
     config: Option<PathBuf>,
 
+    /// repository to resolve git topology from (defaults to the working directory).
+    #[argh(option)]
+    repo: Option<PathBuf>,
+
+    /// target ref whose history is analyzed (defaults to HEAD).
+    #[argh(option)]
+    branch: Option<String>,
+
+    /// base ref the target's history is split at (defaults to the default branch).
+    #[argh(option)]
+    base: Option<String>,
+
+    /// exclude dirty (uncommitted-tree) snapshots from the analysis.
+    #[argh(switch)]
+    no_dirty: bool,
+
     /// only consider runs on or after this date.
     #[argh(option)]
     since: Option<String>,
 
-    /// restrict analysis to a single engine system (criterion or callgrind).
+    /// restrict analysis to a single engine (criterion or callgrind).
     #[argh(option)]
-    system: Option<String>,
+    engine: Option<String>,
+
+    /// restrict analysis to a single operating system (for example, windows).
+    #[argh(option)]
+    os: Option<String>,
+
+    /// restrict analysis to a single CPU architecture (for example, `x86_64`).
+    #[argh(option)]
+    architecture: Option<String>,
+
+    /// restrict analysis to a single machine partition.
+    #[argh(option)]
+    machine_key: Option<String>,
 
     /// restrict analysis to a single metric name (for example, Ir).
     #[argh(option)]
@@ -130,6 +158,10 @@ struct AnalyzeCommand {
     /// output format (text, json, or markdown).
     #[argh(option)]
     format: Option<String>,
+
+    /// list the discriminant sets present in storage instead of analyzing.
+    #[argh(switch)]
+    list_discriminants: bool,
 
     /// exit with failure if a regression is detected.
     #[argh(switch)]
@@ -140,10 +172,18 @@ impl AnalyzeCommand {
     fn into_options(self) -> AnalyzeOptions {
         AnalyzeOptions {
             config_path: self.config,
+            repo: self.repo,
+            branch: self.branch,
+            base: self.base,
+            no_dirty: self.no_dirty,
             since: self.since,
-            system: self.system,
+            engine: self.engine,
+            os: self.os,
+            architecture: self.architecture,
+            machine_key: self.machine_key,
             metric: self.metric,
             format: self.format,
+            list_discriminants: self.list_discriminants,
             fail_on_regression: self.fail_on_regression,
         }
     }
@@ -242,6 +282,41 @@ mod tests {
             panic!("expected analyze command");
         };
         assert!(options.fail_on_regression);
+    }
+
+    #[test]
+    fn analyze_collects_topology_and_facet_options() {
+        let command = parse(&[
+            "analyze",
+            "--repo",
+            "/work/folo",
+            "--branch",
+            "feature",
+            "--base",
+            "master",
+            "--no-dirty",
+            "--engine",
+            "callgrind",
+            "--os",
+            "windows",
+            "--architecture",
+            "x86_64",
+            "--machine-key",
+            "ci-pool",
+            "--list-discriminants",
+        ]);
+        let Command::Analyze(options) = command else {
+            panic!("expected analyze command");
+        };
+        assert_eq!(options.repo, Some(PathBuf::from("/work/folo")));
+        assert_eq!(options.branch.as_deref(), Some("feature"));
+        assert_eq!(options.base.as_deref(), Some("master"));
+        assert!(options.no_dirty);
+        assert_eq!(options.engine.as_deref(), Some("callgrind"));
+        assert_eq!(options.os.as_deref(), Some("windows"));
+        assert_eq!(options.architecture.as_deref(), Some("x86_64"));
+        assert_eq!(options.machine_key.as_deref(), Some("ci-pool"));
+        assert!(options.list_discriminants);
     }
 
     #[test]

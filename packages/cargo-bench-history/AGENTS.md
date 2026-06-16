@@ -54,29 +54,62 @@ When you add a new IO edge, follow the same pattern: a port trait with an
   a conflict.
 
 The commit segment is the **full** SHA (`git.info.commit`, `unknown` when there is
-no repo), because the upcoming git-aware `analyze` reads `v2/.../<full_sha>/`
-directories resolved from `git rev-list`. The `run` store step picks clean vs dirty
-from `git.info.dirty`; clean effective time defaults to the committer date, dirty to
+no repo), because the git-aware `analyze` reads `v2/.../<full_sha>/` directories
+resolved from `git rev-list`. The `run` store step picks clean vs dirty from
+`git.info.dirty`; clean effective time defaults to the committer date, dirty to
 wall-clock now, and `--timestamp` overrides either. There is no run-id in the key.
 
 ## The `analyze` command
 
-`analyze::execute` builds the real `LocalStorage` and delegates to
-`analyze::analyze_with`, which is generic over the `Storage` port so tests drive
-it with `MemoryStorage` + `futures::executor::block_on` (Miri-safe, no Tokio).
-Everything below the storage load is pure and synchronous:
+`analyze::execute` builds the real `SystemGitHistory` (rooted at `--repo` or the
+current directory) and the storage from `build_storage`, then delegates to
+`analyze::analyze_with`, which is generic over both the `GitHistory` and `Storage`
+ports so tests drive it with `FakeGitHistory` + `MemoryStorage` +
+`futures::executor::block_on` (Miri-safe, no Tokio). Everything below the IO ports
+is pure and synchronous.
 
+`analyze` assembles a series by **resolving git topology at query time** rather
+than reading a flat storage prefix — the storage layout cannot pre-assemble a
+timeline because which commits belong to a line of history depends on the branch
+being analyzed:
+
+* **Discriminant facets first.** `analyze::discriminant::parse_key` turns each
+  `v2/<project>/<engine>/<triple>/<machine|synthetic>/<commit>/<file>` key into a
+  `DiscriminantSet` (engine, triple, os/arch derived from the triple, machine).
+  `--engine`/`--os`/`--architecture`/`--machine-key` select sets (case-insensitive
+  facet match); each surviving set becomes its own sub-report. `--list-discriminants`
+  prints the present sets and returns **without requiring a repository** (it is a
+  pure index over storage keys).
+* **Repository required for analysis.** Resolving a timeline needs git, so when not
+  just listing discriminants `analyze` errors if no repository resolves. The target
+  ref is `--branch` (default `HEAD`); the base ref is `--base` >
+  `config.project.default_branch` > detected default branch (`origin/HEAD` → `main`
+  → `master`). `analyze::selection::select_commits` walks the target's
+  first-parent ancestry and splits it at the merge-base with the base: commits on
+  the base side admit **clean runs only**; commits unique to the target side also
+  admit **dirty** snapshots (so the official line stays clean while a feature branch
+  can carry work-in-progress points). `--no-dirty` drops dirty everywhere.
 * `analyze::series` reconstructs one series per `(location, benchmark, metric)`
-  ordered by effective time (then object key as a deterministic tie-break).
-  `--since` filters at the object level — whole runs before the cutoff are
-  dropped — so the reported run count and every series share one window.
+  ordered by **git topology** (first-parent index of the commit), then within a
+  commit by `(dirty, effective, object key)` so a clean point precedes same-commit
+  dirty snapshots deterministically. Topology — not effective time — is primary, so
+  back-dated backfill runs still sort by where their commit sits in history.
+  `--since` filters at the object level — whole runs before the cutoff are dropped.
 * `analyze::findings` is the rolling-baseline regression detector (median
   baseline over a bounded window, MAD-aware threshold, severity tiers). Keep it
   deterministic and cover boundaries with named value-asserting tests, not
   threshold guards.
-* `analyze::report` renders text/json/markdown. Rendering is infallible: the
+* `analyze::report` renders text/json/markdown. The top-level aggregate carries a
+  `sets` array (one entry per discriminant set). Rendering is infallible: the
   report is plain structs of finite numbers, so the JSON path uses `.expect`
   rather than threading a serialization error nobody can trigger.
+
+The read-only `git_history::GitHistory` port (`resolve`, `default_branch`,
+`merge_base`, `first_parent`) has a `SystemGitHistory` adapter that shells
+`git -C <repo>` and a `#[cfg(test)]` `FakeGitHistory` over a canned commit graph.
+Integration tests build a **real** git repo in a tempdir (`Workspace::repo` /
+`Workspace::clean_repo`) and seed storage keys under the commits' real SHAs so the
+live topology and the stored keys agree.
 
 ## Engine adapters (Callgrind and Criterion)
 

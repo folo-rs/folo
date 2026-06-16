@@ -31,8 +31,11 @@ cargo bench-history run [--engine NAME] [--timestamp RFC3339]
                         [--no-store] [--overwrite] [--config PATH]
                         -- <args forwarded to each engine>
 cargo bench-history install [--config PATH]
-cargo bench-history analyze [--since DATE] [--system SYSTEM]
-                            [--format text|json|markdown]
+cargo bench-history analyze [--repo PATH] [--branch REF] [--base REF]
+                            [--engine NAME] [--os OS] [--architecture ARCH]
+                            [--machine-key KEY] [--no-dirty]
+                            [--list-discriminants] [--since DATE]
+                            [--metric NAME] [--format text|json|markdown]
                             [--fail-on-regression] [--config PATH]
 ```
 
@@ -46,8 +49,16 @@ cargo bench-history analyze [--since DATE] [--system SYSTEM]
   command (use `--engine` to target a single engine).
 * `install` generates a starter `.cargo/bench_history.toml` if absent, printing
   its path and next steps; an existing file is never overwritten.
-* `analyze` downloads a partition and reports notable patterns;
-  `--fail-on-regression` enables CI gating.
+* `analyze` reconstructs a timeline from git history and reports notable patterns.
+  It requires a repository (`--repo` selects one other than the current directory).
+  `--branch` chooses the line to analyze (default `HEAD`) and `--base` the line to
+  branch from (default: the configured or detected default branch); commits up to
+  the merge-base contribute clean runs only, while commits unique to the analyzed
+  branch also contribute dirty snapshots unless `--no-dirty` is given. The history
+  is partitioned into *discriminant sets* (engine, target triple, OS, architecture,
+  machine key); `--engine`/`--os`/`--architecture`/`--machine-key` select sets and
+  `--list-discriminants` prints the sets present in storage. `--since`/`--metric`
+  narrow the data and `--fail-on-regression` enables CI gating.
 
 ## Status
 
@@ -58,9 +69,9 @@ Implemented:
   stores one immutable result set per engine per run. Callgrind results are
   hardware-independent (`synthetic` partition); Criterion results are partitioned
   by the host target triple and a machine-key hardware fingerprint.
-* `analyze` loads a project's stored history and reports rolling-baseline
-  regressions/improvements in `text`, `json`, or `markdown`, with optional
-  `--fail-on-regression` CI gating.
+* `analyze` reconstructs a project's timeline from git history and reports
+  rolling-baseline regressions/improvements in `text`, `json`, or `markdown`,
+  grouped by discriminant set, with optional `--fail-on-regression` CI gating.
 * `install` writes a starter `.cargo/bench_history.toml` when one is absent.
 * Storage backends: the local filesystem, or Azure Blob storage behind the
   `azure` feature.

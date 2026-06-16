@@ -30,6 +30,7 @@ mod config_writer;
 mod context;
 mod dispatch;
 mod git;
+mod git_history;
 mod host;
 mod machine;
 mod model;

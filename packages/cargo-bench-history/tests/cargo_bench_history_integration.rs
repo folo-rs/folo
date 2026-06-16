@@ -7,6 +7,8 @@
     reason = "metric values are exact integer-derived counts"
 )]
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use argh::FromArgs;
@@ -250,7 +252,7 @@ async fn run_entry_dispatches_without_a_target_root_override() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn analyze_empty_history_reports_no_changes() {
-    let workspace = Workspace::new(&storage_only_config());
+    let workspace = Workspace::repo(&storage_only_config());
 
     let outcome = workspace
         .drive(&["analyze"])
@@ -273,7 +275,7 @@ async fn analyze_empty_history_reports_no_changes() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn analyze_detects_regression_in_seeded_history() {
-    let workspace = Workspace::new(&storage_only_config());
+    let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_rising_callgrind_history();
 
     let outcome = workspace
@@ -299,7 +301,7 @@ async fn analyze_detects_regression_in_seeded_history() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn analyze_detects_criterion_wall_time_regression() {
-    let workspace = Workspace::new(&storage_only_config());
+    let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_rising_criterion_history("mk-fixed");
 
     let outcome = workspace
@@ -326,7 +328,7 @@ async fn analyze_detects_criterion_wall_time_regression() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn analyze_fail_on_regression_yields_failure() {
-    let workspace = Workspace::new(&storage_only_config());
+    let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_rising_callgrind_history();
 
     let outcome = workspace
@@ -344,7 +346,7 @@ async fn analyze_fail_on_regression_yields_failure() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn analyze_regression_without_gate_is_successful() {
-    let workspace = Workspace::new(&storage_only_config());
+    let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_rising_callgrind_history();
 
     let outcome = workspace
@@ -359,7 +361,7 @@ async fn analyze_regression_without_gate_is_successful() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn analyze_json_format_is_structured() {
-    let workspace = Workspace::new(&storage_only_config());
+    let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_rising_callgrind_history();
 
     let outcome = workspace
@@ -381,7 +383,7 @@ async fn analyze_json_format_is_structured() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn analyze_markdown_format_renders_table() {
-    let workspace = Workspace::new(&storage_only_config());
+    let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_rising_callgrind_history();
 
     let outcome = workspace
@@ -404,7 +406,7 @@ async fn analyze_markdown_format_renders_table() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn analyze_since_filters_old_points() {
-    let workspace = Workspace::new(&storage_only_config());
+    let workspace = Workspace::repo(&storage_only_config());
     // A flat recent history (no change), preceded long ago by an unrelated point.
     workspace.seed_callgrind("2020-01-01", "c0", 999.0);
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
@@ -427,21 +429,22 @@ async fn analyze_since_filters_old_points() {
     assert_eq!(parsed["regressions"], 0, "{report}");
 }
 
-/// `--system` restricts analysis to one engine's partition.
+/// `--engine` restricts analysis to one engine's partition.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 #[serial]
-async fn analyze_system_filters_partition() {
-    let workspace = Workspace::new(&storage_only_config());
+async fn analyze_engine_filters_partition() {
+    let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
-    // A criterion-partition object that the callgrind filter must skip.
+    // A criterion-partition object that the callgrind filter must skip. Its commit
+    // segment is never read because the engine facet excludes it from listing.
     workspace.seed(
         "v2/testproj/criterion/x86_64-pc-windows-msvc/m1/abc123/clean.json",
         &ir_result_set(1, "c1", 100.0),
     );
 
     let outcome = workspace
-        .drive(&["analyze", "--system", "callgrind", "--format", "json"])
+        .drive(&["analyze", "--engine", "callgrind", "--format", "json"])
         .await
         .expect("analysis should succeed");
     let RunOutcome::Analyzed { report, .. } = outcome else {
@@ -460,7 +463,7 @@ async fn analyze_system_filters_partition() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn analyze_rejects_unknown_format() {
-    let workspace = Workspace::new(&storage_only_config());
+    let workspace = Workspace::repo(&storage_only_config());
 
     let error = workspace
         .drive(&["analyze", "--format", "yaml"])
@@ -478,7 +481,7 @@ async fn analyze_rejects_unknown_format() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn analyze_metric_filter_excludes_other_metrics() {
-    let workspace = Workspace::new(&storage_only_config());
+    let workspace = Workspace::repo(&storage_only_config());
     // `Ir` stays flat while `EstimatedCycles` climbs into a regression.
     for (date, commit, cycles) in [
         ("2024-01-01", "c1", 100.0),
@@ -537,7 +540,7 @@ async fn analyze_metric_filter_excludes_other_metrics() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn analyze_falling_cache_hits_is_a_regression() {
-    let workspace = Workspace::new(&storage_only_config());
+    let workspace = Workspace::repo(&storage_only_config());
     for (date, commit, hits) in [
         ("2024-01-01", "c1", 1000.0),
         ("2024-01-02", "c2", 1000.0),
@@ -578,7 +581,7 @@ async fn analyze_falling_cache_hits_is_a_regression() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn analyze_rising_cache_hits_is_an_improvement() {
-    let workspace = Workspace::new(&storage_only_config());
+    let workspace = Workspace::repo(&storage_only_config());
     for (date, commit, hits) in [
         ("2024-01-01", "c1", 700.0),
         ("2024-01-02", "c2", 700.0),
@@ -623,7 +626,7 @@ async fn analyze_rising_cache_hits_is_an_improvement() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn analyze_ranks_mixed_severity_findings_across_benchmarks() {
-    let workspace = Workspace::new(&storage_only_config());
+    let workspace = Workspace::repo(&storage_only_config());
     // `alpha` doubles (a major regression); `beta` ticks up ~2% (a minor one).
     workspace.seed_two_benchmarks("2024-01-01", "c1", 100.0, 100.0);
     workspace.seed_two_benchmarks("2024-01-02", "c2", 100.0, 100.0);
@@ -678,7 +681,7 @@ async fn analyze_ranks_mixed_severity_findings_across_benchmarks() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn analyze_reports_improvement_without_regression() {
-    let workspace = Workspace::new(&storage_only_config());
+    let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
     workspace.seed_callgrind("2024-01-02", "c2", 100.0);
     workspace.seed_callgrind("2024-01-03", "c3", 100.0);
@@ -704,9 +707,273 @@ async fn analyze_reports_improvement_without_regression() {
 }
 
 // ===========================================================================
-// Real-adapter `run` scenarios.
+// Real-adapter `analyze` scenarios exercising git topology.
 //
-// Each drives `run` against the real process/filesystem/storage adapters from
+// These build a real git repository in the workspace (`Workspace::repo`) and seed
+// history keyed by the commits' actual SHAs, so the real `SystemGitHistory`
+// resolves the same timeline `analyze` reconstructs. They cover the repo-required
+// guard, the official-vs-feature dirty admission split, topology ordering, and the
+// discriminant facets — the behaviors the in-lib fake-driven unit tests prove in
+// isolation, here verified end to end against `git`.
+// ===========================================================================
+
+/// Without a repository to resolve topology from, `analyze` is an error rather
+/// than an empty success — a series' timeline comes from git, not storage.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_without_a_repository_errors() {
+    let workspace = Workspace::new(&storage_only_config());
+
+    let error = workspace
+        .drive(&["analyze"])
+        .await
+        .expect_err("analysis without a repository should fail");
+    let RunError::Analyze { message } = error else {
+        panic!("expected an analyze error, got {error:?}");
+    };
+    assert!(message.contains("requires a git repository"), "{message}");
+}
+
+/// The official view (analyzing the default branch against itself) admits only
+/// clean runs: a dirty snapshot sitting on the tip commit is excluded, so a dirty
+/// spike does not flag and the run count covers only the clean points.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_official_view_excludes_dirty_runs() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.seed_callgrind("2024-01-02", "c2", 100.0);
+    workspace.seed_callgrind("2024-01-03", "c3", 100.0);
+    workspace.seed_callgrind("2024-01-04", "c4", 100.0);
+    // A dirty snapshot on the tip commit that would spike the series if admitted.
+    workspace.seed_dirty_callgrind("2024-01-05", "c4", 200.0);
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(regressions, 0, "the dirty spike must be excluded: {report}");
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(
+        parsed["runs"], 4,
+        "only the four clean runs are loaded, not the dirty snapshot: {report}"
+    );
+}
+
+/// A feature view admits dirty snapshots on the branch's own commits (after the
+/// merge-base): a dirty regression on the feature tip flags by default, and
+/// `--no-dirty` suppresses it.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_feature_branch_admits_dirty_snapshots() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // A flat clean baseline on master.
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.seed_callgrind("2024-01-02", "c2", 100.0);
+    workspace.seed_callgrind("2024-01-03", "c3", 100.0);
+    // Branch off master and add a clean point plus a dirty regression on it.
+    workspace.checkout_new_branch("feature");
+    workspace.seed_callgrind("2024-01-04", "f1", 100.0);
+    workspace.seed_dirty_callgrind("2024-01-05", "f1", 200.0);
+
+    // By default (feature is HEAD; base is the detected master) the dirty snapshot
+    // on the target side is admitted, so the spike flags.
+    let RunOutcome::Analyzed { regressions, .. } = workspace
+        .drive(&["analyze"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(regressions, 1, "the dirty feature snapshot should flag");
+
+    // `--no-dirty` drops it, leaving only the flat clean history.
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--no-dirty"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(
+        regressions, 0,
+        "with --no-dirty only the flat clean series remains: {report}"
+    );
+}
+
+/// The series timeline follows git topology, not the runs' effective timestamps:
+/// seeding the regressing commit last in topology but earliest in time still flags
+/// it, proving ingest/effective time does not reorder the history.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_orders_by_topology_not_effective_time() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // Topology c1 -> c2 -> c3 -> c4, but effective times strictly descend, so an
+    // effective-time ordering would put the 130 first (a non-regression).
+    workspace.seed_callgrind("2024-04-04", "c1", 100.0);
+    workspace.seed_callgrind("2024-04-03", "c2", 100.0);
+    workspace.seed_callgrind("2024-04-02", "c3", 100.0);
+    workspace.seed_callgrind("2024-04-01", "c4", 130.0);
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(
+        regressions, 1,
+        "topology order must place the 130 last and flag it: {report}"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(parsed["findings"][0]["baseline"], 100.0, "{report}");
+    assert_eq!(parsed["findings"][0]["latest"], 130.0, "{report}");
+}
+
+/// `--list-discriminants` enumerates exactly the comparable sets present in
+/// storage, deriving the os/architecture facets from each set's target triple.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_list_discriminants_lists_present_sets() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // One commit, but two comparable sets: a Linux and a Windows callgrind pool.
+    workspace.seed_callgrind_in(
+        "x86_64-unknown-linux-gnu",
+        "synthetic",
+        "2024-01-01",
+        "c1",
+        100.0,
+    );
+    workspace.seed_callgrind_in(
+        "x86_64-pc-windows-msvc",
+        "synthetic",
+        "2024-01-01",
+        "c1",
+        100.0,
+    );
+
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["analyze", "--list-discriminants", "--format", "json"])
+        .await
+        .expect("listing succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    let sets = parsed.as_array().expect("an array of sets");
+    assert_eq!(sets.len(), 2, "exactly the two present sets: {message}");
+    let oses: Vec<&str> = sets
+        .iter()
+        .map(|set| set["os"].as_str().expect("an os facet"))
+        .collect();
+    assert!(oses.contains(&"linux"), "{message}");
+    assert!(oses.contains(&"windows"), "{message}");
+    assert!(
+        sets.iter().all(|set| set["engine"] == "callgrind"),
+        "{message}"
+    );
+}
+
+/// A facet filter (`--os`) restricts analysis to the matching set: the same commits
+/// host a regressing Linux series and a flat Windows series, and each `--os`
+/// selection sees only its own.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_os_facet_selects_one_set() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // Each commit carries both a Linux point (rising into a regression) and a
+    // Windows point (flat).
+    for (date, label, linux, windows) in [
+        ("2024-01-01", "c1", 100.0, 50.0),
+        ("2024-01-02", "c2", 100.0, 50.0),
+        ("2024-01-03", "c3", 100.0, 50.0),
+        ("2024-01-04", "c4", 130.0, 50.0),
+    ] {
+        workspace.seed_callgrind_in("x86_64-unknown-linux-gnu", "synthetic", date, label, linux);
+        workspace.seed_callgrind_in("x86_64-pc-windows-msvc", "synthetic", date, label, windows);
+    }
+
+    // The Linux facet sees the regression.
+    let RunOutcome::Analyzed { regressions, .. } = workspace
+        .drive(&["analyze", "--os", "linux"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(regressions, 1, "the Linux series regresses");
+
+    // The Windows facet sees only the flat series.
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--os", "windows"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(regressions, 0, "the Windows series is flat: {report}");
+}
+
+/// From a feature checkout, `--branch master` analyzes the default branch's
+/// official line (clean only), independent of the currently checked-out branch.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_branch_selects_official_line_from_a_feature_checkout() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // Master carries a clean regression.
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.seed_callgrind("2024-01-02", "c2", 100.0);
+    workspace.seed_callgrind("2024-01-03", "c3", 100.0);
+    workspace.seed_callgrind("2024-01-04", "c4", 130.0);
+    // A feature branch with an unrelated dirty improvement that master must ignore.
+    workspace.checkout_new_branch("feature");
+    workspace.seed_dirty_callgrind("2024-01-05", "f1", 10.0);
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--branch", "master", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(
+        regressions, 1,
+        "the master regression is selected, the feature snapshot ignored: {report}"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(parsed["findings"][0]["latest"], 130.0, "{report}");
+}
 // within a temporary workspace. They are `#[serial]` because they mutate the
 // process-wide current directory and `CARGO_TARGET_DIR`, and miri-ignored because
 // they spawn processes and touch the filesystem. Every test in this file is
@@ -1083,7 +1350,7 @@ async fn run_criterion_collects_distinct_cases_as_records() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn run_then_analyze_round_trips_a_sanitizing_project_id() {
-    let workspace = Workspace::new(&callgrind_config_with_id(
+    let workspace = Workspace::clean_repo(&callgrind_config_with_id(
         "my proj/sub",
         &mock_command("--summary grp=single"),
     ));
@@ -1139,7 +1406,7 @@ async fn run_then_analyze_round_trips_a_sanitizing_project_id() {
 #[serial]
 async fn run_then_analyze_preserves_unusual_identity_characters() {
     let command = mock_command("--criterion 'time.capture|mide tiempo|tamaño 4=18.5'");
-    let workspace = Workspace::new(&criterion_config(&command));
+    let workspace = Workspace::clean_repo(&criterion_config(&command));
 
     workspace
         .drive(&[
@@ -1273,6 +1540,11 @@ async fn overwrite_replaces_the_stored_result() {
 /// temp-dir cleanup happen outside it (required on Windows).
 struct Workspace {
     dir: tempfile::TempDir,
+    /// Maps a short commit label (for example `c1`) to the full SHA of the empty
+    /// commit created for it, so seeded storage keys and the live git topology
+    /// agree on the commit-directory segment. Interior mutability lets the
+    /// `&self` seed helpers create commits lazily.
+    commits: RefCell<HashMap<String, String>>,
 }
 
 impl Workspace {
@@ -1280,6 +1552,7 @@ impl Workspace {
     fn new(config: &str) -> Self {
         let workspace = Self {
             dir: tempfile::tempdir().expect("temp dir should be created"),
+            commits: RefCell::new(HashMap::new()),
         };
         let cargo_dir = workspace.root().join(".cargo");
         std::fs::create_dir_all(&cargo_dir).unwrap();
@@ -1287,10 +1560,41 @@ impl Workspace {
         workspace
     }
 
+    /// Creates a workspace with `config` plus an initialized git repository (on a
+    /// `master` branch with one empty root commit), as `analyze` requires a
+    /// repository to resolve a series' timeline from git topology.
+    fn repo(config: &str) -> Self {
+        let workspace = Self::new(config);
+        workspace.init_repo();
+        workspace
+    }
+
+    /// Creates a workspace with `config` plus an initialized git repository whose
+    /// working tree stays *clean* across a `run`: the volatile directories a run
+    /// touches (`.cargo`, `store`, `target`) are git-ignored, so the real probe
+    /// records the root commit as a clean (not dirty) run. Used by the end-to-end
+    /// `run` -> `analyze` round-trip tests.
+    fn clean_repo(config: &str) -> Self {
+        let workspace = Self::new(config);
+        std::fs::write(
+            workspace.root().join(".gitignore"),
+            "/.cargo/\n/store/\n/target/\n",
+        )
+        .unwrap();
+        workspace.git(&["init", "-b", "master"]);
+        workspace.git(&["config", "user.email", "test@example.invalid"]);
+        workspace.git(&["config", "user.name", "Bench History Test"]);
+        workspace.git(&["config", "commit.gpgsign", "false"]);
+        workspace.git(&["add", ".gitignore"]);
+        workspace.git(&["commit", "-m", "root"]);
+        workspace
+    }
+
     /// Creates an empty workspace with no configuration file written.
     fn empty() -> Self {
         Self {
             dir: tempfile::tempdir().expect("temp dir should be created"),
+            commits: RefCell::new(HashMap::new()),
         }
     }
 
@@ -1298,6 +1602,7 @@ impl Workspace {
     fn with_config_at(relative: &str, config: &str) -> Self {
         let workspace = Self {
             dir: tempfile::tempdir().expect("temp dir should be created"),
+            commits: RefCell::new(HashMap::new()),
         };
         let path = workspace.root().join(relative);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1307,6 +1612,63 @@ impl Workspace {
 
     fn root(&self) -> &Path {
         self.dir.path()
+    }
+
+    /// Runs `git -C <root> <args>`, returning its captured output. The repository
+    /// directory is addressed explicitly so commit creation never depends on the
+    /// process current directory.
+    fn git(&self, args: &[&str]) -> std::process::Output {
+        let root = self.root().to_string_lossy().into_owned();
+        let mut full: Vec<&str> = vec!["-C", root.as_str()];
+        full.extend_from_slice(args);
+        let output = std::process::Command::new("git")
+            .args(&full)
+            .output()
+            .expect("git should be available");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    }
+
+    /// Initializes a `master`-branch repository with a deterministic identity and
+    /// one empty root commit so `HEAD` always resolves.
+    fn init_repo(&self) {
+        self.git(&["init", "-b", "master"]);
+        self.git(&["config", "user.email", "test@example.invalid"]);
+        self.git(&["config", "user.name", "Bench History Test"]);
+        self.git(&["config", "commit.gpgsign", "false"]);
+        self.git(&["commit", "--allow-empty", "-m", "root"]);
+    }
+
+    /// Lazily creates an empty commit labeled `label` on the current branch and
+    /// returns its full SHA, reusing the SHA if the label was already created.
+    ///
+    /// Creation order is the first-parent topology order, so seeding in oldest-first
+    /// order makes the storage keys line up with the live git history `analyze`
+    /// reconstructs the series from.
+    fn commit(&self, label: &str) -> String {
+        if let Some(sha) = self.commits.borrow().get(label) {
+            return sha.clone();
+        }
+        self.git(&["commit", "--allow-empty", "-m", label]);
+        let head = self.git(&["rev-parse", "HEAD"]);
+        let sha = String::from_utf8(head.stdout)
+            .expect("a commit SHA is ASCII")
+            .trim()
+            .to_owned();
+        self.commits
+            .borrow_mut()
+            .insert(label.to_owned(), sha.clone());
+        sha
+    }
+
+    /// Creates and checks out a new branch off the current `HEAD`.
+    fn checkout_new_branch(&self, name: &str) {
+        self.git(&["checkout", "-b", name]);
     }
 
     /// Reads a file relative to the workspace root, if it exists.
@@ -1379,25 +1741,43 @@ impl Workspace {
     }
 
     /// Seeds one Callgrind result set with an `Ir` value at the given `date`
-    /// (`YYYY-MM-DD`, taken at UTC midnight) and abbreviated `commit`.
-    fn seed_callgrind(&self, date: &str, commit: &str, value: f64) {
+    /// (`YYYY-MM-DD`, taken at UTC midnight) and commit `label`, creating the
+    /// corresponding empty git commit so the storage key and live topology agree.
+    fn seed_callgrind(&self, date: &str, label: &str, value: f64) {
+        self.seed_callgrind_in("x86_64-unknown-linux-gnu", "synthetic", date, label, value);
+    }
+
+    /// Seeds one clean Callgrind result set into the `triple`/`machine` partition
+    /// for commit `label`, so a single commit can host objects in several
+    /// comparable sets (as parallel CI pools produce).
+    fn seed_callgrind_in(&self, triple: &str, machine: &str, date: &str, label: &str, value: f64) {
+        let sha = self.commit(label);
         let effective: Timestamp = format!("{date}T00:00:00Z").parse().unwrap();
-        let key =
-            format!("v2/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json");
-        self.seed(&key, &ir_result_set(effective.as_second(), commit, value));
+        let key = format!("v2/testproj/callgrind/{triple}/{machine}/{sha}/clean.json");
+        self.seed(&key, &ir_result_set(effective.as_second(), &sha, value));
+    }
+
+    /// Seeds one *dirty* (uncommitted-tree) Callgrind snapshot with an `Ir` value
+    /// at commit `label`, keyed by the effective second like a real dirty run.
+    fn seed_dirty_callgrind(&self, date: &str, label: &str, value: f64) {
+        let sha = self.commit(label);
+        let effective: Timestamp = format!("{date}T00:00:00Z").parse().unwrap();
+        let key = format!(
+            "v2/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{sha}/dirty-{}.json",
+            effective.as_second()
+        );
+        self.seed(&key, &ir_result_set(effective.as_second(), &sha, value));
     }
 
     /// Seeds one Callgrind result set carrying `metrics` for benchmark
     /// `nm::observe/pull` at the given `date` (`YYYY-MM-DD`, UTC midnight) and
-    /// abbreviated `commit`.
-    fn seed_metrics(&self, date: &str, commit: &str, metrics: Vec<Metric>) {
+    /// commit `label`.
+    fn seed_metrics(&self, date: &str, label: &str, metrics: Vec<Metric>) {
+        let sha = self.commit(label);
         let effective: Timestamp = format!("{date}T00:00:00Z").parse().unwrap();
         let key =
-            format!("v2/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json");
-        self.seed(
-            &key,
-            &result_set_with(effective.as_second(), commit, metrics),
-        );
+            format!("v2/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{sha}/clean.json");
+        self.seed(&key, &result_set_with(effective.as_second(), &sha, metrics));
     }
 
     /// Seeds a flat history followed by a clear upward step — a regression.
@@ -1409,14 +1789,15 @@ impl Workspace {
     }
 
     /// Seeds one Criterion `wall_time` result set at the given `date` (`YYYY-MM-DD`,
-    /// UTC midnight), abbreviated `commit`, and machine-key partition `machine`.
-    fn seed_criterion(&self, date: &str, commit: &str, machine: &str, value: f64) {
+    /// UTC midnight), commit `label`, and machine-key partition `machine`.
+    fn seed_criterion(&self, date: &str, label: &str, machine: &str, value: f64) {
+        let sha = self.commit(label);
         let effective: Timestamp = format!("{date}T00:00:00Z").parse().unwrap();
         let key =
-            format!("v2/testproj/criterion/x86_64-pc-windows-msvc/{machine}/{commit}/clean.json");
+            format!("v2/testproj/criterion/x86_64-pc-windows-msvc/{machine}/{sha}/clean.json");
         self.seed(
             &key,
-            &criterion_result_set(effective.as_second(), commit, value),
+            &criterion_result_set(effective.as_second(), &sha, value),
         );
     }
 
@@ -1430,14 +1811,15 @@ impl Workspace {
 
     /// Seeds one Callgrind result set carrying two distinct benchmark identities,
     /// `alpha::bench/wide` and `beta::bench/narrow`, each with an `Ir` metric at the
-    /// given value, stamped at `date` (`YYYY-MM-DD`, UTC midnight) and `commit`.
-    fn seed_two_benchmarks(&self, date: &str, commit: &str, alpha: f64, beta: f64) {
+    /// given value, stamped at `date` (`YYYY-MM-DD`, UTC midnight) and commit `label`.
+    fn seed_two_benchmarks(&self, date: &str, label: &str, alpha: f64, beta: f64) {
+        let sha = self.commit(label);
         let effective: Timestamp = format!("{date}T00:00:00Z").parse().unwrap();
         let key =
-            format!("v2/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json");
+            format!("v2/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{sha}/clean.json");
         self.seed(
             &key,
-            &two_benchmark_result_set(effective.as_second(), commit, alpha, beta),
+            &two_benchmark_result_set(effective.as_second(), &sha, alpha, beta),
         );
     }
 }
