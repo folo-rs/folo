@@ -948,14 +948,24 @@ async fn run_criterion_honors_machine_key_override() {
         "--criterion grp|capture|now=9",
     )));
 
+    // Pin the triple so the full partition is deterministic across host platforms;
+    // the override segment is what this test asserts.
     workspace
-        .drive(&["run", "--engine", "criterion", "--machine-key", "ci-pool-a"])
+        .drive(&[
+            "run",
+            "--engine",
+            "criterion",
+            "--target-triple",
+            "x86_64-unknown-linux-gnu",
+            "--machine-key",
+            "ci-pool-a",
+        ])
         .await
         .expect("run should succeed");
 
     let (key, _) = workspace.single_object();
     assert!(
-        key.contains("/criterion/x86_64-pc-windows-msvc/ci-pool-a/"),
+        key.contains("/criterion/x86_64-unknown-linux-gnu/ci-pool-a/"),
         "{key}"
     );
 }
