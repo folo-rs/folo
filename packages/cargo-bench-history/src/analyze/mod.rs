@@ -57,8 +57,8 @@ pub(crate) async fn analyze_with<S: Storage>(
     // mangled, so listing under the raw id would silently find an empty history.
     let project = sanitize_segment(project_id);
     let prefix = match system {
-        Some(engine) => format!("v1/{project}/{}/", engine.as_str()),
-        None => format!("v1/{project}/"),
+        Some(engine) => format!("v2/{project}/{}/", engine.as_str()),
+        None => format!("v2/{project}/"),
     };
 
     let keys = storage.list(&prefix).await.map_err(RunError::Storage)?;
@@ -205,10 +205,10 @@ mod tests {
         ResultSet::new(context, vec![record])
     }
 
-    fn callgrind_key(effective: i64, commit: &str, run: &str) -> String {
-        format!(
-            "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{effective}-{commit}-{run}.json"
-        )
+    fn callgrind_key(commit: &str, run: &str) -> String {
+        // The commit names the per-point directory; `run` keeps keys distinct so a
+        // multi-point history can reuse a fixed commit without colliding.
+        format!("v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}-{run}/clean.json")
     }
 
     /// Stores a value at `key` in `storage`, panicking on failure (test helper).
@@ -244,7 +244,7 @@ mod tests {
             let second = i64::try_from(index).unwrap();
             store(
                 &storage,
-                &callgrind_key(second, &format!("c{index}"), &format!("r{index}")),
+                &callgrind_key(&format!("c{index}"), &format!("r{index}")),
                 &ir_set(second, &format!("c{index}"), value),
             );
         }
@@ -273,8 +273,8 @@ mod tests {
         for (index, value) in [100.0, 100.0, 100.0, 130.0].into_iter().enumerate() {
             let second = i64::try_from(index).unwrap();
             let key = format!(
-                "v1/{sanitized}/callgrind/x86_64-unknown-linux-gnu/synthetic/\
-                 {second}-c{index}-r{index}.json"
+                "v2/{sanitized}/callgrind/x86_64-unknown-linux-gnu/synthetic/\
+                 c{index}-r{index}/clean.json"
             );
             store(&storage, &key, &ir_set(second, &format!("c{index}"), value));
         }
@@ -303,7 +303,7 @@ mod tests {
             let second = i64::try_from(index).unwrap();
             store(
                 &storage,
-                &callgrind_key(second, &format!("c{index}"), &format!("r{index}")),
+                &callgrind_key(&format!("c{index}"), &format!("r{index}")),
                 &ir_set(second, &format!("c{index}"), value),
             );
         }
@@ -319,11 +319,7 @@ mod tests {
     #[test]
     fn json_format_is_rendered() {
         let storage = MemoryStorage::new();
-        store(
-            &storage,
-            &callgrind_key(1, "c1", "r1"),
-            &ir_set(1, "c1", 10.0),
-        );
+        store(&storage, &callgrind_key("c1", "r1"), &ir_set(1, "c1", 10.0));
 
         let opts = AnalyzeOptions {
             format: Some("json".to_owned()),
@@ -342,14 +338,10 @@ mod tests {
     fn system_filter_narrows_the_listing_prefix() {
         let storage = MemoryStorage::new();
         // One callgrind object and one (hypothetical) criterion object.
+        store(&storage, &callgrind_key("c1", "r1"), &ir_set(1, "c1", 10.0));
         store(
             &storage,
-            &callgrind_key(1, "c1", "r1"),
-            &ir_set(1, "c1", 10.0),
-        );
-        store(
-            &storage,
-            "v1/folo/criterion/x86_64-pc-windows-msvc/abc123/1-c1-r1.json",
+            "v2/folo/criterion/x86_64-pc-windows-msvc/m1/abc123/clean.json",
             &ir_set(1, "c1", 10.0),
         );
 
@@ -369,13 +361,9 @@ mod tests {
     #[test]
     fn non_json_objects_are_skipped() {
         let storage = MemoryStorage::new();
-        store(
-            &storage,
-            &callgrind_key(1, "c1", "r1"),
-            &ir_set(1, "c1", 10.0),
-        );
+        store(&storage, &callgrind_key("c1", "r1"), &ir_set(1, "c1", 10.0));
         // A stray non-result object under the prefix must be ignored, not parsed.
-        block_on(storage.put("v1/folo/callgrind/README.txt", b"not json")).unwrap();
+        block_on(storage.put("v2/folo/callgrind/README.txt", b"not json")).unwrap();
 
         let outcome = block_on(analyze_with(&storage, "folo", &options())).expect("analysis runs");
         let RunOutcome::Analyzed { .. } = outcome else {
@@ -386,7 +374,7 @@ mod tests {
     #[test]
     fn malformed_stored_object_is_an_analyze_error() {
         let storage = MemoryStorage::new();
-        block_on(storage.put(&callgrind_key(1, "c1", "r1"), b"{ not valid")).unwrap();
+        block_on(storage.put(&callgrind_key("c1", "r1"), b"{ not valid")).unwrap();
 
         let error = block_on(analyze_with(&storage, "folo", &options())).unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
@@ -395,7 +383,7 @@ mod tests {
     #[test]
     fn invalid_utf8_object_is_an_analyze_error() {
         let storage = MemoryStorage::new();
-        block_on(storage.put(&callgrind_key(1, "c1", "r1"), &[0xff, 0xfe])).unwrap();
+        block_on(storage.put(&callgrind_key("c1", "r1"), &[0xff, 0xfe])).unwrap();
 
         let error = block_on(analyze_with(&storage, "folo", &options())).unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
@@ -452,7 +440,7 @@ mod tests {
             20.0,
             Some("count".to_owned()),
         ));
-        store(&storage, &callgrind_key(1, "c1", "r1"), &set);
+        store(&storage, &callgrind_key("c1", "r1"), &set);
 
         let opts = AnalyzeOptions {
             metric: Some("Ir".to_owned()),

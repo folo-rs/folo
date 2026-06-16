@@ -137,29 +137,53 @@ impl ComparabilityKey {
 
     /// The storage prefix that all runs in this series share.
     ///
-    /// Layout: `v1/{project}/{system}/{target_triple}/{machine_key|synthetic}`.
+    /// Layout: `v2/{project}/{system}/{target_triple}/{machine_key|synthetic}`.
+    /// Below this prefix the history is organized by commit (see [`clean_key`] and
+    /// [`dirty_key`]) so `analyze` can resolve a series from git topology.
+    ///
+    /// [`clean_key`]: Self::clean_key
+    /// [`dirty_key`]: Self::dirty_key
     #[must_use]
     pub fn partition_prefix(&self) -> String {
         let project = &self.project;
         let system = self.system.as_str();
         let triple = &self.target_triple;
         let machine = self.machine_key.as_deref().unwrap_or("synthetic");
-        format!("v1/{project}/{system}/{triple}/{machine}")
+        format!("v2/{project}/{system}/{triple}/{machine}")
     }
 
-    /// The full object key for one run within this series.
+    /// The object key for the canonical (clean working tree) result at `commit`.
     ///
-    /// Named by **effective** time so that backfilled points sort into their
-    /// historical position: `{prefix}/{effective_unix}-{short_commit}-{run_id}.json`.
+    /// Layout: `{prefix}/{commit}/clean.json`. A clean run is keyed solely by its
+    /// commit, so it is deterministic: a second clean run of the same commit maps
+    /// to the same key and collides, which the write-once storage detects so `run`
+    /// can refuse the duplicate unless an overwrite is explicitly requested.
     ///
-    /// `short_commit` and `run_id` are sanitized the same way as the partition
-    /// components so the file name always forms a single key segment.
+    /// `commit` is sanitized the same way as the partition components so the
+    /// directory name always forms a single key segment.
     #[must_use]
-    pub fn object_key(&self, effective_unix: i64, short_commit: &str, run_id: &str) -> String {
+    pub fn clean_key(&self, commit: &str) -> String {
         let prefix = self.partition_prefix();
-        let short_commit = sanitize_segment(short_commit);
-        let run_id = sanitize_segment(run_id);
-        format!("{prefix}/{effective_unix}-{short_commit}-{run_id}.json")
+        let commit = sanitize_segment(commit);
+        format!("{prefix}/{commit}/clean.json")
+    }
+
+    /// The object key for a dirty (uncommitted-changes) snapshot at `commit`,
+    /// taken at `effective_unix`.
+    ///
+    /// Layout: `{prefix}/{commit}/dirty-{effective_unix}.json`. Because a dirty
+    /// snapshot does not correspond to committed code, it is distinguished by its
+    /// effective time rather than by the commit alone, so multiple dirty snapshots
+    /// on the same base commit coexist; only two snapshots sharing an effective
+    /// second collide.
+    ///
+    /// `commit` is sanitized the same way as the partition components so the
+    /// directory name always forms a single key segment.
+    #[must_use]
+    pub fn dirty_key(&self, commit: &str, effective_unix: i64) -> String {
+        let prefix = self.partition_prefix();
+        let commit = sanitize_segment(commit);
+        format!("{prefix}/{commit}/dirty-{effective_unix}.json")
     }
 }
 
@@ -238,7 +262,7 @@ mod tests {
         );
         assert_eq!(
             key.partition_prefix(),
-            "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic"
+            "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic"
         );
     }
 
@@ -252,12 +276,12 @@ mod tests {
         );
         assert_eq!(
             key.partition_prefix(),
-            "v1/folo/criterion/x86_64-pc-windows-msvc/abc123"
+            "v2/folo/criterion/x86_64-pc-windows-msvc/abc123"
         );
     }
 
     #[test]
-    fn object_key_is_named_by_effective_time() {
+    fn clean_key_is_named_by_commit() {
         let key = ComparabilityKey::new(
             "folo",
             EngineSystem::Callgrind,
@@ -265,8 +289,24 @@ mod tests {
             None,
         );
         assert_eq!(
-            key.object_key(1_700_000_000, "deadbee", "run-7"),
-            "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/1700000000-deadbee-run-7.json"
+            key.clean_key("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
+            "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/\
+             deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/clean.json"
+        );
+    }
+
+    #[test]
+    fn dirty_key_is_named_by_commit_and_effective_time() {
+        let key = ComparabilityKey::new(
+            "folo",
+            EngineSystem::Callgrind,
+            "x86_64-unknown-linux-gnu",
+            None,
+        );
+        assert_eq!(
+            key.dirty_key("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", 1_700_000_000),
+            "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/\
+             deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/dirty-1700000000.json"
         );
     }
 
@@ -319,26 +359,43 @@ mod tests {
         );
         assert_eq!(
             key.partition_prefix(),
-            "v1/team_app/criterion/weird_triple/machine_one"
+            "v2/team_app/criterion/weird_triple/machine_one"
         );
         // The partition prefix has exactly the five canonical segments.
         assert_eq!(key.partition_prefix().split('/').count(), 5);
     }
 
     #[test]
-    fn object_key_sanitizes_commit_and_run_id() {
+    fn clean_key_sanitizes_the_commit() {
         let key = ComparabilityKey::new(
             "folo",
             EngineSystem::Callgrind,
             "x86_64-unknown-linux-gnu",
             None,
         );
-        let object = key.object_key(1_700_000_000, "dead/beef", "run/7");
+        let object = key.clean_key("dead/beef");
         assert_eq!(
             object,
-            "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/1700000000-dead_beef-run_7.json"
+            "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/dead_beef/clean.json"
         );
-        // Exactly the six canonical key segments survive sanitization.
-        assert_eq!(object.split('/').count(), 6);
+        // Exactly the seven canonical key segments survive sanitization.
+        assert_eq!(object.split('/').count(), 7);
+    }
+
+    #[test]
+    fn dirty_key_sanitizes_the_commit() {
+        let key = ComparabilityKey::new(
+            "folo",
+            EngineSystem::Callgrind,
+            "x86_64-unknown-linux-gnu",
+            None,
+        );
+        let object = key.dirty_key("dead/beef", 1_700_000_000);
+        assert_eq!(
+            object,
+            "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/dead_beef/dirty-1700000000.json"
+        );
+        // Exactly the seven canonical key segments survive sanitization.
+        assert_eq!(object.split('/').count(), 7);
     }
 }

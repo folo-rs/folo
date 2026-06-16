@@ -28,7 +28,7 @@ The initial target engines are the ones this workspace uses: Criterion
 ```text
 cargo bench-history run [--engine NAME] [--timestamp RFC3339]
                         [--target-triple TRIPLE] [--machine-key KEY]
-                        [--no-store] [--config PATH]
+                        [--no-store] [--overwrite] [--config PATH]
                         -- <args forwarded to each engine>
 cargo bench-history install [--config PATH]
 cargo bench-history analyze [--since DATE] [--system SYSTEM]
@@ -37,11 +37,13 @@ cargo bench-history analyze [--since DATE] [--system SYSTEM]
 ```
 
 * `run` executes each configured engine, harvests its output, and stores the
-  result set. `--timestamp` overrides the effective time when backfilling history
-  for an old commit; `--machine-key` overrides the hardware fingerprint used to
-  partition hardware-dependent (Criterion) results; everything after `--` is
-  forwarded verbatim to each engine command (use `--engine` to target a single
-  engine).
+  result set. History is keyed by commit: a clean run writes a single
+  deterministic object per commit, so re-running the same commit is refused
+  unless `--overwrite` replaces the stored result. `--timestamp` overrides the
+  effective time when backfilling history for an old commit; `--machine-key`
+  overrides the hardware fingerprint used to partition hardware-dependent
+  (Criterion) results; everything after `--` is forwarded verbatim to each engine
+  command (use `--engine` to target a single engine).
 * `install` generates a starter `.cargo/bench_history.toml` if absent, printing
   its path and next steps; an existing file is never overwritten.
 * `analyze` downloads a partition and reports notable patterns;

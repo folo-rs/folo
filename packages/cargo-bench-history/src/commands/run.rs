@@ -6,7 +6,6 @@
 //! public [`execute`] wires the real adapters and is what the binary runs.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use jiff::Timestamp;
@@ -25,7 +24,7 @@ use crate::machine::{HardwareProfile, resolve_machine_key};
 use crate::model::{ResultRecord, ResultSet};
 use crate::probe::{EnvironmentProbe, SystemProbe};
 use crate::process::{BenchRunner, TokioBenchRunner};
-use crate::storage::{Storage, build_storage};
+use crate::storage::{Storage, StorageError, build_storage};
 use crate::wiring::{default_config_path, resolve_project_id};
 use crate::{RunError, RunOptions, RunOutcome};
 
@@ -49,8 +48,6 @@ pub(crate) struct RunDeps<'a, R, P, O, S> {
     pub(crate) project_id: &'a str,
     /// Version of this tool, recorded with each run.
     pub(crate) tool_version: &'a str,
-    /// Unique identifier distinguishing this run's stored objects.
-    pub(crate) run_id: &'a str,
     /// Cargo target directory that engines write to and the harvest scans. It is
     /// injected into each engine's environment as `CARGO_TARGET_DIR` so the
     /// engine's output always lands where the harvest looks for it.
@@ -83,7 +80,6 @@ pub(crate) async fn execute(
     let output = FsBenchOutputSource::new(target_root.clone());
     let clock = Clock::new_tokio();
     let env = |name: &str| std::env::var(name).ok();
-    let run_id = generate_run_id(&clock);
 
     let deps = RunDeps {
         runner: &runner,
@@ -95,7 +91,6 @@ pub(crate) async fn execute(
         config: &config,
         project_id: &project_id,
         tool_version: env!("CARGO_PKG_VERSION"),
-        run_id: &run_id,
         target_root: &target_root,
     };
 
@@ -238,7 +233,13 @@ where
 
     let execution = timestamp_from(run_start);
     let ingest: Timestamp = deps.clock.system_time_as();
-    let effective = resolve_effective_time(options.timestamp, shared.git.committer, ingest);
+    // A clean run records the committed code, so its effective time defaults to the
+    // commit's committer date. A dirty snapshot does not correspond to any commit,
+    // so it defaults to the wall clock instead. An explicit `--timestamp` overrides
+    // either default (notably for backfilling historical data points).
+    let dirty = shared.git.info.dirty;
+    let committer_default = if dirty { None } else { shared.git.committer };
+    let effective = resolve_effective_time(options.timestamp, committer_default, ingest);
     let target_triple = resolve_target_triple(
         options.target_triple.as_deref(),
         engine,
@@ -277,21 +278,58 @@ where
         &target_triple,
         machine_key.as_deref(),
     );
-    let short_commit = shared.git.info.short_commit.as_deref().unwrap_or("unknown");
-    let object_key = key.object_key(effective.as_second(), short_commit, deps.run_id);
+    // History is organized by commit, so the full commit SHA names the directory
+    // (`analyze` resolves which commits to read from git topology). A clean run is
+    // keyed solely by its commit and so is deterministic; a dirty snapshot adds its
+    // effective time so concurrent snapshots of the same commit coexist.
+    let commit = shared.git.info.commit.as_deref().unwrap_or("unknown");
+    let object_key = if dirty {
+        key.dirty_key(commit, effective.as_second())
+    } else {
+        key.clean_key(commit)
+    };
 
     // A freshly built result set is composed of plain structs and finite counts,
     // so serialization cannot fail.
     let json = result_set
         .to_json()
         .expect("a freshly built result set always serializes to JSON");
-    deps.storage.put(&object_key, json.as_bytes()).await?;
+    store_result(
+        deps.storage,
+        &object_key,
+        json.as_bytes(),
+        options.overwrite,
+    )
+    .await?;
 
     Ok(EngineSummary {
         stored: true,
         count,
         label: format!("{name}: {count} stored"),
     })
+}
+
+/// Persists a serialized result set at `object_key`.
+///
+/// A normal run is write-once: if an object already exists at the key (a clean
+/// re-run of the same commit, or a dirty snapshot sharing an effective second),
+/// the collision surfaces as [`RunError::Duplicate`] so the caller can refuse it.
+/// An overwrite replaces any existing object in place instead.
+async fn store_result<S: Storage>(
+    storage: &S,
+    object_key: &str,
+    bytes: &[u8],
+    overwrite: bool,
+) -> Result<(), RunError> {
+    if overwrite {
+        storage.put_overwrite(object_key, bytes).await?;
+        return Ok(());
+    }
+    match storage.put(object_key, bytes).await {
+        Ok(()) => Ok(()),
+        Err(StorageError::AlreadyExists { key }) => Err(RunError::Duplicate { key }),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// Parses harvested engine output into result records, naming the offending
@@ -420,23 +458,6 @@ fn target_root_from(configured: Option<std::ffi::OsString>) -> PathBuf {
     configured.map_or_else(|| PathBuf::from("target"), PathBuf::from)
 }
 
-/// Generates a run identifier unique within a partition.
-///
-/// Combines the process id, clock nanoseconds, and a process-global monotonic
-/// sequence number so that back-to-back runs in the same process never collide
-/// even when the system clock has coarse resolution (which would otherwise let
-/// `{pid}-{nanos}` repeat and trip the write-once storage contract).
-fn generate_run_id(clock: &Clock) -> String {
-    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-    let nanos = clock
-        .system_time()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map_or(0, |since| since.as_nanos());
-    let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    format!("{}-{nanos}-{sequence}", std::process::id())
-}
-
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -471,17 +492,6 @@ mod tests {
         SystemTime::UNIX_EPOCH
             .checked_add(Duration::from_secs(FROZEN_UNIX))
             .expect("frozen instant is within range")
-    }
-
-    #[test]
-    fn run_ids_are_unique_even_with_an_identical_clock_reading() {
-        // A frozen clock returns the same instant on every read, so the pid and
-        // nanos components are identical; the monotonic sequence is what keeps
-        // back-to-back run ids (and thus object keys) from colliding.
-        let clock = Clock::new_frozen_at(frozen_time());
-        let first = generate_run_id(&clock);
-        let second = generate_run_id(&clock);
-        assert_ne!(first, second);
     }
 
     #[test]
@@ -600,12 +610,21 @@ mod tests {
 
     impl FakeProbe {
         fn new() -> Self {
+            Self::with_status("")
+        }
+
+        /// A probe whose git snapshot reports a dirty working tree.
+        fn dirty() -> Self {
+            Self::with_status(" M src/lib.rs")
+        }
+
+        fn with_status(status: &str) -> Self {
             Self {
                 git: build_snapshot(
                     "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
                     "deadbee",
                     "main",
-                    "",
+                    status,
                     "",
                 ),
                 rustc: RustcInfo {
@@ -729,7 +748,22 @@ mod tests {
         output: &FakeOutput,
         storage: &MemoryStorage,
     ) -> Result<RunOutcome, RunError> {
-        let clock = Clock::new_frozen_at(frozen_time());
+        drive_at(FROZEN_UNIX, options, config, runner, probe, output, storage)
+    }
+
+    fn drive_at(
+        now_unix: u64,
+        options: &RunOptions,
+        config: &Config,
+        runner: &FakeRunner,
+        probe: &FakeProbe,
+        output: &FakeOutput,
+        storage: &MemoryStorage,
+    ) -> Result<RunOutcome, RunError> {
+        let now = SystemTime::UNIX_EPOCH
+            .checked_add(Duration::from_secs(now_unix))
+            .expect("frozen instant is within range");
+        let clock = Clock::new_frozen_at(now);
         let env = |_name: &str| None::<String>;
         let deps = RunDeps {
             runner,
@@ -741,7 +775,6 @@ mod tests {
             config,
             project_id: "folo",
             tool_version: "0.0.1",
-            run_id: "test-run",
             target_root: Path::new("target"),
         };
         block_on(execute_run(options, &deps))
@@ -773,8 +806,8 @@ mod tests {
         assert_eq!(
             keys,
             vec![
-                "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/\
-                 1700000000-deadbee-test-run.json"
+                "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/\
+                 deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/clean.json"
                     .to_owned()
             ]
         );
@@ -791,7 +824,9 @@ mod tests {
     }
 
     #[test]
-    fn backfill_timestamp_names_the_object_by_override() {
+    fn backfill_timestamp_records_the_override_as_the_effective_time() {
+        // Clean keys no longer embed the effective time, so a backfill override is
+        // verified by the stored effective timestamp rather than by the object key.
         let options = RunOptions {
             timestamp: Some("2020-01-01T00:00:00Z".parse().unwrap()),
             ..RunOptions::default()
@@ -809,10 +844,189 @@ mod tests {
         .unwrap();
 
         let keys = storage.keys();
+        assert!(keys[0].ends_with("/clean.json"), "{keys:?}");
+
+        let bytes = block_on(storage.get(&keys[0])).unwrap();
+        let set = ResultSet::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
+        let expected: Timestamp = "2020-01-01T00:00:00Z".parse().unwrap();
+        assert_eq!(set.context.timestamps.effective, expected);
+    }
+
+    #[test]
+    fn clean_re_run_of_the_same_commit_is_refused_as_a_duplicate() {
+        let storage = MemoryStorage::new();
+        drive(
+            &RunOptions::default(),
+            &callgrind_config(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            &FakeOutput::with_two_callgrind_summaries(),
+            &storage,
+        )
+        .unwrap();
+
+        let error = drive(
+            &RunOptions::default(),
+            &callgrind_config(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            &FakeOutput::with_two_callgrind_summaries(),
+            &storage,
+        )
+        .unwrap_err();
+
+        let RunError::Duplicate { key } = error else {
+            panic!("expected a duplicate error, got {error:?}");
+        };
+        assert!(key.ends_with("/clean.json"), "{key}");
+        // The second run left the single stored object untouched.
+        assert_eq!(storage.keys().len(), 1);
+    }
+
+    #[test]
+    fn overwrite_replaces_a_clean_result_in_place() {
+        let storage = MemoryStorage::new();
+        drive(
+            &RunOptions::default(),
+            &callgrind_config(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            // First run harvests two records.
+            &FakeOutput::with_two_callgrind_summaries(),
+            &storage,
+        )
+        .unwrap();
+
+        let overwrite = RunOptions {
+            overwrite: true,
+            ..RunOptions::default()
+        };
+        drive(
+            &overwrite,
+            &callgrind_config(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            // Second run harvests a single record over the same key.
+            &FakeOutput {
+                callgrind: vec![RawSummary {
+                    path: PathBuf::from("a/summary.json"),
+                    content: SINGLE_FIXTURE.to_owned(),
+                }],
+                ..FakeOutput::default()
+            },
+            &storage,
+        )
+        .unwrap();
+
+        let keys = storage.keys();
+        assert_eq!(keys.len(), 1, "{keys:?}");
+        assert!(keys[0].ends_with("/clean.json"), "{keys:?}");
+        let bytes = block_on(storage.get(&keys[0])).unwrap();
+        let set = ResultSet::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
+        assert_eq!(
+            set.results.len(),
+            1,
+            "overwrite should replace the contents"
+        );
+    }
+
+    #[test]
+    fn dirty_run_is_keyed_by_effective_time() {
+        let storage = MemoryStorage::new();
+        drive(
+            &RunOptions::default(),
+            &callgrind_config(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::dirty(),
+            &FakeOutput::with_two_callgrind_summaries(),
+            &storage,
+        )
+        .unwrap();
+
+        let keys = storage.keys();
+        assert_eq!(keys.len(), 1, "{keys:?}");
         assert!(
-            keys[0].contains("/1577836800-deadbee-test-run.json"),
+            keys[0].ends_with(&format!(
+                "/deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/dirty-{FROZEN_UNIX}.json"
+            )),
             "{keys:?}"
         );
+    }
+
+    #[test]
+    fn two_dirty_runs_at_different_times_coexist() {
+        let storage = MemoryStorage::new();
+        drive_at(
+            FROZEN_UNIX,
+            &RunOptions::default(),
+            &callgrind_config(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::dirty(),
+            &FakeOutput::with_two_callgrind_summaries(),
+            &storage,
+        )
+        .unwrap();
+        drive_at(
+            FROZEN_UNIX + 1,
+            &RunOptions::default(),
+            &callgrind_config(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::dirty(),
+            &FakeOutput::with_two_callgrind_summaries(),
+            &storage,
+        )
+        .unwrap();
+
+        let keys = storage.keys();
+        assert_eq!(keys.len(), 2, "{keys:?}");
+    }
+
+    #[test]
+    fn dirty_runs_sharing_an_effective_second_collide() {
+        // Two dirty snapshots taken at the same effective second map to the same
+        // key, so the second is refused as a duplicate just like a clean re-run.
+        let storage = MemoryStorage::new();
+        drive_at(
+            FROZEN_UNIX,
+            &RunOptions::default(),
+            &callgrind_config(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::dirty(),
+            &FakeOutput::with_two_callgrind_summaries(),
+            &storage,
+        )
+        .unwrap();
+
+        let error = drive_at(
+            FROZEN_UNIX,
+            &RunOptions::default(),
+            &callgrind_config(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::dirty(),
+            &FakeOutput::with_two_callgrind_summaries(),
+            &storage,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, RunError::Duplicate { .. }), "{error:?}");
+        assert_eq!(storage.keys().len(), 1);
+
+        // With --overwrite the clash is resolved by replacing the object in place.
+        let overwrite = RunOptions {
+            overwrite: true,
+            ..RunOptions::default()
+        };
+        drive_at(
+            FROZEN_UNIX,
+            &overwrite,
+            &callgrind_config(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::dirty(),
+            &FakeOutput::with_two_callgrind_summaries(),
+            &storage,
+        )
+        .unwrap();
+        assert_eq!(storage.keys().len(), 1);
     }
 
     #[test]

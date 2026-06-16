@@ -25,7 +25,10 @@ driven in tests by fakes, never by real IO:
   returns in-memory `RawSummary` or `RawCriterionCase` values.
 * `storage::Storage` — real `LocalStorage` and (behind the `azure` feature)
   `AzureBlobStorage`, selected at runtime by the `StorageFacade` enum that
-  `build_storage` returns; fake `MemoryStorage`.
+  `build_storage` returns; fake `MemoryStorage`. `put` is **write-once** (an
+  existing key yields `StorageError::AlreadyExists`); `put_overwrite` is the
+  replacing escape hatch used only by `run --overwrite` (and, later, `backfill
+  --overwrite`).
 * `config_writer::ConfigWriter` — real `TokioConfigWriter` (creates parent dirs,
   `create_new` so an existing file is never clobbered); fake `MemoryConfigWriter`.
   Used by `commands::install::execute_install`. Its real adapter's IO error paths
@@ -34,6 +37,27 @@ driven in tests by fakes, never by real IO:
 
 When you add a new IO edge, follow the same pattern: a port trait with an
 `impl Future` return (RPITIT, no `async_trait`), a real adapter, and a fake.
+
+## Storage model (commit-centric v2)
+
+`comparability::ComparabilityKey` builds object keys under the partition prefix
+`v2/<project>/<engine>/<triple>/<machine|synthetic>` and then keys each point by
+**commit**:
+
+* `clean_key(commit)` → `…/<commit>/clean.json` — the one canonical point for a
+  clean working tree at that commit. It is deterministic, so a re-run of the same
+  commit maps to the same key; the write-once `put` turns that into a
+  `RunError::Duplicate` (refused) unless `--overwrite` switches to `put_overwrite`.
+* `dirty_key(commit, effective_unix)` → `…/<commit>/dirty-<effective_unix>.json` —
+  a snapshot of an uncommitted tree, distinguished by its effective second so
+  multiple dirty snapshots on one base commit coexist; only a same-second clash is
+  a conflict.
+
+The commit segment is the **full** SHA (`git.info.commit`, `unknown` when there is
+no repo), because the upcoming git-aware `analyze` reads `v2/.../<full_sha>/`
+directories resolved from `git rev-list`. The `run` store step picks clean vs dirty
+from `git.info.dirty`; clean effective time defaults to the committer date, dirty to
+wall-clock now, and `--timestamp` overrides either. There is no run-id in the key.
 
 ## The `analyze` command
 

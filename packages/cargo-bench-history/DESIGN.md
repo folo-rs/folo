@@ -126,10 +126,11 @@ flowchart LR
   carries the confidence interval and std-dev so analysis can be noise-aware.
 * **ResultRecord** — one `BenchmarkId` + its metrics from a single run.
 * **Timestamps** — every run carries three distinct times (§6): the **effective
-  time** (timeline position; defaults to the benchmarked commit's date,
-  overridable with `--timestamp` for backfill), the **execution time** (when the
-  benches ran), and the **ingest time** (wall clock when stored). Only effective
-  time orders a series; the tool never assumes ingest time is the effective date.
+  time** (defaults to the commit date for clean / wall-clock now for dirty,
+  overridable with `--timestamp`), the **execution time** (when the benches ran),
+  and the **ingest time** (wall clock when stored). The series is ordered by git
+  topology (§8.4), not by effective time; the tool never assumes ingest time is the
+  effective date.
 * **RunContext** — metadata attached to every stored run (see §6).
 * **ResultSet** — `{ schema_version, context, results: [ResultRecord] }`; the
   unit of storage (one immutable file per run).
@@ -193,25 +194,62 @@ rules above are safety nets for when that is impractical.
 
 ### 4.2 On-disk / blob layout
 
-**R:** immutable, append-only-by-new-file model (works identically on local FS
-and blob storage, no read-modify-write races in concurrent CI):
+**R:** immutable, append-only-by-new-file, **commit-centric** model (works
+identically on local FS and blob storage, no read-modify-write races in concurrent
+CI). The path is `<discriminant set>/<commit_sha>/<run file>`:
 
 ```
-<root>/v1/<project>/<system>/<target_triple>/<machine_key|synthetic>/
-    <effective_unix_ts>-<short_sha>-<run_uuid>.json   # one ResultSet per run
+<root>/v2/<project>/<engine>/<target_triple>/<machine_key|synthetic>/<commit_sha>/
+    clean.json                       # ≤1 per commit — the canonical point
+    dirty-<effective_unix>.json      # 0..N snapshots taken on top of this base commit
 ```
 
-`analyze` lists a partition prefix and downloads every `*.json`; `run` writes one
-new object (named by **effective** time, so backfilled points sort into their
-historical position). No mutation, no locking.
+The segment **above** `<commit_sha>` is the **discriminant set** — the dimensions
+that make two runs comparable (§4.3). The commit is a directory; **clean vs dirty
+is filename semantics** within it. This layout is dictated by how `analyze` selects
+data (§8.4): storage is **not** a pre-assembled timeline. A series is **pieced
+together at query time** by resolving git history into an ordered set of commits and
+then reading each commit's directory — so the storage key is indexed by *commit*,
+and ordering comes from *git topology*, never from a timestamp baked into the key.
 
-Each path segment (`<project>`, `<target_triple>`, `<machine_key>`, and the
-`<short_sha>`/`<run_uuid>` parts of the file name) is **sanitized** before the key
-is built: any character outside `[A-Za-z0-9._-]` becomes `_`, and an
-otherwise-empty or all-dots segment becomes `_`. This keeps a stray `/` (e.g. a
-`project.id` of `team/app`) from silently splitting the key into the wrong number
-of segments — which `analyze` would then drop as unattributable — by mangling the
-value rather than rejecting the run.
+**Logical point identity (collisions).** Because the commit is a path segment, a
+**clean** run is identified by `<discriminant set> + <commit>` and maps to the single
+deterministic key `…/<commit>/clean.json`. Collision detection rides on the
+**write-once** `put` contract: the store refuses to overwrite an existing object, so a
+second clean `run`/`backfill` of the same commit fails atomically (non-zero exit,
+nothing written) with no separate exists-check round-trip or TOCTOU window;
+`--overwrite` switches to a replacing write (e.g. to clobber data from broken infra). A
+**dirty** run is keyed by its effective time, `…/<commit>/dirty-<effective_unix>.json`,
+so successive snapshots on the same base commit coexist (effective defaults to
+wall-clock now, §6, spreading them in the order taken); a same-timestamp collision is
+treated like any other write-once conflict (refused unless `--overwrite`).
+
+Branch is **not** a path component: a commit SHA is globally unique, so the same
+commit on two branches is one point. Branch selection happens at query time via git
+topology (§8.4); branch is recorded only as run metadata (§6).
+
+Each path segment (`<project>`, `<target_triple>`, `<machine_key>`, `<commit_sha>`)
+is **sanitized** before the key is built: any character outside `[A-Za-z0-9._-]`
+becomes `_`, and an otherwise-empty or all-dots segment becomes `_`. This keeps a
+stray `/` (e.g. a `project.id` of `team/app`) from silently splitting the key into
+the wrong number of segments — which `analyze` would then drop as unattributable —
+by mangling the value rather than rejecting the run.
+
+### 4.3 Discriminant set & query facets
+
+The discriminant set `<project>/<engine>/<target_triple>/<machine_key|synthetic>`
+is the comparability boundary; a series is only ever built **within** one set. The
+**full target triple** is kept as one segment on purpose — `…-windows-msvc` and
+`…-windows-gnu` are genuinely different binaries and must not merge. For selection,
+`analyze` derives **OS** and **architecture** facets by parsing the triple, so the
+user can pick sets without memorizing triples:
+
+* `--list-discriminants` lists the distinct sets present (a cheap key `list` under
+  `v2/<project>/`, parsed and de-duplicated; an index file can be added later if a
+  store grows large) with their parsed engine / OS / arch / machine key.
+* `--os`, `--architecture`, `--engine`, `--machine-key` **filter which sets** are
+  analyzed. A filter that matches several sets (e.g. a Windows and a Linux nightly
+  pool) yields **one report per set** — parallel data sets, analyzed individually.
 
 ## 5. Machine key (hardware fingerprint)
 
@@ -244,17 +282,22 @@ or `--machine-key` (CLI), which wins over the computed fingerprint.
 
 Captured once per stored run and attached to the `ResultSet`:
 
-* **Effective time** — the timeline position of this data point. Defaults to the
-  benchmarked commit's committer date (so backfilling by checking out an old
-  commit lands the point at its correct historical position), overridable with
-  `--timestamp <rfc3339>` for when the commit date is wrong or absent (squash /
-  rebase, reconstructing from logs, benches not tied to one commit). **This is
-  the only time used to order a series.**
+* **Effective time** — for a **clean** run, defaults to the benchmarked commit's
+  committer date; for a **dirty** run, defaults to **wall-clock now** (the base
+  commit's date no longer identifies the code). Either default is overridable with
+  `--timestamp <rfc3339>` (squash / rebase, reconstructing from logs, benches not
+  tied to one commit). Effective time **no longer orders the series** — git topology
+  does (§8.4). It serves three narrower roles: the dirty filename (`dirty-<unix>`),
+  the sub-order of multiple runs *within one commit* (clean first, then dirty
+  snapshots in the order taken), and the `--since` window filter.
 * **Execution time** — wall clock when the benches actually ran (metadata), read
   from an injected `tick::Clock` (§10) so tests drive it deterministically.
 * **Ingest time** — wall clock when the ResultSet was stored (metadata), also from
   the `tick::Clock`; **never** used as the effective date.
 * **Git:** commit SHA + short SHA, branch, committer date, dirty flag (`git`).
+  Branch is metadata only — query-time topology, not this field, decides series
+  membership (§8.4). Parent lineage is **not** recorded: `analyze` resolves topology
+  from a live repo (§8.4), so storage never needs to reconstruct the commit graph.
 * **CI:** provider + run id + PR number, detected from env:
   * GitHub Actions: `GITHUB_ACTIONS`, `GITHUB_SHA`, `GITHUB_REF_NAME`,
     `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT`.
@@ -371,10 +414,16 @@ For each configured engine, `run`:
    processed), so harvest globbing never relies on bench-file names.
 4. Builds the `ResultSet` (with the resolved RunContext) and **stores it
    immediately** — `run` always persists; there is no separate publish step
-   (`--no-store` produces results without writing, for dry runs). An engine that
-   harvests **zero** cases stores nothing (an empty set carries no comparable
-   data and would only inflate `analyze`'s run count); the summary reports the
-   empty harvest, and other engines in the same run are unaffected.
+   (`--no-store` produces results without writing, for dry runs). A **clean** point
+   writes the deterministic key `…/<commit>/clean.json`; an existing one is refused
+   by default (non-zero exit, via the write-once `put` contract, §4.2) unless
+   `--overwrite`, which makes re-runs idempotent and safe to repeat. A **dirty**
+   snapshot writes
+   `…/<commit>/dirty-<effective_unix>.json` and coexists with prior snapshots (only a
+   same-timestamp clash is a conflict). An engine that harvests **zero** cases stores
+   nothing (an empty set carries no comparable data and would only inflate `analyze`'s
+   run count); the summary reports the empty harvest, and other engines in the same
+   run are unaffected.
 
 Callgrind’s command must run on Linux/WSL (Valgrind), exactly as today — but
 that requirement lives entirely in the user-provided command, keeping the tool
@@ -393,7 +442,8 @@ tool. Since passthrough is appended to *every* invoked engine command, use
 `--engine <name>` to run a single engine at a time (also the fast path for
 test/eval cycles). Other flags: `--timestamp <rfc3339>` (override effective time
 for backfill, §6), `--target-triple <triple>` (override the partition triple,
-§4.1), `--no-store`.
+§4.1), `--no-store`, `--overwrite` (replace an existing same-commit point instead
+of refusing, §4.2).
 
 ### 8.2 `cargo bench-history upload` — deferred (run vs upload)
 `run` already does the only thing that *must* happen at execution time — inject
@@ -423,19 +473,105 @@ template enables both harvestable engines (Callgrind and Criterion) and includes
 a commented `[machine]` block documenting the `key` override.
 
 ### 8.4 `cargo bench-history analyze`
-Download a partition (default: current project; flags to target any stored set or
-time range), build per-benchmark/per-metric series ordered by effective time (§6),
-run the finding algorithms (§9), print a report.
-* `--since <date>` (RFC 3339 timestamp or bare `YYYY-MM-DD`, interpreted at UTC
-  midnight), `--system`, `--metric`, `--format text|json|markdown`,
-  `--fail-on-regression` (CI gating, opt-in; non-zero exit when a regression is
-  found).
-* `--since` filters at the object level: a run whose effective time predates the
-  cutoff is excluded wholesale, so the reported run count and every series share
-  the same window.
-* `--machine-key` overrides the hardware fingerprint when a hardware-dependent
-  run (Criterion) is stored; Callgrind history is hardware-independent
-  (`synthetic` partition) and ignores it.
+
+**Analyze pieces a series together at query time from git topology** — storage is
+indexed by commit (§4.2), not pre-ordered. `analyze` therefore **requires a
+resolvable git repository** (the current checkout by default, or `--repo <path>`);
+with no repo it errors out rather than guessing an order. (Analyzing a foreign
+project's stored data means checking out that project's repo and pointing `analyze`
+at it.)
+
+**Selecting the discriminant set(s).** `--list-discriminants` prints the sets
+present (§4.3). `--engine`, `--os`, `--architecture`, `--machine-key` filter them;
+each matched set is analyzed independently and produces its own report (so a Windows
+and a Linux nightly pool come out as two reports).
+
+**Selecting the commits (the query model).** Two refs frame the analysis:
+* `--branch <ref>` — the **target** whose history is analyzed (default: current
+  `HEAD`).
+* `--base <ref>` — the **integration branch** (default: the detected default branch
+  — `origin/HEAD`, else `main`/`master`; `project.default_branch` config override).
+
+`analyze` resolves the **first-parent** ancestry of the target and splits it at the
+merge-base with the base:
+* commits **in the base ancestry** (≤ merge-base) contribute **clean points only**;
+* commits **unique to the target** (the private branch commits, > merge-base)
+  contribute **clean *and* dirty** points (`--no-dirty` drops the dirty ones).
+
+This single rule covers both use cases: an "official" view is just
+`--branch <default>` (target == base ⇒ everything is base ⇒ clean-only); the
+"how does my feature fit in" view is the default (clean default-branch baseline,
+then the branch's own clean + dirty snapshots). Series are **ordered by git
+topology**; multiple runs on one commit sub-order by effective time (§6). Branch
+*metadata* on a run is never consulted — membership is purely topological, so a
+dirty snapshot taken on a shared base commit (scratch work before committing) is
+excluded from an official view until it is committed.
+
+For each selected commit `analyze` reads its directory (`clean.json` and, when
+admitted, `dirty-*.json`), builds per-`(BenchmarkId, metric)` series in topological
+order, runs the finding algorithms (§9), and prints a report.
+
+* `--since <date>` (RFC 3339 timestamp or bare `YYYY-MM-DD`, UTC midnight) drops
+  runs whose effective time predates the cutoff, so the run count and every series
+  share the window.
+* `--metric`, `--format text|json|markdown`, `--fail-on-regression` (CI gating,
+  opt-in; non-zero exit when a regression is found).
+
+### 8.5 `cargo bench-history backfill`
+
+Reconstructs history by checking out each commit in a range and running
+`cargo bench-history run` for it. Bootstraps an existing repo's timeline and is
+also the convenient path for ad-hoc evaluation over a span of commits.
+
+```
+cargo bench-history backfill --from <commit> --to <commit> [--engine …] \
+    [--overwrite] [--ignore-errors] [-- <passthrough>]
+```
+
+**Range & ancestry.** Commits are enumerated **oldest-first** along the
+**first-parent** mainline of the current branch — `git rev-list --reverse
+--first-parent <from>^..<to>` — so the timeline follows the linear branch
+progression and does not fan out into commits merged in from side branches.
+`--from`/`--to` are both inclusive. Before doing anything the tool verifies the
+range is part of the current branch's history (`git merge-base --is-ancestor
+<from> <to>` and `<to>` an ancestor of — or equal to — `HEAD`); otherwise it
+errors out, because `analyze` only ever surfaces a point when its commit is in the
+analyzed ref's topology (§8.4), so backfilling commits outside the current branch's
+ancestry would write data that no ordinary analysis can reach.
+
+**Per commit**, in order, the tool: checks out the commit, runs every configured
+engine exactly as §8.1 (no `--timestamp` — each point's effective time is its own
+committer date, §6), and stores the result. Backfilled runs are always on a
+**clean** tree, so each is keyed by commit (§4.2) and collision-checked:
+
+* By **default** an existing point for a commit is left untouched and that commit
+  is **skipped** (reported, not an error). This makes backfill **resumable** — an
+  interrupted run can simply be re-issued and it continues where it stopped.
+* `--overwrite` regenerates and replaces existing points across the range (for
+  re-running after a broken-infra batch produced bad data).
+
+**Failure handling.** A *bench/build* failure for a commit (non-zero engine exit,
+or a commit that does not build) **stops** backfill by default; `--ignore-errors`
+records it in a skip list and continues to the next commit, printing a summary at
+the end (done / skipped-empty / failed counts + the failed SHAs). *Infrastructure*
+failures (storage unreachable, git errors) always abort regardless of
+`--ignore-errors`, since continuing cannot produce correct data.
+
+**Working-tree safety.** Backfill **refuses to start on a dirty tree** so it never
+destroys uncommitted work. It operates inside a dedicated **git worktree** (`git
+worktree add`) rather than mutating the primary checkout, which isolates it from
+the user's working directory, removes the HEAD save/restore hazard, and leaves the
+user exactly where they were even if the run is interrupted. Between commits the
+worktree is reset clean (`git reset --hard` + `git clean -fd`, preserving the
+ignored `target/` for incremental-build speed — the §8.1 `mtime ≥ run-start`
+harvest already excludes stale artifacts). The engine commands still come from the
+**invoking** checkout's config (stable across the range), while the benches that
+run are whatever exist in each checked-out commit; benches absent at an old commit
+simply harvest nothing.
+
+`--config`, `--engine`, `--target-triple`, `--machine-key` and `-- <passthrough>`
+behave as for `run`. Callgrind's cross-OS/WSL story is unchanged — the worktree
+path is reachable from WSL exactly like the primary checkout.
 
 ## 9. Analysis algorithms
 
@@ -579,6 +715,27 @@ persists) and adds macOS; mapped to your original numbering:
    `BenchmarkId.package` is `None` (Criterion files are package-agnostic; §3).
    Noise-aware thresholds and change-point/drift findings are split into a
    follow-up iteration.
+6. **Storage model v2 + `run` idempotency** (§4.2, §4.3) — commit-centric layout
+   (`…/<commit>/{clean.json | dirty-<unix>.json}`), schema `v1→v2`, a `Storage`
+   `put_overwrite` write-replacing escape hatch, the clean write-once collision refusal
+   (surfaced as `RunError::Duplicate`) + `--overwrite`, and the dirty effective=now
+   keying. Re-targets `comparability` and `run`'s store step; small, in-process, heavily
+   unit-tested before the git-heavy work builds on it.
+7. **Git-aware `analyze`** (§8.4, §4.3) — the query model: a read-only git-history
+   port (`rev-list --first-parent`, `merge-base`, default-branch detection) with a
+   real adapter + in-memory fake; require-a-repo (else error); target/base ref split
+   with clean-only base + clean/dirty private; topology ordering; `--branch` /
+   `--base` / `--no-dirty`; discriminant facet selection + `--list-discriminants`
+   (`--os` / `--architecture` / `--engine` / `--machine-key`). Largest reshape of an
+   existing command; the series engine moves from timestamp order to topology order.
+8. **`backfill`** (§8.5) — range enumeration + ancestry validation, per-commit
+   checkout in a dedicated git worktree, clean-state guards, default skip-existing
+   (resumable; backfill treats the it.6 write-once collision as a skip rather than
+   an error), `--ignore-errors`, end-of-run summary.
+   Builds on the idempotency (it.6) and the git port (it.7).
+9. **Statistical findings** — noise-aware thresholds (`k·MAD` / CI non-overlap),
+   change-point (Pettitt) and Theil–Sen drift, layered on the Criterion dispersion
+   fields recorded in iteration 5 (§9 #1–#3).
 
 **Deferred:** a standalone `upload` command (§8.2) — added only if a concrete
 need arises, most likely alongside Criterion; the `ingest` module it would reuse
@@ -613,10 +770,11 @@ Each iteration ships with tests and docs and leaves the tool runnable.
    the current run by `mtime ≥ run-start`. Optional `extra_args` escape hatch for
    engines lacking an env knob.
 9. **Effective time vs ingest time** — *Decided:* every run records three times —
-   effective (timeline position, default = commit committer date), execution, and
-   ingest (wall clock). Only effective time orders a series; `--timestamp`
-   overrides it for backfilling old commits. The tool never assumes ingest time
-   is the effective date.
+   effective, execution, and ingest (wall clock). Effective defaults to the commit
+   committer date (clean) or wall-clock now (dirty), overridable with `--timestamp`.
+   Effective time **does not order a series** (git topology does — decision 24); it
+   only names the dirty file, sub-orders runs within one commit, and drives `--since`.
+   The tool never assumes ingest time is the effective date.
 10. **Filtering** — *Decided:* `run` forwards everything after `--` verbatim to
     each engine command and stays filter-agnostic (no awareness of `--workspace`
     / `-p` / bench names); the `mtime ≥ run-start` harvest captures exactly what
@@ -674,3 +832,42 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     pinned by a golden test. Finer signals (RAM size, base frequency) were left
     out of v1 for little gain in homogeneous CI pools; `--machine-key` / `machine.
     key` override the fingerprint (§5). Computed only for Criterion.
+21. **Storage layout & point identity** — *Decided:* **commit-centric** v2 layout
+    `v2/<project>/<engine>/<triple>/<machine|synthetic>/<commit>/{clean.json |
+    dirty-<effective_unix>.json}` (§4.2). The commit is a path segment, so a clean
+    point has the single deterministic key `…/<commit>/clean.json` and collision
+    detection rides on the write-once `put` contract — refused (as
+    `RunError::Duplicate`) unless `--overwrite`. Dirty
+    snapshots are keyed by effective time (default wall-clock now) and coexist; only
+    a same-timestamp clash is a conflict. Branch is **not** in the key (a SHA is
+    globally unique); it is metadata only, and series membership is decided by
+    query-time topology, not by it. Schema bumped `v1→v2` (pre-release, no migration).
+22. **Analyze query model** — *Decided:* `analyze` **requires a resolvable git repo**
+    (current checkout or `--repo`; errors out otherwise — no committer-date fallback,
+    no stored parent lineage). It resolves the **first-parent** ancestry of a target
+    ref (`--branch`, default `HEAD`) and splits it at the merge-base with a base ref
+    (`--base`, default the detected default branch): base-ancestry commits contribute
+    **clean only**, target-unique commits contribute **clean + dirty** (`--no-dirty`
+    to drop dirty). Series are ordered by **git topology** (decision 24 supersedes the
+    old effective-time ordering); runs within one commit sub-order by effective time.
+    Discriminant sets are selected/listed via `--list-discriminants` + `--engine` /
+    `--os` / `--architecture` / `--machine-key`, each matched set producing its own
+    report (§4.3, §8.4).
+23. **`backfill`** — *Decided:* a dedicated command (not a `run` flag) that walks
+    the **first-parent** mainline of the current branch oldest-first
+    (`git rev-list --reverse --first-parent <from>^..<to>`, endpoints inclusive),
+    validating the range is in the branch's ancestry before starting. Each commit
+    is benchmarked exactly as `run` (no `--timestamp`; effective = its committer
+    date) from inside a dedicated **git worktree** so the user's checkout is never
+    disturbed and an interruption leaves them in place. Existing points are
+    **skipped** by default (so backfill is resumable — it reuses the it.6 write-once
+    collision and treats it as a skip rather than an error), `--overwrite` regenerates
+    them; a build/bench failure stops by
+    default and `--ignore-errors` skips and continues with an end-of-run summary,
+    while infrastructure failures always abort. Engine commands come from the
+    invoking checkout's config; benches are whatever each commit contains (§8.5).
+24. **Series ordering** — *Decided:* **git topology** (first-parent order of the
+    resolved commit list), not effective timestamp. This removes the committer-date
+    monotonicity hazard (rebases / amended dates no longer misorder) and is the
+    reason `analyze` needs a live repo (decision 22). Effective time only sub-orders
+    multiple runs sharing one commit and drives the `--since` window.

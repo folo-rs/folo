@@ -71,6 +71,26 @@ impl Storage for LocalStorage {
         file.flush().await.map_err(StorageError::Io)
     }
 
+    async fn put_overwrite(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
+        let path = self.key_path(key)?;
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(StorageError::Io)?;
+        }
+        // `create(true).truncate(true)` replaces an existing object's contents
+        // in full, the deliberate escape hatch from the write-once contract.
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .await
+            .map_err(StorageError::Io)?;
+        file.write_all(bytes).await.map_err(StorageError::Io)?;
+        file.flush().await.map_err(StorageError::Io)
+    }
+
     async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError> {
         let path = self.key_path(key)?;
         match tokio::fs::read(&path).await {
@@ -184,6 +204,53 @@ mod tests {
         );
         // The original object is left untouched.
         assert_eq!(storage.get("v1/folo/run.json").await.unwrap(), b"first");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn put_overwrite_replaces_an_existing_object() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path());
+
+        storage.put("v1/folo/run.json", b"first").await.unwrap();
+        storage
+            .put_overwrite("v1/folo/run.json", b"second")
+            .await
+            .unwrap();
+
+        assert_eq!(storage.get("v1/folo/run.json").await.unwrap(), b"second");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn put_overwrite_creates_intermediate_directories() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path());
+
+        // No prior object at this key, and the parent directory does not exist.
+        storage
+            .put_overwrite("v1/folo/deep/run.json", b"only")
+            .await
+            .unwrap();
+
+        assert_eq!(storage.get("v1/folo/deep/run.json").await.unwrap(), b"only");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn put_overwrite_rejects_traversal_key() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path());
+
+        let error = storage
+            .put_overwrite("v1/../escape.json", b"x")
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(error, StorageError::InvalidKey { .. }),
+            "{error:?}"
+        );
     }
 
     #[tokio::test]

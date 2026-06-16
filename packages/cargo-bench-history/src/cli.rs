@@ -65,6 +65,11 @@ struct RunCommand {
     #[argh(switch)]
     no_store: bool,
 
+    /// replace an already-stored result for this run instead of refusing it as
+    /// a duplicate.
+    #[argh(switch)]
+    overwrite: bool,
+
     /// arguments after `--` forwarded verbatim to each engine command.
     #[argh(positional, greedy)]
     passthrough: Vec<String>,
@@ -79,6 +84,7 @@ impl RunCommand {
             target_triple: self.target_triple,
             machine_key: self.machine_key,
             no_store: self.no_store,
+            overwrite: self.overwrite,
             passthrough: strip_separator(self.passthrough),
         }
     }
@@ -180,6 +186,16 @@ mod tests {
         };
         assert_eq!(options.engine.as_deref(), Some("callgrind"));
         assert_eq!(options.passthrough, vec!["-p".to_owned(), "nm".to_owned()]);
+        assert!(!options.overwrite);
+    }
+
+    #[test]
+    fn run_parses_overwrite_switch() {
+        let command = parse(&["run", "--overwrite"]);
+        let Command::Run(options) = command else {
+            panic!("expected run command");
+        };
+        assert!(options.overwrite);
     }
 
     #[test]

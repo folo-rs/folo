@@ -162,6 +162,30 @@ impl AzureBlobStorage {
             Err(error) => Err(azure_io(&error)),
         }
     }
+
+    /// Uploads `bytes` at `client`, creating the container and retrying once if it
+    /// does not exist yet. `if_not_exists` selects write-once versus replacing
+    /// semantics (see [`upload`]).
+    #[cfg_attr(test, mutants::skip)] // Delegates to the Azure SDK; verified by the Azurite round-trip tests, which mutation testing cannot run.
+    async fn upload_with_retry(
+        &self,
+        client: &BlobClient,
+        bytes: &[u8],
+        key: &str,
+        if_not_exists: bool,
+    ) -> Result<(), StorageError> {
+        match upload(client, bytes, if_not_exists).await {
+            Ok(()) => Ok(()),
+            Err(error) if matches!(classify(&error), Fault::ContainerMissing) => {
+                // The container does not exist yet; create it and retry once.
+                self.ensure_container().await?;
+                upload(client, bytes, if_not_exists)
+                    .await
+                    .map_err(|error| map_error(&error, key))
+            }
+            Err(error) => Err(map_error(&error, key)),
+        }
+    }
 }
 
 impl Storage for AzureBlobStorage {
@@ -169,17 +193,14 @@ impl Storage for AzureBlobStorage {
     async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
         validate_key(key)?;
         let client = self.blob_client(key)?;
-        match upload(&client, bytes).await {
-            Ok(()) => Ok(()),
-            Err(error) if matches!(classify(&error), Fault::ContainerMissing) => {
-                // The container does not exist yet; create it and retry once.
-                self.ensure_container().await?;
-                upload(&client, bytes)
-                    .await
-                    .map_err(|error| map_error(&error, key))
-            }
-            Err(error) => Err(map_error(&error, key)),
-        }
+        self.upload_with_retry(&client, bytes, key, true).await
+    }
+
+    #[cfg_attr(test, mutants::skip)] // Delegates to the Azure SDK; verified by the Azurite round-trip tests, which mutation testing cannot run.
+    async fn put_overwrite(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
+        validate_key(key)?;
+        let client = self.blob_client(key)?;
+        self.upload_with_retry(&client, bytes, key, false).await
     }
 
     #[cfg_attr(test, mutants::skip)] // Delegates to the Azure SDK; verified by the Azurite round-trip tests, which mutation testing cannot run.
@@ -236,14 +257,17 @@ impl Storage for AzureBlobStorage {
     }
 }
 
-/// Uploads `bytes` write-once (failing if the blob already exists).
+/// Uploads `bytes` to `client`, creating the container and retrying once if it
+/// does not exist yet. When `if_not_exists` is set the upload is write-once
+/// (failing if the blob already exists); otherwise it replaces any existing blob.
 #[cfg_attr(test, mutants::skip)] // Delegates to the Azure SDK; verified by the Azurite round-trip tests, which mutation testing cannot run.
-async fn upload(client: &BlobClient, bytes: &[u8]) -> azure_core::Result<()> {
+async fn upload(client: &BlobClient, bytes: &[u8], if_not_exists: bool) -> azure_core::Result<()> {
+    let mut options = BlobClientUploadOptions::default();
+    if if_not_exists {
+        options = options.if_not_exists();
+    }
     client
-        .upload(
-            RequestContent::from(bytes.to_vec()),
-            Some(BlobClientUploadOptions::default().if_not_exists()),
-        )
+        .upload(RequestContent::from(bytes.to_vec()), Some(options))
         .await?;
     Ok(())
 }
@@ -785,6 +809,43 @@ mod tests {
         );
         // The original value is preserved.
         assert_eq!(storage.get("v1/once.json").await.unwrap(), b"original");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)]
+    #[serial]
+    async fn put_overwrite_replaces_an_existing_blob() {
+        let Some(storage) = azurite_storage_or_skip() else {
+            return;
+        };
+        // The first write creates the container on demand; the overwrite replaces
+        // the blob's contents in place rather than failing as `put` would.
+        storage.put("v1/clobber.json", b"original").await.unwrap();
+        storage
+            .put_overwrite("v1/clobber.json", b"replacement")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            storage.get("v1/clobber.json").await.unwrap(),
+            b"replacement"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)]
+    #[serial]
+    async fn put_overwrite_creates_when_absent() {
+        let Some(storage) = azurite_storage_or_skip() else {
+            return;
+        };
+        // No prior blob and no container: the overwrite must still create both.
+        storage
+            .put_overwrite("v1/fresh.json", b"only")
+            .await
+            .unwrap();
+
+        assert_eq!(storage.get("v1/fresh.json").await.unwrap(), b"only");
     }
 
     #[tokio::test]

@@ -65,27 +65,29 @@ pub(crate) struct SeriesFilter<'a> {
 
 /// Parses the comparable [`Location`] from a storage object key.
 ///
-/// Keys have the form `v1/{project}/{system}/{triple}/{machine}/{file}` — exactly
-/// six non-empty segments. Any key that does not match that shape exactly (wrong
-/// version, too few or too many segments, or an empty segment) is ignored (returns
-/// `None`) rather than misattributed to a series.
+/// Keys have the form `v2/{project}/{system}/{triple}/{machine}/{commit}/{file}` —
+/// exactly seven non-empty segments. Any key that does not match that shape exactly
+/// (wrong version, too few or too many segments, or an empty segment) is ignored
+/// (returns `None`) rather than misattributed to a series.
 pub(crate) fn location_from_key(key: &str) -> Option<Location> {
     let parts: Vec<&str> = key.split('/').collect();
-    if parts.len() != 6 {
+    if parts.len() != 7 {
         return None;
     }
-    if *parts.first()? != "v1" {
+    if *parts.first()? != "v2" {
         return None;
     }
     let project = *parts.get(1)?;
     let system = *parts.get(2)?;
     let triple = *parts.get(3)?;
     let machine = *parts.get(4)?;
-    let file = *parts.get(5)?;
+    let commit = *parts.get(5)?;
+    let file = *parts.get(6)?;
     if project.is_empty()
         || system.is_empty()
         || triple.is_empty()
         || machine.is_empty()
+        || commit.is_empty()
         || file.is_empty()
     {
         return None;
@@ -217,17 +219,18 @@ mod tests {
         ResultSet::new(context, vec![record])
     }
 
-    fn key_for(effective: i64, commit: &str, run: &str) -> String {
-        format!(
-            "v1/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/{effective}-{commit}-{run}.json"
-        )
+    fn key_for(commit: &str, run: &str) -> String {
+        // The commit directory is the per-point discriminator; `run` keeps the keys
+        // distinct so effective-time ties have a deterministic object-key tie-break.
+        format!("v2/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}-{run}/clean.json")
     }
 
     #[test]
     fn location_parses_components() {
-        let location =
-            location_from_key("v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/1-a-b.json")
-                .expect("a well-formed key should parse");
+        let location = location_from_key(
+            "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/clean.json",
+        )
+        .expect("a well-formed key should parse");
         assert_eq!(location.system, "callgrind");
         assert_eq!(location.target_triple, "x86_64-unknown-linux-gnu");
         assert_eq!(location.machine, "synthetic");
@@ -235,26 +238,29 @@ mod tests {
 
     #[test]
     fn location_rejects_malformed_keys() {
+        // The previous (v1) six-segment layout is no longer accepted.
+        assert!(location_from_key("v1/folo/callgrind/t/m/f.json").is_none());
         assert!(location_from_key("v2/folo/callgrind/t/m/f.json").is_none());
-        assert!(location_from_key("v1/folo/callgrind").is_none());
-        assert!(location_from_key("v1/folo/callgrind/t/m/").is_none());
+        assert!(location_from_key("v2/folo/callgrind").is_none());
+        assert!(location_from_key("v2/folo/callgrind/t/m/c/").is_none());
         // A single empty segment in any position is rejected, never misattributed.
-        assert!(location_from_key("v1//callgrind/t/m/f.json").is_none());
-        assert!(location_from_key("v1/folo//t/m/f.json").is_none());
-        assert!(location_from_key("v1/folo/callgrind//m/f.json").is_none());
-        assert!(location_from_key("v1/folo/callgrind/t//f.json").is_none());
-        // A deeper key (more than six segments) is rejected rather than treating
+        assert!(location_from_key("v2//callgrind/t/m/c/f.json").is_none());
+        assert!(location_from_key("v2/folo//t/m/c/f.json").is_none());
+        assert!(location_from_key("v2/folo/callgrind//m/c/f.json").is_none());
+        assert!(location_from_key("v2/folo/callgrind/t//c/f.json").is_none());
+        assert!(location_from_key("v2/folo/callgrind/t/m//f.json").is_none());
+        // A deeper key (more than seven segments) is rejected rather than treating
         // an interior directory as the file segment and misattributing the run.
-        assert!(location_from_key("v1/folo/callgrind/t/m/sub/f.json").is_none());
+        assert!(location_from_key("v2/folo/callgrind/t/m/c/sub/f.json").is_none());
     }
 
     #[test]
     fn build_series_orders_points_by_effective_time() {
         // Insert out of order; expect ascending effective ordering on output.
         let objects = vec![
-            (key_for(300, "ccc", "r3"), result_set(ts(300), "ccc", 30.0)),
-            (key_for(100, "aaa", "r1"), result_set(ts(100), "aaa", 10.0)),
-            (key_for(200, "bbb", "r2"), result_set(ts(200), "bbb", 20.0)),
+            (key_for("ccc", "r3"), result_set(ts(300), "ccc", 30.0)),
+            (key_for("aaa", "r1"), result_set(ts(100), "aaa", 10.0)),
+            (key_for("bbb", "r2"), result_set(ts(200), "bbb", 20.0)),
         ];
 
         let series = build_series(&objects, &SeriesFilter::default());
@@ -265,11 +271,11 @@ mod tests {
 
     #[test]
     fn build_series_breaks_effective_ties_by_object_key() {
-        // Two runs at the same effective second; the storage key (which embeds the
-        // run id) is the deterministic tie-break, so `r1` precedes `r2`.
+        // Two points at the same effective second; the storage key is the
+        // deterministic tie-break, so `r1` precedes `r2`.
         let objects = vec![
-            (key_for(100, "aaa", "r2"), result_set(ts(100), "aaa", 22.0)),
-            (key_for(100, "aaa", "r1"), result_set(ts(100), "aaa", 11.0)),
+            (key_for("aaa", "r2"), result_set(ts(100), "aaa", 22.0)),
+            (key_for("aaa", "r1"), result_set(ts(100), "aaa", 11.0)),
         ];
 
         let series = build_series(&objects, &SeriesFilter::default());
@@ -281,9 +287,9 @@ mod tests {
     fn build_series_separates_locations() {
         // A second run in a different triple is a different (incomparable) series.
         let other_key =
-            "v1/proj/callgrind/aarch64-unknown-linux-gnu/synthetic/200-bbb-r2.json".to_owned();
+            "v2/proj/callgrind/aarch64-unknown-linux-gnu/synthetic/bbb/clean.json".to_owned();
         let objects = vec![
-            (key_for(100, "aaa", "r1"), result_set(ts(100), "aaa", 10.0)),
+            (key_for("aaa", "r1"), result_set(ts(100), "aaa", 10.0)),
             (other_key, result_set(ts(200), "bbb", 20.0)),
         ];
 
@@ -297,11 +303,11 @@ mod tests {
         // packages, so they must form two series rather than silently merging.
         let objects = vec![
             (
-                key_for(100, "aaa", "r1"),
+                key_for("aaa", "r1"),
                 result_set_for_package(ts(100), "aaa", 10.0, Some("foo")),
             ),
             (
-                key_for(200, "bbb", "r2"),
+                key_for("bbb", "r2"),
                 result_set_for_package(ts(200), "bbb", 20.0, Some("bar")),
             ),
         ];
@@ -321,7 +327,7 @@ mod tests {
             "x86_64-unknown-linux-gnu",
             None,
         )
-        .object_key(100, "aaa", "r1");
+        .clean_key("aaa");
         assert!(
             location_from_key(&key).is_some(),
             "sanitized key should remain attributable: {key}"
@@ -340,7 +346,7 @@ mod tests {
             99.0,
             Some("count".to_owned()),
         ));
-        let objects = vec![(key_for(100, "aaa", "r1"), set)];
+        let objects = vec![(key_for("aaa", "r1"), set)];
 
         let filter = SeriesFilter { metric: Some("Ir") };
         let series = build_series(&objects, &filter);

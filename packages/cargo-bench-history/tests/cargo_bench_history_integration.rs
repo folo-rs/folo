@@ -436,7 +436,7 @@ async fn analyze_system_filters_partition() {
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
     // A criterion-partition object that the callgrind filter must skip.
     workspace.seed(
-        "v1/testproj/criterion/x86_64-pc-windows-msvc/abc123/1-c1-r1.json",
+        "v2/testproj/criterion/x86_64-pc-windows-msvc/m1/abc123/clean.json",
         &ir_result_set(1, "c1", 100.0),
     );
 
@@ -740,14 +740,13 @@ async fn run_callgrind_end_to_end_stores_results() {
     let (key, set) = workspace.single_object();
 
     // Synthetic partition (Callgrind is hardware-independent) under the resolved
-    // triple and the backfilled effective second; the run-id suffix is dynamic.
+    // triple. The temp workspace is outside any git repository, so the commit
+    // resolves to the `unknown` fallback and the clean tree yields `clean.json`.
     let effective: Timestamp = "2020-01-01T00:00:00Z".parse().unwrap();
-    let prefix = format!(
-        "v1/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{}-unknown-",
-        effective.as_second()
+    assert_eq!(
+        key,
+        "v2/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/unknown/clean.json"
     );
-    assert!(key.starts_with(&prefix), "unexpected key: {key}");
-    assert!(key.ends_with(".json"), "unexpected key: {key}");
 
     assert_eq!(set.schema_version, SCHEMA_VERSION);
     assert_eq!(
@@ -1089,26 +1088,24 @@ async fn run_then_analyze_round_trips_a_sanitizing_project_id() {
         &mock_command("--summary grp=single"),
     ));
 
-    for timestamp in ["2020-01-01T00:00:00Z", "2020-02-01T00:00:00Z"] {
-        workspace
-            .drive(&[
-                "run",
-                "--target-triple",
-                "x86_64-unknown-linux-gnu",
-                "--timestamp",
-                timestamp,
-            ])
-            .await
-            .expect("run should succeed");
-    }
+    workspace
+        .drive(&[
+            "run",
+            "--target-triple",
+            "x86_64-unknown-linux-gnu",
+            "--timestamp",
+            "2020-01-01T00:00:00Z",
+        ])
+        .await
+        .expect("run should succeed");
 
     // The writer sanitizes `my proj/sub` to `my_proj_sub` for the partition.
     let objects = workspace.stored_objects();
-    assert_eq!(objects.len(), 2, "{objects:?}");
+    assert_eq!(objects.len(), 1, "{objects:?}");
     assert!(
         objects
             .iter()
-            .all(|(key, _)| key.starts_with("v1/my_proj_sub/callgrind/")),
+            .all(|(key, _)| key.starts_with("v2/my_proj_sub/callgrind/")),
         "{objects:?}"
     );
 
@@ -1122,8 +1119,8 @@ async fn run_then_analyze_round_trips_a_sanitizing_project_id() {
     };
     let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
     assert_eq!(
-        parsed["runs"], 2,
-        "analyze must find the runs the sanitized partition stored: {report}"
+        parsed["runs"], 1,
+        "analyze must find the run the sanitized partition stored: {report}"
     );
     // The single Callgrind record carries several metrics, each its own series; the
     // exact count is incidental, but the history must be non-empty.
@@ -1144,47 +1141,44 @@ async fn run_then_analyze_preserves_unusual_identity_characters() {
     let command = mock_command("--criterion 'time.capture|mide tiempo|tamaño 4=18.5'");
     let workspace = Workspace::new(&criterion_config(&command));
 
-    for timestamp in ["2020-01-01T00:00:00Z", "2020-02-01T00:00:00Z"] {
-        workspace
-            .drive(&[
-                "run",
-                "--engine",
-                "criterion",
-                "--target-triple",
-                "x86_64-unknown-linux-gnu",
-                "--machine-key",
-                "pool",
-                "--timestamp",
-                timestamp,
-            ])
-            .await
-            .expect("run should succeed");
-    }
+    workspace
+        .drive(&[
+            "run",
+            "--engine",
+            "criterion",
+            "--target-triple",
+            "x86_64-unknown-linux-gnu",
+            "--machine-key",
+            "pool",
+            "--timestamp",
+            "2020-01-01T00:00:00Z",
+        ])
+        .await
+        .expect("run should succeed");
 
     let objects = workspace.stored_objects();
-    assert_eq!(objects.len(), 2, "{objects:?}");
-    for (key, set) in &objects {
-        // The partition key is identity-free and fully sanitized: none of the
-        // identity's spaces or non-ASCII letters leak into it.
-        assert!(
-            key.starts_with("v1/testproj/criterion/x86_64-unknown-linux-gnu/pool/"),
-            "{key}"
-        );
-        assert!(
-            !key.contains(' ') && !key.contains("tamaño") && !key.contains("mide"),
-            "{key}"
-        );
+    assert_eq!(objects.len(), 1, "{objects:?}");
+    let (key, set) = &objects[0];
+    // The partition key is identity-free and fully sanitized: none of the
+    // identity's spaces or non-ASCII letters leak into it.
+    assert!(
+        key.starts_with("v2/testproj/criterion/x86_64-unknown-linux-gnu/pool/"),
+        "{key}"
+    );
+    assert!(
+        !key.contains(' ') && !key.contains("tamaño") && !key.contains("mide"),
+        "{key}"
+    );
 
-        // The identity survives verbatim in the stored result set.
-        assert_eq!(set.results.len(), 1, "{:?}", set.results);
-        let id = &set.results[0].id;
-        assert_eq!(id.group, "time.capture");
-        assert_eq!(id.case.as_deref(), Some("mide tiempo"));
-        assert_eq!(id.value.as_deref(), Some("tamaño 4"));
-    }
+    // The identity survives verbatim in the stored result set.
+    assert_eq!(set.results.len(), 1, "{:?}", set.results);
+    let id = &set.results[0].id;
+    assert_eq!(id.group, "time.capture");
+    assert_eq!(id.case.as_deref(), Some("mide tiempo"));
+    assert_eq!(id.value.as_deref(), Some("tamaño 4"));
 
-    // The reader reconstructs a single series across both runs, proving the unusual
-    // identity is a stable series key end to end.
+    // The reader reconstructs the series, proving the unusual identity is a stable
+    // series key end to end.
     let RunOutcome::Analyzed { report, .. } = workspace
         .drive(&["analyze", "--format", "json"])
         .await
@@ -1193,7 +1187,7 @@ async fn run_then_analyze_preserves_unusual_identity_characters() {
         panic!("expected an analyzed outcome");
     };
     let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
-    assert_eq!(parsed["runs"], 2, "{report}");
+    assert_eq!(parsed["runs"], 1, "{report}");
     assert_eq!(parsed["series"], 1, "{report}");
 }
 
@@ -1215,11 +1209,12 @@ async fn run_uses_explicit_config_path() {
     assert_eq!(workspace.stored_objects().len(), 1);
 }
 
-/// Two sequential runs store two distinct objects without clobbering.
+/// A clean re-run of the same commit collides with the deterministic clean key,
+/// so the second run is refused unless an overwrite is requested.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 #[serial]
-async fn two_runs_store_two_distinct_objects() {
+async fn re_running_the_same_commit_is_refused_as_a_duplicate() {
     let workspace = Workspace::new(&callgrind_config(&mock_command("--summary grp=single")));
 
     workspace
@@ -1227,16 +1222,43 @@ async fn two_runs_store_two_distinct_objects() {
         .await
         .expect("first run should succeed");
 
-    // The engine rewrites the summary on each run, so its modification time stays
-    // inside the second run's harvest window.
+    let error = workspace
+        .drive(&["run"])
+        .await
+        .expect_err("a second clean run of the same commit must be refused");
+    let RunError::Duplicate { key } = error else {
+        panic!("expected a duplicate error, got {error:?}");
+    };
+    assert!(key.ends_with("/clean.json"), "{key}");
+
+    // The refused run left the single stored object in place.
+    assert_eq!(workspace.stored_objects().len(), 1);
+}
+
+/// `--overwrite` replaces an already-stored clean result rather than refusing it.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn overwrite_replaces_the_stored_result() {
+    let workspace = Workspace::new(&callgrind_config(&mock_command("--summary grp=single")));
+
     workspace
         .drive(&["run"])
         .await
-        .expect("second run should succeed");
+        .expect("first run should succeed");
+
+    workspace
+        .drive(&["run", "--overwrite"])
+        .await
+        .expect("an overwrite run should replace the existing object");
 
     let objects = workspace.stored_objects();
-    assert_eq!(objects.len(), 2, "each run should store a distinct object");
-    assert_ne!(objects[0].0, objects[1].0, "object keys must differ");
+    assert_eq!(
+        objects.len(),
+        1,
+        "overwrite must not create a second object"
+    );
+    assert!(objects[0].0.ends_with("/clean.json"), "{:?}", objects[0].0);
 }
 
 // ===========================================================================
@@ -1360,10 +1382,8 @@ impl Workspace {
     /// (`YYYY-MM-DD`, taken at UTC midnight) and abbreviated `commit`.
     fn seed_callgrind(&self, date: &str, commit: &str, value: f64) {
         let effective: Timestamp = format!("{date}T00:00:00Z").parse().unwrap();
-        let key = format!(
-            "v1/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{}-{commit}-run.json",
-            effective.as_second()
-        );
+        let key =
+            format!("v2/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json");
         self.seed(&key, &ir_result_set(effective.as_second(), commit, value));
     }
 
@@ -1372,10 +1392,8 @@ impl Workspace {
     /// abbreviated `commit`.
     fn seed_metrics(&self, date: &str, commit: &str, metrics: Vec<Metric>) {
         let effective: Timestamp = format!("{date}T00:00:00Z").parse().unwrap();
-        let key = format!(
-            "v1/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{}-{commit}-run.json",
-            effective.as_second()
-        );
+        let key =
+            format!("v2/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json");
         self.seed(
             &key,
             &result_set_with(effective.as_second(), commit, metrics),
@@ -1394,10 +1412,8 @@ impl Workspace {
     /// UTC midnight), abbreviated `commit`, and machine-key partition `machine`.
     fn seed_criterion(&self, date: &str, commit: &str, machine: &str, value: f64) {
         let effective: Timestamp = format!("{date}T00:00:00Z").parse().unwrap();
-        let key = format!(
-            "v1/testproj/criterion/x86_64-pc-windows-msvc/{machine}/{}-{commit}-run.json",
-            effective.as_second()
-        );
+        let key =
+            format!("v2/testproj/criterion/x86_64-pc-windows-msvc/{machine}/{commit}/clean.json");
         self.seed(
             &key,
             &criterion_result_set(effective.as_second(), commit, value),
@@ -1417,10 +1433,8 @@ impl Workspace {
     /// given value, stamped at `date` (`YYYY-MM-DD`, UTC midnight) and `commit`.
     fn seed_two_benchmarks(&self, date: &str, commit: &str, alpha: f64, beta: f64) {
         let effective: Timestamp = format!("{date}T00:00:00Z").parse().unwrap();
-        let key = format!(
-            "v1/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{}-{commit}-run.json",
-            effective.as_second()
-        );
+        let key =
+            format!("v2/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json");
         self.seed(
             &key,
             &two_benchmark_result_set(effective.as_second(), commit, alpha, beta),

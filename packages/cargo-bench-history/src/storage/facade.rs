@@ -32,6 +32,14 @@ impl Storage for StorageFacade {
         }
     }
 
+    async fn put_overwrite(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
+        match self {
+            Self::Local(storage) => storage.put_overwrite(key, bytes).await,
+            #[cfg(feature = "azure")]
+            Self::Azure(storage) => storage.put_overwrite(key, bytes).await,
+        }
+    }
+
     async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError> {
         match self {
             Self::Local(storage) => storage.get(key).await,

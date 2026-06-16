@@ -47,6 +47,9 @@ pub struct RunOptions {
     pub machine_key: Option<String>,
     /// Harvest and build results without storing them.
     pub no_store: bool,
+    /// Replace an already-stored result for this run's identity instead of
+    /// refusing the run as a duplicate.
+    pub overwrite: bool,
     /// Arguments forwarded verbatim to each engine command.
     pub passthrough: Vec<String>,
 }
@@ -164,6 +167,12 @@ pub enum RunError {
         /// Human-readable description of the parse failure.
         message: String,
     },
+    /// A result is already stored for this run's identity (same partition and
+    /// commit) and the run did not request an overwrite.
+    Duplicate {
+        /// The object key that already held a result.
+        key: String,
+    },
     /// Analyzing stored history failed (bad filter, malformed stored object).
     Analyze {
         /// Human-readable description of the analysis failure.
@@ -187,6 +196,10 @@ impl fmt::Display for RunError {
                 write!(f, "engine {engine:?} has an invalid command: {message}")
             }
             Self::Parse { message } => write!(f, "failed to parse benchmark output: {message}"),
+            Self::Duplicate { key } => write!(
+                f,
+                "a result is already stored for this run at {key}; pass --overwrite to replace it"
+            ),
             Self::Analyze { message } => write!(f, "failed to analyze history: {message}"),
             Self::Io(error) => write!(f, "I/O error: {error}"),
         }
@@ -203,6 +216,7 @@ impl Error for RunError {
             | Self::Engine { .. }
             | Self::Command { .. }
             | Self::Parse { .. }
+            | Self::Duplicate { .. }
             | Self::Analyze { .. } => None,
         }
     }
@@ -282,6 +296,22 @@ mod tests {
         assert!(no_engine.source().is_none());
         assert!(parse.to_string().contains("bad"));
         assert!(no_engine.to_string().contains("none"));
+    }
+
+    #[test]
+    fn duplicate_error_mentions_overwrite_and_has_no_source() {
+        let error = RunError::Duplicate {
+            key: "v2/folo/callgrind/t/synthetic/abc/clean.json".to_owned(),
+        };
+        assert!(error.to_string().contains("already stored"), "{error}");
+        assert!(error.to_string().contains("--overwrite"), "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains("v2/folo/callgrind/t/synthetic/abc/clean.json"),
+            "{error}"
+        );
+        assert!(error.source().is_none());
     }
 
     #[test]

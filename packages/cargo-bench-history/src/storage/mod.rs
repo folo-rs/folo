@@ -35,6 +35,23 @@ pub trait Storage: fmt::Debug + Send + Sync {
     /// or [`StorageError::Io`] if the object cannot be written.
     fn put(&self, key: &str, bytes: &[u8]) -> impl Future<Output = Result<(), StorageError>>;
 
+    /// Writes `bytes` at `key`, replacing any object already stored there.
+    ///
+    /// Unlike [`put`](Self::put), this never fails because an object already
+    /// exists; it is the explicit escape hatch from the write-once contract that
+    /// `run --overwrite` and `backfill --overwrite` use to regenerate a data
+    /// point. Intermediate structure is created as needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError::InvalidKey`] if `key` is malformed, or
+    /// [`StorageError::Io`] if the object cannot be written.
+    fn put_overwrite(
+        &self,
+        key: &str,
+        bytes: &[u8],
+    ) -> impl Future<Output = Result<(), StorageError>>;
+
     /// Reads the object stored at `key`.
     ///
     /// # Errors
@@ -245,6 +262,31 @@ mod tests {
     }
 
     #[test]
+    fn memory_storage_put_overwrite_replaces_an_existing_object() {
+        let storage = MemoryStorage::new();
+        block_on(storage.put("k", b"first")).unwrap();
+        block_on(storage.put_overwrite("k", b"second")).unwrap();
+        assert_eq!(block_on(storage.get("k")).unwrap(), b"second");
+    }
+
+    #[test]
+    fn memory_storage_put_overwrite_creates_when_absent() {
+        let storage = MemoryStorage::new();
+        block_on(storage.put_overwrite("k", b"only")).unwrap();
+        assert_eq!(block_on(storage.get("k")).unwrap(), b"only");
+    }
+
+    #[test]
+    fn memory_storage_put_overwrite_rejects_malformed_keys() {
+        let storage = MemoryStorage::new();
+        let error = block_on(storage.put_overwrite("v1/../escape", b"x")).unwrap_err();
+        assert!(
+            matches!(error, StorageError::InvalidKey { .. }),
+            "{error:?}"
+        );
+    }
+
+    #[test]
     fn memory_storage_rejects_the_same_malformed_keys_as_local_storage() {
         let storage = MemoryStorage::new();
         // Empty, `.`, `..`, and absolute segments could escape a filesystem root,
@@ -298,6 +340,15 @@ impl Storage for MemoryStorage {
             });
         }
         objects.insert(key.to_owned(), bytes.to_vec());
+        Ok(())
+    }
+
+    async fn put_overwrite(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
+        validate_key(key)?;
+        self.objects
+            .lock()
+            .unwrap()
+            .insert(key.to_owned(), bytes.to_vec());
         Ok(())
     }
 

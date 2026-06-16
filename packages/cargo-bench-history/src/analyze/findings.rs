@@ -281,7 +281,7 @@ mod tests {
             .map(|(index, &value)| SeriesPoint {
                 effective: Timestamp::from_second(i64::try_from(index).unwrap())
                     .expect("seconds within range"),
-                object_key: format!("v1/p/callgrind/t/synthetic/{index}-c-r.json"),
+                object_key: format!("v2/p/callgrind/t/synthetic/commit{index}/clean.json"),
                 commit: Some(format!("commit{index}")),
                 value,
             })
