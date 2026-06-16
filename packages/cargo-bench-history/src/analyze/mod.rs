@@ -439,6 +439,52 @@ mod tests {
         format!("v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
     }
 
+    /// The clean object key for `commit` in an arbitrary engine/triple/machine partition.
+    fn clean_key_in(engine: &str, triple: &str, machine: &str, commit: &str) -> String {
+        format!("v2/folo/{engine}/{triple}/{machine}/{commit}/clean.json")
+    }
+
+    /// A stored result set whose single record carries two metrics (`Ir` and
+    /// `EstimatedCycles`), so its partition reconstructs two distinct series.
+    fn two_metric_set(effective: i64, commit: &str, ir: f64, cycles: f64) -> ResultSet {
+        let time = ts(effective);
+        let context = RunContext::new(
+            Timestamps::new(time, time, time),
+            GitInfo {
+                commit: Some(commit.to_owned()),
+                short_commit: Some(commit.to_owned()),
+                branch: Some("main".to_owned()),
+                dirty: false,
+            },
+            CiInfo::default(),
+            ToolchainInfo::default(),
+            "0.0.1".to_owned(),
+        );
+        let record = ResultRecord::new(
+            BenchmarkId::new(
+                Some("nm".to_owned()),
+                "nm::observe".to_owned(),
+                Some("pull".to_owned()),
+                None,
+            ),
+            vec![
+                Metric::new(
+                    "Ir".to_owned(),
+                    MetricKind::InstructionCount,
+                    ir,
+                    Some("count".to_owned()),
+                ),
+                Metric::new(
+                    "EstimatedCycles".to_owned(),
+                    MetricKind::EstimatedCycles,
+                    cycles,
+                    Some("count".to_owned()),
+                ),
+            ],
+        );
+        ResultSet::new(context, vec![record])
+    }
+
     /// A dirty snapshot key for `commit` taken at `unix`.
     fn dirty_key(commit: &str, unix: i64) -> String {
         format!("v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/dirty-{unix}.json")
@@ -553,6 +599,56 @@ mod tests {
         assert_eq!(regressions, 1);
         assert!(report.contains("regression"), "{report}");
         assert!(report.contains("nm::observe/pull/Ir"), "{report}");
+    }
+
+    #[test]
+    fn per_set_report_counts_runs_and_series_independently() {
+        let storage = MemoryStorage::new();
+        // Set A — callgrind/linux/synthetic: three runs (c0..c2), each carrying two
+        // metrics so the set reconstructs two distinct series.
+        for index in 0..3 {
+            let commit = format!("c{index}");
+            let second = i64::from(index);
+            store(
+                &storage,
+                &clean_key(&commit),
+                &two_metric_set(second, &commit, 100.0, 200.0),
+            );
+        }
+        // Set B — callgrind/darwin/synthetic: two runs (c0..c1), each carrying one
+        // metric so the set reconstructs a single series. Distinct run AND series
+        // counts from set A make an `==`/`!=` swap in either per-set tally observable.
+        for index in 0..2 {
+            let commit = format!("c{index}");
+            let second = i64::from(index);
+            store(
+                &storage,
+                &clean_key_in("callgrind", "aarch64-apple-darwin", "synthetic", &commit),
+                &ir_set(second, &commit, 100.0),
+            );
+        }
+
+        let git = linear_git();
+        let mut options = options();
+        options.format = Some("json".to_owned());
+        let (report, _) = analyze(&git, &storage, "folo", &options);
+
+        let parsed: serde_json::Value = serde_json::from_str(&report).expect("report is JSON");
+        let sets = parsed["sets"].as_array().expect("sets array present");
+
+        let set_a = sets
+            .iter()
+            .find(|set| set["target_triple"] == "x86_64-unknown-linux-gnu")
+            .expect("linux set present");
+        assert_eq!(set_a["runs"], 3, "{report}");
+        assert_eq!(set_a["series"], 2, "{report}");
+
+        let set_b = sets
+            .iter()
+            .find(|set| set["target_triple"] == "aarch64-apple-darwin")
+            .expect("darwin set present");
+        assert_eq!(set_b["runs"], 2, "{report}");
+        assert_eq!(set_b["series"], 1, "{report}");
     }
 
     #[test]
