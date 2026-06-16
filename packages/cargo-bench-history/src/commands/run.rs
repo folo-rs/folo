@@ -21,6 +21,7 @@ use crate::context::{
 };
 use crate::git::GitSnapshot;
 use crate::host::RustcInfo;
+use crate::machine::{HardwareProfile, resolve_machine_key};
 use crate::model::ResultSet;
 use crate::probe::{EnvironmentProbe, SystemProbe};
 use crate::process::{BenchRunner, TokioBenchRunner};
@@ -121,6 +122,8 @@ struct SharedContext {
     ci: CiInfo,
     /// Host triple (possibly differing from the recorded target triple).
     host_triple: String,
+    /// Host hardware profile, fingerprinted for hardware-dependent engines.
+    hardware: HardwareProfile,
 }
 
 /// The result of processing one engine.
@@ -152,6 +155,7 @@ where
         host_triple: rustc.host.clone().unwrap_or_default(),
         rustc,
         ci: detect_ci(deps.env),
+        hardware: deps.probe.hardware().await,
     };
 
     let mut stored = 0_usize;
@@ -265,9 +269,25 @@ where
         });
     }
 
-    // Callgrind is hardware-independent, so its partition uses no machine key.
-    // Hardware fingerprinting arrives with the Criterion adapter.
-    let key = ComparabilityKey::new(deps.project_id, engine, &target_triple, None);
+    // Hardware-dependent engines (such as Criterion) partition their history by a
+    // machine fingerprint so only equivalent machines share a series. An explicit
+    // `--machine-key` (or its config equivalent) overrides the computed fingerprint.
+    // Hardware-independent engines (such as Callgrind) use no machine key.
+    let machine_key = engine.is_hardware_dependent().then(|| {
+        resolve_machine_key(
+            options
+                .machine_key
+                .as_deref()
+                .or(deps.config.machine.key.as_deref()),
+            &shared.hardware,
+        )
+    });
+    let key = ComparabilityKey::new(
+        deps.project_id,
+        engine,
+        &target_triple,
+        machine_key.as_deref(),
+    );
     let short_commit = shared.git.info.short_commit.as_deref().unwrap_or("unknown");
     let object_key = key.object_key(effective.as_second(), short_commit, deps.run_id);
 
@@ -594,6 +614,7 @@ mod tests {
     struct FakeProbe {
         git: GitSnapshot,
         rustc: RustcInfo,
+        hardware: HardwareProfile,
     }
 
     impl FakeProbe {
@@ -610,6 +631,11 @@ mod tests {
                     version: Some("1.91.0".to_owned()),
                     host: Some("x86_64-pc-windows-msvc".to_owned()),
                 },
+                hardware: HardwareProfile {
+                    processors: 8,
+                    memory_regions: 1,
+                    cpu_brand: Some("Test CPU 3000".to_owned()),
+                },
             }
         }
     }
@@ -621,6 +647,10 @@ mod tests {
 
         async fn toolchain(&self) -> io::Result<RustcInfo> {
             Ok(self.rustc.clone())
+        }
+
+        async fn hardware(&self) -> HardwareProfile {
+            self.hardware.clone()
         }
     }
 

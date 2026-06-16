@@ -33,7 +33,6 @@ azure = [
     "dep:base64",
     "dep:futures",
     "dep:hmac",
-    "dep:sha2",
 ]
 
 [dependencies]
@@ -53,9 +52,10 @@ base64 = { workspace = true, optional = true, features = ["std"] }
 futures = { workspace = true, optional = true }
 hmac = { workspace = true, optional = true }
 jiff = { workspace = true, features = ["serde", "std"] }
+many_cpus = { workspace = true }
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["std"] }
-sha2 = { workspace = true, optional = true }
+sha2 = { workspace = true }
 shlex = { workspace = true, features = ["std"] }
 tick = { workspace = true, features = ["tokio"] }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt-multi-thread"] }

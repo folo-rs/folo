@@ -398,6 +398,7 @@ dependencies = [
  "futures",
  "hmac",
  "jiff",
+ "many_cpus",
  "mutants 0.0.4",
  "serde",
  "serde_json",

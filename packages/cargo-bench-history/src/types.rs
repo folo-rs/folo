@@ -43,6 +43,8 @@ pub struct RunOptions {
     pub timestamp: Option<Timestamp>,
     /// Override for the recorded target triple, if set.
     pub target_triple: Option<String>,
+    /// Override for the machine fingerprint (hardware-dependent engines), if set.
+    pub machine_key: Option<String>,
     /// Harvest and build results without storing them.
     pub no_store: bool,
     /// Arguments forwarded verbatim to each engine command.

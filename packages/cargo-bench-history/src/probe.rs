@@ -8,6 +8,7 @@ use std::io;
 
 use crate::git::{GitSnapshot, build_snapshot};
 use crate::host::{RustcInfo, parse_rustc_verbose};
+use crate::machine::{HardwareProfile, system_profile};
 use crate::process::capture;
 
 /// Discovers the git and toolchain context of a run.
@@ -27,6 +28,10 @@ pub(crate) trait EnvironmentProbe {
     /// Returns an error only on an unexpected probe failure; an absent `rustc`
     /// falls back to a host triple derived from the running platform.
     fn toolchain(&self) -> impl Future<Output = io::Result<RustcInfo>>;
+
+    /// Profiles the host hardware for the machine fingerprint. Best effort:
+    /// undetectable facts are left absent rather than failing the probe.
+    fn hardware(&self) -> impl Future<Output = HardwareProfile>;
 }
 
 /// The real [`EnvironmentProbe`], backed by `git` and `rustc`.
@@ -55,6 +60,11 @@ impl EnvironmentProbe for SystemProbe {
             .filter(|output| output.status.success())
             .map(|output| output.stdout.as_str());
         Ok(resolve_toolchain(rustc_output))
+    }
+
+    #[cfg_attr(test, mutants::skip)] // Queries the host hardware; the fingerprint logic is tested.
+    async fn hardware(&self) -> HardwareProfile {
+        system_profile().await
     }
 }
 

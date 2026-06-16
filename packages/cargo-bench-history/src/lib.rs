@@ -31,6 +31,7 @@ mod context;
 mod dispatch;
 mod git;
 mod host;
+mod machine;
 mod model;
 mod probe;
 mod process;
@@ -41,7 +42,8 @@ mod wiring;
 pub use cli::Cli;
 pub use comparability::{ComparabilityKey, EngineSystem, resolve_target_triple};
 pub use config::{
-    Config, ConfigError, EngineConfig, ProjectConfig, StorageConfig, default_template, parse_config,
+    Config, ConfigError, EngineConfig, MachineConfig, ProjectConfig, StorageConfig,
+    default_template, parse_config,
 };
 pub use context::{
     CiInfo, CiProvider, GitInfo, RunContext, Timestamps, ToolchainInfo, detect_ci,

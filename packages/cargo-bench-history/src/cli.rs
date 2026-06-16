@@ -56,6 +56,11 @@ struct RunCommand {
     #[argh(option)]
     target_triple: Option<String>,
 
+    /// override the machine fingerprint used to partition hardware-dependent
+    /// results (for example, a CI machine-pool name).
+    #[argh(option)]
+    machine_key: Option<String>,
+
     /// harvest and build results without storing them.
     #[argh(switch)]
     no_store: bool,
@@ -72,6 +77,7 @@ impl RunCommand {
             engine: self.engine,
             timestamp: self.timestamp,
             target_triple: self.target_triple,
+            machine_key: self.machine_key,
             no_store: self.no_store,
             passthrough: strip_separator(self.passthrough),
         }
@@ -184,6 +190,15 @@ mod tests {
         };
         let expected: Timestamp = "2024-01-01T00:00:00Z".parse().unwrap();
         assert_eq!(options.timestamp, Some(expected));
+    }
+
+    #[test]
+    fn run_parses_machine_key_override() {
+        let command = parse(&["run", "--machine-key", "ci-pool-a"]);
+        let Command::Run(options) = command else {
+            panic!("expected run command");
+        };
+        assert_eq!(options.machine_key.as_deref(), Some("ci-pool-a"));
     }
 
     #[test]

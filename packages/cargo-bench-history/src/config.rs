@@ -45,6 +45,15 @@ command = \"just bench-cg\"
 #
 # [engines.criterion]
 # command = \"cargo bench\"
+
+# Hardware-dependent engines (such as Criterion) partition their history by a
+# machine fingerprint computed from the host's hardware, so only equivalent
+# machines share a series. Set `key` to override that fingerprint with a stable
+# label you control (for example, the name of a CI machine pool). It is ignored
+# by hardware-independent engines such as Callgrind.
+#
+# [machine]
+# key = \"my-ci-pool\"
 ";
 
 /// The parsed configuration file.
@@ -59,6 +68,9 @@ pub struct Config {
     /// Per-engine launch commands, keyed by engine name (e.g. `callgrind`).
     #[serde(default)]
     pub engines: BTreeMap<String, EngineConfig>,
+    /// Machine-fingerprint overrides for hardware-dependent engines.
+    #[serde(default)]
+    pub machine: MachineConfig,
 }
 
 /// Project identity section.
@@ -67,6 +79,15 @@ pub struct Config {
 pub struct ProjectConfig {
     /// Explicit project id; when absent the workspace directory name is used.
     pub id: Option<String>,
+}
+
+/// Machine-fingerprint overrides for hardware-dependent engines.
+#[non_exhaustive]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct MachineConfig {
+    /// Explicit machine key; when absent the host's hardware fingerprint is used.
+    /// Ignored by hardware-independent engines such as Callgrind.
+    pub key: Option<String>,
 }
 
 /// Where result sets are stored.
@@ -301,6 +322,25 @@ path = \"./data\"
 ";
         let config = parse_config(text).unwrap();
         assert_eq!(config.project.id.as_deref(), Some("folo"));
+    }
+
+    #[test]
+    fn machine_key_defaults_to_none() {
+        let config = parse_config(default_template()).unwrap();
+        assert_eq!(config.machine.key, None);
+    }
+
+    #[test]
+    fn explicit_machine_key_is_parsed() {
+        let text = "\
+[storage.local]
+path = \"./data\"
+
+[machine]
+key = \"ci-pool-a\"
+";
+        let config = parse_config(text).unwrap();
+        assert_eq!(config.machine.key.as_deref(), Some("ci-pool-a"));
     }
 
     #[test]
