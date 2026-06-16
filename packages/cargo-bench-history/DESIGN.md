@@ -402,7 +402,10 @@ next steps. Never overwrite an existing file (report and exit success). Honors
 `--config <path>` to write somewhere other than the default location. Writing is
 abstracted behind a `ConfigWriter` port (`TokioConfigWriter` in production, an
 in-memory fake in tests) whose `write_new` creates parent directories and uses
-`create_new` so an existing file is reported, never clobbered.
+`create_new` so an existing file is reported, never clobbered. The generated
+template enables only engines `run` can currently harvest (Callgrind); the
+Criterion section is present but commented out until its adapter lands, so a
+fresh install never produces a config whose every run reports a skipped engine.
 
 ### 8.4 `cargo bench-history analyze`
 Download a partition (default: current project; flags to target any stored set or

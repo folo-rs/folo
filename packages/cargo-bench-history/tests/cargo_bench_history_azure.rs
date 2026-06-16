@@ -20,6 +20,10 @@ use azure_core::http::Url;
 use cargo_bench_history::{Cli, Command, RunError, RunOutcome, run_with_target_root};
 use serial_test::serial;
 
+#[path = "support/cwd_guard.rs"]
+mod cwd_guard;
+use cwd_guard::CwdGuard;
+
 /// The mock engine binary path, provided by Cargo for the `[[bin]]` target.
 const MOCK_ENGINE: &str = env!("CARGO_BIN_EXE_cargo-bench-history-mock-engine");
 
@@ -133,14 +137,10 @@ impl AzureWorkspace {
     /// Drives a command with `args` from inside this workspace, pointing the
     /// harvest at the workspace's own `target/` so it is hermetic.
     async fn drive(&self, args: &[&str]) -> Result<RunOutcome, RunError> {
-        let original = std::env::current_dir().unwrap();
-        std::env::set_current_dir(self.dir.path()).unwrap();
+        let _cwd = CwdGuard::enter(self.dir.path());
 
         let target_root = self.dir.path().join("target");
-        let result = run_with_target_root(&command_from(args), Some(target_root)).await;
-
-        std::env::set_current_dir(&original).unwrap();
-        result
+        run_with_target_root(&command_from(args), Some(target_root)).await
     }
 }
 

@@ -18,6 +18,10 @@ use cargo_bench_history::{
 use jiff::Timestamp;
 use serial_test::serial;
 
+#[path = "support/cwd_guard.rs"]
+mod cwd_guard;
+use cwd_guard::CwdGuard;
+
 /// The mock engine binary path, provided by Cargo for the `[[bin]]` target. It
 /// writes Gungraun summary fixtures into the target tree and exits with a chosen
 /// code, standing in for a real benchmark engine.
@@ -50,9 +54,11 @@ fn run_forwards_passthrough_after_separator() {
 
 #[test]
 #[serial]
-fn default_template_parses_with_two_engines() {
+fn default_template_enables_only_the_supported_engine() {
     let config = parse_config(default_template()).expect("template should parse");
-    assert_eq!(config.engines.len(), 2);
+    assert_eq!(config.engines.len(), 1);
+    assert!(config.engines.contains_key("callgrind"));
+    assert!(!config.engines.contains_key("criterion"));
 }
 
 #[test]
@@ -219,12 +225,10 @@ async fn run_entry_dispatches_without_a_target_root_override() {
     // The production `run` entry passes no target-root override; drive `install`
     // (which ignores it) through it so the public default path is exercised.
     let workspace = Workspace::empty();
-    let original = std::env::current_dir().unwrap();
-    std::env::set_current_dir(workspace.root()).unwrap();
+    let _cwd = CwdGuard::enter(workspace.root());
 
     let result = run(&command_from(&["install"])).await;
 
-    std::env::set_current_dir(&original).unwrap();
     result.unwrap();
     assert!(
         workspace.read(".cargo/bench_history.toml").is_some(),
@@ -981,8 +985,10 @@ impl Workspace {
 
     /// Drives `run` with `args` from inside this workspace.
     async fn drive(&self, args: &[&str]) -> Result<RunOutcome, RunError> {
-        let original = std::env::current_dir().unwrap();
-        std::env::set_current_dir(self.root()).unwrap();
+        // Restore the working directory when this returns (and before the temp
+        // dir is dropped, which on Windows fails while it is the current
+        // directory), even if the harvest panics.
+        let _cwd = CwdGuard::enter(self.root());
 
         // Point the harvest at this workspace's own `target/` explicitly, so a
         // shared ambient `CARGO_TARGET_DIR` (as `cargo llvm-cov` sets during
@@ -990,12 +996,7 @@ impl Workspace {
         // other tests sharing that directory. Passing the root through the API
         // keeps the test hermetic without mutating the process environment.
         let target_root = self.root().join("target");
-        let result = run_with_target_root(&command_from(args), Some(target_root)).await;
-
-        // Restore the working directory before any assertion (and before the temp
-        // dir is dropped, which on Windows fails while it is the current directory).
-        std::env::set_current_dir(&original).unwrap();
-        result
+        run_with_target_root(&command_from(args), Some(target_root)).await
     }
 
     /// All stored objects as `(object key, parsed result set)` pairs, sorted by key.

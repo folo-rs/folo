@@ -39,8 +39,12 @@ path = \"./bench-history\"
 [engines.callgrind]
 command = \"just bench-cg\"
 
-[engines.criterion]
-command = \"cargo bench\"
+# Criterion is not harvested yet, so its section is commented out. A configured
+# criterion engine is skipped by `run` until support lands. Uncomment once that
+# is the case.
+#
+# [engines.criterion]
+# command = \"cargo bench\"
 ";
 
 /// The parsed configuration file.
@@ -194,11 +198,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_template_parses_with_two_engines() {
+    fn default_template_enables_only_the_supported_engine() {
         let config = parse_config(default_template()).unwrap();
-        assert_eq!(config.engines.len(), 2);
+        assert_eq!(config.engines.len(), 1);
         assert!(config.engines.contains_key("callgrind"));
-        assert!(config.engines.contains_key("criterion"));
+        assert!(
+            !config.engines.contains_key("criterion"),
+            "criterion is commented out until run can harvest it"
+        );
     }
 
     #[test]
@@ -348,7 +355,8 @@ command = \"cargo bench\"
 
         let config = load_config(&path).await.unwrap();
 
-        assert_eq!(config.engines.len(), 2);
+        assert_eq!(config.engines.len(), 1);
+        assert!(config.engines.contains_key("callgrind"));
     }
 
     #[tokio::test]
