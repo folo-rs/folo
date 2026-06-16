@@ -94,7 +94,7 @@ fn main() -> ExitCode {
         std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| PathBuf::from("target"), PathBuf::from);
 
     for (group, content) in &summaries {
-        let dir = target_root.join("gungraun").join(group);
+        let dir = target_root.join("gungraun").join(safe_segment(group));
         std::fs::create_dir_all(&dir).expect("summary directory should be creatable");
         std::fs::write(dir.join("summary.json"), content).expect("summary should be writable");
     }
@@ -127,13 +127,18 @@ fn parse_criterion_arg(value: &str) -> CriterionCase {
 /// Writes one Criterion case's `new/benchmark.json` + `new/estimates.json` pair.
 #[cfg_attr(coverage_nightly, coverage(off))]
 fn write_criterion_case(target_root: &std::path::Path, case: &CriterionCase) {
+    // A Criterion group id may legitimately contain `/`; each segment must still be
+    // a safe path component before it is flattened into the on-disk directory name.
+    for part in case.group.split('/') {
+        safe_segment(part);
+    }
     let sanitized_group = case.group.replace('/', "_");
     let mut dir = target_root
         .join("criterion")
         .join(sanitized_group)
-        .join(&case.function);
+        .join(safe_segment(&case.function));
     if !case.value.is_empty() {
-        dir.push(&case.value);
+        dir.push(safe_segment(&case.value));
     }
     dir.push("new");
     std::fs::create_dir_all(&dir).expect("criterion directory should be creatable");
@@ -143,41 +148,56 @@ fn write_criterion_case(target_root: &std::path::Path, case: &CriterionCase) {
     } else {
         format!("{}/{}/{}", case.group, case.function, case.value)
     };
-    let benchmark = format!(
-        "{{\"group_id\":\"{}\",\"function_id\":\"{}\",\"value_str\":\"{}\",\
-         \"throughput\":null,\"full_id\":\"{full_id}\",\
-         \"directory_name\":\"{full_id}\",\"title\":\"{full_id}\"}}",
-        case.group, case.function, case.value,
-    );
-    std::fs::write(dir.join("benchmark.json"), benchmark)
+    let benchmark = serde_json::json!({
+        "group_id": case.group,
+        "function_id": case.function,
+        "value_str": case.value,
+        "throughput": null,
+        "full_id": full_id,
+        "directory_name": full_id,
+        "title": full_id,
+    });
+    std::fs::write(dir.join("benchmark.json"), benchmark.to_string())
         .expect("benchmark.json should be writable");
 
     // A minimal but schema-valid estimates document: the slope point estimate is
     // the requested timing, with a narrow confidence interval and small std_dev.
     let nanos = case.nanos;
-    let low = nanos - 0.5;
-    let high = nanos + 0.5;
     let estimate = |point: f64| {
-        format!(
-            "{{\"confidence_interval\":{{\"confidence_level\":0.95,\
-             \"lower_bound\":{:.4},\"upper_bound\":{:.4}}},\
-             \"point_estimate\":{point},\"standard_error\":0.1}}",
-            point - 0.5,
-            point + 0.5,
-        )
+        serde_json::json!({
+            "confidence_interval": {
+                "confidence_level": 0.95,
+                "lower_bound": point - 0.5,
+                "upper_bound": point + 0.5,
+            },
+            "point_estimate": point,
+            "standard_error": 0.1,
+        })
     };
-    let slope = format!(
-        "{{\"confidence_interval\":{{\"confidence_level\":0.95,\
-         \"lower_bound\":{low:.4},\"upper_bound\":{high:.4}}},\
-         \"point_estimate\":{nanos},\"standard_error\":0.1}}"
-    );
-    let estimates = format!(
-        "{{\"mean\":{},\"median\":{},\"median_abs_dev\":{},\"slope\":{slope},\"std_dev\":{}}}",
-        estimate(nanos),
-        estimate(nanos),
-        estimate(0.2),
-        estimate(0.3),
-    );
-    std::fs::write(dir.join("estimates.json"), estimates)
+    let estimates = serde_json::json!({
+        "mean": estimate(nanos),
+        "median": estimate(nanos),
+        "median_abs_dev": estimate(0.2),
+        "slope": estimate(nanos),
+        "std_dev": estimate(0.3),
+    });
+    std::fs::write(dir.join("estimates.json"), estimates.to_string())
         .expect("estimates.json should be writable");
+}
+
+/// Validates that `segment` is safe to use as a single filesystem path component:
+/// non-empty, not a current/parent-directory reference, and free of path
+/// separators. Test inputs are controlled, so misuse is a loud panic rather than a
+/// silent escape outside the target root.
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn safe_segment(segment: &str) -> &str {
+    assert!(
+        !segment.is_empty()
+            && segment != "."
+            && segment != ".."
+            && !segment.contains('/')
+            && !segment.contains('\\'),
+        "unsafe path segment {segment:?}"
+    );
+    segment
 }
