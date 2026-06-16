@@ -432,6 +432,14 @@ mod tests {
         let markdown = render(&input, ReportFormat::Markdown);
         assert!(markdown.contains("| moderate | regression |"), "{markdown}");
         assert!(markdown.contains("| minor | improvement |"), "{markdown}");
+
+        // The per-set JSON tallies count each direction independently: this set
+        // holds two regressions and one improvement, so neither count is one.
+        let json = render(&input, ReportFormat::Json);
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("report is JSON");
+        let set_json = &parsed["sets"][0];
+        assert_eq!(set_json["regressions"], 2, "{json}");
+        assert_eq!(set_json["improvements"], 1, "{json}");
     }
 
     #[test]

@@ -178,6 +178,9 @@ mod tests {
         assert_eq!(set("x86_64-pc-windows-gnu").os(), "windows");
         assert_eq!(set("x86_64-unknown-linux-gnu").os(), "linux");
         assert_eq!(set("aarch64-apple-darwin").os(), "macos");
+        // An Apple triple carrying only the `apple` token (no `darwin`) still maps
+        // to macos, so the `darwin`/`apple` recognition is a disjunction.
+        assert_eq!(set("aarch64-apple-ios").os(), "macos");
         assert_eq!(set("wasm32-unknown-unknown").os(), "unknown");
     }
 
