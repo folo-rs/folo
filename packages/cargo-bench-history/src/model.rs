@@ -189,10 +189,20 @@ pub struct Metric {
     pub value: f64,
     /// Optional unit label for display (e.g. `ns`, `count`).
     pub unit: Option<String>,
+    /// Estimated standard deviation of the measurement, when the engine reports
+    /// one (Criterion). Absent for deterministic engines (Callgrind).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub std_dev: Option<f64>,
+    /// Lower bound of the value's confidence interval, when reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interval_low: Option<f64>,
+    /// Upper bound of the value's confidence interval, when reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interval_high: Option<f64>,
 }
 
 impl Metric {
-    /// Creates a metric.
+    /// Creates a metric with no dispersion information.
     #[must_use]
     pub fn new(name: String, kind: MetricKind, value: f64, unit: Option<String>) -> Self {
         Self {
@@ -200,7 +210,25 @@ impl Metric {
             kind,
             value,
             unit,
+            std_dev: None,
+            interval_low: None,
+            interval_high: None,
         }
+    }
+
+    /// Attaches dispersion information (standard deviation and confidence-interval
+    /// bounds) to this metric, for noise-aware comparison of noisy engines.
+    #[must_use]
+    pub fn with_dispersion(
+        mut self,
+        std_dev: Option<f64>,
+        interval_low: Option<f64>,
+        interval_high: Option<f64>,
+    ) -> Self {
+        self.std_dev = std_dev;
+        self.interval_low = interval_low;
+        self.interval_high = interval_high;
+        self
     }
 }
 
@@ -273,6 +301,32 @@ mod tests {
     fn metric_kind_serializes_snake_case() {
         let json = serde_json::to_string(&MetricKind::InstructionCount).unwrap();
         assert_eq!(json, "\"instruction_count\"");
+    }
+
+    #[test]
+    fn metric_dispersion_is_omitted_when_absent() {
+        let metric = Metric::new("ir".to_owned(), MetricKind::InstructionCount, 1.0, None);
+        let json = serde_json::to_string(&metric).unwrap();
+        assert!(!json.contains("std_dev"), "{json}");
+        assert!(!json.contains("interval_low"), "{json}");
+    }
+
+    #[test]
+    fn metric_dispersion_roundtrips_when_present() {
+        let metric = Metric::new(
+            "wall_time".to_owned(),
+            MetricKind::WallTime,
+            26.9,
+            Some("ns".to_owned()),
+        )
+        .with_dispersion(Some(0.47), Some(26.6), Some(27.2));
+
+        let json = serde_json::to_string(&metric).unwrap();
+        let parsed: Metric = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, metric);
+        assert_eq!(parsed.std_dev, Some(0.47));
+        assert_eq!(parsed.interval_low, Some(26.6));
+        assert_eq!(parsed.interval_high, Some(27.2));
     }
 
     #[test]

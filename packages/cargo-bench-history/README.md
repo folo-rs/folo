@@ -27,8 +27,9 @@ The initial target engines are the ones this workspace uses: Criterion
 
 ```text
 cargo bench-history run [--engine NAME] [--timestamp RFC3339]
-                        [--target-triple TRIPLE] [--no-store]
-                        [--config PATH] -- <args forwarded to each engine>
+                        [--target-triple TRIPLE] [--machine-key KEY]
+                        [--no-store] [--config PATH]
+                        -- <args forwarded to each engine>
 cargo bench-history install [--config PATH]
 cargo bench-history analyze [--since DATE] [--system SYSTEM]
                             [--format text|json|markdown]
@@ -37,8 +38,10 @@ cargo bench-history analyze [--since DATE] [--system SYSTEM]
 
 * `run` executes each configured engine, harvests its output, and stores the
   result set. `--timestamp` overrides the effective time when backfilling history
-  for an old commit; everything after `--` is forwarded verbatim to each engine
-  command (use `--engine` to target a single engine).
+  for an old commit; `--machine-key` overrides the hardware fingerprint used to
+  partition hardware-dependent (Criterion) results; everything after `--` is
+  forwarded verbatim to each engine command (use `--engine` to target a single
+  engine).
 * `install` generates a starter `.cargo/bench_history.toml` if absent, printing
   its path and next steps; an existing file is never overwritten.
 * `analyze` downloads a partition and reports notable patterns;
@@ -48,8 +51,11 @@ cargo bench-history analyze [--since DATE] [--system SYSTEM]
 
 Implemented:
 
-* `run` executes Callgrind (via Gungraun), harvests its `summary.json` output, and
-  stores one immutable result set per run.
+* `run` executes Callgrind (via Gungraun) and Criterion, harvests their output
+  (`target/gungraun/**/summary.json` and `target/criterion/**/new/*.json`), and
+  stores one immutable result set per engine per run. Callgrind results are
+  hardware-independent (`synthetic` partition); Criterion results are partitioned
+  by the host target triple and a machine-key hardware fingerprint.
 * `analyze` loads a project's stored history and reports rolling-baseline
   regressions/improvements in `text`, `json`, or `markdown`, with optional
   `--fail-on-regression` CI gating.
@@ -57,5 +63,5 @@ Implemented:
 * Storage backends: the local filesystem, or Azure Blob storage behind the
   `azure` feature.
 
-See `DESIGN.md` for the full design and iteration plan; a Criterion adapter and
-machine-key partitioning for hardware-dependent engines are the remaining work.
+See `DESIGN.md` for the full design and iteration plan; noise-aware statistical
+findings (change-point and drift detection) are the remaining work.

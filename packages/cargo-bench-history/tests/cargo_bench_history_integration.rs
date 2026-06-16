@@ -54,11 +54,11 @@ fn run_forwards_passthrough_after_separator() {
 
 #[test]
 #[serial]
-fn default_template_enables_only_the_supported_engine() {
+fn default_template_enables_both_engines() {
     let config = parse_config(default_template()).expect("template should parse");
-    assert_eq!(config.engines.len(), 1);
+    assert_eq!(config.engines.len(), 2);
     assert!(config.engines.contains_key("callgrind"));
-    assert!(!config.engines.contains_key("criterion"));
+    assert!(config.engines.contains_key("criterion"));
 }
 
 #[test]
@@ -291,6 +291,34 @@ async fn analyze_detects_regression_in_seeded_history() {
     assert_eq!(regressions, 1);
     assert!(report.contains("regression"), "{report}");
     assert!(report.contains("nm::observe/pull/Ir"), "{report}");
+}
+
+/// A rising Criterion `wall_time` history is flagged as a regression, proving the
+/// analyzer reconstructs series across a machine-keyed partition too.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_detects_criterion_wall_time_regression() {
+    let workspace = Workspace::new(&storage_only_config());
+    workspace.seed_rising_criterion_history("mk-fixed");
+
+    let outcome = workspace
+        .drive(&["analyze"])
+        .await
+        .expect("analysis should succeed");
+    let RunOutcome::Analyzed {
+        report,
+        regressions,
+        ..
+    } = outcome
+    else {
+        panic!("expected an analyzed outcome, got {outcome:?}");
+    };
+    assert_eq!(regressions, 1);
+    assert!(
+        report.contains("time/capture/std_instant/wall_time"),
+        "{report}"
+    );
 }
 
 /// `--fail-on-regression` makes a flagged regression an unsuccessful outcome.
@@ -837,40 +865,63 @@ async fn run_rejects_unconfigured_requested_engine() {
     assert!(message.contains("not configured"), "{message}");
 }
 
-/// Requesting a configured engine this iteration cannot harvest is rejected.
+/// Explicitly selecting the Criterion engine runs it end to end, storing a
+/// wall-time result set in a machine-fingerprinted partition.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 #[serial]
-async fn run_rejects_unsupported_requested_engine() {
-    let workspace = Workspace::new(&criterion_config(&mock_command("")));
+async fn run_explicit_criterion_selection_stores_results() {
+    let workspace = Workspace::new(&criterion_config(&mock_command(
+        "--criterion grp|capture|now=26.9",
+    )));
 
-    let error = workspace
+    let outcome = workspace
         .drive(&["run", "--engine", "criterion"])
         .await
-        .expect_err("an unsupported engine should be rejected");
-    let RunError::NoEngine { message } = error else {
-        panic!("expected a no-engine error, got {error:?}");
-    };
-    assert!(message.contains("not supported"), "{message}");
+        .expect("run should succeed");
+    assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+    let (key, set) = workspace.single_object();
+    // Criterion partitions by the host triple and a machine fingerprint (never the
+    // `synthetic` segment Callgrind uses).
+    assert!(key.contains("/criterion/"), "{key}");
+    assert!(!key.contains("/synthetic/"), "{key}");
+    assert_eq!(set.results.len(), 1);
+    let metric = &set.results[0].metrics[0];
+    assert_eq!(metric.kind, MetricKind::WallTime);
+    assert_eq!(metric.value, 26.9);
+    assert_eq!(metric.unit.as_deref(), Some("ns"));
+    assert!(metric.std_dev.is_some(), "dispersion should be recorded");
 }
 
-/// Without an explicit `--engine`, an unsupported configured engine is skipped
-/// while the supported one runs and is reported.
+/// Without an explicit `--engine`, every configured engine runs and each stores
+/// its own result set.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 #[serial]
-async fn run_skips_unsupported_configured_engine() {
+async fn run_executes_every_configured_engine() {
     let workspace = Workspace::new(&callgrind_and_criterion_config());
 
     let outcome = workspace.drive(&["run"]).await.expect("run should succeed");
     let RunOutcome::Completed { message } = outcome else {
         panic!("expected completion, got {outcome:?}");
     };
+    assert!(message.contains("Stored 2"), "{message}");
+
+    let objects = workspace.stored_objects();
+    assert_eq!(objects.len(), 2, "{objects:?}");
     assert!(
-        message.contains("Skipped unsupported engine(s): criterion"),
-        "{message}"
+        objects
+            .iter()
+            .any(|(key, _)| key.contains("/callgrind/") && key.contains("/synthetic/")),
+        "{objects:?}"
     );
-    assert_eq!(workspace.stored_objects().len(), 1);
+    assert!(
+        objects
+            .iter()
+            .any(|(key, _)| key.contains("/criterion/") && !key.contains("/synthetic/")),
+        "{objects:?}"
+    );
 }
 
 /// Explicitly selecting the supported engine works end to end.
@@ -886,6 +937,76 @@ async fn run_explicit_callgrind_selection_stores_results() {
         .expect("run should succeed");
     assert!(matches!(outcome, RunOutcome::Completed { .. }));
     assert_eq!(workspace.stored_objects().len(), 1);
+}
+
+/// `--machine-key` overrides the machine fingerprint in a Criterion partition.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn run_criterion_honors_machine_key_override() {
+    let workspace = Workspace::new(&criterion_config(&mock_command(
+        "--criterion grp|capture|now=9",
+    )));
+
+    workspace
+        .drive(&["run", "--engine", "criterion", "--machine-key", "ci-pool-a"])
+        .await
+        .expect("run should succeed");
+
+    let (key, _) = workspace.single_object();
+    assert!(
+        key.contains("/criterion/x86_64-pc-windows-msvc/ci-pool-a/"),
+        "{key}"
+    );
+}
+
+/// A Criterion run collects every harvested case into one result set, keeping
+/// distinct group/function/value identities as separate records.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn run_criterion_collects_distinct_cases_as_records() {
+    // Same function name in two different groups, plus a parametrized case: all
+    // three identities are distinct and must survive as separate records.
+    let command = mock_command(
+        "--criterion timestamp/capture|std_instant|now=27 \
+         --criterion timestamp/elapsed|std_instant|now=41 \
+         --criterion timestamp/capture|fast_clock|=13",
+    );
+    let workspace = Workspace::new(&criterion_config(&command));
+
+    workspace
+        .drive(&["run", "--engine", "criterion"])
+        .await
+        .expect("run should succeed");
+
+    let (_, set) = workspace.single_object();
+    assert_eq!(set.results.len(), 3, "{:?}", set.results);
+    let mut ids: Vec<(String, Option<String>)> = set
+        .results
+        .iter()
+        .map(|record| (record.id.group.clone(), record.id.case.clone()))
+        .collect();
+    ids.sort();
+    assert_eq!(
+        ids,
+        vec![
+            (
+                "timestamp/capture".to_owned(),
+                Some("fast_clock".to_owned())
+            ),
+            (
+                "timestamp/capture".to_owned(),
+                Some("std_instant".to_owned())
+            ),
+            (
+                "timestamp/elapsed".to_owned(),
+                Some("std_instant".to_owned())
+            ),
+        ]
+    );
+    // Every record carries no package (Criterion output is package-agnostic).
+    assert!(set.results.iter().all(|record| record.id.package.is_none()));
 }
 
 /// `--config` loads the configuration from a non-default path.
@@ -1080,6 +1201,61 @@ impl Workspace {
         self.seed_callgrind("2024-01-03", "c3", 100.0);
         self.seed_callgrind("2024-01-04", "c4", 130.0);
     }
+
+    /// Seeds one Criterion `wall_time` result set at the given `date` (`YYYY-MM-DD`,
+    /// UTC midnight), abbreviated `commit`, and machine-key partition `machine`.
+    fn seed_criterion(&self, date: &str, commit: &str, machine: &str, value: f64) {
+        let effective: Timestamp = format!("{date}T00:00:00Z").parse().unwrap();
+        let key = format!(
+            "v1/testproj/criterion/x86_64-pc-windows-msvc/{machine}/{}-{commit}-run.json",
+            effective.as_second()
+        );
+        self.seed(
+            &key,
+            &criterion_result_set(effective.as_second(), commit, value),
+        );
+    }
+
+    /// Seeds a flat Criterion `wall_time` history then a clear upward step.
+    fn seed_rising_criterion_history(&self, machine: &str) {
+        self.seed_criterion("2024-02-01", "d1", machine, 20.0);
+        self.seed_criterion("2024-02-02", "d2", machine, 20.0);
+        self.seed_criterion("2024-02-03", "d3", machine, 20.0);
+        self.seed_criterion("2024-02-04", "d4", machine, 30.0);
+    }
+}
+
+/// Builds a Criterion result set for benchmark `time/capture/std_instant`
+/// carrying a single `wall_time` metric at `value` nanoseconds, stamped with the
+/// effective second and abbreviated `commit`.
+fn criterion_result_set(effective: i64, commit: &str, value: f64) -> ResultSet {
+    let time = Timestamp::from_second(effective).expect("seconds within range");
+    let mut git = GitInfo::default();
+    git.commit = Some(format!("{commit}full"));
+    git.short_commit = Some(commit.to_owned());
+    git.branch = Some("main".to_owned());
+    let context = RunContext::new(
+        Timestamps::new(time, time, time),
+        git,
+        CiInfo::default(),
+        ToolchainInfo::default(),
+        TOOL_VERSION.to_owned(),
+    );
+    let record = ResultRecord::new(
+        BenchmarkId::new(
+            None,
+            "time/capture".to_owned(),
+            Some("std_instant".to_owned()),
+            None,
+        ),
+        vec![Metric::new(
+            "wall_time".to_owned(),
+            MetricKind::WallTime,
+            value,
+            Some("ns".to_owned()),
+        )],
+    );
+    ResultSet::new(context, vec![record])
 }
 
 /// The `Ir` (instruction count) metric value of a record.
@@ -1190,8 +1366,9 @@ fn criterion_config(command: &str) -> String {
     )
 }
 
-/// A configuration with both a supported (callgrind) and an unsupported
-/// (criterion) engine; the criterion command never runs because it is skipped.
+/// A configuration with both the Callgrind and Criterion engines; the Callgrind
+/// command writes one summary and the Criterion command writes one case, so a run
+/// stores one result set per engine.
 fn callgrind_and_criterion_config() -> String {
     format!(
         "[project]\n\
@@ -1203,7 +1380,7 @@ fn callgrind_and_criterion_config() -> String {
          [engines.criterion]\n\
          command = \"{}\"\n",
         toml_escape(&mock_command("--summary grp=single")),
-        toml_escape(&mock_command("--exit-code 99"))
+        toml_escape(&mock_command("--criterion grp|capture|now=12.5"))
     )
 }
 

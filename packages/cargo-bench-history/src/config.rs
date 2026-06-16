@@ -39,12 +39,8 @@ path = \"./bench-history\"
 [engines.callgrind]
 command = \"just bench-cg\"
 
-# Criterion is not harvested yet, so its section is commented out. A configured
-# criterion engine is skipped by `run` until support lands. Uncomment once that
-# is the case.
-#
-# [engines.criterion]
-# command = \"cargo bench\"
+[engines.criterion]
+command = \"cargo bench\"
 
 # Hardware-dependent engines (such as Criterion) partition their history by a
 # machine fingerprint computed from the host's hardware, so only equivalent
@@ -219,14 +215,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_template_enables_only_the_supported_engine() {
+    fn default_template_enables_both_engines() {
         let config = parse_config(default_template()).unwrap();
-        assert_eq!(config.engines.len(), 1);
+        assert_eq!(config.engines.len(), 2);
         assert!(config.engines.contains_key("callgrind"));
-        assert!(
-            !config.engines.contains_key("criterion"),
-            "criterion is commented out until run can harvest it"
-        );
+        assert!(config.engines.contains_key("criterion"));
     }
 
     #[test]
@@ -395,8 +388,9 @@ command = \"cargo bench\"
 
         let config = load_config(&path).await.unwrap();
 
-        assert_eq!(config.engines.len(), 1);
+        assert_eq!(config.engines.len(), 2);
         assert!(config.engines.contains_key("callgrind"));
+        assert!(config.engines.contains_key("criterion"));
     }
 
     #[tokio::test]

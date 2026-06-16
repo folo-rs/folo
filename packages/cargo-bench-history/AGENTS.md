@@ -14,11 +14,15 @@ driven in tests by fakes, never by real IO:
   argv directly (no shell — the configured command is tokenized with POSIX
   shell-word rules and spawned, so forwarded arguments are passed verbatim);
   fake `FakeRunner` records the argv and reports a canned exit status.
-* `probe::EnvironmentProbe` — real `SystemProbe` (shells `git`/`rustc`); fake
-  `FakeProbe` returns canned `GitSnapshot`/`RustcInfo`.
-* `bench_output::BenchOutputSource` — real `FsBenchOutputSource` (walks
-  `target/gungraun/**/summary.json`); fake `FakeOutput` returns in-memory
-  `RawSummary` values.
+* `probe::EnvironmentProbe` — real `SystemProbe` (shells `git`/`rustc`, and
+  reads the local hardware profile via `machine::system_profile`); fake
+  `FakeProbe` returns canned `GitSnapshot`/`RustcInfo`/`HardwareProfile`.
+* `bench_output::BenchOutputSource` — real `FsBenchOutputSource` walks the
+  engine's output tree and returns a `Harvest` enum: `Harvest::Callgrind` from
+  `target/gungraun/**/summary.json` or `Harvest::Criterion` from
+  `target/criterion/**/new/{benchmark,estimates}.json` (only `new/` dirs holding
+  both files, `mtime`-scoped to the run). Fake `FakeOutput` is engine-aware and
+  returns in-memory `RawSummary` or `RawCriterionCase` values.
 * `storage::Storage` — real `LocalStorage` and (behind the `azure` feature)
   `AzureBlobStorage`, selected at runtime by the `StorageFacade` enum that
   `build_storage` returns; fake `MemoryStorage`.
@@ -50,7 +54,35 @@ Everything below the storage load is pure and synchronous:
   report is plain structs of finite numbers, so the JSON path uses `.expect`
   rather than threading a serialization error nobody can trigger.
 
-## Time is injected — never read the wall clock or sleep
+## Engine adapters (Callgrind and Criterion)
+
+Two benchmark engines are supported, each behind a pure parser in `bench/`:
+
+* `bench::callgrind` parses a Gungraun v6 `summary.json` into a `ResultRecord`
+  (instruction count, cache hits, estimated cycles, branches). `package` comes
+  from the `package_dir` basename. Hardware-independent → stored under the
+  `synthetic` partition segment, no machine key.
+* `bench::criterion` parses a `new/benchmark.json` + `new/estimates.json` pair
+  into a `WallTime` `ResultRecord`. The metric value is the `slope` point
+  estimate when present (linear `b.iter` sampling) else the `mean`; the std-dev
+  and the chosen estimate's CI bounds are recorded on the `Metric` (dispersion
+  fields) so later analysis can be noise-aware. The identity is
+  `group_id`/`function_id`/`value_str`, and **`package` is `None`** — Criterion
+  files carry no package and `target/criterion/` is flat, so it is unrecoverable;
+  the workspace's crate-prefixed group ids keep series distinct anyway. Criterion
+  is hardware-dependent → partitioned by the host triple and a machine key.
+
+## Machine key
+
+`machine::system_profile` reads the `many_cpus` processor and memory-region
+counts plus a best-effort, per-platform `detect_cpu_brand`. `machine::fingerprint`
+hashes a version-tagged canonical string (`mk1\nprocessors=…\nmemory_regions=…\n
+cpu_brand=…`) with SHA-256 and truncates to the first 16 hex chars — a **fixed**
+(not seeded) hash so the key is stable across machines and tool versions; a golden
+test pins a fixed profile to its digest. `resolve_machine_key` prefers an explicit
+override (`--machine-key` → `machine.key` config) over the fingerprint. The key is
+computed only when `engine.is_hardware_dependent()` (Criterion); Callgrind never
+reads it.
 
 All time comes from an injected `tick::Clock`. Production uses
 `Clock::new_tokio()`; tests use `Clock::new_frozen_at(...)` for deterministic
@@ -99,6 +131,13 @@ named bench targets in different packages: their `BenchmarkId`s differ only in
 parser ever stops folding `package_dir` into the identity, the
 `run_distinguishes_same_module_path_across_packages` test fails.
 
+It also accepts `--criterion GROUP|FUNCTION|VALUE=NANOS` (repeatable), which
+writes a Criterion `new/benchmark.json` + `new/estimates.json` pair under
+`<target-root>/criterion/<group>/<function>[/<value>]/new/` whose `slope` point
+estimate is `NANOS` nanoseconds (an empty `VALUE` omits the parameter component).
+Distinct identities never share a directory, so one run can emit several Criterion
+cases that harvest into one result set as separate records.
+
 ## End-to-end tests and the current directory
 
 The real-adapter end-to-end test changes the process current directory into a
@@ -123,10 +162,12 @@ the real engine and harvest never diverge either.
 
 ## Fixture-golden canaries
 
-`tests/fixtures/callgrind/*.summary.json` are **real** Gungraun output committed
-verbatim. They are schema-drift canaries used by the parser tests, the
-orchestration tests, and the integration test. Do not hand-edit them to make a
-test pass — regenerate from `just bench-cg` if the upstream schema genuinely
+`tests/fixtures/callgrind/*.summary.json` are **real** Gungraun output and
+`tests/fixtures/criterion/*/{benchmark,estimates}.json` are **real** Criterion
+output, both committed verbatim. They are schema-drift canaries used by the parser
+tests, the orchestration tests, and the integration test. Do not hand-edit them to
+make a test pass — regenerate the Callgrind fixtures from `just bench-cg` (and the
+Criterion fixtures from a `cargo bench` run) if the upstream schema genuinely
 changes, and update the parser/tests to match.
 
 ## WSLENV (do not add magic WSL detection)

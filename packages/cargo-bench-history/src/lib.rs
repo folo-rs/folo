@@ -14,10 +14,10 @@
 //! drift.
 //!
 //! The `run` command executes the configured benchmark engines (Callgrind via
-//! Gungraun), harvests their machine-readable output, and stores one immutable
-//! result set per run through the configured storage backend. The `analyze`
-//! command reconstructs each benchmark's series and reports notable changes, and
-//! the `install` command writes a starter configuration file.
+//! Gungraun, and Criterion), harvests their machine-readable output, and stores
+//! one immutable result set per engine per run through the configured storage
+//! backend. The `analyze` command reconstructs each benchmark's series and reports
+//! notable changes, and the `install` command writes a starter configuration file.
 
 mod analyze;
 mod bench;

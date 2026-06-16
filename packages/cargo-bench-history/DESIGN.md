@@ -49,8 +49,9 @@ Key facts:
 
 * Results are **hardware-dependent and noisy** → must be partitioned by machine
   and compared with noise-aware statistics.
-* Criterion records **no timestamp, no commit, no machine info**. Our tool
-  supplies all run context.
+* Criterion records **no timestamp, no commit, no machine info, and no package**.
+  Our tool supplies all run context, and the stored `BenchmarkId.package` is left
+  `None` (the workspace's crate-prefixed group ids keep series distinct; see §3).
 * The on-disk JSON is criterion-internal (not a stability-guaranteed API), but
   has been stable for many releases. `cargo-criterion` (a separate tool) emits a
   documented `--message-format json` stream; the workspace does not use it
@@ -108,13 +109,18 @@ flowchart LR
 ```
 
 * **BenchmarkId** — stable identity of a series, scoped by the workspace
-  `package` so that equally named bench targets in different packages (for
-  example `foo/benches/a.rs` and `bar/benches/a.rs`) never collide into one
-  series. Callgrind: `package` (Gungraun `package_dir` basename) + `module_path`
-  + `function_name` (+ `id`). Criterion: `package` + `group_id` / `function_id` /
-  `value_str`. Components are kept separate so reports can render the full
-  `qualified()` form or a compact `short()` tail. Renaming a benchmark starts a
-  new series (documented caveat; see §13).
+  `package` where it is recoverable, so that equally named bench targets in
+  different packages (for example `foo/benches/a.rs` and `bar/benches/a.rs`)
+  never collide into one series. Callgrind: `package` (Gungraun `package_dir`
+  basename) + `module_path` + `function_name` (+ `id`). Criterion: `package` is
+  **`None`** — Criterion's on-disk files carry no package and `target/criterion/`
+  is flat, so the package is unrecoverable; the series identity is `group_id` /
+  `function_id` / `value_str`. This is safe here because the workspace
+  crate-prefixes its Criterion group ids (`<crate>_<group>`), so collisions
+  between equally named cases in different packages do not occur. Components are
+  kept separate so reports can render the full `qualified()` form or a compact
+  `short()` tail. Renaming a benchmark starts a new series (documented caveat;
+  see §13).
 * **Metric** — `{ name, unit, value: f64, kind }` where `kind ∈ {Wallclock,
   InstructionCount, CacheHits, EstimatedCycles, Branches, …}`. Criterion also
   carries the confidence interval and std-dev so analysis can be noise-aware.
@@ -213,19 +219,26 @@ Goal: equal for pool-equivalent machines, different for genuinely different
 hardware. **Never** keyed on hostname/serial (cloud pool nodes differ in name
 but are equivalent).
 
-Factors (hashed): CPU brand string, physical core count, logical processor
-count, memory-region (NUMA) count, total RAM bucketed to a coarse boundary, CPU
-base frequency bucket. User override: `machine.key = "my-key"` or `--machine-key`.
+Factors (hashed): the `many_cpus` maximum processor count and maximum
+memory-region (NUMA node) count, plus a best-effort CPU brand string. These are
+the stable, pool-equivalent attributes available without elevated privileges
+across Windows/Linux/macOS; finer signals (RAM size, base frequency) were left
+out of v1 because they add platform-specific probing for little discriminating
+value in homogeneous CI pools. User override: `machine.key = "my-key"` (config)
+or `--machine-key` (CLI), which wins over the computed fingerprint.
 
-* Reuse **`many_cpus`** (already in-workspace) for processor/memory-region
-  counts; a small hardware PAL supplies CPU brand + RAM
-  (Windows/Linux/macOS impls + mock), mirroring the existing `pal/` pattern.
+* Reuse **`many_cpus`** (already in-workspace) for the processor and
+  memory-region counts; a small per-platform `detect_cpu_brand` supplies the CPU
+  brand (Windows/Linux/macOS impls, best-effort — `None` when unavailable).
 * **Stability requirement (correctness):** the key is persisted and compared
-  across machines and tool versions, so it must use a **fixed** hash (e.g.
-  SHA-256 of a canonical string), **not** `foldhash`/`DefaultHasher` (seeded /
-  not stable).
-* Not needed until the Criterion iteration (only Criterion results are
-  hardware-dependent) → machine-key work is deferred to iteration 5.
+  across machines and tool versions, so it uses a **fixed** hash — SHA-256 of a
+  version-tagged canonical string (`mk1\nprocessors=…\nmemory_regions=…\n
+  cpu_brand=…`), truncated to the first 16 hex characters — **not**
+  `foldhash`/`DefaultHasher` (seeded / not stable). A golden unit test pins a
+  fixed profile to its hex digest so an accidental change to the canonical form
+  is caught.
+* Computed only for **hardware-dependent** systems (Criterion). Callgrind
+  partitions under `synthetic` and never reads the machine key.
 
 ## 6. Run context (environment detection)
 
@@ -403,9 +416,8 @@ next steps. Never overwrite an existing file (report and exit success). Honors
 abstracted behind a `ConfigWriter` port (`TokioConfigWriter` in production, an
 in-memory fake in tests) whose `write_new` creates parent directories and uses
 `create_new` so an existing file is reported, never clobbered. The generated
-template enables only engines `run` can currently harvest (Callgrind); the
-Criterion section is present but commented out until its adapter lands, so a
-fresh install never produces a config whose every run reports a skipped engine.
+template enables both harvestable engines (Callgrind and Criterion) and includes
+a commented `[machine]` block documenting the `key` override.
 
 ### 8.4 `cargo bench-history analyze`
 Download a partition (default: current project; flags to target any stored set or
@@ -418,8 +430,9 @@ run the finding algorithms (§9), print a report.
 * `--since` filters at the object level: a run whose effective time predates the
   cutoff is excluded wholesale, so the reported run count and every series share
   the same window.
-* `--machine-key` arrives with hardware partitioning in the Criterion iteration
-  (§9 #2/#3); Callgrind history is hardware-independent (`synthetic` partition).
+* `--machine-key` overrides the hardware fingerprint when a hardware-dependent
+  run (Criterion) is stored; Callgrind history is hardware-independent
+  (`synthetic` partition) and ignores it.
 
 ## 9. Analysis algorithms
 
@@ -442,7 +455,10 @@ toolchain/OS so the engine can segment. Findings (severity-ranked):
 #2 and #3 are additive. All math is pure/deterministic → unit-tested with a
 named, Miri-safe case matrix (flat-never-flags, lone-outlier-flags, severity-tier
 boundaries, window-limiting, deterministic tie-breaks), with no real-time delays
-(per workspace conventions).
+(per workspace conventions). The Criterion adapter records std-dev + CI bounds on
+each `WallTime` metric so noise-aware thresholds (#1's `k·MAD` / CI non-overlap)
+and the change-point/drift findings (#2/#3) can be layered on; those statistical
+refinements are split into a dedicated follow-up iteration.
 
 ## 10. Crate architecture
 
@@ -553,9 +569,13 @@ persists) and adds macOS; mapped to your original numbering:
    account SAS (Azurite/CI + SAS production) / verbatim SAS / Entra ID;
    `run`/`analyze` become storage-agnostic; verify the feature builds and runs on
    Windows, Linux and macOS.
-5. **Criterion** (your 6) — adapter (estimates.json), machine-key computation +
-   partition (Windows/Linux/macOS hardware PAL), noise-aware thresholds; add
-   change-point/drift findings.
+5. **Criterion** (your 6) — adapter parses `target/criterion/**/new/{benchmark,
+   estimates}.json` into `WallTime` records (slope estimate when present, else the
+   mean; std-dev + CI bounds recorded for noise-aware analysis), plus machine-key
+   computation + partition (Windows/Linux/macOS CPU-brand detection). The stored
+   `BenchmarkId.package` is `None` (Criterion files are package-agnostic; §3).
+   Noise-aware thresholds and change-point/drift findings are split into a
+   follow-up iteration.
 
 **Deferred:** a standalone `upload` command (§8.2) — added only if a concrete
 need arises, most likely alongside Criterion; the `ingest` module it would reuse
@@ -638,3 +658,16 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     entry** (`Cli::from_args(argv).into_command()` → `run()`), matching the
     workspace pattern (no `assert_cmd`); a table-driven CLI-flag matrix runs over
     fixture "testdata projects" with prebuilt fake `target/` trees.
+19. **Criterion `BenchmarkId.package`** — *Decided:* stored as `None`. Criterion's
+    on-disk files carry no package and `target/criterion/` is a flat tree, so the
+    owning package is unrecoverable from a harvest. This is safe because the
+    workspace crate-prefixes its Criterion group ids (`<crate>_<group>`), keeping
+    equally named cases in different packages distinct (§2.1/§3). The Callgrind
+    adapter still records `package` from the Gungraun `package_dir` basename.
+20. **Machine-key factors** — *Decided:* SHA-256 (first 16 hex chars) over a
+    version-tagged canonical string of the `many_cpus` processor count,
+    memory-region count, and a best-effort CPU brand string; truncated for a
+    compact path segment, fixed (not seeded) for cross-machine stability, and
+    pinned by a golden test. Finer signals (RAM size, base frequency) were left
+    out of v1 for little gain in homogeneous CI pools; `--machine-key` / `machine.
+    key` override the fingerprint (§5). Computed only for Criterion.

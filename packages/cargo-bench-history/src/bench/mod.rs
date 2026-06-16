@@ -1,12 +1,14 @@
 //! Benchmark-engine adapters: per-engine environment injection, the WSL env
 //! propagation rule, and parsing of each engine's output into the model.
 //!
-//! Iteration 1 implements the Callgrind (Gungraun) engine; Criterion follows in a
-//! later iteration.
+//! Two engines are supported: Callgrind (via Gungraun, deterministic instruction
+//! counts) and Criterion (wall-clock timings).
 
 pub(crate) mod callgrind;
+pub(crate) mod criterion;
 
 pub(crate) use callgrind::parse_callgrind_summary;
+pub(crate) use criterion::parse_criterion_case;
 
 use crate::comparability::EngineSystem;
 
@@ -15,6 +17,18 @@ pub(crate) const GUNGRAUN_DIR: &str = "gungraun";
 
 /// File name Gungraun writes for each benchmark case's machine-readable summary.
 pub(crate) const SUMMARY_FILE: &str = "summary.json";
+
+/// Directory under the cargo target root where Criterion writes its results.
+pub(crate) const CRITERION_DIR: &str = "criterion";
+
+/// Directory name Criterion gives the most recent run of each benchmark case.
+pub(crate) const CRITERION_NEW_DIR: &str = "new";
+
+/// File name Criterion writes describing a benchmark case's identity.
+pub(crate) const CRITERION_BENCHMARK_FILE: &str = "benchmark.json";
+
+/// File name Criterion writes with a benchmark case's statistical estimates.
+pub(crate) const CRITERION_ESTIMATES_FILE: &str = "estimates.json";
 
 /// The environment variables to inject so an engine emits machine-readable output.
 ///

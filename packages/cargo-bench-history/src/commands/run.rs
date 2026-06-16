@@ -12,8 +12,8 @@ use std::time::SystemTime;
 use jiff::Timestamp;
 use tick::Clock;
 
-use crate::bench::{injected_env, parse_callgrind_summary};
-use crate::bench_output::{BenchOutputSource, FsBenchOutputSource};
+use crate::bench::{injected_env, parse_callgrind_summary, parse_criterion_case};
+use crate::bench_output::{BenchOutputSource, FsBenchOutputSource, Harvest};
 use crate::comparability::{ComparabilityKey, EngineSystem, resolve_target_triple};
 use crate::config::{Config, load_config};
 use crate::context::{
@@ -22,7 +22,7 @@ use crate::context::{
 use crate::git::GitSnapshot;
 use crate::host::RustcInfo;
 use crate::machine::{HardwareProfile, resolve_machine_key};
-use crate::model::ResultSet;
+use crate::model::{ResultRecord, ResultSet};
 use crate::probe::{EnvironmentProbe, SystemProbe};
 use crate::process::{BenchRunner, TokioBenchRunner};
 use crate::storage::{Storage, build_storage};
@@ -102,16 +102,6 @@ pub(crate) async fn execute(
     execute_run(options, &deps).await
 }
 
-/// The engines a run will execute, plus those skipped as unsupported.
-#[derive(Debug)]
-struct EngineSelection {
-    /// Engines that will run, as `(config key, engine)` pairs.
-    to_run: Vec<(String, EngineSystem)>,
-    /// Names of configured engines skipped because this iteration cannot harvest
-    /// their output yet.
-    skipped: Vec<String>,
-}
-
 /// Probe facts shared across every engine in a single run.
 struct SharedContext {
     /// Git snapshot of the working directory.
@@ -147,7 +137,7 @@ where
     O: BenchOutputSource,
     S: Storage,
 {
-    let selection = resolve_engines(deps.config, options.engine.as_deref())?;
+    let to_run = resolve_engines(deps.config, options.engine.as_deref())?;
 
     let rustc = deps.probe.toolchain().await?;
     let shared = SharedContext {
@@ -162,7 +152,7 @@ where
     let mut harvested = 0_usize;
     let mut labels = Vec::new();
 
-    for (name, engine) in &selection.to_run {
+    for (name, engine) in &to_run {
         let summary = process_engine(options, deps, &shared, name, *engine).await?;
         if summary.stored {
             stored = stored.saturating_add(1);
@@ -171,13 +161,7 @@ where
         labels.push(summary.label);
     }
 
-    let message = build_message(
-        options.no_store,
-        stored,
-        harvested,
-        &labels,
-        &selection.skipped,
-    );
+    let message = build_message(options.no_store, stored, harvested, &labels);
     Ok(RunOutcome::Completed { message })
 }
 
@@ -228,15 +212,8 @@ where
         });
     }
 
-    let raw = deps.output.collect(engine, run_start).await?;
-    let mut records = Vec::with_capacity(raw.len());
-    for summary in &raw {
-        let record =
-            parse_callgrind_summary(&summary.content).map_err(|error| RunError::Parse {
-                message: format!("{}: {error}", summary.path.display()),
-            })?;
-        records.push(record);
-    }
+    let harvest = deps.output.collect(engine, run_start).await?;
+    let records = parse_harvest(&harvest)?;
     let count = records.len();
 
     let execution = timestamp_from(run_start);
@@ -305,8 +282,45 @@ where
     })
 }
 
+/// Parses harvested engine output into result records, naming the offending
+/// source on a parse failure.
+fn parse_harvest(harvest: &Harvest) -> Result<Vec<ResultRecord>, RunError> {
+    match harvest {
+        Harvest::Callgrind(summaries) => {
+            let mut records = Vec::with_capacity(summaries.len());
+            for summary in summaries {
+                let record =
+                    parse_callgrind_summary(&summary.content).map_err(|error| RunError::Parse {
+                        message: format!("{}: {error}", summary.path.display()),
+                    })?;
+                records.push(record);
+            }
+            Ok(records)
+        }
+        Harvest::Criterion(cases) => {
+            let mut records = Vec::with_capacity(cases.len());
+            for case in cases {
+                let record =
+                    parse_criterion_case(&case.benchmark, &case.estimates).map_err(|error| {
+                        RunError::Parse {
+                            message: format!("{}: {error}", case.dir.display()),
+                        }
+                    })?;
+                records.push(record);
+            }
+            Ok(records)
+        }
+    }
+}
+
 /// Decides which engines to run from the configuration and an optional filter.
-fn resolve_engines(config: &Config, requested: Option<&str>) -> Result<EngineSelection, RunError> {
+///
+/// Returns the engines to run as `(config key, engine)` pairs. An explicit
+/// `--engine` filter must name an engine that is configured.
+fn resolve_engines(
+    config: &Config,
+    requested: Option<&str>,
+) -> Result<Vec<(String, EngineSystem)>, RunError> {
     let mut configured = Vec::new();
     for name in config.engines.keys() {
         let engine = EngineSystem::from_name(name).ok_or_else(|| RunError::NoEngine {
@@ -315,7 +329,7 @@ fn resolve_engines(config: &Config, requested: Option<&str>) -> Result<EngineSel
         configured.push((name.clone(), engine));
     }
 
-    let candidates = match requested {
+    let to_run = match requested {
         Some(requested) => {
             let engine = EngineSystem::from_name(requested).ok_or_else(|| RunError::NoEngine {
                 message: format!("unknown engine {requested:?}"),
@@ -323,13 +337,6 @@ fn resolve_engines(config: &Config, requested: Option<&str>) -> Result<EngineSel
             if !configured.iter().any(|(_, candidate)| *candidate == engine) {
                 return Err(RunError::NoEngine {
                     message: format!("engine {requested:?} is not configured"),
-                });
-            }
-            if !is_supported(engine) {
-                return Err(RunError::NoEngine {
-                    message: format!(
-                        "engine {requested:?} is not supported yet (this iteration supports callgrind)"
-                    ),
                 });
             }
             configured
@@ -340,39 +347,14 @@ fn resolve_engines(config: &Config, requested: Option<&str>) -> Result<EngineSel
         None => configured,
     };
 
-    let mut to_run = Vec::new();
-    let mut skipped = Vec::new();
-    for (name, engine) in candidates {
-        if is_supported(engine) {
-            to_run.push((name, engine));
-        } else {
-            skipped.push(name);
-        }
-    }
-
     if to_run.is_empty() {
         return Err(RunError::NoEngine {
-            message: if skipped.is_empty() {
-                "no engines are configured".to_owned()
-            } else {
-                format!(
-                    "only unsupported engines are configured: {} \
-                     (this iteration supports callgrind)",
-                    skipped.join(", ")
-                )
-            },
+            message: "no engines are configured".to_owned(),
         });
     }
 
-    Ok(EngineSelection { to_run, skipped })
+    Ok(to_run)
 }
-
-/// Whether this iteration can harvest `engine`'s output.
-fn is_supported(engine: EngineSystem) -> bool {
-    matches!(engine, EngineSystem::Callgrind)
-}
-
-/// Tokenizes the engine command and appends its configured and forwarded
 /// arguments verbatim, producing a full argv for direct (shell-free) execution.
 ///
 /// The configured `command` is split with POSIX shell-word rules (honoring
@@ -396,13 +378,7 @@ fn build_command_line(
 }
 
 /// Builds the human-readable run summary.
-fn build_message(
-    no_store: bool,
-    stored: usize,
-    harvested: usize,
-    labels: &[String],
-    skipped: &[String],
-) -> String {
+fn build_message(no_store: bool, stored: usize, harvested: usize, labels: &[String]) -> String {
     let mut message = if no_store {
         format!("Harvested {harvested} benchmark case(s); nothing stored (--no-store).")
     } else {
@@ -412,11 +388,6 @@ fn build_message(
         message.push_str(" [");
         message.push_str(&labels.join("; "));
         message.push(']');
-    }
-    if !skipped.is_empty() {
-        message.push_str(" Skipped unsupported engine(s): ");
-        message.push_str(&skipped.join(", "));
-        message.push('.');
     }
     message
 }
@@ -466,7 +437,7 @@ mod tests {
     use futures::executor::block_on;
 
     use super::*;
-    use crate::bench_output::RawSummary;
+    use crate::bench_output::{Harvest, RawCriterionCase, RawSummary};
     use crate::config::parse_config;
     use crate::git::build_snapshot;
     use crate::process::EngineStatus;
@@ -476,6 +447,10 @@ mod tests {
         include_str!("../../tests/fixtures/callgrind/single_unparametrized.summary.json");
     const PARAMETRIZED_FIXTURE: &str =
         include_str!("../../tests/fixtures/callgrind/parametrized.summary.json");
+    const CRITERION_BENCHMARK_FIXTURE: &str =
+        include_str!("../../tests/fixtures/criterion/std_instant/benchmark.json");
+    const CRITERION_ESTIMATES_FIXTURE: &str =
+        include_str!("../../tests/fixtures/criterion/std_instant/estimates.json");
 
     /// The frozen wall-clock instant used by orchestration tests (2023-11-14Z).
     const FROZEN_UNIX: u64 = 1_700_000_000;
@@ -531,25 +506,19 @@ mod tests {
     #[test]
     fn build_message_brackets_labels_only_when_present() {
         let labels = vec!["callgrind: 1 stored".to_owned()];
-        let with_labels = build_message(false, 1, 1, &labels, &[]);
+        let with_labels = build_message(false, 1, 1, &labels);
         assert!(
             with_labels.contains("[callgrind: 1 stored]"),
             "{with_labels}"
         );
 
-        let without_labels = build_message(false, 0, 0, &[], &[]);
+        let without_labels = build_message(false, 0, 0, &[]);
         assert!(!without_labels.contains('['), "{without_labels}");
     }
 
     #[test]
-    fn build_message_reports_skipped_engines() {
-        let stored = build_message(false, 0, 0, &[], &["criterion".to_owned()]);
-        assert!(
-            stored.contains("Skipped unsupported engine(s): criterion."),
-            "{stored}"
-        );
-
-        let no_store = build_message(true, 0, 3, &[], &[]);
+    fn build_message_reports_no_store() {
+        let no_store = build_message(true, 0, 3, &[]);
         assert!(
             no_store.contains("nothing stored (--no-store)"),
             "{no_store}"
@@ -656,13 +625,14 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct FakeOutput {
-        summaries: Vec<RawSummary>,
+        callgrind: Vec<RawSummary>,
+        criterion: Vec<RawCriterionCase>,
     }
 
     impl FakeOutput {
         fn with_two_callgrind_summaries() -> Self {
             Self {
-                summaries: vec![
+                callgrind: vec![
                     RawSummary {
                         path: PathBuf::from("a/summary.json"),
                         content: SINGLE_FIXTURE.to_owned(),
@@ -672,26 +642,55 @@ mod tests {
                         content: PARAMETRIZED_FIXTURE.to_owned(),
                     },
                 ],
+                ..Self::default()
             }
         }
 
         fn with_malformed_summary() -> Self {
             Self {
-                summaries: vec![RawSummary {
+                callgrind: vec![RawSummary {
                     path: PathBuf::from("a/summary.json"),
                     content: "{ not valid json".to_owned(),
                 }],
+                ..Self::default()
+            }
+        }
+
+        fn with_criterion_case() -> Self {
+            Self {
+                criterion: vec![RawCriterionCase {
+                    dir: PathBuf::from("criterion/grp/std/now/new"),
+                    benchmark: CRITERION_BENCHMARK_FIXTURE.to_owned(),
+                    estimates: CRITERION_ESTIMATES_FIXTURE.to_owned(),
+                }],
+                ..Self::default()
+            }
+        }
+
+        fn with_callgrind_and_criterion() -> Self {
+            let mut output = Self::with_two_callgrind_summaries();
+            output.criterion = Self::with_criterion_case().criterion;
+            output
+        }
+
+        fn with_malformed_criterion_case() -> Self {
+            Self {
+                criterion: vec![RawCriterionCase {
+                    dir: PathBuf::from("criterion/grp/std/now/new"),
+                    benchmark: "{ not valid json".to_owned(),
+                    estimates: CRITERION_ESTIMATES_FIXTURE.to_owned(),
+                }],
+                ..Self::default()
             }
         }
     }
 
     impl BenchOutputSource for FakeOutput {
-        async fn collect(
-            &self,
-            _engine: EngineSystem,
-            _since: SystemTime,
-        ) -> io::Result<Vec<RawSummary>> {
-            Ok(self.summaries.clone())
+        async fn collect(&self, engine: EngineSystem, _since: SystemTime) -> io::Result<Harvest> {
+            Ok(match engine {
+                EngineSystem::Callgrind => Harvest::Callgrind(self.callgrind.clone()),
+                EngineSystem::Criterion => Harvest::Criterion(self.criterion.clone()),
+            })
         }
     }
 
@@ -853,14 +852,14 @@ mod tests {
     }
 
     #[test]
-    fn implicit_run_skips_unsupported_criterion() {
+    fn both_engines_run_stores_a_set_per_engine() {
         let storage = MemoryStorage::new();
         let outcome = drive(
             &RunOptions::default(),
             &both_engines_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
-            &FakeOutput::with_two_callgrind_summaries(),
+            &FakeOutput::with_callgrind_and_criterion(),
             &storage,
         )
         .unwrap();
@@ -868,13 +867,86 @@ mod tests {
         let RunOutcome::Completed { message } = outcome else {
             panic!("expected completion");
         };
-        assert!(message.contains("Skipped"), "{message}");
-        assert!(message.contains("criterion"), "{message}");
-        assert_eq!(storage.keys().len(), 1);
+        assert!(message.contains("Stored 2"), "{message}");
+
+        // Callgrind partitions under `synthetic`; Criterion partitions under the
+        // machine fingerprint of the probed hardware. Both sets are stored.
+        let keys = storage.keys();
+        assert_eq!(keys.len(), 2, "{keys:?}");
+        assert!(
+            keys.iter()
+                .any(|key| key.contains("/callgrind/") && key.contains("/synthetic/")),
+            "{keys:?}"
+        );
+        assert!(
+            keys.iter()
+                .any(|key| key.contains("/criterion/") && !key.contains("/synthetic/")),
+            "{keys:?}"
+        );
     }
 
     #[test]
-    fn explicit_criterion_is_rejected_as_unsupported() {
+    fn explicit_criterion_selection_stores_results() {
+        let storage = MemoryStorage::new();
+        let options = RunOptions {
+            engine: Some("criterion".to_owned()),
+            ..RunOptions::default()
+        };
+        let outcome = drive(
+            &options,
+            &both_engines_config(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            &FakeOutput::with_criterion_case(),
+            &storage,
+        )
+        .unwrap();
+
+        let RunOutcome::Completed { message } = outcome else {
+            panic!("expected completion");
+        };
+        assert!(message.contains("Stored 1"), "{message}");
+
+        // Only the criterion engine ran, partitioned by the machine fingerprint.
+        let keys = storage.keys();
+        assert_eq!(keys.len(), 1, "{keys:?}");
+        assert!(keys[0].contains("/criterion/"), "{keys:?}");
+
+        let bytes = block_on(storage.get(&keys[0])).unwrap();
+        let set = ResultSet::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
+        assert_eq!(set.results.len(), 1);
+        assert_eq!(set.results[0].metrics[0].kind, crate::MetricKind::WallTime);
+    }
+
+    #[test]
+    fn criterion_partition_uses_the_machine_key_override() {
+        let storage = MemoryStorage::new();
+        let options = RunOptions {
+            engine: Some("criterion".to_owned()),
+            machine_key: Some("ci-pool-a".to_owned()),
+            ..RunOptions::default()
+        };
+        drive(
+            &options,
+            &both_engines_config(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            &FakeOutput::with_criterion_case(),
+            &storage,
+        )
+        .unwrap();
+
+        let keys = storage.keys();
+        assert_eq!(keys.len(), 1, "{keys:?}");
+        assert!(
+            keys[0].contains("/criterion/x86_64-pc-windows-msvc/ci-pool-a/"),
+            "{keys:?}"
+        );
+    }
+
+    #[test]
+    fn malformed_criterion_case_is_a_parse_error() {
+        let storage = MemoryStorage::new();
         let options = RunOptions {
             engine: Some("criterion".to_owned()),
             ..RunOptions::default()
@@ -884,17 +956,20 @@ mod tests {
             &both_engines_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
-            &FakeOutput::default(),
-            &MemoryStorage::new(),
+            &FakeOutput::with_malformed_criterion_case(),
+            &storage,
         )
         .unwrap_err();
 
         match error {
-            RunError::NoEngine { message } => {
-                assert!(message.contains("not supported"), "{message}");
+            RunError::Parse { message } => {
+                assert!(message.contains("Criterion"), "{message}");
+                // The offending case directory is named so failures are actionable.
+                assert!(message.contains("new"), "{message}");
             }
-            other => panic!("expected no-engine error, got {other:?}"),
+            other => panic!("expected parse error, got {other:?}"),
         }
+        assert!(storage.keys().is_empty());
     }
 
     #[test]
@@ -1044,15 +1119,12 @@ mod tests {
     }
 
     #[test]
-    fn resolve_engines_errors_when_only_unsupported_configured() {
+    fn resolve_engines_accepts_a_criterion_only_configuration() {
         let config = config_with("[engines.criterion]\ncommand = \"crit\"\n");
-        let error = resolve_engines(&config, None).unwrap_err();
-        match error {
-            RunError::NoEngine { message } => {
-                assert!(message.contains("only unsupported"), "{message}");
-            }
-            other => panic!("expected no-engine error, got {other:?}"),
-        }
+        let to_run = resolve_engines(&config, None).unwrap();
+        assert_eq!(to_run.len(), 1);
+        assert_eq!(to_run[0].0, "criterion");
+        assert_eq!(to_run[0].1, EngineSystem::Criterion);
     }
 
     #[test]
