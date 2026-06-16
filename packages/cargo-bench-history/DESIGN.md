@@ -371,7 +371,10 @@ For each configured engine, `run`:
    processed), so harvest globbing never relies on bench-file names.
 4. Builds the `ResultSet` (with the resolved RunContext) and **stores it
    immediately** — `run` always persists; there is no separate publish step
-   (`--no-store` produces results without writing, for dry runs).
+   (`--no-store` produces results without writing, for dry runs). An engine that
+   harvests **zero** cases stores nothing (an empty set carries no comparable
+   data and would only inflate `analyze`'s run count); the summary reports the
+   empty harvest, and other engines in the same run are unaffected.
 
 Callgrind’s command must run on Linux/WSL (Valgrind), exactly as today — but
 that requirement lives entirely in the user-provided command, keeping the tool

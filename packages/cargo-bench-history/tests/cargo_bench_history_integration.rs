@@ -616,7 +616,64 @@ async fn analyze_rising_cache_hits_is_an_improvement() {
     assert_eq!(parsed["findings"][0]["direction"], "improvement");
 }
 
-/// A falling instruction count is reported as an improvement, not a regression.
+/// Two benchmarks regressing by different magnitudes produce two findings that the
+/// report ranks most-notable first (major before minor), end to end through real
+/// storage and rendering.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_ranks_mixed_severity_findings_across_benchmarks() {
+    let workspace = Workspace::new(&storage_only_config());
+    // `alpha` doubles (a major regression); `beta` ticks up ~2% (a minor one).
+    workspace.seed_two_benchmarks("2024-01-01", "c1", 100.0, 100.0);
+    workspace.seed_two_benchmarks("2024-01-02", "c2", 100.0, 100.0);
+    workspace.seed_two_benchmarks("2024-01-03", "c3", 100.0, 100.0);
+    workspace.seed_two_benchmarks("2024-01-04", "c4", 200.0, 102.0);
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(regressions, 2, "both benchmarks regress: {report}");
+
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    let findings = parsed["findings"].as_array().expect("findings array");
+    assert_eq!(findings.len(), 2, "{report}");
+    // The major regression (alpha, +100%) ranks ahead of the minor one (beta, +2%).
+    assert_eq!(findings[0]["severity"], "major", "{report}");
+    assert_eq!(findings[0]["package"], "alpha", "{report}");
+    assert_eq!(findings[0]["group"], "alpha::bench", "{report}");
+    assert_eq!(findings[1]["severity"], "minor", "{report}");
+    assert_eq!(findings[1]["package"], "beta", "{report}");
+
+    // The Markdown rendering preserves the same ranked order in its table rows.
+    let RunOutcome::Analyzed {
+        report: markdown, ..
+    } = workspace
+        .drive(&["analyze", "--format", "markdown"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    let major_row = markdown
+        .find("| major | regression |")
+        .expect("a major row");
+    let minor_row = markdown
+        .find("| minor | regression |")
+        .expect("a minor row");
+    assert!(
+        major_row < minor_row,
+        "major must precede minor:\n{markdown}"
+    );
+}
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 #[serial]
@@ -1019,6 +1076,127 @@ async fn run_criterion_collects_distinct_cases_as_records() {
     assert!(set.results.iter().all(|record| record.id.package.is_none()));
 }
 
+/// A project id containing characters that require sanitizing (a space and a `/`)
+/// round-trips: `run` stores under the sanitized partition and `analyze` finds the
+/// very same history. Both sides must derive the identical storage segment, so this
+/// guards against writer/reader sanitization drift through the real pipeline.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn run_then_analyze_round_trips_a_sanitizing_project_id() {
+    let workspace = Workspace::new(&callgrind_config_with_id(
+        "my proj/sub",
+        &mock_command("--summary grp=single"),
+    ));
+
+    for timestamp in ["2020-01-01T00:00:00Z", "2020-02-01T00:00:00Z"] {
+        workspace
+            .drive(&[
+                "run",
+                "--target-triple",
+                "x86_64-unknown-linux-gnu",
+                "--timestamp",
+                timestamp,
+            ])
+            .await
+            .expect("run should succeed");
+    }
+
+    // The writer sanitizes `my proj/sub` to `my_proj_sub` for the partition.
+    let objects = workspace.stored_objects();
+    assert_eq!(objects.len(), 2, "{objects:?}");
+    assert!(
+        objects
+            .iter()
+            .all(|(key, _)| key.starts_with("v1/my_proj_sub/callgrind/")),
+        "{objects:?}"
+    );
+
+    // The reader must sanitize the same way; otherwise it lists an empty history.
+    let RunOutcome::Analyzed { report, .. } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(
+        parsed["runs"], 2,
+        "analyze must find the runs the sanitized partition stored: {report}"
+    );
+    // The single Callgrind record carries several metrics, each its own series; the
+    // exact count is incidental, but the history must be non-empty.
+    assert!(
+        parsed["series"].as_u64().expect("series count") >= 1,
+        "{report}"
+    );
+}
+
+/// Unusual characters in a benchmark identity (spaces, a dot, and non-ASCII
+/// letters) belong to the object's JSON body, never to the storage partition key.
+/// They survive `run` -> store -> `analyze` verbatim while the key stays sanitized
+/// and the reader keeps both runs in one series.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn run_then_analyze_preserves_unusual_identity_characters() {
+    let command = mock_command("--criterion 'time.capture|mide tiempo|tamaño 4=18.5'");
+    let workspace = Workspace::new(&criterion_config(&command));
+
+    for timestamp in ["2020-01-01T00:00:00Z", "2020-02-01T00:00:00Z"] {
+        workspace
+            .drive(&[
+                "run",
+                "--engine",
+                "criterion",
+                "--target-triple",
+                "x86_64-unknown-linux-gnu",
+                "--machine-key",
+                "pool",
+                "--timestamp",
+                timestamp,
+            ])
+            .await
+            .expect("run should succeed");
+    }
+
+    let objects = workspace.stored_objects();
+    assert_eq!(objects.len(), 2, "{objects:?}");
+    for (key, set) in &objects {
+        // The partition key is identity-free and fully sanitized: none of the
+        // identity's spaces or non-ASCII letters leak into it.
+        assert!(
+            key.starts_with("v1/testproj/criterion/x86_64-unknown-linux-gnu/pool/"),
+            "{key}"
+        );
+        assert!(
+            !key.contains(' ') && !key.contains("tamaño") && !key.contains("mide"),
+            "{key}"
+        );
+
+        // The identity survives verbatim in the stored result set.
+        assert_eq!(set.results.len(), 1, "{:?}", set.results);
+        let id = &set.results[0].id;
+        assert_eq!(id.group, "time.capture");
+        assert_eq!(id.case.as_deref(), Some("mide tiempo"));
+        assert_eq!(id.value.as_deref(), Some("tamaño 4"));
+    }
+
+    // The reader reconstructs a single series across both runs, proving the unusual
+    // identity is a stable series key end to end.
+    let RunOutcome::Analyzed { report, .. } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(parsed["runs"], 2, "{report}");
+    assert_eq!(parsed["series"], 1, "{report}");
+}
+
 /// `--config` loads the configuration from a non-default path.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
@@ -1233,6 +1411,68 @@ impl Workspace {
         self.seed_criterion("2024-02-03", "d3", machine, 20.0);
         self.seed_criterion("2024-02-04", "d4", machine, 30.0);
     }
+
+    /// Seeds one Callgrind result set carrying two distinct benchmark identities,
+    /// `alpha::bench/wide` and `beta::bench/narrow`, each with an `Ir` metric at the
+    /// given value, stamped at `date` (`YYYY-MM-DD`, UTC midnight) and `commit`.
+    fn seed_two_benchmarks(&self, date: &str, commit: &str, alpha: f64, beta: f64) {
+        let effective: Timestamp = format!("{date}T00:00:00Z").parse().unwrap();
+        let key = format!(
+            "v1/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{}-{commit}-run.json",
+            effective.as_second()
+        );
+        self.seed(
+            &key,
+            &two_benchmark_result_set(effective.as_second(), commit, alpha, beta),
+        );
+    }
+}
+
+/// Builds a Callgrind result set with two records — `alpha::bench/wide` and
+/// `beta::bench/narrow` — each carrying a single `Ir` metric, stamped with the
+/// effective second and abbreviated `commit`.
+fn two_benchmark_result_set(effective: i64, commit: &str, alpha: f64, beta: f64) -> ResultSet {
+    let time = Timestamp::from_second(effective).expect("seconds within range");
+    let mut git = GitInfo::default();
+    git.commit = Some(format!("{commit}full"));
+    git.short_commit = Some(commit.to_owned());
+    git.branch = Some("main".to_owned());
+    let context = RunContext::new(
+        Timestamps::new(time, time, time),
+        git,
+        CiInfo::default(),
+        ToolchainInfo::default(),
+        TOOL_VERSION.to_owned(),
+    );
+    let ir = |value: f64| {
+        vec![Metric::new(
+            "Ir".to_owned(),
+            MetricKind::InstructionCount,
+            value,
+            Some("count".to_owned()),
+        )]
+    };
+    let records = vec![
+        ResultRecord::new(
+            BenchmarkId::new(
+                Some("alpha".to_owned()),
+                "alpha::bench".to_owned(),
+                Some("wide".to_owned()),
+                None,
+            ),
+            ir(alpha),
+        ),
+        ResultRecord::new(
+            BenchmarkId::new(
+                Some("beta".to_owned()),
+                "beta::bench".to_owned(),
+                Some("narrow".to_owned()),
+                None,
+            ),
+            ir(beta),
+        ),
+    ];
+    ResultSet::new(context, records)
 }
 
 /// Builds a Criterion result set for benchmark `time/capture/std_instant`
@@ -1359,6 +1599,21 @@ fn callgrind_config(command: &str) -> String {
          path = \"./store\"\n\n\
          [engines.callgrind]\n\
          command = \"{}\"\n",
+        toml_escape(command)
+    )
+}
+
+/// A single-engine Callgrind configuration with an explicit project `id` (which
+/// may contain characters that require sanitizing) whose command is `command`.
+fn callgrind_config_with_id(id: &str, command: &str) -> String {
+    format!(
+        "[project]\n\
+         id = \"{}\"\n\n\
+         [storage.local]\n\
+         path = \"./store\"\n\n\
+         [engines.callgrind]\n\
+         command = \"{}\"\n",
+        toml_escape(id),
         toml_escape(command)
     )
 }

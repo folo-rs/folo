@@ -188,6 +188,58 @@ mod tests {
     }
 
     #[test]
+    fn same_identity_in_different_packages_produces_one_id() {
+        // Criterion attributes no package, so two benchmarks that share a group,
+        // function, and value but live in different crates parse to the SAME
+        // `BenchmarkId`. They therefore merge into a single analysis series. This
+        // is the deliberate consequence of `package = None` and the reason this
+        // workspace crate-prefixes its Criterion group ids: prefixed group ids keep
+        // the identities distinct, and this test locks that contract in so a future
+        // change that drops the prefixing convention is caught here.
+        let estimates = format!(
+            "{{\"mean\":{},\"median\":{},\"median_abs_dev\":{}}}",
+            estimate_json(10.0, 9.0, 11.0),
+            estimate_json(10.0, 9.0, 11.0),
+            estimate_json(1.0, 0.5, 1.5),
+        );
+        let from_crate_a =
+            parse_criterion_case(&benchmark_json("convert", "encode", "4096"), &estimates).unwrap();
+        let from_crate_b =
+            parse_criterion_case(&benchmark_json("convert", "encode", "4096"), &estimates).unwrap();
+
+        assert_eq!(from_crate_a.id, from_crate_b.id);
+        assert_eq!(from_crate_a.id.package, None);
+        assert_eq!(from_crate_a.id.group, "convert");
+        assert_eq!(from_crate_a.id.case.as_deref(), Some("encode"));
+        assert_eq!(from_crate_a.id.value.as_deref(), Some("4096"));
+    }
+
+    #[test]
+    fn crate_prefixed_group_ids_keep_identities_distinct() {
+        // The flip side of the previous test: when the (recommended) convention is
+        // followed and group ids are crate-prefixed, two like-named benches parse to
+        // distinct identities and stay in separate series.
+        let estimates = format!(
+            "{{\"mean\":{},\"median\":{},\"median_abs_dev\":{}}}",
+            estimate_json(10.0, 9.0, 11.0),
+            estimate_json(10.0, 9.0, 11.0),
+            estimate_json(1.0, 0.5, 1.5),
+        );
+        let from_crate_a = parse_criterion_case(
+            &benchmark_json("crate_a::convert", "encode", "4096"),
+            &estimates,
+        )
+        .unwrap();
+        let from_crate_b = parse_criterion_case(
+            &benchmark_json("crate_b::convert", "encode", "4096"),
+            &estimates,
+        )
+        .unwrap();
+
+        assert_ne!(from_crate_a.id, from_crate_b.id);
+    }
+
+    #[test]
     fn maps_wall_time_with_slope_and_dispersion() {
         let record = parse_criterion_case(STD_INSTANT_BENCHMARK, STD_INSTANT_ESTIMATES).unwrap();
         assert_eq!(record.metrics.len(), 1);

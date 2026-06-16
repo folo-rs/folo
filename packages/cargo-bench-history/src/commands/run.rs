@@ -216,6 +216,26 @@ where
     let records = parse_harvest(&harvest)?;
     let count = records.len();
 
+    if options.no_store {
+        return Ok(EngineSummary {
+            stored: false,
+            count,
+            label: format!("{name}: {count} harvested (not stored)"),
+        });
+    }
+
+    // An engine that harvested nothing produces no comparable data point. Storing an
+    // empty result set would inflate `analyze`'s run count with a series-less object
+    // (and silently mask a misconfigured filter or output path), so skip storage and
+    // surface the empty harvest in the summary instead.
+    if count == 0 {
+        return Ok(EngineSummary {
+            stored: false,
+            count: 0,
+            label: format!("{name}: no benchmark cases harvested (nothing stored)"),
+        });
+    }
+
     let execution = timestamp_from(run_start);
     let ingest: Timestamp = deps.clock.system_time_as();
     let effective = resolve_effective_time(options.timestamp, shared.git.committer, ingest);
@@ -237,14 +257,6 @@ where
         deps.tool_version.to_owned(),
     );
     let result_set = ResultSet::new(context, records);
-
-    if options.no_store {
-        return Ok(EngineSummary {
-            stored: false,
-            count,
-            label: format!("{name}: {count} harvested (not stored)"),
-        });
-    }
 
     // Hardware-dependent engines (such as Criterion) partition their history by a
     // machine fingerprint so only equivalent machines share a series. An explicit
@@ -826,6 +838,58 @@ mod tests {
         };
         assert!(message.contains("nothing stored"), "{message}");
         assert!(storage.keys().is_empty());
+    }
+
+    #[test]
+    fn empty_harvest_stores_nothing_and_reports_it() {
+        // An engine that exits cleanly but produces no fresh output (e.g. a
+        // benchmark-name filter that matched nothing) must not store an empty
+        // result set, which would otherwise inflate `analyze`'s run count.
+        let storage = MemoryStorage::new();
+        let outcome = drive(
+            &RunOptions::default(),
+            &callgrind_config(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            &FakeOutput::default(),
+            &storage,
+        )
+        .unwrap();
+
+        let RunOutcome::Completed { message } = outcome else {
+            panic!("expected completion");
+        };
+        assert!(message.contains("Stored 0 result set(s)"), "{message}");
+        assert!(
+            message.contains("no benchmark cases harvested (nothing stored)"),
+            "{message}"
+        );
+        assert!(storage.keys().is_empty(), "{:?}", storage.keys());
+    }
+
+    #[test]
+    fn empty_harvest_for_one_engine_does_not_block_the_other() {
+        // With both engines configured but only Criterion producing output, the
+        // empty Callgrind harvest is skipped while Criterion is still stored.
+        let storage = MemoryStorage::new();
+        let outcome = drive(
+            &RunOptions::default(),
+            &both_engines_config(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            &FakeOutput::with_criterion_case(),
+            &storage,
+        )
+        .unwrap();
+
+        let RunOutcome::Completed { message } = outcome else {
+            panic!("expected completion");
+        };
+        assert!(message.contains("Stored 1 result set(s)"), "{message}");
+
+        let keys = storage.keys();
+        assert_eq!(keys.len(), 1, "{keys:?}");
+        assert!(keys[0].contains("/criterion/"), "{keys:?}");
     }
 
     #[test]
