@@ -25,6 +25,8 @@ pub enum Command {
     Install(InstallOptions),
     /// Analyze stored history for notable patterns.
     Analyze(AnalyzeOptions),
+    /// Replay `run` across a range of historical commits.
+    Backfill(BackfillOptions),
 }
 
 /// Options for the `run` command.
@@ -103,6 +105,35 @@ pub struct AnalyzeOptions {
     pub list_discriminants: bool,
     /// Exit with failure if a regression is detected.
     pub fail_on_regression: bool,
+}
+
+/// Options for the `backfill` command.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[expect(
+    clippy::exhaustive_structs,
+    reason = "constructed and matched by the in-crate binary and integration tests"
+)]
+pub struct BackfillOptions {
+    /// Path to the configuration file, if overridden.
+    pub config_path: Option<PathBuf>,
+    /// Oldest commit of the range to backfill (inclusive).
+    pub from: String,
+    /// Newest commit of the range to backfill (inclusive).
+    pub to: String,
+    /// Restrict the runs to a single named engine, if set.
+    pub engine: Option<String>,
+    /// Override for the recorded target triple, if set.
+    pub target_triple: Option<String>,
+    /// Override for the machine fingerprint (hardware-dependent engines), if set.
+    pub machine_key: Option<String>,
+    /// Replace already-stored results for the backfilled commits instead of
+    /// skipping them as duplicates.
+    pub overwrite: bool,
+    /// Continue past commits whose build or benchmark fails instead of stopping.
+    pub ignore_errors: bool,
+    /// Arguments forwarded verbatim to each engine command.
+    pub passthrough: Vec<String>,
 }
 
 /// The outcome of a successful [`run`](crate::run).
@@ -195,6 +226,14 @@ pub enum RunError {
         /// Human-readable description of the analysis failure.
         message: String,
     },
+    /// A backfill precondition failed (a dirty working tree, an unresolvable or
+    /// out-of-history commit range) or the run stopped after a per-commit
+    /// failure (without `--ignore-errors`). The message carries the explanation
+    /// and any partial summary.
+    Backfill {
+        /// Human-readable description, including any partial backfill summary.
+        message: String,
+    },
     /// An underlying I/O operation (process, probe, or harvest) failed.
     Io(io::Error),
 }
@@ -218,6 +257,7 @@ impl fmt::Display for RunError {
                 "a result is already stored for this run at {key}; pass --overwrite to replace it"
             ),
             Self::Analyze { message } => write!(f, "failed to analyze history: {message}"),
+            Self::Backfill { message } => write!(f, "backfill failed: {message}"),
             Self::Io(error) => write!(f, "I/O error: {error}"),
         }
     }
@@ -234,7 +274,8 @@ impl Error for RunError {
             | Self::Command { .. }
             | Self::Parse { .. }
             | Self::Duplicate { .. }
-            | Self::Analyze { .. } => None,
+            | Self::Analyze { .. }
+            | Self::Backfill { .. } => None,
         }
     }
 }
@@ -344,6 +385,16 @@ mod tests {
             error.to_string().contains("unknown report format"),
             "{error}"
         );
+        assert!(error.source().is_none());
+    }
+
+    #[test]
+    fn backfill_error_is_displayed_and_has_no_source() {
+        let error = RunError::Backfill {
+            message: "refusing to backfill: the working tree is dirty".to_owned(),
+        };
+        assert!(error.to_string().contains("backfill failed"), "{error}");
+        assert!(error.to_string().contains("dirty"), "{error}");
         assert!(error.source().is_none());
     }
 

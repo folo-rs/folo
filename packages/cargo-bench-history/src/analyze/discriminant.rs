@@ -127,8 +127,10 @@ fn arch_from_triple(triple: &str) -> &str {
 /// Derives a normalized operating-system facet from a target triple.
 ///
 /// The OS token is recognized anywhere in the triple so `…-pc-windows-msvc`,
-/// `…-unknown-linux-gnu`, and `…-apple-darwin` all map to a stable short name;
-/// an unrecognized triple falls back to its conventional OS component.
+/// `…-unknown-linux-gnu`, and `…-apple-darwin` all map to a stable short name.
+/// A triple whose OS token is none of `windows`, `darwin`/`apple`, or `linux`
+/// maps to `"unknown"` (so e.g. `freebsd` and `wasm32-unknown-unknown` both
+/// surface under the `unknown` OS facet rather than a per-triple value).
 fn os_from_triple(triple: &str) -> &'static str {
     if triple.contains("windows") {
         "windows"

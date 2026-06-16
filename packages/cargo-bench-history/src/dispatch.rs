@@ -41,5 +41,6 @@ pub async fn run_with_target_root(
         Command::Run(options) => commands::run_with_target_root(options, target_root).await,
         Command::Install(options) => commands::install(options).await,
         Command::Analyze(options) => commands::analyze(options).await,
+        Command::Backfill(options) => commands::backfill(options).await,
     }
 }

@@ -111,6 +111,56 @@ Integration tests build a **real** git repo in a tempdir (`Workspace::repo` /
 `Workspace::clean_repo`) and seed storage keys under the commits' real SHAs so the
 live topology and the stored keys agree.
 
+## The `backfill` command
+
+`commands::backfill` replays `run` across an inclusive commit range, bootstrapping
+history for commits that predate the tool. It is generic over two ports so the
+loop logic runs against Miri-safe fakes:
+
+* `BackfillGit` — `is_clean`/`resolve`/`first_parent` (topology, the latter two
+  delegating to an embedded `SystemGitHistory`) plus the worktree lifecycle
+  (`add_worktree`/`reset_to`/`remove_worktree`). The real `SystemBackfillGit`
+  shells `git worktree add --detach --force`, `checkout --detach --force` +
+  `reset --hard` + `clean -fd` (ignored build artifacts survive for incremental
+  speed), and `worktree remove --force`. The fake `FakeBackfillGit` wraps
+  `FakeGitHistory` and records `added`/`resets`/`removed` via `RefCell`.
+* `CommitRunner` — runs and stores one already-checked-out commit. The real
+  `SystemCommitRunner` reuses the `run` pipeline (`run::run_engines`) against a
+  worktree-rooted `SystemProbe::in_dir` / `TokioBenchRunner::in_dir` /
+  `FsBenchOutputSource` (`target_root = worktree/target`); the fake returns canned
+  per-commit outcomes.
+
+Key invariants:
+
+* **The primary checkout is never mutated.** All work happens in a worktree under
+  the system temp dir; config/project-id/storage are loaded once from the invoking
+  checkout, never from the worktree.
+* **Validation precedes any worktree work** (`plan_commits`): refuse a dirty tree,
+  require both endpoints to resolve, require `--from` to be a first-parent ancestor
+  of `--to`, and require `--to` to be on `HEAD`'s first-parent history (so the
+  points are later analyzable). The range is enumerated oldest-first and inclusive
+  via `first_parent(to).split_off(position(from))` (avoid `vec[a..]` — clippy
+  `indexing_slicing`).
+* **Failure model** (`map_run_result`, a pure classifier): a stored set →
+  `Stored{cases}`; an empty harvest → `SkippedEmpty`; `RunError::Duplicate` →
+  `SkippedExisting` (resumable); `Engine`/`Command`/`Parse` → `BenchFailed` (a
+  recoverable, per-commit failure that stops the loop unless `--ignore-errors`);
+  every other `RunError` (storage, config, I/O) is **infrastructure** and aborts
+  regardless of `--ignore-errors`. A stop surfaces as `RunError::Backfill` (a
+  non-zero exit) carrying the partial summary.
+* **Teardown always runs.** `execute_backfill` computes the `remove_worktree`
+  result before propagating any per-commit error, so the worktree is removed on
+  both the success and the error path.
+* **Multi-engine collision caveat:** if one engine stores and another is a
+  duplicate, `run_engines` returns `Err(Duplicate)` and the whole commit is
+  reported `SkippedExisting`; `--overwrite` avoids it.
+
+Integration tests (`backfill_*`) drive the real adapters against a `clean_repo`
+git tempdir: the mock engine's `--fail-if-exists PATH` flag exits non-zero when a
+marker file is present in the checked-out worktree, so a commit that tracks the
+marker stands in for one that fails to build. Helpers `commit_with_file` /
+`commit_removing_file` / `make_dirty` build the needed histories.
+
 ## Engine adapters (Callgrind and Criterion)
 
 Two benchmark engines are supported, each behind a pure parser in `bench/`:
@@ -194,6 +244,12 @@ writes a Criterion `new/benchmark.json` + `new/estimates.json` pair under
 estimate is `NANOS` nanoseconds (an empty `VALUE` omits the parameter component).
 Distinct identities never share a directory, so one run can emit several Criterion
 cases that harvest into one result set as separate records.
+
+Finally, `--fail-if-exists PATH` exits with code 1 and writes no output when
+`PATH` (relative to the working directory) exists. Backfill runs each engine in a
+checked-out worktree, so a commit that tracks the named marker file stands in for
+a commit that fails to build or benchmark; the `backfill_*` integration tests use
+this to exercise the stop-on-failure and `--ignore-errors` paths.
 
 ## End-to-end tests and the current directory
 

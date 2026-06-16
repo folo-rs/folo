@@ -5,6 +5,7 @@
 
 use std::future::Future;
 use std::io;
+use std::path::{Path, PathBuf};
 
 use crate::git::{GitSnapshot, build_snapshot};
 use crate::host::{RustcInfo, parse_rustc_verbose};
@@ -35,17 +36,55 @@ pub(crate) trait EnvironmentProbe {
 }
 
 /// The real [`EnvironmentProbe`], backed by `git` and `rustc`.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct SystemProbe;
+///
+/// By default `git` is queried in the process working directory. `in_dir`
+/// targets a specific repository directory (via `git -C <dir>`) so a run can
+/// probe a checked-out worktree without mutating the process current directory.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SystemProbe {
+    /// Repository directory passed to `git -C`; the process CWD when absent.
+    repo: Option<PathBuf>,
+}
+
+impl SystemProbe {
+    /// Probes `git` in `repo` (via `git -C <repo>`) instead of the process CWD.
+    pub(crate) fn in_dir(repo: impl Into<PathBuf>) -> Self {
+        Self {
+            repo: Some(repo.into()),
+        }
+    }
+
+    /// Captures one git field, yielding the empty string on any failure.
+    #[cfg_attr(test, mutants::skip)] // Shells out to `git`; environment IO with no pure logic to assert.
+    async fn git_field(&self, args: &[&str]) -> String {
+        let repo = self
+            .repo
+            .as_deref()
+            .map(Path::to_string_lossy)
+            .map(std::borrow::Cow::into_owned);
+        let mut full: Vec<&str> = Vec::new();
+        if let Some(repo) = repo.as_deref() {
+            full.push("-C");
+            full.push(repo);
+        }
+        full.extend_from_slice(args);
+        match capture("git", &full).await {
+            Ok(output) if output.status.success() => output.stdout,
+            _ => String::new(),
+        }
+    }
+}
 
 impl EnvironmentProbe for SystemProbe {
     #[cfg_attr(test, mutants::skip)] // Shells out to `git`; the parsing it delegates to is tested.
     async fn git(&self) -> io::Result<GitSnapshot> {
-        let commit = git_field(&["rev-parse", "HEAD"]).await;
-        let short = git_field(&["rev-parse", "--short", "HEAD"]).await;
-        let branch = git_field(&["rev-parse", "--abbrev-ref", "HEAD"]).await;
-        let status = git_field(&["status", "--porcelain"]).await;
-        let committer = git_field(&["show", "-s", "--format=%cI", "HEAD"]).await;
+        let commit = self.git_field(&["rev-parse", "HEAD"]).await;
+        let short = self.git_field(&["rev-parse", "--short", "HEAD"]).await;
+        let branch = self.git_field(&["rev-parse", "--abbrev-ref", "HEAD"]).await;
+        let status = self.git_field(&["status", "--porcelain"]).await;
+        let committer = self
+            .git_field(&["show", "-s", "--format=%cI", "HEAD"])
+            .await;
 
         Ok(build_snapshot(
             &commit, &short, &branch, &status, &committer,
@@ -76,15 +115,6 @@ fn resolve_toolchain(rustc_output: Option<&str>) -> RustcInfo {
         info.host = Some(fallback_host_triple());
     }
     info
-}
-
-/// Captures one git field, yielding the empty string on any failure.
-#[cfg_attr(test, mutants::skip)] // Shells out to `git`; environment IO with no pure logic to assert.
-async fn git_field(args: &[&str]) -> String {
-    match capture("git", args).await {
-        Ok(output) if output.status.success() => output.stdout,
-        _ => String::new(),
-    }
 }
 
 /// Best-effort host triple derived from the running platform, used when `rustc`

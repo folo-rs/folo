@@ -6,6 +6,7 @@
 
 use std::future::Future;
 use std::io;
+use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
 
 use crate::bench::merge_wslenv;
@@ -55,8 +56,24 @@ pub(crate) struct CommandOutput {
 }
 
 /// The real [`BenchRunner`], backed by `tokio::process`.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct TokioBenchRunner;
+///
+/// By default the engine command runs in the process working directory.
+/// `in_dir` runs it in a specific directory (a checked-out worktree) without
+/// mutating the process current directory.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TokioBenchRunner {
+    /// Working directory for the engine command; the process CWD when absent.
+    dir: Option<PathBuf>,
+}
+
+impl TokioBenchRunner {
+    /// Runs the engine command in `dir` instead of the process CWD.
+    pub(crate) fn in_dir(dir: impl Into<PathBuf>) -> Self {
+        Self {
+            dir: Some(dir.into()),
+        }
+    }
+}
 
 impl BenchRunner for TokioBenchRunner {
     async fn run_engine(
@@ -65,6 +82,10 @@ impl BenchRunner for TokioBenchRunner {
         env: &[(String, String)],
     ) -> io::Result<EngineStatus> {
         let mut command = engine_command(argv);
+
+        if let Some(dir) = self.dir.as_deref() {
+            command.current_dir(dir);
+        }
 
         for (name, value) in env {
             command.env(name, value);

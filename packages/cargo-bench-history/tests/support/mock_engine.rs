@@ -10,6 +10,7 @@
 //! ```text
 //! cargo-bench-history-mock-engine [--exit-code N] [--summary GROUP=KIND]...
 //!                                 [--criterion GROUP|FUNCTION|VALUE=NANOS]...
+//!                                 [--fail-if-exists PATH]
 //! ```
 //!
 //! `--summary GROUP=KIND` writes a Gungraun (Callgrind) `summary.json`, where
@@ -26,6 +27,11 @@
 //! `GROUP`/`FUNCTION`/`VALUE` (an empty `VALUE` omits the parameter component) and
 //! whose wall-clock slope estimate is `NANOS` nanoseconds. The on-disk directory is
 //! derived from the identity, so distinct identities never share a directory.
+//!
+//! `--fail-if-exists PATH` exits with code 1 and writes no output when `PATH`
+//! (relative to the working directory) exists. Backfill runs each engine in a
+//! checked-out worktree, so a commit that tracks the named marker file stands in
+//! for a commit that fails to build or benchmark.
 //!
 //! Summaries are written under `<target-root>`, which honors `CARGO_TARGET_DIR`
 //! exactly as the harvester does.
@@ -59,6 +65,7 @@ fn main() -> ExitCode {
     let mut exit_code: u8 = 0;
     let mut summaries: Vec<(String, String)> = Vec::new();
     let mut criterion_cases: Vec<CriterionCase> = Vec::new();
+    let mut fail_if_exists: Option<PathBuf> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -86,8 +93,20 @@ fn main() -> ExitCode {
                     .expect("--criterion requires GROUP|FUNCTION|VALUE=NANOS");
                 criterion_cases.push(parse_criterion_arg(&value));
             }
+            "--fail-if-exists" => {
+                let value = args.next().expect("--fail-if-exists requires a PATH");
+                fail_if_exists = Some(PathBuf::from(value));
+            }
             other => panic!("unknown argument {other:?}"),
         }
+    }
+
+    // Stand in for a commit that fails to build: when the marker is present in the
+    // checked-out worktree, exit non-zero before writing any output.
+    if let Some(marker) = &fail_if_exists
+        && marker.exists()
+    {
+        return ExitCode::from(1);
     }
 
     let target_root =

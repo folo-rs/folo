@@ -1529,6 +1529,246 @@ async fn overwrite_replaces_the_stored_result() {
 }
 
 // ===========================================================================
+// Real-adapter `backfill` scenarios.
+//
+// These drive `backfill` against a real git repository (a temporary checkout
+// with empty commits) and the real worktree, process, harvest, and storage
+// adapters: each commit of the range is checked out in a dedicated worktree and
+// the mock engine writes one summary there. They are `#[serial]` (current
+// directory) and `#[cfg_attr(miri, ignore)]` (real git, processes, filesystem).
+// ===========================================================================
+
+/// A backfill stores one clean result per commit in the range, leaves the primary
+/// checkout and branch untouched, and the backfilled points then surface through
+/// `analyze` in git-topology order.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn backfill_stores_one_clean_object_per_commit_and_restores_checkout() {
+    let workspace = Workspace::clean_repo(&callgrind_config(&mock_command("--summary grp=single")));
+    let c1 = workspace.commit("c1");
+    let c2 = workspace.commit("c2");
+    let c3 = workspace.commit("c3");
+    let branch_before = workspace.current_branch();
+    let head_before = workspace.head();
+
+    let RunOutcome::Completed { message } = workspace
+        .drive(&[
+            "backfill",
+            "--from",
+            &c1,
+            "--to",
+            &c3,
+            "--target-triple",
+            "x86_64-unknown-linux-gnu",
+        ])
+        .await
+        .expect("backfill should succeed")
+    else {
+        panic!("expected a completed outcome");
+    };
+    assert!(message.contains("3 stored"), "{message}");
+
+    // One clean object per commit, keyed by that commit's full SHA.
+    let objects = workspace.stored_objects();
+    assert_eq!(objects.len(), 3, "{objects:?}");
+    for sha in [&c1, &c2, &c3] {
+        let expected =
+            format!("v2/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{sha}/clean.json");
+        assert!(
+            objects.iter().any(|(key, _)| key == &expected),
+            "missing {expected} in {objects:?}"
+        );
+    }
+
+    // The backfill never touches the primary checkout: HEAD and the branch are
+    // exactly as they were before it ran.
+    assert_eq!(workspace.current_branch(), branch_before);
+    assert_eq!(workspace.head(), head_before);
+
+    // The backfilled points are now visible to `analyze` along the master line.
+    let RunOutcome::Analyzed { report, .. } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(
+        parsed["runs"], 3,
+        "analyze should see every backfilled commit: {report}"
+    );
+}
+
+/// Re-running an identical backfill skips every commit whose result already
+/// exists (write-once collision), making backfill resumable without duplicating.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn backfill_skips_already_stored_commits_on_rerun() {
+    let workspace = Workspace::clean_repo(&callgrind_config(&mock_command("--summary grp=single")));
+    let c1 = workspace.commit("c1");
+    let c2 = workspace.commit("c2");
+
+    workspace
+        .drive(&["backfill", "--from", &c1, "--to", &c2])
+        .await
+        .expect("the first backfill should store both commits");
+    assert_eq!(workspace.stored_objects().len(), 2);
+
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["backfill", "--from", &c1, "--to", &c2])
+        .await
+        .expect("a re-run should succeed by skipping")
+    else {
+        panic!("expected a completed outcome");
+    };
+    assert!(
+        message.contains("0 stored, 2 skipped (existing)"),
+        "{message}"
+    );
+    // No new objects were written.
+    assert_eq!(workspace.stored_objects().len(), 2);
+}
+
+/// `--overwrite` replaces every already-stored commit in the range rather than
+/// skipping it, leaving exactly one clean object per commit.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn backfill_overwrite_replaces_already_stored_commits() {
+    let workspace = Workspace::clean_repo(&callgrind_config(&mock_command("--summary grp=single")));
+    let c1 = workspace.commit("c1");
+    let c2 = workspace.commit("c2");
+
+    workspace
+        .drive(&["backfill", "--from", &c1, "--to", &c2])
+        .await
+        .expect("the first backfill should store both commits");
+
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["backfill", "--from", &c1, "--to", &c2, "--overwrite"])
+        .await
+        .expect("an overwrite backfill should replace in place")
+    else {
+        panic!("expected a completed outcome");
+    };
+    assert!(message.contains("2 stored"), "{message}");
+    // Each commit still has exactly one object; nothing was duplicated.
+    assert_eq!(workspace.stored_objects().len(), 2);
+}
+
+/// A commit that fails to benchmark stops the backfill by default: earlier commits
+/// are stored, but the loop halts at the failure and reports a non-zero exit.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn backfill_stops_on_a_failing_commit_by_default() {
+    let workspace = Workspace::clean_repo(&callgrind_config(&mock_command(
+        "--summary grp=single --fail-if-exists BROKEN",
+    )));
+    let c1 = workspace.commit("c1");
+    workspace.commit_with_file("c2 introduces a broken build", "BROKEN", "boom\n");
+    let c3 = workspace.commit_removing_file("c3 fixes the build", "BROKEN");
+
+    let error = workspace
+        .drive(&["backfill", "--from", &c1, "--to", &c3])
+        .await
+        .expect_err("a failing commit must stop the backfill");
+    let RunError::Backfill { message } = error else {
+        panic!("expected a backfill error, got {error:?}");
+    };
+    assert!(message.contains("stopped at"), "{message}");
+
+    // Only the first (healthy) commit was stored before the stop; c3 never ran.
+    let objects = workspace.stored_objects();
+    assert_eq!(objects.len(), 1, "{objects:?}");
+    assert!(objects[0].0.contains(&c1), "{:?}", objects[0].0);
+}
+
+/// `--ignore-errors` continues past a failing commit, storing the healthy commits
+/// on either side and reporting the failure in the summary.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn backfill_ignore_errors_continues_past_a_failing_commit() {
+    let workspace = Workspace::clean_repo(&callgrind_config(&mock_command(
+        "--summary grp=single --fail-if-exists BROKEN",
+    )));
+    let c1 = workspace.commit("c1");
+    workspace.commit_with_file("c2 introduces a broken build", "BROKEN", "boom\n");
+    let c3 = workspace.commit_removing_file("c3 fixes the build", "BROKEN");
+
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["backfill", "--from", &c1, "--to", &c3, "--ignore-errors"])
+        .await
+        .expect("--ignore-errors should complete past the failure")
+    else {
+        panic!("expected a completed outcome");
+    };
+    assert!(message.contains("2 stored"), "{message}");
+    assert!(message.contains("1 failed"), "{message}");
+    // The two healthy commits are stored; the broken one contributed nothing.
+    assert_eq!(workspace.stored_objects().len(), 2);
+}
+
+/// A dirty working tree is refused before any worktree work, so nothing is stored.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn backfill_refuses_a_dirty_working_tree() {
+    let workspace = Workspace::clean_repo(&callgrind_config(&mock_command("--summary grp=single")));
+    let c1 = workspace.commit("c1");
+    workspace.make_dirty("uncommitted.txt");
+
+    let error = workspace
+        .drive(&["backfill", "--from", &c1, "--to", &c1])
+        .await
+        .expect_err("a dirty tree must be refused");
+    let RunError::Backfill { message } = error else {
+        panic!("expected a backfill error, got {error:?}");
+    };
+    assert!(message.contains("uncommitted changes"), "{message}");
+    assert!(workspace.stored_objects().is_empty());
+}
+
+/// A range whose `--from` is not a first-parent ancestor of `--to` (here, a
+/// reversed range) is rejected before any worktree work, storing nothing.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn backfill_rejects_a_range_outside_the_first_parent_history() {
+    let workspace = Workspace::clean_repo(&callgrind_config(&mock_command("--summary grp=single")));
+    let c1 = workspace.commit("c1");
+    let c2 = workspace.commit("c2");
+
+    let error = workspace
+        .drive(&["backfill", "--from", &c2, "--to", &c1])
+        .await
+        .expect_err("a reversed range must be rejected");
+    let RunError::Backfill { message } = error else {
+        panic!("expected a backfill error, got {error:?}");
+    };
+    assert!(message.contains("not a first-parent ancestor"), "{message}");
+    assert!(workspace.stored_objects().is_empty());
+}
+
+/// `backfill --help` is an early exit whose usage text documents the range flags.
+#[test]
+#[serial]
+fn backfill_help_documents_range_flags() {
+    let early_exit = Cli::from_args(&["cargo-bench-history"], &["backfill", "--help"])
+        .expect_err("help is reported as an early exit");
+    assert!(
+        early_exit.output.contains("--from"),
+        "{}",
+        early_exit.output
+    );
+    assert!(early_exit.output.contains("--to"), "{}", early_exit.output);
+}
+
+// ===========================================================================
 // Test harness and helpers.
 // ===========================================================================
 
@@ -1669,6 +1909,49 @@ impl Workspace {
     /// Creates and checks out a new branch off the current `HEAD`.
     fn checkout_new_branch(&self, name: &str) {
         self.git(&["checkout", "-b", name]);
+    }
+
+    /// Commits a tracked file with `contents` at `relative` on the current branch
+    /// and returns the new commit's full SHA. Unlike [`commit`](Self::commit), the
+    /// commit changes the tree, so the file appears in any worktree checked out to
+    /// it — used to stand in for a "broken" commit the mock engine reacts to.
+    fn commit_with_file(&self, message: &str, relative: &str, contents: &str) -> String {
+        std::fs::write(self.root().join(relative), contents).unwrap();
+        self.git(&["add", relative]);
+        self.git(&["commit", "-m", message]);
+        self.head()
+    }
+
+    /// Removes a previously tracked file at `relative`, commits the removal on the
+    /// current branch, and returns the new commit's full SHA.
+    fn commit_removing_file(&self, message: &str, relative: &str) -> String {
+        self.git(&["rm", relative]);
+        self.git(&["commit", "-m", message]);
+        self.head()
+    }
+
+    /// The full SHA of the current `HEAD`.
+    fn head(&self) -> String {
+        let output = self.git(&["rev-parse", "HEAD"]);
+        String::from_utf8(output.stdout)
+            .expect("a commit SHA is ASCII")
+            .trim()
+            .to_owned()
+    }
+
+    /// The name of the currently checked-out branch.
+    fn current_branch(&self) -> String {
+        let output = self.git(&["rev-parse", "--abbrev-ref", "HEAD"]);
+        String::from_utf8(output.stdout)
+            .expect("a branch name is ASCII")
+            .trim()
+            .to_owned()
+    }
+
+    /// Writes an untracked file at `relative`, leaving the working tree dirty (it
+    /// is neither committed nor git-ignored).
+    fn make_dirty(&self, relative: &str) {
+        std::fs::write(self.root().join(relative), "uncommitted\n").unwrap();
     }
 
     /// Reads a file relative to the workspace root, if it exists.

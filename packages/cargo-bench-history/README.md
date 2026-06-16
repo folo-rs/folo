@@ -31,6 +31,10 @@ cargo bench-history run [--engine NAME] [--timestamp RFC3339]
                         [--no-store] [--overwrite] [--config PATH]
                         -- <args forwarded to each engine>
 cargo bench-history install [--config PATH]
+cargo bench-history backfill --from REF --to REF [--engine NAME]
+                             [--target-triple TRIPLE] [--machine-key KEY]
+                             [--overwrite] [--ignore-errors] [--config PATH]
+                             -- <args forwarded to each engine>
 cargo bench-history analyze [--repo PATH] [--branch REF] [--base REF]
                             [--engine NAME] [--os OS] [--architecture ARCH]
                             [--machine-key KEY] [--no-dirty]
@@ -49,6 +53,16 @@ cargo bench-history analyze [--repo PATH] [--branch REF] [--base REF]
   command (use `--engine` to target a single engine).
 * `install` generates a starter `.cargo/bench_history.toml` if absent, printing
   its path and next steps; an existing file is never overwritten.
+* `backfill` replays `run` across the inclusive commit range `--from..--to`,
+  bootstrapping history for a repository that adopted the tool late. Each commit
+  is checked out in a dedicated git **worktree** (the primary checkout is never
+  touched) and its configured engines run there, recording the commit's committer
+  date as the effective time. The range must lie on the current branch's
+  first-parent history and the working tree must be clean. Already-stored commits
+  are skipped (so backfill is resumable) unless `--overwrite` replaces them; a
+  commit that fails to build or benchmark stops the run unless `--ignore-errors`
+  continues past it. `--engine`/`--target-triple`/`--machine-key` and a `--`
+  passthrough behave as for `run`.
 * `analyze` reconstructs a timeline from git history and reports notable patterns.
   It requires a repository (`--repo` selects one other than the current directory).
   `--branch` chooses the line to analyze (default `HEAD`) and `--base` the line to
@@ -73,6 +87,9 @@ Implemented:
   rolling-baseline regressions/improvements in `text`, `json`, or `markdown`,
   grouped by discriminant set, with optional `--fail-on-regression` CI gating.
 * `install` writes a starter `.cargo/bench_history.toml` when one is absent.
+* `backfill` replays `run` across a commit range in isolated git worktrees,
+  bootstrapping history for old commits; it is resumable (skips already-stored
+  commits) and supports `--overwrite` and `--ignore-errors`.
 * Storage backends: the local filesystem, or Azure Blob storage behind the
   `azure` feature.
 

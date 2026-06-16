@@ -53,4 +53,6 @@ pub use context::{
 pub use dispatch::{run, run_with_target_root};
 pub use model::{BenchmarkId, Metric, MetricKind, ResultRecord, ResultSet, SCHEMA_VERSION};
 pub use storage::{LocalStorage, Storage, StorageError};
-pub use types::{AnalyzeOptions, Command, InstallOptions, RunError, RunOptions, RunOutcome};
+pub use types::{
+    AnalyzeOptions, BackfillOptions, Command, InstallOptions, RunError, RunOptions, RunOutcome,
+};

@@ -74,8 +74,8 @@ pub(crate) async fn execute(
     let project_id = resolve_project_id(&config, &workspace_dir);
     let storage = build_storage(&config)?;
 
-    let runner = TokioBenchRunner;
-    let probe = SystemProbe;
+    let runner = TokioBenchRunner::default();
+    let probe = SystemProbe::default();
     let target_root = target_root.unwrap_or_else(resolve_target_root);
     let output = FsBenchOutputSource::new(target_root.clone());
     let clock = Clock::new_tokio();
@@ -121,11 +121,46 @@ struct EngineSummary {
     label: String,
 }
 
+/// Aggregate outcome of running every selected engine in one run.
+pub(crate) struct RunSummary {
+    /// Number of result sets stored.
+    pub(crate) stored: usize,
+    /// Number of benchmark cases harvested across all engines.
+    pub(crate) harvested: usize,
+    /// Per-engine human-readable labels.
+    pub(crate) labels: Vec<String>,
+}
+
 /// Orchestrates a run against injected collaborators.
 pub(crate) async fn execute_run<R, P, O, S>(
     options: &RunOptions,
     deps: &RunDeps<'_, R, P, O, S>,
 ) -> Result<RunOutcome, RunError>
+where
+    R: BenchRunner,
+    P: EnvironmentProbe,
+    O: BenchOutputSource,
+    S: Storage,
+{
+    let summary = run_engines(options, deps).await?;
+    let message = build_message(
+        options.no_store,
+        summary.stored,
+        summary.harvested,
+        &summary.labels,
+    );
+    Ok(RunOutcome::Completed { message })
+}
+
+/// Runs every selected engine and returns the aggregate [`RunSummary`].
+///
+/// This is the storage-aware core shared by the `run` command and `backfill`:
+/// the former wraps the summary in a human-readable message, the latter maps it
+/// to a per-commit outcome.
+pub(crate) async fn run_engines<R, P, O, S>(
+    options: &RunOptions,
+    deps: &RunDeps<'_, R, P, O, S>,
+) -> Result<RunSummary, RunError>
 where
     R: BenchRunner,
     P: EnvironmentProbe,
@@ -156,8 +191,11 @@ where
         labels.push(summary.label);
     }
 
-    let message = build_message(options.no_store, stored, harvested, &labels);
-    Ok(RunOutcome::Completed { message })
+    Ok(RunSummary {
+        stored,
+        harvested,
+        labels,
+    })
 }
 
 /// Runs one engine, harvests its output, and (unless suppressed) stores the set.

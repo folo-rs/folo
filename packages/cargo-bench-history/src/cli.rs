@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use argh::FromArgs;
 use jiff::Timestamp;
 
-use crate::{AnalyzeOptions, Command, InstallOptions, RunOptions};
+use crate::{AnalyzeOptions, BackfillOptions, Command, InstallOptions, RunOptions};
 
 /// Maintain a history of benchmark results over time and analyze it for trends.
 #[derive(Debug, FromArgs)]
@@ -24,6 +24,7 @@ impl Cli {
             Subcommand::Run(command) => Command::Run(command.into_options()),
             Subcommand::Install(command) => Command::Install(command.into_options()),
             Subcommand::Analyze(command) => Command::Analyze(command.into_options()),
+            Subcommand::Backfill(command) => Command::Backfill(command.into_options()),
         }
     }
 }
@@ -34,6 +35,7 @@ enum Subcommand {
     Run(RunCommand),
     Install(InstallCommand),
     Analyze(AnalyzeCommand),
+    Backfill(BackfillCommand),
 }
 
 /// Run the configured benchmark engines and store the results.
@@ -189,6 +191,65 @@ impl AnalyzeCommand {
     }
 }
 
+/// Replay `run` across a range of historical commits.
+#[derive(Debug, FromArgs)]
+#[argh(subcommand, name = "backfill")]
+struct BackfillCommand {
+    /// path to the configuration file (defaults to `.cargo/bench_history.toml`).
+    #[argh(option)]
+    config: Option<PathBuf>,
+
+    /// oldest commit of the range to backfill (inclusive).
+    #[argh(option)]
+    from: String,
+
+    /// newest commit of the range to backfill (inclusive).
+    #[argh(option)]
+    to: String,
+
+    /// run only the named engine (for example, callgrind).
+    #[argh(option)]
+    engine: Option<String>,
+
+    /// override the recorded target triple used for partitioning.
+    #[argh(option)]
+    target_triple: Option<String>,
+
+    /// override the machine fingerprint used to partition hardware-dependent
+    /// results (for example, a CI machine-pool name).
+    #[argh(option)]
+    machine_key: Option<String>,
+
+    /// replace already-stored results for the backfilled commits instead of
+    /// skipping them as duplicates.
+    #[argh(switch)]
+    overwrite: bool,
+
+    /// continue past commits whose build or benchmark fails instead of stopping.
+    #[argh(switch)]
+    ignore_errors: bool,
+
+    /// arguments after `--` forwarded verbatim to each engine command.
+    #[argh(positional, greedy)]
+    passthrough: Vec<String>,
+}
+
+impl BackfillCommand {
+    fn into_options(self) -> BackfillOptions {
+        BackfillOptions {
+            config_path: self.config,
+            from: self.from,
+            to: self.to,
+            engine: self.engine,
+            target_triple: self.target_triple,
+            machine_key: self.machine_key,
+            overwrite: self.overwrite,
+            ignore_errors: self.ignore_errors,
+            passthrough: strip_separator(self.passthrough),
+        }
+    }
+}
+
 /// Removes a single leading `--` separator from forwarded arguments, if present.
 ///
 /// `argh` strips the separator that ends its own option parsing, but this guards
@@ -317,6 +378,48 @@ mod tests {
         assert_eq!(options.architecture.as_deref(), Some("x86_64"));
         assert_eq!(options.machine_key.as_deref(), Some("ci-pool"));
         assert!(options.list_discriminants);
+    }
+
+    #[test]
+    fn backfill_collects_range_options_and_passthrough() {
+        let command = parse(&[
+            "backfill",
+            "--from",
+            "abc123",
+            "--to",
+            "def456",
+            "--engine",
+            "callgrind",
+            "--target-triple",
+            "x86_64-unknown-linux-gnu",
+            "--machine-key",
+            "ci-pool",
+            "--overwrite",
+            "--ignore-errors",
+            "--",
+            "-p",
+            "nm",
+        ]);
+        let Command::Backfill(options) = command else {
+            panic!("expected backfill command");
+        };
+        assert_eq!(options.from, "abc123");
+        assert_eq!(options.to, "def456");
+        assert_eq!(options.engine.as_deref(), Some("callgrind"));
+        assert_eq!(
+            options.target_triple.as_deref(),
+            Some("x86_64-unknown-linux-gnu")
+        );
+        assert_eq!(options.machine_key.as_deref(), Some("ci-pool"));
+        assert!(options.overwrite);
+        assert!(options.ignore_errors);
+        assert_eq!(options.passthrough, vec!["-p".to_owned(), "nm".to_owned()]);
+    }
+
+    #[test]
+    fn backfill_requires_from_and_to() {
+        let parsed = Cli::from_args(&["cargo-bench-history"], &["backfill", "--from", "abc123"]);
+        assert!(parsed.is_err(), "missing --to must be rejected");
     }
 
     #[test]
