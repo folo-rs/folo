@@ -107,9 +107,10 @@ fn case_to_record(benchmark: &Benchmark, estimates: &Estimates) -> ResultRecord 
     ResultRecord::new(id, vec![metric])
 }
 
-/// Returns the trimmed string as `Some` unless it is empty.
+/// Returns the trimmed value as `Some` unless it is empty after trimming.
 fn non_empty(value: Option<&str>) -> Option<String> {
     value
+        .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
 }
@@ -256,6 +257,23 @@ mod tests {
         assert_eq!(record.id.value, None);
         // With no slope and no std_dev, only the mean drives the metric.
         assert_eq!(record.metrics[0].std_dev, None);
+    }
+
+    #[test]
+    fn whitespace_value_str_is_trimmed_to_no_component() {
+        let estimates = format!(
+            "{{\"mean\":{},\"median\":{},\"median_abs_dev\":{}}}",
+            estimate_json(10.0, 9.0, 11.0),
+            estimate_json(10.0, 9.0, 11.0),
+            estimate_json(1.0, 0.5, 1.5),
+        );
+        // A whitespace-only value carries no identity and must not become a series
+        // component; a padded value is trimmed to its meaningful content.
+        let blank = parse_criterion_case(&benchmark_json("grp", "fun", "  "), &estimates).unwrap();
+        assert_eq!(blank.id.value, None);
+        let padded =
+            parse_criterion_case(&benchmark_json("grp", "fun", "  4096  "), &estimates).unwrap();
+        assert_eq!(padded.id.value.as_deref(), Some("4096"));
     }
 
     #[test]
