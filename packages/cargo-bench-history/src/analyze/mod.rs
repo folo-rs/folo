@@ -14,7 +14,7 @@ use jiff::Timestamp;
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
 
-use crate::comparability::EngineSystem;
+use crate::comparability::{EngineSystem, sanitize_segment};
 use crate::config::load_config;
 use crate::model::ResultSet;
 use crate::storage::{Storage, build_storage};
@@ -51,9 +51,14 @@ pub(crate) async fn analyze_with<S: Storage>(
     let since = parse_since(options.since.as_deref())?;
     let system = parse_system(options.system.as_deref())?;
 
+    // The listing prefix must use the same sanitized project segment that
+    // `ComparabilityKey` writes its storage keys under. A project id containing a
+    // character that sanitizes (a space, `/`, a non-ASCII letter, ...) is stored
+    // mangled, so listing under the raw id would silently find an empty history.
+    let project = sanitize_segment(project_id);
     let prefix = match system {
-        Some(engine) => format!("v1/{project_id}/{}/", engine.as_str()),
-        None => format!("v1/{project_id}/"),
+        Some(engine) => format!("v1/{project}/{}/", engine.as_str()),
+        None => format!("v1/{project}/"),
     };
 
     let keys = storage.list(&prefix).await.map_err(RunError::Storage)?;
@@ -255,6 +260,39 @@ mod tests {
         };
         assert_eq!(regressions, 1);
         assert!(report.contains("regression"), "{report}");
+        assert!(report.contains("nm::observe/pull/Ir"), "{report}");
+    }
+
+    #[test]
+    fn history_is_found_for_a_project_id_that_requires_sanitizing() {
+        // `run` stores under the sanitized project segment, so `analyze` must list
+        // under that same segment; listing under the raw id would miss the history.
+        let storage = MemoryStorage::new();
+        let raw_project = "my project/v2";
+        let sanitized = sanitize_segment(raw_project);
+        for (index, value) in [100.0, 100.0, 100.0, 130.0].into_iter().enumerate() {
+            let second = i64::try_from(index).unwrap();
+            let key = format!(
+                "v1/{sanitized}/callgrind/x86_64-unknown-linux-gnu/synthetic/\
+                 {second}-c{index}-r{index}.json"
+            );
+            store(&storage, &key, &ir_set(second, &format!("c{index}"), value));
+        }
+
+        let outcome =
+            block_on(analyze_with(&storage, raw_project, &options())).expect("analysis runs");
+        let RunOutcome::Analyzed {
+            report,
+            regressions,
+            ..
+        } = outcome
+        else {
+            panic!("expected an analyzed outcome");
+        };
+        assert_eq!(
+            regressions, 1,
+            "history stored under the sanitized key must be found"
+        );
         assert!(report.contains("nm::observe/pull/Ir"), "{report}");
     }
 
