@@ -957,6 +957,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "worktree_path reads the wall clock via SystemTime::now"
+    )]
     fn worktree_path_is_a_named_scratch_dir_under_temp() {
         // A lib-level assertion on the worktree path (the real `execute_backfill`
         // catches a broken path only by shelling out to `git worktree add`, which
