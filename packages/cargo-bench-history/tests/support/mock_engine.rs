@@ -22,6 +22,13 @@
 //!   but reporting a different `package_dir`, so its `BenchmarkId` differs only in
 //!   package. Used to exercise cross-package bench-name collisions.
 //!
+//! `GROUP` may contain `/`, which is split into nested directory segments under
+//! `gungraun/`. Real Gungraun output nests by bench binary (`gungraun/<binary>/
+//! <group>/...`), so two same-named bench harnesses in different packages
+//! (`foo/benches/a.rs` and `bar/benches/a.rs`) land under the same top-level
+//! directory but in distinct nested ones — the on-disk collision shape the
+//! recursive harvester must keep distinct.
+//!
 //! `--criterion GROUP|FUNCTION|VALUE=NANOS` writes a Criterion case as a
 //! `new/benchmark.json` and `new/estimates.json` pair whose identity is
 //! `GROUP`/`FUNCTION`/`VALUE` (an empty `VALUE` omits the parameter component) and
@@ -113,7 +120,12 @@ fn main() -> ExitCode {
         std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| PathBuf::from("target"), PathBuf::from);
 
     for (group, content) in &summaries {
-        let dir = target_root.join("gungraun").join(safe_segment(group));
+        // A group may name nested directories (a real engine nests by bench binary
+        // then group), so split on `/` and validate each component separately.
+        let mut dir = target_root.join("gungraun");
+        for part in group.split('/') {
+            dir.push(safe_segment(part));
+        }
         std::fs::create_dir_all(&dir).expect("summary directory should be creatable");
         std::fs::write(dir.join("summary.json"), content).expect("summary should be writable");
     }

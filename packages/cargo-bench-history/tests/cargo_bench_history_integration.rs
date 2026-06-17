@@ -974,6 +974,283 @@ async fn analyze_branch_selects_official_line_from_a_feature_checkout() {
     let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
     assert_eq!(parsed["findings"][0]["latest"], 130.0, "{report}");
 }
+
+/// The official line of a branch that contains merge commits follows first-parent
+/// topology: a run stored on a merge commit is on the line, but runs on the
+/// merged-in side branch's own commits are not. This is the common real-world
+/// shape (a pull request merged into `master`), which the flat-prefix model never
+/// exercised.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_official_line_follows_first_parent_across_a_merge() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // master:  root - c1 - M - c3   (M merges the side branch into master)
+    //                  \   /
+    //  side:            sf1 - sf2
+    workspace.commit("c1");
+    workspace.checkout_new_branch("side");
+    workspace.commit("sf1");
+    workspace.commit("sf2");
+    workspace.checkout("master");
+    workspace.merge("side", "M");
+    workspace.commit("c3");
+
+    // The first-parent line carries a clean regression on its tip.
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.seed_callgrind("2024-01-02", "M", 100.0);
+    workspace.seed_callgrind("2024-01-03", "c3", 130.0);
+    // Side-branch points sit on the second-parent side and must never leak into the
+    // official line; they carry wild values that would distort the series if read.
+    workspace.seed_callgrind("2024-01-02", "sf1", 999.0);
+    workspace.seed_callgrind("2024-01-02", "sf2", 999.0);
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(
+        parsed["runs"], 3,
+        "only the first-parent line c1 -> M -> c3 is analyzed, not the side branch: {report}"
+    );
+    assert_eq!(
+        regressions, 1,
+        "the regression on the tip commit flags once the merge commit is on the line: {report}"
+    );
+    assert_eq!(parsed["findings"][0]["latest"], 130.0, "{report}");
+}
+
+/// When a feature branch merges the default branch *in* (so the merge-base sits
+/// off the feature's first-parent chain), the selection treats the whole feature
+/// line as target-side and admits dirty snapshots on every selected commit —
+/// including ones that a plain branch-point split would have left base-side and
+/// clean-only. The merged-in default-branch commits stay off the line.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_feature_that_merged_master_admits_dirty_off_chain_merge_base() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // master:  root - c1 - c2 - c3
+    //                  \
+    // feature:          f1 - M - f2   (M merges master's tip c3 into feature)
+    //                        /
+    // merge-base(feature, master) = c3, which is NOT on feature's first-parent
+    // chain [root, c1, f1, M, f2].
+    workspace.commit("c1");
+    workspace.checkout_new_branch("feature");
+    workspace.commit("f1");
+    workspace.checkout("master");
+    workspace.commit("c2");
+    workspace.commit("c3");
+    workspace.checkout("feature");
+    workspace.merge("master", "M");
+    workspace.commit("f2");
+
+    // Clean points along the feature's first-parent line.
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.seed_callgrind("2024-01-02", "f1", 100.0);
+    workspace.seed_callgrind("2024-01-05", "f2", 100.0);
+    // A dirty snapshot on c1. Without the merge, c1 would be base-side (clean
+    // only) and this would be excluded; the off-chain merge-base makes the whole
+    // line target-side, so it is admitted.
+    workspace.seed_dirty_callgrind("2024-01-03", "c1", 200.0);
+    // Merged-in master commits c2/c3 are off the first-parent line and excluded.
+    workspace.seed_callgrind("2024-01-03", "c2", 999.0);
+    workspace.seed_callgrind("2024-01-04", "c3", 999.0);
+
+    let RunOutcome::Analyzed { report, .. } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    // Loaded: c1 clean, c1 dirty, f1 clean, f2 clean = 4. The dirty c1 being
+    // counted proves the off-chain merge-base admitted it; c2/c3 being absent
+    // proves first-parent selection excluded the merged-in commits (otherwise the
+    // count would be 6).
+    assert_eq!(
+        parsed["runs"], 4,
+        "off-chain merge-base admits the dirty base-side snapshot and excludes the \
+         merged-in commits: {report}"
+    );
+}
+
+/// Two machine-key partitions on the same engine/triple stay isolated: a rising
+/// (regressing) series on one machine and a flat series on the other never merge
+/// into one series, so exactly one set regresses. This guards the series grouping
+/// key keeping `machine` — dropping it would cross-compare the two machines.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_criterion_machine_keys_stay_isolated() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // Same commits, same Windows/x86_64 triple, two distinct machine keys.
+    workspace.seed_rising_criterion_history("mk-rising");
+    workspace.seed_criterion("2024-02-01", "d1", "mk-flat", 20.0);
+    workspace.seed_criterion("2024-02-02", "d2", "mk-flat", 20.0);
+    workspace.seed_criterion("2024-02-03", "d3", "mk-flat", 20.0);
+    workspace.seed_criterion("2024-02-04", "d4", "mk-flat", 20.0);
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    let sets = parsed["sets"].as_array().expect("a per-set breakdown");
+    assert_eq!(
+        sets.len(),
+        2,
+        "the two machine keys form two comparable sets: {report}"
+    );
+    assert_eq!(
+        regressions, 1,
+        "only the rising machine regresses; the machines do not cross-compare: {report}"
+    );
+}
+
+/// `--architecture` selects a single comparable set: the same commits host a
+/// regressing `x86_64` series and a flat `aarch64` series, and each `--architecture`
+/// selection sees only its own.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_architecture_facet_selects_one_set() {
+    let workspace = Workspace::repo(&storage_only_config());
+    for (date, label, x64, arm) in [
+        ("2024-01-01", "c1", 100.0, 50.0),
+        ("2024-01-02", "c2", 100.0, 50.0),
+        ("2024-01-03", "c3", 100.0, 50.0),
+        ("2024-01-04", "c4", 130.0, 50.0),
+    ] {
+        workspace.seed_callgrind_in("x86_64-unknown-linux-gnu", "synthetic", date, label, x64);
+        workspace.seed_callgrind_in("aarch64-unknown-linux-gnu", "synthetic", date, label, arm);
+    }
+
+    let RunOutcome::Analyzed { regressions, .. } = workspace
+        .drive(&["analyze", "--architecture", "x86_64"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(regressions, 1, "the x86_64 series regresses");
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--architecture", "aarch64"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(regressions, 0, "the aarch64 series is flat: {report}");
+}
+
+/// `--machine-key` selects a single comparable set: with a regressing machine and
+/// a flat machine on the same triple, each `--machine-key` selection sees only
+/// the named machine's series.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_machine_key_facet_selects_one_set() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_rising_criterion_history("mk-rising");
+    workspace.seed_criterion("2024-02-01", "d1", "mk-flat", 20.0);
+    workspace.seed_criterion("2024-02-02", "d2", "mk-flat", 20.0);
+    workspace.seed_criterion("2024-02-03", "d3", "mk-flat", 20.0);
+    workspace.seed_criterion("2024-02-04", "d4", "mk-flat", 20.0);
+
+    let RunOutcome::Analyzed { regressions, .. } = workspace
+        .drive(&["analyze", "--machine-key", "mk-rising"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(regressions, 1, "the rising machine regresses");
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--machine-key", "mk-flat"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(
+        regressions, 0,
+        "the flat machine does not regress: {report}"
+    );
+}
+
+/// The dirty/feature-branch admission path works for Criterion too (not only
+/// Callgrind): a dirty Criterion regression on a feature commit flags by default
+/// and is suppressed by `--no-dirty`.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_criterion_feature_branch_admits_dirty_snapshots() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // A flat clean Criterion baseline on master.
+    workspace.seed_criterion("2024-02-01", "c1", "mk", 20.0);
+    workspace.seed_criterion("2024-02-02", "c2", "mk", 20.0);
+    workspace.seed_criterion("2024-02-03", "c3", "mk", 20.0);
+    // Branch off master and add a clean point plus a dirty regression on it.
+    workspace.checkout_new_branch("feature");
+    workspace.seed_criterion("2024-02-04", "f1", "mk", 20.0);
+    workspace.seed_dirty_criterion("2024-02-05", "f1", "mk", 40.0);
+
+    let RunOutcome::Analyzed { regressions, .. } = workspace
+        .drive(&["analyze"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(
+        regressions, 1,
+        "the dirty Criterion feature snapshot should flag"
+    );
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--no-dirty"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(
+        regressions, 0,
+        "with --no-dirty only the flat clean Criterion series remains: {report}"
+    );
+}
 // within a temporary workspace. They are `#[serial]` because they mutate the
 // process-wide current directory and `CARGO_TARGET_DIR`, and miri-ignored because
 // they spawn processes and touch the filesystem. Every test in this file is
@@ -1104,6 +1381,44 @@ async fn run_distinguishes_same_module_path_across_packages() {
     assert_eq!(packages, vec![Some("fast_time"), Some("other_pkg")]);
 
     // The identities differ, so analyze would build two series rather than one.
+    assert_ne!(set.results[0].id, set.results[1].id);
+}
+
+/// Two bench harnesses that compile to the *same* binary name in different
+/// packages (`foo/benches/a.rs` and `bar/benches/a.rs`) write their summaries
+/// under the same top-level `gungraun/shared/` directory but in distinct nested
+/// ones. Both must be harvested — the recursive walk finds each — and kept
+/// distinct by package, so the on-disk name collision never collapses or drops a
+/// result.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn run_harvests_colliding_bench_binary_names_in_distinct_packages() {
+    let workspace = Workspace::new(&callgrind_config(&mock_command(
+        "--summary shared/foo=single --summary shared/bar=single-alt-pkg",
+    )));
+
+    let outcome = workspace.drive(&["run"]).await.expect("run should succeed");
+    let RunOutcome::Completed { message } = outcome else {
+        panic!("expected completion, got {outcome:?}");
+    };
+    assert!(message.contains("covering 2"), "{message}");
+
+    let (_, set) = workspace.single_object();
+    assert_eq!(
+        set.results.len(),
+        2,
+        "both colliding-name summaries are harvested from their nested directories"
+    );
+
+    // Same group/case, distinct package — exactly the cross-package collision shape.
+    let mut packages: Vec<Option<&str>> = set
+        .results
+        .iter()
+        .map(|r| r.id.package.as_deref())
+        .collect();
+    packages.sort_unstable();
+    assert_eq!(packages, vec![Some("fast_time"), Some("other_pkg")]);
     assert_ne!(set.results[0].id, set.results[1].id);
 }
 
@@ -1601,6 +1916,63 @@ async fn backfill_stores_one_clean_object_per_commit_and_restores_checkout() {
     );
 }
 
+/// Backfill walks the first-parent line across a merge commit: a range spanning a
+/// pull-request merge stores one clean object on each first-parent commit
+/// (including the merge commit itself) and never on the merged-in side branch's
+/// own commits.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn backfill_spans_a_merge_commit_along_first_parent() {
+    let workspace = Workspace::clean_repo(&callgrind_config(&mock_command("--summary grp=single")));
+    // master:  root - c1 - M - c3   (M merges the side branch into master)
+    //                  \   /
+    //  side:            sf1 - sf2
+    let c1 = workspace.commit("c1");
+    workspace.checkout_new_branch("side");
+    let sf1 = workspace.commit("sf1");
+    let sf2 = workspace.commit("sf2");
+    workspace.checkout("master");
+    let m = workspace.merge("side", "M");
+    let c3 = workspace.commit("c3");
+
+    let RunOutcome::Completed { message } = workspace
+        .drive(&[
+            "backfill",
+            "--from",
+            &c1,
+            "--to",
+            &c3,
+            "--target-triple",
+            "x86_64-unknown-linux-gnu",
+        ])
+        .await
+        .expect("backfill should succeed")
+    else {
+        panic!("expected a completed outcome");
+    };
+    assert!(message.contains("3 stored"), "{message}");
+
+    let objects = workspace.stored_objects();
+    assert_eq!(objects.len(), 3, "{objects:?}");
+    for sha in [&c1, &m, &c3] {
+        let expected =
+            format!("v2/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{sha}/clean.json");
+        assert!(
+            objects.iter().any(|(key, _)| key == &expected),
+            "missing {expected} in {objects:?}"
+        );
+    }
+    // The merged-in side-branch commits are off the first-parent line: nothing is
+    // stored for them.
+    for sha in [&sf1, &sf2] {
+        assert!(
+            !objects.iter().any(|(key, _)| key.contains(sha.as_str())),
+            "side-branch commit {sha} must not be backfilled: {objects:?}"
+        );
+    }
+}
+
 /// Re-running an identical backfill skips every commit whose result already
 /// exists (write-once collision), making backfill resumable without duplicating.
 #[tokio::test]
@@ -1700,11 +2072,17 @@ async fn backfill_ignore_errors_continues_past_a_failing_commit() {
     workspace.commit_with_file("c2 introduces a broken build", "BROKEN", "boom\n");
     let c3 = workspace.commit_removing_file("c3 fixes the build", "BROKEN");
 
-    let RunOutcome::Completed { message } = workspace
+    let outcome = workspace
         .drive(&["backfill", "--from", &c1, "--to", &c3, "--ignore-errors"])
         .await
-        .expect("--ignore-errors should complete past the failure")
-    else {
+        .expect("--ignore-errors should complete past the failure");
+    // Even though a commit failed to benchmark, `--ignore-errors` makes the
+    // overall command succeed (exit code zero); the failure is reported, not fatal.
+    assert!(
+        outcome.is_success(),
+        "--ignore-errors must yield a successful exit despite the failure: {outcome:?}"
+    );
+    let RunOutcome::Completed { message } = outcome else {
         panic!("expected a completed outcome");
     };
     assert!(message.contains("2 stored"), "{message}");
@@ -1911,6 +2289,26 @@ impl Workspace {
         self.git(&["checkout", "-b", name]);
     }
 
+    /// Checks out an existing branch.
+    fn checkout(&self, name: &str) {
+        self.git(&["checkout", name]);
+    }
+
+    /// Merges `branch` into the current branch with an always-materialized merge
+    /// commit (`--no-ff`), labels the resulting merge commit `label`, and returns
+    /// its full SHA. The merge commit has the current branch's tip as its first
+    /// parent and `branch`'s tip as its second, so it sits on the current branch's
+    /// first-parent line while the merged-in commits stay off it — the topology the
+    /// git-aware `analyze`/`backfill` selection must respect.
+    fn merge(&self, branch: &str, label: &str) -> String {
+        self.git(&["merge", "--no-ff", "--no-edit", "-m", label, branch]);
+        let sha = self.head();
+        self.commits
+            .borrow_mut()
+            .insert(label.to_owned(), sha.clone());
+        sha
+    }
+
     /// Commits a tracked file with `contents` at `relative` on the current branch
     /// and returns the new commit's full SHA. Unlike [`commit`](Self::commit), the
     /// commit changes the tree, so the file appears in any worktree checked out to
@@ -2078,6 +2476,22 @@ impl Workspace {
         let effective: Timestamp = format!("{date}T00:00:00Z").parse().unwrap();
         let key =
             format!("v2/testproj/criterion/x86_64-pc-windows-msvc/{machine}/{sha}/clean.json");
+        self.seed(
+            &key,
+            &criterion_result_set(effective.as_second(), &sha, value),
+        );
+    }
+
+    /// Seeds one *dirty* (uncommitted-tree) Criterion `wall_time` snapshot at the
+    /// given `date`, commit `label`, and machine-key partition `machine`, keyed by
+    /// the effective second like a real dirty run.
+    fn seed_dirty_criterion(&self, date: &str, label: &str, machine: &str, value: f64) {
+        let sha = self.commit(label);
+        let effective: Timestamp = format!("{date}T00:00:00Z").parse().unwrap();
+        let key = format!(
+            "v2/testproj/criterion/x86_64-pc-windows-msvc/{machine}/{sha}/dirty-{}.json",
+            effective.as_second()
+        );
         self.seed(
             &key,
             &criterion_result_set(effective.as_second(), &sha, value),

@@ -236,7 +236,11 @@ The mock engine accepts `--summary GROUP=KIND` (repeatable). `KIND` is `single`
 named bench targets in different packages: their `BenchmarkId`s differ only in
 `package`, so they must stay distinct series rather than silently merge. If the
 parser ever stops folding `package_dir` into the identity, the
-`run_distinguishes_same_module_path_across_packages` test fails.
+`run_distinguishes_same_module_path_across_packages` test fails. `GROUP` may
+contain `/`, which splits into nested directories under `gungraun/` so a test can
+reproduce a real engine's per-binary nesting (and the on-disk collision of two
+same-named bench binaries in different packages, exercised by
+`run_harvests_colliding_bench_binary_names_in_distinct_packages`).
 
 It also accepts `--criterion GROUP|FUNCTION|VALUE=NANOS` (repeatable), which
 writes a Criterion `new/benchmark.json` + `new/estimates.json` pair under

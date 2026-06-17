@@ -175,6 +175,17 @@ impl AzureWorkspace {
         self.git(&["commit", "--allow-empty", "-m", message]);
     }
 
+    /// Creates and checks out a new branch off the current `HEAD`.
+    fn checkout_new_branch(&self, name: &str) {
+        self.git(&["checkout", "-b", name]);
+    }
+
+    /// Writes an untracked (and not git-ignored) file, leaving the working tree
+    /// dirty so the next run records a dirty snapshot.
+    fn make_dirty(&self, relative: &str) {
+        std::fs::write(self.dir.path().join(relative), "uncommitted\n").unwrap();
+    }
+
     /// Drives a command with `args` from inside this workspace, pointing the
     /// harvest at the workspace's own `target/` so it is hermetic.
     async fn drive(&self, args: &[&str]) -> Result<RunOutcome, RunError> {
@@ -248,4 +259,77 @@ async fn run_then_analyze_round_trips_through_azurite() {
     // A flat two-point series is not a regression.
     assert_eq!(regressions, 0);
     assert_eq!(parsed["regressions"], 0);
+}
+
+/// A non-trivial round-trip through Azurite: a multi-commit master line plus a
+/// feature branch carrying a clean and a dirty snapshot. This proves the Azure
+/// `list(prefix)` enumerates objects across several commit partitions and that
+/// the git-aware feature/official dirty-admission split works end to end against
+/// the real backend (not just a flat two-object listing).
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_feature_and_dirty_round_trip_through_azurite() {
+    if !azurite_available() {
+        return;
+    }
+    let workspace = AzureWorkspace::new(&azure_config(&mock_command("--summary grp=single")));
+
+    // master: root - c2   (two clean points on the official line).
+    workspace
+        .drive(&["run", "--timestamp", "2024-01-01T00:00:00Z"])
+        .await
+        .expect("clean run on root should store");
+    workspace.commit("c2");
+    workspace
+        .drive(&["run", "--timestamp", "2024-01-02T00:00:00Z"])
+        .await
+        .expect("clean run on c2 should store");
+
+    // feature off c2: one clean point plus a dirty snapshot on the same commit.
+    workspace.checkout_new_branch("feature");
+    workspace.commit("f1");
+    workspace
+        .drive(&["run", "--timestamp", "2024-01-03T00:00:00Z"])
+        .await
+        .expect("clean run on f1 should store");
+    workspace.make_dirty("uncommitted.txt");
+    workspace
+        .drive(&["run", "--timestamp", "2024-01-04T00:00:00Z"])
+        .await
+        .expect("dirty run on f1 should store");
+
+    // The feature view admits the dirty snapshot on the target-side commit, so all
+    // four stored objects are loaded from Azurite.
+    let RunOutcome::Analyzed { report, .. } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("feature analyze should read the history back from Azurite")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    let parsed: serde_json::Value =
+        serde_json::from_str(&report).expect("the json report should parse");
+    assert_eq!(
+        parsed["runs"], 4,
+        "the feature view loads both master points plus the clean and dirty feature \
+         snapshots: {report}"
+    );
+
+    // The official view (master) admits only the two clean master points: the
+    // feature commit is off master's first-parent line and the dirty snapshot is
+    // excluded regardless.
+    let RunOutcome::Analyzed { report, .. } = workspace
+        .drive(&["analyze", "--branch", "master", "--format", "json"])
+        .await
+        .expect("official analyze should read the history back from Azurite")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    let parsed: serde_json::Value =
+        serde_json::from_str(&report).expect("the json report should parse");
+    assert_eq!(
+        parsed["runs"], 2,
+        "the official line excludes the feature commit and the dirty snapshot: {report}"
+    );
 }

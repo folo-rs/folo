@@ -168,6 +168,13 @@ mod fake {
     /// The graph is modeled by each commit's **first parent** (`None` for a root),
     /// which is exactly the topology `analyze` consults: first-parent ancestry and
     /// the merge-base along it. Named refs (including `HEAD`) point at commits.
+    ///
+    /// It deliberately cannot represent a merge commit (a commit has a single
+    /// parent), so its [`merge_base`](GitHistory::merge_base) walks first-parent
+    /// chains only and diverges from real `git merge-base` (full DAG) on
+    /// merge-laden histories — for example a feature branch that merged its base in,
+    /// whose real merge-base sits off the first-parent chain. Cover such merge
+    /// topologies with the real-git integration tests, not this fake.
     #[derive(Clone, Debug, Default)]
     pub(crate) struct FakeGitHistory {
         /// Ref name (branch/tag/`HEAD`) -> the commit SHA it points at.
