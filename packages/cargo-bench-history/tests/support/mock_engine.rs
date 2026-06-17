@@ -150,18 +150,21 @@ fn parse_criterion_arg(value: &str) -> CriterionCase {
         .split_once('=')
         .expect("--criterion value must be GROUP|FUNCTION|VALUE=NANOS");
     let parts: Vec<&str> = identity.split('|').collect();
+    let (group, function, value) = match parts.as_slice() {
+        [group, function] => (*group, *function, ""),
+        [group, function, value] => (*group, *function, *value),
+        _ => panic!(
+            "--criterion identity must be GROUP|FUNCTION or GROUP|FUNCTION|VALUE, got {identity:?}"
+        ),
+    };
     assert!(
-        matches!(parts.len(), 2 | 3),
-        "--criterion identity must be GROUP|FUNCTION or GROUP|FUNCTION|VALUE, got {identity:?}"
-    );
-    assert!(
-        !parts[0].is_empty() && !parts[1].is_empty(),
+        !group.is_empty() && !function.is_empty(),
         "--criterion GROUP and FUNCTION must be non-empty, got {identity:?}"
     );
     CriterionCase {
-        group: parts[0].to_owned(),
-        function: parts[1].to_owned(),
-        value: parts.get(2).copied().unwrap_or("").to_owned(),
+        group: group.to_owned(),
+        function: function.to_owned(),
+        value: value.to_owned(),
         nanos: nanos.parse().expect("NANOS must be a number"),
     }
 }
