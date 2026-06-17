@@ -138,19 +138,30 @@ fn main() -> ExitCode {
 }
 
 /// Parses a `GROUP|FUNCTION|VALUE=NANOS` argument into a [`CriterionCase`].
+///
+/// `VALUE` is optional: both `GROUP|FUNCTION=NANOS` and the value-less
+/// `GROUP|FUNCTION|=NANOS` form denote a case without a parameter. `GROUP` and
+/// `FUNCTION` must be non-empty and no further `|`-separated components are
+/// allowed, so a malformed fixture fails here with a clear message rather than at
+/// a later filesystem write.
 #[cfg_attr(coverage_nightly, coverage(off))]
 fn parse_criterion_arg(value: &str) -> CriterionCase {
     let (identity, nanos) = value
         .split_once('=')
         .expect("--criterion value must be GROUP|FUNCTION|VALUE=NANOS");
-    let mut parts = identity.split('|');
-    let group = parts.next().expect("missing GROUP").to_owned();
-    let function = parts.next().expect("missing FUNCTION").to_owned();
-    let value = parts.next().unwrap_or("").to_owned();
+    let parts: Vec<&str> = identity.split('|').collect();
+    assert!(
+        matches!(parts.len(), 2 | 3),
+        "--criterion identity must be GROUP|FUNCTION or GROUP|FUNCTION|VALUE, got {identity:?}"
+    );
+    assert!(
+        !parts[0].is_empty() && !parts[1].is_empty(),
+        "--criterion GROUP and FUNCTION must be non-empty, got {identity:?}"
+    );
     CriterionCase {
-        group,
-        function,
-        value,
+        group: parts[0].to_owned(),
+        function: parts[1].to_owned(),
+        value: parts.get(2).copied().unwrap_or("").to_owned(),
         nanos: nanos.parse().expect("NANOS must be a number"),
     }
 }
