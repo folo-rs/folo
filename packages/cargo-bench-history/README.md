@@ -11,8 +11,8 @@ data".
 Most benchmark tooling only reports the current run, or at best compares against
 the previous local run. `cargo-bench-history` instead stores **every** run as an
 immutable record (on the local filesystem or, with the `azure` feature, in an
-Azure Blob container) and reconstructs per-benchmark series ordered by an
-*effective* timestamp, so historical trends become analyzable.
+Azure Blob container) and reconstructs per-benchmark series in git first-parent
+commit order, so historical trends become analyzable.
 
 Results are partitioned only by what makes them fundamentally incomparable —
 project, engine system, target triple, and (for hardware-dependent engines) a

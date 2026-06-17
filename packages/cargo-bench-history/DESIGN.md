@@ -575,7 +575,8 @@ path is reachable from WSL exactly like the primary checkout.
 
 ## 9. Analysis algorithms
 
-Series: per `(BenchmarkId, metric)`, ordered by effective time (§6), tagged with
+Series: per `(BenchmarkId, metric)`, ordered by git first-parent topology (§8.4)
+with runs on one commit sub-ordered by effective time (§6), tagged with
 toolchain/OS so the engine can segment. Findings (severity-ranked):
 
 1. **Rolling-baseline regression/improvement** *(v1 first)* — baseline = median

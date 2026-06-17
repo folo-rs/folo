@@ -1,9 +1,9 @@
 //! [`StorageFacade`]: a static-dispatch enum over every storage backend.
 //!
-//! The [`Storage`](super::Storage) trait uses `async fn`, which is not
-//! dyn-compatible, so callers select a backend through this enum rather than a
-//! `Box<dyn Storage>`. [`build_storage`] maps a [`StorageConfig`] to the
-//! corresponding variant.
+//! The [`Storage`](super::Storage) trait's methods return `impl Future` (an
+//! RPITIT signature), which is not dyn-compatible, so callers select a backend
+//! through this enum rather than a `Box<dyn Storage>`. [`build_storage`] maps a
+//! [`StorageConfig`] to the corresponding variant.
 
 use crate::config::{Config, StorageConfig};
 

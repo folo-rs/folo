@@ -10,7 +10,7 @@
 //! fundamentally incomparable — project, engine system, target triple, and (for
 //! hardware-dependent engines) a machine key — so that everything else stays
 //! visible as a step in the timeline. The `analyze` command then reconstructs
-//! per-benchmark series ordered by effective time and looks for regressions and
+//! per-benchmark series in git first-parent order and looks for regressions and
 //! drift.
 //!
 //! The `run` command executes the configured benchmark engines (Callgrind via
