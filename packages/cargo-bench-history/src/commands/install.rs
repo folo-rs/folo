@@ -45,6 +45,7 @@ fn install_message(path: &Path, written: bool) -> String {
              Next steps:\n\
              - Edit it to set the [storage] backend and each [engines.*] command for this workspace.\n\
              - Run `cargo bench-history run` to record the first benchmark history entry.\n\
+             - To seed history for an existing repository, run `cargo bench-history backfill --from <commit> --to <commit>` to benchmark a range of past commits.\n\
              - Run `cargo bench-history analyze` once you have a few entries to review trends."
         )
     } else {
@@ -123,6 +124,7 @@ mod tests {
         let wrote = install_message(&path, true);
         assert!(wrote.contains("Wrote a starter configuration"), "{wrote}");
         assert!(wrote.contains("bench_history.toml"), "{wrote}");
+        assert!(wrote.contains("backfill"), "{wrote}");
 
         let existed = install_message(&path, false);
         assert!(existed.contains("already exists"), "{existed}");

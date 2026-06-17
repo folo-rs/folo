@@ -179,6 +179,16 @@ Two benchmark engines are supported, each behind a pure parser in `bench/`:
   the workspace's crate-prefixed group ids keep series distinct anyway. Criterion
   is hardware-dependent → partitioned by the host triple and a machine key.
 
+Each `[engines.*]` may declare an `os` list (Rust OS names: `linux`/`macos`/
+`windows`). An empty list (the default) is unrestricted; a non-empty list makes a
+default `run`/`backfill` **skip** the engine on any other host, reporting the skip
+in the run summary. The generated config restricts Callgrind to `linux` (it runs
+under Valgrind). `resolve_engines(config, requested, host_os)` (run.rs) applies
+this only to the default selection — an explicit `--engine` always overrides it
+(so Callgrind can be forced through WSL on Windows). `host_os` is injected via
+`RunDeps.host_os` (production passes `std::env::consts::OS`; tests pass a literal)
+so the filter is deterministic; `EngineConfig::supports_host` is the predicate.
+
 ## Machine key
 
 `machine::system_profile` reads the `many_cpus` processor and memory-region

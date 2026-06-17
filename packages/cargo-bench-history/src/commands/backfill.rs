@@ -18,6 +18,7 @@
 //! duplicate) is reported as skipped-existing; `--overwrite` avoids that by
 //! replacing in place.
 
+use std::env::consts;
 use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -496,6 +497,7 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
             project_id: self.project_id,
             tool_version: self.tool_version,
             target_root: &target_root,
+            host_os: consts::OS,
         };
 
         map_run_result(run_engines(&run_options, &deps).await)

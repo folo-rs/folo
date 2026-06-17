@@ -46,11 +46,14 @@ struct RunCommand {
     #[argh(option)]
     config: Option<PathBuf>,
 
-    /// run only the named engine (for example, callgrind).
+    /// run only the named engine, for example callgrind or criterion
+    /// (default: every configured engine).
     #[argh(option)]
     engine: Option<String>,
 
-    /// override the effective timestamp (RFC 3339) when backfilling history.
+    /// override the effective timestamp, in RFC 3339 format, for example
+    /// `2024-01-31T14:30:00Z`; used when backfilling history (default: the
+    /// commit time for a clean run, otherwise the current time).
     #[argh(option)]
     timestamp: Option<Timestamp>,
 
@@ -133,11 +136,13 @@ struct AnalyzeCommand {
     #[argh(switch)]
     no_dirty: bool,
 
-    /// only consider runs on or after this date.
+    /// only consider runs on or after this date, in RFC 3339 format, for
+    /// example `2024-01-01T00:00:00Z` (default: no lower bound).
     #[argh(option)]
     since: Option<String>,
 
-    /// restrict analysis to a single engine (criterion or callgrind).
+    /// restrict analysis to a single engine, criterion or callgrind
+    /// (default: every engine).
     #[argh(option)]
     engine: Option<String>,
 
@@ -157,7 +162,7 @@ struct AnalyzeCommand {
     #[argh(option)]
     metric: Option<String>,
 
-    /// output format (text, json, or markdown).
+    /// output format: text, json, or markdown (default: text).
     #[argh(option)]
     format: Option<String>,
 
@@ -199,15 +204,18 @@ struct BackfillCommand {
     #[argh(option)]
     config: Option<PathBuf>,
 
-    /// oldest commit of the range to backfill (inclusive).
+    /// oldest commit of the range to backfill, inclusive; a SHA, tag, or ref
+    /// such as `HEAD~20`.
     #[argh(option)]
     from: String,
 
-    /// newest commit of the range to backfill (inclusive).
+    /// newest commit of the range to backfill, inclusive; a SHA, tag, or ref
+    /// such as `HEAD` (must be on the current branch's first-parent history).
     #[argh(option)]
     to: String,
 
-    /// run only the named engine (for example, callgrind).
+    /// run only the named engine, for example callgrind or criterion
+    /// (default: every configured engine).
     #[argh(option)]
     engine: Option<String>,
 

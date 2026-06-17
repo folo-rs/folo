@@ -380,11 +380,21 @@ no configured command is simply not used here.**
 [engines.callgrind]            # omit the section entirely => engine unused
 command = "just bench-cg"      # or "cargo bench -p nm --bench nm_observe_cg"
                                # GUNGRAUN_SAVE_SUMMARY injected automatically (env)
+os = ["linux"]                 # default run skips this engine off-Linux (Valgrind);
+                               # force it anywhere with `--engine callgrind`
 
 [engines.criterion]
 command = "cargo bench"        # estimates.json written automatically; no injection
 # extra_args = ["--message-format=json"]   # optional escape hatch (e.g. cargo-criterion)
+# os = ["linux", "macos", "windows"]        # default (omitted) = every host
 ```
+
+The optional per-engine `os` list (Rust OS names) declares the hosts on which the
+engine's command can run. When non-empty, a default `run`/`backfill` **skips** the
+engine on any other host and reports the skip; an explicit `--engine` always
+overrides the restriction. The generated config sets `os = ["linux"]` on
+Callgrind (it runs under Valgrind, which is Linux-only) so a Windows `run` does
+not vainly attempt it, while still allowing `--engine callgrind` through WSL.
 
 For each configured engine, `run`:
 

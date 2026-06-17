@@ -50,9 +50,14 @@ cargo bench-history analyze [--repo PATH] [--branch REF] [--base REF]
   effective time when backfilling history for an old commit; `--machine-key`
   overrides the hardware fingerprint used to partition hardware-dependent
   (Criterion) results; everything after `--` is forwarded verbatim to each engine
-  command (use `--engine` to target a single engine).
+  command (use `--engine` to target a single engine). An engine whose config
+  declares an `os` list (the generated config restricts Callgrind to `linux`,
+  since it runs under Valgrind) is skipped on other hosts during a default run;
+  an explicit `--engine` forces it (for example, Callgrind through WSL on
+  Windows).
 * `install` generates a starter `.cargo/bench_history.toml` if absent, printing
-  its path and next steps; an existing file is never overwritten.
+  its path and next steps (including how to `backfill` history for an existing
+  repository); an existing file is never overwritten.
 * `backfill` replays `run` across the inclusive commit range `--from..--to`,
   bootstrapping history for a repository that adopted the tool late. Each commit
   is checked out in a dedicated git **worktree** (the primary checkout is never

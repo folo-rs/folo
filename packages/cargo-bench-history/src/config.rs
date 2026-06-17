@@ -39,6 +39,12 @@ path = \"./bench-history\"
 
 [engines.callgrind]
 command = \"just bench-cg\"
+# Callgrind runs benches under Valgrind, which is Linux-only, so a default `run`
+# skips this engine on other hosts. On Windows, drive it through WSL with an
+# explicit `cargo bench-history run --engine callgrind`. Edit this list to add
+# any host where your command works (values match Rust's OS names: linux, macos,
+# windows).
+os = [\"linux\"]
 
 [engines.criterion]
 command = \"cargo bench\"
@@ -144,6 +150,28 @@ pub struct EngineConfig {
     /// Extra arguments appended to the command (escape hatch; usually empty).
     #[serde(default)]
     pub extra_args: Vec<String>,
+    /// Host operating systems this engine's command can run on, using Rust's OS
+    /// names (`linux`, `macos`, `windows`).
+    ///
+    /// An empty list (the default) places no restriction, so the engine is part
+    /// of the default selection on every host. When the list is non-empty, a
+    /// default `run` skips the engine on any host not in it; an explicit
+    /// `--engine` request always overrides the restriction. This expresses
+    /// fundamental dependencies such as Callgrind requiring Valgrind (Linux).
+    #[serde(default)]
+    pub os: Vec<String>,
+}
+
+impl EngineConfig {
+    /// Whether this engine's command is allowed to run on `host_os` as part of
+    /// the default (unfiltered) selection.
+    ///
+    /// An empty [`os`](Self::os) list means "every host"; otherwise the host must
+    /// be listed. The comparison uses Rust's OS names (`std::env::consts::OS`).
+    #[must_use]
+    pub fn supports_host(&self, host_os: &str) -> bool {
+        self.os.is_empty() || self.os.iter().any(|candidate| candidate == host_os)
+    }
 }
 
 /// Parses a configuration from TOML source text.
@@ -378,6 +406,51 @@ command = \"cargo bench\"
                 .extra_args
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn engine_os_defaults_to_unrestricted() {
+        let text = "\
+[storage.local]
+path = \"./data\"
+
+[engines.criterion]
+command = \"cargo bench\"
+";
+        let config = parse_config(text).unwrap();
+        let engine = config.engines.get("criterion").unwrap();
+        assert!(engine.os.is_empty());
+        assert!(engine.supports_host("windows"));
+        assert!(engine.supports_host("linux"));
+        assert!(engine.supports_host("macos"));
+    }
+
+    #[test]
+    fn engine_os_restricts_supported_hosts() {
+        let text = "\
+[storage.local]
+path = \"./data\"
+
+[engines.callgrind]
+command = \"just bench-cg\"
+os = [\"linux\"]
+";
+        let config = parse_config(text).unwrap();
+        let engine = config.engines.get("callgrind").unwrap();
+        assert_eq!(engine.os, vec!["linux".to_owned()]);
+        assert!(engine.supports_host("linux"));
+        assert!(!engine.supports_host("windows"));
+        assert!(!engine.supports_host("macos"));
+    }
+
+    #[test]
+    fn default_template_restricts_callgrind_to_linux() {
+        let config = parse_config(default_template()).unwrap();
+        assert_eq!(
+            config.engines.get("callgrind").unwrap().os,
+            vec!["linux".to_owned()]
+        );
+        assert!(config.engines.get("criterion").unwrap().os.is_empty());
     }
 
     #[test]

@@ -5,6 +5,7 @@
 //! [`tick::Clock`], so the whole flow is exercised in-process with fakes. The
 //! public [`execute`] wires the real adapters and is what the binary runs.
 
+use std::env::consts;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -52,6 +53,10 @@ pub(crate) struct RunDeps<'a, R, P, O, S> {
     /// injected into each engine's environment as `CARGO_TARGET_DIR` so the
     /// engine's output always lands where the harvest looks for it.
     pub(crate) target_root: &'a Path,
+    /// The host operating system (Rust's `std::env::consts::OS` name) used to
+    /// decide which engines run by default. An engine whose configured `os` list
+    /// excludes this host is skipped unless explicitly requested with `--engine`.
+    pub(crate) host_os: &'a str,
 }
 
 /// The real `run`: wire the production adapters and orchestrate.
@@ -92,6 +97,7 @@ pub(crate) async fn execute(
         project_id: &project_id,
         tool_version: env!("CARGO_PKG_VERSION"),
         target_root: &target_root,
+        host_os: consts::OS,
     };
 
     execute_run(options, &deps).await
@@ -167,7 +173,7 @@ where
     O: BenchOutputSource,
     S: Storage,
 {
-    let to_run = resolve_engines(deps.config, options.engine.as_deref())?;
+    let (to_run, skipped) = resolve_engines(deps.config, options.engine.as_deref(), deps.host_os)?;
 
     let rustc = deps.probe.toolchain().await?;
     let shared = SharedContext {
@@ -180,7 +186,7 @@ where
 
     let mut stored = 0_usize;
     let mut harvested = 0_usize;
-    let mut labels = Vec::new();
+    let mut labels = skipped;
 
     for (name, engine) in &to_run {
         let summary = process_engine(options, deps, &shared, name, *engine).await?;
@@ -401,47 +407,76 @@ fn parse_harvest(harvest: &Harvest) -> Result<Vec<ResultRecord>, RunError> {
     }
 }
 
+/// The engines selected to run, paired with human-readable notes about engines
+/// skipped because their `os` restriction excludes the host.
+type EngineSelection = (Vec<(String, EngineSystem)>, Vec<String>);
+
 /// Decides which engines to run from the configuration and an optional filter.
 ///
-/// Returns the engines to run as `(config key, engine)` pairs. An explicit
-/// `--engine` filter must name an engine that is configured.
+/// Returns the engines to run as `(config key, engine)` pairs together with notes
+/// describing engines skipped because their configured `os` list excludes
+/// `host_os`. An explicit `--engine` filter must name a configured engine and
+/// always overrides the host-OS restriction (so e.g. Callgrind can be forced
+/// through WSL on Windows).
 fn resolve_engines(
     config: &Config,
     requested: Option<&str>,
-) -> Result<Vec<(String, EngineSystem)>, RunError> {
+    host_os: &str,
+) -> Result<EngineSelection, RunError> {
     let mut configured = Vec::new();
-    for name in config.engines.keys() {
+    for (name, engine_config) in &config.engines {
         let engine = EngineSystem::from_name(name).ok_or_else(|| RunError::NoEngine {
             message: format!("configuration references unknown engine {name:?}"),
         })?;
-        configured.push((name.clone(), engine));
+        configured.push((name.clone(), engine, engine_config.supports_host(host_os)));
     }
+
+    let mut skipped = Vec::new();
 
     let to_run = match requested {
         Some(requested) => {
             let engine = EngineSystem::from_name(requested).ok_or_else(|| RunError::NoEngine {
                 message: format!("unknown engine {requested:?}"),
             })?;
-            if !configured.iter().any(|(_, candidate)| *candidate == engine) {
+            if !configured
+                .iter()
+                .any(|(_, candidate, _)| *candidate == engine)
+            {
                 return Err(RunError::NoEngine {
                     message: format!("engine {requested:?} is not configured"),
                 });
             }
             configured
                 .into_iter()
-                .filter(|(_, candidate)| *candidate == engine)
+                .filter(|(_, candidate, _)| *candidate == engine)
+                .map(|(name, candidate, _)| (name, candidate))
                 .collect()
         }
-        None => configured,
+        None => {
+            let mut to_run = Vec::new();
+            for (name, engine, supported) in configured {
+                if supported {
+                    to_run.push((name, engine));
+                } else {
+                    skipped.push(format!(
+                        "skipped {name} (not supported on {host_os}; force with --engine {name})"
+                    ));
+                }
+            }
+            to_run
+        }
     };
 
     if to_run.is_empty() {
-        return Err(RunError::NoEngine {
-            message: "no engines are configured".to_owned(),
-        });
+        let message = if skipped.is_empty() {
+            "no engines are configured".to_owned()
+        } else {
+            format!("no engines run on {host_os}; force one with --engine <name>")
+        };
+        return Err(RunError::NoEngine { message });
     }
 
-    Ok(to_run)
+    Ok((to_run, skipped))
 }
 /// arguments verbatim, producing a full argv for direct (shell-free) execution.
 ///
@@ -798,6 +833,25 @@ mod tests {
         output: &FakeOutput,
         storage: &MemoryStorage,
     ) -> Result<RunOutcome, RunError> {
+        drive_on_host(
+            "linux", now_unix, options, config, runner, probe, output, storage,
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "test helper threads every injected port"
+    )]
+    fn drive_on_host(
+        host_os: &str,
+        now_unix: u64,
+        options: &RunOptions,
+        config: &Config,
+        runner: &FakeRunner,
+        probe: &FakeProbe,
+        output: &FakeOutput,
+        storage: &MemoryStorage,
+    ) -> Result<RunOutcome, RunError> {
         let now = SystemTime::UNIX_EPOCH
             .checked_add(Duration::from_secs(now_unix))
             .expect("frozen instant is within range");
@@ -814,8 +868,42 @@ mod tests {
             project_id: "folo",
             tool_version: "0.0.1",
             target_root: Path::new("target"),
+            host_os,
         };
         block_on(execute_run(options, &deps))
+    }
+
+    #[test]
+    fn os_restricted_engine_is_skipped_and_noted_on_unsupported_host() {
+        // callgrind is restricted to linux; on a windows host the default run
+        // skips it (reporting the skip) and still runs criterion.
+        let config = config_with(
+            "[engines.callgrind]\ncommand = \"noop\"\nos = [\"linux\"]\n\n[engines.criterion]\ncommand = \"crit\"\n",
+        );
+        let storage = MemoryStorage::new();
+
+        let outcome = drive_on_host(
+            "windows",
+            FROZEN_UNIX,
+            &RunOptions::default(),
+            &config,
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            &FakeOutput::with_criterion_case(),
+            &storage,
+        )
+        .unwrap();
+
+        let RunOutcome::Completed { message } = outcome else {
+            panic!("expected completion");
+        };
+        assert!(message.contains("skipped callgrind"), "{message}");
+        assert!(message.contains("windows"), "{message}");
+        assert!(message.contains("--engine callgrind"), "{message}");
+
+        let keys = storage.keys();
+        assert_eq!(keys.len(), 1, "only criterion should store: {keys:?}");
+        assert!(keys[0].contains("/criterion/"), "{keys:?}");
     }
 
     #[test]
@@ -1396,7 +1484,7 @@ mod tests {
 
     #[test]
     fn resolve_engines_errors_when_none_configured() {
-        let error = resolve_engines(&config_with(""), None).unwrap_err();
+        let error = resolve_engines(&config_with(""), None, "linux").unwrap_err();
         match error {
             RunError::NoEngine { message } => {
                 assert!(message.contains("no engines are configured"), "{message}");
@@ -1408,13 +1496,13 @@ mod tests {
     #[test]
     fn resolve_engines_rejects_unknown_config_engine() {
         let config = config_with("[engines.dhat]\ncommand = \"x\"\n");
-        let error = resolve_engines(&config, None).unwrap_err();
+        let error = resolve_engines(&config, None, "linux").unwrap_err();
         assert!(matches!(error, RunError::NoEngine { .. }));
     }
 
     #[test]
     fn resolve_engines_rejects_unknown_requested_engine() {
-        let error = resolve_engines(&callgrind_config(), Some("dhat")).unwrap_err();
+        let error = resolve_engines(&callgrind_config(), Some("dhat"), "linux").unwrap_err();
         match error {
             RunError::NoEngine { message } => {
                 assert!(message.contains("unknown engine"), "{message}");
@@ -1425,7 +1513,7 @@ mod tests {
 
     #[test]
     fn resolve_engines_rejects_unconfigured_requested_engine() {
-        let error = resolve_engines(&callgrind_config(), Some("criterion")).unwrap_err();
+        let error = resolve_engines(&callgrind_config(), Some("criterion"), "linux").unwrap_err();
         match error {
             RunError::NoEngine { message } => {
                 assert!(message.contains("not configured"), "{message}");
@@ -1437,10 +1525,54 @@ mod tests {
     #[test]
     fn resolve_engines_accepts_a_criterion_only_configuration() {
         let config = config_with("[engines.criterion]\ncommand = \"crit\"\n");
-        let to_run = resolve_engines(&config, None).unwrap();
+        let (to_run, skipped) = resolve_engines(&config, None, "linux").unwrap();
         assert_eq!(to_run.len(), 1);
         assert_eq!(to_run[0].0, "criterion");
         assert_eq!(to_run[0].1, EngineSystem::Criterion);
+        assert!(skipped.is_empty());
+    }
+
+    #[test]
+    fn resolve_engines_skips_os_restricted_engine_by_default() {
+        let config = config_with(
+            "[engines.callgrind]\ncommand = \"noop\"\nos = [\"linux\"]\n\n[engines.criterion]\ncommand = \"crit\"\n",
+        );
+        let (to_run, skipped) = resolve_engines(&config, None, "windows").unwrap();
+        assert_eq!(to_run.len(), 1);
+        assert_eq!(to_run[0].1, EngineSystem::Criterion);
+        assert_eq!(skipped.len(), 1);
+        assert!(skipped[0].contains("callgrind"), "{}", skipped[0]);
+        assert!(skipped[0].contains("windows"), "{}", skipped[0]);
+    }
+
+    #[test]
+    fn resolve_engines_runs_os_restricted_engine_on_supported_host() {
+        let config = config_with("[engines.callgrind]\ncommand = \"noop\"\nos = [\"linux\"]\n");
+        let (to_run, skipped) = resolve_engines(&config, None, "linux").unwrap();
+        assert_eq!(to_run.len(), 1);
+        assert_eq!(to_run[0].1, EngineSystem::Callgrind);
+        assert!(skipped.is_empty());
+    }
+
+    #[test]
+    fn resolve_engines_forces_os_restricted_engine_when_requested() {
+        let config = config_with("[engines.callgrind]\ncommand = \"noop\"\nos = [\"linux\"]\n");
+        let (to_run, skipped) = resolve_engines(&config, Some("callgrind"), "windows").unwrap();
+        assert_eq!(to_run.len(), 1);
+        assert_eq!(to_run[0].1, EngineSystem::Callgrind);
+        assert!(skipped.is_empty());
+    }
+
+    #[test]
+    fn resolve_engines_errors_when_only_engine_is_os_restricted() {
+        let config = config_with("[engines.callgrind]\ncommand = \"noop\"\nos = [\"linux\"]\n");
+        let error = resolve_engines(&config, None, "windows").unwrap_err();
+        match error {
+            RunError::NoEngine { message } => {
+                assert!(message.contains("no engines run on windows"), "{message}");
+            }
+            other => panic!("expected no-engine error, got {other:?}"),
+        }
     }
 
     #[test]
