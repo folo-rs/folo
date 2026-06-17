@@ -17,30 +17,31 @@ use crate::{Command, RunError, RunOutcome};
 /// storage error).
 #[doc(hidden)]
 pub async fn run(command: &Command) -> Result<RunOutcome, RunError> {
-    run_with_target_root(command, None).await
+    run_with_overrides(command, None, None).await
 }
 
-/// Executes a parsed command with an explicit cargo target root for the `run`
-/// harvest (other commands ignore it).
+/// Executes a parsed command, overriding both the cargo target root (for the
+/// `run`/`backfill` harvest) and the benchmark command those subcommands invoke.
 ///
-/// This exists so end-to-end tests can point the harvest at a fixture `target/`
-/// tree without mutating the process-wide `CARGO_TARGET_DIR`. Production code
-/// calls [`run`], which passes `None` and resolves the root from the
-/// environment.
+/// This exists so end-to-end tests can drive the full `run`/`backfill` flow
+/// against a mock benchmark program instead of `cargo bench`, without mutating
+/// the process environment. Production code calls [`run`], which passes `None`
+/// for both and uses `cargo bench` with the resolved target root.
 ///
 /// # Errors
 ///
 /// Returns a `RunError` if a command fails (for example, a configuration or
 /// storage error).
 #[doc(hidden)]
-pub async fn run_with_target_root(
+pub async fn run_with_overrides(
     command: &Command,
     target_root: Option<PathBuf>,
+    bench_command: Option<Vec<String>>,
 ) -> Result<RunOutcome, RunError> {
     match command {
-        Command::Run(options) => commands::run_with_target_root(options, target_root).await,
+        Command::Run(options) => commands::run(options, target_root, bench_command).await,
         Command::Install(options) => commands::install(options).await,
         Command::Analyze(options) => commands::analyze(options).await,
-        Command::Backfill(options) => commands::backfill(options).await,
+        Command::Backfill(options) => commands::backfill(options, bench_command).await,
     }
 }

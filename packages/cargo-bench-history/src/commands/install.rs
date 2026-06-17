@@ -43,7 +43,7 @@ fn install_message(path: &Path, written: bool) -> String {
         format!(
             "Wrote a starter configuration to {display}.\n\
              Next steps:\n\
-             - Edit it to set the [storage] backend and each [engines.*] command for this workspace.\n\
+             - Edit it to set the [storage] backend for this workspace.\n\
              - Run `cargo bench-history run` to record the first benchmark history entry.\n\
              - To seed history for an existing repository, run `cargo bench-history backfill --from <commit> --to <commit>` to benchmark a range of past commits.\n\
              - Run `cargo bench-history analyze` once you have a few entries to review trends."

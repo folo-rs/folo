@@ -99,8 +99,7 @@ mod tests {
     use super::*;
 
     fn config_with_storage(storage: &str) -> Config {
-        let text = format!("{storage}\n[engines.callgrind]\ncommand = \"x\"\n");
-        parse_config(&text).expect("test configuration should parse")
+        parse_config(storage).expect("test configuration should parse")
     }
 
     #[tokio::test]

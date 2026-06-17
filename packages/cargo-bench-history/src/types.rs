@@ -39,8 +39,11 @@ pub enum Command {
 pub struct RunOptions {
     /// Path to the configuration file, if overridden.
     pub config_path: Option<PathBuf>,
-    /// Restrict the run to a single named engine, if set.
-    pub engine: Option<String>,
+    /// Restrict the run to these packages (`--package`/`-p`); empty means the
+    /// whole workspace.
+    pub packages: Vec<String>,
+    /// Restrict the run to these benchmark targets (`--bench`); empty means all.
+    pub benches: Vec<String>,
     /// Override for the effective timestamp (backfill), if set.
     pub timestamp: Option<Timestamp>,
     /// Override for the recorded target triple, if set.
@@ -52,7 +55,7 @@ pub struct RunOptions {
     /// Replace an already-stored result for this run's identity instead of
     /// refusing the run as a duplicate.
     pub overwrite: bool,
-    /// Arguments forwarded verbatim to each engine command.
+    /// Arguments forwarded verbatim to the benchmark command after the scope flags.
     pub passthrough: Vec<String>,
 }
 
@@ -121,8 +124,11 @@ pub struct BackfillOptions {
     pub from: String,
     /// Newest commit of the range to backfill (inclusive).
     pub to: String,
-    /// Restrict the runs to a single named engine, if set.
-    pub engine: Option<String>,
+    /// Restrict the runs to these packages (`--package`/`-p`); empty means the
+    /// whole workspace.
+    pub packages: Vec<String>,
+    /// Restrict the runs to these benchmark targets (`--bench`); empty means all.
+    pub benches: Vec<String>,
     /// Override for the recorded target triple, if set.
     pub target_triple: Option<String>,
     /// Override for the machine fingerprint (hardware-dependent engines), if set.
@@ -132,7 +138,7 @@ pub struct BackfillOptions {
     pub overwrite: bool,
     /// Continue past commits whose build or benchmark fails instead of stopping.
     pub ignore_errors: bool,
-    /// Arguments forwarded verbatim to each engine command.
+    /// Arguments forwarded verbatim to the benchmark command after the scope flags.
     pub passthrough: Vec<String>,
 }
 
@@ -191,23 +197,18 @@ pub enum RunError {
     Config(ConfigError),
     /// A storage operation failed.
     Storage(StorageError),
-    /// No supported engine was available to run.
-    NoEngine {
-        /// Human-readable explanation of why nothing could run.
-        message: String,
-    },
-    /// An engine command exited with a non-zero status.
+    /// The benchmark command exited with a non-zero status.
     Engine {
-        /// The engine whose command failed.
+        /// The benchmark command that failed (`cargo bench`).
         engine: String,
         /// The process exit code, if one was reported.
         code: Option<i32>,
     },
-    /// A configured engine command could not be tokenized into an argv.
+    /// The benchmark command could not be assembled into an argv.
     Command {
-        /// The engine whose command is malformed.
+        /// The benchmark command label.
         engine: String,
-        /// Human-readable description of the tokenization failure.
+        /// Human-readable description of the failure.
         message: String,
     },
     /// A harvested benchmark summary could not be parsed.
@@ -243,7 +244,6 @@ impl fmt::Display for RunError {
         match self {
             Self::Config(error) => write!(f, "configuration error: {error}"),
             Self::Storage(error) => write!(f, "storage error: {error}"),
-            Self::NoEngine { message } => write!(f, "no engine to run: {message}"),
             Self::Engine { engine, code } => match code {
                 Some(code) => write!(f, "engine {engine:?} failed with exit code {code}"),
                 None => write!(f, "engine {engine:?} terminated without an exit code"),
@@ -269,8 +269,7 @@ impl Error for RunError {
             Self::Config(error) => Some(error),
             Self::Storage(error) => Some(error),
             Self::Io(error) => Some(error),
-            Self::NoEngine { .. }
-            | Self::Engine { .. }
+            Self::Engine { .. }
             | Self::Command { .. }
             | Self::Parse { .. }
             | Self::Duplicate { .. }
@@ -343,17 +342,18 @@ mod tests {
     }
 
     #[test]
-    fn parse_and_no_engine_errors_have_no_source() {
+    fn parse_and_command_errors_have_no_source() {
         let parse = RunError::Parse {
             message: "bad".to_owned(),
         };
-        let no_engine = RunError::NoEngine {
-            message: "none".to_owned(),
+        let command = RunError::Command {
+            engine: "cargo bench".to_owned(),
+            message: "empty".to_owned(),
         };
         assert!(parse.source().is_none());
-        assert!(no_engine.source().is_none());
+        assert!(command.source().is_none());
         assert!(parse.to_string().contains("bad"));
-        assert!(no_engine.to_string().contains("none"));
+        assert!(command.to_string().contains("empty"));
     }
 
     #[test]

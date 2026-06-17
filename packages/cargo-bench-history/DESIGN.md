@@ -174,7 +174,7 @@ partitions.
 
 Resolution order (first match wins):
 
-1. Explicit `--target-triple` (or per-engine config `target_triple`).
+1. Explicit `--target-triple`.
 2. **Engine-declared constraint.** The Callgrind engine only runs under
    Linux/Valgrind, so its adapter pins the OS component to `linux`
    unconditionally — this alone resolves the Windows→WSL Callgrind case with no
@@ -370,59 +370,35 @@ typed `Outcome`/`Error`.
 
 ### 8.1 `cargo bench-history run`
 
-**Engine detection is delegated to the user.** The tool cannot reliably tell
-which engine a given bench uses (`cargo bench` runs all harnesses together; the
-engine lives in each bench’s `main()`). So the user declares, per engine, the
-command that launches that engine’s benches in this workspace. **An engine with
-no configured command is simply not used here.**
+**Engines are detected from output, not configured.** `run` invokes the
+workspace's benches once with `cargo bench` and harvests whichever engines
+produced output. There is no `[engines]` configuration: the tool enables the
+combined environment every supported engine needs and then inspects each output
+tree to see which engines actually ran. This works because Criterion and Callgrind
+can both be driven from a single `cargo bench` invocation, and off-Linux the
+Callgrind (`_cg`) benches compile to `#[cfg(target_os = "linux")]` no-ops, so they
+simply produce no output — no OS logic is needed in the tool.
 
-```toml
-[engines.callgrind]            # omit the section entirely => engine unused
-command = "just bench-cg"      # or "cargo bench -p nm --bench nm_observe_cg"
-                               # GUNGRAUN_SAVE_SUMMARY injected automatically (env)
-os = ["linux"]                 # default run skips this engine off-Linux (Valgrind);
-                               # force it anywhere with `--engine callgrind`
+`run`:
 
-[engines.criterion]
-command = "cargo bench"        # estimates.json written automatically; no injection
-# extra_args = ["--message-format=json"]   # optional escape hatch (e.g. cargo-criterion)
-# os = ["linux", "macos", "windows"]        # default (omitted) = every host
-```
-
-The optional per-engine `os` list (Rust OS names) declares the hosts on which the
-engine's command can run. When non-empty, a default `run`/`backfill` **skips** the
-engine on any other host and reports the skip; an explicit `--engine` always
-overrides the restriction. The generated config sets `os = ["linux"]` on
-Callgrind (it runs under Valgrind, which is Linux-only) so a Windows `run` does
-not vainly attempt it, while still allowing `--engine callgrind` through WSL.
-
-For each configured engine, `run`:
-
-1. **Injects engine configuration via environment variables** (not appended
-   args). Env is robust regardless of how the command launches the benches —
-   direct, through `just`, or through WSL — whereas trailing `-- …` args are
-   swallowed by wrappers like `just bench-cg` that build their own
-   `cargo bench` invocation. Callgrind → `GUNGRAUN_SAVE_SUMMARY=pretty-json`;
-   Criterion → nothing needed. An optional `extra_args` escape hatch covers
-   engines/modes with no env knob (e.g. `cargo-criterion --message-format`).
+1. **Injects the combined bench environment via environment variables** (not
+   appended args). Env is robust regardless of how the benches launch. Callgrind
+   needs `GUNGRAUN_SAVE_SUMMARY=pretty-json`; Criterion needs nothing. The union of
+   every supported engine's env (`injected_bench_env`, iterating `EngineSystem::ALL`)
+   is set unconditionally — an engine that did not run merely ignores its variable.
    * **Target directory pinning:** the tool also injects `CARGO_TARGET_DIR` set
-     to the target root it will harvest, so the engine's output always lands
+     to the target root it will harvest, so the benches' output always lands
      where the harvest scans — even when an ambient `CARGO_TARGET_DIR` (such as
      the one `cargo llvm-cov` sets) would otherwise redirect it elsewhere.
-   * **WSL propagation:** the tool cannot reliably detect whether a command
-     crosses into WSL (it may be an opaque `just …` wrapper), so it does **not**
-     try. Instead, for every env var it injects it **unconditionally appends that
-     var's name to `WSLENV`** (with the `/u` up-flag, e.g.
-     `GUNGRAUN_SAVE_SUMMARY/u`). This is inert when no WSL boundary is crossed and
-     makes the injected env cross the boundary when one is. The golden rule (run
-     the tool in the same OS as the benches) remains the guidance.
-2. Records the **run-start time**, then runs the user command.
-3. **Harvests by engine-specific output location** (`target/gungraun/**/summary.json`
-   for Callgrind, `target/criterion/**/new/estimates.json` for Criterion),
-   filtered to files with `mtime ≥ run-start` so stale cases from earlier runs
-   are not re-ingested. The engine is known (it is the config section being
-   processed), so harvest globbing never relies on bench-file names.
-4. Builds the `ResultSet` (with the resolved RunContext) and **stores it
+2. Records the **run-start time**, then runs `cargo bench` (with the scope flags
+   below). A non-zero exit aborts the run.
+3. **Harvests every supported engine's output location**
+   (`target/gungraun/**/summary.json` for Callgrind,
+   `target/criterion/**/new/estimates.json` for Criterion), filtered to files with
+   `mtime ≥ run-start` so stale cases from earlier runs are not re-ingested. Each
+   tree is attributed to its engine; an engine whose tree produced no cases is
+   silently skipped.
+4. Builds a `ResultSet` per engine (with the resolved RunContext) and **stores it
    immediately** — `run` always persists; there is no separate publish step
    (`--no-store` produces results without writing, for dry runs). A **clean** point
    writes the deterministic key `…/<commit>/clean.json`; an existing one is refused
@@ -435,25 +411,27 @@ For each configured engine, `run`:
    run count); the summary reports the empty harvest, and other engines in the same
    run are unaffected.
 
-Callgrind’s command must run on Linux/WSL (Valgrind), exactly as today — but
-that requirement lives entirely in the user-provided command, keeping the tool
-platform-agnostic.
+To collect Callgrind data, run the tool on Linux (or in WSL), where Valgrind is
+available; on other hosts only Criterion is harvested. This is automatic — the
+Callgrind benches are absent from the build there, so the tool never attempts
+Valgrind off-Linux.
 
-**Flags & filtering.** Everything after a `--` separator is forwarded **verbatim**
-to each engine command, e.g.
-`cargo bench-history run --engine callgrind -- -p nm --bench nm_observe_cg`. The
-tool does **not** interpret these args and makes no assumption that any filter
-syntax (`--workspace`, `-p`, a bench-binary name) is even supported — that is
-between the user and their bench command (passthrough composes when the command
-is a direct `cargo bench`; opaque wrappers like `just bench-cg` should bake their
-own filters in). Because harvest is scoped by `mtime ≥ run-start`, whatever subset
-actually ran is exactly what gets ingested — no filter-awareness needed in the
-tool. Since passthrough is appended to *every* invoked engine command, use
-`--engine <name>` to run a single engine at a time (also the fast path for
-test/eval cycles). Other flags: `--timestamp <rfc3339>` (override effective time
-for backfill, §6), `--target-triple <triple>` (override the partition triple,
-§4.1), `--no-store`, `--overwrite` (replace an existing same-commit point instead
-of refusing, §4.2).
+**Scope & filtering.** Scope flags translate directly to `cargo bench` arguments:
+`--workspace` (the default) benches the whole workspace; `--package`/`-p NAME`
+(repeatable) restricts to specific packages (and omits `--workspace`); `--bench
+NAME` (repeatable) restricts to named bench targets. Everything after a `--`
+separator is forwarded **verbatim** to `cargo bench` after the scope flags.
+Because harvest is scoped by `mtime ≥ run-start`, whatever subset actually ran is
+exactly what gets ingested. Note that two non-overlapping partial runs at the same
+commit (different `--package`/`--bench` subsets) do **not** merge: each stores its
+own `clean.json` and the second collides with the first (§4.2) — gaps in coverage
+are expected to come from *different commits* covering different subsets, not from
+multiple partial runs at one commit. Other flags: `--timestamp <rfc3339>`
+(override effective time for backfill, §6), `--target-triple <triple>` (override
+the partition triple, §4.1), `--machine-key <key>` (override the hardware
+fingerprint, §4.1), `--no-store`, `--overwrite` (replace an existing same-commit
+point instead of refusing, §4.2). `--engine` is **not** a `run` flag — it is an
+`analyze` facet over stored data (§8.4).
 
 ### 8.2 `cargo bench-history upload` — deferred (run vs upload)
 `run` already does the only thing that *must* happen at execution time — inject
@@ -479,8 +457,9 @@ next steps. Never overwrite an existing file (report and exit success). Honors
 abstracted behind a `ConfigWriter` port (`TokioConfigWriter` in production, an
 in-memory fake in tests) whose `write_new` creates parent directories and uses
 `create_new` so an existing file is reported, never clobbered. The generated
-template enables both harvestable engines (Callgrind and Criterion) and includes
-a commented `[machine]` block documenting the `key` override.
+template configures only the `[storage]` backend (engines are detected from
+output, not configured — §8.1) and includes a commented `[machine]` block
+documenting the `key` override.
 
 ### 8.4 `cargo bench-history analyze`
 
@@ -534,7 +513,8 @@ Reconstructs history by checking out each commit in a range and running
 also the convenient path for ad-hoc evaluation over a span of commits.
 
 ```
-cargo bench-history backfill --from <commit> --to <commit> [--engine …] \
+cargo bench-history backfill --from <commit> --to <commit> \
+    [--workspace] [--package NAME] [--bench NAME] \
     [--overwrite] [--ignore-errors] [-- <passthrough>]
 ```
 
@@ -549,10 +529,11 @@ errors out, because `analyze` only ever surfaces a point when its commit is in t
 analyzed ref's topology (§8.4), so backfilling commits outside the current branch's
 ancestry would write data that no ordinary analysis can reach.
 
-**Per commit**, in order, the tool: checks out the commit, runs every configured
-engine exactly as §8.1 (no `--timestamp` — each point's effective time is its own
-committer date, §6), and stores the result. Backfilled runs are always on a
-**clean** tree, so each is keyed by commit (§4.2) and collision-checked:
+**Per commit**, in order, the tool: checks out the commit, runs the benches with
+`cargo bench` exactly as §8.1 (no `--timestamp` — each point's effective time is
+its own committer date, §6), harvests every engine that produced output, and
+stores the result. Backfilled runs are always on a **clean** tree, so each is
+keyed by commit (§4.2) and collision-checked:
 
 * By **default** an existing point for a commit is left untouched and that commit
   is **skipped** (reported, not an error). This makes backfill **resumable** — an
@@ -574,14 +555,14 @@ the user's working directory, removes the HEAD save/restore hazard, and leaves t
 user exactly where they were even if the run is interrupted. Between commits the
 worktree is reset clean (`git reset --hard` + `git clean -fd`, preserving the
 ignored `target/` for incremental-build speed — the §8.1 `mtime ≥ run-start`
-harvest already excludes stale artifacts). The engine commands still come from the
-**invoking** checkout's config (stable across the range), while the benches that
-run are whatever exist in each checked-out commit; benches absent at an old commit
-simply harvest nothing.
+harvest already excludes stale artifacts). The benches that run are whatever exist
+in each checked-out commit; benches absent at an old commit simply harvest
+nothing.
 
-`--config`, `--engine`, `--target-triple`, `--machine-key` and `-- <passthrough>`
-behave as for `run`. Callgrind's cross-OS/WSL story is unchanged — the worktree
-path is reachable from WSL exactly like the primary checkout.
+`--config`, `--workspace`/`--package`/`--bench`, `--target-triple`,
+`--machine-key` and `-- <passthrough>` behave as for `run`. To collect Callgrind
+data, run backfill on Linux/WSL — the worktree path is reachable from WSL exactly
+like the primary checkout.
 
 ## 9. Analysis algorithms
 
@@ -650,9 +631,9 @@ findings, format — and is the Miri-safe bulk of the code and tests. Async is
 pushed only to the I/O edges, each a small trait ("port") with a real Tokio
 adapter plus an in-lib `#[cfg(test)]` in-memory fake:
 
-* `ProcessRunner` (async) — launch an engine command with injected env; return
-  exit status. Real = `tokio::process::Command`; fake records the invocation and
-  can drop fixture `summary.json` files to simulate a bench run.
+* `ProcessRunner` (async) — launch the benchmark command (`cargo bench`) with
+  injected env; return exit status. Real = `tokio::process::Command`; fake records
+  the invocation and can drop fixture `summary.json` files to simulate a bench run.
 * `Git` (async) — commit/short/branch/committer-date/dirty (shells `git` via
   `tokio::process`; PARSE pure). Fake returns canned `GitInfo`.
 * `Storage` (async) — `StorageFacade` enum (§7); in-memory fake for tests.
@@ -686,13 +667,12 @@ Miri-safe `block_on`); a stable hash (`sha2`) and `many_cpus` for the machine ke
 
 * `analyze`, `install`, and the harvest/store half of `run` are platform-neutral
   (pure file/IO/compute) and first-class on **Windows, Linux and macOS**.
-* Only the *bench execution* inside `run` is constrained, and only by the
-  user-provided command: Callgrind needs Linux/Valgrind (so on Windows it is
-  driven via WSL, exactly like `just bench-cg`; on macOS Valgrind is effectively
-  unavailable, so the Callgrind engine is simply left unconfigured there).
-  Criterion runs natively on all three OSes.
-* WSL specifics (env propagation, target-triple resolution) are covered in §8.1
-  and §4.1; the golden rule is to run the tool in the same OS as the benches.
+* Only the *bench execution* inside `run` is constrained: Callgrind needs
+  Linux/Valgrind, so its benches are `#[cfg(target_os = "linux")]` and simply
+  produce no output on Windows/macOS — to collect Callgrind data, run the tool on
+  Linux (or in WSL). Criterion runs natively on all three OSes.
+* Target-triple resolution is covered in §4.1; the golden rule is to run the tool
+  in the same OS as the benches.
 * Optionally add `just bench-history-*` recipes later; the tool is standalone.
 
 ## 12. Implementation plan
@@ -707,7 +687,7 @@ The revised plan folds your original "upload" step into "run" (run always
 persists) and adds macOS; mapped to your original numbering:
 
 1. **`run` for Callgrind, end-to-end with local storage** (your 1 + 2) — adapter
-   injects `GUNGRAUN_SAVE_SUMMARY`, invokes the user command, `mtime`-scoped
+   injects `GUNGRAUN_SAVE_SUMMARY`, invokes the benches, `mtime`-scoped
    harvest of `summary.json`, builds the ResultSet, and writes it via
    `LocalStorage` to the partition. `run` persists by itself; no separate
    `upload`. (Confirms the “special need” is just the summary flag — kept.)
@@ -774,33 +754,38 @@ Each iteration ships with tests and docs and leaves the tool runnable.
    strings, `StorageSharedKeyCredential`, and `DefaultAzureCredential` (§7).
 7. **Date/time dependency** — *Decided:* `jiff` for timestamps and `--since`
    parsing.
-8. **`run` invocation** — *Decided:* per-engine user-provided commands declared
-   in config (an engine with no command is unused); the tool injects engine
-   configuration via **environment variables** (e.g. `GUNGRAUN_SAVE_SUMMARY`),
-   not appended args, propagating across WSL via `WSLENV`; harvest is scoped to
-   the current run by `mtime ≥ run-start`. Optional `extra_args` escape hatch for
-   engines lacking an env knob.
+8. **`run` invocation** — *Decided (vNext):* `run`/`backfill` invoke the
+   workspace's benches once with `cargo bench` (no per-engine config); the tool
+   injects the union of every supported engine's environment (e.g.
+   `GUNGRAUN_SAVE_SUMMARY` for Callgrind) plus `CARGO_TARGET_DIR`, then harvests
+   each engine's output tree and keeps whichever engines produced cases. Harvest is
+   scoped to the current run by `mtime ≥ run-start`. Off-Linux the Callgrind benches
+   compile to no-ops, so only Criterion is harvested — no OS logic in the tool.
+   *(Superseded: the earlier per-engine `command`/`os`/`extra_args` config and
+   `WSLENV` bridging are gone — to collect Callgrind data, run the tool natively on
+   Linux/WSL.)*
 9. **Effective time vs ingest time** — *Decided:* every run records three times —
    effective, execution, and ingest (wall clock). Effective defaults to the commit
    committer date (clean) or wall-clock now (dirty), overridable with `--timestamp`.
    Effective time **does not order a series** (git topology does — decision 24); it
    only names the dirty file, sub-orders runs within one commit, and drives `--since`.
    The tool never assumes ingest time is the effective date.
-10. **Filtering** — *Decided:* `run` forwards everything after `--` verbatim to
-    each engine command and stays filter-agnostic (no awareness of `--workspace`
-    / `-p` / bench names); the `mtime ≥ run-start` harvest captures exactly what
-    ran. `--engine <name>` scopes which engine(s) run (passthrough hits every
-    engine command, so this is needed for heterogeneous setups and handy for fast
-    test/eval cycles).
+10. **Filtering** — *Decided (vNext):* `run`/`backfill` expose first-class scope
+    flags — `--workspace` (default), `--package`/`-p NAME`, `--bench NAME` — that
+    translate directly to `cargo bench` arguments; everything after `--` is
+    forwarded verbatim after them. The `mtime ≥ run-start` harvest captures exactly
+    what ran. `--engine` is not a `run` flag — it is an `analyze` facet over stored
+    data (decision 22). *(Superseded: the earlier filter-agnostic passthrough-only
+    model with `--engine`-scoped engine selection.)*
 11. **Target triple & WSL** — *Decided:* the partition triple is where the bench
-    *ran*. Resolution: `--target-triple` > per-engine config > engine constraint
-    (Callgrind pins OS=`linux`) > host detection. Arch matches across the WSL
-    boundary, so only the OS flips (handled by the Callgrind constraint); the
-    tool's `host_triple` is stored as metadata to keep mismatches auditable.
-    Golden rule: run the tool in the same OS as the benches.
+    *ran*. Resolution: `--target-triple` > engine constraint (Callgrind pins
+    OS=`linux`) > host detection. Callgrind data is collected by running the tool
+    natively on Linux/WSL, so there is no Windows-trigger/Linux-exec boundary to
+    reconcile; the tool's `host_triple` is stored as metadata to keep any mismatch
+    auditable. Golden rule: run the tool in the same OS as the benches.
 12. **macOS** — *Decided:* first-class for `install` / `analyze` / Criterion /
     Azure and the harvest-store half of `run`; only Callgrind execution is
-    unavailable (no Valgrind) and is simply left unconfigured there.
+    unavailable (no Valgrind), and its benches simply produce no output there.
 13. **`run` vs `upload`** — *Decided:* `run` always persists (execute → ingest →
     store); the standalone `upload` command is **deferred** because its value is
     marginal for Callgrind and only becomes real with Criterion (iteration 5).
@@ -812,9 +797,10 @@ Each iteration ships with tests and docs and leaves the tool runnable.
 15. **Clock** — *Decided:* the `tick` crate (already a workspace dep) supplies the
     injected clock; `tick::ClockControl` drives deterministic simulated time in
     tests. No hand-rolled clock port; convert its `SystemTime` to `jiff::Timestamp`.
-16. **WSL env propagation** — *Decided:* drop magic WSL detection; for every
-    injected engine env var, unconditionally append its name to `WSLENV` (with the
-    `/u` up-flag). Inert outside WSL, correct across the boundary (§8.1).
+16. **WSL env propagation** — *Superseded (vNext):* the earlier `WSLENV` bridging
+    is removed. `run`/`backfill` invoke `cargo bench` in-process, so to collect
+    Callgrind data you run the tool natively on Linux/WSL and no env var has to
+    cross a WSL boundary (decision 8).
 17. **Cloud-storage testing** — *Decided:* Azure backend is exercised in regular CI
     against the **Azurite emulator** (not real cloud, not `#[ignore]`; only
     `#[cfg_attr(miri, ignore)]` for the network edge). The emulator runs directly
@@ -875,10 +861,20 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     collision and treats it as a skip rather than an error), `--overwrite` regenerates
     them; a build/bench failure stops by
     default and `--ignore-errors` skips and continues with an end-of-run summary,
-    while infrastructure failures always abort. Engine commands come from the
-    invoking checkout's config; benches are whatever each commit contains (§8.5).
+    while infrastructure failures always abort. Benches are whatever each commit
+    contains, run with `cargo bench` exactly as `run` (§8.5).
 24. **Series ordering** — *Decided:* **git topology** (first-parent order of the
     resolved commit list), not effective timestamp. This removes the committer-date
     monotonicity hazard (rebases / amended dates no longer misorder) and is the
     reason `analyze` needs a live repo (decision 22). Effective time only sub-orders
     multiple runs sharing one commit and drives the `--since` window.
+25. **No engine configuration (vNext)** — *Decided:* there is no `[engines]` config.
+    `run`/`backfill` run the workspace's benches once with `cargo bench`, inject the
+    combined environment every supported engine needs, and detect each engine from
+    the output tree it wrote (decision 8). Scope is expressed with first-class
+    `--workspace`/`--package`/`--bench` flags (decision 10). This supersedes the
+    per-engine `command`/`os`/`extra_args` config, the `--engine`-on-`run` selector,
+    and the `WSLENV` bridging. The bet is that a single `cargo bench` invocation with
+    the union of engine env vars yields correct output for every supported engine —
+    true for Criterion + Callgrind, where off-Linux the Callgrind benches are
+    compiled-out no-ops.

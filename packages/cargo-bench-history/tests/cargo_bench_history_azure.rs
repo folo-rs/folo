@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use argh::FromArgs;
 use azure_core::http::Url;
-use cargo_bench_history::{Cli, Command, RunError, RunOutcome, run_with_target_root};
+use cargo_bench_history::{Cli, Command, RunError, RunOutcome, run_with_overrides};
 use serial_test::serial;
 
 #[path = "support/cwd_guard.rs"]
@@ -83,24 +83,13 @@ fn unique_container() -> String {
     format!("bh-it-{nanos}-{n}")
 }
 
-/// Builds a config `command` line that invokes the mock engine with `args`,
-/// POSIX single-quoting the path so it survives shell-word tokenization.
-fn mock_command(args: &str) -> String {
-    let quoted = format!("'{}'", MOCK_ENGINE.replace('\'', r"'\''"));
-    if args.is_empty() {
-        quoted
-    } else {
-        format!("{quoted} {args}")
-    }
-}
-
 /// Escapes a string for embedding in a TOML basic (double-quoted) string.
 fn toml_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-/// A config that stores in a fresh Azurite container and runs the mock engine.
-fn azure_config(command: &str) -> String {
+/// A config that stores in a fresh Azurite container.
+fn azure_config() -> String {
     format!(
         "[project]\n\
          id = \"azureproj\"\n\n\
@@ -108,13 +97,10 @@ fn azure_config(command: &str) -> String {
          account = \"devstoreaccount1\"\n\
          container = \"{container}\"\n\
          endpoint = \"{endpoint}\"\n\
-         account_key = \"{key}\"\n\n\
-         [engines.callgrind]\n\
-         command = \"{command}\"\n",
+         account_key = \"{key}\"\n",
         container = unique_container(),
         endpoint = toml_escape(&azurite_endpoint()),
         key = AZURITE_KEY,
-        command = toml_escape(command),
     )
 }
 
@@ -126,12 +112,14 @@ fn azure_config(command: &str) -> String {
 /// dirty) runs against the committed code.
 struct AzureWorkspace {
     dir: tempfile::TempDir,
+    bench: Vec<String>,
 }
 
 impl AzureWorkspace {
     fn new(config: &str) -> Self {
         let workspace = Self {
             dir: tempfile::tempdir().expect("temp dir should be created"),
+            bench: Vec::new(),
         };
         let cargo_dir = workspace.dir.path().join(".cargo");
         std::fs::create_dir_all(&cargo_dir).unwrap();
@@ -148,6 +136,14 @@ impl AzureWorkspace {
         workspace.git(&["add", ".gitignore"]);
         workspace.git(&["commit", "-m", "root"]);
         workspace
+    }
+
+    /// Sets the arguments the mock benchmark engine receives, describing the
+    /// fixtures it should emit. A run invokes the mock once with these arguments
+    /// and harvests every engine output tree it wrote.
+    fn with_bench(mut self, args: &[&str]) -> Self {
+        self.bench = args.iter().map(|arg| (*arg).to_owned()).collect();
+        self
     }
 
     /// Runs `git -C <root> <args>`, asserting success.
@@ -192,7 +188,12 @@ impl AzureWorkspace {
         let _cwd = CwdGuard::enter(self.dir.path());
 
         let target_root = self.dir.path().join("target");
-        run_with_target_root(&command_from(args), Some(target_root)).await
+        // Drive `run`/`backfill` against the mock engine instead of `cargo bench`:
+        // the program plus its fixture-describing arguments form the benchmark
+        // command, which the single bench invocation runs to produce engine output.
+        let mut bench_command = vec![MOCK_ENGINE.to_owned()];
+        bench_command.extend(self.bench.iter().cloned());
+        run_with_overrides(&command_from(args), Some(target_root), Some(bench_command)).await
     }
 }
 
@@ -204,7 +205,7 @@ async fn run_stores_results_in_azurite() {
     if !azurite_available() {
         return;
     }
-    let workspace = AzureWorkspace::new(&azure_config(&mock_command("--summary grp=single")));
+    let workspace = AzureWorkspace::new(&azure_config()).with_bench(&["--summary", "grp=single"]);
 
     let outcome = workspace
         .drive(&["run", "--timestamp", "2024-01-01T00:00:00Z"])
@@ -225,7 +226,7 @@ async fn run_then_analyze_round_trips_through_azurite() {
     if !azurite_available() {
         return;
     }
-    let workspace = AzureWorkspace::new(&azure_config(&mock_command("--summary grp=single")));
+    let workspace = AzureWorkspace::new(&azure_config()).with_bench(&["--summary", "grp=single"]);
 
     workspace
         .drive(&["run", "--timestamp", "2024-01-01T00:00:00Z"])
@@ -273,7 +274,7 @@ async fn analyze_feature_and_dirty_round_trip_through_azurite() {
     if !azurite_available() {
         return;
     }
-    let workspace = AzureWorkspace::new(&azure_config(&mock_command("--summary grp=single")));
+    let workspace = AzureWorkspace::new(&azure_config()).with_bench(&["--summary", "grp=single"]);
 
     // master: root - c2   (two clean points on the official line).
     workspace

@@ -30,8 +30,8 @@ mod tests {
 
     use super::*;
 
-    fn config_with(engines: &str) -> Config {
-        let text = format!("[storage.local]\npath = \"./data\"\n\n{engines}");
+    fn config_with(extra: &str) -> Config {
+        let text = format!("[storage.local]\npath = \"./data\"\n\n{extra}");
         parse_config(&text).expect("test configuration should parse")
     }
 
@@ -45,14 +45,13 @@ mod tests {
 
     #[test]
     fn resolve_project_id_prefers_explicit_then_directory_name() {
-        let explicit =
-            config_with("[project]\nid = \"explicit\"\n[engines.callgrind]\ncommand = \"x\"\n");
+        let explicit = config_with("[project]\nid = \"explicit\"\n");
         assert_eq!(
             resolve_project_id(&explicit, Path::new("/work/folo")),
             "explicit"
         );
 
-        let implicit = config_with("[engines.callgrind]\ncommand = \"x\"\n");
+        let implicit = config_with("");
         assert_eq!(
             resolve_project_id(&implicit, Path::new("/work/folo")),
             "folo"
@@ -61,7 +60,7 @@ mod tests {
 
     #[test]
     fn resolve_project_id_falls_back_when_directory_name_is_unavailable() {
-        let config = config_with("[engines.callgrind]\ncommand = \"x\"\n");
+        let config = config_with("");
         assert_eq!(resolve_project_id(&config, Path::new("/")), "project");
     }
 }

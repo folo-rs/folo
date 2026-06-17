@@ -104,7 +104,10 @@ fn main() -> ExitCode {
                 let value = args.next().expect("--fail-if-exists requires a PATH");
                 fail_if_exists = Some(PathBuf::from(value));
             }
-            other => panic!("unknown argument {other:?}"),
+            // The production flow appends cargo scope flags (`--workspace`,
+            // `--package`, `--bench`) and `--` passthrough after the mock's own
+            // contiguous arguments; stop once those begin.
+            _ => break,
         }
     }
 

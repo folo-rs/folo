@@ -10,10 +10,10 @@ synchronous and pushes async only to the IO edges, each modelled as a small
 The orchestrator (`commands::run::execute_run`) is generic over its ports and is
 driven in tests by fakes, never by real IO:
 
-* `process::BenchRunner` — real `TokioBenchRunner` runs the engine command's
-  argv directly (no shell — the configured command is tokenized with POSIX
-  shell-word rules and spawned, so forwarded arguments are passed verbatim);
-  fake `FakeRunner` records the argv and reports a canned exit status.
+* `process::BenchRunner` — real `TokioBenchRunner` runs the benchmark command's
+  argv directly (no shell — `argv[0]` is the program and the rest are passed
+  verbatim, so forwarded arguments survive spaces and quotes intact); fake
+  `FakeRunner` records the argv and reports a canned exit status.
 * `probe::EnvironmentProbe` — real `SystemProbe` (shells `git`/`rustc`, and
   reads the local hardware profile via `machine::system_profile`); fake
   `FakeProbe` returns canned `GitSnapshot`/`RustcInfo`/`HardwareProfile`.
@@ -179,15 +179,16 @@ Two benchmark engines are supported, each behind a pure parser in `bench/`:
   the workspace's crate-prefixed group ids keep series distinct anyway. Criterion
   is hardware-dependent → partitioned by the host triple and a machine key.
 
-Each `[engines.*]` may declare an `os` list (Rust OS names: `linux`/`macos`/
-`windows`). An empty list (the default) is unrestricted; a non-empty list makes a
-default `run`/`backfill` **skip** the engine on any other host, reporting the skip
-in the run summary. The generated config restricts Callgrind to `linux` (it runs
-under Valgrind). `resolve_engines(config, requested, host_os)` (run.rs) applies
-this only to the default selection — an explicit `--engine` always overrides it
-(so Callgrind can be forced through WSL on Windows). `host_os` is injected via
-`RunDeps.host_os` (production passes `std::env::consts::OS`; tests pass a literal)
-so the filter is deterministic; `EngineConfig::supports_host` is the predicate.
+There is no engine configuration. `run` and `backfill` invoke `cargo bench` once
+with the combined environment every supported engine needs
+(`injected_bench_env`, today `GUNGRAUN_SAVE_SUMMARY=pretty-json`), then harvest
+both output trees (`target/criterion/**`, `target/gungraun/**`); an engine that
+produced no cases (for example Callgrind off Linux, where the `_cg` benches are
+`#[cfg(target_os = "linux")]` no-ops) is silently skipped. Scope a run with
+`--workspace` (the default), `--package`/`-p NAME` (repeatable), or `--bench NAME`
+(repeatable) — these translate to the matching `cargo bench` arguments. `--engine`
+is **not** a `run`/`backfill` flag; it is an `analyze` facet over already-stored
+data. `EngineSystem::ALL` enumerates the engines harvested per run.
 
 ## Machine key
 
@@ -230,13 +231,17 @@ Gungraun summary fixtures into `<target-root>/gungraun/GROUP/summary.json` (so t
 harvester finds fresh output) and exits with a chosen code — never use a shell
 builtin like `exit 7`, because the runner no longer goes through a shell. Resolve
 `<target-root>` the same way the harvester does (`CARGO_TARGET_DIR` or `target`),
-so the mock writes where the harvester reads. Because the engine runs without a
-shell, the config `command` embeds the binary path POSIX-single-quoted (so it
-survives shell-word tokenization as one argument) and TOML-escaped (so Windows
-backslashes survive the TOML string). Like every other crate root that uses
-`#[cfg_attr(coverage_nightly, coverage(off))]`, the mock engine must declare
-`#![cfg_attr(coverage_nightly, feature(coverage_attribute))]` at its top, or the
-coverage job fails to compile it (E0658).
+so the mock writes where the harvester reads. The integration harness injects the
+mock as the benchmark command via the `run_with_overrides` `bench_command`
+override (`[MOCK_ENGINE] + self.bench`, set with `Workspace::with_bench`), so the
+program path and each fixture-describing argument are passed verbatim as distinct
+argv entries — no shell, no quoting, no config `command`. After the mock's own
+contiguous arguments, `run` appends the cargo scope flags (`--workspace`/
+`--package NAME`/`--bench NAME`) and any `--` passthrough, which the mock ignores
+(it stops at the first argument it does not recognize). Like every other crate
+root that uses `#[cfg_attr(coverage_nightly, coverage(off))]`, the mock engine
+must declare `#![cfg_attr(coverage_nightly, feature(coverage_attribute))]` at its
+top, or the coverage job fails to compile it (E0658).
 
 The mock engine accepts `--summary GROUP=KIND` (repeatable). `KIND` is `single`
 (unparametrized, `Ir` = 36, package `fast_time`), `parametrized` (id
@@ -274,18 +279,20 @@ cannot be dropped while it is the current directory, so restore the original CWD
 `[project] id` in the test config rather than relying on the CWD basename.
 
 Each test also points the harvest at its own tempdir `target/` for the duration
-of `run`, by passing an explicit target root through the `run_with_target_root`
-entry. `run` injects that resolved root into every engine's environment as
-`CARGO_TARGET_DIR`, so the engine writes exactly where the harvest scans. This
-matters under the coverage job, which runs `cargo llvm-cov nextest` and redirects
-every build and bin into one shared `target/llvm-cov-target`: that ambient
-`CARGO_TARGET_DIR` would otherwise make the mock engine (which honors it) write
-its summaries into the shared directory while the overridden harvester looked in
-the tempdir, harvesting nothing. Pinning both ends to the same root keeps each
-test hermetic **without mutating the process environment** — do not reintroduce a
-`set_var("CARGO_TARGET_DIR", …)` guard. The production `run` entry passes `None`,
-resolves the root from the environment as usual, and injects that same value so
-the real engine and harvest never diverge either.
+of `run`, and drives `run`/`backfill` against the mock benchmark program instead
+of `cargo bench`, by passing both an explicit target root and the benchmark
+command through the `run_with_overrides` entry. `run` injects that resolved root
+into the benchmark environment as `CARGO_TARGET_DIR`, so the engine writes exactly
+where the harvest scans. This matters under the coverage job, which runs `cargo
+llvm-cov nextest` and redirects every build and bin into one shared
+`target/llvm-cov-target`: that ambient `CARGO_TARGET_DIR` would otherwise make the
+mock engine (which honors it) write its summaries into the shared directory while
+the overridden harvester looked in the tempdir, harvesting nothing. Pinning both
+ends to the same root keeps each test hermetic **without mutating the process
+environment** — do not reintroduce a `set_var("CARGO_TARGET_DIR", …)` guard. The
+production `run` entry passes `None` for both, resolves the root from the
+environment as usual, runs `cargo bench`, and injects that same value so the real
+engine and harvest never diverge either.
 
 ## Fixture-golden canaries
 
@@ -296,15 +303,6 @@ tests, the orchestration tests, and the integration test. Do not hand-edit them 
 make a test pass — regenerate the Callgrind fixtures from `just bench-cg` (and the
 Criterion fixtures from a `cargo bench` run) if the upstream schema genuinely
 changes, and update the parser/tests to match.
-
-## WSLENV (do not add magic WSL detection)
-
-When injecting engine environment variables, `TokioBenchRunner` unconditionally
-appends their names to `WSLENV` with the `/u` up-flag (`bench::merge_wslenv`).
-This is inert outside WSL and makes the injected env cross the Windows→Linux
-boundary regardless of how the command launches, so we never try to detect
-whether a command crosses into WSL. The golden rule still holds as guidance: run
-the tool in the same OS as the benches.
 
 ## Azure Blob storage (`azure` feature)
 

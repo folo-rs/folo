@@ -5,14 +5,13 @@
 //! [`tick::Clock`], so the whole flow is exercised in-process with fakes. The
 //! public [`execute`] wires the real adapters and is what the binary runs.
 
-use std::env::consts;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use jiff::Timestamp;
 use tick::Clock;
 
-use crate::bench::{injected_env, parse_callgrind_summary, parse_criterion_case};
+use crate::bench::{injected_bench_env, parse_callgrind_summary, parse_criterion_case};
 use crate::bench_output::{BenchOutputSource, FsBenchOutputSource, Harvest};
 use crate::comparability::{ComparabilityKey, EngineSystem, resolve_target_triple};
 use crate::config::{Config, load_config};
@@ -29,9 +28,17 @@ use crate::storage::{Storage, StorageError, build_storage};
 use crate::wiring::{default_config_path, resolve_project_id};
 use crate::{RunError, RunOptions, RunOutcome};
 
+/// The program and base arguments the production tool runs to benchmark the
+/// workspace. The first-class scope flags (`--workspace`/`--package`/`--bench`)
+/// and any `--` passthrough are appended to this.
+const DEFAULT_BENCH_COMMAND: [&str; 2] = ["cargo", "bench"];
+
+/// The label used for the single benchmark command in error messages.
+const BENCH_COMMAND_LABEL: &str = "cargo bench";
+
 /// The injected collaborators an orchestrated run operates against.
 pub(crate) struct RunDeps<'a, R, P, O, S> {
-    /// Launches engine commands.
+    /// Launches the benchmark command.
     pub(crate) runner: &'a R,
     /// Probes git and toolchain facts.
     pub(crate) probe: &'a P,
@@ -50,24 +57,27 @@ pub(crate) struct RunDeps<'a, R, P, O, S> {
     /// Version of this tool, recorded with each run.
     pub(crate) tool_version: &'a str,
     /// Cargo target directory that engines write to and the harvest scans. It is
-    /// injected into each engine's environment as `CARGO_TARGET_DIR` so the
-    /// engine's output always lands where the harvest looks for it.
+    /// injected into the benchmark command's environment as `CARGO_TARGET_DIR` so
+    /// the output always lands where the harvest looks for it.
     pub(crate) target_root: &'a Path,
-    /// The host operating system (Rust's `std::env::consts::OS` name) used to
-    /// decide which engines run by default. An engine whose configured `os` list
-    /// excludes this host is skipped unless explicitly requested with `--engine`.
-    pub(crate) host_os: &'a str,
+    /// The benchmark command (program plus base arguments) run once per `run`.
+    /// Production uses `cargo bench`; the scope flags and passthrough are appended
+    /// to it. Tests inject a mock program in its place.
+    pub(crate) bench_command: &'a [String],
 }
 
 /// The real `run`: wire the production adapters and orchestrate.
 ///
 /// `target_root` overrides the cargo target directory the harvest scans.
 /// Production passes `None`, resolving the root from `CARGO_TARGET_DIR` (or the
-/// `target/` default). Tests pass an explicit root so the harvest is hermetic
-/// without mutating the process environment.
+/// `target/` default). `bench_command` overrides the program run to produce
+/// benchmark output; production passes `None`, defaulting to `cargo bench`. Tests
+/// pass explicit values so the flow is hermetic without mutating the process
+/// environment.
 pub(crate) async fn execute(
     options: &RunOptions,
     target_root: Option<PathBuf>,
+    bench_command: Option<Vec<String>>,
 ) -> Result<RunOutcome, RunError> {
     let config_path = options
         .config_path
@@ -85,6 +95,7 @@ pub(crate) async fn execute(
     let output = FsBenchOutputSource::new(target_root.clone());
     let clock = Clock::new_tokio();
     let env = |name: &str| std::env::var(name).ok();
+    let bench_command = bench_command.unwrap_or_else(default_bench_command);
 
     let deps = RunDeps {
         runner: &runner,
@@ -97,10 +108,18 @@ pub(crate) async fn execute(
         project_id: &project_id,
         tool_version: env!("CARGO_PKG_VERSION"),
         target_root: &target_root,
-        host_os: consts::OS,
+        bench_command: &bench_command,
     };
 
     execute_run(options, &deps).await
+}
+
+/// The production benchmark command: `cargo bench`.
+pub(crate) fn default_bench_command() -> Vec<String> {
+    DEFAULT_BENCH_COMMAND
+        .iter()
+        .map(|part| (*part).to_owned())
+        .collect()
 }
 
 /// Probe facts shared across every engine in a single run.
@@ -117,14 +136,15 @@ struct SharedContext {
     hardware: HardwareProfile,
 }
 
-/// The result of processing one engine.
+/// The result of harvesting one engine's output.
 struct EngineSummary {
     /// Whether a result set was stored.
     stored: bool,
     /// Number of benchmark cases harvested.
     count: usize,
-    /// Human-readable per-engine summary.
-    label: String,
+    /// Human-readable per-engine summary, or `None` when the engine produced no
+    /// output (so it is silently absent from the summary).
+    label: Option<String>,
 }
 
 /// Aggregate outcome of running every selected engine in one run.
@@ -158,11 +178,15 @@ where
     Ok(RunOutcome::Completed { message })
 }
 
-/// Runs every selected engine and returns the aggregate [`RunSummary`].
+/// Runs the benchmark command once and harvests every engine's output.
 ///
 /// This is the storage-aware core shared by the `run` command and `backfill`:
 /// the former wraps the summary in a human-readable message, the latter maps it
-/// to a per-commit outcome.
+/// to a per-commit outcome. The benchmark command (`cargo bench` in production)
+/// is run a single time with the union of every engine's injected environment;
+/// each engine is then identified by which output tree it populated. An engine
+/// that produced no output (for example Callgrind off Linux, where its benches
+/// compile to no-ops) simply contributes nothing.
 pub(crate) async fn run_engines<R, P, O, S>(
     options: &RunOptions,
     deps: &RunDeps<'_, R, P, O, S>,
@@ -173,7 +197,27 @@ where
     O: BenchOutputSource,
     S: Storage,
 {
-    let (to_run, skipped) = resolve_engines(deps.config, options.engine.as_deref(), deps.host_os)?;
+    let argv = build_bench_argv(deps.bench_command, options)?;
+
+    // The benchmark command runs once with the union of every engine's injected
+    // environment plus `CARGO_TARGET_DIR` pinned to the directory the harvest
+    // scans, so engine output always lands where it is collected from — notably
+    // when an ambient `CARGO_TARGET_DIR` (such as the one `cargo llvm-cov` sets)
+    // differs from the root this run resolved.
+    let mut env = injected_bench_env();
+    env.push((
+        "CARGO_TARGET_DIR".to_owned(),
+        deps.target_root.to_string_lossy().into_owned(),
+    ));
+
+    let run_start = deps.clock.system_time();
+    let status = deps.runner.run_benches(&argv, &env).await?;
+    if !status.success {
+        return Err(RunError::Engine {
+            engine: BENCH_COMMAND_LABEL.to_owned(),
+            code: status.code,
+        });
+    }
 
     let rustc = deps.probe.toolchain().await?;
     let shared = SharedContext {
@@ -186,15 +230,17 @@ where
 
     let mut stored = 0_usize;
     let mut harvested = 0_usize;
-    let mut labels = skipped;
+    let mut labels = Vec::new();
 
-    for (name, engine) in &to_run {
-        let summary = process_engine(options, deps, &shared, name, *engine).await?;
+    for engine in EngineSystem::ALL {
+        let summary = harvest_engine(options, deps, &shared, engine, run_start).await?;
         if summary.stored {
             stored = stored.saturating_add(1);
         }
         harvested = harvested.saturating_add(summary.count);
-        labels.push(summary.label);
+        if let Some(label) = summary.label {
+            labels.push(label);
+        }
     }
 
     Ok(RunSummary {
@@ -204,13 +250,50 @@ where
     })
 }
 
-/// Runs one engine, harvests its output, and (unless suppressed) stores the set.
-async fn process_engine<R, P, O, S>(
+/// Builds the benchmark command line: the base command followed by the cargo
+/// scope flags translated from the run options, then any `--` passthrough.
+///
+/// Scope follows cargo's own conventions: with no `--package` filters the whole
+/// workspace is benched (`--workspace`); otherwise each requested package is
+/// passed with `--package`. Any `--bench` filters and passthrough arguments are
+/// appended verbatim. Non-overlapping `--package`/`--bench` runs at one commit
+/// therefore exercise disjoint benchmark cases.
+fn build_bench_argv(
+    bench_command: &[String],
+    options: &RunOptions,
+) -> Result<Vec<String>, RunError> {
+    let Some((program, _)) = bench_command.split_first() else {
+        return Err(RunError::Command {
+            engine: BENCH_COMMAND_LABEL.to_owned(),
+            message: "the benchmark command is empty".to_owned(),
+        });
+    };
+    debug_assert!(!program.is_empty());
+
+    let mut argv = bench_command.to_vec();
+    if options.packages.is_empty() {
+        argv.push("--workspace".to_owned());
+    } else {
+        for package in &options.packages {
+            argv.push("--package".to_owned());
+            argv.push(package.clone());
+        }
+    }
+    for bench in &options.benches {
+        argv.push("--bench".to_owned());
+        argv.push(bench.clone());
+    }
+    argv.extend(options.passthrough.iter().cloned());
+    Ok(argv)
+}
+
+/// Harvests one engine's output and (unless suppressed) stores the result set.
+async fn harvest_engine<R, P, O, S>(
     options: &RunOptions,
     deps: &RunDeps<'_, R, P, O, S>,
     shared: &SharedContext,
-    name: &str,
     engine: EngineSystem,
+    run_start: SystemTime,
 ) -> Result<EngineSummary, RunError>
 where
     R: BenchRunner,
@@ -218,60 +301,29 @@ where
     O: BenchOutputSource,
     S: Storage,
 {
-    let engine_config = deps
-        .config
-        .engines
-        .get(name)
-        .expect("engine name was taken from the configuration map");
-
-    let run_start = deps.clock.system_time();
-    let mut injected = injected_env(engine);
-    // Pin the engine's output location to the directory the harvest scans, so the
-    // two never diverge — notably when an ambient `CARGO_TARGET_DIR` (such as the
-    // one `cargo llvm-cov` sets) differs from the root this run resolved.
-    injected.push((
-        "CARGO_TARGET_DIR".to_owned(),
-        deps.target_root.to_string_lossy().into_owned(),
-    ));
-    let argv = build_command_line(
-        &engine_config.command,
-        &engine_config.extra_args,
-        &options.passthrough,
-    )
-    .map_err(|message| RunError::Command {
-        engine: name.to_owned(),
-        message,
-    })?;
-
-    let status = deps.runner.run_engine(&argv, &injected).await?;
-    if !status.success {
-        return Err(RunError::Engine {
-            engine: name.to_owned(),
-            code: status.code,
-        });
-    }
-
     let harvest = deps.output.collect(engine, run_start).await?;
     let records = parse_harvest(&harvest)?;
     let count = records.len();
+
+    // An engine that produced no fresh output contributes nothing. Off Linux the
+    // Callgrind tree is simply absent; a `--package`/`--bench` filter may also
+    // match no cases for one engine. Storing an empty result set would inflate
+    // `analyze`'s run count with a series-less object, so skip it silently — there
+    // is no misconfiguration to report, since absence is the expected steady state
+    // for an engine that does not apply here.
+    if count == 0 {
+        return Ok(EngineSummary {
+            stored: false,
+            count: 0,
+            label: None,
+        });
+    }
 
     if options.no_store {
         return Ok(EngineSummary {
             stored: false,
             count,
-            label: format!("{name}: {count} harvested (not stored)"),
-        });
-    }
-
-    // An engine that harvested nothing produces no comparable data point. Storing an
-    // empty result set would inflate `analyze`'s run count with a series-less object
-    // (and silently mask a misconfigured filter or output path), so skip storage and
-    // surface the empty harvest in the summary instead.
-    if count == 0 {
-        return Ok(EngineSummary {
-            stored: false,
-            count: 0,
-            label: format!("{name}: no benchmark cases harvested (nothing stored)"),
+            label: Some(format!("{engine}: {count} harvested (not stored)")),
         });
     }
 
@@ -349,7 +401,7 @@ where
     Ok(EngineSummary {
         stored: true,
         count,
-        label: format!("{name}: {count} stored"),
+        label: Some(format!("{engine}: {count} stored")),
     })
 }
 
@@ -405,99 +457,6 @@ fn parse_harvest(harvest: &Harvest) -> Result<Vec<ResultRecord>, RunError> {
             Ok(records)
         }
     }
-}
-
-/// The engines selected to run, paired with human-readable notes about engines
-/// skipped because their `os` restriction excludes the host.
-type EngineSelection = (Vec<(String, EngineSystem)>, Vec<String>);
-
-/// Decides which engines to run from the configuration and an optional filter.
-///
-/// Returns the engines to run as `(config key, engine)` pairs together with notes
-/// describing engines skipped because their configured `os` list excludes
-/// `host_os`. An explicit `--engine` filter must name a configured engine and
-/// always overrides the host-OS restriction (so e.g. Callgrind can be forced
-/// through WSL on Windows).
-fn resolve_engines(
-    config: &Config,
-    requested: Option<&str>,
-    host_os: &str,
-) -> Result<EngineSelection, RunError> {
-    let mut configured = Vec::new();
-    for (name, engine_config) in &config.engines {
-        let engine = EngineSystem::from_name(name).ok_or_else(|| RunError::NoEngine {
-            message: format!("configuration references unknown engine {name:?}"),
-        })?;
-        configured.push((name.clone(), engine, engine_config.supports_host(host_os)));
-    }
-
-    let mut skipped = Vec::new();
-
-    let to_run = match requested {
-        Some(requested) => {
-            let engine = EngineSystem::from_name(requested).ok_or_else(|| RunError::NoEngine {
-                message: format!("unknown engine {requested:?}"),
-            })?;
-            if !configured
-                .iter()
-                .any(|(_, candidate, _)| *candidate == engine)
-            {
-                return Err(RunError::NoEngine {
-                    message: format!("engine {requested:?} is not configured"),
-                });
-            }
-            configured
-                .into_iter()
-                .filter(|(_, candidate, _)| *candidate == engine)
-                .map(|(name, candidate, _)| (name, candidate))
-                .collect()
-        }
-        None => {
-            let mut to_run = Vec::new();
-            for (name, engine, supported) in configured {
-                if supported {
-                    to_run.push((name, engine));
-                } else {
-                    skipped.push(format!(
-                        "skipped {name} (not supported on {host_os}; force with --engine {name})"
-                    ));
-                }
-            }
-            to_run
-        }
-    };
-
-    if to_run.is_empty() {
-        let message = if skipped.is_empty() {
-            "no engines are configured".to_owned()
-        } else {
-            format!("no engines run on {host_os}; force one with --engine <name>")
-        };
-        return Err(RunError::NoEngine { message });
-    }
-
-    Ok((to_run, skipped))
-}
-/// arguments verbatim, producing a full argv for direct (shell-free) execution.
-///
-/// The configured `command` is split with POSIX shell-word rules (honoring
-/// quotes), then `extra_args` and `passthrough` are appended as-is — each is
-/// already a discrete argument and is forwarded without re-tokenization, so
-/// values containing spaces or quotes are preserved exactly. Returns an error if
-/// `command` is not validly quoted or yields no program to run.
-fn build_command_line(
-    command: &str,
-    extra_args: &[String],
-    passthrough: &[String],
-) -> Result<Vec<String>, String> {
-    let mut argv = shlex::split(command)
-        .ok_or_else(|| format!("command {command:?} is not a valid shell-quoted string"))?;
-    if argv.is_empty() {
-        return Err("command is empty".to_owned());
-    }
-    argv.extend(extra_args.iter().cloned());
-    argv.extend(passthrough.iter().cloned());
-    Ok(argv)
 }
 
 /// Builds the human-readable run summary.
@@ -663,7 +622,7 @@ mod tests {
     }
 
     impl BenchRunner for FakeRunner {
-        async fn run_engine(
+        async fn run_benches(
             &self,
             argv: &[String],
             env: &[(String, String)],
@@ -798,19 +757,15 @@ mod tests {
         }
     }
 
-    fn config_with(engines: &str) -> Config {
-        let text = format!("[storage.local]\npath = \"./data\"\n\n{engines}");
-        parse_config(&text).expect("test configuration should parse")
+    fn storage_only_config() -> Config {
+        parse_config("[storage.local]\npath = \"./data\"\n")
+            .expect("test configuration should parse")
     }
 
-    fn callgrind_config() -> Config {
-        config_with("[engines.callgrind]\ncommand = \"noop\"\n")
-    }
-
-    fn both_engines_config() -> Config {
-        config_with(
-            "[engines.callgrind]\ncommand = \"noop\"\n\n[engines.criterion]\ncommand = \"crit\"\n",
-        )
+    /// The benchmark program tests pretend to run. The [`FakeRunner`] records the
+    /// argv and never executes anything, so the value only needs to be non-empty.
+    fn mock_bench_command() -> Vec<String> {
+        vec!["mock".to_owned()]
     }
 
     fn drive(
@@ -833,30 +788,12 @@ mod tests {
         output: &FakeOutput,
         storage: &MemoryStorage,
     ) -> Result<RunOutcome, RunError> {
-        drive_on_host(
-            "linux", now_unix, options, config, runner, probe, output, storage,
-        )
-    }
-
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "test helper threads every injected port"
-    )]
-    fn drive_on_host(
-        host_os: &str,
-        now_unix: u64,
-        options: &RunOptions,
-        config: &Config,
-        runner: &FakeRunner,
-        probe: &FakeProbe,
-        output: &FakeOutput,
-        storage: &MemoryStorage,
-    ) -> Result<RunOutcome, RunError> {
         let now = SystemTime::UNIX_EPOCH
             .checked_add(Duration::from_secs(now_unix))
             .expect("frozen instant is within range");
         let clock = Clock::new_frozen_at(now);
         let env = |_name: &str| None::<String>;
+        let bench_command = mock_bench_command();
         let deps = RunDeps {
             runner,
             probe,
@@ -868,42 +805,9 @@ mod tests {
             project_id: "folo",
             tool_version: "0.0.1",
             target_root: Path::new("target"),
-            host_os,
+            bench_command: &bench_command,
         };
         block_on(execute_run(options, &deps))
-    }
-
-    #[test]
-    fn os_restricted_engine_is_skipped_and_noted_on_unsupported_host() {
-        // callgrind is restricted to linux; on a windows host the default run
-        // skips it (reporting the skip) and still runs criterion.
-        let config = config_with(
-            "[engines.callgrind]\ncommand = \"noop\"\nos = [\"linux\"]\n\n[engines.criterion]\ncommand = \"crit\"\n",
-        );
-        let storage = MemoryStorage::new();
-
-        let outcome = drive_on_host(
-            "windows",
-            FROZEN_UNIX,
-            &RunOptions::default(),
-            &config,
-            &FakeRunner::succeeding(),
-            &FakeProbe::new(),
-            &FakeOutput::with_criterion_case(),
-            &storage,
-        )
-        .unwrap();
-
-        let RunOutcome::Completed { message } = outcome else {
-            panic!("expected completion");
-        };
-        assert!(message.contains("skipped callgrind"), "{message}");
-        assert!(message.contains("windows"), "{message}");
-        assert!(message.contains("--engine callgrind"), "{message}");
-
-        let keys = storage.keys();
-        assert_eq!(keys.len(), 1, "only criterion should store: {keys:?}");
-        assert!(keys[0].contains("/criterion/"), "{keys:?}");
     }
 
     #[test]
@@ -915,7 +819,7 @@ mod tests {
 
         let outcome = drive(
             &RunOptions::default(),
-            &callgrind_config(),
+            &storage_only_config(),
             &runner,
             &probe,
             &output,
@@ -961,7 +865,7 @@ mod tests {
 
         drive(
             &options,
-            &callgrind_config(),
+            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -983,7 +887,7 @@ mod tests {
         let storage = MemoryStorage::new();
         drive(
             &RunOptions::default(),
-            &callgrind_config(),
+            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -993,7 +897,7 @@ mod tests {
 
         let error = drive(
             &RunOptions::default(),
-            &callgrind_config(),
+            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1014,7 +918,7 @@ mod tests {
         let storage = MemoryStorage::new();
         drive(
             &RunOptions::default(),
-            &callgrind_config(),
+            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             // First run harvests two records.
@@ -1029,7 +933,7 @@ mod tests {
         };
         drive(
             &overwrite,
-            &callgrind_config(),
+            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             // Second run harvests a single record over the same key.
@@ -1061,7 +965,7 @@ mod tests {
         let storage = MemoryStorage::new();
         drive(
             &RunOptions::default(),
-            &callgrind_config(),
+            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::dirty(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1085,7 +989,7 @@ mod tests {
         drive_at(
             FROZEN_UNIX,
             &RunOptions::default(),
-            &callgrind_config(),
+            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::dirty(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1095,7 +999,7 @@ mod tests {
         drive_at(
             FROZEN_UNIX + 1,
             &RunOptions::default(),
-            &callgrind_config(),
+            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::dirty(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1115,7 +1019,7 @@ mod tests {
         drive_at(
             FROZEN_UNIX,
             &RunOptions::default(),
-            &callgrind_config(),
+            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::dirty(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1126,7 +1030,7 @@ mod tests {
         let error = drive_at(
             FROZEN_UNIX,
             &RunOptions::default(),
-            &callgrind_config(),
+            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::dirty(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1145,7 +1049,7 @@ mod tests {
         drive_at(
             FROZEN_UNIX,
             &overwrite,
-            &callgrind_config(),
+            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::dirty(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1165,7 +1069,7 @@ mod tests {
 
         let outcome = drive(
             &options,
-            &callgrind_config(),
+            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1182,13 +1086,14 @@ mod tests {
 
     #[test]
     fn empty_harvest_stores_nothing_and_reports_it() {
-        // An engine that exits cleanly but produces no fresh output (e.g. a
-        // benchmark-name filter that matched nothing) must not store an empty
-        // result set, which would otherwise inflate `analyze`'s run count.
+        // A benchmark command that exits cleanly but produces no fresh output (for
+        // example a `--bench` filter that matched nothing, or an engine that does
+        // not apply on this OS) must not store an empty result set, which would
+        // otherwise inflate `analyze`'s run count.
         let storage = MemoryStorage::new();
         let outcome = drive(
             &RunOptions::default(),
-            &callgrind_config(),
+            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::default(),
@@ -1200,21 +1105,20 @@ mod tests {
             panic!("expected completion");
         };
         assert!(message.contains("Stored 0 result set(s)"), "{message}");
-        assert!(
-            message.contains("no benchmark cases harvested (nothing stored)"),
-            "{message}"
-        );
+        // An engine that produced nothing is absent from the summary rather than
+        // flagged, because absence is the expected steady state off its OS.
+        assert!(!message.contains('['), "{message}");
         assert!(storage.keys().is_empty(), "{:?}", storage.keys());
     }
 
     #[test]
     fn empty_harvest_for_one_engine_does_not_block_the_other() {
-        // With both engines configured but only Criterion producing output, the
-        // empty Callgrind harvest is skipped while Criterion is still stored.
+        // With only Criterion producing output, the empty Callgrind harvest is
+        // skipped while Criterion is still stored.
         let storage = MemoryStorage::new();
         let outcome = drive(
             &RunOptions::default(),
-            &both_engines_config(),
+            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_criterion_case(),
@@ -1237,7 +1141,7 @@ mod tests {
         let storage = MemoryStorage::new();
         let error = drive(
             &RunOptions::default(),
-            &callgrind_config(),
+            &storage_only_config(),
             &FakeRunner::failing(101),
             &FakeProbe::new(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1247,7 +1151,7 @@ mod tests {
 
         match error {
             RunError::Engine { engine, code } => {
-                assert_eq!(engine, "callgrind");
+                assert_eq!(engine, "cargo bench");
                 assert_eq!(code, Some(101));
             }
             other => panic!("expected engine error, got {other:?}"),
@@ -1260,7 +1164,7 @@ mod tests {
         let storage = MemoryStorage::new();
         let outcome = drive(
             &RunOptions::default(),
-            &both_engines_config(),
+            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_callgrind_and_criterion(),
@@ -1290,15 +1194,11 @@ mod tests {
     }
 
     #[test]
-    fn explicit_criterion_selection_stores_results() {
+    fn criterion_output_is_stored() {
         let storage = MemoryStorage::new();
-        let options = RunOptions {
-            engine: Some("criterion".to_owned()),
-            ..RunOptions::default()
-        };
         let outcome = drive(
-            &options,
-            &both_engines_config(),
+            &RunOptions::default(),
+            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_criterion_case(),
@@ -1311,7 +1211,7 @@ mod tests {
         };
         assert!(message.contains("Stored 1"), "{message}");
 
-        // Only the criterion engine ran, partitioned by the machine fingerprint.
+        // Only Criterion produced output, partitioned by the machine fingerprint.
         let keys = storage.keys();
         assert_eq!(keys.len(), 1, "{keys:?}");
         assert!(keys[0].contains("/criterion/"), "{keys:?}");
@@ -1326,13 +1226,12 @@ mod tests {
     fn criterion_partition_uses_the_machine_key_override() {
         let storage = MemoryStorage::new();
         let options = RunOptions {
-            engine: Some("criterion".to_owned()),
             machine_key: Some("ci-pool-a".to_owned()),
             ..RunOptions::default()
         };
         drive(
             &options,
-            &both_engines_config(),
+            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_criterion_case(),
@@ -1351,13 +1250,9 @@ mod tests {
     #[test]
     fn malformed_criterion_case_is_a_parse_error() {
         let storage = MemoryStorage::new();
-        let options = RunOptions {
-            engine: Some("criterion".to_owned()),
-            ..RunOptions::default()
-        };
         let error = drive(
-            &options,
-            &both_engines_config(),
+            &RunOptions::default(),
+            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_malformed_criterion_case(),
@@ -1380,13 +1275,13 @@ mod tests {
     fn passthrough_arguments_reach_the_runner_verbatim() {
         let runner = FakeRunner::succeeding();
         let options = RunOptions {
-            passthrough: vec!["-p".to_owned(), "nm".to_owned()],
+            passthrough: vec!["--".to_owned(), "--quiet".to_owned()],
             ..RunOptions::default()
         };
 
         drive(
             &options,
-            &callgrind_config(),
+            &storage_only_config(),
             &runner,
             &FakeProbe::new(),
             &FakeOutput::default(),
@@ -1394,21 +1289,23 @@ mod tests {
         )
         .unwrap();
 
+        // The benchmark command is the mock program, the default `--workspace`
+        // scope, then the passthrough forwarded verbatim.
         assert_eq!(
             runner
                 .last_command()
                 .expect("a command should have been recorded"),
-            ["noop", "-p", "nm"]
+            ["mock", "--workspace", "--", "--quiet"]
         );
     }
 
     #[test]
-    fn engine_environment_pins_the_target_directory() {
+    fn bench_environment_pins_the_target_directory() {
         let runner = FakeRunner::succeeding();
 
         drive(
             &RunOptions::default(),
-            &callgrind_config(),
+            &storage_only_config(),
             &runner,
             &FakeProbe::new(),
             &FakeOutput::default(),
@@ -1419,8 +1316,9 @@ mod tests {
         let env = runner
             .last_env()
             .expect("an environment should have been recorded");
-        // The engine receives the callgrind summary flag plus the resolved target
-        // directory, so its output lands exactly where the harvest scans.
+        // The benchmark command receives the combined engine environment (the
+        // Callgrind summary flag) plus the resolved target directory, so output
+        // lands exactly where the harvest scans.
         assert!(
             env.contains(&("GUNGRAUN_SAVE_SUMMARY".to_owned(), "pretty-json".to_owned())),
             "{env:?}"
@@ -1436,7 +1334,7 @@ mod tests {
         let storage = MemoryStorage::new();
         let error = drive(
             &RunOptions::default(),
-            &callgrind_config(),
+            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_malformed_summary(),
@@ -1457,147 +1355,54 @@ mod tests {
     }
 
     #[test]
-    fn malformed_engine_command_is_a_command_error() {
-        // The TOML value `prog "unterminated` has an unbalanced quote, so
-        // tokenization fails before the engine is ever spawned.
-        let config = config_with("[engines.callgrind]\ncommand = \"prog \\\"unterminated\"\n");
-        let storage = MemoryStorage::new();
-        let error = drive(
-            &RunOptions::default(),
-            &config,
-            &FakeRunner::succeeding(),
-            &FakeProbe::new(),
-            &FakeOutput::default(),
-            &storage,
-        )
-        .unwrap_err();
+    fn build_bench_argv_defaults_to_the_whole_workspace() {
+        let argv = build_bench_argv(&mock_bench_command(), &RunOptions::default()).unwrap();
+        assert_eq!(argv, ["mock", "--workspace"]);
+    }
 
+    #[test]
+    fn build_bench_argv_translates_package_filters() {
+        let options = RunOptions {
+            packages: vec!["nm".to_owned(), "many_cpus".to_owned()],
+            ..RunOptions::default()
+        };
+        let argv = build_bench_argv(&mock_bench_command(), &options).unwrap();
+        // Packages omit `--workspace` and each becomes a `--package` pair.
+        assert_eq!(argv, ["mock", "--package", "nm", "--package", "many_cpus"]);
+    }
+
+    #[test]
+    fn build_bench_argv_translates_bench_filters_and_passthrough_in_order() {
+        let options = RunOptions {
+            packages: vec!["nm".to_owned()],
+            benches: vec!["nm_observe".to_owned()],
+            passthrough: vec!["--".to_owned(), "--noplot".to_owned()],
+            ..RunOptions::default()
+        };
+        let argv = build_bench_argv(&mock_bench_command(), &options).unwrap();
+        assert_eq!(
+            argv,
+            [
+                "mock",
+                "--package",
+                "nm",
+                "--bench",
+                "nm_observe",
+                "--",
+                "--noplot"
+            ]
+        );
+    }
+
+    #[test]
+    fn build_bench_argv_rejects_an_empty_command() {
+        let error = build_bench_argv(&[], &RunOptions::default()).unwrap_err();
         match error {
             RunError::Command { engine, message } => {
-                assert_eq!(engine, "callgrind");
-                assert!(message.contains("valid shell"), "{message}");
+                assert_eq!(engine, "cargo bench");
+                assert!(message.contains("empty"), "{message}");
             }
             other => panic!("expected command error, got {other:?}"),
         }
-        assert!(storage.keys().is_empty());
-    }
-
-    #[test]
-    fn resolve_engines_errors_when_none_configured() {
-        let error = resolve_engines(&config_with(""), None, "linux").unwrap_err();
-        match error {
-            RunError::NoEngine { message } => {
-                assert!(message.contains("no engines are configured"), "{message}");
-            }
-            other => panic!("expected no-engine error, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn resolve_engines_rejects_unknown_config_engine() {
-        let config = config_with("[engines.dhat]\ncommand = \"x\"\n");
-        let error = resolve_engines(&config, None, "linux").unwrap_err();
-        assert!(matches!(error, RunError::NoEngine { .. }));
-    }
-
-    #[test]
-    fn resolve_engines_rejects_unknown_requested_engine() {
-        let error = resolve_engines(&callgrind_config(), Some("dhat"), "linux").unwrap_err();
-        match error {
-            RunError::NoEngine { message } => {
-                assert!(message.contains("unknown engine"), "{message}");
-            }
-            other => panic!("expected no-engine error, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn resolve_engines_rejects_unconfigured_requested_engine() {
-        let error = resolve_engines(&callgrind_config(), Some("criterion"), "linux").unwrap_err();
-        match error {
-            RunError::NoEngine { message } => {
-                assert!(message.contains("not configured"), "{message}");
-            }
-            other => panic!("expected no-engine error, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn resolve_engines_accepts_a_criterion_only_configuration() {
-        let config = config_with("[engines.criterion]\ncommand = \"crit\"\n");
-        let (to_run, skipped) = resolve_engines(&config, None, "linux").unwrap();
-        assert_eq!(to_run.len(), 1);
-        assert_eq!(to_run[0].0, "criterion");
-        assert_eq!(to_run[0].1, EngineSystem::Criterion);
-        assert!(skipped.is_empty());
-    }
-
-    #[test]
-    fn resolve_engines_skips_os_restricted_engine_by_default() {
-        let config = config_with(
-            "[engines.callgrind]\ncommand = \"noop\"\nos = [\"linux\"]\n\n[engines.criterion]\ncommand = \"crit\"\n",
-        );
-        let (to_run, skipped) = resolve_engines(&config, None, "windows").unwrap();
-        assert_eq!(to_run.len(), 1);
-        assert_eq!(to_run[0].1, EngineSystem::Criterion);
-        assert_eq!(skipped.len(), 1);
-        assert!(skipped[0].contains("callgrind"), "{}", skipped[0]);
-        assert!(skipped[0].contains("windows"), "{}", skipped[0]);
-    }
-
-    #[test]
-    fn resolve_engines_runs_os_restricted_engine_on_supported_host() {
-        let config = config_with("[engines.callgrind]\ncommand = \"noop\"\nos = [\"linux\"]\n");
-        let (to_run, skipped) = resolve_engines(&config, None, "linux").unwrap();
-        assert_eq!(to_run.len(), 1);
-        assert_eq!(to_run[0].1, EngineSystem::Callgrind);
-        assert!(skipped.is_empty());
-    }
-
-    #[test]
-    fn resolve_engines_forces_os_restricted_engine_when_requested() {
-        let config = config_with("[engines.callgrind]\ncommand = \"noop\"\nos = [\"linux\"]\n");
-        let (to_run, skipped) = resolve_engines(&config, Some("callgrind"), "windows").unwrap();
-        assert_eq!(to_run.len(), 1);
-        assert_eq!(to_run[0].1, EngineSystem::Callgrind);
-        assert!(skipped.is_empty());
-    }
-
-    #[test]
-    fn resolve_engines_errors_when_only_engine_is_os_restricted() {
-        let config = config_with("[engines.callgrind]\ncommand = \"noop\"\nos = [\"linux\"]\n");
-        let error = resolve_engines(&config, None, "windows").unwrap_err();
-        match error {
-            RunError::NoEngine { message } => {
-                assert!(message.contains("no engines run on windows"), "{message}");
-            }
-            other => panic!("expected no-engine error, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn build_command_line_tokenizes_and_appends_verbatim() {
-        assert_eq!(
-            build_command_line("just bench-cg", &[], &["-p".to_owned(), "nm".to_owned()]).unwrap(),
-            ["just", "bench-cg", "-p", "nm"]
-        );
-        assert_eq!(
-            build_command_line("cargo bench", &["--quiet".to_owned()], &[]).unwrap(),
-            ["cargo", "bench", "--quiet"]
-        );
-        // A quoted segment in the configured command is one argument, and a
-        // forwarded argument with spaces is appended verbatim (not re-tokenized).
-        assert_eq!(
-            build_command_line("prog \"a b\"", &[], &["c d".to_owned()]).unwrap(),
-            ["prog", "a b", "c d"]
-        );
-    }
-
-    #[test]
-    fn build_command_line_rejects_malformed_and_empty_commands() {
-        let unbalanced = build_command_line("prog \"unterminated", &[], &[]).unwrap_err();
-        assert!(unbalanced.contains("valid shell"), "{unbalanced}");
-        let empty = build_command_line("   ", &[], &[]).unwrap_err();
-        assert!(empty.contains("empty"), "{empty}");
     }
 }

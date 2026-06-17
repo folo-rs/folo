@@ -19,6 +19,11 @@ pub enum EngineSystem {
 }
 
 impl EngineSystem {
+    /// Every supported engine, in a stable order used to inject the combined
+    /// benchmark environment and to harvest each engine's output tree after the
+    /// single `cargo bench` invocation.
+    pub const ALL: [Self; 2] = [Self::Callgrind, Self::Criterion];
+
     /// The stable lowercase identifier used in storage paths and config keys.
     #[must_use]
     pub fn as_str(self) -> &'static str {

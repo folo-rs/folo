@@ -13,11 +13,12 @@
 //! per-benchmark series in git first-parent order and looks for regressions and
 //! drift.
 //!
-//! The `run` command executes the configured benchmark engines (Callgrind via
-//! Gungraun, and Criterion), harvests their machine-readable output, and stores
-//! one immutable result set per engine per run through the configured storage
-//! backend. The `analyze` command reconstructs each benchmark's series and reports
-//! notable changes, and the `install` command writes a starter configuration file.
+//! The `run` command executes the workspace's benches once with `cargo bench`,
+//! harvests the machine-readable output of every supported engine (Callgrind via
+//! Gungraun, and Criterion), and stores one immutable result set per engine per
+//! run through the configured storage backend. The `analyze` command reconstructs
+//! each benchmark's series and reports notable changes, and the `install` command
+//! writes a starter configuration file.
 
 mod analyze;
 mod bench;
@@ -43,14 +44,14 @@ mod wiring;
 pub use cli::Cli;
 pub use comparability::{ComparabilityKey, EngineSystem, resolve_target_triple};
 pub use config::{
-    Config, ConfigError, EngineConfig, MachineConfig, ProjectConfig, StorageConfig,
-    default_template, parse_config,
+    Config, ConfigError, MachineConfig, ProjectConfig, StorageConfig, default_template,
+    parse_config,
 };
 pub use context::{
     CiInfo, CiProvider, GitInfo, RunContext, Timestamps, ToolchainInfo, detect_ci,
     resolve_effective_time,
 };
-pub use dispatch::{run, run_with_target_root};
+pub use dispatch::{run, run_with_overrides};
 pub use model::{BenchmarkId, Metric, MetricKind, ResultRecord, ResultSet, SCHEMA_VERSION};
 pub use storage::{LocalStorage, Storage, StorageError};
 pub use types::{

@@ -38,7 +38,7 @@ enum Subcommand {
     Backfill(BackfillCommand),
 }
 
-/// Run the configured benchmark engines and store the results.
+/// Run the workspace benchmarks (`cargo bench`) and store the results.
 #[derive(Debug, FromArgs)]
 #[argh(subcommand, name = "run")]
 struct RunCommand {
@@ -46,10 +46,19 @@ struct RunCommand {
     #[argh(option)]
     config: Option<PathBuf>,
 
-    /// run only the named engine, for example callgrind or criterion
-    /// (default: every configured engine).
+    /// benchmark the entire workspace; overrides --package (this is the default
+    /// when no --package is given).
+    #[argh(switch)]
+    workspace: bool,
+
+    /// benchmark only this package; repeatable, for example `-p nm -p many_cpus`
+    /// (default: the whole workspace).
+    #[argh(option, short = 'p', long = "package")]
+    package: Vec<String>,
+
+    /// benchmark only this bench target; repeatable (default: every bench target).
     #[argh(option)]
-    engine: Option<String>,
+    bench: Vec<String>,
 
     /// override the effective timestamp, in RFC 3339 format, for example
     /// `2024-01-31T14:30:00Z`; used when backfilling history (default: the
@@ -75,16 +84,26 @@ struct RunCommand {
     #[argh(switch)]
     overwrite: bool,
 
-    /// arguments after `--` forwarded verbatim to each engine command.
+    /// arguments after `--` forwarded verbatim to `cargo bench` after the scope
+    /// flags.
     #[argh(positional, greedy)]
     passthrough: Vec<String>,
 }
 
 impl RunCommand {
     fn into_options(self) -> RunOptions {
+        // An explicit `--workspace` benches the whole workspace, taking precedence
+        // over any `--package` filters; otherwise the packages (possibly empty,
+        // meaning the whole workspace) select the scope.
+        let packages = if self.workspace {
+            Vec::new()
+        } else {
+            self.package
+        };
         RunOptions {
             config_path: self.config,
-            engine: self.engine,
+            packages,
+            benches: self.bench,
             timestamp: self.timestamp,
             target_triple: self.target_triple,
             machine_key: self.machine_key,
@@ -214,10 +233,19 @@ struct BackfillCommand {
     #[argh(option)]
     to: String,
 
-    /// run only the named engine, for example callgrind or criterion
-    /// (default: every configured engine).
+    /// benchmark the entire workspace; overrides --package (this is the default
+    /// when no --package is given).
+    #[argh(switch)]
+    workspace: bool,
+
+    /// benchmark only this package; repeatable, for example `-p nm -p many_cpus`
+    /// (default: the whole workspace).
+    #[argh(option, short = 'p', long = "package")]
+    package: Vec<String>,
+
+    /// benchmark only this bench target; repeatable (default: every bench target).
     #[argh(option)]
-    engine: Option<String>,
+    bench: Vec<String>,
 
     /// override the recorded target triple used for partitioning.
     #[argh(option)]
@@ -237,18 +265,25 @@ struct BackfillCommand {
     #[argh(switch)]
     ignore_errors: bool,
 
-    /// arguments after `--` forwarded verbatim to each engine command.
+    /// arguments after `--` forwarded verbatim to `cargo bench` after the scope
+    /// flags.
     #[argh(positional, greedy)]
     passthrough: Vec<String>,
 }
 
 impl BackfillCommand {
     fn into_options(self) -> BackfillOptions {
+        let packages = if self.workspace {
+            Vec::new()
+        } else {
+            self.package
+        };
         BackfillOptions {
             config_path: self.config,
             from: self.from,
             to: self.to,
-            engine: self.engine,
+            packages,
+            benches: self.bench,
             target_triple: self.target_triple,
             machine_key: self.machine_key,
             overwrite: self.overwrite,
@@ -288,14 +323,38 @@ mod tests {
     }
 
     #[test]
-    fn run_collects_options_and_passthrough() {
-        let command = parse(&["run", "--engine", "callgrind", "--", "-p", "nm"]);
+    fn run_collects_scope_and_passthrough() {
+        let command = parse(&[
+            "run",
+            "--package",
+            "nm",
+            "-p",
+            "many_cpus",
+            "--bench",
+            "nm_observe",
+            "--",
+            "--noplot",
+        ]);
         let Command::Run(options) = command else {
             panic!("expected run command");
         };
-        assert_eq!(options.engine.as_deref(), Some("callgrind"));
-        assert_eq!(options.passthrough, vec!["-p".to_owned(), "nm".to_owned()]);
+        assert_eq!(
+            options.packages,
+            vec!["nm".to_owned(), "many_cpus".to_owned()]
+        );
+        assert_eq!(options.benches, vec!["nm_observe".to_owned()]);
+        assert_eq!(options.passthrough, vec!["--noplot".to_owned()]);
         assert!(!options.overwrite);
+    }
+
+    #[test]
+    fn run_workspace_flag_overrides_package_filters() {
+        let command = parse(&["run", "--workspace", "-p", "nm"]);
+        let Command::Run(options) = command else {
+            panic!("expected run command");
+        };
+        // An explicit --workspace clears the package scope.
+        assert!(options.packages.is_empty());
     }
 
     #[test]
@@ -396,8 +455,10 @@ mod tests {
             "abc123",
             "--to",
             "def456",
-            "--engine",
-            "callgrind",
+            "--package",
+            "nm",
+            "--bench",
+            "nm_observe",
             "--target-triple",
             "x86_64-unknown-linux-gnu",
             "--machine-key",
@@ -405,15 +466,15 @@ mod tests {
             "--overwrite",
             "--ignore-errors",
             "--",
-            "-p",
-            "nm",
+            "--noplot",
         ]);
         let Command::Backfill(options) = command else {
             panic!("expected backfill command");
         };
         assert_eq!(options.from, "abc123");
         assert_eq!(options.to, "def456");
-        assert_eq!(options.engine.as_deref(), Some("callgrind"));
+        assert_eq!(options.packages, vec!["nm".to_owned()]);
+        assert_eq!(options.benches, vec!["nm_observe".to_owned()]);
         assert_eq!(
             options.target_triple.as_deref(),
             Some("x86_64-unknown-linux-gnu")
@@ -421,7 +482,7 @@ mod tests {
         assert_eq!(options.machine_key.as_deref(), Some("ci-pool"));
         assert!(options.overwrite);
         assert!(options.ignore_errors);
-        assert_eq!(options.passthrough, vec!["-p".to_owned(), "nm".to_owned()]);
+        assert_eq!(options.passthrough, vec!["--noplot".to_owned()]);
     }
 
     #[test]

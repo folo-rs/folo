@@ -9,9 +9,8 @@ use std::io;
 use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
 
-use crate::bench::merge_wslenv;
-
-/// Launches an engine's benchmark command with injected environment variables.
+/// Launches the benchmark command (`cargo bench`) with injected environment
+/// variables.
 pub(crate) trait BenchRunner {
     /// Runs `argv` directly (no shell) with `env` applied, letting the child
     /// inherit stdio so benchmark progress streams to the terminal. `argv[0]` is
@@ -20,7 +19,7 @@ pub(crate) trait BenchRunner {
     /// # Errors
     ///
     /// Returns an error if the process cannot be spawned or awaited.
-    fn run_engine(
+    fn run_benches(
         &self,
         argv: &[String],
         env: &[(String, String)],
@@ -76,7 +75,7 @@ impl TokioBenchRunner {
 }
 
 impl BenchRunner for TokioBenchRunner {
-    async fn run_engine(
+    async fn run_benches(
         &self,
         argv: &[String],
         env: &[(String, String)],
@@ -89,12 +88,6 @@ impl BenchRunner for TokioBenchRunner {
 
         for (name, value) in env {
             command.env(name, value);
-        }
-
-        let injected_names: Vec<&str> = env.iter().map(|(name, _)| name.as_str()).collect();
-        let existing_wslenv = std::env::var("WSLENV").ok();
-        if let Some(wslenv) = merge_wslenv(existing_wslenv.as_deref(), &injected_names) {
-            command.env("WSLENV", wslenv);
         }
 
         Ok(EngineStatus::from_exit(command.status().await?))
@@ -127,7 +120,7 @@ pub(crate) async fn capture(program: &str, args: &[&str]) -> io::Result<CommandO
 fn engine_command(argv: &[String]) -> tokio::process::Command {
     let (program, args) = argv
         .split_first()
-        .expect("engine argv is non-empty; build_command_line rejects empty commands");
+        .expect("engine argv is non-empty; build_bench_argv rejects empty commands");
     let mut command = tokio::process::Command::new(program);
     command.args(args);
     command

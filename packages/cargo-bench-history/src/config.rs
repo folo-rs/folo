@@ -1,7 +1,6 @@
-//! Configuration loaded from `.cargo/bench_history.toml`: which project this is,
-//! where results are stored, and the command that launches each benchmark engine.
+//! Configuration loaded from `.cargo/bench_history.toml`: which project this is
+//! and where its benchmark history is stored.
 
-use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -13,6 +12,14 @@ const DEFAULT_TEMPLATE: &str = "\
 # cargo-bench-history configuration.
 #
 # Stored at .cargo/bench_history.toml. Uncomment and edit as needed.
+#
+# `run` and `backfill` always execute the workspace's benches with `cargo bench`
+# and detect each supported engine (Criterion and, on Linux, Callgrind) from the
+# output it produces. There is nothing to configure about engines: scope a run
+# with `--workspace` (the default), `--package`/`-p`, or `--bench` instead.
+#
+# To seed history for an existing repository, see
+# `cargo bench-history backfill --from <commit> --to <commit>`.
 
 # [project]
 # id = \"my-project\"            # defaults to the workspace directory name
@@ -34,21 +41,6 @@ path = \"./bench-history\"
 # account_key = \"...\"   # optional: base64 account key, self-signs an account SAS
 # sas_token = \"...\"     # optional: a pre-made SAS query string, used verbatim
 
-# Declare the command that launches each engine's benches in this workspace.
-# Omit an engine section entirely to leave that engine unused here.
-
-[engines.callgrind]
-command = \"just bench-cg\"
-# Callgrind runs benches under Valgrind, which is Linux-only, so a default `run`
-# skips this engine on other hosts. On Windows, drive it through WSL with an
-# explicit `cargo bench-history run --engine callgrind`. Edit this list to add
-# any host where your command works (values match Rust's OS names: linux, macos,
-# windows).
-os = [\"linux\"]
-
-[engines.criterion]
-command = \"cargo bench\"
-
 # Hardware-dependent engines (such as Criterion) partition their history by a
 # machine fingerprint computed from the host's hardware, so only equivalent
 # machines share a series. Set `key` to override that fingerprint with a stable
@@ -68,9 +60,6 @@ pub struct Config {
     pub project: ProjectConfig,
     /// Where result sets are stored.
     pub storage: StorageConfig,
-    /// Per-engine launch commands, keyed by engine name (e.g. `callgrind`).
-    #[serde(default)]
-    pub engines: BTreeMap<String, EngineConfig>,
     /// Machine-fingerprint overrides for hardware-dependent engines.
     #[serde(default)]
     pub machine: MachineConfig,
@@ -134,44 +123,6 @@ pub enum StorageConfig {
         #[serde(default)]
         sas_token: Option<String>,
     },
-}
-
-/// The command that launches one engine's benches.
-#[non_exhaustive]
-#[derive(Clone, Debug, Deserialize, PartialEq)]
-pub struct EngineConfig {
-    /// The command that runs the engine's benches (e.g. `just bench-cg`).
-    ///
-    /// It is tokenized with POSIX shell-word rules (so quoted arguments are
-    /// honored) and run directly, without a shell — shell features such as
-    /// pipes, redirects, `&&`, and environment-variable expansion are not
-    /// available. The first token is the program; the rest are its arguments.
-    pub command: String,
-    /// Extra arguments appended to the command (escape hatch; usually empty).
-    #[serde(default)]
-    pub extra_args: Vec<String>,
-    /// Host operating systems this engine's command can run on, using Rust's OS
-    /// names (`linux`, `macos`, `windows`).
-    ///
-    /// An empty list (the default) places no restriction, so the engine is part
-    /// of the default selection on every host. When the list is non-empty, a
-    /// default `run` skips the engine on any host not in it; an explicit
-    /// `--engine` request always overrides the restriction. This expresses
-    /// fundamental dependencies such as Callgrind requiring Valgrind (Linux).
-    #[serde(default)]
-    pub os: Vec<String>,
-}
-
-impl EngineConfig {
-    /// Whether this engine's command is allowed to run on `host_os` as part of
-    /// the default (unfiltered) selection.
-    ///
-    /// An empty [`os`](Self::os) list means "every host"; otherwise the host must
-    /// be listed. The comparison uses Rust's OS names (`std::env::consts::OS`).
-    #[must_use]
-    pub fn supports_host(&self, host_os: &str) -> bool {
-        self.os.is_empty() || self.os.iter().any(|candidate| candidate == host_os)
-    }
 }
 
 /// Parses a configuration from TOML source text.
@@ -247,11 +198,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_template_enables_both_engines() {
-        let config = parse_config(default_template()).unwrap();
-        assert_eq!(config.engines.len(), 2);
-        assert!(config.engines.contains_key("callgrind"));
-        assert!(config.engines.contains_key("criterion"));
+    fn default_template_has_no_engines_section() {
+        // vNext runs all benches via `cargo bench` and detects engines from the
+        // output, so the starter config declares nothing about engines.
+        assert!(!default_template().contains("[engines"));
     }
 
     #[test]
@@ -389,71 +339,6 @@ key = \"ci-pool-a\"
     }
 
     #[test]
-    fn engine_extra_args_default_to_empty() {
-        let text = "\
-[storage.local]
-path = \"./data\"
-
-[engines.criterion]
-command = \"cargo bench\"
-";
-        let config = parse_config(text).unwrap();
-        assert!(
-            config
-                .engines
-                .get("criterion")
-                .unwrap()
-                .extra_args
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn engine_os_defaults_to_unrestricted() {
-        let text = "\
-[storage.local]
-path = \"./data\"
-
-[engines.criterion]
-command = \"cargo bench\"
-";
-        let config = parse_config(text).unwrap();
-        let engine = config.engines.get("criterion").unwrap();
-        assert!(engine.os.is_empty());
-        assert!(engine.supports_host("windows"));
-        assert!(engine.supports_host("linux"));
-        assert!(engine.supports_host("macos"));
-    }
-
-    #[test]
-    fn engine_os_restricts_supported_hosts() {
-        let text = "\
-[storage.local]
-path = \"./data\"
-
-[engines.callgrind]
-command = \"just bench-cg\"
-os = [\"linux\"]
-";
-        let config = parse_config(text).unwrap();
-        let engine = config.engines.get("callgrind").unwrap();
-        assert_eq!(engine.os, vec!["linux".to_owned()]);
-        assert!(engine.supports_host("linux"));
-        assert!(!engine.supports_host("windows"));
-        assert!(!engine.supports_host("macos"));
-    }
-
-    #[test]
-    fn default_template_restricts_callgrind_to_linux() {
-        let config = parse_config(default_template()).unwrap();
-        assert_eq!(
-            config.engines.get("callgrind").unwrap().os,
-            vec!["linux".to_owned()]
-        );
-        assert!(config.engines.get("criterion").unwrap().os.is_empty());
-    }
-
-    #[test]
     fn missing_storage_is_an_error() {
         let error = parse_config("[project]\nid = \"x\"\n").unwrap_err();
         assert!(matches!(error, ConfigError::Parse(_)));
@@ -485,9 +370,8 @@ os = [\"linux\"]
 
         let config = load_config(&path).await.unwrap();
 
-        assert_eq!(config.engines.len(), 2);
-        assert!(config.engines.contains_key("callgrind"));
-        assert!(config.engines.contains_key("criterion"));
+        assert!(matches!(config.storage, StorageConfig::Local { .. }));
+        assert_eq!(config.project.id, None);
     }
 
     #[tokio::test]

@@ -18,7 +18,6 @@
 //! duplicate) is reported as skipped-existing; `--overwrite` avoids that by
 //! replacing in place.
 
-use std::env::consts;
 use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -35,7 +34,7 @@ use crate::storage::{Storage, build_storage};
 use crate::wiring::{default_config_path, resolve_project_id};
 use crate::{BackfillOptions, RunError, RunOptions, RunOutcome};
 
-use super::run::{RunDeps, RunSummary, run_engines};
+use super::run::{RunDeps, RunSummary, default_bench_command, run_engines};
 
 /// Read access to a repository's commit topology plus the worktree lifecycle a
 /// backfill needs to check out each commit in isolation.
@@ -97,7 +96,10 @@ enum CommitOutcome {
 
 /// The real `backfill`: load configuration, wire the production adapters, and
 /// orchestrate the range.
-pub(crate) async fn execute(options: &BackfillOptions) -> Result<RunOutcome, RunError> {
+pub(crate) async fn execute(
+    options: &BackfillOptions,
+    bench_command: Option<Vec<String>>,
+) -> Result<RunOutcome, RunError> {
     let config_path = options
         .config_path
         .clone()
@@ -107,6 +109,7 @@ pub(crate) async fn execute(options: &BackfillOptions) -> Result<RunOutcome, Run
     let workspace_dir = std::env::current_dir().map_err(RunError::Io)?;
     let project_id = resolve_project_id(&config, &workspace_dir);
     let storage = build_storage(&config)?;
+    let bench_command = bench_command.unwrap_or_else(default_bench_command);
 
     let git = SystemBackfillGit::new(&workspace_dir);
     let runner = SystemCommitRunner {
@@ -115,6 +118,7 @@ pub(crate) async fn execute(options: &BackfillOptions) -> Result<RunOutcome, Run
         storage: &storage,
         tool_version: env!("CARGO_PKG_VERSION"),
         options,
+        bench_command: &bench_command,
     };
     let worktree = worktree_path();
 
@@ -460,8 +464,10 @@ struct SystemCommitRunner<'a, S> {
     storage: &'a S,
     /// Version of this tool, recorded with each run.
     tool_version: &'a str,
-    /// The backfill options whose engine/triple/machine/overwrite are reused.
+    /// The backfill options whose scope/triple/machine/overwrite are reused.
     options: &'a BackfillOptions,
+    /// The benchmark command (`cargo bench` in production) run in each worktree.
+    bench_command: &'a [String],
 }
 
 impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
@@ -478,7 +484,8 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
         // and dates from its commit, so no `--timestamp` override is used.
         let run_options = RunOptions {
             config_path: None,
-            engine: self.options.engine.clone(),
+            packages: self.options.packages.clone(),
+            benches: self.options.benches.clone(),
             timestamp: None,
             target_triple: self.options.target_triple.clone(),
             machine_key: self.options.machine_key.clone(),
@@ -497,7 +504,7 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
             project_id: self.project_id,
             tool_version: self.tool_version,
             target_root: &target_root,
-            host_os: consts::OS,
+            bench_command: self.bench_command,
         };
 
         map_run_result(run_engines(&run_options, &deps).await)

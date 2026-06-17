@@ -26,15 +26,16 @@ The initial target engines are the ones this workspace uses: Criterion
 ## Commands
 
 ```text
-cargo bench-history run [--engine NAME] [--timestamp RFC3339]
-                        [--target-triple TRIPLE] [--machine-key KEY]
-                        [--no-store] [--overwrite] [--config PATH]
-                        -- <args forwarded to each engine>
+cargo bench-history run [--workspace] [--package NAME] [--bench NAME]
+                        [--timestamp RFC3339] [--target-triple TRIPLE]
+                        [--machine-key KEY] [--no-store] [--overwrite]
+                        [--config PATH] -- <args forwarded to cargo bench>
 cargo bench-history install [--config PATH]
-cargo bench-history backfill --from REF --to REF [--engine NAME]
+cargo bench-history backfill --from REF --to REF [--workspace]
+                             [--package NAME] [--bench NAME]
                              [--target-triple TRIPLE] [--machine-key KEY]
                              [--overwrite] [--ignore-errors] [--config PATH]
-                             -- <args forwarded to each engine>
+                             -- <args forwarded to cargo bench>
 cargo bench-history analyze [--repo PATH] [--branch REF] [--base REF]
                             [--engine NAME] [--os OS] [--architecture ARCH]
                             [--machine-key KEY] [--no-dirty]
@@ -43,30 +44,30 @@ cargo bench-history analyze [--repo PATH] [--branch REF] [--base REF]
                             [--fail-on-regression] [--config PATH]
 ```
 
-* `run` executes each configured engine, harvests its output, and stores the
-  result set. History is keyed by commit: a clean run writes a single
-  deterministic object per commit, so re-running the same commit is refused
-  unless `--overwrite` replaces the stored result. `--timestamp` overrides the
-  effective time when backfilling history for an old commit; `--machine-key`
-  overrides the hardware fingerprint used to partition hardware-dependent
-  (Criterion) results; everything after `--` is forwarded verbatim to each engine
-  command (use `--engine` to target a single engine). An engine whose config
-  declares an `os` list (the generated config restricts Callgrind to `linux`,
-  since it runs under Valgrind) is skipped on other hosts during a default run;
-  an explicit `--engine` forces it (for example, Callgrind through WSL on
-  Windows).
+* `run` executes the workspace's benches once with `cargo bench`, harvests every
+  supported engine's output, and stores a result set per engine. There is nothing
+  to configure about engines: the run enables the combined environment Criterion
+  and Callgrind need and detects each engine from the output it produces (off
+  Linux the Callgrind benches compile to no-ops, so only Criterion is stored).
+  Scope the run with `--workspace` (the default), `--package`/`-p NAME`, or
+  `--bench NAME`; everything after `--` is forwarded verbatim to `cargo bench`.
+  History is keyed by commit: a clean run writes a single deterministic object per
+  commit, so re-running the same commit is refused unless `--overwrite` replaces
+  the stored result. `--timestamp` overrides the effective time when backfilling
+  history for an old commit; `--machine-key` overrides the hardware fingerprint
+  used to partition hardware-dependent (Criterion) results.
 * `install` generates a starter `.cargo/bench_history.toml` if absent, printing
   its path and next steps (including how to `backfill` history for an existing
   repository); an existing file is never overwritten.
 * `backfill` replays `run` across the inclusive commit range `--from..--to`,
   bootstrapping history for a repository that adopted the tool late. Each commit
   is checked out in a dedicated git **worktree** (the primary checkout is never
-  touched) and its configured engines run there, recording the commit's committer
-  date as the effective time. The range must lie on the current branch's
-  first-parent history and the working tree must be clean. Already-stored commits
-  are skipped (so backfill is resumable) unless `--overwrite` replaces them; a
-  commit that fails to build or benchmark stops the run unless `--ignore-errors`
-  continues past it. `--engine`/`--target-triple`/`--machine-key` and a `--`
+  touched) and benched there, recording the commit's committer date as the
+  effective time. The range must lie on the current branch's first-parent history
+  and the working tree must be clean. Already-stored commits are skipped (so
+  backfill is resumable) unless `--overwrite` replaces them; a commit that fails to
+  build or benchmark stops the run unless `--ignore-errors` continues past it.
+  `--workspace`/`--package`/`--bench`/`--target-triple`/`--machine-key` and a `--`
   passthrough behave as for `run`.
 * `analyze` reconstructs a timeline from git history and reports notable patterns.
   It requires a repository (`--repo` selects one other than the current directory).

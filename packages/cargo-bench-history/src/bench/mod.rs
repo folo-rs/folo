@@ -30,69 +30,37 @@ pub(crate) const CRITERION_BENCHMARK_FILE: &str = "benchmark.json";
 /// File name Criterion writes with a benchmark case's statistical estimates.
 pub(crate) const CRITERION_ESTIMATES_FILE: &str = "estimates.json";
 
+/// The environment variables to inject so every supported engine emits
+/// machine-readable output during the single `cargo bench` invocation.
+///
+/// This is the union of every engine's [`injected_env`]: Callgrind needs
+/// `GUNGRAUN_SAVE_SUMMARY=pretty-json` so Gungraun writes the `summary.json`
+/// files the tool harvests; Criterion writes `estimates.json` unconditionally, so
+/// it contributes nothing. Duplicate names are de-duplicated, keeping the first.
+pub(crate) fn injected_bench_env() -> Vec<(String, String)> {
+    let mut env: Vec<(String, String)> = Vec::new();
+    for engine in EngineSystem::ALL {
+        for (name, value) in injected_env(engine) {
+            if !env.iter().any(|(existing, _)| *existing == name) {
+                env.push((name, value));
+            }
+        }
+    }
+    env
+}
+
 /// The environment variables to inject so an engine emits machine-readable output.
 ///
 /// Callgrind needs `GUNGRAUN_SAVE_SUMMARY=pretty-json` so Gungraun writes the
 /// `summary.json` files the tool harvests. Criterion writes `estimates.json`
 /// unconditionally, so it needs nothing.
-pub(crate) fn injected_env(engine: EngineSystem) -> Vec<(String, String)> {
+fn injected_env(engine: EngineSystem) -> Vec<(String, String)> {
     match engine {
         EngineSystem::Callgrind => {
             vec![("GUNGRAUN_SAVE_SUMMARY".to_owned(), "pretty-json".to_owned())]
         }
         EngineSystem::Criterion => Vec::new(),
     }
-}
-
-/// Computes the `WSLENV` value that propagates injected variables across a WSL
-/// boundary, preserving any existing entries.
-///
-/// The tool cannot reliably detect whether a command crosses into WSL (it may be
-/// an opaque wrapper such as `just bench-cg`), so every injected variable must
-/// carry the `/u` "up" flag that shares it in the Windows→WSL direction. An
-/// injected name already listed in `WSLENV` has the `u` flag added to its
-/// existing flags if missing, rather than being left without it; other entries
-/// are preserved verbatim. This is inert when no boundary is crossed and correct
-/// when one is. Returns `None` when there is nothing to set.
-pub(crate) fn merge_wslenv(existing: Option<&str>, injected_names: &[&str]) -> Option<String> {
-    let mut entries: Vec<(String, String)> = Vec::new();
-
-    if let Some(existing) = existing {
-        for entry in existing.split(':').filter(|entry| !entry.is_empty()) {
-            let (name, flags) = entry.split_once('/').map_or_else(
-                || (entry.to_owned(), String::new()),
-                |(name, flags)| (name.to_owned(), flags.to_owned()),
-            );
-            entries.push((name, flags));
-        }
-    }
-
-    for injected in injected_names {
-        if let Some((_, flags)) = entries.iter_mut().find(|(name, _)| name == injected) {
-            if !flags.contains('u') {
-                flags.push('u');
-            }
-        } else {
-            entries.push(((*injected).to_owned(), "u".to_owned()));
-        }
-    }
-
-    if entries.is_empty() {
-        return None;
-    }
-
-    let rendered = entries
-        .iter()
-        .map(|(name, flags)| {
-            if flags.is_empty() {
-                name.clone()
-            } else {
-                format!("{name}/{flags}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(":");
-    Some(rendered)
 }
 
 #[cfg(test)]
@@ -115,60 +83,12 @@ mod tests {
     }
 
     #[test]
-    fn merge_wslenv_from_empty() {
+    fn combined_env_is_the_union_across_engines() {
+        // The single `cargo bench` invocation gets the union of every engine's
+        // env, deduplicated. Today only Callgrind contributes a variable.
         assert_eq!(
-            merge_wslenv(None, &["GUNGRAUN_SAVE_SUMMARY"]),
-            Some("GUNGRAUN_SAVE_SUMMARY/u".to_owned())
+            injected_bench_env(),
+            vec![("GUNGRAUN_SAVE_SUMMARY".to_owned(), "pretty-json".to_owned())]
         );
-    }
-
-    #[test]
-    fn merge_wslenv_appends_to_existing() {
-        assert_eq!(
-            merge_wslenv(Some("PATH/l"), &["GUNGRAUN_SAVE_SUMMARY"]),
-            Some("PATH/l:GUNGRAUN_SAVE_SUMMARY/u".to_owned())
-        );
-    }
-
-    #[test]
-    fn merge_wslenv_does_not_duplicate() {
-        assert_eq!(
-            merge_wslenv(Some("GUNGRAUN_SAVE_SUMMARY/u"), &["GUNGRAUN_SAVE_SUMMARY"]),
-            Some("GUNGRAUN_SAVE_SUMMARY/u".to_owned())
-        );
-    }
-
-    #[test]
-    fn merge_wslenv_adds_up_flag_to_existing_entry_without_it() {
-        assert_eq!(
-            merge_wslenv(Some("GUNGRAUN_SAVE_SUMMARY/l"), &["GUNGRAUN_SAVE_SUMMARY"]),
-            Some("GUNGRAUN_SAVE_SUMMARY/lu".to_owned())
-        );
-    }
-
-    #[test]
-    fn merge_wslenv_adds_up_flag_to_existing_flagless_entry() {
-        assert_eq!(
-            merge_wslenv(Some("GUNGRAUN_SAVE_SUMMARY"), &["GUNGRAUN_SAVE_SUMMARY"]),
-            Some("GUNGRAUN_SAVE_SUMMARY/u".to_owned())
-        );
-    }
-
-    #[test]
-    fn merge_wslenv_preserves_unrelated_flagless_entries() {
-        assert_eq!(
-            merge_wslenv(Some("PATH"), &["GUNGRAUN_SAVE_SUMMARY"]),
-            Some("PATH:GUNGRAUN_SAVE_SUMMARY/u".to_owned())
-        );
-    }
-
-    #[test]
-    fn merge_wslenv_nothing_to_set() {
-        assert_eq!(merge_wslenv(None, &[]), None);
-    }
-
-    #[test]
-    fn merge_wslenv_keeps_existing_when_no_injection() {
-        assert_eq!(merge_wslenv(Some("FOO/u"), &[]), Some("FOO/u".to_owned()));
     }
 }
