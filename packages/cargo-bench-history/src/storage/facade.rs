@@ -92,6 +92,8 @@ pub(crate) fn build_storage(config: &Config) -> Result<StorageFacade, StorageErr
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use tempfile::tempdir;
+
     use crate::config::parse_config;
 
     use super::*;
@@ -99,6 +101,30 @@ mod tests {
     fn config_with_storage(storage: &str) -> Config {
         let text = format!("{storage}\n[engines.callgrind]\ncommand = \"x\"\n");
         parse_config(&text).expect("test configuration should parse")
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn local_facade_dispatches_every_storage_method() {
+        let dir = tempdir().unwrap();
+        let storage = StorageFacade::Local(LocalStorage::new(dir.path()));
+
+        // `put` dispatches to the backend and writes the object.
+        storage.put("v1/proj/run.json", b"first").await.unwrap();
+        assert_eq!(storage.get("v1/proj/run.json").await.unwrap(), b"first");
+
+        // `put_overwrite` must replace the existing contents through the facade;
+        // overwriting with *different* bytes distinguishes a real dispatch from a
+        // silent no-op.
+        storage
+            .put_overwrite("v1/proj/run.json", b"second")
+            .await
+            .unwrap();
+        assert_eq!(storage.get("v1/proj/run.json").await.unwrap(), b"second");
+
+        // `list` dispatches to the backend and surfaces the stored key.
+        let keys = storage.list("v1/proj/").await.unwrap();
+        assert_eq!(keys, vec!["v1/proj/run.json".to_owned()]);
     }
 
     #[test]

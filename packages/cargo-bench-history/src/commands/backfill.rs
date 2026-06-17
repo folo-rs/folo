@@ -955,4 +955,29 @@ mod tests {
         })));
         assert!(matches!(infra, Err(RunError::Storage(_))), "{infra:?}");
     }
+
+    #[test]
+    fn worktree_path_is_a_named_scratch_dir_under_temp() {
+        // A lib-level assertion on the worktree path (the real `execute_backfill`
+        // catches a broken path only by shelling out to `git worktree add`, which
+        // hangs on Windows when handed an empty path instead of failing fast).
+        let path = worktree_path();
+
+        assert!(
+            path.starts_with(std::env::temp_dir()),
+            "worktree path should live under the system temp dir: {path:?}"
+        );
+        let name = path
+            .file_name()
+            .and_then(|component| component.to_str())
+            .expect("worktree path should have a UTF-8 file name");
+        assert!(
+            name.starts_with("cargo-bench-history-worktree-"),
+            "unexpected worktree name: {name}"
+        );
+        assert!(
+            name.contains(&std::process::id().to_string()),
+            "worktree name should embed the process id for uniqueness: {name}"
+        );
+    }
 }
