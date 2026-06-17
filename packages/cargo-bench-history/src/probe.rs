@@ -139,8 +139,19 @@ fn host_triple_for(arch: &str, os: &str) -> String {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::env::consts;
+    use std::path::PathBuf;
 
-    use super::{fallback_host_triple, host_triple_for, resolve_toolchain};
+    use super::{SystemProbe, fallback_host_triple, host_triple_for, resolve_toolchain};
+
+    #[test]
+    fn in_dir_targets_the_repository_directory() {
+        // `in_dir` must record the repository directory so git is queried with
+        // `-C <repo>`; the default probe leaves it absent (git runs in the
+        // process CWD), so the two must differ.
+        let probe = SystemProbe::in_dir("some/repo");
+        assert_eq!(probe.repo, Some(PathBuf::from("some/repo")));
+        assert_eq!(SystemProbe::default().repo, None);
+    }
 
     #[test]
     fn fallback_host_triple_describes_the_running_platform() {

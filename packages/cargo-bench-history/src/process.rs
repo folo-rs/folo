@@ -136,7 +136,18 @@ fn engine_command(argv: &[String]) -> tokio::process::Command {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use super::engine_command;
+    use std::path::PathBuf;
+
+    use super::{TokioBenchRunner, engine_command};
+
+    #[test]
+    fn in_dir_sets_the_working_directory() {
+        // `in_dir` must record the target directory; the default runner leaves it
+        // absent (engine runs in the process CWD), so the two must differ.
+        let runner = TokioBenchRunner::in_dir("some/worktree");
+        assert_eq!(runner.dir, Some(PathBuf::from("some/worktree")));
+        assert_eq!(TokioBenchRunner::default().dir, None);
+    }
 
     #[test]
     fn engine_command_runs_argv_directly() {
