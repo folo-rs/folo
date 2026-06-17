@@ -124,8 +124,9 @@ struct Benchmark {
     value_str: Option<String>,
 }
 
-/// The subset of Criterion's `estimates.json` the tool reads. `slope` is present
-/// only for linearly sampled benchmarks; `std_dev` is always reported.
+/// The subset of Criterion's `estimates.json` the tool reads. `mean` is always
+/// present; `slope` (only for linearly sampled benchmarks) and `std_dev` are
+/// both optional and tolerated as absent.
 #[derive(Debug, Deserialize)]
 struct Estimates {
     mean: Estimate,

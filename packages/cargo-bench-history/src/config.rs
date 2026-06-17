@@ -22,7 +22,7 @@ const DEFAULT_TEMPLATE: &str = "\
 path = \"./bench-history\"
 
 # To store results in Azure Blob Storage instead, replace the [storage.local]
-# section above with an [storage.azure] section. The `azure` build feature must
+# section above with a [storage.azure] section. The `azure` build feature must
 # be enabled. Authentication is, in priority order: a self-signed account SAS
 # (set `account_key`), a pre-made SAS token (set `sas_token`), or Microsoft Entra
 # ID (set neither, requires an HTTPS endpoint).
