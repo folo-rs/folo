@@ -127,12 +127,18 @@ struct InstallCommand {
     /// path to the configuration file to generate.
     #[argh(option)]
     config: Option<PathBuf>,
+
+    /// emit detailed diagnostic notes to standard error (which path is written,
+    /// or that an existing configuration was left unchanged).
+    #[argh(switch)]
+    verbose: bool,
 }
 
 impl InstallCommand {
     fn into_options(self) -> InstallOptions {
         InstallOptions {
             config_path: self.config,
+            verbose: self.verbose,
         }
     }
 }
@@ -198,6 +204,12 @@ struct AnalyzeCommand {
     /// exit with failure if a regression is detected.
     #[argh(switch)]
     fail_on_regression: bool,
+
+    /// emit detailed diagnostic notes to standard error (which storage prefix is
+    /// listed, which objects are included or excluded and why, the resolved git
+    /// topology).
+    #[argh(switch)]
+    verbose: bool,
 }
 
 impl AnalyzeCommand {
@@ -217,6 +229,7 @@ impl AnalyzeCommand {
             format: self.format,
             list_discriminants: self.list_discriminants,
             fail_on_regression: self.fail_on_regression,
+            verbose: self.verbose,
         }
     }
 }
@@ -426,6 +439,32 @@ mod tests {
             options.config_path,
             Some(PathBuf::from("custom/bench.toml"))
         );
+    }
+
+    #[test]
+    fn install_parses_verbose_switch() {
+        let Command::Install(options) = parse(&["install", "--verbose"]) else {
+            panic!("expected install command");
+        };
+        assert!(options.verbose);
+
+        let Command::Install(options) = parse(&["install"]) else {
+            panic!("expected install command");
+        };
+        assert!(!options.verbose);
+    }
+
+    #[test]
+    fn analyze_parses_verbose_switch() {
+        let Command::Analyze(options) = parse(&["analyze", "--verbose"]) else {
+            panic!("expected analyze command");
+        };
+        assert!(options.verbose);
+
+        let Command::Analyze(options) = parse(&["analyze"]) else {
+            panic!("expected analyze command");
+        };
+        assert!(!options.verbose);
     }
 
     #[test]

@@ -27,6 +27,7 @@ use crate::comparability::{EngineSystem, sanitize_segment};
 use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
 use crate::model::ResultSet;
+use crate::report::{Reporter, StderrReporter};
 use crate::storage::{Storage, build_storage};
 use crate::wiring::{default_config_path, resolve_project_id};
 use crate::{AnalyzeOptions, RunError, RunOutcome};
@@ -40,10 +41,16 @@ use series::{LoadedObject, SeriesFilter, build_series};
 /// The real `analyze`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
 pub(crate) async fn execute(options: &AnalyzeOptions) -> Result<RunOutcome, RunError> {
+    let reporter = StderrReporter::new(options.verbose);
+
     let config_path = options
         .config_path
         .clone()
         .unwrap_or_else(default_config_path);
+    reporter.note(&format!(
+        "loading configuration from {}",
+        config_path.display()
+    ));
     let config = load_config(&config_path).await?;
 
     let workspace_dir = std::env::current_dir().map_err(RunError::Io)?;
@@ -53,7 +60,7 @@ pub(crate) async fn execute(options: &AnalyzeOptions) -> Result<RunOutcome, RunE
     let repo = options.repo.clone().unwrap_or(workspace_dir);
     let git = SystemGitHistory::new(repo);
 
-    analyze_with(&git, &storage, &project_id, &config, options).await
+    analyze_with(&git, &storage, &project_id, &config, options, &reporter).await
 }
 
 /// Storage- and git-generic `analyze`: facet-filter the stored objects, resolve
@@ -65,6 +72,7 @@ pub(crate) async fn analyze_with<G, S>(
     project_id: &str,
     config: &Config,
     options: &AnalyzeOptions,
+    reporter: &dyn Reporter,
 ) -> Result<RunOutcome, RunError>
 where
     G: GitHistory,
@@ -91,23 +99,42 @@ where
         machine_key: options.machine_key.as_deref(),
     };
 
+    reporter.note(&format!(
+        "project id: {project_id} (storage segment: {project})"
+    ));
+    reporter.note(&format!("listing stored objects under prefix {prefix}"));
+    if reporter.enabled() {
+        reporter.note(&format!("facet filters: {}", describe_facets(&facets)));
+    }
+
     let keys = storage.list(&prefix).await.map_err(RunError::Storage)?;
+    reporter.note(&format!("storage returned {} object key(s)", keys.len()));
 
     // Parse and facet-filter the candidate keys up front so both the discriminant
     // listing and the analysis work from the same selected set.
     let mut candidates: Vec<(String, ParsedKey)> = Vec::new();
     for key in keys {
         if !key.ends_with(".json") {
+            reporter.note(&format!("skipping {key}: not a .json object"));
             continue;
         }
         let Some(parsed) = parse_key(&key) else {
+            reporter.note(&format!("skipping {key}: not a recognized v2 storage key"));
             continue;
         };
         if !parsed.set.matches(&facets) {
+            reporter.note(&format!(
+                "skipping {key}: discriminant {} does not match the facet filters",
+                parsed.set
+            ));
             continue;
         }
         candidates.push((key, parsed));
     }
+    reporter.note(&format!(
+        "{} object(s) match the facet filters",
+        candidates.len()
+    ));
 
     if options.list_discriminants {
         let mut sets: Vec<DiscriminantSet> = candidates
@@ -145,6 +172,16 @@ where
         None => None,
     };
 
+    reporter.note(&format!(
+        "target ref {target_ref} resolves to {target_sha}; {} commit(s) on its first-parent line",
+        ancestry.len()
+    ));
+    reporter.note(&format!(
+        "base ref resolves to {}; merge-base with target is {}",
+        base_sha.as_deref().unwrap_or("<none>"),
+        merge_base.as_deref().unwrap_or("<none>")
+    ));
+
     let selection = select_commits(&ancestry, merge_base.as_deref(), !options.no_dirty);
     // First-parent position of each selected commit; an object whose commit is not
     // here is outside the analyzed history and contributes nothing.
@@ -158,11 +195,24 @@ where
         .map(|selected| (selected.commit.as_str(), selected.admit_dirty))
         .collect();
 
+    // Tally why candidates do not enter the analysis, so a `0 runs` outcome can
+    // explain itself (via `--verbose` per object, and via a summary hint when
+    // candidates existed but none were admitted).
+    let candidate_count = candidates.len();
+    let mut excluded_outside_history = 0_usize;
+    let mut excluded_dirty_base = 0_usize;
+    let mut excluded_since = 0_usize;
+
     // Load each in-selection object, admitting a dirty snapshot only on a commit
     // whose side of the merge-base allows it, then apply the `--since` window.
     let mut loaded: Vec<LoadedObject> = Vec::new();
     for (key, parsed) in candidates {
         if !order.contains_key(&parsed.commit) {
+            excluded_outside_history = excluded_outside_history.saturating_add(1);
+            reporter.note(&format!(
+                "excluding {key}: commit {} is not on {target_ref}'s analyzed history",
+                parsed.commit
+            ));
             continue;
         }
         if parsed.is_dirty()
@@ -171,6 +221,12 @@ where
                 .copied()
                 .unwrap_or(false)
         {
+            excluded_dirty_base = excluded_dirty_base.saturating_add(1);
+            reporter.note(&format!(
+                "excluding {key}: dirty snapshot on a base-side commit ({} \
+                 only admits clean runs); dirty runs count only on the target side",
+                parsed.commit
+            ));
             continue;
         }
         let bytes = storage.get(&key).await.map_err(RunError::Storage)?;
@@ -181,14 +237,24 @@ where
             message: format!("stored object {key} is not a valid result set: {error}"),
         })?;
         if since.is_some_and(|since| result.context.timestamps.effective < since) {
+            excluded_since = excluded_since.saturating_add(1);
+            reporter.note(&format!(
+                "excluding {key}: effective time is before the --since cutoff"
+            ));
             continue;
         }
+        reporter.note(&format!("including {key}"));
         loaded.push(LoadedObject {
             key: parsed,
             object_key: key,
             result,
         });
     }
+    reporter.note(&format!(
+        "{} object(s) entered the analysis ({excluded_outside_history} outside history, \
+         {excluded_dirty_base} dirty-on-base, {excluded_since} before --since)",
+        loaded.len()
+    ));
 
     let filter = SeriesFilter {
         metric: options.metric.as_deref(),
@@ -220,12 +286,27 @@ where
         })
         .collect();
 
+    // When stored runs existed but none entered the analysis, the empty outcome is
+    // otherwise indistinguishable from "no data". Explain the dominant reasons so
+    // the user can act without resorting to `--verbose`.
+    let hint = empty_history_hint(
+        loaded.is_empty(),
+        candidate_count,
+        target_ref,
+        ExclusionTally {
+            outside_history: excluded_outside_history,
+            dirty_base: excluded_dirty_base,
+            since: excluded_since,
+        },
+    );
+
     let input = ReportInput {
         project: project_id,
         runs: loaded.len(),
         series: series.len(),
         findings: &findings,
         sets: &summaries,
+        hint: hint.as_deref(),
     };
     let report = render(&input, format);
 
@@ -342,6 +423,82 @@ fn parse_format(name: Option<&str>) -> Result<ReportFormat, RunError> {
     }
 }
 
+/// A human-readable summary of the active facet filters, for `--verbose` notes.
+fn describe_facets(facets: &Facets<'_>) -> String {
+    let mut parts = Vec::new();
+    if let Some(engine) = facets.engine {
+        parts.push(format!("engine={engine}"));
+    }
+    if let Some(os) = facets.os {
+        parts.push(format!("os={os}"));
+    }
+    if let Some(architecture) = facets.architecture {
+        parts.push(format!("architecture={architecture}"));
+    }
+    if let Some(machine_key) = facets.machine_key {
+        parts.push(format!("machine={machine_key}"));
+    }
+    if parts.is_empty() {
+        "none".to_owned()
+    } else {
+        parts.join(", ")
+    }
+}
+
+/// How many facet-matching candidates were excluded, by reason.
+#[derive(Clone, Copy, Debug)]
+struct ExclusionTally {
+    /// Commit is not on the analyzed first-parent history.
+    outside_history: usize,
+    /// Dirty snapshot on a base-side commit (clean-only).
+    dirty_base: usize,
+    /// Effective time is before the `--since` cutoff.
+    since: usize,
+}
+
+/// Builds a diagnostic hint for the case where stored runs matched the facet
+/// filters but none entered the analysis, so the empty outcome explains itself.
+///
+/// Returns `None` when at least one run was loaded, or when there were no
+/// candidates at all (a genuinely empty history needs no special explanation).
+fn empty_history_hint(
+    loaded_is_empty: bool,
+    candidate_count: usize,
+    target_ref: &str,
+    tally: ExclusionTally,
+) -> Option<String> {
+    if !loaded_is_empty || candidate_count == 0 {
+        return None;
+    }
+
+    let mut lines = vec![format!(
+        "Found {candidate_count} stored run(s) for this project, but none entered the analysis:"
+    )];
+    if tally.dirty_base > 0 {
+        lines.push(format!(
+            "  - {} dirty (uncommitted-tree) snapshot(s) on base-branch commits were excluded; \
+             only clean runs count on the base branch. Commit your working tree (including the \
+             configuration file) and re-run, or analyze a feature branch with --branch.",
+            tally.dirty_base
+        ));
+    }
+    if tally.outside_history > 0 {
+        lines.push(format!(
+            "  - {} run(s) are on commits outside {target_ref}'s analyzed history. \
+             Check out the branch they were recorded on, or pass --branch.",
+            tally.outside_history
+        ));
+    }
+    if tally.since > 0 {
+        lines.push(format!(
+            "  - {} run(s) are older than the --since cutoff.",
+            tally.since
+        ));
+    }
+    lines.push("Re-run with --verbose for a per-object explanation.".to_owned());
+    Some(lines.join("\n"))
+}
+
 /// Parses the `--engine` facet into an [`EngineSystem`], if set.
 fn parse_engine(name: Option<&str>) -> Result<Option<EngineSystem>, RunError> {
     match name {
@@ -389,6 +546,7 @@ mod tests {
     use crate::context::{CiInfo, GitInfo, RunContext, Timestamps, ToolchainInfo};
     use crate::git_history::FakeGitHistory;
     use crate::model::{BenchmarkId, Metric, MetricKind, ResultRecord};
+    use crate::report::RecordingReporter;
     use crate::storage::{MemoryStorage, Storage};
 
     use super::*;
@@ -542,8 +700,16 @@ mod tests {
         project: &str,
         options: &AnalyzeOptions,
     ) -> (String, usize) {
-        let outcome = block_on(analyze_with(git, storage, project, &config(), options))
-            .expect("analysis runs");
+        let reporter = RecordingReporter::new();
+        let outcome = block_on(analyze_with(
+            git,
+            storage,
+            project,
+            &config(),
+            options,
+            &reporter,
+        ))
+        .expect("analysis runs");
         match outcome {
             RunOutcome::Analyzed {
                 report,
@@ -572,8 +738,15 @@ mod tests {
         let storage = MemoryStorage::new();
         seed_linear_regression(&storage);
         let git = FakeGitHistory::new(); // No commits: HEAD does not resolve.
-        let error =
-            block_on(analyze_with(&git, &storage, "folo", &config(), &options())).unwrap_err();
+        let error = block_on(analyze_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &options(),
+            &RecordingReporter::new(),
+        ))
+        .unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
         assert!(
             error.to_string().contains("requires a git repository"),
@@ -755,6 +928,59 @@ mod tests {
         let (report, _) = analyze(&git, &storage, "folo", &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 3, "the base-side dirty c1 run is excluded");
+    }
+
+    #[test]
+    fn all_dirty_on_base_yields_zero_runs_with_a_hint() {
+        // The user-reported trap: on the default branch's tip every run is a
+        // dirty snapshot (e.g. because the config file was never committed), so
+        // all are excluded and the empty outcome must explain itself with a hint
+        // and per-object verbose notes rather than looking like "no data".
+        let storage = MemoryStorage::new();
+        store(&storage, &dirty_key("c3", 100), &ir_set(100, "c3", 100.0));
+        store(&storage, &dirty_key("c3", 200), &ir_set(200, "c3", 130.0));
+        let git = linear_git();
+
+        let opts = AnalyzeOptions {
+            format: Some("json".to_owned()),
+            ..options()
+        };
+        let reporter = RecordingReporter::new();
+        let outcome = block_on(analyze_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &opts,
+            &reporter,
+        ))
+        .expect("analysis runs");
+        let RunOutcome::Analyzed { report, .. } = outcome else {
+            panic!("expected an analysis outcome");
+        };
+
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(
+            parsed["runs"], 0,
+            "every dirty-on-base snapshot is excluded"
+        );
+        let hint = parsed["hint"]
+            .as_str()
+            .expect("a diagnostic hint is present");
+        assert!(
+            hint.contains("Found 2 stored run(s)"),
+            "the hint should count the stored runs: {hint}"
+        );
+        assert!(
+            hint.contains("dirty"),
+            "the hint should explain the dirty-on-base exclusion: {hint}"
+        );
+
+        assert!(
+            reporter.contains("dirty snapshot on a base-side commit"),
+            "verbose notes should explain each exclusion: {:?}",
+            reporter.notes()
+        );
     }
 
     #[test]
@@ -991,8 +1217,15 @@ mod tests {
             fail_on_regression: true,
             ..options()
         };
-        let outcome = block_on(analyze_with(&git, &storage, "folo", &config(), &opts))
-            .expect("analysis runs");
+        let outcome = block_on(analyze_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &opts,
+            &RecordingReporter::new(),
+        ))
+        .expect("analysis runs");
         assert!(!outcome.is_success(), "a gated regression must fail");
     }
 
@@ -1030,8 +1263,15 @@ mod tests {
         block_on(storage.put(&clean_key("c0"), b"{ not valid")).unwrap();
         let git = linear_git();
 
-        let error =
-            block_on(analyze_with(&git, &storage, "folo", &config(), &options())).unwrap_err();
+        let error = block_on(analyze_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &options(),
+            &RecordingReporter::new(),
+        ))
+        .unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
     }
 
@@ -1041,8 +1281,15 @@ mod tests {
         block_on(storage.put(&clean_key("c0"), &[0xff, 0xfe])).unwrap();
         let git = linear_git();
 
-        let error =
-            block_on(analyze_with(&git, &storage, "folo", &config(), &options())).unwrap_err();
+        let error = block_on(analyze_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &options(),
+            &RecordingReporter::new(),
+        ))
+        .unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
     }
 
@@ -1054,7 +1301,15 @@ mod tests {
             format: Some("yaml".to_owned()),
             ..options()
         };
-        let error = block_on(analyze_with(&git, &storage, "folo", &config(), &opts)).unwrap_err();
+        let error = block_on(analyze_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &opts,
+            &RecordingReporter::new(),
+        ))
+        .unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
     }
 
@@ -1066,7 +1321,15 @@ mod tests {
             engine: Some("dhat".to_owned()),
             ..options()
         };
-        let error = block_on(analyze_with(&git, &storage, "folo", &config(), &opts)).unwrap_err();
+        let error = block_on(analyze_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &opts,
+            &RecordingReporter::new(),
+        ))
+        .unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
     }
 
@@ -1079,7 +1342,15 @@ mod tests {
             base: Some("does-not-exist".to_owned()),
             ..options()
         };
-        let error = block_on(analyze_with(&git, &storage, "folo", &config(), &opts)).unwrap_err();
+        let error = block_on(analyze_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &opts,
+            &RecordingReporter::new(),
+        ))
+        .unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
         assert!(error.to_string().contains("--base"), "{error}");
     }
@@ -1111,8 +1382,15 @@ mod tests {
             format: Some("json".to_owned()),
             ..options()
         };
-        let outcome =
-            block_on(analyze_with(&git, &storage, "folo", &config, &opts)).expect("analysis runs");
+        let outcome = block_on(analyze_with(
+            &git,
+            &storage,
+            "folo",
+            &config,
+            &opts,
+            &RecordingReporter::new(),
+        ))
+        .expect("analysis runs");
         let RunOutcome::Analyzed { report, .. } = outcome else {
             panic!("expected an analyzed outcome");
         };

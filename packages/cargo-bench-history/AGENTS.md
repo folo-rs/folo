@@ -40,17 +40,27 @@ When you add a new IO edge, follow the same pattern: a port trait with an
 
 ## Verbose diagnostics (`report::Reporter`)
 
-`--verbose` on `run`/`backfill` threads a `report::Reporter` through the run
-pipeline so an otherwise-silent outcome (notably an empty harvest that stores
-nothing) can be diagnosed. The trait has `enabled()` (gate expensive per-file note
-formatting) and `note(&str)`. Production uses `StderrReporter::new(verbose)`, which
-writes `[bench-history] …` lines to **standard error** only when verbose — never
-stdout, so machine-readable output stays clean. Tests use the `#[cfg(test)]`
-`RecordingReporter` (records notes in a `RefCell`, exposing `notes()`/`contains()`).
+`--verbose` is accepted by every command (`run`/`backfill`/`analyze`/`install`)
+and threads a `report::Reporter` through the relevant pipeline so an
+otherwise-silent outcome can be diagnosed. The trait has `enabled()` (gate
+expensive per-file note formatting) and `note(&str)`. Production uses
+`StderrReporter::new(verbose)`, which writes `[bench-history] …` lines to
+**standard error** only when verbose — never stdout, so machine-readable output
+stays clean. Tests use the `#[cfg(test)]` `RecordingReporter` (records notes in a
+`RefCell`, exposing `notes()`/`contains()`).
 `bench_output::collect` takes `&dyn Reporter` and notes each directory scanned and
 every file included/excluded/stale; `run` notes the argv, injected env, harvest
-boundary, and each stored key. The reporter is `&dyn Reporter` (not `+ Sync`), so
-the run futures stay `!Send` and Miri-driven via `block_on`.
+boundary, and each stored key. `analyze_with` notes the listing prefix, facet
+filters, the resolved target/base/merge-base, and why each candidate object is
+included or excluded; `install` notes whether it wrote or left the config. The
+reporter is `&dyn Reporter` (not `+ Sync`), so the run futures stay `!Send` and
+Miri-driven via `block_on`.
+
+`analyze` also renders a non-verbose diagnostic *hint* (carried on `ReportInput`/
+`JsonReport`, built by `empty_history_hint`) whenever facet-matching runs were
+stored but none entered the analysis — most commonly when every run is a dirty
+snapshot on a base-side commit (the "config file never committed" trap). The hint
+makes a `0 runs` result self-explanatory without needing `--verbose`.
 
 ## Storage model (commit-centric v2)
 

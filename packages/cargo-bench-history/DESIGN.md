@@ -516,6 +516,13 @@ order, runs the finding algorithms (§9), and prints a report.
   share the window.
 * `--metric`, `--format text|json|markdown`, `--fail-on-regression` (CI gating,
   opt-in; non-zero exit when a regression is found).
+* `--verbose` prints a per-object diagnostic trail to stderr (the listing prefix,
+  facet filters, resolved target/base/merge-base, and why each candidate is
+  included or excluded). When facet-matching runs were stored but none entered the
+  analysis (commonly because every run is a dirty snapshot on a base-side commit),
+  the report itself carries a *hint* explaining the empty result even without
+  `--verbose`, so a `0 runs` outcome is never mistaken for "no data". `--verbose`
+  is accepted by every command.
 
 ### 8.5 `cargo bench-history backfill`
 

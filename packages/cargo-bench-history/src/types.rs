@@ -71,6 +71,8 @@ pub struct RunOptions {
 pub struct InstallOptions {
     /// Path to the configuration file to generate, if overridden.
     pub config_path: Option<PathBuf>,
+    /// Emit detailed diagnostic notes to standard error describing each step.
+    pub verbose: bool,
 }
 
 /// Options for the `analyze` command.
@@ -110,6 +112,8 @@ pub struct AnalyzeOptions {
     pub list_discriminants: bool,
     /// Exit with failure if a regression is detected.
     pub fail_on_regression: bool,
+    /// Emit detailed diagnostic notes to standard error describing each step.
+    pub verbose: bool,
 }
 
 /// Options for the `backfill` command.

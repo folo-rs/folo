@@ -31,7 +31,7 @@ cargo bench-history run [--workspace] [--package NAME] [--bench NAME]
                         [--machine-key KEY] [--no-store] [--overwrite]
                         [--verbose] [--config PATH]
                         -- <args forwarded to cargo bench>
-cargo bench-history install [--config PATH]
+cargo bench-history install [--verbose] [--config PATH]
 cargo bench-history backfill --from REF --to REF [--workspace]
                              [--package NAME] [--bench NAME]
                              [--target-triple TRIPLE] [--machine-key KEY]
@@ -43,7 +43,7 @@ cargo bench-history analyze [--repo PATH] [--branch REF] [--base REF]
                             [--machine-key KEY] [--no-dirty]
                             [--list-discriminants] [--since DATE]
                             [--metric NAME] [--format text|json|markdown]
-                            [--fail-on-regression] [--config PATH]
+                            [--fail-on-regression] [--verbose] [--config PATH]
 ```
 
 * `run` executes the workspace's benches once with `cargo bench`, harvests every
@@ -84,7 +84,10 @@ cargo bench-history analyze [--repo PATH] [--branch REF] [--base REF]
   is partitioned into *discriminant sets* (engine, target triple, OS, architecture,
   machine key); `--engine`/`--os`/`--architecture`/`--machine-key` select sets and
   `--list-discriminants` prints the sets present in storage. `--since`/`--metric`
-  narrow the data and `--fail-on-regression` enables CI gating.
+  narrow the data and `--fail-on-regression` enables CI gating. When stored runs
+  exist but none enter the analysis (for example because every run is a dirty
+  snapshot on the base branch), the report explains why; `--verbose` adds a
+  per-object diagnostic trail to standard error. Every command accepts `--verbose`.
 
 ## Status
 

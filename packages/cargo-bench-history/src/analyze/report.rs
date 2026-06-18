@@ -64,6 +64,9 @@ pub(crate) struct ReportInput<'a> {
     pub(crate) findings: &'a [Finding],
     /// The per-set breakdown, one entry per set that contributed data.
     pub(crate) sets: &'a [SetSummary<'a>],
+    /// A diagnostic hint shown when stored runs existed but none were analyzed,
+    /// explaining why the outcome is empty. Absent in the normal case.
+    pub(crate) hint: Option<&'a str>,
 }
 
 /// The JSON shape of a per-set slice.
@@ -104,6 +107,9 @@ struct JsonReport<'a> {
     regressions: usize,
     /// Number of flagged improvements.
     improvements: usize,
+    /// A diagnostic hint when stored runs existed but none were analyzed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hint: Option<&'a str>,
     /// Every set's findings, globally ranked.
     findings: &'a [Finding],
     /// The per-set breakdown.
@@ -159,6 +165,10 @@ fn render_text(input: &ReportInput<'_>) -> String {
 
     if input.findings.is_empty() {
         lines.push("No notable changes detected.".to_owned());
+        if let Some(hint) = input.hint {
+            lines.push(String::new());
+            lines.push(hint.to_owned());
+        }
         return finish(&lines);
     }
 
@@ -201,6 +211,10 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
     if input.findings.is_empty() {
         lines.push(String::new());
         lines.push("No notable changes detected.".to_owned());
+        if let Some(hint) = input.hint {
+            lines.push(String::new());
+            lines.push(hint.to_owned());
+        }
         return finish(&lines);
     }
 
@@ -267,6 +281,7 @@ fn render_json(input: &ReportInput<'_>) -> String {
         series: input.series,
         regressions: count_top(input.findings, Direction::Regression),
         improvements: count_top(input.findings, Direction::Improvement),
+        hint: input.hint,
         findings: input.findings,
         sets,
     };
@@ -370,6 +385,7 @@ mod tests {
             series: findings.len().max(1),
             findings,
             sets: summaries,
+            hint: None,
         }
     }
 
@@ -393,11 +409,27 @@ mod tests {
             series: 1,
             findings: &[],
             sets: &[],
+            hint: None,
         };
         let report = render(&input, ReportFormat::Text);
         assert!(report.contains("Analyzed project folo"), "{report}");
         assert!(report.contains("regressions: 0"), "{report}");
         assert!(report.contains("No notable changes detected."), "{report}");
+    }
+
+    #[test]
+    fn text_report_renders_hint_when_present() {
+        let input = ReportInput {
+            project: "folo",
+            runs: 0,
+            series: 0,
+            findings: &[],
+            sets: &[],
+            hint: Some("Found 2 stored run(s) ... dirty snapshot(s)"),
+        };
+        let report = render(&input, ReportFormat::Text);
+        assert!(report.contains("No notable changes detected."), "{report}");
+        assert!(report.contains("Found 2 stored run(s)"), "{report}");
     }
 
     #[test]
@@ -476,9 +508,29 @@ mod tests {
             series: 0,
             findings: &[],
             sets: &[],
+            hint: Some("Found 2 stored run(s) ... commit your working tree"),
         };
         let report = render(&input, ReportFormat::Markdown);
         assert!(report.contains("No notable changes detected."), "{report}");
+        assert!(report.contains("commit your working tree"), "{report}");
+    }
+
+    #[test]
+    fn json_report_includes_hint_field_when_present() {
+        let input = ReportInput {
+            project: "folo",
+            runs: 0,
+            series: 0,
+            findings: &[],
+            sets: &[],
+            hint: Some("dirty snapshot(s) on base-branch commits"),
+        };
+        let report = render(&input, ReportFormat::Json);
+        let parsed: serde_json::Value = serde_json::from_str(&report).expect("report is JSON");
+        assert_eq!(
+            parsed["hint"], "dirty snapshot(s) on base-branch commits",
+            "{report}"
+        );
     }
 
     #[test]

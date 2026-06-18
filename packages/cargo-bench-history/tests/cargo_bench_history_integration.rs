@@ -768,6 +768,46 @@ async fn analyze_official_view_excludes_dirty_runs() {
     );
 }
 
+/// When every stored run on the default branch is a dirty (uncommitted-tree)
+/// snapshot — the trap a user hits when the configuration file is never committed,
+/// so each `run` records a `dirty-*.json` on the base-side tip — `analyze` finds
+/// zero runs but renders a diagnostic hint that explains the exclusion, so the
+/// empty result is not mistaken for "no data". This exercises the discoverability
+/// fix end to end through the production dispatch.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_hints_when_every_run_is_a_dirty_snapshot_on_the_base() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // Two dirty snapshots on master commits and not a single clean run anywhere.
+    workspace.seed_dirty_callgrind("2024-01-01", "c1", 100.0);
+    workspace.seed_dirty_callgrind("2024-01-02", "c2", 130.0);
+
+    let RunOutcome::Analyzed { report, .. } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(
+        parsed["runs"], 0,
+        "every dirty-on-base snapshot is excluded: {report}"
+    );
+    let hint = parsed["hint"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the empty result must carry a diagnostic hint: {report}"));
+    assert!(
+        hint.contains("Found 2 stored run(s)"),
+        "the hint should count the stored runs: {hint}"
+    );
+    assert!(
+        hint.contains("dirty"),
+        "the hint should explain the dirty-on-base exclusion: {hint}"
+    );
+}
+
 /// A feature view admits dirty snapshots on the branch's own commits (after the
 /// merge-base): a dirty regression on the feature tip flags by default, and
 /// `--no-dirty` suppresses it.
