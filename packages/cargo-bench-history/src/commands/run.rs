@@ -71,10 +71,10 @@ pub(crate) struct RunDeps<'a, R, P, O, S> {
 ///
 /// `target_root` overrides the cargo target directory the harvest scans.
 /// Production passes `None`, resolving the root from `CARGO_TARGET_DIR` (or the
-/// `target/` default). `bench_command` overrides the program run to produce
-/// benchmark output; production passes `None`, defaulting to `cargo bench`. Tests
-/// pass explicit values so the flow is hermetic without mutating the process
-/// environment.
+/// `target/` default) as an absolute path. `bench_command` overrides the program
+/// run to produce benchmark output; production passes `None`, defaulting to
+/// `cargo bench`. Tests pass explicit values so the flow is hermetic without
+/// mutating the process environment.
 pub(crate) async fn execute(
     options: &RunOptions,
     target_root: Option<PathBuf>,
@@ -538,15 +538,29 @@ fn timestamp_from(time: SystemTime) -> Timestamp {
     Timestamp::try_from(time).expect("system time is within the supported timestamp range")
 }
 
-/// The cargo target directory, honoring `CARGO_TARGET_DIR`.
+/// The cargo target directory, honoring `CARGO_TARGET_DIR`, as an absolute path.
 fn resolve_target_root() -> PathBuf {
-    target_root_from(std::env::var_os("CARGO_TARGET_DIR"))
+    let base = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    target_root_from(std::env::var_os("CARGO_TARGET_DIR"), &base)
 }
 
 /// Resolves the cargo target directory from an optional `CARGO_TARGET_DIR` value,
-/// falling back to the conventional `target/` directory when it is unset.
-fn target_root_from(configured: Option<std::ffi::OsString>) -> PathBuf {
-    configured.map_or_else(|| PathBuf::from("target"), PathBuf::from)
+/// falling back to the conventional `target/` directory when it is unset, and
+/// makes the result absolute by joining a relative path onto `base`.
+///
+/// Absolutizing matters because the value is injected back as `CARGO_TARGET_DIR`
+/// for the benchmark command. Cargo runs each benchmark binary with its working
+/// directory set to the owning package's directory, so a relative `target/` would
+/// be resolved there by an engine such as Criterion — depositing output under the
+/// package instead of the workspace root the harvest scans. An absolute root keeps
+/// the write and the scan pointed at the same tree regardless of that cwd.
+fn target_root_from(configured: Option<std::ffi::OsString>, base: &Path) -> PathBuf {
+    let configured = configured.map_or_else(|| PathBuf::from("target"), PathBuf::from);
+    if configured.is_absolute() {
+        configured
+    } else {
+        base.join(configured)
+    }
 }
 
 #[cfg(test)]
@@ -587,26 +601,55 @@ mod tests {
 
     #[test]
     fn target_root_falls_back_to_the_conventional_directory() {
-        assert_eq!(target_root_from(None), PathBuf::from("target"));
+        let base = if cfg!(windows) {
+            Path::new(r"C:\work")
+        } else {
+            Path::new("/work")
+        };
+        let resolved = target_root_from(None, base);
+        assert_eq!(resolved, base.join("target"));
+        assert!(resolved.is_absolute());
+    }
+
+    #[test]
+    fn target_root_resolves_a_relative_cargo_target_dir_against_the_base() {
+        let base = if cfg!(windows) {
+            Path::new(r"C:\work")
+        } else {
+            Path::new("/work")
+        };
+        let resolved = target_root_from(Some(std::ffi::OsString::from("out")), base);
+        assert_eq!(resolved, base.join("out"));
+        assert!(resolved.is_absolute());
     }
 
     #[test]
     fn target_root_honors_an_explicit_cargo_target_dir() {
-        let configured = std::ffi::OsString::from("/custom/out");
+        let absolute = if cfg!(windows) {
+            r"C:\custom\out"
+        } else {
+            "/custom/out"
+        };
+        let configured = std::ffi::OsString::from(absolute);
         assert_eq!(
-            target_root_from(Some(configured)),
-            PathBuf::from("/custom/out")
+            target_root_from(Some(configured), Path::new("ignored-base")),
+            PathBuf::from(absolute)
         );
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Reads the process working directory, which Miri cannot access.
     fn resolve_target_root_matches_the_ambient_environment() {
-        // Resolving never panics and agrees with `target_root_from` for whatever
-        // `CARGO_TARGET_DIR` happens to be set (or unset) in this process.
+        // Resolving never panics, yields an absolute path, and agrees with
+        // `target_root_from` for whatever `CARGO_TARGET_DIR` happens to be set
+        // (or unset) in this process.
+        let base = std::env::current_dir().expect("current directory is available");
+        let resolved = resolve_target_root();
         assert_eq!(
-            resolve_target_root(),
-            target_root_from(std::env::var_os("CARGO_TARGET_DIR"))
+            resolved,
+            target_root_from(std::env::var_os("CARGO_TARGET_DIR"), &base)
         );
+        assert!(resolved.is_absolute());
     }
 
     #[test]

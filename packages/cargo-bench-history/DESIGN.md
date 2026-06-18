@@ -388,9 +388,14 @@ simply produce no output — no OS logic is needed in the tool.
    every supported engine's env (`injected_bench_env`, iterating `EngineSystem::ALL`)
    is set unconditionally — an engine that did not run merely ignores its variable.
    * **Target directory pinning:** the tool also injects `CARGO_TARGET_DIR` set
-     to the target root it will harvest, so the benches' output always lands
-     where the harvest scans — even when an ambient `CARGO_TARGET_DIR` (such as
-     the one `cargo llvm-cov` sets) would otherwise redirect it elsewhere.
+     to the *absolute* target root it will harvest, so the benches' output always
+     lands where the harvest scans. An absolute root is essential because cargo
+     runs each benchmark binary with its working directory set to the owning
+     package's directory: a relative `target/` would be resolved there by an
+     engine such as Criterion (which honors `CARGO_TARGET_DIR` as a path),
+     scattering output under each package instead of the workspace root. Pinning
+     an absolute root also overrides an ambient `CARGO_TARGET_DIR` (such as the
+     one `cargo llvm-cov` sets) that would otherwise redirect output elsewhere.
 2. Records the **run-start time**, then runs `cargo bench` (with the scope flags
    below). A non-zero exit aborts the run.
 3. **Harvests every supported engine's output location**
