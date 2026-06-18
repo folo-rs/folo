@@ -37,6 +37,32 @@
 //! # }
 //! ```
 //!
+//! # Machine-readable output
+//!
+//! In addition to printing to the console, you can emit machine-readable JSON
+//! files (one per operation) into the Cargo target directory for later
+//! analysis. Files are written to `target/all_the_time/<operation>.json`, with
+//! operation names sanitized to be filesystem-safe:
+//!
+//! ```no_run
+//! use all_the_time::Session;
+//!
+//! # fn main() -> std::io::Result<()> {
+//! let session = Session::new();
+//!
+//! {
+//!     let batch_op = session.operation("batch_work");
+//!     let _span = batch_op.measure_thread().iterations(1000);
+//!     for _ in 0..1000 {
+//!         std::hint::black_box(42 * 2);
+//!     }
+//! }
+//!
+//! session.write_to_target()?;
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! # Thread vs process processor time
 //!
 //! You can choose between tracking thread processor time or process processor time:
@@ -114,6 +140,7 @@ mod pal;
 mod process_span;
 mod report;
 mod session;
+mod target_output;
 mod thread_span;
 
 pub(crate) use constants::*;

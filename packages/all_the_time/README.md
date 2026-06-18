@@ -6,7 +6,7 @@ enabling analysis of processor usage patterns in benchmarks and performance test
 ```rust
 use all_the_time::Session;
 
-fn main() {
+fn main() -> std::io::Result<()> {
     let session = Session::new();
 
     // Track multiple iterations efficiently
@@ -28,6 +28,12 @@ fn main() {
     } // Total time measured once and divided by iteration count for mean
 
     session.print_to_stdout();
+
+    // Also emit machine-readable JSON files (one per operation) into the Cargo
+    // target directory: target/all_the_time/<operation>.json
+    session.write_to_target()?;
+
+    Ok(())
 }
 ```
 

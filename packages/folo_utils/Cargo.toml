@@ -20,6 +20,8 @@ doc = false
 default = []
 
 [dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 mutants = { workspace = true }

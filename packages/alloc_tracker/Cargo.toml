@@ -22,12 +22,16 @@ default = []
 panic_on_next_alloc = []
 
 [dependencies]
+folo_utils = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
 mutants = { workspace = true }
 serial_test = { workspace = true }
 static_assertions = { workspace = true }
+tempfile = { workspace = true }
 
 [[bench]]
 name = "alloc_tracker_example"

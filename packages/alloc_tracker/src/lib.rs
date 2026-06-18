@@ -66,6 +66,32 @@
 //! }
 //! ```
 //!
+//! # Machine-readable output
+//!
+//! In addition to printing to the console, you can emit machine-readable JSON
+//! files (one per operation) into the Cargo target directory for later
+//! analysis. Files are written to `target/alloc_tracker/<operation>.json`, with
+//! operation names sanitized to be filesystem-safe:
+//!
+//! ```no_run
+//! use alloc_tracker::{Allocator, Session};
+//!
+//! #[global_allocator]
+//! static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+//!
+//! # fn main() -> std::io::Result<()> {
+//! let session = Session::new();
+//! {
+//!     let operation = session.operation("my_operation");
+//!     let _span = operation.measure_process();
+//!     let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
+//! }
+//!
+//! session.write_to_target()?;
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! # Tracking mean allocations
 //!
 //! For benchmarking scenarios, where you run multiple iterations of an operation, use [`Operation`]:
@@ -149,6 +175,7 @@ mod operation_metrics;
 mod process_span;
 mod report;
 mod session;
+mod target_output;
 mod thread_span;
 
 pub use allocator::*;

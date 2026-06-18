@@ -18,7 +18,7 @@ use alloc_tracker::{Allocator, Session, panic_on_next_alloc};
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
 #[expect(clippy::useless_vec, reason = "example needs to show allocation")]
-fn main() {
+fn main() -> std::io::Result<()> {
     // Basic allocation tracking - now shows both bytes and allocation count
     let session = Session::new();
 
@@ -40,6 +40,10 @@ fn main() {
 
     // Print results - now shows both mean bytes and mean allocation count
     session.print_to_stdout();
+
+    // Also emit machine-readable JSON files (one per operation) into the Cargo
+    // target directory: target/alloc_tracker/<operation>.json
+    session.write_to_target()?;
 
     // Session automatically cleans up when dropped
 
@@ -63,4 +67,6 @@ fn main() {
         println!("cargo run --example alloc_tracker_readme --features panic_on_next_alloc");
         let _vec = vec![1, 2, 3]; // Regular allocation without panic functionality
     }
+
+    Ok(())
 }
