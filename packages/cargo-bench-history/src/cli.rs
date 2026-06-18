@@ -84,6 +84,11 @@ struct RunCommand {
     #[argh(switch)]
     overwrite: bool,
 
+    /// emit detailed diagnostic notes to standard error (which directories are
+    /// scanned, which files are included or skipped, what is stored where).
+    #[argh(switch)]
+    verbose: bool,
+
     /// arguments after `--` forwarded verbatim to `cargo bench` after the scope
     /// flags.
     #[argh(positional, greedy)]
@@ -110,6 +115,7 @@ impl RunCommand {
             no_store: self.no_store,
             overwrite: self.overwrite,
             passthrough: strip_separator(self.passthrough),
+            verbose: self.verbose,
         }
     }
 }
@@ -265,6 +271,11 @@ struct BackfillCommand {
     #[argh(switch)]
     ignore_errors: bool,
 
+    /// emit detailed diagnostic notes to standard error for each commit's run
+    /// (which directories are scanned, which files are included or skipped).
+    #[argh(switch)]
+    verbose: bool,
+
     /// arguments after `--` forwarded verbatim to `cargo bench` after the scope
     /// flags.
     #[argh(positional, greedy)]
@@ -289,6 +300,7 @@ impl BackfillCommand {
             overwrite: self.overwrite,
             ignore_errors: self.ignore_errors,
             passthrough: strip_separator(self.passthrough),
+            verbose: self.verbose,
         }
     }
 }
@@ -383,6 +395,19 @@ mod tests {
             panic!("expected run command");
         };
         assert_eq!(options.machine_key.as_deref(), Some("ci-pool-a"));
+    }
+
+    #[test]
+    fn run_parses_verbose_switch() {
+        let Command::Run(options) = parse(&["run", "--verbose"]) else {
+            panic!("expected run command");
+        };
+        assert!(options.verbose);
+
+        let Command::Run(options) = parse(&["run"]) else {
+            panic!("expected run command");
+        };
+        assert!(!options.verbose);
     }
 
     #[test]
@@ -489,6 +514,27 @@ mod tests {
     fn backfill_requires_from_and_to() {
         let parsed = Cli::from_args(&["cargo-bench-history"], &["backfill", "--from", "abc123"]);
         assert!(parsed.is_err(), "missing --to must be rejected");
+    }
+
+    #[test]
+    fn backfill_parses_verbose_switch() {
+        let Command::Backfill(options) = parse(&[
+            "backfill",
+            "--from",
+            "abc123",
+            "--to",
+            "def456",
+            "--verbose",
+        ]) else {
+            panic!("expected backfill command");
+        };
+        assert!(options.verbose);
+
+        let Command::Backfill(options) = parse(&["backfill", "--from", "abc123", "--to", "def456"])
+        else {
+            panic!("expected backfill command");
+        };
+        assert!(!options.verbose);
     }
 
     #[test]

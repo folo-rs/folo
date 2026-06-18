@@ -7,14 +7,17 @@
 use std::ffi::OsStr;
 use std::future::Future;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
+
+use jiff::Timestamp;
 
 use crate::bench::{
     CRITERION_BENCHMARK_FILE, CRITERION_DIR, CRITERION_ESTIMATES_FILE, CRITERION_NEW_DIR,
     GUNGRAUN_DIR, SUMMARY_FILE,
 };
 use crate::comparability::EngineSystem;
+use crate::report::Reporter;
 
 /// Tolerance subtracted from the run-start boundary before comparing file
 /// modification times, absorbing coarse filesystem mtime granularity so a summary
@@ -55,6 +58,10 @@ pub(crate) enum Harvest {
 pub(crate) trait BenchOutputSource {
     /// Returns every output `engine` wrote at or after `since`.
     ///
+    /// `reporter` receives a diagnostic note for each directory scanned and each
+    /// candidate file included or excluded, so a `--verbose` run can explain an
+    /// empty harvest.
+    ///
     /// # Errors
     ///
     /// Returns an error if the output tree cannot be read.
@@ -62,6 +69,7 @@ pub(crate) trait BenchOutputSource {
         &self,
         engine: EngineSystem,
         since: SystemTime,
+        reporter: &dyn Reporter,
     ) -> impl Future<Output = io::Result<Harvest>>;
 }
 
@@ -80,17 +88,31 @@ impl FsBenchOutputSource {
     }
 
     /// Walks `{target_root}/gungraun` for fresh `summary.json` files.
-    async fn collect_callgrind(&self, since: SystemTime) -> io::Result<Vec<RawSummary>> {
+    async fn collect_callgrind(
+        &self,
+        since: SystemTime,
+        reporter: &dyn Reporter,
+    ) -> io::Result<Vec<RawSummary>> {
         let threshold = since.checked_sub(MTIME_SLACK).unwrap_or(since);
         let summary_name = OsStr::new(SUMMARY_FILE);
 
+        let root = self.target_root.join(GUNGRAUN_DIR);
+        reporter.note(&format!(
+            "callgrind: scanning {} for {SUMMARY_FILE} files modified at or after {}",
+            root.display(),
+            format_mtime(threshold)
+        ));
+
         let mut summaries = Vec::new();
-        let mut stack = vec![self.target_root.join(GUNGRAUN_DIR)];
+        let mut stack = vec![root.clone()];
 
         while let Some(dir) = stack.pop() {
             let mut entries = match tokio::fs::read_dir(&dir).await {
                 Ok(entries) => entries,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    note_missing_dir(reporter, "callgrind", &dir, &root);
+                    continue;
+                }
                 Err(error) => return Err(error),
             };
 
@@ -102,14 +124,27 @@ impl FsBenchOutputSource {
                 } else if path.file_name() == Some(summary_name) {
                     let modified = entry.metadata().await?.modified()?;
                     if modified >= threshold {
+                        if reporter.enabled() {
+                            reporter.note(&format!("callgrind: including {}", path.display()));
+                        }
                         let content = tokio::fs::read_to_string(&path).await?;
                         summaries.push(RawSummary { path, content });
+                    } else if reporter.enabled() {
+                        reporter.note(&format!(
+                            "callgrind: excluding {} (modified {}, older than the run boundary)",
+                            path.display(),
+                            format_mtime(modified)
+                        ));
                     }
                 }
             }
         }
 
         summaries.sort_by(|left, right| left.path.cmp(&right.path));
+        reporter.note(&format!(
+            "callgrind: harvested {} fresh summary file(s)",
+            summaries.len()
+        ));
         Ok(summaries)
     }
 
@@ -120,19 +155,34 @@ impl FsBenchOutputSource {
     /// directories holding both `benchmark.json` and `estimates.json` are
     /// harvested, and a case is admitted only when its `estimates.json` is no
     /// older than the run-start boundary. Incomplete pairs are skipped.
-    async fn collect_criterion(&self, since: SystemTime) -> io::Result<Vec<RawCriterionCase>> {
+    async fn collect_criterion(
+        &self,
+        since: SystemTime,
+        reporter: &dyn Reporter,
+    ) -> io::Result<Vec<RawCriterionCase>> {
         let threshold = since.checked_sub(MTIME_SLACK).unwrap_or(since);
         let benchmark_name = OsStr::new(CRITERION_BENCHMARK_FILE);
         let estimates_name = OsStr::new(CRITERION_ESTIMATES_FILE);
         let new_dir_name = OsStr::new(CRITERION_NEW_DIR);
 
+        let root = self.target_root.join(CRITERION_DIR);
+        reporter.note(&format!(
+            "criterion: scanning {} for {CRITERION_NEW_DIR}/ cases with {CRITERION_ESTIMATES_FILE} \
+             modified at or after {}",
+            root.display(),
+            format_mtime(threshold)
+        ));
+
         let mut cases = Vec::new();
-        let mut stack = vec![self.target_root.join(CRITERION_DIR)];
+        let mut stack = vec![root.clone()];
 
         while let Some(dir) = stack.pop() {
             let mut entries = match tokio::fs::read_dir(&dir).await {
                 Ok(entries) => entries,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    note_missing_dir(reporter, "criterion", &dir, &root);
+                    continue;
+                }
                 Err(error) => return Err(error),
             };
 
@@ -150,14 +200,26 @@ impl FsBenchOutputSource {
                 }
             }
 
-            // A complete, fresh case lives in a `new/` directory holding both files.
-            if dir.file_name() != Some(new_dir_name) || !has_benchmark {
+            // A complete, fresh case lives in a `new/` directory holding both
+            // files. Non-`new/` directories (group nodes, `base/`) are structural,
+            // not incomplete cases, so they are skipped without a note.
+            if dir.file_name() != Some(new_dir_name) {
                 continue;
             }
-            let Some(modified) = estimates_mtime else {
+            let Some(modified) = estimates_mtime.filter(|_| has_benchmark) else {
+                if reporter.enabled() {
+                    reporter.note(&format!(
+                        "criterion: skipping {} (missing {CRITERION_BENCHMARK_FILE} or \
+                         {CRITERION_ESTIMATES_FILE})",
+                        dir.display()
+                    ));
+                }
                 continue;
             };
             if modified >= threshold {
+                if reporter.enabled() {
+                    reporter.note(&format!("criterion: including {}", dir.display()));
+                }
                 let benchmark =
                     tokio::fs::read_to_string(dir.join(CRITERION_BENCHMARK_FILE)).await?;
                 let estimates =
@@ -167,20 +229,65 @@ impl FsBenchOutputSource {
                     benchmark,
                     estimates,
                 });
+            } else if reporter.enabled() {
+                reporter.note(&format!(
+                    "criterion: excluding {} (modified {}, older than the run boundary)",
+                    dir.display(),
+                    format_mtime(modified)
+                ));
             }
         }
 
         cases.sort_by(|left, right| left.dir.cmp(&right.dir));
+        reporter.note(&format!(
+            "criterion: harvested {} fresh case(s)",
+            cases.len()
+        ));
         Ok(cases)
     }
 }
 
 impl BenchOutputSource for FsBenchOutputSource {
-    async fn collect(&self, engine: EngineSystem, since: SystemTime) -> io::Result<Harvest> {
+    async fn collect(
+        &self,
+        engine: EngineSystem,
+        since: SystemTime,
+        reporter: &dyn Reporter,
+    ) -> io::Result<Harvest> {
         match engine {
-            EngineSystem::Callgrind => Ok(Harvest::Callgrind(self.collect_callgrind(since).await?)),
-            EngineSystem::Criterion => Ok(Harvest::Criterion(self.collect_criterion(since).await?)),
+            EngineSystem::Callgrind => Ok(Harvest::Callgrind(
+                self.collect_callgrind(since, reporter).await?,
+            )),
+            EngineSystem::Criterion => Ok(Harvest::Criterion(
+                self.collect_criterion(since, reporter).await?,
+            )),
         }
+    }
+}
+
+/// Formats a filesystem modification time for a diagnostic note, falling back to
+/// a placeholder for the rare time that falls outside the timestamp range.
+fn format_mtime(time: SystemTime) -> String {
+    Timestamp::try_from(time)
+        .map_or_else(|_| "<out-of-range>".to_owned(), |stamp| stamp.to_string())
+}
+
+/// Emits a diagnostic note for a directory that `read_dir` reported as missing.
+///
+/// A missing engine root is the common cause of an empty harvest (the engine
+/// produced nothing), so it is always reported; a missing nested directory is a
+/// rare mid-scan race that is only noted in verbose mode.
+fn note_missing_dir(reporter: &dyn Reporter, engine: &str, dir: &Path, root: &Path) {
+    if dir == root {
+        reporter.note(&format!(
+            "{engine}: directory {} does not exist; no output was produced here",
+            dir.display()
+        ));
+    } else if reporter.enabled() {
+        reporter.note(&format!(
+            "{engine}: directory {} disappeared during the scan; skipping",
+            dir.display()
+        ));
     }
 }
 
@@ -192,22 +299,44 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::report::RecordingReporter;
 
-    fn write_summary(root: &std::path::Path, relative: &str, content: &str) -> PathBuf {
+    /// Collects through the source with a recording reporter, returning both the
+    /// harvest and the reporter so a test can assert on either. Most tests ignore
+    /// the reporter; the verbose-output tests inspect its notes.
+    async fn harvest_with(
+        source: &FsBenchOutputSource,
+        engine: EngineSystem,
+        since: SystemTime,
+        reporter: &RecordingReporter,
+    ) -> io::Result<Harvest> {
+        source.collect(engine, since, reporter).await
+    }
+
+    /// Collects through the source, discarding the diagnostic notes.
+    async fn harvest(
+        source: &FsBenchOutputSource,
+        engine: EngineSystem,
+        since: SystemTime,
+    ) -> io::Result<Harvest> {
+        harvest_with(source, engine, since, &RecordingReporter::new()).await
+    }
+
+    fn write_summary(root: &Path, relative: &str, content: &str) -> PathBuf {
         let path = root.join(GUNGRAUN_DIR).join(relative);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, content).unwrap();
         path
     }
 
-    fn write_criterion_file(root: &std::path::Path, relative: &str, content: &str) -> PathBuf {
+    fn write_criterion_file(root: &Path, relative: &str, content: &str) -> PathBuf {
         let path = root.join(CRITERION_DIR).join(relative);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, content).unwrap();
         path
     }
 
-    fn set_mtime(path: &std::path::Path, when: SystemTime) {
+    fn set_mtime(path: &Path, when: SystemTime) {
         std::fs::File::options()
             .write(true)
             .open(path)
@@ -240,8 +369,7 @@ mod tests {
 
         let source = FsBenchOutputSource::new(dir.path());
         let since = SystemTime::now() - Duration::from_mins(1);
-        let harvest = source
-            .collect(EngineSystem::Callgrind, since)
+        let harvest = harvest(&source, EngineSystem::Callgrind, since)
             .await
             .unwrap();
 
@@ -261,8 +389,7 @@ mod tests {
         set_mtime(&stale, long_ago);
 
         let source = FsBenchOutputSource::new(dir.path());
-        let harvest = source
-            .collect(EngineSystem::Callgrind, SystemTime::now())
+        let harvest = harvest(&source, EngineSystem::Callgrind, SystemTime::now())
             .await
             .unwrap();
 
@@ -288,8 +415,7 @@ mod tests {
         set_mtime(&outside, since - Duration::from_secs(3));
 
         let source = FsBenchOutputSource::new(dir.path());
-        let harvest = source
-            .collect(EngineSystem::Callgrind, since)
+        let harvest = harvest(&source, EngineSystem::Callgrind, since)
             .await
             .unwrap();
 
@@ -304,8 +430,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let source = FsBenchOutputSource::new(dir.path());
 
-        let harvest = source
-            .collect(EngineSystem::Callgrind, SystemTime::now())
+        let harvest = harvest(&source, EngineSystem::Callgrind, SystemTime::now())
             .await
             .unwrap();
 
@@ -321,8 +446,7 @@ mod tests {
         std::fs::write(dir.path().join(GUNGRAUN_DIR), "not a directory").unwrap();
         let source = FsBenchOutputSource::new(dir.path());
 
-        let error = source
-            .collect(EngineSystem::Callgrind, SystemTime::UNIX_EPOCH)
+        let error = harvest(&source, EngineSystem::Callgrind, SystemTime::UNIX_EPOCH)
             .await
             .unwrap_err();
 
@@ -344,8 +468,7 @@ mod tests {
 
         let source = FsBenchOutputSource::new(dir.path());
         let since = SystemTime::now() - Duration::from_mins(1);
-        let harvest = source
-            .collect(EngineSystem::Criterion, since)
+        let harvest = harvest(&source, EngineSystem::Criterion, since)
             .await
             .unwrap();
 
@@ -380,8 +503,7 @@ mod tests {
         set_mtime(&stale_estimates, since - Duration::from_hours(1));
 
         let source = FsBenchOutputSource::new(dir.path());
-        let harvest = source
-            .collect(EngineSystem::Criterion, since)
+        let harvest = harvest(&source, EngineSystem::Criterion, since)
             .await
             .unwrap();
 
@@ -396,8 +518,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let source = FsBenchOutputSource::new(dir.path());
 
-        let harvest = source
-            .collect(EngineSystem::Criterion, SystemTime::UNIX_EPOCH)
+        let harvest = harvest(&source, EngineSystem::Criterion, SystemTime::UNIX_EPOCH)
             .await
             .unwrap();
 
@@ -411,11 +532,121 @@ mod tests {
         std::fs::write(dir.path().join(CRITERION_DIR), "not a directory").unwrap();
         let source = FsBenchOutputSource::new(dir.path());
 
-        let error = source
-            .collect(EngineSystem::Criterion, SystemTime::UNIX_EPOCH)
+        let error = harvest(&source, EngineSystem::Criterion, SystemTime::UNIX_EPOCH)
             .await
             .unwrap_err();
 
         assert_ne!(error.kind(), io::ErrorKind::NotFound, "{error}");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn verbose_notes_report_a_missing_engine_directory() {
+        let dir = tempdir().unwrap();
+        let source = FsBenchOutputSource::new(dir.path());
+        let reporter = RecordingReporter::new();
+
+        harvest_with(
+            &source,
+            EngineSystem::Criterion,
+            SystemTime::now(),
+            &reporter,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            reporter.contains("does not exist"),
+            "an absent engine tree must be reported: {:?}",
+            reporter.notes()
+        );
+        assert!(reporter.contains("harvested 0 fresh case(s)"));
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn verbose_notes_distinguish_included_and_excluded_cases() {
+        let dir = tempdir().unwrap();
+        let fresh = write_criterion_file(dir.path(), "grp/fresh/now/new/estimates.json", "est");
+        write_criterion_file(dir.path(), "grp/fresh/now/new/benchmark.json", "bm");
+        let stale = write_criterion_file(dir.path(), "grp/stale/now/new/estimates.json", "est");
+        write_criterion_file(dir.path(), "grp/stale/now/new/benchmark.json", "bm");
+
+        let since = SystemTime::now();
+        set_mtime(&fresh, since - Duration::from_secs(1));
+        set_mtime(&stale, since - Duration::from_hours(1));
+
+        let source = FsBenchOutputSource::new(dir.path());
+        let reporter = RecordingReporter::new();
+        harvest_with(&source, EngineSystem::Criterion, since, &reporter)
+            .await
+            .unwrap();
+
+        let notes = reporter.notes();
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("including") && n.contains("fresh")),
+            "the fresh case must be reported as included: {notes:?}"
+        );
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("excluding") && n.contains("stale")),
+            "the stale case must be reported as excluded: {notes:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn verbose_notes_report_an_incomplete_criterion_case() {
+        let dir = tempdir().unwrap();
+        // A `new/` directory with only benchmark.json is an incomplete case.
+        write_criterion_file(dir.path(), "grp/partial/now/new/benchmark.json", "bm");
+
+        let source = FsBenchOutputSource::new(dir.path());
+        let reporter = RecordingReporter::new();
+        let harvest = harvest_with(
+            &source,
+            EngineSystem::Criterion,
+            SystemTime::UNIX_EPOCH,
+            &reporter,
+        )
+        .await
+        .unwrap();
+
+        assert!(criterion_cases(harvest).is_empty());
+        assert!(
+            reporter
+                .notes()
+                .iter()
+                .any(|n| n.contains("skipping") && n.contains("partial")),
+            "an incomplete case must be reported as skipped: {:?}",
+            reporter.notes()
+        );
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn verbose_notes_report_included_callgrind_summaries() {
+        let dir = tempdir().unwrap();
+        write_summary(dir.path(), "group/summary.json", "s");
+
+        let source = FsBenchOutputSource::new(dir.path());
+        let since = SystemTime::now() - Duration::from_mins(1);
+        let reporter = RecordingReporter::new();
+        harvest_with(&source, EngineSystem::Callgrind, since, &reporter)
+            .await
+            .unwrap();
+
+        assert!(
+            reporter
+                .notes()
+                .iter()
+                .any(|n| n.contains("including") && n.contains("summary.json")),
+            "a fresh summary must be reported as included: {:?}",
+            reporter.notes()
+        );
+        assert!(reporter.contains("harvested 1 fresh summary file(s)"));
     }
 }

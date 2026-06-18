@@ -29,12 +29,14 @@ The initial target engines are the ones this workspace uses: Criterion
 cargo bench-history run [--workspace] [--package NAME] [--bench NAME]
                         [--timestamp RFC3339] [--target-triple TRIPLE]
                         [--machine-key KEY] [--no-store] [--overwrite]
-                        [--config PATH] -- <args forwarded to cargo bench>
+                        [--verbose] [--config PATH]
+                        -- <args forwarded to cargo bench>
 cargo bench-history install [--config PATH]
 cargo bench-history backfill --from REF --to REF [--workspace]
                              [--package NAME] [--bench NAME]
                              [--target-triple TRIPLE] [--machine-key KEY]
-                             [--overwrite] [--ignore-errors] [--config PATH]
+                             [--overwrite] [--ignore-errors] [--verbose]
+                             [--config PATH]
                              -- <args forwarded to cargo bench>
 cargo bench-history analyze [--repo PATH] [--branch REF] [--base REF]
                             [--engine NAME] [--os OS] [--architecture ARCH]
@@ -55,7 +57,11 @@ cargo bench-history analyze [--repo PATH] [--branch REF] [--base REF]
   commit, so re-running the same commit is refused unless `--overwrite` replaces
   the stored result. `--timestamp` overrides the effective time when backfilling
   history for an old commit; `--machine-key` overrides the hardware fingerprint
-  used to partition hardware-dependent (Criterion) results.
+  used to partition hardware-dependent (Criterion) results. `--verbose` prints a
+  step-by-step diagnostic trail to standard error (the benchmark command and
+  injected environment, every directory scanned, which output files were included
+  or skipped as stale, and where each result was stored) — useful when a run
+  unexpectedly stores nothing.
 * `install` generates a starter `.cargo/bench_history.toml` if absent, printing
   its path and next steps (including how to `backfill` history for an existing
   repository); an existing file is never overwritten.
@@ -67,8 +73,8 @@ cargo bench-history analyze [--repo PATH] [--branch REF] [--base REF]
   and the working tree must be clean. Already-stored commits are skipped (so
   backfill is resumable) unless `--overwrite` replaces them; a commit that fails to
   build or benchmark stops the run unless `--ignore-errors` continues past it.
-  `--workspace`/`--package`/`--bench`/`--target-triple`/`--machine-key` and a `--`
-  passthrough behave as for `run`.
+  `--workspace`/`--package`/`--bench`/`--target-triple`/`--machine-key`/`--verbose`
+  and a `--` passthrough behave as for `run`.
 * `analyze` reconstructs a timeline from git history and reports notable patterns.
   It requires a repository (`--repo` selects one other than the current directory).
   `--branch` chooses the line to analyze (default `HEAD`) and `--base` the line to

@@ -57,6 +57,8 @@ pub struct RunOptions {
     pub overwrite: bool,
     /// Arguments forwarded verbatim to the benchmark command after the scope flags.
     pub passthrough: Vec<String>,
+    /// Emit detailed diagnostic notes to standard error describing each step.
+    pub verbose: bool,
 }
 
 /// Options for the `install` command.
@@ -140,6 +142,8 @@ pub struct BackfillOptions {
     pub ignore_errors: bool,
     /// Arguments forwarded verbatim to the benchmark command after the scope flags.
     pub passthrough: Vec<String>,
+    /// Emit detailed diagnostic notes to standard error describing each step.
+    pub verbose: bool,
 }
 
 /// The outcome of a successful [`run`](crate::run).

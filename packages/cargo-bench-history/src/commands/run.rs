@@ -14,7 +14,7 @@ use tick::Clock;
 use crate::bench::{injected_bench_env, parse_callgrind_summary, parse_criterion_case};
 use crate::bench_output::{BenchOutputSource, FsBenchOutputSource, Harvest};
 use crate::comparability::{ComparabilityKey, EngineSystem, resolve_target_triple};
-use crate::config::{Config, load_config};
+use crate::config::{StorageConfig, load_config};
 use crate::context::{
     CiInfo, RunContext, Timestamps, ToolchainInfo, detect_ci, resolve_effective_time,
 };
@@ -24,6 +24,7 @@ use crate::machine::{HardwareProfile, resolve_machine_key};
 use crate::model::{ResultRecord, ResultSet};
 use crate::probe::{EnvironmentProbe, SystemProbe};
 use crate::process::{BenchRunner, TokioBenchRunner};
+use crate::report::{Reporter, StderrReporter};
 use crate::storage::{Storage, StorageError, build_storage};
 use crate::wiring::{default_config_path, resolve_project_id};
 use crate::{RunError, RunOptions, RunOutcome};
@@ -50,8 +51,6 @@ pub(crate) struct RunDeps<'a, R, P, O, S> {
     pub(crate) clock: &'a Clock,
     /// Resolves environment variables (for CI detection).
     pub(crate) env: &'a dyn Fn(&str) -> Option<String>,
-    /// The loaded configuration.
-    pub(crate) config: &'a Config,
     /// Resolved project identity for the storage partition.
     pub(crate) project_id: &'a str,
     /// Version of this tool, recorded with each run.
@@ -64,6 +63,8 @@ pub(crate) struct RunDeps<'a, R, P, O, S> {
     /// Production uses `cargo bench`; the scope flags and passthrough are appended
     /// to it. Tests inject a mock program in its place.
     pub(crate) bench_command: &'a [String],
+    /// Sink for `--verbose` diagnostic notes describing each step of the run.
+    pub(crate) reporter: &'a dyn Reporter,
 }
 
 /// The real `run`: wire the production adapters and orchestrate.
@@ -79,19 +80,34 @@ pub(crate) async fn execute(
     target_root: Option<PathBuf>,
     bench_command: Option<Vec<String>>,
 ) -> Result<RunOutcome, RunError> {
+    let reporter = StderrReporter::new(options.verbose);
+
     let config_path = options
         .config_path
         .clone()
         .unwrap_or_else(default_config_path);
+    reporter.note(&format!(
+        "loading configuration from {}",
+        config_path.display()
+    ));
     let config = load_config(&config_path).await?;
 
     let workspace_dir = std::env::current_dir().map_err(RunError::Io)?;
     let project_id = resolve_project_id(&config, &workspace_dir);
+    reporter.note(&format!("project id: {project_id}"));
+    reporter.note(&format!(
+        "storage backend: {}",
+        describe_storage(&config.storage)
+    ));
     let storage = build_storage(&config)?;
 
     let runner = TokioBenchRunner::default();
     let probe = SystemProbe::default();
     let target_root = target_root.unwrap_or_else(resolve_target_root);
+    reporter.note(&format!(
+        "cargo target directory (scanned for engine output): {}",
+        target_root.display()
+    ));
     let output = FsBenchOutputSource::new(target_root.clone());
     let clock = Clock::new_tokio();
     let env = |name: &str| std::env::var(name).ok();
@@ -104,14 +120,27 @@ pub(crate) async fn execute(
         storage: &storage,
         clock: &clock,
         env: &env,
-        config: &config,
         project_id: &project_id,
         tool_version: env!("CARGO_PKG_VERSION"),
         target_root: &target_root,
         bench_command: &bench_command,
+        reporter: &reporter,
     };
 
     execute_run(options, &deps).await
+}
+
+/// A short human-readable description of where results are stored, for the
+/// verbose diagnostic trail.
+fn describe_storage(storage: &StorageConfig) -> String {
+    match storage {
+        StorageConfig::Local { path } => {
+            format!("local filesystem at {}", path.display())
+        }
+        StorageConfig::Azure {
+            account, container, ..
+        } => format!("Azure Blob (account {account}, container {container})"),
+    }
 }
 
 /// The production benchmark command: `cargo bench`.
@@ -210,6 +239,18 @@ where
         deps.target_root.to_string_lossy().into_owned(),
     ));
 
+    if deps.reporter.enabled() {
+        deps.reporter
+            .note(&format!("running benchmark command: {}", argv.join(" ")));
+        let rendered_env = env
+            .iter()
+            .map(|(name, value)| format!("{name}={value}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        deps.reporter
+            .note(&format!("injected environment: {rendered_env}"));
+    }
+
     let run_start = deps.clock.system_time();
     let status = deps.runner.run_benches(&argv, &env).await?;
     if !status.success {
@@ -218,6 +259,11 @@ where
             code: status.code,
         });
     }
+    deps.reporter.note(&format!(
+        "benchmark command finished; harvesting output modified at or after {} \
+         (older files are treated as stale leftovers)",
+        timestamp_from(run_start)
+    ));
 
     let rustc = deps.probe.toolchain().await?;
     let shared = SharedContext {
@@ -301,7 +347,10 @@ where
     O: BenchOutputSource,
     S: Storage,
 {
-    let harvest = deps.output.collect(engine, run_start).await?;
+    let harvest = deps
+        .output
+        .collect(engine, run_start, deps.reporter)
+        .await?;
     let records = parse_harvest(&harvest)?;
     let count = records.len();
 
@@ -312,6 +361,9 @@ where
     // is no misconfiguration to report, since absence is the expected steady state
     // for an engine that does not apply here.
     if count == 0 {
+        deps.reporter.note(&format!(
+            "{engine}: no fresh benchmark cases harvested; nothing to store"
+        ));
         return Ok(EngineSummary {
             stored: false,
             count: 0,
@@ -320,6 +372,9 @@ where
     }
 
     if options.no_store {
+        deps.reporter.note(&format!(
+            "{engine}: harvested {count} case(s); not storing (--no-store)"
+        ));
         return Ok(EngineSummary {
             stored: false,
             count,
@@ -357,17 +412,11 @@ where
 
     // Hardware-dependent engines (such as Criterion) partition their history by a
     // machine fingerprint so only equivalent machines share a series. An explicit
-    // `--machine-key` (or its config equivalent) overrides the computed fingerprint.
-    // Hardware-independent engines (such as Callgrind) use no machine key.
-    let machine_key = engine.is_hardware_dependent().then(|| {
-        resolve_machine_key(
-            options
-                .machine_key
-                .as_deref()
-                .or(deps.config.machine.key.as_deref()),
-            &shared.hardware,
-        )
-    });
+    // `--machine-key` overrides the computed fingerprint. Hardware-independent
+    // engines (such as Callgrind) use no machine key.
+    let machine_key = engine
+        .is_hardware_dependent()
+        .then(|| resolve_machine_key(options.machine_key.as_deref(), &shared.hardware));
     let key = ComparabilityKey::new(
         deps.project_id,
         engine,
@@ -385,6 +434,14 @@ where
         key.clean_key(commit)
     };
 
+    deps.reporter.note(&format!(
+        "{engine}: {count} case(s) at commit {commit} ({}), effective {effective}{} -> {object_key}",
+        if dirty { "dirty" } else { "clean" },
+        machine_key
+            .as_deref()
+            .map_or_else(String::new, |key| format!(", machine {key}")),
+    ));
+
     // A freshly built result set is composed of plain structs and finite counts,
     // so serialization cannot fail.
     let json = result_set
@@ -397,6 +454,8 @@ where
         options.overwrite,
     )
     .await?;
+    deps.reporter
+        .note(&format!("{engine}: stored {object_key}"));
 
     Ok(EngineSummary {
         stored: true,
@@ -503,9 +562,9 @@ mod tests {
 
     use super::*;
     use crate::bench_output::{Harvest, RawCriterionCase, RawSummary};
-    use crate::config::parse_config;
     use crate::git::build_snapshot;
     use crate::process::EngineStatus;
+    use crate::report::RecordingReporter;
     use crate::storage::MemoryStorage;
 
     const SINGLE_FIXTURE: &str =
@@ -749,17 +808,17 @@ mod tests {
     }
 
     impl BenchOutputSource for FakeOutput {
-        async fn collect(&self, engine: EngineSystem, _since: SystemTime) -> io::Result<Harvest> {
+        async fn collect(
+            &self,
+            engine: EngineSystem,
+            _since: SystemTime,
+            _reporter: &dyn Reporter,
+        ) -> io::Result<Harvest> {
             Ok(match engine {
                 EngineSystem::Callgrind => Harvest::Callgrind(self.callgrind.clone()),
                 EngineSystem::Criterion => Harvest::Criterion(self.criterion.clone()),
             })
         }
-    }
-
-    fn storage_only_config() -> Config {
-        parse_config("[storage.local]\npath = \"./data\"\n")
-            .expect("test configuration should parse")
     }
 
     /// The benchmark program tests pretend to run. The [`FakeRunner`] records the
@@ -770,23 +829,34 @@ mod tests {
 
     fn drive(
         options: &RunOptions,
-        config: &Config,
         runner: &FakeRunner,
         probe: &FakeProbe,
         output: &FakeOutput,
         storage: &MemoryStorage,
     ) -> Result<RunOutcome, RunError> {
-        drive_at(FROZEN_UNIX, options, config, runner, probe, output, storage)
+        drive_at(FROZEN_UNIX, options, runner, probe, output, storage)
     }
 
     fn drive_at(
         now_unix: u64,
         options: &RunOptions,
-        config: &Config,
         runner: &FakeRunner,
         probe: &FakeProbe,
         output: &FakeOutput,
         storage: &MemoryStorage,
+    ) -> Result<RunOutcome, RunError> {
+        let reporter = StderrReporter::new(false);
+        drive_at_with(now_unix, options, runner, probe, output, storage, &reporter)
+    }
+
+    fn drive_at_with(
+        now_unix: u64,
+        options: &RunOptions,
+        runner: &FakeRunner,
+        probe: &FakeProbe,
+        output: &FakeOutput,
+        storage: &MemoryStorage,
+        reporter: &dyn Reporter,
     ) -> Result<RunOutcome, RunError> {
         let now = SystemTime::UNIX_EPOCH
             .checked_add(Duration::from_secs(now_unix))
@@ -801,13 +871,76 @@ mod tests {
             storage,
             clock: &clock,
             env: &env,
-            config,
             project_id: "folo",
             tool_version: "0.0.1",
             target_root: Path::new("target"),
             bench_command: &bench_command,
+            reporter,
         };
         block_on(execute_run(options, &deps))
+    }
+
+    #[test]
+    fn verbose_run_notes_the_command_and_stored_key() {
+        let runner = FakeRunner::succeeding();
+        let probe = FakeProbe::new();
+        let output = FakeOutput::with_two_callgrind_summaries();
+        let storage = MemoryStorage::new();
+        let reporter = RecordingReporter::new();
+
+        drive_at_with(
+            FROZEN_UNIX,
+            &RunOptions::default(),
+            &runner,
+            &probe,
+            &output,
+            &storage,
+            &reporter,
+        )
+        .unwrap();
+
+        assert!(
+            reporter.contains("running benchmark command: mock"),
+            "expected an argv note, got {:?}",
+            reporter.notes()
+        );
+        assert!(
+            reporter.contains("GUNGRAUN_SAVE_SUMMARY"),
+            "expected the injected-env note, got {:?}",
+            reporter.notes()
+        );
+        assert!(
+            reporter.contains("stored v2/folo/callgrind/"),
+            "expected a stored-key note, got {:?}",
+            reporter.notes()
+        );
+    }
+
+    #[test]
+    fn verbose_run_notes_an_empty_harvest() {
+        let runner = FakeRunner::succeeding();
+        let probe = FakeProbe::new();
+        let output = FakeOutput::default();
+        let storage = MemoryStorage::new();
+        let reporter = RecordingReporter::new();
+
+        drive_at_with(
+            FROZEN_UNIX,
+            &RunOptions::default(),
+            &runner,
+            &probe,
+            &output,
+            &storage,
+            &reporter,
+        )
+        .unwrap();
+
+        assert!(
+            reporter.contains("no fresh benchmark cases harvested"),
+            "expected an empty-harvest note, got {:?}",
+            reporter.notes()
+        );
+        assert!(storage.keys().is_empty());
     }
 
     #[test]
@@ -817,15 +950,7 @@ mod tests {
         let output = FakeOutput::with_two_callgrind_summaries();
         let storage = MemoryStorage::new();
 
-        let outcome = drive(
-            &RunOptions::default(),
-            &storage_only_config(),
-            &runner,
-            &probe,
-            &output,
-            &storage,
-        )
-        .unwrap();
+        let outcome = drive(&RunOptions::default(), &runner, &probe, &output, &storage).unwrap();
 
         let RunOutcome::Completed { message } = outcome else {
             panic!("expected completion");
@@ -865,7 +990,6 @@ mod tests {
 
         drive(
             &options,
-            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -887,7 +1011,6 @@ mod tests {
         let storage = MemoryStorage::new();
         drive(
             &RunOptions::default(),
-            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -897,7 +1020,6 @@ mod tests {
 
         let error = drive(
             &RunOptions::default(),
-            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -918,7 +1040,6 @@ mod tests {
         let storage = MemoryStorage::new();
         drive(
             &RunOptions::default(),
-            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             // First run harvests two records.
@@ -933,7 +1054,6 @@ mod tests {
         };
         drive(
             &overwrite,
-            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             // Second run harvests a single record over the same key.
@@ -965,7 +1085,6 @@ mod tests {
         let storage = MemoryStorage::new();
         drive(
             &RunOptions::default(),
-            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::dirty(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -989,7 +1108,6 @@ mod tests {
         drive_at(
             FROZEN_UNIX,
             &RunOptions::default(),
-            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::dirty(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -999,7 +1117,6 @@ mod tests {
         drive_at(
             FROZEN_UNIX + 1,
             &RunOptions::default(),
-            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::dirty(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1019,7 +1136,6 @@ mod tests {
         drive_at(
             FROZEN_UNIX,
             &RunOptions::default(),
-            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::dirty(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1030,7 +1146,6 @@ mod tests {
         let error = drive_at(
             FROZEN_UNIX,
             &RunOptions::default(),
-            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::dirty(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1049,7 +1164,6 @@ mod tests {
         drive_at(
             FROZEN_UNIX,
             &overwrite,
-            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::dirty(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1069,7 +1183,6 @@ mod tests {
 
         let outcome = drive(
             &options,
-            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1093,7 +1206,6 @@ mod tests {
         let storage = MemoryStorage::new();
         let outcome = drive(
             &RunOptions::default(),
-            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::default(),
@@ -1118,7 +1230,6 @@ mod tests {
         let storage = MemoryStorage::new();
         let outcome = drive(
             &RunOptions::default(),
-            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_criterion_case(),
@@ -1141,7 +1252,6 @@ mod tests {
         let storage = MemoryStorage::new();
         let error = drive(
             &RunOptions::default(),
-            &storage_only_config(),
             &FakeRunner::failing(101),
             &FakeProbe::new(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1164,7 +1274,6 @@ mod tests {
         let storage = MemoryStorage::new();
         let outcome = drive(
             &RunOptions::default(),
-            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_callgrind_and_criterion(),
@@ -1198,7 +1307,6 @@ mod tests {
         let storage = MemoryStorage::new();
         let outcome = drive(
             &RunOptions::default(),
-            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_criterion_case(),
@@ -1231,7 +1339,6 @@ mod tests {
         };
         drive(
             &options,
-            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_criterion_case(),
@@ -1252,7 +1359,6 @@ mod tests {
         let storage = MemoryStorage::new();
         let error = drive(
             &RunOptions::default(),
-            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_malformed_criterion_case(),
@@ -1281,7 +1387,6 @@ mod tests {
 
         drive(
             &options,
-            &storage_only_config(),
             &runner,
             &FakeProbe::new(),
             &FakeOutput::default(),
@@ -1305,7 +1410,6 @@ mod tests {
 
         drive(
             &RunOptions::default(),
-            &storage_only_config(),
             &runner,
             &FakeProbe::new(),
             &FakeOutput::default(),
@@ -1334,7 +1438,6 @@ mod tests {
         let storage = MemoryStorage::new();
         let error = drive(
             &RunOptions::default(),
-            &storage_only_config(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_malformed_summary(),

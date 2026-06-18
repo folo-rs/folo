@@ -38,6 +38,20 @@ driven in tests by fakes, never by real IO:
 When you add a new IO edge, follow the same pattern: a port trait with an
 `impl Future` return (RPITIT, no `async_trait`), a real adapter, and a fake.
 
+## Verbose diagnostics (`report::Reporter`)
+
+`--verbose` on `run`/`backfill` threads a `report::Reporter` through the run
+pipeline so an otherwise-silent outcome (notably an empty harvest that stores
+nothing) can be diagnosed. The trait has `enabled()` (gate expensive per-file note
+formatting) and `note(&str)`. Production uses `StderrReporter::new(verbose)`, which
+writes `[bench-history] …` lines to **standard error** only when verbose — never
+stdout, so machine-readable output stays clean. Tests use the `#[cfg(test)]`
+`RecordingReporter` (records notes in a `RefCell`, exposing `notes()`/`contains()`).
+`bench_output::collect` takes `&dyn Reporter` and notes each directory scanned and
+every file included/excluded/stale; `run` notes the argv, injected env, harvest
+boundary, and each stored key. The reporter is `&dyn Reporter` (not `+ Sync`), so
+the run futures stay `!Send` and Miri-driven via `block_on`.
+
 ## Storage model (commit-centric v2)
 
 `comparability::ComparabilityKey` builds object keys under the partition prefix
@@ -198,7 +212,9 @@ hashes a version-tagged canonical string (`mk1\nprocessors=…\nmemory_regions=�
 cpu_brand=…`) with SHA-256 and truncates to the first 16 hex chars — a **fixed**
 (not seeded) hash so the key is stable across machines and tool versions; a golden
 test pins a fixed profile to its digest. `resolve_machine_key` prefers an explicit
-override (`--machine-key` → `machine.key` config) over the fingerprint. The key is
+`--machine-key` override (a CLI-only flag — the config file is committed, so it must
+not carry a machine key that would be wrong for some checkouts) over the
+fingerprint. The key is
 computed only when `engine.is_hardware_dependent()` (Criterion); Callgrind never
 reads it.
 

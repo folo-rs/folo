@@ -12,14 +12,6 @@ const DEFAULT_TEMPLATE: &str = "\
 # cargo-bench-history configuration.
 #
 # Stored at .cargo/bench_history.toml. Uncomment and edit as needed.
-#
-# `run` and `backfill` always execute the workspace's benches with `cargo bench`
-# and detect each supported engine (Criterion and, on Linux, Callgrind) from the
-# output it produces. There is nothing to configure about engines: scope a run
-# with `--workspace` (the default), `--package`/`-p`, or `--bench` instead.
-#
-# To seed history for an existing repository, see
-# `cargo bench-history backfill --from <commit> --to <commit>`.
 
 # [project]
 # id = \"my-project\"            # defaults to the workspace directory name
@@ -32,23 +24,19 @@ path = \"./bench-history\"
 # section above with a [storage.azure] section. The `azure` build feature must
 # be enabled. Authentication is, in priority order: a self-signed account SAS
 # (set `account_key`), a pre-made SAS token (set `sas_token`), or Microsoft Entra
-# ID (set neither, requires an HTTPS endpoint).
+# ID (set neither; requires an HTTPS endpoint). Entra ID is the recommended mode
+# for CI, where GitHub Actions can federate into Azure without a stored secret;
+# for setup, see
+# https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-azure
 #
 # [storage.azure]
 # account = \"mystorageaccount\"
 # container = \"bench-history\"
 # endpoint = \"https://mystorageaccount.blob.core.windows.net\"  # optional
 # account_key = \"...\"   # optional: base64 account key, self-signs an account SAS
-# sas_token = \"...\"     # optional: a pre-made SAS query string, used verbatim
-
-# Hardware-dependent engines (such as Criterion) partition their history by a
-# machine fingerprint computed from the host's hardware, so only equivalent
-# machines share a series. Set `key` to override that fingerprint with a stable
-# label you control (for example, the name of a CI machine pool). It is ignored
-# by hardware-independent engines such as Callgrind.
-#
-# [machine]
-# key = \"my-ci-pool\"
+# sas_token = \"...\"     # optional: a pre-made SAS token, used verbatim. Give the
+#                        # query string only, without the leading '?', for example
+#                        # \"sv=2024-11-04&ss=b&srt=o&sp=r&se=2030-01-01T00:00:00Z&sig=...\"
 ";
 
 /// The parsed configuration file.
@@ -60,9 +48,6 @@ pub struct Config {
     pub project: ProjectConfig,
     /// Where result sets are stored.
     pub storage: StorageConfig,
-    /// Machine-fingerprint overrides for hardware-dependent engines.
-    #[serde(default)]
-    pub machine: MachineConfig,
 }
 
 /// Project identity section.
@@ -74,15 +59,6 @@ pub struct ProjectConfig {
     /// The repository's default (integration) branch, used by `analyze` as the
     /// base ref when neither `--base` nor a detectable `origin/HEAD` resolves it.
     pub default_branch: Option<String>,
-}
-
-/// Machine-fingerprint overrides for hardware-dependent engines.
-#[non_exhaustive]
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-pub struct MachineConfig {
-    /// Explicit machine key; when absent the host's hardware fingerprint is used.
-    /// Ignored by hardware-independent engines such as Callgrind.
-    pub key: Option<String>,
 }
 
 /// Where result sets are stored.
@@ -118,8 +94,9 @@ pub enum StorageConfig {
         /// account SAS to authenticate (the mode used against Azurite).
         #[serde(default)]
         account_key: Option<String>,
-        /// A pre-made SAS token (a URL query string). When set, it is used
-        /// verbatim to authenticate. Mutually exclusive with `account_key`.
+        /// A pre-made SAS token (the URL query string only, without a leading
+        /// `?`, e.g. `sv=2024-11-04&ss=b&srt=o&sp=r&se=...&sig=...`). When set, it
+        /// is used verbatim to authenticate. Mutually exclusive with `account_key`.
         #[serde(default)]
         sas_token: Option<String>,
     },
@@ -320,13 +297,15 @@ path = \"./data\"
     }
 
     #[test]
-    fn machine_key_defaults_to_none() {
-        let config = parse_config(default_template()).unwrap();
-        assert_eq!(config.machine.key, None);
+    fn missing_storage_is_an_error() {
+        let error = parse_config("[project]\nid = \"x\"\n").unwrap_err();
+        assert!(matches!(error, ConfigError::Parse(_)));
     }
 
     #[test]
-    fn explicit_machine_key_is_parsed() {
+    fn legacy_machine_section_is_ignored() {
+        // The machine key is now a run-time-only flag (`--machine-key`); a
+        // `[machine]` table left over from an older config must not break parsing.
         let text = "\
 [storage.local]
 path = \"./data\"
@@ -335,13 +314,7 @@ path = \"./data\"
 key = \"ci-pool-a\"
 ";
         let config = parse_config(text).unwrap();
-        assert_eq!(config.machine.key.as_deref(), Some("ci-pool-a"));
-    }
-
-    #[test]
-    fn missing_storage_is_an_error() {
-        let error = parse_config("[project]\nid = \"x\"\n").unwrap_err();
-        assert!(matches!(error, ConfigError::Parse(_)));
+        assert!(matches!(config.storage, StorageConfig::Local { .. }));
     }
 
     #[test]

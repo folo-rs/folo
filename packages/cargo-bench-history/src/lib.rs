@@ -37,6 +37,7 @@ mod machine;
 mod model;
 mod probe;
 mod process;
+mod report;
 mod storage;
 mod types;
 mod wiring;
@@ -44,8 +45,7 @@ mod wiring;
 pub use cli::Cli;
 pub use comparability::{ComparabilityKey, EngineSystem, resolve_target_triple};
 pub use config::{
-    Config, ConfigError, MachineConfig, ProjectConfig, StorageConfig, default_template,
-    parse_config,
+    Config, ConfigError, ProjectConfig, StorageConfig, default_template, parse_config,
 };
 pub use context::{
     CiInfo, CiProvider, GitInfo, RunContext, Timestamps, ToolchainInfo, detect_ci,

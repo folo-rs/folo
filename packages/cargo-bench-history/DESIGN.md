@@ -262,8 +262,9 @@ memory-region (NUMA node) count, plus a best-effort CPU brand string. These are
 the stable, pool-equivalent attributes available without elevated privileges
 across Windows/Linux/macOS; finer signals (RAM size, base frequency) were left
 out of v1 because they add platform-specific probing for little discriminating
-value in homogeneous CI pools. User override: `machine.key = "my-key"` (config)
-or `--machine-key` (CLI), which wins over the computed fingerprint.
+value in homogeneous CI pools. User override: `--machine-key` (CLI only — the
+config file is committed and would be wrong for some checkouts), which wins over
+the computed fingerprint.
 
 * Reuse **`many_cpus`** (already in-workspace) for the processor and
   memory-region counts; a small per-platform `detect_cpu_brand` supplies the CPU
@@ -430,7 +431,10 @@ multiple partial runs at one commit. Other flags: `--timestamp <rfc3339>`
 (override effective time for backfill, §6), `--target-triple <triple>` (override
 the partition triple, §4.1), `--machine-key <key>` (override the hardware
 fingerprint, §4.1), `--no-store`, `--overwrite` (replace an existing same-commit
-point instead of refusing, §4.2). `--engine` is **not** a `run` flag — it is an
+point instead of refusing, §4.2), `--verbose` (print a step-by-step diagnostic
+trail to stderr — the benchmark command and injected env, directories scanned,
+files included/skipped-as-stale, and each stored key — to diagnose a run that
+unexpectedly stored nothing). `--engine` is **not** a `run` flag — it is an
 `analyze` facet over stored data (§8.4).
 
 ### 8.2 `cargo bench-history upload` — deferred (run vs upload)
@@ -458,8 +462,10 @@ abstracted behind a `ConfigWriter` port (`TokioConfigWriter` in production, an
 in-memory fake in tests) whose `write_new` creates parent directories and uses
 `create_new` so an existing file is reported, never clobbered. The generated
 template configures only the `[storage]` backend (engines are detected from
-output, not configured — §8.1) and includes a commented `[machine]` block
-documenting the `key` override.
+output, not configured — §8.1); it carries no machine-key setting (the key is a
+run-time-only `--machine-key` flag, since a committed config would be wrong for
+some checkouts) and the next-steps hint points at `backfill` for seeding an
+existing repository's history.
 
 ### 8.4 `cargo bench-history analyze`
 
@@ -515,7 +521,7 @@ also the convenient path for ad-hoc evaluation over a span of commits.
 ```
 cargo bench-history backfill --from <commit> --to <commit> \
     [--workspace] [--package NAME] [--bench NAME] \
-    [--overwrite] [--ignore-errors] [-- <passthrough>]
+    [--overwrite] [--ignore-errors] [--verbose] [-- <passthrough>]
 ```
 
 **Range & ancestry.** Commits are enumerated **oldest-first** along the

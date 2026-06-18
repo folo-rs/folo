@@ -26,10 +26,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tick::Clock;
 
 use crate::bench_output::FsBenchOutputSource;
-use crate::config::{Config, load_config};
+use crate::config::load_config;
 use crate::git_history::{GitHistory, SystemGitHistory};
 use crate::probe::SystemProbe;
 use crate::process::{TokioBenchRunner, capture};
+use crate::report::StderrReporter;
 use crate::storage::{Storage, build_storage};
 use crate::wiring::{default_config_path, resolve_project_id};
 use crate::{BackfillOptions, RunError, RunOptions, RunOutcome};
@@ -113,7 +114,6 @@ pub(crate) async fn execute(
 
     let git = SystemBackfillGit::new(&workspace_dir);
     let runner = SystemCommitRunner {
-        config: &config,
         project_id: &project_id,
         storage: &storage,
         tool_version: env!("CARGO_PKG_VERSION"),
@@ -456,8 +456,6 @@ impl BackfillGit for SystemBackfillGit {
 
 /// The real [`CommitRunner`], wiring the `run` pipeline against a worktree.
 struct SystemCommitRunner<'a, S> {
-    /// The loaded configuration (from the invoking checkout, stable per range).
-    config: &'a Config,
     /// Resolved project identity for the storage partition.
     project_id: &'a str,
     /// The configured storage backend.
@@ -479,6 +477,7 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
         let output = FsBenchOutputSource::new(target_root.clone());
         let clock = Clock::new_tokio();
         let env = |name: &str| std::env::var(name).ok();
+        let reporter = StderrReporter::new(self.options.verbose);
 
         // A backfilled run is always clean (the worktree is a pristine checkout)
         // and dates from its commit, so no `--timestamp` override is used.
@@ -492,6 +491,7 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
             no_store: false,
             overwrite: self.options.overwrite,
             passthrough: self.options.passthrough.clone(),
+            verbose: self.options.verbose,
         };
         let deps = RunDeps {
             runner: &runner,
@@ -500,11 +500,11 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
             storage: self.storage,
             clock: &clock,
             env: &env,
-            config: self.config,
             project_id: self.project_id,
             tool_version: self.tool_version,
             target_root: &target_root,
             bench_command: self.bench_command,
+            reporter: &reporter,
         };
 
         map_run_result(run_engines(&run_options, &deps).await)
