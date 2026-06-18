@@ -322,6 +322,21 @@ real `resolve_target_root` runs) with the mock's `--chdir` flag standing in for
 that per-package cwd. Keep both: a regression in `resolve_target_root` would slip
 past every override-driven test.
 
+`tests/cargo_bench_history_real_engine.rs` is the one true end-to-end test: it
+writes a tiny standalone crate with a single real Criterion benchmark into a
+tempdir and drives the production `run` (no overrides) against an actual `cargo
+bench`, asserting the genuine wall-time output is harvested and stored. It is the
+only test that exercises `resolve_target_root`, real cargo argument passing, and
+Criterion's real on-disk layout together, so it would have caught the relative
+`CARGO_TARGET_DIR` bug on its own. It is deliberately heavyweight (it compiles
+Criterion and runs a benchmark process), so it is gated off under Miri and under
+coverage (`#[cfg_attr(coverage_nightly, ignore)]`); the benchmark is shrunk to
+Criterion's smallest run (10 samples, sub-second warm-up/measurement) and
+Criterion is taken with `default-features = false` to keep the build quick. When
+touching the run/harvest pipeline, do not let this test's gating tempt you to skip
+it locally — run it with plain `cargo test`/`nextest` (it is not Miri- or
+coverage-gated there).
+
 ## Fixture-golden canaries
 
 `tests/fixtures/callgrind/*.summary.json` are **real** Gungraun output and
