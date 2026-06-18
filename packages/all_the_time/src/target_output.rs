@@ -254,6 +254,30 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
+    fn skips_operations_without_iterations() {
+        let fake_platform = FakePlatform::new();
+        let platform = PlatformFacade::fake(fake_platform.clone());
+        let session = Session::with_platform(platform);
+
+        fake_platform.set_thread_time(Duration::from_millis(0));
+        {
+            let operation = session.operation("measured");
+            let _span = operation.measure_thread().iterations(4);
+            fake_platform.set_thread_time(Duration::from_millis(80));
+        }
+        // Registered but never measured, so it stays at zero iterations and must
+        // be skipped rather than written.
+        let _unmeasured = session.operation("unmeasured");
+
+        let directory = tempfile::tempdir().unwrap();
+        session.write_to_directory(directory.path()).unwrap();
+
+        assert!(directory.path().join("measured.json").exists());
+        assert!(!directory.path().join("unmeasured.json").exists());
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
     fn overwrites_existing_files() {
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("read_cell.json");
