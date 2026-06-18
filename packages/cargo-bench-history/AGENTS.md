@@ -310,6 +310,18 @@ production `run` entry passes `None` for both, resolves the root from the
 environment as usual, runs `cargo bench`, and injects that same value so the real
 engine and harvest never diverge either.
 
+Because that override pins an absolute root and runs the mock from the workspace
+root, it cannot catch a bug in `resolve_target_root` itself. The resolved root
+must be **absolute**: cargo runs each `--package`-scoped benchmark binary with its
+working directory set to the owning package's directory, so a relative
+`CARGO_TARGET_DIR` would be resolved there by an engine that honors it (Criterion),
+scattering output away from the workspace-rooted harvest — the "Stored 0 result
+set(s)" symptom. `run_harvests_output_when_the_engine_runs_in_a_package_directory`
+guards this by driving through `drive_resolving_target_root` (no override, so the
+real `resolve_target_root` runs) with the mock's `--chdir` flag standing in for
+that per-package cwd. Keep both: a regression in `resolve_target_root` would slip
+past every override-driven test.
+
 ## Fixture-golden canaries
 
 `tests/fixtures/callgrind/*.summary.json` are **real** Gungraun output and

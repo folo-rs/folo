@@ -40,6 +40,13 @@
 //! checked-out worktree, so a commit that tracks the named marker file stands in
 //! for a commit that fails to build or benchmark.
 //!
+//! `--chdir DIR` changes the working directory to `DIR` before resolving
+//! `CARGO_TARGET_DIR` and writing output. This stands in for cargo, which runs a
+//! benchmark binary with its working directory set to the owning package's
+//! directory — so an engine that honors a relative `CARGO_TARGET_DIR` (such as
+//! Criterion) would resolve it there. It lets a test prove the harvest injects an
+//! absolute target root that lands output where it scans regardless of that cwd.
+//!
 //! Summaries are written under `<target-root>`, which honors `CARGO_TARGET_DIR`
 //! exactly as the harvester does.
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
@@ -73,6 +80,7 @@ fn main() -> ExitCode {
     let mut summaries: Vec<(String, String)> = Vec::new();
     let mut criterion_cases: Vec<CriterionCase> = Vec::new();
     let mut fail_if_exists: Option<PathBuf> = None;
+    let mut chdir: Option<PathBuf> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -104,6 +112,10 @@ fn main() -> ExitCode {
                 let value = args.next().expect("--fail-if-exists requires a PATH");
                 fail_if_exists = Some(PathBuf::from(value));
             }
+            "--chdir" => {
+                let value = args.next().expect("--chdir requires a DIR");
+                chdir = Some(PathBuf::from(value));
+            }
             // The production flow appends cargo scope flags (`--workspace`,
             // `--package`, `--bench`) and `--` passthrough after the mock's own
             // contiguous arguments; stop once those begin.
@@ -117,6 +129,13 @@ fn main() -> ExitCode {
         && marker.exists()
     {
         return ExitCode::from(1);
+    }
+
+    // Stand in for cargo running a benchmark binary with its working directory set
+    // to the owning package's directory: change into it before a possibly relative
+    // CARGO_TARGET_DIR is resolved, so output lands wherever that resolution points.
+    if let Some(dir) = &chdir {
+        std::env::set_current_dir(dir).expect("--chdir directory should exist");
     }
 
     let target_root =

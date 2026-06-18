@@ -1311,6 +1311,42 @@ async fn run_callgrind_end_to_end_stores_results() {
     assert_eq!(ir.kind, MetricKind::InstructionCount);
 }
 
+/// Regression: a benchmark binary launched by `cargo bench --package X` runs with
+/// its working directory set to the package directory, so the harvest must inject
+/// an *absolute* `CARGO_TARGET_DIR`. A relative one would be resolved by an engine
+/// that honors it (such as Criterion) against that package directory, depositing
+/// output where the workspace-rooted harvest never looks — storing nothing, the
+/// exact symptom this guards against. Driving without a target-root override
+/// exercises the real `resolve_target_root`, and the mock changes into a package
+/// subdirectory before writing, standing in for cargo's per-package cwd.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn run_harvests_output_when_the_engine_runs_in_a_package_directory() {
+    let workspace = Workspace::new(&storage_only_config()).with_bench(&[
+        "--chdir",
+        "subpkg",
+        "--summary",
+        "grp=single",
+    ]);
+    std::fs::create_dir_all(workspace.root().join("subpkg")).unwrap();
+
+    let outcome = workspace
+        .drive_resolving_target_root(&["run"])
+        .await
+        .expect("run should succeed");
+
+    let RunOutcome::Completed { message } = outcome else {
+        panic!("expected completion, got {outcome:?}");
+    };
+    assert!(message.contains("Stored 1"), "{message}");
+    assert_eq!(
+        workspace.stored_objects().len(),
+        1,
+        "the summary written from the package directory should be harvested and stored"
+    );
+}
+
 /// Two summaries under the target tree yield one stored set with one record each.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
@@ -2361,6 +2397,22 @@ impl Workspace {
         bench_command.extend(self.bench.iter().cloned());
 
         run_with_overrides(&command_from(args), Some(target_root), Some(bench_command)).await
+    }
+
+    /// Drives a command the way the production `run` entry does: with no target-root
+    /// override, so the real `resolve_target_root` chooses the cargo target
+    /// directory and injects it as `CARGO_TARGET_DIR`. Unlike [`drive`], this
+    /// exercises that resolution rather than pinning the root explicitly, which is
+    /// what lets a test observe whether the injected root is absolute.
+    ///
+    /// [`drive`]: Self::drive
+    async fn drive_resolving_target_root(&self, args: &[&str]) -> Result<RunOutcome, RunError> {
+        let _cwd = CwdGuard::enter(self.root());
+
+        let mut bench_command = vec![MOCK_ENGINE.to_owned()];
+        bench_command.extend(self.bench.iter().cloned());
+
+        run_with_overrides(&command_from(args), None, Some(bench_command)).await
     }
 
     /// All stored objects as `(object key, parsed result set)` pairs, sorted by key.
