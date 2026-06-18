@@ -160,30 +160,42 @@ impl Session {
     }
 }
 
-/// Converts a [`Duration`] to whole nanoseconds, capped at the `u64` range.
+/// Converts a [`Duration`] to whole nanoseconds, saturating at `u64::MAX`.
 fn duration_as_nanos(duration: Duration) -> u64 {
-    duration
-        .as_nanos()
-        .try_into()
-        .expect("all realistic processor time values fit in u64 nanoseconds")
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::time::Duration;
+
+    use super::duration_as_nanos;
     use crate::Session;
     use crate::pal::{FakePlatform, PlatformFacade};
+
+    #[test]
+    fn duration_as_nanos_converts_whole_nanoseconds() {
+        assert_eq!(duration_as_nanos(Duration::from_millis(5)), 5_000_000);
+    }
+
+    #[test]
+    fn duration_as_nanos_saturates_beyond_u64() {
+        // `Duration::from_secs(u64::MAX)` holds far more nanoseconds than fit in
+        // a `u64`, so the conversion saturates instead of panicking.
+        assert_eq!(duration_as_nanos(Duration::from_secs(u64::MAX)), u64::MAX);
+    }
 
     fn session_with_recorded_work(name: &str) -> Session {
         let fake_platform = FakePlatform::new();
         let platform = PlatformFacade::fake(fake_platform.clone());
         let session = Session::with_platform(platform);
 
-        fake_platform.set_thread_time(std::time::Duration::from_millis(0));
+        fake_platform.set_thread_time(Duration::from_millis(0));
         {
             let operation = session.operation(name);
             let _span = operation.measure_thread().iterations(4);
-            fake_platform.set_thread_time(std::time::Duration::from_millis(80));
+            fake_platform.set_thread_time(Duration::from_millis(80));
         }
 
         session

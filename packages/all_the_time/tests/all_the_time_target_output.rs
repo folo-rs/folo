@@ -89,3 +89,45 @@ fn empty_session_writes_nothing() {
 
     assert!(!target.exists(), "no directory should be created");
 }
+
+#[test]
+#[cfg_attr(miri, ignore)] // Resolves the Cargo target directory and writes files, neither supported under Miri.
+fn write_to_target_writes_into_cargo_target_directory() {
+    // A distinctive name avoids colliding with output from other operations in
+    // the shared Cargo target directory.
+    const OPERATION: &str = "all_the_time_write_to_target_probe";
+
+    let session = Session::new();
+    {
+        let operation = session.operation(OPERATION);
+        let _span = operation.measure_thread().iterations(8);
+        for _ in 0..8 {
+            black_box(black_box(2_u64) * black_box(3));
+        }
+    }
+
+    let expected = folo_utils::cargo_target_directory()
+        .unwrap_or_else(|| std::path::PathBuf::from("target"))
+        .join("all_the_time")
+        .join(format!("{OPERATION}.json"));
+
+    // Start from a clean slate so the assertion proves this call wrote the file.
+    if expected.exists() {
+        std::fs::remove_file(&expected).unwrap();
+    }
+
+    session.write_to_target().unwrap();
+
+    assert!(
+        expected.exists(),
+        "write_to_target should create {}",
+        expected.display()
+    );
+
+    let contents = std::fs::read_to_string(&expected).unwrap();
+    assert!(contents.contains("\"operation\": \"all_the_time_write_to_target_probe\""));
+    assert!(contents.contains("\"total_iterations\": 8"));
+
+    // Avoid polluting the shared target directory for later runs.
+    std::fs::remove_file(&expected).unwrap();
+}
