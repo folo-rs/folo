@@ -73,7 +73,7 @@ fn write_to_target_writes_into_cargo_target_directory() {
     }
 
     let expected = folo_utils::cargo_target_directory()
-        .unwrap_or_else(|| std::path::PathBuf::from("target"))
+        .unwrap_or_else(|| "target".into())
         .join("alloc_tracker")
         .join(format!("{OPERATION}.json"));
 
