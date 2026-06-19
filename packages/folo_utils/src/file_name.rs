@@ -52,8 +52,10 @@ fn is_windows_reserved(name: &str) -> bool {
         return true;
     }
 
-    // `COM0`..=`COM9` and `LPT0`..=`LPT9` are reserved serial and parallel port
-    // names.
+    // Escape `COM0`..=`COM9` and `LPT0`..=`LPT9`. The canonical reserved set is
+    // `COM1`..=`COM9` and `LPT1`..=`LPT9`, but the `0` variants are escaped too as
+    // a conservative choice: over-escaping a name is harmless, whereas failing to
+    // escape a genuinely reserved name makes the file unwritable on Windows.
     for prefix in ["COM", "LPT"] {
         if let Some(rest) = strip_prefix_ignore_ascii_case(stem, prefix)
             && let [digit] = rest.as_bytes()

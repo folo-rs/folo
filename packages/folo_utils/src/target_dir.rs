@@ -16,8 +16,16 @@ use serde::Deserialize;
 /// guaranteed to be present in every runtime environment. Returns `None` if the
 /// target directory cannot be determined, in which case callers should fall
 /// back to a relative `target` path.
+//
+// The behavior here depends entirely on the ambient environment: which
+// environment variables are set, whether a `cargo` binary is reachable, and the
+// workspace layout that `cargo metadata` reports. None of that can be exercised
+// deterministically across CI environments, so coverage measurement would be
+// flaky and stable tests cannot catch mutations to the env-var names or the
+// subprocess arguments. The only branch-worthy pure logic is parsing the
+// metadata JSON, which lives in `parse_metadata_target_directory` and is
+// unit-tested directly.
 #[cfg_attr(test, mutants::skip)]
-// Reads process env and shells out to `cargo metadata`; the JSON parsing is unit-tested separately.
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[must_use]
 pub fn cargo_target_directory() -> Option<PathBuf> {

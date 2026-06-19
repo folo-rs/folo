@@ -116,3 +116,25 @@ fn write_to_target_writes_into_cargo_target_directory() {
     // Avoid polluting the shared target directory for later runs.
     fs::remove_file(&expected).unwrap();
 }
+
+#[test]
+#[cfg_attr(miri, ignore)] // Uses the global allocator, which is not supported under Miri.
+#[should_panic(expected = "after sanitization")]
+fn panics_when_operation_names_collide_after_sanitization() {
+    let session = Session::new();
+
+    // Both names sanitize to the same file name, which must not silently
+    // overwrite one operation's results.
+    for name in ["group/case", "group_case"] {
+        let operation = session.operation(name);
+        let _span = operation.measure_thread().iterations(4);
+        for _ in 0..4 {
+            let data: Vec<u8> = black_box(vec![0_u8; 64]);
+            black_box(&data);
+        }
+    }
+
+    // The collision is detected before anything is written, so this path is
+    // never created.
+    session.write_to_directory("collision_is_detected_before_writing");
+}

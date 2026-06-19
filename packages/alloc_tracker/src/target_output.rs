@@ -1,5 +1,6 @@
 //! Machine-readable JSON output of memory allocation statistics.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -41,6 +42,9 @@ impl Report {
     /// written. Benchmark results are not useful without the output files they
     /// produce, so a write failure is treated as fatal rather than recoverable.
     ///
+    /// Also panics if two operation names sanitize to the same file name, since
+    /// writing both would silently discard one operation's results.
+    ///
     /// # Examples
     ///
     /// ```no_run
@@ -79,6 +83,9 @@ impl Report {
     /// written. Benchmark results are not useful without the output files they
     /// produce, so a write failure is treated as fatal rather than recoverable.
     ///
+    /// Also panics if two operation names sanitize to the same file name, since
+    /// writing both would silently discard one operation's results.
+    ///
     /// # Examples
     ///
     /// ```
@@ -98,21 +105,25 @@ impl Report {
     /// session.to_report().write_to_directory(&directory);
     /// ```
     pub fn write_to_directory(&self, directory: impl AsRef<Path>) {
-        if self.is_empty() {
-            return;
-        }
-
         let directory = directory.as_ref();
-        fs::create_dir_all(directory).unwrap_or_else(|error| {
-            panic!(
-                "failed to create benchmark output directory {}: {error}",
-                directory.display()
-            )
-        });
 
+        // Build every output up front, detecting sanitized-name collisions before
+        // touching the filesystem. Two operation names that sanitize to the same
+        // file name would otherwise silently overwrite each other's results.
+        let mut file_names: HashMap<String, &str> = HashMap::new();
+        let mut outputs: Vec<(PathBuf, String)> = Vec::new();
         for (name, operation) in self.operations() {
             if operation.total_iterations() == 0 {
                 continue;
+            }
+
+            let file_name = format!("{}.json", folo_utils::sanitize_file_name(name));
+            if let Some(previous) = file_names.insert(file_name.clone(), name) {
+                panic!(
+                    "operations {previous:?} and {name:?} both map to the output file name \
+                     {file_name:?} after sanitization; rename one of them to avoid silently \
+                     overwriting benchmark results"
+                );
             }
 
             let output = OperationOutput {
@@ -127,8 +138,23 @@ impl Report {
             let json = serde_json::to_string_pretty(&output)
                 .expect("serializing fixed primitive fields to JSON cannot fail");
 
-            let file_name = format!("{}.json", folo_utils::sanitize_file_name(name));
-            let path = directory.join(file_name);
+            outputs.push((directory.join(file_name), json));
+        }
+
+        // Without any output, no directory is created, so a probe run that captured
+        // no measurable work leaves nothing behind.
+        if outputs.is_empty() {
+            return;
+        }
+
+        fs::create_dir_all(directory).unwrap_or_else(|error| {
+            panic!(
+                "failed to create benchmark output directory {}: {error}",
+                directory.display()
+            )
+        });
+
+        for (path, json) in outputs {
             fs::write(&path, json).unwrap_or_else(|error| {
                 panic!(
                     "failed to write benchmark output file {}: {error}",
@@ -269,5 +295,23 @@ mod tests {
         let contents = fs::read_to_string(&file).unwrap();
         assert!(!contents.contains("stale"));
         assert!(contents.contains("allocate_vec"));
+    }
+
+    #[test]
+    #[should_panic(expected = "after sanitization")]
+    fn panics_when_operation_names_collide_after_sanitization() {
+        let session = Session::new();
+
+        // Both names sanitize to `group_case.json`, so writing both would silently
+        // discard one operation's results.
+        for name in ["group/case", "group_case"] {
+            let operation = session.operation(name);
+            let _span = operation.measure_thread().iterations(4);
+            register_fake_allocation(800, 8);
+        }
+
+        // The collision is detected before anything is written, so this path is
+        // never created.
+        session.write_to_directory("collision_is_detected_before_writing");
     }
 }
