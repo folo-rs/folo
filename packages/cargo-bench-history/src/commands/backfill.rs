@@ -41,9 +41,6 @@ use super::run::{RunDeps, RunSummary, default_bench_command, run_engines};
 /// Read access to a repository's commit topology plus the worktree lifecycle a
 /// backfill needs to check out each commit in isolation.
 trait BackfillGit {
-    /// Whether the primary working tree has no uncommitted changes.
-    fn is_clean(&self) -> impl Future<Output = io::Result<bool>>;
-
     /// Resolves a ref (branch, tag, `HEAD`, or SHA) to its full commit SHA, or
     /// `Ok(None)` when it does not resolve.
     fn resolve(&self, reference: &str) -> impl Future<Output = io::Result<Option<String>>>;
@@ -166,20 +163,13 @@ where
 
 /// Validates the request and resolves the oldest-first, inclusive commit range.
 ///
-/// Refuses a dirty working tree, requires both endpoints to resolve, requires
-/// `--from` to be a first-parent ancestor of `--to`, and requires `--to` to be
-/// part of `HEAD`'s history (so `analyze` will surface the backfilled points).
+/// Requires both endpoints to resolve, requires `--from` to be a first-parent
+/// ancestor of `--to`, and requires `--to` to be part of `HEAD`'s history (so
+/// `analyze` will surface the backfilled points).
 async fn plan_commits<G: BackfillGit>(
     options: &BackfillOptions,
     git: &G,
 ) -> Result<Vec<String>, RunError> {
-    if !git.is_clean().await.map_err(RunError::Io)? {
-        return Err(RunError::Backfill {
-            message: "the working tree has uncommitted changes; commit or stash them first"
-                .to_owned(),
-        });
-    }
-
     let from = resolve_required(git, &options.from, "--from").await?;
     let to = resolve_required(git, &options.to, "--to").await?;
 
@@ -380,18 +370,6 @@ impl SystemBackfillGit {
 }
 
 impl BackfillGit for SystemBackfillGit {
-    #[cfg_attr(test, mutants::skip)] // Shells out to `git`; environment IO with no pure logic to assert.
-    async fn is_clean(&self) -> io::Result<bool> {
-        let repo = self.repo.to_string_lossy().into_owned();
-        let output = capture("git", &["-C", repo.as_str(), "status", "--porcelain"]).await?;
-        if !output.status.success() {
-            return Err(io::Error::other(
-                "git status failed; is this a git repository?",
-            ));
-        }
-        Ok(output.stdout.trim().is_empty())
-    }
-
     async fn resolve(&self, reference: &str) -> io::Result<Option<String>> {
         self.history.resolve(reference).await
     }
@@ -544,17 +522,15 @@ mod tests {
     /// In-memory [`BackfillGit`] over a [`FakeGitHistory`], recording worktree ops.
     struct FakeBackfillGit {
         history: FakeGitHistory,
-        clean: bool,
         added: RefCell<Vec<(PathBuf, String)>>,
         resets: RefCell<Vec<(PathBuf, String)>>,
         removed: RefCell<Vec<PathBuf>>,
     }
 
     impl FakeBackfillGit {
-        fn new(history: FakeGitHistory, clean: bool) -> Self {
+        fn new(history: FakeGitHistory) -> Self {
             Self {
                 history,
-                clean,
                 added: RefCell::new(Vec::new()),
                 resets: RefCell::new(Vec::new()),
                 removed: RefCell::new(Vec::new()),
@@ -563,10 +539,6 @@ mod tests {
     }
 
     impl BackfillGit for FakeBackfillGit {
-        fn is_clean(&self) -> impl Future<Output = io::Result<bool>> {
-            ready(Ok(self.clean))
-        }
-
         fn resolve(&self, reference: &str) -> impl Future<Output = io::Result<Option<String>>> {
             self.history.resolve(reference)
         }
@@ -668,7 +640,7 @@ mod tests {
 
     #[test]
     fn plan_enumerates_inclusive_first_parent_range_oldest_first() {
-        let git = FakeBackfillGit::new(fixture(), true);
+        let git = FakeBackfillGit::new(fixture());
         let commits = block_on(plan_commits(&options("c1", "f2"), &git)).expect("range plans");
         assert!(
             commits.iter().eq(["c1", "f1", "f2"].iter()),
@@ -678,24 +650,14 @@ mod tests {
 
     #[test]
     fn plan_includes_a_single_commit_range() {
-        let git = FakeBackfillGit::new(fixture(), true);
+        let git = FakeBackfillGit::new(fixture());
         let commits = block_on(plan_commits(&options("f2", "f2"), &git)).expect("range plans");
         assert!(commits.iter().eq(std::iter::once(&"f2")), "{commits:?}");
     }
 
     #[test]
-    fn plan_rejects_a_dirty_working_tree() {
-        let git = FakeBackfillGit::new(fixture(), false);
-        let error = block_on(plan_commits(&options("c1", "f2"), &git)).expect_err("must refuse");
-        let RunError::Backfill { message } = error else {
-            panic!("expected a backfill error, got {error:?}");
-        };
-        assert!(message.contains("uncommitted changes"), "{message}");
-    }
-
-    #[test]
     fn plan_rejects_an_unresolvable_endpoint() {
-        let git = FakeBackfillGit::new(fixture(), true);
+        let git = FakeBackfillGit::new(fixture());
         let error = block_on(plan_commits(&options("absent", "f2"), &git)).expect_err("refuse");
         let RunError::Backfill { message } = error else {
             panic!("expected a backfill error, got {error:?}");
@@ -706,7 +668,7 @@ mod tests {
     #[test]
     fn plan_rejects_a_from_that_is_not_an_ancestor_of_to() {
         // f1 is on the feature side, not in master's first-parent ancestry.
-        let git = FakeBackfillGit::new(fixture(), true);
+        let git = FakeBackfillGit::new(fixture());
         let error = block_on(plan_commits(&options("f1", "c3"), &git)).expect_err("refuse");
         let RunError::Backfill { message } = error else {
             panic!("expected a backfill error, got {error:?}");
@@ -717,7 +679,7 @@ mod tests {
     #[test]
     fn plan_rejects_a_to_outside_the_current_branch_history() {
         // HEAD is at feature; c3 (master tip) is not part of feature's history.
-        let git = FakeBackfillGit::new(fixture(), true);
+        let git = FakeBackfillGit::new(fixture());
         let error = block_on(plan_commits(&options("c0", "c3"), &git)).expect_err("refuse");
         let RunError::Backfill { message } = error else {
             panic!("expected a backfill error, got {error:?}");
@@ -730,7 +692,7 @@ mod tests {
 
     #[test]
     fn run_commits_records_every_outcome_kind() {
-        let git = FakeBackfillGit::new(fixture(), true);
+        let git = FakeBackfillGit::new(fixture());
         let runner = FakeCommitRunner::new()
             .with("c0", FakeResult::Stored(5))
             .with("c1", FakeResult::SkippedExisting)
@@ -779,7 +741,7 @@ mod tests {
 
     #[test]
     fn run_commits_stops_on_first_failure_by_default() {
-        let git = FakeBackfillGit::new(fixture(), true);
+        let git = FakeBackfillGit::new(fixture());
         let runner = FakeCommitRunner::new().with("c1", FakeResult::BenchFailed("boom".to_owned()));
         let commits = vec!["c0".to_owned(), "c1".to_owned(), "f1".to_owned()];
 
@@ -811,7 +773,7 @@ mod tests {
 
     #[test]
     fn run_commits_continues_past_failures_with_ignore_errors() {
-        let git = FakeBackfillGit::new(fixture(), true);
+        let git = FakeBackfillGit::new(fixture());
         let runner = FakeCommitRunner::new().with("c1", FakeResult::BenchFailed("boom".to_owned()));
         let commits = vec!["c0".to_owned(), "c1".to_owned(), "f1".to_owned()];
         let mut opts = options("c0", "f1");
@@ -838,7 +800,7 @@ mod tests {
 
     #[test]
     fn run_commits_aborts_on_infrastructure_error_even_with_ignore_errors() {
-        let git = FakeBackfillGit::new(fixture(), true);
+        let git = FakeBackfillGit::new(fixture());
         let runner = FakeCommitRunner::new().with("c1", FakeResult::Infra("disk".to_owned()));
         let commits = vec!["c0".to_owned(), "c1".to_owned(), "f1".to_owned()];
         let mut opts = options("c0", "f1");
@@ -878,7 +840,7 @@ mod tests {
 
     #[test]
     fn execute_completes_and_tears_down_on_success() {
-        let git = FakeBackfillGit::new(fixture(), true);
+        let git = FakeBackfillGit::new(fixture());
         let runner = FakeCommitRunner::new();
         let outcome = block_on(execute_backfill(
             &options("c0", "f2"),
@@ -904,7 +866,7 @@ mod tests {
 
     #[test]
     fn execute_returns_error_and_tears_down_when_stopped() {
-        let git = FakeBackfillGit::new(fixture(), true);
+        let git = FakeBackfillGit::new(fixture());
         let runner = FakeCommitRunner::new().with("c1", FakeResult::BenchFailed("boom".to_owned()));
         let error = block_on(execute_backfill(
             &options("c0", "f2"),
@@ -924,7 +886,7 @@ mod tests {
 
     #[test]
     fn execute_tears_down_after_an_infrastructure_abort() {
-        let git = FakeBackfillGit::new(fixture(), true);
+        let git = FakeBackfillGit::new(fixture());
         let runner = FakeCommitRunner::new().with("c0", FakeResult::Infra("disk".to_owned()));
         let error = block_on(execute_backfill(
             &options("c0", "f2"),
@@ -936,24 +898,6 @@ mod tests {
 
         assert!(matches!(error, RunError::Io(_)), "{error:?}");
         assert!(git.removed.borrow().iter().eq(std::iter::once(&worktree())));
-    }
-
-    #[test]
-    fn execute_refuses_dirty_tree_before_touching_the_worktree() {
-        let git = FakeBackfillGit::new(fixture(), false);
-        let runner = FakeCommitRunner::new();
-        let error = block_on(execute_backfill(
-            &options("c0", "f2"),
-            &git,
-            &runner,
-            &worktree(),
-        ))
-        .expect_err("dirty tree refused");
-
-        assert!(matches!(error, RunError::Backfill { .. }), "{error:?}");
-        assert!(git.added.borrow().is_empty(), "no worktree created");
-        assert!(git.removed.borrow().is_empty(), "nothing to remove");
-        assert!(runner.ran.borrow().is_empty(), "no commit run");
     }
 
     #[test]

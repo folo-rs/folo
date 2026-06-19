@@ -2269,25 +2269,31 @@ async fn backfill_ignore_errors_continues_past_a_failing_commit() {
     assert_eq!(workspace.stored_objects().len(), 2);
 }
 
-/// A dirty working tree is refused before any worktree work, so nothing is stored.
+/// A dirty primary working tree does not block backfill: it runs in an isolated
+/// worktree and benches the requested commit by SHA, so the primary checkout's
+/// state is irrelevant to what gets measured and stored.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 #[serial]
-async fn backfill_refuses_a_dirty_working_tree() {
+async fn backfill_ignores_a_dirty_primary_working_tree() {
     let workspace =
         Workspace::clean_repo(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
     let c1 = workspace.commit("c1");
     workspace.make_dirty("uncommitted.txt");
 
-    let error = workspace
+    let outcome = workspace
         .drive(&["backfill", "--from", &c1, "--to", &c1])
         .await
-        .expect_err("a dirty tree must be refused");
-    let RunError::Backfill { message } = error else {
-        panic!("expected a backfill error, got {error:?}");
+        .expect("a dirty primary tree must not block backfill");
+    assert!(
+        outcome.is_success(),
+        "a dirty primary tree must not affect backfill: {outcome:?}"
+    );
+    let RunOutcome::Completed { message } = outcome else {
+        panic!("expected a completed outcome");
     };
-    assert!(message.contains("uncommitted changes"), "{message}");
-    assert!(workspace.stored_objects().is_empty());
+    assert!(message.contains("1 stored"), "{message}");
+    assert!(!workspace.stored_objects().is_empty());
 }
 
 /// A range whose `--from` is not a first-parent ancestor of `--to` (here, a

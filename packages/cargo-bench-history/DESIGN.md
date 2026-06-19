@@ -592,11 +592,14 @@ the end (done / skipped-empty / failed counts + the failed SHAs). *Infrastructur
 failures (storage unreachable, git errors) always abort regardless of
 `--ignore-errors`, since continuing cannot produce correct data.
 
-**Working-tree safety.** Backfill **refuses to start on a dirty tree** so it never
-destroys uncommitted work. It operates inside a dedicated **git worktree** (`git
-worktree add`) rather than mutating the primary checkout, which isolates it from
-the user's working directory, removes the HEAD save/restore hazard, and leaves the
-user exactly where they were even if the run is interrupted. Between commits the
+**Working-tree safety.** Backfill operates inside a dedicated **git worktree** (`git
+worktree add`) under the system temp dir rather than mutating the primary checkout,
+which isolates it from the user's working directory, removes the HEAD save/restore
+hazard, and leaves the
+user exactly where they were even if the run is interrupted. The primary checkout's
+state is therefore irrelevant — a dirty working tree neither blocks backfill nor
+affects what is measured (each point benches a specific commit SHA, never the
+working-tree state). Between commits the
 worktree is reset clean (`git reset --hard` + `git clean -fd`, preserving the
 ignored `target/` for incremental-build speed — the §8.1 `mtime ≥ run-start`
 harvest already excludes stale artifacts). The benches that run are whatever exist

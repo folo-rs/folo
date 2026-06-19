@@ -168,7 +168,7 @@ Key invariants:
 * **The primary checkout is never mutated.** All work happens in a worktree under
   the system temp dir; config/project-id/storage are loaded once from the invoking
   checkout, never from the worktree.
-* **Validation precedes any worktree work** (`plan_commits`): refuse a dirty tree,
+* **Validation precedes any worktree work** (`plan_commits`):
   require both endpoints to resolve, require `--from` to be a first-parent ancestor
   of `--to`, and require `--to` to be on `HEAD`'s first-parent history (so the
   points are later analyzable). The range is enumerated oldest-first and inclusive
