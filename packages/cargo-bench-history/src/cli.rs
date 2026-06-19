@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use argh::FromArgs;
 use jiff::Timestamp;
 
-use crate::{AnalyzeOptions, BackfillOptions, Command, InstallOptions, RunOptions};
+use crate::{AnalyzeOptions, BackfillOptions, Command, InstallOptions, ListOptions, RunOptions};
 
 /// Maintain a history of benchmark results over time and analyze it for trends.
 #[derive(Debug, FromArgs)]
@@ -24,6 +24,7 @@ impl Cli {
             Subcommand::Run(command) => Command::Run(command.into_options()),
             Subcommand::Install(command) => Command::Install(command.into_options()),
             Subcommand::Analyze(command) => Command::Analyze(command.into_options()),
+            Subcommand::List(command) => Command::List(command.into_options()),
             Subcommand::Backfill(command) => Command::Backfill(command.into_options()),
         }
     }
@@ -35,6 +36,7 @@ enum Subcommand {
     Run(RunCommand),
     Install(InstallCommand),
     Analyze(AnalyzeCommand),
+    List(ListCommand),
     Backfill(BackfillCommand),
 }
 
@@ -205,10 +207,6 @@ struct AnalyzeCommand {
     #[argh(option)]
     format: Option<String>,
 
-    /// list the discriminant sets present in storage instead of analyzing.
-    #[argh(switch)]
-    list_discriminants: bool,
-
     /// exit with failure if a regression is detected.
     #[argh(switch)]
     fail_on_regression: bool,
@@ -236,8 +234,107 @@ impl AnalyzeCommand {
             machine_key: self.machine_key,
             metric: self.metric,
             format: self.format,
-            list_discriminants: self.list_discriminants,
             fail_on_regression: self.fail_on_regression,
+            verbose: self.verbose,
+        }
+    }
+}
+
+/// List the data set a matching `analyze` would include, without analyzing it.
+///
+/// The selection options mirror `analyze` exactly, so the listing previews the
+/// exact runs an `analyze` with the same flags would consume — grouped by
+/// comparable discriminant set, with the run, series, and commit counts of each.
+#[derive(Debug, FromArgs)]
+#[argh(subcommand, name = "list")]
+struct ListCommand {
+    /// path to the configuration file (defaults to `.cargo/bench_history.toml`).
+    #[argh(option)]
+    config: Option<PathBuf>,
+
+    /// repository to resolve git topology from (defaults to the working directory).
+    #[argh(option)]
+    repo: Option<PathBuf>,
+
+    /// target ref whose history is listed (defaults to HEAD).
+    #[argh(option)]
+    branch: Option<String>,
+
+    /// base ref the target's history is split at (defaults to the default branch).
+    #[argh(option)]
+    base: Option<String>,
+
+    /// exclude dirty (uncommitted-tree) snapshots from the listing.
+    #[argh(switch)]
+    no_dirty: bool,
+
+    /// only list runs on or after this date, in RFC 3339 format, for
+    /// example `2024-01-01T00:00:00Z` (default: no lower bound).
+    #[argh(option)]
+    since: Option<String>,
+
+    /// restrict the listing to a single engine, criterion or callgrind
+    /// (default: every engine).
+    #[argh(option)]
+    engine: Option<String>,
+
+    /// restrict the listing to a single full target triple (for example,
+    /// `x86_64-unknown-linux-gnu`). Mutually exclusive with `--os` /
+    /// `--architecture`, which select the same dimension by its derived parts.
+    #[argh(option)]
+    target_triple: Option<String>,
+
+    /// restrict the listing to a single operating system (for example, windows).
+    /// Cannot be combined with `--target-triple`.
+    #[argh(option)]
+    os: Option<String>,
+
+    /// restrict the listing to a single CPU architecture (for example, `x86_64`).
+    /// Cannot be combined with `--target-triple`.
+    #[argh(option)]
+    architecture: Option<String>,
+
+    /// restrict the listing to a single machine partition.
+    #[argh(option)]
+    machine_key: Option<String>,
+
+    /// restrict the listing to a single metric name (for example, Ir).
+    #[argh(option)]
+    metric: Option<String>,
+
+    /// output format: text, json, or markdown (default: text).
+    #[argh(option)]
+    format: Option<String>,
+
+    /// list the discriminant sets present in storage instead of the data set the
+    /// analysis would include (does not require a repository).
+    #[argh(switch)]
+    discriminants: bool,
+
+    /// emit detailed diagnostic notes to standard error (which storage prefix is
+    /// listed, which objects are included or excluded and why, the resolved git
+    /// topology).
+    #[argh(switch)]
+    verbose: bool,
+}
+
+impl ListCommand {
+    fn into_options(self) -> ListOptions {
+        ListOptions {
+            config_path: self.config,
+            repo: self.repo,
+            branch: self.branch,
+            base: self.base,
+            no_dirty: self.no_dirty,
+            since: self.since,
+            engine: self.engine,
+            target_triple: self.target_triple,
+            os: self.os,
+            architecture: self.architecture,
+            machine_key: self.machine_key,
+            metric: self.metric,
+            format: self.format,
+            discriminants: self.discriminants,
             verbose: self.verbose,
         }
     }
@@ -504,7 +601,6 @@ mod tests {
             "x86_64",
             "--machine-key",
             "ci-pool",
-            "--list-discriminants",
         ]);
         let Command::Analyze(options) = command else {
             panic!("expected analyze command");
@@ -517,7 +613,6 @@ mod tests {
         assert_eq!(options.os.as_deref(), Some("windows"));
         assert_eq!(options.architecture.as_deref(), Some("x86_64"));
         assert_eq!(options.machine_key.as_deref(), Some("ci-pool"));
-        assert!(options.list_discriminants);
     }
 
     #[test]
@@ -525,6 +620,63 @@ mod tests {
         let command = parse(&["analyze", "--target-triple", "x86_64-unknown-linux-gnu"]);
         let Command::Analyze(options) = command else {
             panic!("expected analyze command");
+        };
+        assert_eq!(
+            options.target_triple.as_deref(),
+            Some("x86_64-unknown-linux-gnu")
+        );
+        assert_eq!(options.os, None);
+        assert_eq!(options.architecture, None);
+    }
+
+    #[test]
+    fn list_collects_selection_and_discriminants() {
+        let command = parse(&[
+            "list",
+            "--repo",
+            "/work/folo",
+            "--branch",
+            "feature",
+            "--base",
+            "master",
+            "--no-dirty",
+            "--engine",
+            "callgrind",
+            "--os",
+            "windows",
+            "--architecture",
+            "x86_64",
+            "--machine-key",
+            "ci-pool",
+            "--metric",
+            "Ir",
+            "--format",
+            "json",
+            "--discriminants",
+            "--verbose",
+        ]);
+        let Command::List(options) = command else {
+            panic!("expected list command");
+        };
+        assert_eq!(options.repo, Some(PathBuf::from("/work/folo")));
+        assert_eq!(options.branch.as_deref(), Some("feature"));
+        assert_eq!(options.base.as_deref(), Some("master"));
+        assert!(options.no_dirty);
+        assert_eq!(options.engine.as_deref(), Some("callgrind"));
+        assert_eq!(options.os.as_deref(), Some("windows"));
+        assert_eq!(options.architecture.as_deref(), Some("x86_64"));
+        assert_eq!(options.machine_key.as_deref(), Some("ci-pool"));
+        assert_eq!(options.metric.as_deref(), Some("Ir"));
+        assert_eq!(options.format.as_deref(), Some("json"));
+        assert!(options.discriminants);
+        assert!(options.verbose);
+    }
+
+    #[test]
+    fn list_parses_target_triple_facet() {
+        let command = parse(&["list", "--target-triple", "x86_64-unknown-linux-gnu"]);
+        let Command::List(options) = command else {
+            panic!("expected list command");
         };
         assert_eq!(
             options.target_triple.as_deref(),

@@ -959,12 +959,12 @@ async fn analyze_orders_by_topology_not_effective_time() {
     assert_eq!(parsed["findings"][0]["latest"], 130.0, "{report}");
 }
 
-/// `--list-discriminants` enumerates exactly the comparable sets present in
+/// `list --discriminants` enumerates exactly the comparable sets present in
 /// storage, deriving the os/architecture facets from each set's target triple.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 #[serial]
-async fn analyze_list_discriminants_lists_present_sets() {
+async fn list_discriminants_lists_present_sets() {
     let workspace = Workspace::repo(&storage_only_config());
     // One commit, but two comparable sets: a Linux and a Windows callgrind pool.
     workspace.seed_callgrind_in(
@@ -983,7 +983,7 @@ async fn analyze_list_discriminants_lists_present_sets() {
     );
 
     let RunOutcome::Completed { message } = workspace
-        .drive(&["analyze", "--list-discriminants", "--format", "json"])
+        .drive(&["list", "--discriminants", "--format", "json"])
         .await
         .expect("listing succeeds")
     else {
@@ -1002,6 +1002,138 @@ async fn analyze_list_discriminants_lists_present_sets() {
         sets.iter().all(|set| set["engine"] == "callgrind"),
         "{message}"
     );
+}
+
+/// `list` previews exactly the data set the matching `analyze` would consume:
+/// per discriminant set, the run, series, and per-commit counts of the selected
+/// runs, ordered oldest-first by git topology.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn list_previews_the_analyzed_data_set() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_rising_callgrind_history();
+
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["list", "--format", "json"])
+        .await
+        .expect("listing succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(parsed["totals"]["runs"], 4, "{message}");
+    assert_eq!(parsed["totals"]["series"], 1, "{message}");
+    assert_eq!(parsed["totals"]["discriminant_sets"], 1, "{message}");
+
+    let sets = parsed["sets"].as_array().expect("an array of sets");
+    assert_eq!(sets.len(), 1, "{message}");
+    assert_eq!(sets[0]["engine"], "callgrind", "{message}");
+    assert_eq!(sets[0]["runs"], 4, "{message}");
+
+    let commits = sets[0]["commits"].as_array().expect("an array of commits");
+    assert_eq!(commits.len(), 4, "one run per commit: {message}");
+    // The four seeded commits, oldest first by topology, each one clean run.
+    assert!(
+        commits
+            .iter()
+            .all(|commit| commit["runs"] == 1 && commit["clean"] == 1 && commit["dirty"] == 0),
+        "{message}"
+    );
+}
+
+/// `list` mirrors `analyze`'s facet selection: with two comparable sets present, a
+/// `--os` filter previews only the matching set, exactly as `analyze` would scope it.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn list_facet_selection_mirrors_analyze() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_callgrind_in(
+        "x86_64-unknown-linux-gnu",
+        "synthetic",
+        "2024-01-01",
+        "c1",
+        100.0,
+    );
+    workspace.seed_callgrind_in(
+        "x86_64-pc-windows-msvc",
+        "synthetic",
+        "2024-01-01",
+        "c1",
+        50.0,
+    );
+
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["list", "--os", "linux", "--format", "json"])
+        .await
+        .expect("listing succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(parsed["totals"]["discriminant_sets"], 1, "{message}");
+    assert_eq!(parsed["sets"][0]["os"], "linux", "{message}");
+}
+
+/// `list` admits and excludes dirty snapshots exactly as `analyze` does: on a
+/// feature branch a dirty run on the target side is previewed by default and
+/// dropped under `--no-dirty`.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn list_admits_and_excludes_dirty_like_analyze() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.checkout_new_branch("feature");
+    workspace.seed_callgrind("2024-01-02", "f1", 100.0);
+    workspace.seed_dirty_callgrind("2024-01-03", "f1", 200.0);
+
+    // By default the dirty snapshot on the target side is included: f1 hosts both a
+    // clean and a dirty run, for three runs across two commits.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["list", "--format", "json"])
+        .await
+        .expect("listing succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(parsed["totals"]["runs"], 3, "{message}");
+    let commits = parsed["sets"][0]["commits"].as_array().expect("commits");
+    let f1 = commits.last().expect("the feature commit entry");
+    assert_eq!(f1["runs"], 2, "{message}");
+    assert_eq!(f1["clean"], 1, "{message}");
+    assert_eq!(f1["dirty"], 1, "{message}");
+
+    // `--no-dirty` drops the dirty snapshot, leaving only the two clean runs.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["list", "--no-dirty", "--format", "json"])
+        .await
+        .expect("listing succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(parsed["totals"]["runs"], 2, "{message}");
+}
+
+/// Like `analyze`, `list` requires a repository to resolve the timeline from git
+/// topology; without one it errors rather than reporting an empty data set.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn list_without_a_repository_errors() {
+    let workspace = Workspace::new(&storage_only_config());
+
+    let error = workspace
+        .drive(&["list"])
+        .await
+        .expect_err("listing without a repository should fail");
+    let RunError::Analyze { message } = error else {
+        panic!("expected an analyze error, got {error:?}");
+    };
+    assert!(message.contains("requires a git repository"), "{message}");
 }
 
 /// A facet filter (`--os`) restricts analysis to the matching set: the same commits

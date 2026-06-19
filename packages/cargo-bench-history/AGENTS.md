@@ -104,7 +104,7 @@ being analyzed:
   facet match); each surviving set becomes its own sub-report. `--target-triple`
   matches the whole triple directly and is mutually exclusive with `--os` /
   `--architecture` (the triple fixes both — `validate_triple_exclusivity` rejects
-  the combination). `--list-discriminants`
+  the combination). The `list --discriminants` command (not `analyze`)
   prints the present sets and returns **without requiring a repository** (it is a
   pure index over storage keys).
 * **Repository required for analysis.** Resolving a timeline needs git, so when not
@@ -143,6 +143,33 @@ The read-only `git_history::GitHistory` port (`resolve`, `default_branch`,
 Integration tests build a **real** git repo in a tempdir (`Workspace::repo` /
 `Workspace::clean_repo`) and seed storage keys under the commits' real SHAs so the
 live topology and the stored keys agree.
+
+## The `list` command
+
+**`list` mirrors `analyze`'s data-set-selection parameters exactly** (a hard
+requirement — keep them in lockstep). It accepts the same selection flags
+(`--repo`/`--branch`/`--base`/`--engine`/`--target-triple`/`--os`/`--architecture`/
+`--machine-key`/`--no-dirty`/`--since`/`--metric`/`--format`/`--config`) but,
+instead of analyzing, only *previews* which data set an `analyze` pass would
+consume: per discriminant set it reports the run, series, and per-commit counts of
+the selected runs (each commit's clean/dirty split), ordered oldest-first by git
+topology. Whenever you add or change a selection parameter on `analyze`, add the
+same parameter to `list`. `list` has no `--fail-on-regression` (it never analyzes).
+
+`--list-discriminants` was migrated off `analyze` to **`list --discriminants`**:
+it lists the discriminant sets present in storage without requiring a repository.
+
+`list` lives **inside** the analyze module tree as `src/analyze/list.rs`
+(`pub(crate) mod list;`), reusing the selection pipeline that was extracted from
+`analyze_with` into `analyze/mod.rs`: `Selection` (a borrow of the selection
+fields, built via `from_analyze`/`from_list`), `parsed_facets`,
+`facet_filtered_candidates` (shared by both the discriminants index and the
+topology query), `select_dataset` (git topology + commit selection + object load),
+and `dirty_base_exception_warning`. `list_with` parses the format, builds a
+`Selection`, then either renders the discriminants index (no repo) or runs
+`select_dataset` → `build_listing` → `render_listing`, returning a
+`RunOutcome::Completed { message }`. `count_noun` (text.rs) appends `s` when the
+count ≠ 1, so list.rs uses a local `series_noun` to avoid "seriess".
 
 ## The `backfill` command
 

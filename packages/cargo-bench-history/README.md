@@ -41,10 +41,14 @@ cargo bench-history backfill --from REF --to REF [--workspace]
 cargo bench-history analyze [--repo PATH] [--branch REF] [--base REF]
                             [--engine NAME] [--target-triple TRIPLE]
                             [--os OS] [--architecture ARCH]
-                            [--machine-key KEY] [--no-dirty]
-                            [--list-discriminants] [--since DATE]
+                            [--machine-key KEY] [--no-dirty] [--since DATE]
                             [--metric NAME] [--format text|json|markdown]
                             [--fail-on-regression] [--verbose] [--config PATH]
+cargo bench-history list [--discriminants] [--repo PATH] [--branch REF]
+                         [--base REF] [--engine NAME] [--target-triple TRIPLE]
+                         [--os OS] [--architecture ARCH] [--machine-key KEY]
+                         [--no-dirty] [--since DATE] [--metric NAME]
+                         [--format text|json|markdown] [--verbose] [--config PATH]
 ```
 
 * `run` executes the workspace's benches once with `cargo bench`, harvests every
@@ -86,14 +90,22 @@ cargo bench-history analyze [--repo PATH] [--branch REF] [--base REF]
   branch, that branch tip's dirty snapshots are included, and the report warns that
   this data is ephemeral — switch to a feature branch to persist it). The history
   is partitioned into *discriminant sets* (engine, target triple, OS, architecture,
-  machine key); `--engine`/`--os`/`--architecture`/`--machine-key` select sets and
-  `--list-discriminants` prints the sets present in storage. `--target-triple`
+  machine key); `--engine`/`--os`/`--architecture`/`--machine-key` select sets.
+  `--target-triple`
   selects by the whole triple instead of `--os`/`--architecture` and cannot be
   combined with them. `--since`/`--metric`
   narrow the data and `--fail-on-regression` enables CI gating. When stored runs
   exist but none enter the analysis (for example because every run is a dirty
   snapshot on the base branch), the report explains why; `--verbose` adds a
   per-object diagnostic trail to standard error. Every command accepts `--verbose`.
+* `list` previews the data set that an `analyze` pass would consume without
+  analyzing it: it accepts the same data-set-selection flags as `analyze`
+  (`--repo`/`--branch`/`--base`/`--engine`/`--target-triple`/`--os`/
+  `--architecture`/`--machine-key`/`--no-dirty`/`--since`/`--metric`) and reports,
+  per discriminant set, the run, series, and per-commit counts of the selected
+  runs. `--discriminants` instead lists the discriminant sets present in storage
+  (no repository required) — useful for discovering which engines, triples, and
+  machine keys have data before scoping an analysis.
 
 ## Status
 
@@ -107,6 +119,9 @@ Implemented:
 * `analyze` reconstructs a project's timeline from git history and reports
   rolling-baseline regressions/improvements in `text`, `json`, or `markdown`,
   grouped by discriminant set, with optional `--fail-on-regression` CI gating.
+* `list` previews the data set an `analyze` pass would consume (run/series/commit
+  counts per discriminant set), or lists the discriminant sets present in storage
+  with `--discriminants`.
 * `install` writes a starter `.cargo/bench_history.toml` when one is absent.
 * `backfill` replays `run` across a commit range in isolated git worktrees,
   bootstrapping history for old commits; it is resumable (skips already-stored

@@ -42,6 +42,7 @@ pub async fn run_with_overrides(
         Command::Run(options) => commands::run(options, target_root, bench_command).await,
         Command::Install(options) => commands::install(options).await,
         Command::Analyze(options) => commands::analyze(options).await,
+        Command::List(options) => commands::list(options).await,
         Command::Backfill(options) => commands::backfill(options, bench_command).await,
     }
 }

@@ -25,6 +25,8 @@ pub enum Command {
     Install(InstallOptions),
     /// Analyze stored history for notable patterns.
     Analyze(AnalyzeOptions),
+    /// List the data set a matching `analyze` pass would include.
+    List(ListOptions),
     /// Replay `run` across a range of historical commits.
     Backfill(BackfillOptions),
 }
@@ -111,10 +113,54 @@ pub struct AnalyzeOptions {
     pub metric: Option<String>,
     /// Output format selector, if set.
     pub format: Option<String>,
-    /// List the discriminant sets present in storage instead of analyzing.
-    pub list_discriminants: bool,
     /// Exit with failure if a regression is detected.
     pub fail_on_regression: bool,
+    /// Emit detailed diagnostic notes to standard error describing each step.
+    pub verbose: bool,
+}
+
+/// Options for the `list` command.
+///
+/// The data-set-selection options mirror [`AnalyzeOptions`] exactly so a `list`
+/// invocation previews the data set the same `analyze` invocation would consume.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[expect(
+    clippy::exhaustive_structs,
+    reason = "constructed and matched by the in-crate binary and integration tests"
+)]
+pub struct ListOptions {
+    /// Path to the configuration file, if overridden.
+    pub config_path: Option<PathBuf>,
+    /// Repository to resolve git topology from; defaults to the working directory.
+    pub repo: Option<PathBuf>,
+    /// Target ref whose history is listed; defaults to `HEAD`.
+    pub branch: Option<String>,
+    /// Base ref the target's history is split at; defaults to the detected (or
+    /// configured) default branch.
+    pub base: Option<String>,
+    /// Exclude dirty (uncommitted-tree) snapshots from the target side.
+    pub no_dirty: bool,
+    /// Only consider runs on or after this date, if set.
+    pub since: Option<String>,
+    /// Restrict the listing to a single engine (criterion or callgrind), if set.
+    pub engine: Option<String>,
+    /// Restrict the listing to a single full target triple, if set. Mutually
+    /// exclusive with `os` / `architecture` (the triple already fixes both).
+    pub target_triple: Option<String>,
+    /// Restrict the listing to a single operating-system facet, if set.
+    pub os: Option<String>,
+    /// Restrict the listing to a single CPU-architecture facet, if set.
+    pub architecture: Option<String>,
+    /// Restrict the listing to a single machine partition, if set.
+    pub machine_key: Option<String>,
+    /// Restrict the listing to a single metric name, if set.
+    pub metric: Option<String>,
+    /// Output format selector, if set.
+    pub format: Option<String>,
+    /// List the discriminant sets present in storage instead of the data set that
+    /// would enter the analysis. Does not require a repository.
+    pub discriminants: bool,
     /// Emit detailed diagnostic notes to standard error describing each step.
     pub verbose: bool,
 }

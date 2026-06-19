@@ -6,6 +6,7 @@ mod install;
 mod run;
 
 pub(crate) use crate::analyze::execute as analyze;
+pub(crate) use crate::analyze::list::execute as list;
 pub(crate) use backfill::execute as backfill;
 pub(crate) use install::execute as install;
 pub(crate) use run::execute as run;

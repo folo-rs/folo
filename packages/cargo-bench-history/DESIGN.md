@@ -24,8 +24,8 @@ It stores every result over time (local path or Azure blob), runs in multiple
 environments (dev PC, GitHub Actions, ADO), and partitions data only when the
 results are not otherwise comparable.
 
-Commands: `run`, `install`, `analyze`, `backfill` (plus a deferred `upload` —
-§8.2).
+Commands: `run`, `install`, `analyze`, `backfill`, `list` (plus a deferred
+`upload` — §8.2).
 
 ## 2. How the benchmark systems work (and what they emit)
 
@@ -248,7 +248,7 @@ is the comparability boundary; a series is only ever built **within** one set. T
 `analyze` derives **OS** and **architecture** facets by parsing the triple, so the
 user can pick sets without memorizing triples:
 
-* `--list-discriminants` lists the distinct sets present (a cheap key `list` under
+* `list --discriminants` lists the distinct sets present (a cheap key `list` under
   `v2/<project>/`, parsed and de-duplicated; an index file can be added later if a
   store grows large) with their parsed engine / OS / arch / machine key.
 * `--os`, `--architecture`, `--engine`, `--machine-key` **filter which sets** are
@@ -372,7 +372,8 @@ implement the same trait with no special-casing upstream.
 
 ## 8. Commands
 
-The commands (`run`, `install`, `analyze`; `upload` is deferred — §8.2) follow
+The commands (`run`, `install`, `analyze`, `backfill`, `list`; `upload` is
+deferred — §8.2) follow
 the established pattern: `main.rs` strips the injected `bench-history` arg, `argh`
 parses (here with **subcommands**), and dispatches to `lib::run`, which returns a
 typed `Outcome`/`Error`.
@@ -490,7 +491,7 @@ with no repo it errors out rather than guessing an order. (Analyzing a foreign
 project's stored data means checking out that project's repo and pointing `analyze`
 at it.)
 
-**Selecting the discriminant sets.** `--list-discriminants` prints the sets
+**Selecting the discriminant sets.** `list --discriminants` prints the sets
 present (§4.3). `--engine`, `--os`, `--architecture`, `--machine-key` filter them;
 each matched set is analyzed independently and produces its own report (so a Windows
 and a Linux nightly pool come out as two reports). `--target-triple` filters by the
@@ -611,6 +612,38 @@ nothing.
 data, run backfill on Linux/WSL — the worktree path is reachable from WSL exactly
 like the primary checkout.
 
+### 8.6 `cargo bench-history list`
+
+`list` previews the exact data set an `analyze` pass would consume, without running
+the analysis — letting the user inspect and confirm the commit range and the
+discriminant sets before committing to an `analyze`.
+
+```
+cargo bench-history list [--discriminants] \
+    [--repo PATH] [--branch REF] [--base REF] \
+    [--engine NAME] [--target-triple TRIPLE] [--os OS] [--architecture ARCH] \
+    [--machine-key KEY] [--no-dirty] [--since DATE] [--metric NAME] \
+    [--format text|json|markdown] [--verbose] [--config PATH]
+```
+
+`list` **mirrors `analyze`'s data-set-selection parameters exactly**: every
+selection flag `analyze` accepts (`--repo`/`--branch`/`--base`/`--engine`/
+`--target-triple`/`--os`/`--architecture`/`--machine-key`/`--no-dirty`/`--since`/
+`--metric`) selects the same data set here, resolved through the same shared
+selection pipeline (§8.4). The two commands must stay in lockstep — a selection
+parameter added to one is added to the other. `list` omits only the analysis-only
+`--fail-on-regression` (it never analyzes).
+
+Instead of findings, `list` reports — per discriminant set — the run, series, and
+per-commit counts of the selected runs (each commit's clean/dirty split), ordered
+oldest-first by git topology, so the user sees precisely which runs would feed the
+analysis.
+
+`--discriminants` switches to a storage index: it lists the discriminant sets
+present under `v2/<project>/` (engine / OS / arch / machine key) **without requiring
+a repository** (§4.3). This is where the storage-set listing lives, separate from
+the repository-driven data-set preview.
+
 ## 9. Analysis algorithms
 
 Series: per `(BenchmarkId, metric)`, ordered by git first-parent topology (§8.4)
@@ -675,14 +708,15 @@ src/
     azure.rs              # AzureBlobStorage           [feature = "azure"]
     sas.rs                # self-signed account-SAS signer [feature = "azure"]
   analyze/
-    mod.rs                # query orchestration (facet filter + topology query)
+    mod.rs                # query orchestration (shared selection pipeline)
     discriminant.rs       # parse v2 keys; DiscriminantSet/Facets
     selection.rs          # split the target ancestry at the merge-base
     series.rs             # per-(BenchmarkId, metric) series in topology order
     findings.rs           # rolling-baseline regression/improvement detector
     report.rs             # text|json|markdown multi-set renderer
+    list.rs               # `list` data-set preview + `list --discriminants`
   commands/
-    mod.rs run.rs install.rs backfill.rs   # the analyze handler is analyze/mod.rs
+    mod.rs run.rs install.rs backfill.rs   # the analyze/list handlers are in analyze/
 ```
 
 **Async ports & adapters (the testability boundary).** The app is **async by
@@ -797,8 +831,9 @@ adds macOS; mapped to the original request's numbering:
    port (`rev-list --first-parent`, `merge-base`, default-branch detection) with a
    real adapter + in-memory fake; require-a-repo (else error); target/base ref split
    with clean-only base + clean/dirty private; topology ordering; `--branch` /
-   `--base` / `--no-dirty`; discriminant facet selection + `--list-discriminants`
-   (`--os` / `--architecture` / `--engine` / `--machine-key`). Largest reshape of an
+   `--base` / `--no-dirty`; discriminant facet selection (`--os` / `--architecture`
+   / `--engine` / `--machine-key`; the set index is listed via `list
+   --discriminants`). Largest reshape of an
    existing command; the series engine moves from timestamp order to topology order.
 8. ✅ **`backfill`** (§8.5) — range enumeration + ancestry validation, per-commit
    checkout in a dedicated git worktree, clean-state guards, default skip-existing
@@ -929,11 +964,12 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     **clean only**, target-unique commits contribute **clean + dirty** (`--no-dirty`
     to drop dirty). Series are ordered by **git topology** (decision 24 supersedes the
     old effective-time ordering); runs within one commit sub-order by effective time.
-    Discriminant sets are selected/listed via `--list-discriminants` + `--engine` /
+    Discriminant sets are selected via `--engine` /
     `--os` / `--architecture` / `--machine-key` (or `--target-triple` for the whole
     triple, mutually exclusive with `--os` / `--architecture`), each matched set
     producing its own
-    report (§4.3, §8.4). **Dirty-tree base-tip exception:** when the working tree is
+    report (§4.3, §8.4); the set index is listed via the `list --discriminants`
+    command. **Dirty-tree base-tip exception:** when the working tree is
     currently dirty (`git status --porcelain` non-empty) and the target tip is
     base-side, that tip's dirty snapshots are admitted (the "evaluating the tool" /
     "accidentally on the base branch" case), limited to the tip and gated by

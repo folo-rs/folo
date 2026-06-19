@@ -13,6 +13,7 @@
 
 mod discriminant;
 mod findings;
+pub(crate) mod list;
 mod report;
 mod selection;
 mod series;
@@ -31,7 +32,7 @@ use crate::report::{Reporter, StderrReporter};
 use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
 use crate::wiring::{default_config_path, resolve_project_id};
-use crate::{AnalyzeOptions, RunError, RunOutcome};
+use crate::{AnalyzeOptions, ListOptions, RunError, RunOutcome};
 
 use discriminant::{DiscriminantSet, Facets, ParsedKey, parse_key};
 use findings::{RegressionConfig, find_changes};
@@ -80,14 +81,171 @@ where
     S: Storage,
 {
     let format = parse_format(options.format.as_deref())?;
-    let since = parse_since(options.since.as_deref())?;
-    let engine = parse_engine(options.engine.as_deref())?;
-    validate_triple_exclusivity(
-        options.target_triple.as_deref(),
-        options.os.as_deref(),
-        options.architecture.as_deref(),
-    )?;
+    let selection = Selection::from_analyze(options);
+    let dataset = select_dataset(git, storage, project_id, config, &selection, reporter).await?;
 
+    let filter = SeriesFilter {
+        metric: options.metric.as_deref(),
+    };
+    let series = build_series(&dataset.loaded, &dataset.order, &filter);
+    let findings = find_changes(&series, &RegressionConfig::default());
+    let regressions = findings
+        .iter()
+        .filter(|finding| finding.is_regression())
+        .count();
+
+    // Break the report down by comparable set so each partition reads on its own.
+    let mut sets: Vec<DiscriminantSet> = series.iter().map(|one| one.set.clone()).collect();
+    sets.sort();
+    sets.dedup();
+    let summaries: Vec<SetSummary<'_>> = sets
+        .iter()
+        .map(|set| SetSummary {
+            set,
+            runs: dataset
+                .loaded
+                .iter()
+                .filter(|object| &object.key.set == set)
+                .count(),
+            series: series.iter().filter(|one| &one.set == set).count(),
+            findings: findings
+                .iter()
+                .filter(|finding| &finding.set == set)
+                .collect(),
+        })
+        .collect();
+
+    // When stored runs existed but none entered the analysis, the empty outcome is
+    // otherwise indistinguishable from "no data". Explain the dominant reasons so
+    // the user can act without resorting to `--verbose`.
+    let hint = empty_history_hint(
+        dataset.loaded.is_empty(),
+        dataset.candidate_count,
+        &dataset.target_ref,
+        dataset.tally,
+    );
+
+    // Admitting a dirty snapshot on the base branch's tip is a courtesy for the
+    // "evaluating the tool" / "accidentally working on the base branch" cases; warn
+    // that such data is not persisted across commits.
+    let warning = dataset
+        .included_dirty_base_exception
+        .then(dirty_base_exception_warning);
+
+    let input = ReportInput {
+        project: project_id,
+        runs: dataset.loaded.len(),
+        series: series.len(),
+        findings: &findings,
+        sets: &summaries,
+        hint: hint.as_deref(),
+        warning: warning.as_deref(),
+    };
+    let report = render(&input, format);
+
+    Ok(RunOutcome::Analyzed {
+        report,
+        regressions,
+        fail_on_regression: options.fail_on_regression,
+    })
+}
+
+/// The data-set selection parameters shared by `analyze` and `list`: which stored
+/// objects to consider (facets + `--since`) and how to resolve the git timeline
+/// (`--repo` is resolved by the caller into the [`GitHistory`] adapter; `--branch` /
+/// `--base` / `--no-dirty` steer the topology query). `--metric` is deliberately
+/// *not* here: it filters which series are built, not which runs load.
+struct Selection<'a> {
+    branch: Option<&'a str>,
+    base: Option<&'a str>,
+    no_dirty: bool,
+    since: Option<&'a str>,
+    engine: Option<&'a str>,
+    target_triple: Option<&'a str>,
+    os: Option<&'a str>,
+    architecture: Option<&'a str>,
+    machine_key: Option<&'a str>,
+}
+
+impl<'a> Selection<'a> {
+    fn from_analyze(options: &'a AnalyzeOptions) -> Self {
+        Self {
+            branch: options.branch.as_deref(),
+            base: options.base.as_deref(),
+            no_dirty: options.no_dirty,
+            since: options.since.as_deref(),
+            engine: options.engine.as_deref(),
+            target_triple: options.target_triple.as_deref(),
+            os: options.os.as_deref(),
+            architecture: options.architecture.as_deref(),
+            machine_key: options.machine_key.as_deref(),
+        }
+    }
+
+    fn from_list(options: &'a ListOptions) -> Self {
+        Self {
+            branch: options.branch.as_deref(),
+            base: options.base.as_deref(),
+            no_dirty: options.no_dirty,
+            since: options.since.as_deref(),
+            engine: options.engine.as_deref(),
+            target_triple: options.target_triple.as_deref(),
+            os: options.os.as_deref(),
+            architecture: options.architecture.as_deref(),
+            machine_key: options.machine_key.as_deref(),
+        }
+    }
+}
+
+/// The objects an analysis (or listing) draws on, plus the bookkeeping needed to
+/// explain an empty outcome and warn about ephemeral data.
+struct SelectedDataSet {
+    /// The in-selection objects, loaded and parsed, in storage-key order.
+    loaded: Vec<LoadedObject>,
+    /// First-parent position of each selected commit, for series ordering.
+    order: HashMap<String, usize>,
+    /// How many facet-matching candidates existed before topology filtering.
+    candidate_count: usize,
+    /// Why candidates were excluded, for the empty-history hint.
+    tally: ExclusionTally,
+    /// Whether a dirty run was admitted solely by the base-branch dirty-tree
+    /// exception (triggers the ephemeral-data warning).
+    included_dirty_base_exception: bool,
+    /// The target ref the timeline was resolved against (for diagnostics).
+    target_ref: String,
+}
+
+/// Parses the `--engine` facet and validates the triple/os/arch exclusivity, then
+/// assembles the [`Facets`] borrow used to filter stored discriminant sets.
+fn parsed_facets<'a>(
+    selection: &Selection<'a>,
+) -> Result<(Option<EngineSystem>, Facets<'a>), RunError> {
+    let engine = parse_engine(selection.engine)?;
+    validate_triple_exclusivity(
+        selection.target_triple,
+        selection.os,
+        selection.architecture,
+    )?;
+    let facets = Facets {
+        engine: engine.map(EngineSystem::as_str),
+        target_triple: selection.target_triple,
+        os: selection.os,
+        architecture: selection.architecture,
+        machine_key: selection.machine_key,
+    };
+    Ok((engine, facets))
+}
+
+/// Lists the stored objects under the project's partition and keeps the ones whose
+/// discriminant set matches the facet filters. Shared by the topology-aware
+/// selection and the discriminant listing (which needs no repository).
+async fn facet_filtered_candidates<S: Storage>(
+    storage: &S,
+    project_id: &str,
+    engine: Option<EngineSystem>,
+    facets: &Facets<'_>,
+    reporter: &dyn Reporter,
+) -> Result<Vec<(String, ParsedKey)>, RunError> {
     // The listing prefix must use the same sanitized project segment that
     // `ComparabilityKey` writes its storage keys under. A project id containing a
     // character that sanitizes (a space, `/`, a non-ASCII letter, ...) is stored
@@ -98,20 +256,12 @@ where
         None => format!("v2/{project}/"),
     };
 
-    let facets = Facets {
-        engine: engine.map(EngineSystem::as_str),
-        target_triple: options.target_triple.as_deref(),
-        os: options.os.as_deref(),
-        architecture: options.architecture.as_deref(),
-        machine_key: options.machine_key.as_deref(),
-    };
-
     reporter.note(&format!(
         "project id: {project_id} (storage segment: {project})"
     ));
     reporter.note(&format!("listing stored objects under prefix {prefix}"));
     if reporter.enabled() {
-        reporter.note(&format!("facet filters: {}", describe_facets(&facets)));
+        reporter.note(&format!("facet filters: {}", describe_facets(facets)));
     }
 
     let keys = storage.list(&prefix).await.map_err(RunError::Storage)?;
@@ -120,8 +270,6 @@ where
         count_noun(keys.len(), "object key")
     ));
 
-    // Parse and facet-filter the candidate keys up front so both the discriminant
-    // listing and the analysis work from the same selected set.
     let mut candidates: Vec<(String, ParsedKey)> = Vec::new();
     for key in keys {
         if !key.ends_with(".json") {
@@ -132,7 +280,7 @@ where
             reporter.note(&format!("skipping {key}: not a recognized v2 storage key"));
             continue;
         };
-        if !parsed.set.matches(&facets) {
+        if !parsed.set.matches(facets) {
             reporter.note(&format!(
                 "skipping {key}: discriminant {} does not match the facet filters",
                 parsed.set
@@ -145,24 +293,34 @@ where
         "{} match the facet filters",
         count_noun(candidates.len(), "object")
     ));
+    Ok(candidates)
+}
 
-    if options.list_discriminants {
-        let mut sets: Vec<DiscriminantSet> = candidates
-            .into_iter()
-            .map(|(_, parsed)| parsed.set)
-            .collect();
-        sets.sort();
-        sets.dedup();
-        return Ok(RunOutcome::Completed {
-            message: render_discriminants(&sets, format),
-        });
-    }
+/// Resolves the git topology, selects the comparable commits, and loads the
+/// in-selection objects into a [`SelectedDataSet`]. Requires a repository: the
+/// timeline is reconstructed from git history, not from stored timestamps.
+async fn select_dataset<G, S>(
+    git: &G,
+    storage: &S,
+    project_id: &str,
+    config: &Config,
+    selection: &Selection<'_>,
+    reporter: &dyn Reporter,
+) -> Result<SelectedDataSet, RunError>
+where
+    G: GitHistory,
+    S: Storage,
+{
+    let since = parse_since(selection.since)?;
+    let (engine, facets) = parsed_facets(selection)?;
+    let candidates =
+        facet_filtered_candidates(storage, project_id, engine, &facets, reporter).await?;
 
     // Analysis requires a repository: the timeline is resolved from git topology,
     // not from stored timestamps. An unresolvable target ref means there is no
     // repository here (or the branch does not exist), which is an error rather than
     // an empty success.
-    let target_ref = options.branch.as_deref().unwrap_or("HEAD");
+    let target_ref = selection.branch.unwrap_or("HEAD");
     let Some(target_sha) = git.resolve(target_ref).await.map_err(RunError::Io)? else {
         return Err(RunError::Analyze {
             message: format!(
@@ -172,7 +330,7 @@ where
         });
     };
 
-    let base_sha = resolve_base_ref(git, config, options).await?;
+    let base_sha = resolve_base_ref(git, config, selection.base).await?;
     let ancestry = git.first_parent(&target_sha).await.map_err(RunError::Io)?;
     let merge_base = match &base_sha {
         Some(base) => git
@@ -197,7 +355,7 @@ where
     // are the user's in-flight work rather than stale leftovers, so they are
     // admitted (and the user warned). `--no-dirty` skips both the probe and the
     // exception.
-    let working_tree_dirty = if options.no_dirty {
+    let working_tree_dirty = if selection.no_dirty {
         false
     } else {
         git.is_dirty().await.map_err(RunError::Io)?
@@ -206,28 +364,28 @@ where
         reporter.note("working tree is dirty: dirty snapshots on a base-side tip will be admitted");
     }
 
-    let selection = select_commits(
+    let selected = select_commits(
         &ancestry,
         merge_base.as_deref(),
-        !options.no_dirty,
+        !selection.no_dirty,
         working_tree_dirty,
     );
     // First-parent position of each selected commit; an object whose commit is not
     // here is outside the analyzed history and contributes nothing.
-    let order: HashMap<String, usize> = selection
+    let order: HashMap<String, usize> = selected
         .iter()
         .enumerate()
-        .map(|(index, selected)| (selected.commit.clone(), index))
+        .map(|(index, one)| (one.commit.clone(), index))
         .collect();
-    let admit_dirty: HashMap<&str, bool> = selection
+    let admit_dirty: HashMap<&str, bool> = selected
         .iter()
-        .map(|selected| (selected.commit.as_str(), selected.admit_dirty))
+        .map(|one| (one.commit.as_str(), one.admit_dirty))
         .collect();
     // Commits whose dirty runs are admitted only by the base-branch dirty-tree
     // exception, so including one triggers the ephemeral-data warning.
-    let dirty_base_exception: HashMap<&str, bool> = selection
+    let dirty_base_exception: HashMap<&str, bool> = selected
         .iter()
-        .map(|selected| (selected.commit.as_str(), selected.dirty_base_exception))
+        .map(|one| (one.commit.as_str(), one.dirty_base_exception))
         .collect();
 
     // Tally why candidates do not enter the analysis, so a `0 runs` outcome can
@@ -307,76 +465,26 @@ where
         count_noun(loaded.len(), "object")
     ));
 
-    let filter = SeriesFilter {
-        metric: options.metric.as_deref(),
-    };
-    let series = build_series(&loaded, &order, &filter);
-    let findings = find_changes(&series, &RegressionConfig::default());
-    let regressions = findings
-        .iter()
-        .filter(|finding| finding.is_regression())
-        .count();
-
-    // Break the report down by comparable set so each partition reads on its own.
-    let mut sets: Vec<DiscriminantSet> = series.iter().map(|one| one.set.clone()).collect();
-    sets.sort();
-    sets.dedup();
-    let summaries: Vec<SetSummary<'_>> = sets
-        .iter()
-        .map(|set| SetSummary {
-            set,
-            runs: loaded
-                .iter()
-                .filter(|object| &object.key.set == set)
-                .count(),
-            series: series.iter().filter(|one| &one.set == set).count(),
-            findings: findings
-                .iter()
-                .filter(|finding| &finding.set == set)
-                .collect(),
-        })
-        .collect();
-
-    // When stored runs existed but none entered the analysis, the empty outcome is
-    // otherwise indistinguishable from "no data". Explain the dominant reasons so
-    // the user can act without resorting to `--verbose`.
-    let hint = empty_history_hint(
-        loaded.is_empty(),
+    Ok(SelectedDataSet {
+        loaded,
+        order,
         candidate_count,
-        target_ref,
-        ExclusionTally {
+        tally: ExclusionTally {
             outside_history: excluded_outside_history,
             dirty_base: excluded_dirty_base,
             since: excluded_since,
         },
-    );
-
-    // Admitting a dirty snapshot on the base branch's tip is a courtesy for the
-    // "evaluating the tool" / "accidentally working on the base branch" cases; warn
-    // that such data is not persisted across commits.
-    let warning = included_dirty_base_exception.then(|| {
-        "Warning: analysis included dirty runs (with uncommitted changes) on top of the \
-         base branch. These may be excluded from future analysis. Switch to a new branch \
-         to persist benchmark history of your changes."
-            .to_owned()
-    });
-
-    let input = ReportInput {
-        project: project_id,
-        runs: loaded.len(),
-        series: series.len(),
-        findings: &findings,
-        sets: &summaries,
-        hint: hint.as_deref(),
-        warning: warning.as_deref(),
-    };
-    let report = render(&input, format);
-
-    Ok(RunOutcome::Analyzed {
-        report,
-        regressions,
-        fail_on_regression: options.fail_on_regression,
+        included_dirty_base_exception,
+        target_ref: target_ref.to_owned(),
     })
+}
+
+/// The ephemeral-data warning appended when a dirty base-branch-tip run is admitted.
+fn dirty_base_exception_warning() -> String {
+    "Warning: analysis included dirty runs (with uncommitted changes) on top of the \
+     base branch. These may be excluded from future analysis. Switch to a new branch \
+     to persist benchmark history of your changes."
+        .to_owned()
 }
 
 /// Resolves the base ref the target's history is split against, returning its
@@ -388,9 +496,9 @@ where
 async fn resolve_base_ref<G: GitHistory>(
     git: &G,
     config: &Config,
-    options: &AnalyzeOptions,
+    base: Option<&str>,
 ) -> Result<Option<String>, RunError> {
-    if let Some(base) = options.base.as_deref() {
+    if let Some(base) = base {
         return git
             .resolve(base)
             .await
@@ -411,68 +519,6 @@ async fn resolve_base_ref<G: GitHistory>(
         return Ok(Some(resolved));
     }
     Ok(None)
-}
-
-/// Renders the distinct discriminant sets present in storage for `--list-discriminants`.
-fn render_discriminants(sets: &[DiscriminantSet], format: ReportFormat) -> String {
-    match format {
-        ReportFormat::Json => {
-            #[derive(serde::Serialize)]
-            struct JsonDiscriminant<'a> {
-                engine: &'a str,
-                target_triple: &'a str,
-                os: &'a str,
-                architecture: &'a str,
-                machine: &'a str,
-            }
-            let list: Vec<JsonDiscriminant<'_>> = sets
-                .iter()
-                .map(|set| JsonDiscriminant {
-                    engine: &set.engine,
-                    target_triple: &set.target_triple,
-                    os: set.os(),
-                    architecture: set.architecture(),
-                    machine: &set.machine,
-                })
-                .collect();
-            serde_json::to_string_pretty(&list).expect("discriminant list serializes to JSON")
-        }
-        ReportFormat::Markdown => {
-            let mut lines = vec!["# Discriminant sets".to_owned(), String::new()];
-            if sets.is_empty() {
-                lines.push("No discriminant sets found.".to_owned());
-                return format!("{}\n", lines.join("\n"));
-            }
-            lines.push("| Engine | OS | Architecture | Machine | Target triple |".to_owned());
-            lines.push("| --- | --- | --- | --- | --- |".to_owned());
-            for set in sets {
-                lines.push(format!(
-                    "| {} | {} | {} | {} | {} |",
-                    set.engine,
-                    set.os(),
-                    set.architecture(),
-                    set.machine,
-                    set.target_triple
-                ));
-            }
-            format!("{}\n", lines.join("\n"))
-        }
-        ReportFormat::Text => {
-            if sets.is_empty() {
-                return "No discriminant sets found.\n".to_owned();
-            }
-            let mut lines = vec!["Discriminant sets:".to_owned()];
-            for set in sets {
-                lines.push(format!(
-                    "  - {set} (os={} arch={} machine={})",
-                    set.os(),
-                    set.architecture(),
-                    set.machine
-                ));
-            }
-            format!("{}\n", lines.join("\n"))
-        }
-    }
 }
 
 /// Parses the `--format` option, defaulting to text.
@@ -1305,49 +1351,6 @@ mod tests {
         };
         let (_, regressions) = analyze(&git, &storage, "folo", &opts);
         assert_eq!(regressions, 1, "the dirty f2 value is the latest point");
-    }
-
-    #[test]
-    fn list_discriminants_lists_present_sets_without_a_repo() {
-        // `--list-discriminants` never requires a repository.
-        let storage = MemoryStorage::new();
-        store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
-        store(
-            &storage,
-            "v2/folo/criterion/x86_64-pc-windows-msvc/m1/c0/clean.json",
-            &ir_set(0, "c0", 100.0),
-        );
-        let git = FakeGitHistory::new(); // No repo, but listing does not need one.
-
-        let opts = AnalyzeOptions {
-            list_discriminants: true,
-            format: Some("json".to_owned()),
-            ..options()
-        };
-        let (report, _) = analyze(&git, &storage, "folo", &opts);
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-        let sets = parsed.as_array().expect("a JSON array of sets");
-        assert_eq!(sets.len(), 2, "{report}");
-        let engines: Vec<&str> = sets
-            .iter()
-            .map(|set| set["engine"].as_str().unwrap())
-            .collect();
-        assert!(engines.contains(&"callgrind"), "{report}");
-        assert!(engines.contains(&"criterion"), "{report}");
-    }
-
-    #[test]
-    fn list_discriminants_text_format_lists_each_set() {
-        let storage = MemoryStorage::new();
-        store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
-        let git = FakeGitHistory::new();
-        let opts = AnalyzeOptions {
-            list_discriminants: true,
-            ..options()
-        };
-        let (report, _) = analyze(&git, &storage, "folo", &opts);
-        assert!(report.contains("Discriminant sets:"), "{report}");
-        assert!(report.contains("os=linux"), "{report}");
     }
 
     #[test]
