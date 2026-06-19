@@ -1,10 +1,12 @@
 # cargo-bench-history — Design & Implementation Plan
 
-Status: design approved; iterations 1 (`run` for Callgrind + local storage) and 2
-(`analyze` rolling-baseline regression over local Callgrind history) implemented.
-Items still marked **R** are non-blocking recommendations open to revision during
-implementation. The resolved design decisions are logged in
-[§13 Decisions & open items](#13-decisions--open-items).
+Status: implemented. All of the numbered iterations are shipped — `run`,
+`analyze` (rolling-baseline regression), `install`, the Azure Blob backend,
+the Criterion adapter, the commit-centric storage model (v2), git-aware
+`analyze`, and `backfill`. The remaining statistical findings (change-point and
+drift, §9 #2–#3) are the one deferred follow-up. The resolved design decisions
+are logged in [§13 Decisions & open items](#13-decisions--open-items); the
+iteration mapping is in [§12 Implementation plan](#12-implementation-plan).
 
 ## 1. Purpose
 
@@ -22,7 +24,8 @@ It stores every result over time (local path or Azure blob), runs in multiple
 environments (dev PC, GitHub Actions, ADO), and partitions data only when the
 results are not otherwise comparable.
 
-Commands: `run`, `install`, `analyze` (plus a deferred `upload` — §8.2).
+Commands: `run`, `install`, `analyze`, `backfill` (plus a deferred `upload` —
+§8.2).
 
 ## 2. How the benchmark systems work (and what they emit)
 
@@ -55,8 +58,9 @@ Key facts:
 * The on-disk JSON is criterion-internal (not a stability-guaranteed API), but
   has been stable for many releases. `cargo-criterion` (a separate tool) emits a
   documented `--message-format json` stream; the workspace does not use it
-  today. **R:** v1 parses the on-disk files, isolated behind an adapter, so we
-  can swap to `cargo-criterion` later without touching the rest of the tool.
+  today. The adapter parses the on-disk files in isolation behind
+  `bench/criterion.rs`, so a later swap to `cargo-criterion` would not touch the
+  rest of the tool.
 
 ### 2.2 Callgrind via Gungraun (simulated, hardware-independent)
 
@@ -194,9 +198,9 @@ rules above are safety nets for when that is impractical.
 
 ### 4.2 On-disk / blob layout
 
-**R:** immutable, append-only-by-new-file, **commit-centric** model (works
-identically on local FS and blob storage, no read-modify-write races in concurrent
-CI). The path is `<discriminant set>/<commit_sha>/<run file>`:
+The layout is an immutable, append-only-by-new-file, **commit-centric** model
+(works identically on local FS and blob storage, no read-modify-write races in
+concurrent CI). The path is `<discriminant set>/<commit_sha>/<run file>`:
 
 ```
 <root>/v2/<project>/<engine>/<target_triple>/<machine_key|synthetic>/<commit_sha>/
@@ -451,13 +455,14 @@ then stores the result. A standalone `upload` would merely re-harvest *existing*
   there is no `summary.json` to harvest, so the benches had to run under our
   control anyway, which is exactly what `run` does.
 * **Criterion:** plausible (estimates.json is always written, so output may
-  pre-exist from a separate `cargo bench`), but that engine does not land until
-  iteration 5.
+  pre-exist from a separate `cargo bench`), and the engine is now supported — so
+  this is the most likely trigger for un-deferring `upload`.
 
-So `upload` is **deferred**. The harvest → build → store logic lives in an
-internal `ingest` module that `run` calls; exposing it later as an `upload`
-subcommand is a thin addition if a concrete need appears (most likely alongside
-Criterion). When added it is platform-neutral (only reads files).
+So `upload` is **deferred**. The harvest → build → store logic already lives in
+reusable pieces (`bench_output.rs` for the harvest, the store step in
+`commands/run.rs`), shared by `run` and `backfill`; exposing it as an `upload`
+subcommand is a thin addition if a concrete need appears. When added it is
+platform-neutral (only reads files).
 
 ### 8.3 `cargo bench-history install`
 Generate an example `.cargo/bench_history.toml` if absent; print its path and
@@ -617,29 +622,43 @@ refinements are split into a dedicated follow-up iteration.
 ```
 src/
   main.rs                 # #[tokio::main]; strip "bench-history" arg, parse, dispatch
-  lib.rs                  # pub async fn run(Command) -> Result<Outcome, Error>
-  cli.rs / types.rs       # argh subcommands + RunInput/Outcome/Error
+  lib.rs                  # module wiring + the public re-exports
+  cli.rs / types.rs       # argh subcommands + RunOptions/Outcome/Error
+  dispatch.rs             # route a parsed Command to its command handler
+  wiring.rs               # locate config + project id, build the StorageFacade
   config.rs               # load + generate .cargo/bench_history.toml (toml)
+  config_writer.rs        # ConfigWriter port (tokio adapter + fake) for `install`
   model.rs                # ResultSet/Record/Metric/BenchmarkId/Context (serde)
-  comparability.rs        # ComparabilityKey + partition path
-  process.rs              # ProcessRunner port (async) + tokio adapter + fake   [it. 1]
-  git.rs                  # Git port (async) + git-shell adapter + fake         [it. 1]
-  host.rs                 # rustc -vV pure parse -> toolchain/host triple        [it. 1]
-  context/                # env.rs (CI), git wiring  (+ ports/fakes)
-  machine.rs              # machine key (many_cpus + hw PAL)   [it. 5]
+  comparability.rs        # ComparabilityKey + commit-centric partition path
+  context.rs              # RunContext (CI/git/toolchain + the three timestamps)
+  process.rs              # ProcessRunner port (async) + tokio adapter + fake
+  probe.rs                # environment probe port (git/rustc) + shell adapter + fake
+  git.rs                  # pure parse of git output -> GitSnapshot
+  git_history.rs          # read-only GitHistory port (rev-list/merge-base) + fake
+  host.rs                 # rustc -vV pure parse -> toolchain/host triple
+  machine.rs              # machine key (many_cpus + SHA-256 fingerprint)
+  report.rs               # Reporter port (--verbose stderr trail) + fake
+  text.rs                 # singular/plural rendering for user-facing counts
   bench/
-    mod.rs                # engine env injection + harvest glob per engine
-    callgrind.rs          # Gungraun summary v6 serde + mapping   [it. 1]
-    criterion.rs          # [it. 5]
-  ingest.rs               # harvest target/ -> ResultSet -> store (shared) [it. 1]
+    mod.rs                # combined engine env injection + per-engine harvest glob
+    callgrind.rs          # Gungraun summary v6 serde + mapping
+    criterion.rs          # Criterion estimates/benchmark JSON -> WallTime records
+  bench_output.rs         # BenchOutputSource port: harvest target/ -> fresh cases
   storage/
-    mod.rs                # Storage trait (async) + StorageFacade enum + fake
-    local.rs              # tokio::fs   [it. 1]
-    azure.rs              # [it. 4, feature = "azure"]
+    mod.rs                # Storage trait (async) + in-memory fake
+    local.rs              # tokio::fs backend
+    facade.rs             # StorageFacade enum (Local | Azure), static dispatch
+    azure.rs              # AzureBlobStorage           [feature = "azure"]
+    sas.rs                # self-signed account-SAS signer [feature = "azure"]
   analyze/
-    mod.rs  series.rs  findings.rs   # [it. 2+]
+    mod.rs                # query orchestration (facet filter + topology query)
+    discriminant.rs       # parse v2 keys; DiscriminantSet/Facets
+    selection.rs          # split the target ancestry at the merge-base
+    series.rs             # per-(BenchmarkId, metric) series in topology order
+    findings.rs           # rolling-baseline regression/improvement detector
+    report.rs             # text|json|markdown multi-set renderer
   commands/
-    run.rs install.rs analyze.rs     # upload.rs added if/when undeferred
+    mod.rs run.rs install.rs backfill.rs   # the analyze handler is analyze/mod.rs
 ```
 
 **Async ports & adapters (the testability boundary).** The app is **async by
@@ -652,8 +671,21 @@ adapter plus an in-lib `#[cfg(test)]` in-memory fake:
 * `ProcessRunner` (async) — launch the benchmark command (`cargo bench`) with
   injected env; return exit status. Real = `tokio::process::Command`; fake records
   the invocation and can drop fixture `summary.json` files to simulate a bench run.
-* `Git` (async) — commit/short/branch/committer-date/dirty (shells `git` via
-  `tokio::process`; PARSE pure). Fake returns canned `GitInfo`.
+* `EnvProbe` (async, `probe.rs`) — discover the run-time git facts
+  (commit/short/branch/committer-date/dirty) and toolchain facts; the real adapter
+  shells `git` and `rustc` (PARSE pure in `git.rs`/`host.rs`), the fake returns
+  canned facts.
+* `GitHistory` (async, `git_history.rs`) — the read-only history query
+  `analyze`/`backfill` need: resolve a ref, detect the default branch, compute a
+  merge-base, walk first-parent ancestry. Real shells `git -C <repo>`; the fake
+  serves a canned commit graph.
+* `BenchOutputSource` (async, `bench_output.rs`) — harvest the fresh
+  `summary.json`/`estimates.json` an engine wrote this run. Real walks the target
+  tree with `tokio::fs`; the fake returns canned cases.
+* `ConfigWriter` (async, `config_writer.rs`) — `install`'s create-if-absent file
+  write. Real uses `tokio::fs` `create_new`; the fake records writes in memory.
+* `Reporter` (`report.rs`) — the `--verbose` diagnostic-note sink; real writes to
+  stderr, the fake records notes for assertions.
 * `Storage` (async) — `StorageFacade` enum (§7); in-memory fake for tests.
 * Env access is a plain `Fn(&str) -> Option<String>` (matches `detect_ci`).
 * The clock is the **`tick` crate**, not a custom port: `tick::Clock`
@@ -676,10 +708,12 @@ real-time sleeps (inject `tick::Clock`); proptest with bounded cases + Miri-safe
 regression twins; zero warnings; alphabetical no-default-features deps.
 
 Dependency sketch: `argh`, `serde`, `serde_json`, `toml`, `jiff` (timestamps +
-`--since`), `tokio` (rt-multi-thread, macros, process, fs), `tick` (clock; `tokio`
-feature in prod, `test-util` in dev), `futures` (dev-only, `executor` for the
-Miri-safe `block_on`); a stable hash (`sha2`) and `many_cpus` for the machine key
-[it. 5]; optional `azure` feature → `azure_storage_blob` + `azure_identity` [it. 4].
+`--since`), `tokio` (rt-multi-thread, macros, process, fs, io-util), `tick` (clock;
+`tokio` feature in prod, `test-util` in dev), `many_cpus` and `sha2` (the machine
+key), and `futures` (`executor`, dev-only) for the Miri-safe `block_on`. The
+optional **`azure`** feature pulls in `azure_core`, `azure_identity`,
+`azure_storage_blob`, `base64`, `hmac` (SAS signing pairs `hmac` with the always-on
+`sha2`), and `futures` at runtime.
 
 ## 11. Cross-platform notes
 
@@ -695,60 +729,66 @@ Miri-safe `block_on`); a stable hash (`sha2`) and `many_cpus` for the machine ke
 
 ## 12. Implementation plan
 
-Phase 0 (foundation, precedes the numbered iterations): crate skeleton +
-`argh` subcommands (`run`/`install`/`analyze`) + `config.rs` + `model.rs` (incl.
+**All nine iterations below were delivered except #9 (statistical findings),
+which is the one deferred follow-up.** They are kept here in their original
+sequence as the historical roadmap and as a map from this design to the shipped
+code.
+
+Phase 0 (foundation, preceded the numbered iterations): crate skeleton +
+`argh` subcommands + `config.rs` + `model.rs` (incl.
 the three timestamps) + `Storage` trait + `comparability` (incl. target-triple
 resolution, §4.1) + `RunContext` (git/CI + effective time). Small and
-high-leverage; the iterations build on it.
+high-leverage; the iterations built on it.
 
-The revised plan folds your original "upload" step into "run" (run always
-persists) and adds macOS; mapped to your original numbering:
+The plan folds the original "upload" step into "run" (run always persists) and
+adds macOS; mapped to the original request's numbering:
 
-1. **`run` for Callgrind, end-to-end with local storage** (your 1 + 2) — adapter
+1. ✅ **`run` for Callgrind, end-to-end with local storage** (your 1 + 2) — adapter
    injects `GUNGRAUN_SAVE_SUMMARY`, invokes the benches, `mtime`-scoped
    harvest of `summary.json`, builds the ResultSet, and writes it via
    `LocalStorage` to the partition. `run` persists by itself; no separate
    `upload`. (Confirms the “special need” is just the summary flag — kept.)
-2. **`analyze` (useful finding)** (your 3) — series engine + rolling-baseline
+2. ✅ **`analyze` (useful finding)** (your 3) — series engine + rolling-baseline
    regression over local Callgrind history; text report (+ `--fail-on`).
-3. **`install`** (your 4) — generate `.cargo/bench_history.toml`, point the user
+3. ✅ **`install`** (your 4) — generate `.cargo/bench_history.toml`, point the user
    to it.
-4. **Azure blob** (your 5) — `azure` feature, `AzureBlobStorage`, self-signed
+4. ✅ **Azure blob** (your 5) — `azure` feature, `AzureBlobStorage`, self-signed
    account SAS (Azurite/CI + SAS production) / verbatim SAS / Entra ID;
    `run`/`analyze` become storage-agnostic; verify the feature builds and runs on
    Windows, Linux and macOS.
-5. **Criterion** (your 6) — adapter parses `target/criterion/**/new/{benchmark,
+5. ✅ **Criterion** (your 6) — adapter parses `target/criterion/**/new/{benchmark,
    estimates}.json` into `WallTime` records (slope estimate when present, else the
    mean; std-dev + CI bounds recorded for noise-aware analysis), plus machine-key
    computation + partition (Windows/Linux/macOS CPU-brand detection). The stored
    `BenchmarkId.package` is `None` (Criterion files are package-agnostic; §3).
    Noise-aware thresholds and change-point/drift findings are split into a
    follow-up iteration.
-6. **Storage model v2 + `run` idempotency** (§4.2, §4.3) — commit-centric layout
+6. ✅ **Storage model v2 + `run` idempotency** (§4.2, §4.3) — commit-centric layout
    (`…/<commit>/{clean.json | dirty-<unix>.json}`), schema `v1→v2`, a `Storage`
    `put_overwrite` write-replacing escape hatch, the clean write-once collision refusal
    (surfaced as `RunError::Duplicate`) + `--overwrite`, and the dirty effective=now
    keying. Re-targets `comparability` and `run`'s store step; small, in-process, heavily
    unit-tested before the git-heavy work builds on it.
-7. **Git-aware `analyze`** (§8.4, §4.3) — the query model: a read-only git-history
+7. ✅ **Git-aware `analyze`** (§8.4, §4.3) — the query model: a read-only git-history
    port (`rev-list --first-parent`, `merge-base`, default-branch detection) with a
    real adapter + in-memory fake; require-a-repo (else error); target/base ref split
    with clean-only base + clean/dirty private; topology ordering; `--branch` /
    `--base` / `--no-dirty`; discriminant facet selection + `--list-discriminants`
    (`--os` / `--architecture` / `--engine` / `--machine-key`). Largest reshape of an
    existing command; the series engine moves from timestamp order to topology order.
-8. **`backfill`** (§8.5) — range enumeration + ancestry validation, per-commit
+8. ✅ **`backfill`** (§8.5) — range enumeration + ancestry validation, per-commit
    checkout in a dedicated git worktree, clean-state guards, default skip-existing
    (resumable; backfill treats the it.6 write-once collision as a skip rather than
    an error), `--ignore-errors`, end-of-run summary.
    Builds on the idempotency (it.6) and the git port (it.7).
-9. **Statistical findings** — noise-aware thresholds (`k·MAD` / CI non-overlap),
-   change-point (Pettitt) and Theil–Sen drift, layered on the Criterion dispersion
-   fields recorded in iteration 5 (§9 #1–#3).
+9. ⏳ **Statistical findings** *(deferred)* — noise-aware thresholds (`k·MAD` / CI
+   non-overlap), change-point (Pettitt) and Theil–Sen drift, layered on the
+   Criterion dispersion fields recorded in iteration 5 (§9 #1–#3).
 
 **Deferred:** a standalone `upload` command (§8.2) — added only if a concrete
-need arises, most likely alongside Criterion; the `ingest` module it would reuse
-already exists from iteration 1.
+need arises, most likely alongside Criterion. Its harvest → build → store logic
+already exists, shared between `run` and `backfill` (`bench_output.rs` plus the
+store step in `commands/run.rs`).
 
 Each iteration ships with tests and docs and leaves the tool runnable.
 
