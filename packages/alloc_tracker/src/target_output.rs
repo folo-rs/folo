@@ -332,6 +332,34 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
+    #[should_panic(expected = "failed to create benchmark output directory")]
+    fn panics_when_output_directory_cannot_be_created() {
+        let session = session_with_recorded_work("allocate_vec");
+        let directory = tempfile::tempdir().unwrap();
+
+        // A regular file where a directory component is expected makes the
+        // recursive directory creation fail.
+        let blocker = directory.path().join("blocker");
+        fs::write(&blocker, "not a directory").unwrap();
+
+        session.write_to_directory(blocker.join("nested"));
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
+    #[should_panic(expected = "failed to write benchmark output file")]
+    fn panics_when_output_file_cannot_be_written() {
+        let session = session_with_recorded_work("allocate_vec");
+        let directory = tempfile::tempdir().unwrap();
+
+        // A directory occupying the output file's path makes the file write fail.
+        fs::create_dir_all(directory.path().join("allocate_vec.json")).unwrap();
+
+        session.write_to_directory(directory.path());
+    }
+
+    #[test]
     #[should_panic(expected = "after sanitization")]
     fn panics_when_operation_names_collide_after_sanitization() {
         let session = Session::new();
