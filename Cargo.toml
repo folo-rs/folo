@@ -7,7 +7,7 @@ authors = ["Sander Saares <sander@saares.eu>"]
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/folo-rs/folo"
-rust-version = "1.91"
+rust-version = "1.93"
 
 [workspace.dependencies]
 all_the_time = { version = "0.4.20", path = "packages/all_the_time", default-features = false }
