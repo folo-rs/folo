@@ -221,7 +221,9 @@ impl Drop for Session {
             return;
         }
 
-        if !self.emit_stdout && !self.emit_file {
+        // With neither output enabled there is nothing to emit, so skip building
+        // a report entirely.
+        if !(self.emit_stdout || self.emit_file) {
             return;
         }
 

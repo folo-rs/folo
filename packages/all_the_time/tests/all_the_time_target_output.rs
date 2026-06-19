@@ -88,6 +88,36 @@ fn dropping_session_writes_json_into_cargo_target_directory() {
 
 #[test]
 #[cfg_attr(miri, ignore)] // Uses the real platform and the filesystem, neither supported under Miri.
+fn no_stdout_session_still_writes_json() {
+    const OPERATION: &str = "all_the_time_no_stdout_writes_probe";
+
+    let expected = output_path(OPERATION);
+    remove_if_present(&expected);
+
+    {
+        // Suppressing stdout must not suppress the JSON file output.
+        let session = Session::new().no_stdout();
+        record_work(&session, OPERATION);
+    }
+
+    assert!(
+        expected.exists(),
+        "no_stdout() should still write {}",
+        expected.display()
+    );
+
+    let value = read_json(&expected);
+    assert_eq!(
+        value.get("operation").and_then(Value::as_str),
+        Some(OPERATION)
+    );
+
+    // Avoid polluting the shared target directory for later runs.
+    remove_file(&expected).unwrap();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Uses the real platform and the filesystem, neither supported under Miri.
 fn no_file_suppresses_json_output() {
     const OPERATION: &str = "all_the_time_no_file_probe";
 
