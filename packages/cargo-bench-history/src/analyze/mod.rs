@@ -82,6 +82,11 @@ where
     let format = parse_format(options.format.as_deref())?;
     let since = parse_since(options.since.as_deref())?;
     let engine = parse_engine(options.engine.as_deref())?;
+    validate_triple_exclusivity(
+        options.target_triple.as_deref(),
+        options.os.as_deref(),
+        options.architecture.as_deref(),
+    )?;
 
     // The listing prefix must use the same sanitized project segment that
     // `ComparabilityKey` writes its storage keys under. A project id containing a
@@ -95,6 +100,7 @@ where
 
     let facets = Facets {
         engine: engine.map(EngineSystem::as_str),
+        target_triple: options.target_triple.as_deref(),
         os: options.os.as_deref(),
         architecture: options.architecture.as_deref(),
         machine_key: options.machine_key.as_deref(),
@@ -485,6 +491,9 @@ fn describe_facets(facets: &Facets<'_>) -> String {
     if let Some(engine) = facets.engine {
         parts.push(format!("engine={engine}"));
     }
+    if let Some(target_triple) = facets.target_triple {
+        parts.push(format!("target_triple={target_triple}"));
+    }
     if let Some(os) = facets.os {
         parts.push(format!("os={os}"));
     }
@@ -566,6 +575,26 @@ fn parse_engine(name: Option<&str>) -> Result<Option<EngineSystem>, RunError> {
                 message: format!("unknown engine {name:?}; expected criterion or callgrind"),
             }),
     }
+}
+
+/// Rejects combining `--target-triple` with the derived `--os` / `--architecture`
+/// facets. The triple already determines both, so accepting them together invites
+/// silently contradictory filters; they are mutually exclusive — specify either the
+/// whole triple or its individual components.
+fn validate_triple_exclusivity(
+    target_triple: Option<&str>,
+    os: Option<&str>,
+    architecture: Option<&str>,
+) -> Result<(), RunError> {
+    if target_triple.is_some() && (os.is_some() || architecture.is_some()) {
+        return Err(RunError::Analyze {
+            message: "--target-triple cannot be combined with --os or --architecture; \
+                      the triple already determines both, so specify either the full \
+                      target triple or its individual components"
+                .to_owned(),
+        });
+    }
+    Ok(())
 }
 
 /// Parses the `--since` option as an RFC 3339 timestamp or a bare `YYYY-MM-DD`
@@ -1345,6 +1374,70 @@ mod tests {
     }
 
     #[test]
+    fn target_triple_facet_selects_one_set() {
+        // Two sets differing only by triple; `--target-triple` reports just the one.
+        let storage = MemoryStorage::new();
+        store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
+        store(
+            &storage,
+            "v2/folo/callgrind/x86_64-pc-windows-msvc/synthetic/c0/clean.json",
+            &ir_set(0, "c0", 100.0),
+        );
+        let git = linear_git();
+
+        let opts = AnalyzeOptions {
+            target_triple: Some("x86_64-unknown-linux-gnu".to_owned()),
+            format: Some("json".to_owned()),
+            ..options()
+        };
+        let (report, _) = analyze(&git, &storage, "folo", &opts);
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(parsed["runs"], 1, "only the linux-gnu triple is loaded");
+        assert_eq!(parsed["sets"].as_array().unwrap().len(), 1, "{report}");
+        assert_eq!(
+            parsed["sets"][0]["target_triple"], "x86_64-unknown-linux-gnu",
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn target_triple_combined_with_os_or_architecture_is_an_error() {
+        let storage = MemoryStorage::new();
+        store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
+        let git = linear_git();
+
+        for conflicting in [
+            AnalyzeOptions {
+                target_triple: Some("x86_64-unknown-linux-gnu".to_owned()),
+                os: Some("linux".to_owned()),
+                ..options()
+            },
+            AnalyzeOptions {
+                target_triple: Some("x86_64-unknown-linux-gnu".to_owned()),
+                architecture: Some("x86_64".to_owned()),
+                ..options()
+            },
+        ] {
+            let error = block_on(analyze_with(
+                &git,
+                &storage,
+                "folo",
+                &config(),
+                &conflicting,
+                &RecordingReporter::new(),
+            ))
+            .unwrap_err();
+            assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
+            assert!(
+                error
+                    .to_string()
+                    .contains("--target-triple cannot be combined"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
     fn two_sets_produce_two_report_sections() {
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
@@ -1559,6 +1652,19 @@ mod tests {
         ))
         .unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
+    }
+
+    #[test]
+    fn triple_exclusivity_allows_either_side_but_not_both() {
+        // The triple alone, or its derived parts alone, are fine.
+        validate_triple_exclusivity(Some("x86_64-unknown-linux-gnu"), None, None).unwrap();
+        validate_triple_exclusivity(None, Some("linux"), Some("x86_64")).unwrap();
+        validate_triple_exclusivity(None, None, None).unwrap();
+        // Combining the triple with either derived facet is rejected.
+        validate_triple_exclusivity(Some("x86_64-unknown-linux-gnu"), Some("linux"), None)
+            .unwrap_err();
+        validate_triple_exclusivity(Some("x86_64-unknown-linux-gnu"), None, Some("x86_64"))
+            .unwrap_err();
     }
 
     #[test]

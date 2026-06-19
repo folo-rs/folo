@@ -98,6 +98,9 @@ pub struct AnalyzeOptions {
     pub since: Option<String>,
     /// Restrict analysis to a single engine (criterion or callgrind), if set.
     pub engine: Option<String>,
+    /// Restrict analysis to a single full target triple, if set. Mutually
+    /// exclusive with `os` / `architecture` (the triple already fixes both).
+    pub target_triple: Option<String>,
     /// Restrict analysis to a single operating-system facet, if set.
     pub os: Option<String>,
     /// Restrict analysis to a single CPU-architecture facet, if set.

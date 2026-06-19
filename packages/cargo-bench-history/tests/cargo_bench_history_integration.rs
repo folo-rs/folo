@@ -1275,9 +1275,77 @@ async fn analyze_architecture_facet_selects_one_set() {
     assert_eq!(regressions, 0, "the aarch64 series is flat: {report}");
 }
 
-/// `--machine-key` selects a single comparable set: with a regressing machine and
-/// a flat machine on the same triple, each `--machine-key` selection sees only
-/// the named machine's series.
+/// `--target-triple` selects a single comparable set by its whole partition value:
+/// the same commits host a regressing `x86_64-unknown-linux-gnu` series and a flat
+/// `aarch64-unknown-linux-gnu` series, and each `--target-triple` selection sees
+/// only its own. This complements the derived `--os` / `--architecture` facets by
+/// pinning the exact triple.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_target_triple_facet_selects_one_set() {
+    let workspace = Workspace::repo(&storage_only_config());
+    for (date, label, x64, arm) in [
+        ("2024-01-01", "c1", 100.0, 50.0),
+        ("2024-01-02", "c2", 100.0, 50.0),
+        ("2024-01-03", "c3", 100.0, 50.0),
+        ("2024-01-04", "c4", 130.0, 50.0),
+    ] {
+        workspace.seed_callgrind_in("x86_64-unknown-linux-gnu", "synthetic", date, label, x64);
+        workspace.seed_callgrind_in("aarch64-unknown-linux-gnu", "synthetic", date, label, arm);
+    }
+
+    let RunOutcome::Analyzed { regressions, .. } = workspace
+        .drive(&["analyze", "--target-triple", "x86_64-unknown-linux-gnu"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(regressions, 1, "the x86_64 triple regresses");
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--target-triple", "aarch64-unknown-linux-gnu"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(regressions, 0, "the aarch64 triple is flat: {report}");
+}
+
+/// `--target-triple` and the derived `--os` / `--architecture` facets are mutually
+/// exclusive: combining them is rejected with an explanatory error rather than
+/// silently intersecting two filters of the same dimension.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_target_triple_with_os_is_rejected() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+
+    let error = workspace
+        .drive(&[
+            "analyze",
+            "--target-triple",
+            "x86_64-unknown-linux-gnu",
+            "--os",
+            "linux",
+        ])
+        .await
+        .expect_err("combining --target-triple with --os must be rejected");
+    assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
+    assert!(
+        error
+            .to_string()
+            .contains("--target-triple cannot be combined"),
+        "{error}"
+    );
+}
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 #[serial]

@@ -177,11 +177,19 @@ struct AnalyzeCommand {
     #[argh(option)]
     engine: Option<String>,
 
+    /// restrict analysis to a single full target triple (for example,
+    /// `x86_64-unknown-linux-gnu`). Mutually exclusive with `--os` /
+    /// `--architecture`, which select the same dimension by its derived parts.
+    #[argh(option)]
+    target_triple: Option<String>,
+
     /// restrict analysis to a single operating system (for example, windows).
+    /// Cannot be combined with `--target-triple`.
     #[argh(option)]
     os: Option<String>,
 
     /// restrict analysis to a single CPU architecture (for example, `x86_64`).
+    /// Cannot be combined with `--target-triple`.
     #[argh(option)]
     architecture: Option<String>,
 
@@ -222,6 +230,7 @@ impl AnalyzeCommand {
             no_dirty: self.no_dirty,
             since: self.since,
             engine: self.engine,
+            target_triple: self.target_triple,
             os: self.os,
             architecture: self.architecture,
             machine_key: self.machine_key,
@@ -509,6 +518,20 @@ mod tests {
         assert_eq!(options.architecture.as_deref(), Some("x86_64"));
         assert_eq!(options.machine_key.as_deref(), Some("ci-pool"));
         assert!(options.list_discriminants);
+    }
+
+    #[test]
+    fn analyze_parses_target_triple_facet() {
+        let command = parse(&["analyze", "--target-triple", "x86_64-unknown-linux-gnu"]);
+        let Command::Analyze(options) = command else {
+            panic!("expected analyze command");
+        };
+        assert_eq!(
+            options.target_triple.as_deref(),
+            Some("x86_64-unknown-linux-gnu")
+        );
+        assert_eq!(options.os, None);
+        assert_eq!(options.architecture, None);
     }
 
     #[test]

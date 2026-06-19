@@ -37,6 +37,7 @@ impl DiscriminantSet {
     /// Whether this set passes every facet of `facets` that is set.
     pub(crate) fn matches(&self, facets: &Facets<'_>) -> bool {
         facet_matches(facets.engine, &self.engine)
+            && facet_matches(facets.target_triple, &self.target_triple)
             && facet_matches(facets.os, self.os())
             && facet_matches(facets.architecture, self.architecture())
             && facet_matches(facets.machine_key, &self.machine)
@@ -44,10 +45,18 @@ impl DiscriminantSet {
 }
 
 /// The facet filters from the command line; each `None` facet is unconstrained.
+///
+/// `target_triple` matches the whole partition value directly; `os` and
+/// `architecture` are the derived facets. A caller must not set `target_triple`
+/// together with either derived facet (the triple already fixes both) — that
+/// mutual exclusion is enforced before the `Facets` are built (see `analyze`).
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Facets<'a> {
     /// Restrict to a single engine (for example, `callgrind`).
     pub(crate) engine: Option<&'a str>,
+    /// Restrict to a single full target triple (for example,
+    /// `x86_64-unknown-linux-gnu`).
+    pub(crate) target_triple: Option<&'a str>,
     /// Restrict to a single operating system (for example, `windows`).
     pub(crate) os: Option<&'a str>,
     /// Restrict to a single CPU architecture (for example, `x86_64`).
@@ -240,6 +249,25 @@ mod tests {
         }));
         assert!(!windows.matches(&Facets {
             machine_key: Some("m1"),
+            ..Facets::default()
+        }));
+    }
+
+    #[test]
+    fn matches_on_the_full_target_triple() {
+        let linux = set("x86_64-unknown-linux-gnu");
+        assert!(linux.matches(&Facets {
+            target_triple: Some("x86_64-unknown-linux-gnu"),
+            ..Facets::default()
+        }));
+        // Case-insensitive, like the other user-facing facets.
+        assert!(linux.matches(&Facets {
+            target_triple: Some("X86_64-Unknown-Linux-Gnu"),
+            ..Facets::default()
+        }));
+        // A triple that shares the architecture but not the whole value misses.
+        assert!(!linux.matches(&Facets {
+            target_triple: Some("x86_64-pc-windows-msvc"),
             ..Facets::default()
         }));
     }

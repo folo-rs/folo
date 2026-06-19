@@ -101,7 +101,10 @@ being analyzed:
   `v2/<project>/<engine>/<triple>/<machine|synthetic>/<commit>/<file>` key into a
   `DiscriminantSet` (engine, triple, os/arch derived from the triple, machine).
   `--engine`/`--os`/`--architecture`/`--machine-key` select sets (case-insensitive
-  facet match); each surviving set becomes its own sub-report. `--list-discriminants`
+  facet match); each surviving set becomes its own sub-report. `--target-triple`
+  matches the whole triple directly and is mutually exclusive with `--os` /
+  `--architecture` (the triple fixes both — `validate_triple_exclusivity` rejects
+  the combination). `--list-discriminants`
   prints the present sets and returns **without requiring a repository** (it is a
   pure index over storage keys).
 * **Repository required for analysis.** Resolving a timeline needs git, so when not

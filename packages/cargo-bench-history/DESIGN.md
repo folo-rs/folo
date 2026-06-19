@@ -254,6 +254,10 @@ user can pick sets without memorizing triples:
 * `--os`, `--architecture`, `--engine`, `--machine-key` **filter which sets** are
   analyzed. A filter that matches several sets (e.g. a Windows and a Linux nightly
   pool) yields **one report per set** — parallel data sets, analyzed individually.
+  `--target-triple` filters by the whole partition value (e.g.
+  `x86_64-unknown-linux-gnu`); it is **mutually exclusive** with the derived `--os`
+  / `--architecture` facets (the triple already fixes both), so combining them is
+  rejected.
 
 ## 5. Machine key (hardware fingerprint)
 
@@ -489,7 +493,9 @@ at it.)
 **Selecting the discriminant sets.** `--list-discriminants` prints the sets
 present (§4.3). `--engine`, `--os`, `--architecture`, `--machine-key` filter them;
 each matched set is analyzed independently and produces its own report (so a Windows
-and a Linux nightly pool come out as two reports).
+and a Linux nightly pool come out as two reports). `--target-triple` filters by the
+exact triple instead of the derived `--os` / `--architecture` facets and is
+mutually exclusive with them (the triple determines both — combining is rejected).
 
 **Selecting the commits (the query model).** Two refs frame the analysis:
 * `--branch <ref>` — the **target** whose history is analyzed (default: current
@@ -921,7 +927,9 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     to drop dirty). Series are ordered by **git topology** (decision 24 supersedes the
     old effective-time ordering); runs within one commit sub-order by effective time.
     Discriminant sets are selected/listed via `--list-discriminants` + `--engine` /
-    `--os` / `--architecture` / `--machine-key`, each matched set producing its own
+    `--os` / `--architecture` / `--machine-key` (or `--target-triple` for the whole
+    triple, mutually exclusive with `--os` / `--architecture`), each matched set
+    producing its own
     report (§4.3, §8.4). **Dirty-tree base-tip exception:** when the working tree is
     currently dirty (`git status --porcelain` non-empty) and the target tip is
     base-side, that tip's dirty snapshots are admitted (the "evaluating the tool" /

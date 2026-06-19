@@ -39,7 +39,8 @@ cargo bench-history backfill --from REF --to REF [--workspace]
                              [--config PATH]
                              -- <args forwarded to cargo bench>
 cargo bench-history analyze [--repo PATH] [--branch REF] [--base REF]
-                            [--engine NAME] [--os OS] [--architecture ARCH]
+                            [--engine NAME] [--target-triple TRIPLE]
+                            [--os OS] [--architecture ARCH]
                             [--machine-key KEY] [--no-dirty]
                             [--list-discriminants] [--since DATE]
                             [--metric NAME] [--format text|json|markdown]
@@ -86,7 +87,9 @@ cargo bench-history analyze [--repo PATH] [--branch REF] [--base REF]
   this data is ephemeral — switch to a feature branch to persist it). The history
   is partitioned into *discriminant sets* (engine, target triple, OS, architecture,
   machine key); `--engine`/`--os`/`--architecture`/`--machine-key` select sets and
-  `--list-discriminants` prints the sets present in storage. `--since`/`--metric`
+  `--list-discriminants` prints the sets present in storage. `--target-triple`
+  selects by the whole triple instead of `--os`/`--architecture` and cannot be
+  combined with them. `--since`/`--metric`
   narrow the data and `--fail-on-regression` enables CI gating. When stored runs
   exist but none enter the analysis (for example because every run is a dirty
   snapshot on the base branch), the report explains why; `--verbose` adds a
