@@ -1136,6 +1136,214 @@ async fn list_without_a_repository_errors() {
     assert!(message.contains("requires a git repository"), "{message}");
 }
 
+/// `clean` removes the dirty runs a matching `list`/`analyze` would include on the
+/// target side of a feature branch, leaving the clean runs untouched. The end
+/// state is verified through `list`, proving the production delete path reaches the
+/// configured storage.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn clean_removes_dirty_runs_on_a_feature_branch() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.checkout_new_branch("feature");
+    workspace.seed_callgrind("2024-01-02", "f1", 100.0);
+    workspace.seed_dirty_callgrind("2024-01-03", "f1", 200.0);
+
+    // Before: the target-side dirty snapshot is part of the data set.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["list", "--format", "json"])
+        .await
+        .expect("listing succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(parsed["totals"]["runs"], 3, "{message}");
+
+    // Clean removes exactly the one dirty run.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["clean", "--format", "json"])
+        .await
+        .expect("clean succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(parsed["dry_run"], false, "{message}");
+    assert_eq!(parsed["totals"]["runs"], 1, "{message}");
+
+    // After: only the two clean runs remain; the dirty snapshot is gone.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["list", "--format", "json"])
+        .await
+        .expect("listing succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(parsed["totals"]["runs"], 2, "{message}");
+    let commits = parsed["sets"][0]["commits"].as_array().expect("commits");
+    assert!(
+        commits.iter().all(|commit| commit["dirty"] == 0),
+        "no dirty run remains: {message}"
+    );
+}
+
+/// The key divergence from `analyze`/`list`: on the base branch with a *clean*
+/// working tree, `list` hides the base-tip dirty snapshot, yet `clean` still
+/// removes it (the base-tip exception is unconditional for `clean`).
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn clean_removes_the_base_branch_tip_dirty_with_a_clean_tree() {
+    let workspace = Workspace::clean_repo(&storage_only_config());
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.seed_dirty_callgrind("2024-01-02", "c1", 200.0);
+
+    // With a clean working tree, `list` excludes the base-tip dirty snapshot.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["list", "--format", "json"])
+        .await
+        .expect("listing succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(
+        parsed["totals"]["runs"], 1,
+        "list hides the base-tip dirty run with a clean tree: {message}"
+    );
+
+    // `clean` removes it anyway.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["clean", "--format", "json"])
+        .await
+        .expect("clean succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(parsed["totals"]["runs"], 1, "{message}");
+
+    // A second pass finds nothing left to remove.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["clean", "--dry-run", "--format", "json"])
+        .await
+        .expect("clean succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(
+        parsed["totals"]["runs"], 0,
+        "the base-tip dirty run was already removed: {message}"
+    );
+}
+
+/// `--dry-run` previews the removal without deleting: it reports the same runs a
+/// real `clean` would, but a follow-up real `clean` still finds and removes them.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn clean_dry_run_reports_without_deleting() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.checkout_new_branch("feature");
+    workspace.seed_dirty_callgrind("2024-01-02", "f1", 200.0);
+
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["clean", "--dry-run", "--format", "json"])
+        .await
+        .expect("clean succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(parsed["dry_run"], true, "{message}");
+    assert_eq!(parsed["totals"]["runs"], 1, "{message}");
+
+    // The dry run deleted nothing: a real clean still removes the same run.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["clean", "--format", "json"])
+        .await
+        .expect("clean succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(parsed["dry_run"], false, "{message}");
+    assert_eq!(parsed["totals"]["runs"], 1, "{message}");
+}
+
+/// An engine facet scopes the cleanup: a callgrind-scoped `clean` leaves a dirty
+/// criterion snapshot on the same commit untouched.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn clean_scopes_by_engine() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.checkout_new_branch("feature");
+    workspace.seed_dirty_callgrind("2024-01-02", "f1", 200.0);
+    workspace.seed_dirty_criterion("2024-01-02", "f1", "m1", 20.0);
+
+    // Clean only the callgrind set.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["clean", "--engine", "callgrind", "--format", "json"])
+        .await
+        .expect("clean succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(
+        parsed["totals"]["runs"], 1,
+        "only the callgrind dirty run: {message}"
+    );
+    assert_eq!(parsed["sets"][0]["engine"], "callgrind", "{message}");
+
+    // The criterion dirty snapshot survives: a criterion-scoped clean still finds it.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&[
+            "clean",
+            "--engine",
+            "criterion",
+            "--dry-run",
+            "--format",
+            "json",
+        ])
+        .await
+        .expect("clean succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(
+        parsed["totals"]["runs"], 1,
+        "criterion dirty survived: {message}"
+    );
+    assert_eq!(parsed["sets"][0]["engine"], "criterion", "{message}");
+}
+
+/// Like `analyze`/`list`, `clean` requires a repository to resolve the topology;
+/// without one it errors rather than removing nothing silently.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn clean_without_a_repository_errors() {
+    let workspace = Workspace::new(&storage_only_config());
+
+    let error = workspace
+        .drive(&["clean"])
+        .await
+        .expect_err("clean without a repository should fail");
+    let RunError::Analyze { message } = error else {
+        panic!("expected an analyze error, got {error:?}");
+    };
+    assert!(message.contains("requires a git repository"), "{message}");
+}
+
 /// A facet filter (`--os`) restricts analysis to the matching set: the same commits
 /// host a regressing Linux series and a flat Windows series, and each `--os`
 /// selection sees only its own.

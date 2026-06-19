@@ -24,8 +24,8 @@ It stores every result over time (local path or Azure blob), runs in multiple
 environments (dev PC, GitHub Actions, ADO), and partitions data only when the
 results are not otherwise comparable.
 
-Commands: `run`, `install`, `analyze`, `backfill`, `list` (plus a deferred
-`upload` — §8.2).
+Commands: `run`, `install`, `analyze`, `backfill`, `list`, `clean` (plus a
+deferred `upload` — §8.2).
 
 ## 2. How the benchmark systems work (and what they emit)
 
@@ -327,10 +327,18 @@ repo or CI.
 ```rust
 trait Storage {
     async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError>;
+    async fn put_overwrite(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError>;
     async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError>;
     async fn list(&self, prefix: &str) -> Result<Vec<String>, StorageError>;
+    async fn delete(&self, key: &str) -> Result<(), StorageError>;
 }
 ```
+
+`put` is write-once (a re-`put` of an existing key is `StorageError::AlreadyExists`,
+the basis of `run`'s clean-collision refusal — §8.1); `put_overwrite` replaces in
+place (the `--overwrite` escape hatch). `delete` removes one object and returns
+`StorageError::NotFound` when it is absent — used by `clean` (§8.7) to reclaim dirty
+runs.
 
 Storage I/O is **async** (§10): `LocalStorage` over `tokio::fs`, `AzureBlobStorage`
 over async HTTP. `async fn` in a trait is not `dyn`-compatible, so backend
@@ -372,8 +380,8 @@ implement the same trait with no special-casing upstream.
 
 ## 8. Commands
 
-The commands (`run`, `install`, `analyze`, `backfill`, `list`; `upload` is
-deferred — §8.2) follow
+The commands (`run`, `install`, `analyze`, `backfill`, `list`, `clean`; `upload`
+is deferred — §8.2) follow
 the established pattern: `main.rs` strips the injected `bench-history` arg, `argh`
 parses (here with **subcommands**), and dispatches to `lib::run`, which returns a
 typed `Outcome`/`Error`.
@@ -644,6 +652,39 @@ present under `v2/<project>/` (engine / OS / arch / machine key) **without requi
 a repository** (§4.3). This is where the storage-set listing lives, separate from
 the repository-driven data-set preview.
 
+### 8.7 `cargo bench-history clean`
+
+`clean` removes the dirty (uncommitted-tree) runs from exactly the commits a
+matching `analyze`/`list` pass would admit dirty runs from — the commits unique to
+the analyzed branch, or the base branch's tip when on the base branch. It exists so
+that ephemeral evaluation/experiment snapshots can be reclaimed without hand-deleting
+storage objects.
+
+```
+cargo bench-history clean [--dry-run] \
+    [--repo PATH] [--branch REF] [--base REF] \
+    [--engine NAME] [--target-triple TRIPLE] [--os OS] [--architecture ARCH] \
+    [--machine-key KEY] [--since DATE] \
+    [--format text|json|markdown] [--verbose] [--config PATH]
+```
+
+`clean` **mirrors `analyze`'s/`list`'s data-set-selection parameters** through the
+same shared selection pipeline (§8.4) — the same lockstep requirement applies. It
+omits only `--no-dirty` (cleaning *targets* dirty runs) and `--metric` (deletion is
+per-object, not per-metric). Clean runs are never touched.
+
+The one intentional divergence: the base-branch tip's dirty runs are admitted
+**unconditionally** here, whereas `analyze`/`list` admit them only when the working
+tree is currently dirty (the `DirtyTipPolicy` parameter to the shared
+`resolve_history` helper — `Always` for `clean`, `WhenWorkingTreeDirty` for
+`analyze`/`list`). This lets `clean` reclaim base-branch snapshots regardless of the
+current tree state.
+
+`--dry-run` previews the removal — building the identical plan but skipping the
+deletes. The JSON report carries `dry_run` and the deleted object keys per commit
+for transparency; text/markdown report counts only. Deletion is per object via the
+`Storage::delete` trait method (§7).
+
 ## 9. Analysis algorithms
 
 Series: per `(BenchmarkId, metric)`, ordered by git first-parent topology (§8.4)
@@ -715,8 +756,9 @@ src/
     findings.rs           # rolling-baseline regression/improvement detector
     report.rs             # text|json|markdown multi-set renderer
     list.rs               # `list` data-set preview + `list --discriminants`
+    clean.rs              # `clean` removes dirty runs (mirrors list selection)
   commands/
-    mod.rs run.rs install.rs backfill.rs   # the analyze/list handlers are in analyze/
+    mod.rs run.rs install.rs backfill.rs   # the analyze/list/clean handlers are in analyze/
 ```
 
 **Async ports & adapters (the testability boundary).** The app is **async by
@@ -1005,3 +1047,15 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     the union of engine env vars yields correct output for every supported engine —
     true for Criterion + Callgrind, where off-Linux the Callgrind benches are
     compiled-out no-ops.
+26. **`list` / `clean` mirror `analyze`'s selection** — *Decided:* `list` (preview
+    the data set, no analysis — §8.6) and `clean` (delete the dirty runs from the
+    admitting commits — §8.7) reuse `analyze`'s exact data-set-selection pipeline,
+    so a selection flag added to one is added to all three (lockstep). `list` omits
+    `--fail-on-regression`; `clean` omits `--no-dirty` (it targets dirty runs) and
+    `--metric` (deletion is per-object). The one intentional divergence is the
+    base-branch tip's dirty exception (decision 22): `analyze`/`list` admit it only
+    when the working tree is currently dirty, but `clean` admits it
+    **unconditionally** (the shared `resolve_history` helper's `DirtyTipPolicy`
+    parameter), so `clean` can reclaim ephemeral base-branch snapshots regardless of
+    the current tree state. `clean` adds a write-once-safe `Storage::delete` (§7) and
+    a `--dry-run` preview.

@@ -49,6 +49,11 @@ cargo bench-history list [--discriminants] [--repo PATH] [--branch REF]
                          [--os OS] [--architecture ARCH] [--machine-key KEY]
                          [--no-dirty] [--since DATE] [--metric NAME]
                          [--format text|json|markdown] [--verbose] [--config PATH]
+cargo bench-history clean [--dry-run] [--repo PATH] [--branch REF]
+                          [--base REF] [--engine NAME] [--target-triple TRIPLE]
+                          [--os OS] [--architecture ARCH] [--machine-key KEY]
+                          [--since DATE] [--format text|json|markdown]
+                          [--verbose] [--config PATH]
 ```
 
 * `run` executes the workspace's benches once with `cargo bench`, harvests every
@@ -106,6 +111,16 @@ cargo bench-history list [--discriminants] [--repo PATH] [--branch REF]
   runs. `--discriminants` instead lists the discriminant sets present in storage
   (no repository required) — useful for discovering which engines, triples, and
   machine keys have data before scoping an analysis.
+* `clean` removes the dirty (uncommitted-tree) runs from the same commits a
+  matching `analyze`/`list` pass would draw them from: the commits unique to the
+  analyzed branch, or the base branch's tip commit when you are on the base
+  branch. It accepts the same data-set-selection flags as `analyze` (except
+  `--no-dirty`/`--metric`, which do not apply) and deletes nothing else — clean
+  runs are always left intact. Unlike `analyze`/`list`, the base-branch tip's
+  dirty runs are removed unconditionally (not only when the working tree is
+  currently dirty), so `clean` reclaims ephemeral snapshots regardless of the
+  current tree state. `--dry-run` previews exactly what would be removed without
+  deleting anything.
 
 ## Status
 
@@ -122,6 +137,8 @@ Implemented:
 * `list` previews the data set an `analyze` pass would consume (run/series/commit
   counts per discriminant set), or lists the discriminant sets present in storage
   with `--discriminants`.
+* `clean` removes dirty runs from the analyzed branch's commits (or the base
+  branch tip), with a `--dry-run` preview.
 * `install` writes a starter `.cargo/bench_history.toml` when one is absent.
 * `backfill` replays `run` across a commit range in isolated git worktrees,
   bootstrapping history for old commits; it is resumable (skips already-stored

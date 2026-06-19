@@ -6,7 +6,9 @@ use std::path::PathBuf;
 use argh::FromArgs;
 use jiff::Timestamp;
 
-use crate::{AnalyzeOptions, BackfillOptions, Command, InstallOptions, ListOptions, RunOptions};
+use crate::{
+    AnalyzeOptions, BackfillOptions, CleanOptions, Command, InstallOptions, ListOptions, RunOptions,
+};
 
 /// Maintain a history of benchmark results over time and analyze it for trends.
 #[derive(Debug, FromArgs)]
@@ -25,6 +27,7 @@ impl Cli {
             Subcommand::Install(command) => Command::Install(command.into_options()),
             Subcommand::Analyze(command) => Command::Analyze(command.into_options()),
             Subcommand::List(command) => Command::List(command.into_options()),
+            Subcommand::Clean(command) => Command::Clean(command.into_options()),
             Subcommand::Backfill(command) => Command::Backfill(command.into_options()),
         }
     }
@@ -37,6 +40,7 @@ enum Subcommand {
     Install(InstallCommand),
     Analyze(AnalyzeCommand),
     List(ListCommand),
+    Clean(CleanCommand),
     Backfill(BackfillCommand),
 }
 
@@ -335,6 +339,97 @@ impl ListCommand {
             metric: self.metric,
             format: self.format,
             discriminants: self.discriminants,
+            verbose: self.verbose,
+        }
+    }
+}
+
+/// Remove the dirty runs a matching `analyze`/`list` would include.
+///
+/// The selection options mirror `analyze`/`list` (minus `--no-dirty`, meaningless
+/// when only dirty runs are touched, and `--metric`, a series filter), so `clean`
+/// removes exactly the dirty runs a `list` with the same flags would show on the
+/// target side — plus the base-branch tip's dirty runs, which are removed
+/// unconditionally. Pass `--dry-run` to preview without deleting.
+#[derive(Debug, FromArgs)]
+#[argh(subcommand, name = "clean")]
+struct CleanCommand {
+    /// path to the configuration file (defaults to `.cargo/bench_history.toml`).
+    #[argh(option)]
+    config: Option<PathBuf>,
+
+    /// repository to resolve git topology from (defaults to the working directory).
+    #[argh(option)]
+    repo: Option<PathBuf>,
+
+    /// target ref whose history is cleaned (defaults to HEAD).
+    #[argh(option)]
+    branch: Option<String>,
+
+    /// base ref the target's history is split at (defaults to the default branch).
+    #[argh(option)]
+    base: Option<String>,
+
+    /// only remove runs on or after this date, in RFC 3339 format, for
+    /// example `2024-01-01T00:00:00Z` (default: no lower bound).
+    #[argh(option)]
+    since: Option<String>,
+
+    /// restrict the cleanup to a single engine, criterion or callgrind
+    /// (default: every engine).
+    #[argh(option)]
+    engine: Option<String>,
+
+    /// restrict the cleanup to a single full target triple (for example,
+    /// `x86_64-unknown-linux-gnu`). Mutually exclusive with `--os` /
+    /// `--architecture`, which select the same dimension by its derived parts.
+    #[argh(option)]
+    target_triple: Option<String>,
+
+    /// restrict the cleanup to a single operating system (for example, windows).
+    /// Cannot be combined with `--target-triple`.
+    #[argh(option)]
+    os: Option<String>,
+
+    /// restrict the cleanup to a single CPU architecture (for example, `x86_64`).
+    /// Cannot be combined with `--target-triple`.
+    #[argh(option)]
+    architecture: Option<String>,
+
+    /// restrict the cleanup to a single machine partition.
+    #[argh(option)]
+    machine_key: Option<String>,
+
+    /// preview what would be removed without deleting anything.
+    #[argh(switch)]
+    dry_run: bool,
+
+    /// output format: text, json, or markdown (default: text).
+    #[argh(option)]
+    format: Option<String>,
+
+    /// emit detailed diagnostic notes to standard error (which storage prefix is
+    /// listed, which objects are selected or skipped and why, the resolved git
+    /// topology, and each deletion).
+    #[argh(switch)]
+    verbose: bool,
+}
+
+impl CleanCommand {
+    fn into_options(self) -> CleanOptions {
+        CleanOptions {
+            config_path: self.config,
+            repo: self.repo,
+            branch: self.branch,
+            base: self.base,
+            since: self.since,
+            engine: self.engine,
+            target_triple: self.target_triple,
+            os: self.os,
+            architecture: self.architecture,
+            machine_key: self.machine_key,
+            dry_run: self.dry_run,
+            format: self.format,
             verbose: self.verbose,
         }
     }
@@ -684,6 +779,62 @@ mod tests {
         );
         assert_eq!(options.os, None);
         assert_eq!(options.architecture, None);
+    }
+
+    #[test]
+    fn clean_collects_selection_and_dry_run() {
+        let command = parse(&[
+            "clean",
+            "--repo",
+            "/work/folo",
+            "--branch",
+            "feature",
+            "--base",
+            "master",
+            "--since",
+            "2024-01-01T00:00:00Z",
+            "--engine",
+            "callgrind",
+            "--os",
+            "windows",
+            "--architecture",
+            "x86_64",
+            "--machine-key",
+            "ci-pool",
+            "--dry-run",
+            "--format",
+            "json",
+            "--verbose",
+        ]);
+        let Command::Clean(options) = command else {
+            panic!("expected clean command");
+        };
+        assert_eq!(options.repo, Some(PathBuf::from("/work/folo")));
+        assert_eq!(options.branch.as_deref(), Some("feature"));
+        assert_eq!(options.base.as_deref(), Some("master"));
+        assert_eq!(options.since.as_deref(), Some("2024-01-01T00:00:00Z"));
+        assert_eq!(options.engine.as_deref(), Some("callgrind"));
+        assert_eq!(options.os.as_deref(), Some("windows"));
+        assert_eq!(options.architecture.as_deref(), Some("x86_64"));
+        assert_eq!(options.machine_key.as_deref(), Some("ci-pool"));
+        assert!(options.dry_run);
+        assert_eq!(options.format.as_deref(), Some("json"));
+        assert!(options.verbose);
+    }
+
+    #[test]
+    fn clean_parses_target_triple_facet() {
+        let command = parse(&["clean", "--target-triple", "x86_64-unknown-linux-gnu"]);
+        let Command::Clean(options) = command else {
+            panic!("expected clean command");
+        };
+        assert_eq!(
+            options.target_triple.as_deref(),
+            Some("x86_64-unknown-linux-gnu")
+        );
+        assert_eq!(options.os, None);
+        assert_eq!(options.architecture, None);
+        assert!(!options.dry_run);
     }
 
     #[test]

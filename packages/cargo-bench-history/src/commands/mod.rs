@@ -5,6 +5,7 @@ mod backfill;
 mod install;
 mod run;
 
+pub(crate) use crate::analyze::clean::execute as clean;
 pub(crate) use crate::analyze::execute as analyze;
 pub(crate) use crate::analyze::list::execute as list;
 pub(crate) use backfill::execute as backfill;

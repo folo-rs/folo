@@ -11,6 +11,7 @@
 //! ports. [`execute`] wires the real adapters; [`analyze_with`] is the
 //! storage- and git-generic orchestrator the in-memory tests drive.
 
+pub(crate) mod clean;
 mod discriminant;
 mod findings;
 pub(crate) mod list;
@@ -32,7 +33,7 @@ use crate::report::{Reporter, StderrReporter};
 use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
 use crate::wiring::{default_config_path, resolve_project_id};
-use crate::{AnalyzeOptions, ListOptions, RunError, RunOutcome};
+use crate::{AnalyzeOptions, CleanOptions, ListOptions, RunError, RunOutcome};
 
 use discriminant::{DiscriminantSet, Facets, ParsedKey, parse_key};
 use findings::{RegressionConfig, find_changes};
@@ -195,6 +196,23 @@ impl<'a> Selection<'a> {
             machine_key: options.machine_key.as_deref(),
         }
     }
+
+    fn from_clean(options: &'a CleanOptions) -> Self {
+        Self {
+            branch: options.branch.as_deref(),
+            base: options.base.as_deref(),
+            // `clean` only ever touches dirty runs, so dirty admission is always
+            // on; the base-tip exception is applied unconditionally (see
+            // `DirtyTipPolicy::Always`).
+            no_dirty: false,
+            since: options.since.as_deref(),
+            engine: options.engine.as_deref(),
+            target_triple: options.target_triple.as_deref(),
+            os: options.os.as_deref(),
+            architecture: options.architecture.as_deref(),
+            machine_key: options.machine_key.as_deref(),
+        }
+    }
 }
 
 /// The objects an analysis (or listing) draws on, plus the bookkeeping needed to
@@ -316,77 +334,19 @@ where
     let candidates =
         facet_filtered_candidates(storage, project_id, engine, &facets, reporter).await?;
 
-    // Analysis requires a repository: the timeline is resolved from git topology,
-    // not from stored timestamps. An unresolvable target ref means there is no
-    // repository here (or the branch does not exist), which is an error rather than
-    // an empty success.
-    let target_ref = selection.branch.unwrap_or("HEAD");
-    let Some(target_sha) = git.resolve(target_ref).await.map_err(RunError::Io)? else {
-        return Err(RunError::Analyze {
-            message: format!(
-                "analyze requires a git repository: could not resolve {target_ref:?}. \
-                 Run inside a repository (or pass --repo / --branch)."
-            ),
-        });
-    };
-
-    let base_sha = resolve_base_ref(git, config, selection.base).await?;
-    let ancestry = git.first_parent(&target_sha).await.map_err(RunError::Io)?;
-    let merge_base = match &base_sha {
-        Some(base) => git
-            .merge_base(&target_sha, base)
-            .await
-            .map_err(RunError::Io)?,
-        None => None,
-    };
-
-    reporter.note(&format!(
-        "target ref {target_ref} resolves to {target_sha}; {} on its first-parent line",
-        count_noun(ancestry.len(), "commit")
-    ));
-    reporter.note(&format!(
-        "base ref resolves to {}; merge-base with target is {}",
-        base_sha.as_deref().unwrap_or("<none>"),
-        merge_base.as_deref().unwrap_or("<none>")
-    ));
-
-    // When the target tip is base-side (an official / on-the-base-branch view) but
-    // the working tree is currently dirty, the dirty snapshots stored on the tip
-    // are the user's in-flight work rather than stale leftovers, so they are
-    // admitted (and the user warned). `--no-dirty` skips both the probe and the
-    // exception.
-    let working_tree_dirty = if selection.no_dirty {
-        false
-    } else {
-        git.is_dirty().await.map_err(RunError::Io)?
-    };
-    if working_tree_dirty {
-        reporter.note("working tree is dirty: dirty snapshots on a base-side tip will be admitted");
-    }
-
-    let selected = select_commits(
-        &ancestry,
-        merge_base.as_deref(),
-        !selection.no_dirty,
-        working_tree_dirty,
-    );
-    // First-parent position of each selected commit; an object whose commit is not
-    // here is outside the analyzed history and contributes nothing.
-    let order: HashMap<String, usize> = selected
-        .iter()
-        .enumerate()
-        .map(|(index, one)| (one.commit.clone(), index))
-        .collect();
-    let admit_dirty: HashMap<&str, bool> = selected
-        .iter()
-        .map(|one| (one.commit.as_str(), one.admit_dirty))
-        .collect();
-    // Commits whose dirty runs are admitted only by the base-branch dirty-tree
-    // exception, so including one triggers the ephemeral-data warning.
-    let dirty_base_exception: HashMap<&str, bool> = selected
-        .iter()
-        .map(|one| (one.commit.as_str(), one.dirty_base_exception))
-        .collect();
+    let ResolvedHistory {
+        target_ref,
+        order,
+        admit_dirty,
+        dirty_base_exception,
+    } = resolve_history(
+        git,
+        config,
+        selection,
+        DirtyTipPolicy::WhenWorkingTreeDirty,
+        reporter,
+    )
+    .await?;
 
     // Tally why candidates do not enter the analysis, so a `0 runs` outcome can
     // explain itself (via `--verbose` per object, and via a summary hint when
@@ -475,7 +435,135 @@ where
             since: excluded_since,
         },
         included_dirty_base_exception,
+        target_ref,
+    })
+}
+
+/// How the base-branch dirty-tip exception is gated.
+///
+/// On a feature branch the target-side commits admit dirty runs unconditionally;
+/// this policy only governs the *base* branch's tip. `analyze`/`list` admit a
+/// base-tip dirty run only when the working tree is currently dirty (the
+/// "evaluating the tool / accidentally on the base branch" case); `clean` removes
+/// base-tip dirty runs regardless of the current working-tree state.
+#[derive(Clone, Copy)]
+enum DirtyTipPolicy {
+    /// Admit a base-side tip's dirty runs only when the working tree is dirty now.
+    WhenWorkingTreeDirty,
+    /// Always treat a base-side tip as admitting dirty runs.
+    Always,
+}
+
+/// The git topology a selection resolves to: the target ref it was resolved
+/// against, the first-parent position of each selected commit, and the per-commit
+/// dirty-admission flags. All maps use owned commit SHAs so the borrowed
+/// `selected` set can drop before the caller's load loop.
+struct ResolvedHistory {
+    /// The target ref the timeline was resolved against (for diagnostics).
+    target_ref: String,
+    /// First-parent position of each selected commit, for series ordering. An
+    /// object whose commit is absent is outside the analyzed history.
+    order: HashMap<String, usize>,
+    /// Whether each selected commit admits dirty (uncommitted-tree) snapshots.
+    admit_dirty: HashMap<String, bool>,
+    /// Whether a commit's dirty runs are admitted *only* by the base-branch
+    /// dirty-tree exception, which triggers the ephemeral-data warning.
+    dirty_base_exception: HashMap<String, bool>,
+}
+
+/// Resolves the git topology for a selection: the target ref's first-parent
+/// ancestry, the merge-base with the base ref, and the per-commit dirty-admission
+/// flags. Requires a repository — an unresolvable target ref is an error rather
+/// than an empty success.
+async fn resolve_history<G>(
+    git: &G,
+    config: &Config,
+    selection: &Selection<'_>,
+    policy: DirtyTipPolicy,
+    reporter: &dyn Reporter,
+) -> Result<ResolvedHistory, RunError>
+where
+    G: GitHistory,
+{
+    // Resolving the timeline requires a repository: the topology comes from git
+    // history, not from stored timestamps. An unresolvable target ref means there
+    // is no repository here (or the branch does not exist), which is an error.
+    let target_ref = selection.branch.unwrap_or("HEAD");
+    let Some(target_sha) = git.resolve(target_ref).await.map_err(RunError::Io)? else {
+        return Err(RunError::Analyze {
+            message: format!(
+                "this command requires a git repository: could not resolve {target_ref:?}. \
+                 Run inside a repository (or pass --repo / --branch)."
+            ),
+        });
+    };
+
+    let base_sha = resolve_base_ref(git, config, selection.base).await?;
+    let ancestry = git.first_parent(&target_sha).await.map_err(RunError::Io)?;
+    let merge_base = match &base_sha {
+        Some(base) => git
+            .merge_base(&target_sha, base)
+            .await
+            .map_err(RunError::Io)?,
+        None => None,
+    };
+
+    reporter.note(&format!(
+        "target ref {target_ref} resolves to {target_sha}; {} on its first-parent line",
+        count_noun(ancestry.len(), "commit")
+    ));
+    reporter.note(&format!(
+        "base ref resolves to {}; merge-base with target is {}",
+        base_sha.as_deref().unwrap_or("<none>"),
+        merge_base.as_deref().unwrap_or("<none>")
+    ));
+
+    // The base-branch dirty-tip exception: `analyze`/`list` admit a base-side tip's
+    // dirty runs only when the working tree is currently dirty (`--no-dirty` skips
+    // both the probe and the exception); `clean` admits them unconditionally so it
+    // can remove them regardless of the present working-tree state.
+    let dirty_tip_exception = match policy {
+        DirtyTipPolicy::Always => !selection.no_dirty,
+        DirtyTipPolicy::WhenWorkingTreeDirty => {
+            let working_tree_dirty = if selection.no_dirty {
+                false
+            } else {
+                git.is_dirty().await.map_err(RunError::Io)?
+            };
+            if working_tree_dirty {
+                reporter.note(
+                    "working tree is dirty: dirty snapshots on a base-side tip will be admitted",
+                );
+            }
+            working_tree_dirty
+        }
+    };
+
+    let selected = select_commits(
+        &ancestry,
+        merge_base.as_deref(),
+        !selection.no_dirty,
+        dirty_tip_exception,
+    );
+    let order: HashMap<String, usize> = selected
+        .iter()
+        .enumerate()
+        .map(|(index, one)| (one.commit.clone(), index))
+        .collect();
+    let admit_dirty: HashMap<String, bool> = selected
+        .iter()
+        .map(|one| (one.commit.clone(), one.admit_dirty))
+        .collect();
+    let dirty_base_exception: HashMap<String, bool> = selected
+        .iter()
+        .map(|one| (one.commit.clone(), one.dirty_base_exception))
+        .collect();
+
+    Ok(ResolvedHistory {
         target_ref: target_ref.to_owned(),
+        order,
+        admit_dirty,
+        dirty_base_exception,
     })
 }
 

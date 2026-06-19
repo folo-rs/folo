@@ -154,7 +154,8 @@ instead of analyzing, only *previews* which data set an `analyze` pass would
 consume: per discriminant set it reports the run, series, and per-commit counts of
 the selected runs (each commit's clean/dirty split), ordered oldest-first by git
 topology. Whenever you add or change a selection parameter on `analyze`, add the
-same parameter to `list`. `list` has no `--fail-on-regression` (it never analyzes).
+same parameter to **both** `list` and `clean` (see below) unless it is genuinely
+inapplicable. `list` has no `--fail-on-regression` (it never analyzes).
 
 `--list-discriminants` was migrated off `analyze` to **`list --discriminants`**:
 it lists the discriminant sets present in storage without requiring a repository.
@@ -170,6 +171,43 @@ and `dirty_base_exception_warning`. `list_with` parses the format, builds a
 `select_dataset` → `build_listing` → `render_listing`, returning a
 `RunOutcome::Completed { message }`. `count_noun` (text.rs) appends `s` when the
 count ≠ 1, so list.rs uses a local `series_noun` to avoid "seriess".
+
+## The `clean` command
+
+**`clean` mirrors `analyze`'s/`list`'s data-set-selection parameters** (the same
+hard lockstep requirement) — it accepts `--repo`/`--branch`/`--base`/`--engine`/
+`--target-triple`/`--os`/`--architecture`/`--machine-key`/`--since`/`--format`/
+`--config`/`--verbose`. The two selection flags it omits are deliberate:
+`--no-dirty` (cleaning targets dirty runs, so suppressing them is meaningless) and
+`--metric` (deletion is per-object, not per-metric). Instead of analyzing, it
+**deletes** the dirty (uncommitted-tree) runs from exactly the commits that admit
+dirty runs in a selection: the commits unique to the analyzed branch, or the base
+branch's tip when you are on the base branch. Clean runs are never touched.
+
+The one **intentional divergence** from `analyze`/`list`: the base-branch tip's
+dirty runs are admitted **unconditionally** (`DirtyTipPolicy::Always`), whereas
+`analyze`/`list` only admit them when the working tree is currently dirty
+(`DirtyTipPolicy::WhenWorkingTreeDirty`). This is what lets `clean` reclaim
+ephemeral base-branch snapshots regardless of the current tree state. The policy
+is the parameter to the shared `resolve_history` helper in `analyze/mod.rs`
+(extracted from `select_dataset`); `select_dataset` passes `WhenWorkingTreeDirty`,
+`clean` passes `Always`.
+
+`clean` lives **inside** the analyze module tree as `src/analyze/clean.rs`
+(`pub(crate) mod clean;`), reusing the same `Selection` (built via `from_clean`,
+which hardwires `no_dirty: false`), `parsed_facets`, `facet_filtered_candidates`,
+and `resolve_history` pipeline. `clean_with` resolves the history, selects the
+dirty objects on the admitting commits, builds a `Plan` (grouped by discriminant
+set, commits oldest-first by topology), and — unless `--dry-run` — deletes each
+key via `Storage::delete`. The JSON report carries `dry_run` plus the deleted
+`keys` per commit for transparency; text/markdown report counts only. `--dry-run`
+builds the same plan but skips the deletes (`verb` switches "Would remove" ↔
+"Removed").
+
+`Storage::delete(&self, key)` was added to the `Storage` trait and all four impls
+(Memory, Local, Azure, Facade) for this command; it returns `StorageError::NotFound`
+when the object is absent (the local/memory impls validate the key first; Azure maps
+a 404 / missing-container fault to `NotFound`).
 
 ## The `backfill` command
 

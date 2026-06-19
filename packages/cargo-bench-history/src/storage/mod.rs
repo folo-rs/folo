@@ -67,6 +67,15 @@ pub trait Storage: fmt::Debug + Send + Sync {
     ///
     /// Returns [`StorageError::Io`] if the listing cannot be produced.
     fn list(&self, prefix: &str) -> impl Future<Output = Result<Vec<String>, StorageError>>;
+
+    /// Removes the object stored at `key`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError::InvalidKey`] if `key` is malformed,
+    /// [`StorageError::NotFound`] if no object exists at `key`, or
+    /// [`StorageError::Io`] if it cannot be removed.
+    fn delete(&self, key: &str) -> impl Future<Output = Result<(), StorageError>>;
 }
 
 /// An error from a [`Storage`] operation.
@@ -287,6 +296,37 @@ mod tests {
     }
 
     #[test]
+    fn memory_storage_delete_removes_an_object() {
+        let storage = MemoryStorage::new();
+        block_on(storage.put("v1/a/1.json", b"1")).unwrap();
+        block_on(storage.put("v1/a/2.json", b"2")).unwrap();
+
+        block_on(storage.delete("v1/a/1.json")).unwrap();
+
+        // Only the targeted key is gone; the sibling object is untouched.
+        assert_eq!(storage.keys(), vec!["v1/a/2.json".to_owned()]);
+        let error = block_on(storage.get("v1/a/1.json")).unwrap_err();
+        assert!(matches!(error, StorageError::NotFound { .. }), "{error:?}");
+    }
+
+    #[test]
+    fn memory_storage_delete_missing_key_is_not_found() {
+        let storage = MemoryStorage::new();
+        let error = block_on(storage.delete("v1/absent.json")).unwrap_err();
+        assert!(matches!(error, StorageError::NotFound { .. }), "{error:?}");
+    }
+
+    #[test]
+    fn memory_storage_delete_rejects_malformed_keys() {
+        let storage = MemoryStorage::new();
+        let error = block_on(storage.delete("v1/../escape")).unwrap_err();
+        assert!(
+            matches!(error, StorageError::InvalidKey { .. }),
+            "{error:?}"
+        );
+    }
+
+    #[test]
     fn memory_storage_rejects_the_same_malformed_keys_as_local_storage() {
         let storage = MemoryStorage::new();
         // Empty, `.`, `..`, and absolute segments could escape a filesystem root,
@@ -373,5 +413,17 @@ impl Storage for MemoryStorage {
             .filter(|key| key.starts_with(prefix))
             .cloned()
             .collect())
+    }
+
+    async fn delete(&self, key: &str) -> Result<(), StorageError> {
+        validate_key(key)?;
+        self.objects
+            .lock()
+            .unwrap()
+            .remove(key)
+            .map(|_| ())
+            .ok_or_else(|| StorageError::NotFound {
+                key: key.to_owned(),
+            })
     }
 }

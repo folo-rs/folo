@@ -132,6 +132,17 @@ impl Storage for LocalStorage {
         keys.sort();
         Ok(keys)
     }
+
+    async fn delete(&self, key: &str) -> Result<(), StorageError> {
+        let path = self.key_path(key)?;
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Err(StorageError::NotFound {
+                key: key.to_owned(),
+            }),
+            Err(error) => Err(StorageError::Io(error)),
+        }
+    }
 }
 
 impl LocalStorage {
@@ -428,6 +439,66 @@ mod tests {
 
         // "v1/a" is a file, so creating it as a parent directory fails.
         let error = storage.put("v1/a/b.json", b"x").await.unwrap_err();
+
+        assert!(matches!(error, StorageError::Io(_)), "{error:?}");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn delete_removes_an_object_and_leaves_siblings() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path());
+        storage.put("v1/a/clean.json", b"c").await.unwrap();
+        storage.put("v1/a/dirty.json", b"d").await.unwrap();
+
+        storage.delete("v1/a/dirty.json").await.unwrap();
+
+        // The sibling survives and the deleted object is gone.
+        assert_eq!(
+            storage.list("v1/a/").await.unwrap(),
+            vec!["v1/a/clean.json".to_owned()]
+        );
+        let error = storage.get("v1/a/dirty.json").await.unwrap_err();
+        assert!(matches!(error, StorageError::NotFound { .. }), "{error:?}");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn delete_missing_key_reports_not_found() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path());
+
+        let error = storage.delete("v1/missing.json").await.unwrap_err();
+
+        match error {
+            StorageError::NotFound { key } => assert_eq!(key, "v1/missing.json"),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn delete_rejects_traversal_key() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path());
+
+        let error = storage.delete("v1/../escape.json").await.unwrap_err();
+
+        assert!(
+            matches!(error, StorageError::InvalidKey { .. }),
+            "{error:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn delete_on_a_directory_reports_io_error() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path());
+        storage.put("v1/a/1.json", b"1").await.unwrap();
+
+        // Removing the directory "v1/a" as a file is a non-NotFound I/O error.
+        let error = storage.delete("v1/a").await.unwrap_err();
 
         assert!(matches!(error, StorageError::Io(_)), "{error:?}");
     }

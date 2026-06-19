@@ -27,6 +27,8 @@ pub enum Command {
     Analyze(AnalyzeOptions),
     /// List the data set a matching `analyze` pass would include.
     List(ListOptions),
+    /// Remove the dirty runs a matching `analyze`/`list` pass would include.
+    Clean(CleanOptions),
     /// Replay `run` across a range of historical commits.
     Backfill(BackfillOptions),
 }
@@ -161,6 +163,50 @@ pub struct ListOptions {
     /// List the discriminant sets present in storage instead of the data set that
     /// would enter the analysis. Does not require a repository.
     pub discriminants: bool,
+    /// Emit detailed diagnostic notes to standard error describing each step.
+    pub verbose: bool,
+}
+
+/// Options for the `clean` command.
+///
+/// The data-set-selection options mirror [`AnalyzeOptions`]/[`ListOptions`]
+/// (minus `no_dirty`, which is meaningless when the command only ever touches
+/// dirty runs, and `metric`, which is a series filter rather than a run
+/// selector) so a `clean` invocation removes exactly the dirty runs the same
+/// `analyze`/`list` invocation would include.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[expect(
+    clippy::exhaustive_structs,
+    reason = "constructed and matched by the in-crate binary and integration tests"
+)]
+pub struct CleanOptions {
+    /// Path to the configuration file, if overridden.
+    pub config_path: Option<PathBuf>,
+    /// Repository to resolve git topology from; defaults to the working directory.
+    pub repo: Option<PathBuf>,
+    /// Target ref whose history is cleaned; defaults to `HEAD`.
+    pub branch: Option<String>,
+    /// Base ref the target's history is split at; defaults to the detected (or
+    /// configured) default branch.
+    pub base: Option<String>,
+    /// Only remove runs on or after this date, if set.
+    pub since: Option<String>,
+    /// Restrict the cleanup to a single engine (criterion or callgrind), if set.
+    pub engine: Option<String>,
+    /// Restrict the cleanup to a single full target triple, if set. Mutually
+    /// exclusive with `os` / `architecture` (the triple already fixes both).
+    pub target_triple: Option<String>,
+    /// Restrict the cleanup to a single operating-system facet, if set.
+    pub os: Option<String>,
+    /// Restrict the cleanup to a single CPU-architecture facet, if set.
+    pub architecture: Option<String>,
+    /// Restrict the cleanup to a single machine partition, if set.
+    pub machine_key: Option<String>,
+    /// Preview what would be removed without deleting anything.
+    pub dry_run: bool,
+    /// Output format selector, if set.
+    pub format: Option<String>,
     /// Emit detailed diagnostic notes to standard error describing each step.
     pub verbose: bool,
 }

@@ -55,6 +55,14 @@ impl Storage for StorageFacade {
             Self::Azure(storage) => storage.list(prefix).await,
         }
     }
+
+    async fn delete(&self, key: &str) -> Result<(), StorageError> {
+        match self {
+            Self::Local(storage) => storage.delete(key).await,
+            #[cfg(feature = "azure")]
+            Self::Azure(storage) => storage.delete(key).await,
+        }
+    }
 }
 
 /// Builds the storage backend the configuration selects.
@@ -124,6 +132,11 @@ mod tests {
         // `list` dispatches to the backend and surfaces the stored key.
         let keys = storage.list("v1/proj/").await.unwrap();
         assert_eq!(keys, vec!["v1/proj/run.json".to_owned()]);
+
+        // `delete` dispatches to the backend and removes the object.
+        storage.delete("v1/proj/run.json").await.unwrap();
+        let error = storage.get("v1/proj/run.json").await.unwrap_err();
+        assert!(matches!(error, StorageError::NotFound { .. }), "{error:?}");
     }
 
     #[test]

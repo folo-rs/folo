@@ -255,6 +255,21 @@ impl Storage for AzureBlobStorage {
         keys.sort();
         Ok(keys)
     }
+
+    #[cfg_attr(test, mutants::skip)] // Delegates to the Azure SDK; verified by the Azurite round-trip tests, which mutation testing cannot run.
+    async fn delete(&self, key: &str) -> Result<(), StorageError> {
+        validate_key(key)?;
+        let client = self.blob_client(key)?;
+        match client.delete(None).await {
+            Ok(_) => Ok(()),
+            Err(error) if matches!(classify(&error), Fault::NotFound | Fault::ContainerMissing) => {
+                Err(StorageError::NotFound {
+                    key: key.to_owned(),
+                })
+            }
+            Err(error) => Err(azure_io(&error)),
+        }
+    }
 }
 
 /// Uploads `bytes` to `client`, creating the container and retrying once if it
@@ -787,6 +802,55 @@ mod tests {
         // No put, so the container does not exist: a get must still resolve to a
         // plain not-found rather than an I/O error.
         let error = storage.get("v1/absent.json").await.unwrap_err();
+        assert!(matches!(error, StorageError::NotFound { .. }), "{error:?}");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)]
+    #[serial]
+    async fn delete_removes_a_blob_and_leaves_siblings() {
+        let Some(storage) = azurite_storage_or_skip() else {
+            return;
+        };
+        storage.put("v1/proj/clean.json", b"c").await.unwrap();
+        storage.put("v1/proj/dirty.json", b"d").await.unwrap();
+
+        storage.delete("v1/proj/dirty.json").await.unwrap();
+
+        // The sibling survives and the deleted blob reports not-found.
+        assert_eq!(
+            storage.list("v1/proj/").await.unwrap(),
+            vec!["v1/proj/clean.json".to_owned()]
+        );
+        let error = storage.get("v1/proj/dirty.json").await.unwrap_err();
+        assert!(matches!(error, StorageError::NotFound { .. }), "{error:?}");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)]
+    #[serial]
+    async fn delete_missing_blob_reports_not_found() {
+        let Some(storage) = azurite_storage_or_skip() else {
+            return;
+        };
+        // Create the container (and an unrelated blob) so the missing-blob case
+        // is a blob-level 404, not a missing container.
+        storage.put("v1/present.json", b"x").await.unwrap();
+
+        let error = storage.delete("v1/absent.json").await.unwrap_err();
+        assert!(matches!(error, StorageError::NotFound { .. }), "{error:?}");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)]
+    #[serial]
+    async fn delete_in_missing_container_reports_not_found() {
+        let Some(storage) = azurite_storage_or_skip() else {
+            return;
+        };
+        // No put, so the container does not exist: a delete must still resolve to
+        // a plain not-found rather than an I/O error.
+        let error = storage.delete("v1/absent.json").await.unwrap_err();
         assert!(matches!(error, StorageError::NotFound { .. }), "{error:?}");
     }
 
