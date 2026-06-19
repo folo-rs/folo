@@ -165,14 +165,11 @@ impl Operation {
         if data.total_iterations == 0 {
             Duration::ZERO
         } else {
-            // Use div_ceil for proper division, falling back to manual calculation if needed
-            Duration::from_nanos(
+            Duration::from_nanos_u128(
                 data.total_processor_time
                     .as_nanos()
                     .checked_div(u128::from(data.total_iterations))
-                    .expect("guarded by if condition")
-                    .try_into()
-                    .expect("all realistic values fit in u64"),
+                    .expect("guarded by if condition"),
             )
         }
     }

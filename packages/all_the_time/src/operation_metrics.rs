@@ -18,11 +18,7 @@ impl OperationMetrics {
             .checked_mul(u128::from(iterations))
             .expect("duration multiplied by iterations overflows u128 - this indicates an unrealistic scenario");
 
-        let total_duration = Duration::from_nanos(
-            total_duration_nanos
-                .try_into()
-                .expect("total duration exceeds maximum Duration value - this indicates an unrealistic scenario"),
-        );
+        let total_duration = Duration::from_nanos_u128(total_duration_nanos);
 
         self.total_processor_time = self.total_processor_time.checked_add(total_duration).expect(
             "processor time accumulation overflows Duration - this indicates an unrealistic scenario",

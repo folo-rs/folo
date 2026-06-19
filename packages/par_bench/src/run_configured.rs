@@ -170,11 +170,7 @@ fn calculate_mean_duration(thread_count: NonZero<usize>, total_elapsed_nanos: u1
         .checked_div(thread_count.get() as u128)
         .expect("thread count is NonZero, so division by zero is impossible");
 
-    Duration::from_nanos(
-        total_elapsed_nanos_per_thread
-            .try_into()
-            .expect("overflowing u64 is unrealistic when using a real clock"),
-    )
+    Duration::from_nanos_u128(total_elapsed_nanos_per_thread)
 }
 
 /// The result of executing a benchmark run, carrying data suitable for ingestion
