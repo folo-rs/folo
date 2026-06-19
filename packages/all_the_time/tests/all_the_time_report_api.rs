@@ -7,7 +7,7 @@ use all_the_time::Session as TimeSession;
 #[test]
 #[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
 fn all_the_time_report_api() {
-    let session = TimeSession::new();
+    let session = TimeSession::new().no_stdout().no_file();
 
     {
         let op = session.operation("test_work");

@@ -59,8 +59,6 @@ fn main() {
     }
 
     println!();
-    session.print_to_stdout();
-    println!();
 
     println!("Wall clock times (includes measurement overhead):");
     println!("  Unbatched approach: {unbatched_wall_time:?}");

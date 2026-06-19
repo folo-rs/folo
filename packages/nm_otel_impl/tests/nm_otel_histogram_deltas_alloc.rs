@@ -19,7 +19,7 @@ const BUCKETS: [i64; 4] = [10, 50, 100, 500];
               conflicts with the alloc_tracker probe"
 )]
 fn histogram_deltas_does_not_allocate_on_steady_state() {
-    let session = Session::new();
+    let session = Session::new().no_stdout().no_file();
     let op = session.operation("histogram_deltas_steady_state");
 
     let mut state = EventState::default();

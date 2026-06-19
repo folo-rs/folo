@@ -33,9 +33,7 @@ fn main() {
         }
     } // Total time measured once and divided by iteration count for mean
 
-    session.print_to_stdout();
-
-    // Also emit machine-readable JSON files (one per operation) into the Cargo
+    // When `session` is dropped it prints a human-readable summary to stdout and
+    // writes machine-readable JSON files (one per operation) into the Cargo
     // target directory: target/all_the_time/<operation>.json
-    session.write_to_target();
 }

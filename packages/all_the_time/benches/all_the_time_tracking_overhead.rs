@@ -30,7 +30,9 @@ fn entrypoint(c: &mut Criterion) {
 
     // all_the_time overhead measurements
     {
-        let time_session = Session::new();
+        // This bench measures tracking overhead itself, so the session suppresses
+        // its own stdout and file output on drop.
+        let time_session = Session::new().no_stdout().no_file();
 
         let thread_op = time_session.operation("empty_thread_span");
         group.bench_function("thread_span_empty", |b| {

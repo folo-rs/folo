@@ -62,8 +62,6 @@ fn main() {
     track_thread_local_allocations(&session);
     track_process_wide_allocations(&session);
 
-    session.print_to_stdout();
-
     println!();
     println!("Note: measure_thread should show much lower allocation counts than measure_process.");
     println!("This is because measure_thread only measures the main thread's allocations,");

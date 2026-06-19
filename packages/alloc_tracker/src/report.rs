@@ -19,6 +19,7 @@ use std::fmt;
 ///
 /// # fn main() {
 /// let session = Session::new();
+/// # let session = session.no_stdout().no_file();
 /// {
 ///     let operation = session.operation("test_work");
 ///     let _span = operation.measure_process();
@@ -41,7 +42,9 @@ use std::fmt;
 /// # fn main() {
 /// // Create two separate sessions
 /// let session1 = Session::new();
+/// # let session1 = session1.no_stdout().no_file();
 /// let session2 = Session::new();
+/// # let session2 = session2.no_stdout().no_file();
 ///
 /// // Record some work in each
 /// {
@@ -131,7 +134,9 @@ impl Report {
     ///
     /// # fn main() {
     /// let session1 = Session::new();
+    /// # let session1 = session1.no_stdout().no_file();
     /// let session2 = Session::new();
+    /// # let session2 = session2.no_stdout().no_file();
     ///
     /// // Both sessions record the same operation name
     /// {
@@ -218,6 +223,7 @@ impl Report {
     ///
     /// # fn main() {
     /// let session = Session::new();
+    /// # let session = session.no_stdout().no_file();
     /// {
     ///     let operation = session.operation("test_work");
     ///     let _span = operation.measure_process();
@@ -395,14 +401,14 @@ mod tests {
 
     #[test]
     fn report_from_empty_session_is_empty() {
-        let session = Session::new();
+        let session = Session::new().no_stdout().no_file();
         let report = session.to_report();
         assert!(report.is_empty());
     }
 
     #[test]
     fn report_from_session_with_operations_is_not_empty() {
-        let session = Session::new();
+        let session = Session::new().no_stdout().no_file();
         {
             let operation = session.operation("test");
             let _span = operation.measure_thread();
@@ -423,7 +429,7 @@ mod tests {
 
     #[test]
     fn merge_empty_with_non_empty() {
-        let session = Session::new();
+        let session = Session::new().no_stdout().no_file();
         {
             let operation = session.operation("test");
             let _span = operation.measure_thread();
@@ -442,8 +448,8 @@ mod tests {
 
     #[test]
     fn merge_different_operations() {
-        let session1 = Session::new();
-        let session2 = Session::new();
+        let session1 = Session::new().no_stdout().no_file();
+        let session2 = Session::new().no_stdout().no_file();
 
         {
             let op1 = session1.operation("test1");
@@ -468,8 +474,8 @@ mod tests {
 
     #[test]
     fn merge_same_operations() {
-        let session1 = Session::new();
-        let session2 = Session::new();
+        let session1 = Session::new().no_stdout().no_file();
+        let session2 = Session::new().no_stdout().no_file();
 
         {
             let op1 = session1.operation("test");
@@ -496,7 +502,7 @@ mod tests {
 
     #[test]
     fn report_clone() {
-        let session = Session::new();
+        let session = Session::new().no_stdout().no_file();
         {
             let operation = session.operation("test");
             let _span = operation.measure_thread();
@@ -533,7 +539,7 @@ mod tests {
 
     #[test]
     fn report_operation_total_allocations_count_consistency_with_session() {
-        let session = Session::new();
+        let session = Session::new().no_stdout().no_file();
         {
             let operation = session.operation("test_consistency");
             let _span = operation.measure_thread();

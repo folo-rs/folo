@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::{Report, Session};
+use crate::Report;
 
 /// Subdirectory of the Cargo target directory that receives the JSON files.
 const OUTPUT_SUBDIRECTORY: &str = "alloc_tracker";
@@ -44,25 +44,7 @@ impl Report {
     ///
     /// Also panics if two operation names sanitize to the same file name, since
     /// writing both would silently discard one operation's results.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use alloc_tracker::{Allocator, Session};
-    ///
-    /// #[global_allocator]
-    /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
-    ///
-    /// let session = Session::new();
-    /// {
-    ///     let operation = session.operation("work");
-    ///     let _span = operation.measure_process();
-    ///     let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
-    /// }
-    ///
-    /// session.to_report().write_to_target();
-    /// ```
-    pub fn write_to_target(&self) {
+    pub(crate) fn write_to_target(&self) {
         let target =
             folo_utils::cargo_target_directory().unwrap_or_else(|| PathBuf::from("target"));
         self.write_to_directory(target.join(OUTPUT_SUBDIRECTORY));
@@ -85,26 +67,7 @@ impl Report {
     ///
     /// Also panics if two operation names sanitize to the same file name, since
     /// writing both would silently discard one operation's results.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use alloc_tracker::{Allocator, Session};
-    ///
-    /// #[global_allocator]
-    /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
-    ///
-    /// let session = Session::new();
-    /// {
-    ///     let operation = session.operation("work");
-    ///     let _span = operation.measure_process();
-    ///     let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
-    /// }
-    ///
-    /// let directory = std::env::temp_dir().join("alloc_tracker_example");
-    /// session.to_report().write_to_directory(&directory);
-    /// ```
-    pub fn write_to_directory(&self, directory: impl AsRef<Path>) {
+    pub(crate) fn write_to_directory(&self, directory: impl AsRef<Path>) {
         let directory = directory.as_ref();
 
         // Build every output up front, detecting sanitized-name collisions before
@@ -165,37 +128,6 @@ impl Report {
     }
 }
 
-impl Session {
-    /// Writes machine-readable JSON statistics into the Cargo target directory.
-    ///
-    /// This is a convenience method equivalent to
-    /// `self.to_report().write_to_target()`. See
-    /// [`Report::write_to_target`](crate::Report::write_to_target) for details.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the output directory cannot be created or a file cannot be
-    /// written.
-    pub fn write_to_target(&self) {
-        self.to_report().write_to_target();
-    }
-
-    /// Writes machine-readable JSON statistics into the given directory.
-    ///
-    /// This is a convenience method equivalent to
-    /// `self.to_report().write_to_directory(directory)`. See
-    /// [`Report::write_to_directory`](crate::Report::write_to_directory) for
-    /// details.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the output directory cannot be created or a file cannot be
-    /// written.
-    pub fn write_to_directory(&self, directory: impl AsRef<Path>) {
-        self.to_report().write_to_directory(directory);
-    }
-}
-
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -212,7 +144,7 @@ mod tests {
     }
 
     fn session_with_recorded_work(name: &str) -> Session {
-        let session = Session::new();
+        let session = Session::new().no_stdout().no_file();
         {
             let operation = session.operation(name);
             let _span = operation.measure_thread().iterations(4);
@@ -227,7 +159,7 @@ mod tests {
         let session = session_with_recorded_work("allocate_vec");
         let directory = tempfile::tempdir().unwrap();
 
-        session.write_to_directory(directory.path());
+        session.to_report().write_to_directory(directory.path());
 
         let file = directory.path().join("allocate_vec.json");
         let value = read_json(&file);
@@ -268,7 +200,7 @@ mod tests {
         let session = session_with_recorded_work("group/case name");
         let directory = tempfile::tempdir().unwrap();
 
-        session.write_to_directory(directory.path());
+        session.to_report().write_to_directory(directory.path());
 
         let file = directory.path().join("group_case_name.json");
         assert!(file.exists());
@@ -283,11 +215,11 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
     fn empty_session_writes_no_files() {
-        let session = Session::new();
+        let session = Session::new().no_stdout().no_file();
         let directory = tempfile::tempdir().unwrap();
         let target = directory.path().join("nested");
 
-        session.write_to_directory(&target);
+        session.to_report().write_to_directory(&target);
 
         // Nothing is written, so the directory is not even created.
         assert!(!target.exists());
@@ -296,7 +228,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
     fn skips_operations_without_iterations() {
-        let session = Session::new();
+        let session = Session::new().no_stdout().no_file();
         {
             let operation = session.operation("measured");
             let _span = operation.measure_thread().iterations(4);
@@ -307,7 +239,7 @@ mod tests {
         let _unmeasured = session.operation("unmeasured");
 
         let directory = tempfile::tempdir().unwrap();
-        session.write_to_directory(directory.path());
+        session.to_report().write_to_directory(directory.path());
 
         assert!(directory.path().join("measured.json").exists());
         assert!(!directory.path().join("unmeasured.json").exists());
@@ -321,7 +253,7 @@ mod tests {
         fs::write(&file, "stale contents").unwrap();
 
         let session = session_with_recorded_work("allocate_vec");
-        session.write_to_directory(directory.path());
+        session.to_report().write_to_directory(directory.path());
 
         // Parsing succeeds only if the stale, non-JSON contents were replaced.
         let value = read_json(&file);
@@ -343,7 +275,9 @@ mod tests {
         let blocker = directory.path().join("blocker");
         fs::write(&blocker, "not a directory").unwrap();
 
-        session.write_to_directory(blocker.join("nested"));
+        session
+            .to_report()
+            .write_to_directory(blocker.join("nested"));
     }
 
     #[test]
@@ -356,13 +290,13 @@ mod tests {
         // A directory occupying the output file's path makes the file write fail.
         fs::create_dir_all(directory.path().join("allocate_vec.json")).unwrap();
 
-        session.write_to_directory(directory.path());
+        session.to_report().write_to_directory(directory.path());
     }
 
     #[test]
     #[should_panic(expected = "after sanitization")]
     fn panics_when_operation_names_collide_after_sanitization() {
-        let session = Session::new();
+        let session = Session::new().no_stdout().no_file();
 
         // Both names sanitize to `group_case.json`, so writing both would silently
         // discard one operation's results.
@@ -374,6 +308,8 @@ mod tests {
 
         // The collision is detected before anything is written, so this path is
         // never created.
-        session.write_to_directory("collision_is_detected_before_writing");
+        session
+            .to_report()
+            .write_to_directory("collision_is_detected_before_writing");
     }
 }

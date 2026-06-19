@@ -52,8 +52,7 @@ fn main() {
         }
     }
 
-    session.print_to_stdout();
-
     println!();
-    println!("Session automatically cleaned up when dropped.");
+    println!("When the session is dropped, its results are printed to stdout and");
+    println!("written to target/alloc_tracker/ as machine-readable JSON.");
 }

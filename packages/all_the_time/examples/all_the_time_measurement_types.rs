@@ -60,8 +60,6 @@ fn main() {
     measure_thread_time(&session);
     measure_process_time(&session);
 
-    session.print_to_stdout();
-
     println!();
     println!("Note: measure_thread should show much lower times than measure_process.");
     println!("This is because measure_thread only measures the main thread's processor time,");
