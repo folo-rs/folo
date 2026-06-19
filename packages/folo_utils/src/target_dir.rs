@@ -10,8 +10,12 @@ use serde::Deserialize;
 ///
 /// Uses the same strategy as Criterion: the `CARGO_TARGET_DIR` environment
 /// variable if set, otherwise the `target_directory` reported by
-/// `cargo metadata`. Returns `None` if neither source is available, in which
-/// case callers should fall back to a relative `target` path.
+/// `cargo metadata`. When the `CARGO` environment variable is not set (so the
+/// path to the `cargo` binary that launched the process is unknown), the
+/// `cargo` binary is resolved from `PATH` instead, because `CARGO` is not
+/// guaranteed to be present in every runtime environment. Returns `None` if the
+/// target directory cannot be determined, in which case callers should fall
+/// back to a relative `target` path.
 #[cfg_attr(test, mutants::skip)]
 // Reads process env and shells out to `cargo metadata`; the JSON parsing is unit-tested separately.
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -21,7 +25,7 @@ pub fn cargo_target_directory() -> Option<PathBuf> {
         return Some(PathBuf::from(dir));
     }
 
-    let cargo = env::var_os("CARGO")?;
+    let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let output = Command::new(cargo)
         .args(["metadata", "--format-version", "1", "--no-deps"])
         .output()
