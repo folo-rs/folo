@@ -39,6 +39,7 @@ mod probe;
 mod process;
 mod report;
 mod storage;
+mod text;
 mod types;
 mod wiring;
 

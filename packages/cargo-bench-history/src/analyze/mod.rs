@@ -29,6 +29,7 @@ use crate::git_history::{GitHistory, SystemGitHistory};
 use crate::model::ResultSet;
 use crate::report::{Reporter, StderrReporter};
 use crate::storage::{Storage, build_storage};
+use crate::text::count_noun;
 use crate::wiring::{default_config_path, resolve_project_id};
 use crate::{AnalyzeOptions, RunError, RunOutcome};
 
@@ -108,7 +109,10 @@ where
     }
 
     let keys = storage.list(&prefix).await.map_err(RunError::Storage)?;
-    reporter.note(&format!("storage returned {} object key(s)", keys.len()));
+    reporter.note(&format!(
+        "storage returned {}",
+        count_noun(keys.len(), "object key")
+    ));
 
     // Parse and facet-filter the candidate keys up front so both the discriminant
     // listing and the analysis work from the same selected set.
@@ -132,8 +136,8 @@ where
         candidates.push((key, parsed));
     }
     reporter.note(&format!(
-        "{} object(s) match the facet filters",
-        candidates.len()
+        "{} match the facet filters",
+        count_noun(candidates.len(), "object")
     ));
 
     if options.list_discriminants {
@@ -173,8 +177,8 @@ where
     };
 
     reporter.note(&format!(
-        "target ref {target_ref} resolves to {target_sha}; {} commit(s) on its first-parent line",
-        ancestry.len()
+        "target ref {target_ref} resolves to {target_sha}; {} on its first-parent line",
+        count_noun(ancestry.len(), "commit")
     ));
     reporter.note(&format!(
         "base ref resolves to {}; merge-base with target is {}",
@@ -251,9 +255,9 @@ where
         });
     }
     reporter.note(&format!(
-        "{} object(s) entered the analysis ({excluded_outside_history} outside history, \
+        "{} entered the analysis ({excluded_outside_history} outside history, \
          {excluded_dirty_base} dirty-on-base, {excluded_since} before --since)",
-        loaded.len()
+        count_noun(loaded.len(), "object")
     ));
 
     let filter = SeriesFilter {
@@ -472,27 +476,28 @@ fn empty_history_hint(
     }
 
     let mut lines = vec![format!(
-        "Found {candidate_count} stored run(s) for this project, but none entered the analysis:"
+        "Found {} for this project, but none entered the analysis:",
+        count_noun(candidate_count, "stored run")
     )];
     if tally.dirty_base > 0 {
         lines.push(format!(
-            "  - {} dirty (uncommitted-tree) snapshot(s) on base-branch commits were excluded; \
-             only clean runs count on the base branch. Commit your working tree (including the \
-             configuration file) and re-run, or analyze a feature branch with --branch.",
-            tally.dirty_base
+            "  - {} on base-branch commits — only clean runs count on the base \
+             branch. Commit your working tree (including the configuration file) and re-run, \
+             or analyze a feature branch with --branch.",
+            count_noun(tally.dirty_base, "dirty (uncommitted-tree) snapshot")
         ));
     }
     if tally.outside_history > 0 {
         lines.push(format!(
-            "  - {} run(s) are on commits outside {target_ref}'s analyzed history. \
-             Check out the branch they were recorded on, or pass --branch.",
-            tally.outside_history
+            "  - {} on commits outside {target_ref}'s analyzed history — check out the \
+             branch they were recorded on, or pass --branch.",
+            count_noun(tally.outside_history, "run")
         ));
     }
     if tally.since > 0 {
         lines.push(format!(
-            "  - {} run(s) are older than the --since cutoff.",
-            tally.since
+            "  - {} older than the --since cutoff.",
+            count_noun(tally.since, "run")
         ));
     }
     lines.push("Re-run with --verbose for a per-object explanation.".to_owned());
@@ -968,7 +973,7 @@ mod tests {
             .as_str()
             .expect("a diagnostic hint is present");
         assert!(
-            hint.contains("Found 2 stored run(s)"),
+            hint.contains("Found 2 stored runs"),
             "the hint should count the stored runs: {hint}"
         );
         assert!(

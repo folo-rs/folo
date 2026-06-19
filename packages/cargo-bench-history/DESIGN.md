@@ -481,7 +481,7 @@ with no repo it errors out rather than guessing an order. (Analyzing a foreign
 project's stored data means checking out that project's repo and pointing `analyze`
 at it.)
 
-**Selecting the discriminant set(s).** `--list-discriminants` prints the sets
+**Selecting the discriminant sets.** `--list-discriminants` prints the sets
 present (§4.3). `--engine`, `--os`, `--architecture`, `--machine-key` filter them;
 each matched set is analyzed independently and produces its own report (so a Windows
 and a Linux nightly pool come out as two reports).

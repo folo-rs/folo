@@ -799,7 +799,7 @@ async fn analyze_hints_when_every_run_is_a_dirty_snapshot_on_the_base() {
         .as_str()
         .unwrap_or_else(|| panic!("the empty result must carry a diagnostic hint: {report}"));
     assert!(
-        hint.contains("Found 2 stored run(s)"),
+        hint.contains("Found 2 stored runs"),
         "the hint should count the stored runs: {hint}"
     );
     assert!(

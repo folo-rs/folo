@@ -32,6 +32,7 @@ use crate::probe::SystemProbe;
 use crate::process::{TokioBenchRunner, capture};
 use crate::report::StderrReporter;
 use crate::storage::{Storage, build_storage};
+use crate::text::count_noun;
 use crate::wiring::{default_config_path, resolve_project_id};
 use crate::{BackfillOptions, RunError, RunOptions, RunOutcome};
 
@@ -276,15 +277,20 @@ impl BackfillReport {
     /// Renders the multi-line summary for a range of `total` commits.
     fn render(&self, total: usize) -> String {
         let mut lines = vec![format!(
-            "Backfill range of {total} commit(s): {} stored, {} skipped (existing), \
+            "Backfill range of {}: {} stored, {} skipped (existing), \
              {} skipped (empty), {} failed.",
+            count_noun(total, "commit"),
             self.stored.len(),
             self.skipped_existing.len(),
             self.skipped_empty.len(),
             self.failed.len(),
         )];
         for (commit, cases) in &self.stored {
-            lines.push(format!("  stored {} ({cases} case(s))", short(commit)));
+            lines.push(format!(
+                "  stored {} ({})",
+                short(commit),
+                count_noun(*cases, "case")
+            ));
         }
         for commit in &self.skipped_existing {
             lines.push(format!("  skipped {} (already stored)", short(commit)));
@@ -843,6 +849,31 @@ mod tests {
         assert!(matches!(error, RunError::Io(_)), "{error:?}");
         // The loop stopped at the failing commit; f1 was never reached.
         assert!(runner.ran.borrow().iter().eq(["c0", "c1"].iter()));
+    }
+
+    #[test]
+    fn render_pluralizes_commit_and_case_counts() {
+        let one = BackfillReport {
+            stored: vec![("abcdef0".to_owned(), 1)],
+            ..BackfillReport::default()
+        };
+        let rendered = one.render(1);
+        assert!(
+            rendered.contains("Backfill range of 1 commit:"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("(1 case)"), "{rendered}");
+
+        let many = BackfillReport {
+            stored: vec![("abcdef0".to_owned(), 3)],
+            ..BackfillReport::default()
+        };
+        let rendered = many.render(2);
+        assert!(
+            rendered.contains("Backfill range of 2 commits:"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("(3 cases)"), "{rendered}");
     }
 
     #[test]

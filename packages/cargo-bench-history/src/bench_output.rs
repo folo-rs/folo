@@ -18,6 +18,7 @@ use crate::bench::{
 };
 use crate::comparability::EngineSystem;
 use crate::report::Reporter;
+use crate::text::count_noun;
 
 /// Tolerance subtracted from the run-start boundary before comparing file
 /// modification times, absorbing coarse filesystem mtime granularity so a summary
@@ -142,8 +143,8 @@ impl FsBenchOutputSource {
 
         summaries.sort_by(|left, right| left.path.cmp(&right.path));
         reporter.note(&format!(
-            "callgrind: harvested {} fresh summary file(s)",
-            summaries.len()
+            "callgrind: harvested {}",
+            count_noun(summaries.len(), "fresh summary file")
         ));
         Ok(summaries)
     }
@@ -240,8 +241,8 @@ impl FsBenchOutputSource {
 
         cases.sort_by(|left, right| left.dir.cmp(&right.dir));
         reporter.note(&format!(
-            "criterion: harvested {} fresh case(s)",
-            cases.len()
+            "criterion: harvested {}",
+            count_noun(cases.len(), "fresh case")
         ));
         Ok(cases)
     }
@@ -560,7 +561,7 @@ mod tests {
             "an absent engine tree must be reported: {:?}",
             reporter.notes()
         );
-        assert!(reporter.contains("harvested 0 fresh case(s)"));
+        assert!(reporter.contains("harvested 0 fresh cases"));
     }
 
     #[tokio::test]
@@ -647,6 +648,6 @@ mod tests {
             "a fresh summary must be reported as included: {:?}",
             reporter.notes()
         );
-        assert!(reporter.contains("harvested 1 fresh summary file(s)"));
+        assert!(reporter.contains("harvested 1 fresh summary file"));
     }
 }

@@ -425,11 +425,11 @@ mod tests {
             series: 0,
             findings: &[],
             sets: &[],
-            hint: Some("Found 2 stored run(s) ... dirty snapshot(s)"),
+            hint: Some("Found 2 stored runs ... dirty snapshots"),
         };
         let report = render(&input, ReportFormat::Text);
         assert!(report.contains("No notable changes detected."), "{report}");
-        assert!(report.contains("Found 2 stored run(s)"), "{report}");
+        assert!(report.contains("Found 2 stored runs"), "{report}");
     }
 
     #[test]
@@ -508,7 +508,7 @@ mod tests {
             series: 0,
             findings: &[],
             sets: &[],
-            hint: Some("Found 2 stored run(s) ... commit your working tree"),
+            hint: Some("Found 2 stored runs ... commit your working tree"),
         };
         let report = render(&input, ReportFormat::Markdown);
         assert!(report.contains("No notable changes detected."), "{report}");
@@ -523,12 +523,12 @@ mod tests {
             series: 0,
             findings: &[],
             sets: &[],
-            hint: Some("dirty snapshot(s) on base-branch commits"),
+            hint: Some("dirty snapshots on base-branch commits"),
         };
         let report = render(&input, ReportFormat::Json);
         let parsed: serde_json::Value = serde_json::from_str(&report).expect("report is JSON");
         assert_eq!(
-            parsed["hint"], "dirty snapshot(s) on base-branch commits",
+            parsed["hint"], "dirty snapshots on base-branch commits",
             "{report}"
         );
     }

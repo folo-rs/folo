@@ -26,6 +26,7 @@ use crate::probe::{EnvironmentProbe, SystemProbe};
 use crate::process::{BenchRunner, TokioBenchRunner};
 use crate::report::{Reporter, StderrReporter};
 use crate::storage::{Storage, StorageError, build_storage};
+use crate::text::count_noun;
 use crate::wiring::{default_config_path, resolve_project_id};
 use crate::{RunError, RunOptions, RunOutcome};
 
@@ -373,7 +374,8 @@ where
 
     if options.no_store {
         deps.reporter.note(&format!(
-            "{engine}: harvested {count} case(s); not storing (--no-store)"
+            "{engine}: harvested {}; not storing (--no-store)",
+            count_noun(count, "case")
         ));
         return Ok(EngineSummary {
             stored: false,
@@ -435,7 +437,8 @@ where
     };
 
     deps.reporter.note(&format!(
-        "{engine}: {count} case(s) at commit {commit} ({}), effective {effective}{} -> {object_key}",
+        "{engine}: {} at commit {commit} ({}), effective {effective}{} -> {object_key}",
+        count_noun(count, "case"),
         if dirty { "dirty" } else { "clean" },
         machine_key
             .as_deref()
@@ -521,9 +524,16 @@ fn parse_harvest(harvest: &Harvest) -> Result<Vec<ResultRecord>, RunError> {
 /// Builds the human-readable run summary.
 fn build_message(no_store: bool, stored: usize, harvested: usize, labels: &[String]) -> String {
     let mut message = if no_store {
-        format!("Harvested {harvested} benchmark case(s); nothing stored (--no-store).")
+        format!(
+            "Harvested {}; nothing stored (--no-store).",
+            count_noun(harvested, "benchmark case")
+        )
     } else {
-        format!("Stored {stored} result set(s) covering {harvested} benchmark case(s).")
+        format!(
+            "Stored {} covering {}.",
+            count_noun(stored, "result set"),
+            count_noun(harvested, "benchmark case")
+        )
     };
     if !labels.is_empty() {
         message.push_str(" [");
@@ -678,6 +688,21 @@ mod tests {
         assert!(
             no_store.contains("nothing stored (--no-store)"),
             "{no_store}"
+        );
+    }
+
+    #[test]
+    fn build_message_pluralizes_counts_correctly() {
+        let singular = build_message(false, 1, 1, &[]);
+        assert!(
+            singular.contains("Stored 1 result set covering 1 benchmark case."),
+            "{singular}"
+        );
+
+        let plural = build_message(false, 2, 3, &[]);
+        assert!(
+            plural.contains("Stored 2 result sets covering 3 benchmark cases."),
+            "{plural}"
         );
     }
 
@@ -1259,7 +1284,7 @@ mod tests {
         let RunOutcome::Completed { message } = outcome else {
             panic!("expected completion");
         };
-        assert!(message.contains("Stored 0 result set(s)"), "{message}");
+        assert!(message.contains("Stored 0 result sets"), "{message}");
         // An engine that produced nothing is absent from the summary rather than
         // flagged, because absence is the expected steady state off its OS.
         assert!(!message.contains('['), "{message}");
@@ -1283,7 +1308,10 @@ mod tests {
         let RunOutcome::Completed { message } = outcome else {
             panic!("expected completion");
         };
-        assert!(message.contains("Stored 1 result set(s)"), "{message}");
+        assert!(
+            message.contains("Stored 1 result set covering"),
+            "{message}"
+        );
 
         let keys = storage.keys();
         assert_eq!(keys.len(), 1, "{keys:?}");

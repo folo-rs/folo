@@ -326,7 +326,7 @@ must be **absolute**: cargo runs each `--package`-scoped benchmark binary with i
 working directory set to the owning package's directory, so a relative
 `CARGO_TARGET_DIR` would be resolved there by an engine that honors it (Criterion),
 scattering output away from the workspace-rooted harvest — the "Stored 0 result
-set(s)" symptom. `run_harvests_output_when_the_engine_runs_in_a_package_directory`
+sets" symptom. `run_harvests_output_when_the_engine_runs_in_a_package_directory`
 guards this by driving through `drive_resolving_target_root` (no override, so the
 real `resolve_target_root` runs) with the mock's `--chdir` flag standing in for
 that per-package cwd. Keep both: a regression in `resolve_target_root` would slip
