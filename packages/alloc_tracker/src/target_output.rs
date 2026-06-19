@@ -173,6 +173,8 @@ impl Session {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::fs;
+
     use crate::Session;
     use crate::allocator::register_fake_allocation;
 
@@ -188,14 +190,14 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
-    fn writes_one_json_file_per_operation() {
+    fn writes_operation_statistics_as_json() {
         let session = session_with_recorded_work("allocate_vec");
         let directory = tempfile::tempdir().unwrap();
 
         session.write_to_directory(directory.path());
 
         let file = directory.path().join("allocate_vec.json");
-        let contents = std::fs::read_to_string(&file).unwrap();
+        let contents = fs::read_to_string(&file).unwrap();
 
         assert!(contents.contains("\"operation\": \"allocate_vec\""));
         assert!(contents.contains("\"total_iterations\": 4"));
@@ -216,7 +218,7 @@ mod tests {
         let file = directory.path().join("group_case_name.json");
         assert!(file.exists());
 
-        let contents = std::fs::read_to_string(&file).unwrap();
+        let contents = fs::read_to_string(&file).unwrap();
         // The original, unsanitized name is preserved inside the file.
         assert!(contents.contains("\"operation\": \"group/case name\""));
     }
@@ -259,12 +261,12 @@ mod tests {
     fn overwrites_existing_files() {
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("allocate_vec.json");
-        std::fs::write(&file, "stale contents").unwrap();
+        fs::write(&file, "stale contents").unwrap();
 
         let session = session_with_recorded_work("allocate_vec");
         session.write_to_directory(directory.path());
 
-        let contents = std::fs::read_to_string(&file).unwrap();
+        let contents = fs::read_to_string(&file).unwrap();
         assert!(!contents.contains("stale"));
         assert!(contents.contains("allocate_vec"));
     }

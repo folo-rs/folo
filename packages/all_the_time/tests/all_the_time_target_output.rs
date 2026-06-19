@@ -1,5 +1,6 @@
 //! Integration tests for writing machine-readable JSON output to disk.
 
+use std::fs;
 use std::hint::black_box;
 
 use all_the_time::Session;
@@ -34,7 +35,11 @@ fn writes_json_files_for_each_operation() {
     assert!(first.exists(), "expected JSON file for first operation");
     assert!(second.exists(), "expected JSON file for second operation");
 
-    let first_contents = std::fs::read_to_string(&first).unwrap();
+    // Exactly one file per measured operation, and nothing more.
+    let written = fs::read_dir(directory.path()).unwrap().count();
+    assert_eq!(written, 2, "expected one JSON file per operation");
+
+    let first_contents = fs::read_to_string(&first).unwrap();
     assert!(first_contents.contains("\"operation\": \"first_operation\""));
     assert!(first_contents.contains("\"total_iterations\": 100"));
     assert!(first_contents.contains("\"total_processor_time_nanos\""));
@@ -67,8 +72,8 @@ fn report_and_session_write_equivalently() {
     assert!(report_file.exists());
 
     // Both entry points capture the same data (iteration count is deterministic).
-    let session_contents = std::fs::read_to_string(&session_file).unwrap();
-    let report_contents = std::fs::read_to_string(&report_file).unwrap();
+    let session_contents = fs::read_to_string(&session_file).unwrap();
+    let report_contents = fs::read_to_string(&report_file).unwrap();
     assert!(session_contents.contains("\"total_iterations\": 10"));
     assert!(report_contents.contains("\"total_iterations\": 10"));
 }
@@ -110,7 +115,7 @@ fn write_to_target_writes_into_cargo_target_directory() {
 
     // Start from a clean slate so the assertion proves this call wrote the file.
     if expected.exists() {
-        std::fs::remove_file(&expected).unwrap();
+        fs::remove_file(&expected).unwrap();
     }
 
     session.write_to_target();
@@ -121,10 +126,10 @@ fn write_to_target_writes_into_cargo_target_directory() {
         expected.display()
     );
 
-    let contents = std::fs::read_to_string(&expected).unwrap();
+    let contents = fs::read_to_string(&expected).unwrap();
     assert!(contents.contains("\"operation\": \"all_the_time_write_to_target_probe\""));
     assert!(contents.contains("\"total_iterations\": 8"));
 
     // Avoid polluting the shared target directory for later runs.
-    std::fs::remove_file(&expected).unwrap();
+    fs::remove_file(&expected).unwrap();
 }

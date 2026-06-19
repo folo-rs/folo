@@ -173,6 +173,7 @@ fn duration_as_nanos(duration: Duration) -> u64 {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::fs;
     use std::time::Duration;
 
     use super::duration_as_nanos;
@@ -208,14 +209,14 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
-    fn writes_one_json_file_per_operation() {
+    fn writes_operation_statistics_as_json() {
         let session = session_with_recorded_work("read_cell");
         let directory = tempfile::tempdir().unwrap();
 
         session.write_to_directory(directory.path());
 
         let file = directory.path().join("read_cell.json");
-        let contents = std::fs::read_to_string(&file).unwrap();
+        let contents = fs::read_to_string(&file).unwrap();
 
         assert!(contents.contains("\"operation\": \"read_cell\""));
         assert!(contents.contains("\"total_iterations\": 4"));
@@ -234,7 +235,7 @@ mod tests {
         let file = directory.path().join("group_case_name.json");
         assert!(file.exists());
 
-        let contents = std::fs::read_to_string(&file).unwrap();
+        let contents = fs::read_to_string(&file).unwrap();
         // The original, unsanitized name is preserved inside the file.
         assert!(contents.contains("\"operation\": \"group/case name\""));
     }
@@ -284,12 +285,12 @@ mod tests {
     fn overwrites_existing_files() {
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("read_cell.json");
-        std::fs::write(&file, "stale contents").unwrap();
+        fs::write(&file, "stale contents").unwrap();
 
         let session = session_with_recorded_work("read_cell");
         session.write_to_directory(directory.path());
 
-        let contents = std::fs::read_to_string(&file).unwrap();
+        let contents = fs::read_to_string(&file).unwrap();
         assert!(!contents.contains("stale"));
         assert!(contents.contains("read_cell"));
     }
