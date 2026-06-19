@@ -200,9 +200,16 @@ impl Session {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::fs;
+    use std::path::Path;
+
+    use serde_json::Value;
 
     use crate::Session;
     use crate::allocator::register_fake_allocation;
+
+    fn read_json(path: &Path) -> Value {
+        serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    }
 
     fn session_with_recorded_work(name: &str) -> Session {
         let session = Session::new();
@@ -223,14 +230,36 @@ mod tests {
         session.write_to_directory(directory.path());
 
         let file = directory.path().join("allocate_vec.json");
-        let contents = fs::read_to_string(&file).unwrap();
+        let value = read_json(&file);
 
-        assert!(contents.contains("\"operation\": \"allocate_vec\""));
-        assert!(contents.contains("\"total_iterations\": 4"));
-        assert!(contents.contains("\"total_bytes_allocated\": 800"));
-        assert!(contents.contains("\"total_allocations_count\": 8"));
-        assert!(contents.contains("\"mean_bytes_per_iteration\": 200"));
-        assert!(contents.contains("\"mean_allocations_per_iteration\": 2"));
+        assert_eq!(
+            value.get("operation").and_then(Value::as_str),
+            Some("allocate_vec")
+        );
+        assert_eq!(
+            value.get("total_iterations").and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            value.get("total_bytes_allocated").and_then(Value::as_u64),
+            Some(800)
+        );
+        assert_eq!(
+            value.get("total_allocations_count").and_then(Value::as_u64),
+            Some(8)
+        );
+        assert_eq!(
+            value
+                .get("mean_bytes_per_iteration")
+                .and_then(Value::as_u64),
+            Some(200)
+        );
+        assert_eq!(
+            value
+                .get("mean_allocations_per_iteration")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
     }
 
     #[test]
@@ -244,9 +273,11 @@ mod tests {
         let file = directory.path().join("group_case_name.json");
         assert!(file.exists());
 
-        let contents = fs::read_to_string(&file).unwrap();
         // The original, unsanitized name is preserved inside the file.
-        assert!(contents.contains("\"operation\": \"group/case name\""));
+        assert_eq!(
+            read_json(&file).get("operation").and_then(Value::as_str),
+            Some("group/case name")
+        );
     }
 
     #[test]
@@ -292,9 +323,12 @@ mod tests {
         let session = session_with_recorded_work("allocate_vec");
         session.write_to_directory(directory.path());
 
-        let contents = fs::read_to_string(&file).unwrap();
-        assert!(!contents.contains("stale"));
-        assert!(contents.contains("allocate_vec"));
+        // Parsing succeeds only if the stale, non-JSON contents were replaced.
+        let value = read_json(&file);
+        assert_eq!(
+            value.get("operation").and_then(Value::as_str),
+            Some("allocate_vec")
+        );
     }
 
     #[test]

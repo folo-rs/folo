@@ -2,11 +2,17 @@
 
 use std::fs;
 use std::hint::black_box;
+use std::path::Path;
 
 use alloc_tracker::{Allocator, Session};
+use serde_json::Value;
 
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+
+fn read_json(path: &Path) -> Value {
+    serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+}
 
 #[test]
 #[cfg_attr(miri, ignore)] // Uses the global allocator and the filesystem, neither supported under Miri.
@@ -49,13 +55,39 @@ fn writes_json_files_for_each_operation() {
     let written = fs::read_dir(directory.path()).unwrap().count();
     assert_eq!(written, 2, "expected one JSON file per operation");
 
-    let contents = fs::read_to_string(&first).unwrap();
-    assert!(contents.contains("\"operation\": \"allocate_buffer\""));
-    assert!(contents.contains("\"total_iterations\": 16"));
-    assert!(contents.contains("\"total_bytes_allocated\""));
-    assert!(contents.contains("\"total_allocations_count\""));
-    assert!(contents.contains("\"mean_bytes_per_iteration\""));
-    assert!(contents.contains("\"mean_allocations_per_iteration\""));
+    let value = read_json(&first);
+    assert_eq!(
+        value.get("operation").and_then(Value::as_str),
+        Some("allocate_buffer")
+    );
+    assert_eq!(
+        value.get("total_iterations").and_then(Value::as_u64),
+        Some(16)
+    );
+    assert!(
+        value
+            .get("total_bytes_allocated")
+            .and_then(Value::as_u64)
+            .is_some()
+    );
+    assert!(
+        value
+            .get("total_allocations_count")
+            .and_then(Value::as_u64)
+            .is_some()
+    );
+    assert!(
+        value
+            .get("mean_bytes_per_iteration")
+            .and_then(Value::as_u64)
+            .is_some()
+    );
+    assert!(
+        value
+            .get("mean_allocations_per_iteration")
+            .and_then(Value::as_u64)
+            .is_some()
+    );
 }
 
 #[test]
@@ -109,9 +141,15 @@ fn write_to_target_writes_into_cargo_target_directory() {
         expected.display()
     );
 
-    let contents = fs::read_to_string(&expected).unwrap();
-    assert!(contents.contains("\"operation\": \"alloc_tracker_write_to_target_probe\""));
-    assert!(contents.contains("\"total_iterations\": 8"));
+    let value = read_json(&expected);
+    assert_eq!(
+        value.get("operation").and_then(Value::as_str),
+        Some("alloc_tracker_write_to_target_probe")
+    );
+    assert_eq!(
+        value.get("total_iterations").and_then(Value::as_u64),
+        Some(8)
+    );
 
     // Avoid polluting the shared target directory for later runs.
     fs::remove_file(&expected).unwrap();

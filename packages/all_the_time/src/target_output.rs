@@ -200,11 +200,18 @@ fn duration_as_nanos(duration: Duration) -> u64 {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::fs;
+    use std::path::Path;
     use std::time::Duration;
+
+    use serde_json::Value;
 
     use super::duration_as_nanos;
     use crate::Session;
     use crate::pal::{FakePlatform, PlatformFacade};
+
+    fn read_json(path: &Path) -> Value {
+        serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    }
 
     #[test]
     fn duration_as_nanos_converts_whole_nanoseconds() {
@@ -242,12 +249,28 @@ mod tests {
         session.write_to_directory(directory.path());
 
         let file = directory.path().join("read_cell.json");
-        let contents = fs::read_to_string(&file).unwrap();
+        let value = read_json(&file);
 
-        assert!(contents.contains("\"operation\": \"read_cell\""));
-        assert!(contents.contains("\"total_iterations\": 4"));
-        assert!(contents.contains("\"total_processor_time_nanos\": 80000000"));
-        assert!(contents.contains("\"mean_processor_time_nanos\": 20000000"));
+        assert_eq!(
+            value.get("operation").and_then(Value::as_str),
+            Some("read_cell")
+        );
+        assert_eq!(
+            value.get("total_iterations").and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            value
+                .get("total_processor_time_nanos")
+                .and_then(Value::as_u64),
+            Some(80_000_000)
+        );
+        assert_eq!(
+            value
+                .get("mean_processor_time_nanos")
+                .and_then(Value::as_u64),
+            Some(20_000_000)
+        );
     }
 
     #[test]
@@ -261,9 +284,11 @@ mod tests {
         let file = directory.path().join("group_case_name.json");
         assert!(file.exists());
 
-        let contents = fs::read_to_string(&file).unwrap();
         // The original, unsanitized name is preserved inside the file.
-        assert!(contents.contains("\"operation\": \"group/case name\""));
+        assert_eq!(
+            read_json(&file).get("operation").and_then(Value::as_str),
+            Some("group/case name")
+        );
     }
 
     #[test]
@@ -316,9 +341,12 @@ mod tests {
         let session = session_with_recorded_work("read_cell");
         session.write_to_directory(directory.path());
 
-        let contents = fs::read_to_string(&file).unwrap();
-        assert!(!contents.contains("stale"));
-        assert!(contents.contains("read_cell"));
+        // Parsing succeeds only if the stale, non-JSON contents were replaced.
+        let value = read_json(&file);
+        assert_eq!(
+            value.get("operation").and_then(Value::as_str),
+            Some("read_cell")
+        );
     }
 
     #[test]

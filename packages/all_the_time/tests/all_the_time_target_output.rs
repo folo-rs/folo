@@ -2,8 +2,14 @@
 
 use std::fs;
 use std::hint::black_box;
+use std::path::Path;
 
 use all_the_time::Session;
+use serde_json::Value;
+
+fn read_json(path: &Path) -> Value {
+    serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+}
 
 #[test]
 #[cfg_attr(miri, ignore)] // Uses the real platform and the filesystem, neither supported under Miri.
@@ -39,11 +45,27 @@ fn writes_json_files_for_each_operation() {
     let written = fs::read_dir(directory.path()).unwrap().count();
     assert_eq!(written, 2, "expected one JSON file per operation");
 
-    let first_contents = fs::read_to_string(&first).unwrap();
-    assert!(first_contents.contains("\"operation\": \"first_operation\""));
-    assert!(first_contents.contains("\"total_iterations\": 100"));
-    assert!(first_contents.contains("\"total_processor_time_nanos\""));
-    assert!(first_contents.contains("\"mean_processor_time_nanos\""));
+    let value = read_json(&first);
+    assert_eq!(
+        value.get("operation").and_then(Value::as_str),
+        Some("first_operation")
+    );
+    assert_eq!(
+        value.get("total_iterations").and_then(Value::as_u64),
+        Some(100)
+    );
+    assert!(
+        value
+            .get("total_processor_time_nanos")
+            .and_then(Value::as_u64)
+            .is_some()
+    );
+    assert!(
+        value
+            .get("mean_processor_time_nanos")
+            .and_then(Value::as_u64)
+            .is_some()
+    );
 }
 
 #[test]
@@ -75,7 +97,12 @@ fn report_and_session_write_equivalently() {
     let session_contents = fs::read_to_string(&session_file).unwrap();
     let report_contents = fs::read_to_string(&report_file).unwrap();
     assert_eq!(session_contents, report_contents);
-    assert!(session_contents.contains("\"total_iterations\": 10"));
+    assert_eq!(
+        read_json(&session_file)
+            .get("total_iterations")
+            .and_then(Value::as_u64),
+        Some(10)
+    );
 }
 
 #[test]
@@ -126,9 +153,15 @@ fn write_to_target_writes_into_cargo_target_directory() {
         expected.display()
     );
 
-    let contents = fs::read_to_string(&expected).unwrap();
-    assert!(contents.contains("\"operation\": \"all_the_time_write_to_target_probe\""));
-    assert!(contents.contains("\"total_iterations\": 8"));
+    let value = read_json(&expected);
+    assert_eq!(
+        value.get("operation").and_then(Value::as_str),
+        Some("all_the_time_write_to_target_probe")
+    );
+    assert_eq!(
+        value.get("total_iterations").and_then(Value::as_u64),
+        Some(8)
+    );
 
     // Avoid polluting the shared target directory for later runs.
     fs::remove_file(&expected).unwrap();
