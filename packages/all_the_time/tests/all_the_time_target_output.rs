@@ -71,11 +71,11 @@ fn report_and_session_write_equivalently() {
     assert!(session_file.exists());
     assert!(report_file.exists());
 
-    // Both entry points capture the same data (iteration count is deterministic).
+    // Both entry points serialize the same recorded data, so the output is identical.
     let session_contents = fs::read_to_string(&session_file).unwrap();
     let report_contents = fs::read_to_string(&report_file).unwrap();
+    assert_eq!(session_contents, report_contents);
     assert!(session_contents.contains("\"total_iterations\": 10"));
-    assert!(report_contents.contains("\"total_iterations\": 10"));
 }
 
 #[test]
