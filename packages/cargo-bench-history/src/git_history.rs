@@ -41,6 +41,14 @@ pub(crate) trait GitHistory {
     /// This is the linear mainline of the ref — the timeline `analyze` orders a
     /// series by. An unresolvable ref yields an empty list.
     fn first_parent(&self, reference: &str) -> impl Future<Output = io::Result<Vec<String>>>;
+
+    /// Reports whether the working tree currently has uncommitted changes
+    /// (tracked modifications, staged changes, or untracked files).
+    ///
+    /// `analyze` uses this to decide whether dirty snapshots on the base
+    /// branch's tip are the user's current work — admitted, with a warning — or
+    /// stale leftovers to be excluded (see DESIGN §8.4).
+    fn is_dirty(&self) -> impl Future<Output = io::Result<bool>>;
 }
 
 /// The real [`GitHistory`], shelling out to `git` in a fixed repository directory.
@@ -118,6 +126,21 @@ impl GitHistory for SystemGitHistory {
             .map(|stdout| parse_rev_list(&stdout))
             .unwrap_or_default())
     }
+
+    #[cfg_attr(test, mutants::skip)] // Shells out to `git`; the dirty test is delegated to `porcelain_is_dirty`.
+    async fn is_dirty(&self) -> io::Result<bool> {
+        let output = self.run(&["status", "--porcelain"]).await?;
+        // A non-repository path exits non-zero (`None`); treat it as not dirty —
+        // `analyze` already errors out earlier when the ref does not resolve.
+        Ok(output.as_deref().is_some_and(porcelain_is_dirty))
+    }
+}
+
+/// Reports whether `git status --porcelain` output indicates an unclean working
+/// tree. The command prints one line per changed or untracked path and nothing at
+/// all for a clean tree, so any non-blank content means dirty.
+fn porcelain_is_dirty(stdout: &str) -> bool {
+    !stdout.trim().is_empty()
 }
 
 /// Extracts a single commit SHA from `git rev-parse` / `git merge-base` output:
@@ -183,6 +206,8 @@ mod fake {
         parents: HashMap<String, Option<String>>,
         /// The detected default branch, if the repository advertises one.
         default_branch: Option<String>,
+        /// Whether the working tree has uncommitted changes.
+        dirty: bool,
     }
 
     impl FakeGitHistory {
@@ -192,6 +217,7 @@ mod fake {
                 refs: HashMap::new(),
                 parents: HashMap::new(),
                 default_branch: None,
+                dirty: false,
             }
         }
 
@@ -220,6 +246,12 @@ mod fake {
         /// Sets the advertised default branch.
         pub(crate) fn mark_default(&mut self, name: &str) -> &mut Self {
             self.default_branch = Some(name.to_owned());
+            self
+        }
+
+        /// Marks the working tree as having uncommitted changes.
+        pub(crate) fn mark_dirty(&mut self) -> &mut Self {
+            self.dirty = true;
             self
         }
 
@@ -283,6 +315,10 @@ mod fake {
             chain.reverse(); // oldest-first, matching `rev-list --reverse`.
             ready(Ok(chain))
         }
+
+        fn is_dirty(&self) -> impl Future<Output = io::Result<bool>> {
+            ready(Ok(self.dirty))
+        }
     }
 }
 
@@ -308,6 +344,14 @@ mod tests {
         let parsed = parse_rev_list("c0\nc1\n\n  c2  \n");
         assert_eq!(parsed, vec!["c0", "c1", "c2"]);
         assert!(parse_rev_list("\n   \n").is_empty());
+    }
+
+    #[test]
+    fn porcelain_is_dirty_detects_any_nonblank_content() {
+        assert!(porcelain_is_dirty(" M src/lib.rs\n"));
+        assert!(porcelain_is_dirty("?? new_file\n"));
+        assert!(!porcelain_is_dirty(""));
+        assert!(!porcelain_is_dirty("   \n  \n"));
     }
 
     #[test]
@@ -371,6 +415,14 @@ mod tests {
             block_on(FakeGitHistory::new().default_branch()).unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn fake_reports_working_tree_dirtiness() {
+        assert!(!block_on(fixture().is_dirty()).unwrap());
+        let mut dirty = fixture();
+        dirty.mark_dirty();
+        assert!(block_on(dirty.is_dirty()).unwrap());
     }
 
     #[test]

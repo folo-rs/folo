@@ -741,7 +741,8 @@ async fn analyze_without_a_repository_errors() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn analyze_official_view_excludes_dirty_runs() {
-    let workspace = Workspace::repo(&storage_only_config());
+    // A clean working tree, so the base-branch dirty-tree exception does not apply.
+    let workspace = Workspace::clean_repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
     workspace.seed_callgrind("2024-01-02", "c2", 100.0);
     workspace.seed_callgrind("2024-01-03", "c3", 100.0);
@@ -778,7 +779,9 @@ async fn analyze_official_view_excludes_dirty_runs() {
 #[cfg_attr(miri, ignore)]
 #[serial]
 async fn analyze_hints_when_every_run_is_a_dirty_snapshot_on_the_base() {
-    let workspace = Workspace::repo(&storage_only_config());
+    // A clean working tree, so the base-branch dirty-tree exception does not apply
+    // and every dirty-on-base snapshot stays excluded (yielding the hint).
+    let workspace = Workspace::clean_repo(&storage_only_config());
     // Two dirty snapshots on master commits and not a single clean run anywhere.
     workspace.seed_dirty_callgrind("2024-01-01", "c1", 100.0);
     workspace.seed_dirty_callgrind("2024-01-02", "c2", 130.0);
@@ -805,6 +808,73 @@ async fn analyze_hints_when_every_run_is_a_dirty_snapshot_on_the_base() {
     assert!(
         hint.contains("dirty"),
         "the hint should explain the dirty-on-base exclusion: {hint}"
+    );
+}
+
+/// The mirror of the exclusion case: when the working tree is *currently* dirty on
+/// the base branch (the user is evaluating the tool, or accidentally working on top
+/// of the default branch), the dirty snapshot on the tip commit IS admitted, and
+/// the report ends with a warning that such data may be excluded from future
+/// analysis. `--no-dirty` overrides it. Exercised end to end through the production
+/// dispatch with a real dirty git tree.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_dirty_tree_on_the_base_admits_the_tip_with_a_warning() {
+    let workspace = Workspace::clean_repo(&storage_only_config());
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.seed_callgrind("2024-01-02", "c2", 100.0);
+    workspace.seed_callgrind("2024-01-03", "c3", 100.0);
+    // A dirty regression snapshot on the tip commit (c3).
+    workspace.seed_dirty_callgrind("2024-01-04", "c3", 130.0);
+    // Make the working tree genuinely dirty (an uncommitted, non-ignored file),
+    // matching the "evaluating the tool" / "working on the base branch" scenario.
+    workspace.make_dirty("uncommitted.txt");
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(
+        regressions, 1,
+        "the dirty tip regression is admitted: {report}"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(
+        parsed["runs"], 4,
+        "the dirty tip snapshot joins the three clean runs: {report}"
+    );
+    let warning = parsed["warning"]
+        .as_str()
+        .unwrap_or_else(|| panic!("admitting a dirty base-branch run must warn: {report}"));
+    assert!(
+        warning.contains("Switch to a new branch"),
+        "the warning should advise switching to a branch: {warning}"
+    );
+
+    // `--no-dirty` skips the probe and the exception, so the dirty tip is dropped.
+    let RunOutcome::Analyzed { report, .. } = workspace
+        .drive(&["analyze", "--format", "json", "--no-dirty"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(
+        parsed["runs"], 3,
+        "--no-dirty drops the dirty tip snapshot: {report}"
+    );
+    assert!(
+        parsed["warning"].is_null(),
+        "no warning fires under --no-dirty: {report}"
     );
 }
 

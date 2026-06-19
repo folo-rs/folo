@@ -186,7 +186,26 @@ where
         merge_base.as_deref().unwrap_or("<none>")
     ));
 
-    let selection = select_commits(&ancestry, merge_base.as_deref(), !options.no_dirty);
+    // When the target tip is base-side (an official / on-the-base-branch view) but
+    // the working tree is currently dirty, the dirty snapshots stored on the tip
+    // are the user's in-flight work rather than stale leftovers, so they are
+    // admitted (and the user warned). `--no-dirty` skips both the probe and the
+    // exception.
+    let working_tree_dirty = if options.no_dirty {
+        false
+    } else {
+        git.is_dirty().await.map_err(RunError::Io)?
+    };
+    if working_tree_dirty {
+        reporter.note("working tree is dirty: dirty snapshots on a base-side tip will be admitted");
+    }
+
+    let selection = select_commits(
+        &ancestry,
+        merge_base.as_deref(),
+        !options.no_dirty,
+        working_tree_dirty,
+    );
     // First-parent position of each selected commit; an object whose commit is not
     // here is outside the analyzed history and contributes nothing.
     let order: HashMap<String, usize> = selection
@@ -198,6 +217,12 @@ where
         .iter()
         .map(|selected| (selected.commit.as_str(), selected.admit_dirty))
         .collect();
+    // Commits whose dirty runs are admitted only by the base-branch dirty-tree
+    // exception, so including one triggers the ephemeral-data warning.
+    let dirty_base_exception: HashMap<&str, bool> = selection
+        .iter()
+        .map(|selected| (selected.commit.as_str(), selected.dirty_base_exception))
+        .collect();
 
     // Tally why candidates do not enter the analysis, so a `0 runs` outcome can
     // explain itself (via `--verbose` per object, and via a summary hint when
@@ -206,6 +231,9 @@ where
     let mut excluded_outside_history = 0_usize;
     let mut excluded_dirty_base = 0_usize;
     let mut excluded_since = 0_usize;
+    // Whether at least one dirty run was admitted solely by the base-branch
+    // dirty-tree exception, so the report can warn that it is ephemeral.
+    let mut included_dirty_base_exception = false;
 
     // Load each in-selection object, admitting a dirty snapshot only on a commit
     // whose side of the merge-base allows it, then apply the `--since` window.
@@ -247,7 +275,20 @@ where
             ));
             continue;
         }
-        reporter.note(&format!("including {key}"));
+        if parsed.is_dirty()
+            && dirty_base_exception
+                .get(parsed.commit.as_str())
+                .copied()
+                .unwrap_or(false)
+        {
+            included_dirty_base_exception = true;
+            reporter.note(&format!(
+                "including {key}: dirty snapshot on the base-branch tip, admitted \
+                 because the working tree is dirty (ephemeral — see the warning)"
+            ));
+        } else {
+            reporter.note(&format!("including {key}"));
+        }
         loaded.push(LoadedObject {
             key: parsed,
             object_key: key,
@@ -304,6 +345,16 @@ where
         },
     );
 
+    // Admitting a dirty snapshot on the base branch's tip is a courtesy for the
+    // "evaluating the tool" / "accidentally working on the base branch" cases; warn
+    // that such data is not persisted across commits.
+    let warning = included_dirty_base_exception.then(|| {
+        "Warning: analysis included dirty runs (with uncommitted changes) on top of the \
+         base branch. These may be excluded from future analysis. Switch to a new branch \
+         to persist benchmark history of your changes."
+            .to_owned()
+    });
+
     let input = ReportInput {
         project: project_id,
         runs: loaded.len(),
@@ -311,6 +362,7 @@ where
         findings: &findings,
         sets: &summaries,
         hint: hint.as_deref(),
+        warning: warning.as_deref(),
     };
     let report = render(&input, format);
 
@@ -984,6 +1036,177 @@ mod tests {
         assert!(
             reporter.contains("dirty snapshot on a base-side commit"),
             "verbose notes should explain each exclusion: {:?}",
+            reporter.notes()
+        );
+    }
+
+    #[test]
+    fn dirty_tree_on_base_branch_admits_tip_dirty_runs_with_a_warning() {
+        // On the base branch (official view) with a currently-dirty working tree,
+        // the dirty snapshots on the tip are the user's in-flight work and ARE
+        // admitted, with a warning that they are ephemeral.
+        let storage = MemoryStorage::new();
+        for (index, value) in [100.0, 100.0, 100.0].into_iter().enumerate() {
+            let commit = format!("c{index}");
+            let second = i64::try_from(index).unwrap();
+            store(
+                &storage,
+                &clean_key(&commit),
+                &ir_set(second, &commit, value),
+            );
+        }
+        store(&storage, &dirty_key("c3", 300), &ir_set(300, "c3", 130.0));
+        let mut git = linear_git();
+        git.mark_dirty();
+
+        let opts = AnalyzeOptions {
+            format: Some("json".to_owned()),
+            ..options()
+        };
+        let reporter = RecordingReporter::new();
+        let outcome = block_on(analyze_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &opts,
+            &reporter,
+        ))
+        .expect("analysis runs");
+        let RunOutcome::Analyzed {
+            report,
+            regressions,
+            ..
+        } = outcome
+        else {
+            panic!("expected an analysis outcome");
+        };
+
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(parsed["runs"], 4, "the dirty tip snapshot is admitted");
+        assert_eq!(regressions, 1, "the dirty c3 value is the latest point");
+        let warning = parsed["warning"]
+            .as_str()
+            .expect("the ephemeral-data warning is present");
+        assert!(
+            warning.contains("dirty runs") && warning.contains("Switch to a new branch"),
+            "{warning}"
+        );
+        assert!(
+            reporter.contains("ephemeral"),
+            "a verbose note should flag the ephemeral inclusion: {:?}",
+            reporter.notes()
+        );
+    }
+
+    #[test]
+    fn clean_tree_on_base_branch_excludes_dirty_and_warns_nothing() {
+        // The exception is gated on the working tree being dirty: with a clean
+        // tree the base-tip dirty snapshot stays excluded and no warning fires.
+        let storage = MemoryStorage::new();
+        for (index, value) in [100.0, 100.0, 100.0].into_iter().enumerate() {
+            let commit = format!("c{index}");
+            let second = i64::try_from(index).unwrap();
+            store(
+                &storage,
+                &clean_key(&commit),
+                &ir_set(second, &commit, value),
+            );
+        }
+        store(&storage, &dirty_key("c3", 300), &ir_set(300, "c3", 999.0));
+        let git = linear_git(); // Clean working tree (the default).
+
+        let opts = AnalyzeOptions {
+            format: Some("json".to_owned()),
+            ..options()
+        };
+        let (report, _) = analyze(&git, &storage, "folo", &opts);
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(parsed["runs"], 3, "the dirty tip run stays excluded");
+        assert!(
+            parsed["warning"].is_null(),
+            "no warning when the tree is clean"
+        );
+    }
+
+    #[test]
+    fn no_dirty_overrides_the_dirty_tree_exception() {
+        // `--no-dirty` skips the dirtiness probe and the exception, so even with a
+        // dirty tree the base-tip dirty snapshot is excluded and no warning fires.
+        let storage = MemoryStorage::new();
+        for (index, value) in [100.0, 100.0, 100.0].into_iter().enumerate() {
+            let commit = format!("c{index}");
+            let second = i64::try_from(index).unwrap();
+            store(
+                &storage,
+                &clean_key(&commit),
+                &ir_set(second, &commit, value),
+            );
+        }
+        store(&storage, &dirty_key("c3", 300), &ir_set(300, "c3", 999.0));
+        let mut git = linear_git();
+        git.mark_dirty();
+
+        let opts = AnalyzeOptions {
+            no_dirty: true,
+            format: Some("json".to_owned()),
+            ..options()
+        };
+        let (report, _) = analyze(&git, &storage, "folo", &opts);
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(parsed["runs"], 3, "--no-dirty drops the dirty tip snapshot");
+        assert!(parsed["warning"].is_null(), "no warning under --no-dirty");
+    }
+
+    #[test]
+    fn only_the_tip_admits_dirty_under_the_exception() {
+        // With a dirty tree the exception applies ONLY to the base-branch tip: a
+        // dirty snapshot on an earlier base-side commit stays excluded while the
+        // tip's dirty snapshot is admitted (and warned).
+        let storage = MemoryStorage::new();
+        for (index, value) in [100.0, 100.0, 100.0, 100.0].into_iter().enumerate() {
+            let commit = format!("c{index}");
+            let second = i64::try_from(index).unwrap();
+            store(
+                &storage,
+                &clean_key(&commit),
+                &ir_set(second, &commit, value),
+            );
+        }
+        store(&storage, &dirty_key("c1", 150), &ir_set(150, "c1", 999.0));
+        store(&storage, &dirty_key("c3", 300), &ir_set(300, "c3", 130.0));
+        let mut git = linear_git();
+        git.mark_dirty();
+
+        let opts = AnalyzeOptions {
+            format: Some("json".to_owned()),
+            ..options()
+        };
+        let reporter = RecordingReporter::new();
+        let outcome = block_on(analyze_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &opts,
+            &reporter,
+        ))
+        .expect("analysis runs");
+        let RunOutcome::Analyzed { report, .. } = outcome else {
+            panic!("expected an analysis outcome");
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(
+            parsed["runs"], 5,
+            "only the tip's dirty run joins the four clean runs"
+        );
+        assert!(
+            !parsed["warning"].is_null(),
+            "the tip's admitted dirty run warns: {report}"
+        );
+        assert!(
+            reporter.contains("dirty snapshot on a base-side commit"),
+            "the earlier base-side dirty run is still excluded: {:?}",
             reporter.notes()
         );
     }

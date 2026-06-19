@@ -67,6 +67,9 @@ pub(crate) struct ReportInput<'a> {
     /// A diagnostic hint shown when stored runs existed but none were analyzed,
     /// explaining why the outcome is empty. Absent in the normal case.
     pub(crate) hint: Option<&'a str>,
+    /// A warning shown when the analysis admitted dirty runs on the base branch's
+    /// tip (the working-tree-dirty exception). Absent in the normal case.
+    pub(crate) warning: Option<&'a str>,
 }
 
 /// The JSON shape of a per-set slice.
@@ -110,6 +113,9 @@ struct JsonReport<'a> {
     /// A diagnostic hint when stored runs existed but none were analyzed.
     #[serde(skip_serializing_if = "Option::is_none")]
     hint: Option<&'a str>,
+    /// A warning when dirty base-branch-tip runs were admitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    warning: Option<&'a str>,
     /// Every set's findings, globally ranked.
     findings: &'a [Finding],
     /// The per-set breakdown.
@@ -146,6 +152,15 @@ fn finish(lines: &[String]) -> String {
     format!("{}\n", lines.join("\n"))
 }
 
+/// Appends the ephemeral-data warning (if any) as a trailing, blank-line-separated
+/// block, so it reads at the very end of the report.
+fn push_warning(lines: &mut Vec<String>, warning: Option<&str>) {
+    if let Some(warning) = warning {
+        lines.push(String::new());
+        lines.push(warning.to_owned());
+    }
+}
+
 /// A one-line label for a set, naming its partition and derived facets.
 fn set_label(set: &DiscriminantSet) -> String {
     format!("{set} (os={} arch={})", set.os(), set.architecture())
@@ -169,6 +184,7 @@ fn render_text(input: &ReportInput<'_>) -> String {
             lines.push(String::new());
             lines.push(hint.to_owned());
         }
+        push_warning(&mut lines, input.warning);
         return finish(&lines);
     }
 
@@ -192,6 +208,7 @@ fn render_text(input: &ReportInput<'_>) -> String {
             ));
         }
     }
+    push_warning(&mut lines, input.warning);
     finish(&lines)
 }
 
@@ -215,6 +232,7 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
             lines.push(String::new());
             lines.push(hint.to_owned());
         }
+        push_warning(&mut lines, input.warning);
         return finish(&lines);
     }
 
@@ -249,6 +267,7 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
             ));
         }
     }
+    push_warning(&mut lines, input.warning);
     finish(&lines)
 }
 
@@ -282,6 +301,7 @@ fn render_json(input: &ReportInput<'_>) -> String {
         regressions: count_top(input.findings, Direction::Regression),
         improvements: count_top(input.findings, Direction::Improvement),
         hint: input.hint,
+        warning: input.warning,
         findings: input.findings,
         sets,
     };
@@ -386,6 +406,7 @@ mod tests {
             findings,
             sets: summaries,
             hint: None,
+            warning: None,
         }
     }
 
@@ -410,6 +431,7 @@ mod tests {
             findings: &[],
             sets: &[],
             hint: None,
+            warning: None,
         };
         let report = render(&input, ReportFormat::Text);
         assert!(report.contains("Analyzed project folo"), "{report}");
@@ -426,6 +448,7 @@ mod tests {
             findings: &[],
             sets: &[],
             hint: Some("Found 2 stored runs ... dirty snapshots"),
+            warning: None,
         };
         let report = render(&input, ReportFormat::Text);
         assert!(report.contains("No notable changes detected."), "{report}");
@@ -509,6 +532,7 @@ mod tests {
             findings: &[],
             sets: &[],
             hint: Some("Found 2 stored runs ... commit your working tree"),
+            warning: None,
         };
         let report = render(&input, ReportFormat::Markdown);
         assert!(report.contains("No notable changes detected."), "{report}");
@@ -524,6 +548,7 @@ mod tests {
             findings: &[],
             sets: &[],
             hint: Some("dirty snapshots on base-branch commits"),
+            warning: None,
         };
         let report = render(&input, ReportFormat::Json);
         let parsed: serde_json::Value = serde_json::from_str(&report).expect("report is JSON");
@@ -531,6 +556,63 @@ mod tests {
             parsed["hint"], "dirty snapshots on base-branch commits",
             "{report}"
         );
+    }
+
+    #[test]
+    fn warning_renders_at_the_end_of_every_format() {
+        let set = discriminant_set();
+        let findings = vec![regression()];
+        let mut summaries = Vec::new();
+        let mut input = single_set_input("folo", &set, &findings, &mut summaries);
+        input.warning = Some("Warning: analysis included dirty runs (ephemeral).");
+
+        let text = render(&input, ReportFormat::Text);
+        assert!(text.trim_end().ends_with("(ephemeral)."), "{text}");
+
+        let markdown = render(&input, ReportFormat::Markdown);
+        assert!(markdown.trim_end().ends_with("(ephemeral)."), "{markdown}");
+
+        let json = render(&input, ReportFormat::Json);
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("report is JSON");
+        assert_eq!(
+            parsed["warning"], "Warning: analysis included dirty runs (ephemeral).",
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn warning_renders_even_when_there_are_no_findings() {
+        let input = ReportInput {
+            project: "folo",
+            runs: 1,
+            series: 1,
+            findings: &[],
+            sets: &[],
+            hint: None,
+            warning: Some("Warning: dirty runs were included."),
+        };
+        let text = render(&input, ReportFormat::Text);
+        assert!(text.contains("No notable changes detected."), "{text}");
+        assert!(text.trim_end().ends_with("included."), "{text}");
+
+        let markdown = render(&input, ReportFormat::Markdown);
+        assert!(markdown.trim_end().ends_with("included."), "{markdown}");
+    }
+
+    #[test]
+    fn omitted_warning_is_absent_from_json() {
+        let input = ReportInput {
+            project: "folo",
+            runs: 0,
+            series: 0,
+            findings: &[],
+            sets: &[],
+            hint: None,
+            warning: None,
+        };
+        let report = render(&input, ReportFormat::Json);
+        let parsed: serde_json::Value = serde_json::from_str(&report).expect("report is JSON");
+        assert!(parsed.get("warning").is_none(), "{report}");
     }
 
     #[test]

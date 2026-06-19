@@ -512,6 +512,21 @@ topology**; multiple runs on one commit sub-order by effective time (§6). Branc
 dirty snapshot taken on a shared base commit (scratch work before committing) is
 excluded from an official view until it is committed.
 
+**Dirty-working-tree exception on the base tip.** There is one carve-out to the
+clean-only base rule, for the common "first impressions" scenario where a user
+runs `analyze` while sitting on the base branch with uncommitted changes (e.g. an
+untracked `.cargo/bench_history.toml`, so every stored run landed as a
+`dirty-*.json` on the base tip). When the **working tree is currently dirty** (the
+`GitHistory::is_dirty` probe — `git status --porcelain` non-empty, untracked files
+included, matching how a run decides clean-vs-dirty) **and** the target **tip**
+commit is base-side, that tip's dirty snapshots are admitted (they are the user's
+in-flight work, not stale leftovers). The exception is limited to the tip — earlier
+base-side commits stay clean-only — and is gated by `allow_dirty`, so `--no-dirty`
+overrides it. Whenever such a run is actually included, the report ends with a
+**warning** that the data is ephemeral ("…included dirty runs … on top of the base
+branch … Switch to a new branch to persist benchmark history of your changes.").
+On a feature view the tip is already target-side, so the exception is a no-op there.
+
 For each selected commit `analyze` reads its directory (`clean.json` and, when
 admitted, `dirty-*.json`), builds per-`(BenchmarkId, metric)` series in topological
 order, runs the finding algorithms (§9), and prints a report.
@@ -907,7 +922,14 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     old effective-time ordering); runs within one commit sub-order by effective time.
     Discriminant sets are selected/listed via `--list-discriminants` + `--engine` /
     `--os` / `--architecture` / `--machine-key`, each matched set producing its own
-    report (§4.3, §8.4).
+    report (§4.3, §8.4). **Dirty-tree base-tip exception:** when the working tree is
+    currently dirty (`git status --porcelain` non-empty) and the target tip is
+    base-side, that tip's dirty snapshots are admitted (the "evaluating the tool" /
+    "accidentally on the base branch" case), limited to the tip and gated by
+    `allow_dirty` (`--no-dirty` overrides). Including such a run appends an
+    ephemeral-data **warning** to the report. Rationale: these are the user's
+    in-flight changes, so showing them (with a nudge to branch) beats a confusing
+    `0 runs`; persisting them is still refused so committed history stays clean.
 23. **`backfill`** — *Decided:* a dedicated command (not a `run` flag) that walks
     the **first-parent** mainline of the current branch oldest-first
     (`git rev-list --reverse --first-parent <from>^..<to>`, endpoints inclusive),

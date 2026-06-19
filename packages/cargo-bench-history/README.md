@@ -80,7 +80,10 @@ cargo bench-history analyze [--repo PATH] [--branch REF] [--base REF]
   `--branch` chooses the line to analyze (default `HEAD`) and `--base` the line to
   branch from (default: the configured or detected default branch); commits up to
   the merge-base contribute clean runs only, while commits unique to the analyzed
-  branch also contribute dirty snapshots unless `--no-dirty` is given. The history
+  branch also contribute dirty snapshots unless `--no-dirty` is given (one
+  exception: if your working tree is currently dirty while you are on the base
+  branch, that branch tip's dirty snapshots are included, and the report warns that
+  this data is ephemeral — switch to a feature branch to persist it). The history
   is partitioned into *discriminant sets* (engine, target triple, OS, architecture,
   machine key); `--engine`/`--os`/`--architecture`/`--machine-key` select sets and
   `--list-discriminants` prints the sets present in storage. `--since`/`--metric`

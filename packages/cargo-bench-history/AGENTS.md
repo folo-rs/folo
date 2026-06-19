@@ -112,7 +112,13 @@ being analyzed:
   first-parent ancestry and splits it at the merge-base with the base: commits on
   the base side admit **clean runs only**; commits unique to the target side also
   admit **dirty** snapshots (so the official line stays clean while a feature branch
-  can carry work-in-progress points). `--no-dirty` drops dirty everywhere.
+  can carry work-in-progress points). `--no-dirty` drops dirty everywhere. **One
+  exception:** when the working tree is currently dirty (`GitHistory::is_dirty`) and
+  the target **tip** is base-side, that tip's dirty snapshots are admitted and the
+  report ends with an ephemeral-data warning — the "evaluating the tool" /
+  "accidentally on the base branch" case. It is tip-only and `--no-dirty` overrides
+  it. `select_commits`'s fourth parameter (`dirty_tip_exception`) carries this, and
+  `SelectedCommit::dirty_base_exception` flags the tip so `analyze` knows to warn.
 * `analyze::series` reconstructs one series per `(location, benchmark, metric)`
   ordered by **git topology** (first-parent index of the commit), then within a
   commit by `(dirty, effective, object key)` so a clean point precedes same-commit

@@ -12,8 +12,14 @@
 pub(crate) struct SelectedCommit {
     /// The commit SHA (the storage commit-directory segment).
     pub(crate) commit: String,
-    /// Whether dirty snapshots on this commit are admitted (target-side only).
+    /// Whether dirty snapshots on this commit are admitted (target-side, or the
+    /// base-side tip under the dirty-working-tree exception).
     pub(crate) admit_dirty: bool,
+    /// Whether `admit_dirty` is granted *only* by the base-branch dirty-tree
+    /// exception (a base-side tip whose dirty runs are the user's current work).
+    /// When such a run is actually included, `analyze` warns that it is
+    /// ephemeral (see DESIGN §8.4).
+    pub(crate) dirty_base_exception: bool,
 }
 
 /// Splits the target's first-parent `ancestry` (oldest-first) at the `merge_base`
@@ -26,20 +32,32 @@ pub(crate) struct SelectedCommit {
 /// commit is treated as target-side — the inclusive choice for a "how does my
 /// branch fit in" view, and harmless for an official view (whose base *is* the
 /// target, so the merge-base is always the tip and on the chain).
+///
+/// `dirty_tip_exception` carves out the on-the-base-branch scenario: when the
+/// **tip** commit is base-side (an official view) but the working tree is
+/// currently dirty, its dirty snapshots are the user's in-flight work, so they are
+/// admitted (flagged via [`SelectedCommit::dirty_base_exception`] so the caller can
+/// warn). Earlier base-side commits are unaffected — only the tip. `allow_dirty`
+/// still gates it, so `--no-dirty` overrides the exception.
 pub(crate) fn select_commits(
     ancestry: &[String],
     merge_base: Option<&str>,
     allow_dirty: bool,
+    dirty_tip_exception: bool,
 ) -> Vec<SelectedCommit> {
     let split = merge_base.and_then(|base| ancestry.iter().position(|commit| commit == base));
+    let tip_index = ancestry.len().checked_sub(1);
     ancestry
         .iter()
         .enumerate()
         .map(|(index, commit)| {
             let target_side = split.is_none_or(|boundary| index > boundary);
+            let is_tip = tip_index == Some(index);
+            let dirty_base_exception = !target_side && is_tip && allow_dirty && dirty_tip_exception;
             SelectedCommit {
                 commit: commit.clone(),
-                admit_dirty: target_side && allow_dirty,
+                admit_dirty: (target_side && allow_dirty) || dirty_base_exception,
+                dirty_base_exception,
             }
         })
         .collect()
@@ -66,10 +84,15 @@ mod tests {
         // Analyzing master with base==master: merge-base is the tip, so every
         // commit is base-side (clean only).
         let ancestry = shas(&["c0", "c1", "c2", "c3"]);
-        let selection = select_commits(&ancestry, Some("c3"), true);
+        let selection = select_commits(&ancestry, Some("c3"), true, false);
         assert_eq!(
             admit(&selection),
             vec![("c0", false), ("c1", false), ("c2", false), ("c3", false)]
+        );
+        assert!(
+            selection
+                .iter()
+                .all(|selected| !selected.dirty_base_exception)
         );
     }
 
@@ -78,7 +101,7 @@ mod tests {
         // feature ancestry [c0,c1,f1,f2] branched at c1: c0,c1 base-side; f1,f2
         // target-side (admit dirty).
         let ancestry = shas(&["c0", "c1", "f1", "f2"]);
-        let selection = select_commits(&ancestry, Some("c1"), true);
+        let selection = select_commits(&ancestry, Some("c1"), true, false);
         assert_eq!(
             admit(&selection),
             vec![("c0", false), ("c1", false), ("f1", true), ("f2", true)]
@@ -88,14 +111,14 @@ mod tests {
     #[test]
     fn no_dirty_suppresses_target_side_admission() {
         let ancestry = shas(&["c0", "c1", "f1", "f2"]);
-        let selection = select_commits(&ancestry, Some("c1"), false);
+        let selection = select_commits(&ancestry, Some("c1"), false, false);
         assert!(selection.iter().all(|selected| !selected.admit_dirty));
     }
 
     #[test]
     fn absent_merge_base_treats_everything_as_target_side() {
         let ancestry = shas(&["a0", "a1"]);
-        let selection = select_commits(&ancestry, None, true);
+        let selection = select_commits(&ancestry, None, true, false);
         assert_eq!(admit(&selection), vec![("a0", true), ("a1", true)]);
     }
 
@@ -104,18 +127,64 @@ mod tests {
         // A merge-base that is not present in the ancestry list falls back to the
         // inclusive (target-side) treatment.
         let ancestry = shas(&["c0", "c1", "c2"]);
-        let selection = select_commits(&ancestry, Some("zz"), true);
+        let selection = select_commits(&ancestry, Some("zz"), true, false);
         assert!(selection.iter().all(|selected| selected.admit_dirty));
     }
 
     #[test]
     fn ordering_is_preserved_oldest_first() {
         let ancestry = shas(&["c0", "c1", "c2"]);
-        let selection = select_commits(&ancestry, Some("c0"), true);
+        let selection = select_commits(&ancestry, Some("c0"), true, false);
         let order: Vec<&str> = selection
             .iter()
             .map(|selected| selected.commit.as_str())
             .collect();
         assert_eq!(order, vec!["c0", "c1", "c2"]);
+    }
+
+    #[test]
+    fn dirty_tip_exception_admits_dirty_on_the_base_side_tip_only() {
+        // Official view (everything base-side) but the working tree is dirty: only
+        // the tip (c3) admits dirty runs, flagged as the base-branch exception;
+        // earlier base-side commits stay clean-only.
+        let ancestry = shas(&["c0", "c1", "c2", "c3"]);
+        let selection = select_commits(&ancestry, Some("c3"), true, true);
+        assert_eq!(
+            admit(&selection),
+            vec![("c0", false), ("c1", false), ("c2", false), ("c3", true)]
+        );
+        let flagged: Vec<&str> = selection
+            .iter()
+            .filter(|selected| selected.dirty_base_exception)
+            .map(|selected| selected.commit.as_str())
+            .collect();
+        assert_eq!(flagged, vec!["c3"], "only the tip carries the exception");
+    }
+
+    #[test]
+    fn dirty_tip_exception_is_gated_by_allow_dirty() {
+        // --no-dirty (allow_dirty == false) overrides the dirty-tree exception.
+        let ancestry = shas(&["c0", "c1", "c2", "c3"]);
+        let selection = select_commits(&ancestry, Some("c3"), false, true);
+        assert!(selection.iter().all(|selected| !selected.admit_dirty));
+        assert!(
+            selection
+                .iter()
+                .all(|selected| !selected.dirty_base_exception)
+        );
+    }
+
+    #[test]
+    fn dirty_tip_exception_does_not_flag_a_target_side_tip() {
+        // On a feature view the tip is already target-side, so the exception adds
+        // nothing and must not mark the tip as a base-branch exception.
+        let ancestry = shas(&["c0", "c1", "f1", "f2"]);
+        let selection = select_commits(&ancestry, Some("c1"), true, true);
+        assert!(
+            selection
+                .iter()
+                .all(|selected| !selected.dirty_base_exception),
+            "a target-side tip is admitted normally, not via the exception"
+        );
     }
 }
