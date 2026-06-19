@@ -25,7 +25,7 @@ fn writes_json_files_for_each_operation() {
     }
 
     let directory = tempfile::tempdir().unwrap();
-    session.write_to_directory(directory.path()).unwrap();
+    session.write_to_directory(directory.path());
 
     let file = directory.path().join("allocate_buffer.json");
     assert!(file.exists(), "expected JSON file for the operation");
@@ -48,7 +48,7 @@ fn empty_session_writes_nothing() {
     let directory = tempfile::tempdir().unwrap();
     let target = directory.path().join("output");
 
-    session.write_to_directory(&target).unwrap();
+    session.write_to_directory(&target);
 
     assert!(!target.exists(), "no directory should be created");
 }
@@ -82,7 +82,7 @@ fn write_to_target_writes_into_cargo_target_directory() {
         std::fs::remove_file(&expected).unwrap();
     }
 
-    session.write_to_target().unwrap();
+    session.write_to_target();
 
     assert!(
         expected.exists(),

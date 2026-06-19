@@ -1,8 +1,8 @@
 //! Machine-readable JSON output of processor time statistics.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use std::{fs, io};
 
 use serde::Serialize;
 
@@ -34,17 +34,17 @@ impl Report {
     /// session was part of a "list available benchmarks" probe run instead of
     /// some real activity.
     ///
-    /// # Errors
+    /// # Panics
     ///
-    /// Returns an error if the output directory cannot be created or a file
-    /// cannot be written.
+    /// Panics if the output directory cannot be created or a file cannot be
+    /// written. Benchmark results are not useful without the output files they
+    /// produce, so a write failure is treated as fatal rather than recoverable.
     ///
     /// # Examples
     ///
     /// ```no_run
     /// use all_the_time::Session;
     ///
-    /// # fn main() -> std::io::Result<()> {
     /// let session = Session::new();
     /// {
     ///     let operation = session.operation("work");
@@ -54,14 +54,12 @@ impl Report {
     ///     }
     /// }
     ///
-    /// session.to_report().write_to_target()?;
-    /// # Ok(())
-    /// # }
+    /// session.to_report().write_to_target();
     /// ```
-    pub fn write_to_target(&self) -> io::Result<()> {
+    pub fn write_to_target(&self) {
         let target =
             folo_utils::cargo_target_directory().unwrap_or_else(|| PathBuf::from("target"));
-        self.write_to_directory(target.join(OUTPUT_SUBDIRECTORY))
+        self.write_to_directory(target.join(OUTPUT_SUBDIRECTORY));
     }
 
     /// Writes machine-readable JSON statistics into the given directory.
@@ -73,17 +71,17 @@ impl Report {
     ///
     /// Writes nothing if no operations were captured.
     ///
-    /// # Errors
+    /// # Panics
     ///
-    /// Returns an error if the output directory cannot be created or a file
-    /// cannot be written.
+    /// Panics if the output directory cannot be created or a file cannot be
+    /// written. Benchmark results are not useful without the output files they
+    /// produce, so a write failure is treated as fatal rather than recoverable.
     ///
     /// # Examples
     ///
     /// ```
     /// use all_the_time::Session;
     ///
-    /// # fn main() -> std::io::Result<()> {
     /// let session = Session::new();
     /// {
     ///     let operation = session.operation("work");
@@ -94,17 +92,20 @@ impl Report {
     /// }
     ///
     /// let directory = std::env::temp_dir().join("all_the_time_example");
-    /// session.to_report().write_to_directory(&directory)?;
-    /// # Ok(())
-    /// # }
+    /// session.to_report().write_to_directory(&directory);
     /// ```
-    pub fn write_to_directory(&self, directory: impl AsRef<Path>) -> io::Result<()> {
+    pub fn write_to_directory(&self, directory: impl AsRef<Path>) {
         if self.is_empty() {
-            return Ok(());
+            return;
         }
 
         let directory = directory.as_ref();
-        fs::create_dir_all(directory)?;
+        fs::create_dir_all(directory).unwrap_or_else(|error| {
+            panic!(
+                "failed to create benchmark output directory {}: {error}",
+                directory.display()
+            )
+        });
 
         for (name, operation) in self.operations() {
             if operation.total_iterations() == 0 {
@@ -122,10 +123,14 @@ impl Report {
                 .expect("serializing fixed primitive fields to JSON cannot fail");
 
             let file_name = format!("{}.json", folo_utils::sanitize_file_name(name));
-            fs::write(directory.join(file_name), json)?;
+            let path = directory.join(file_name);
+            fs::write(&path, json).unwrap_or_else(|error| {
+                panic!(
+                    "failed to write benchmark output file {}: {error}",
+                    path.display()
+                )
+            });
         }
-
-        Ok(())
     }
 }
 
@@ -136,12 +141,12 @@ impl Session {
     /// `self.to_report().write_to_target()`. See
     /// [`Report::write_to_target`](crate::Report::write_to_target) for details.
     ///
-    /// # Errors
+    /// # Panics
     ///
-    /// Returns an error if the output directory cannot be created or a file
-    /// cannot be written.
-    pub fn write_to_target(&self) -> io::Result<()> {
-        self.to_report().write_to_target()
+    /// Panics if the output directory cannot be created or a file cannot be
+    /// written.
+    pub fn write_to_target(&self) {
+        self.to_report().write_to_target();
     }
 
     /// Writes machine-readable JSON statistics into the given directory.
@@ -151,12 +156,12 @@ impl Session {
     /// [`Report::write_to_directory`](crate::Report::write_to_directory) for
     /// details.
     ///
-    /// # Errors
+    /// # Panics
     ///
-    /// Returns an error if the output directory cannot be created or a file
-    /// cannot be written.
-    pub fn write_to_directory(&self, directory: impl AsRef<Path>) -> io::Result<()> {
-        self.to_report().write_to_directory(directory)
+    /// Panics if the output directory cannot be created or a file cannot be
+    /// written.
+    pub fn write_to_directory(&self, directory: impl AsRef<Path>) {
+        self.to_report().write_to_directory(directory);
     }
 }
 
@@ -207,9 +212,7 @@ mod tests {
         let session = session_with_recorded_work("read_cell");
         let directory = tempfile::tempdir().unwrap();
 
-        session
-            .write_to_directory(directory.path())
-            .expect("writing to a writable temp directory succeeds");
+        session.write_to_directory(directory.path());
 
         let file = directory.path().join("read_cell.json");
         let contents = std::fs::read_to_string(&file).unwrap();
@@ -226,7 +229,7 @@ mod tests {
         let session = session_with_recorded_work("group/case name");
         let directory = tempfile::tempdir().unwrap();
 
-        session.write_to_directory(directory.path()).unwrap();
+        session.write_to_directory(directory.path());
 
         let file = directory.path().join("group_case_name.json");
         assert!(file.exists());
@@ -246,7 +249,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let target = directory.path().join("nested");
 
-        session.write_to_directory(&target).unwrap();
+        session.write_to_directory(&target);
 
         // Nothing is written, so the directory is not even created.
         assert!(!target.exists());
@@ -270,7 +273,7 @@ mod tests {
         let _unmeasured = session.operation("unmeasured");
 
         let directory = tempfile::tempdir().unwrap();
-        session.write_to_directory(directory.path()).unwrap();
+        session.write_to_directory(directory.path());
 
         assert!(directory.path().join("measured.json").exists());
         assert!(!directory.path().join("unmeasured.json").exists());
@@ -284,7 +287,7 @@ mod tests {
         std::fs::write(&file, "stale contents").unwrap();
 
         let session = session_with_recorded_work("read_cell");
-        session.write_to_directory(directory.path()).unwrap();
+        session.write_to_directory(directory.path());
 
         let contents = std::fs::read_to_string(&file).unwrap();
         assert!(!contents.contains("stale"));

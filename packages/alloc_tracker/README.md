@@ -11,7 +11,7 @@ use alloc_tracker::{Allocator, Session};
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
-fn main() -> std::io::Result<()> {
+fn main() {
     let session = Session::new();
 
     // Track a single operation
@@ -26,11 +26,9 @@ fn main() -> std::io::Result<()> {
 
     // Also emit machine-readable JSON files (one per operation) into the Cargo
     // target directory: target/alloc_tracker/<operation>.json
-    session.write_to_target()?;
+    session.write_to_target();
 
     // Session automatically cleans up when dropped
-
-    Ok(())
 }
 ```
 

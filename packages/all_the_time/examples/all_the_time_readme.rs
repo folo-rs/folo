@@ -10,7 +10,7 @@
 
 use all_the_time::Session;
 
-fn main() -> std::io::Result<()> {
+fn main() {
     let session = Session::new();
 
     // Track multiple iterations efficiently
@@ -37,7 +37,5 @@ fn main() -> std::io::Result<()> {
 
     // Also emit machine-readable JSON files (one per operation) into the Cargo
     // target directory: target/all_the_time/<operation>.json
-    session.write_to_target()?;
-
-    Ok(())
+    session.write_to_target();
 }

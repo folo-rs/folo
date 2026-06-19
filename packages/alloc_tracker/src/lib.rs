@@ -79,7 +79,7 @@
 //! #[global_allocator]
 //! static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 //!
-//! # fn main() -> std::io::Result<()> {
+//! # fn main() {
 //! let session = Session::new();
 //! {
 //!     let operation = session.operation("my_operation");
@@ -87,8 +87,7 @@
 //!     let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
 //! }
 //!
-//! session.write_to_target()?;
-//! # Ok(())
+//! session.write_to_target();
 //! # }
 //! ```
 //!

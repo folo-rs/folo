@@ -26,7 +26,7 @@ fn writes_json_files_for_each_operation() {
     }
 
     let directory = tempfile::tempdir().unwrap();
-    session.write_to_directory(directory.path()).unwrap();
+    session.write_to_directory(directory.path());
 
     let first = directory.path().join("first_operation.json");
     let second = directory.path().join("second_operation.json");
@@ -57,11 +57,8 @@ fn report_and_session_write_equivalently() {
     let from_session = tempfile::tempdir().unwrap();
     let from_report = tempfile::tempdir().unwrap();
 
-    session.write_to_directory(from_session.path()).unwrap();
-    session
-        .to_report()
-        .write_to_directory(from_report.path())
-        .unwrap();
+    session.write_to_directory(from_session.path());
+    session.to_report().write_to_directory(from_report.path());
 
     let session_file = from_session.path().join("shared_name.json");
     let report_file = from_report.path().join("shared_name.json");
@@ -85,7 +82,7 @@ fn empty_session_writes_nothing() {
     let directory = tempfile::tempdir().unwrap();
     let target = directory.path().join("output");
 
-    session.write_to_directory(&target).unwrap();
+    session.write_to_directory(&target);
 
     assert!(!target.exists(), "no directory should be created");
 }
@@ -116,7 +113,7 @@ fn write_to_target_writes_into_cargo_target_directory() {
         std::fs::remove_file(&expected).unwrap();
     }
 
-    session.write_to_target().unwrap();
+    session.write_to_target();
 
     assert!(
         expected.exists(),
