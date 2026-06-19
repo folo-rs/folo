@@ -1326,6 +1326,144 @@ async fn clean_scopes_by_engine() {
     assert_eq!(parsed["sets"][0]["engine"], "criterion", "{message}");
 }
 
+/// A non-engine facet (`--os`) scopes the cleanup just like it scopes
+/// `analyze`/`list`: the same target commit hosts a dirty Linux (callgrind) run and
+/// a dirty Windows (criterion) run, and `--os linux` removes only the former.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn clean_scopes_by_os_facet() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.checkout_new_branch("feature");
+    workspace.seed_dirty_callgrind("2024-01-02", "f1", 200.0);
+    workspace.seed_dirty_criterion("2024-01-02", "f1", "m1", 20.0);
+
+    // `--os linux` removes only the callgrind (linux) dirty run.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["clean", "--os", "linux", "--format", "json"])
+        .await
+        .expect("clean succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(parsed["totals"]["runs"], 1, "{message}");
+    assert_eq!(parsed["sets"][0]["os"], "linux", "{message}");
+    assert_eq!(parsed["sets"][0]["engine"], "callgrind", "{message}");
+
+    // The Windows (criterion) dirty run survives: a `--os windows` pass still finds it.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["clean", "--os", "windows", "--dry-run", "--format", "json"])
+        .await
+        .expect("clean succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(
+        parsed["totals"]["runs"], 1,
+        "windows dirty survived: {message}"
+    );
+    assert_eq!(parsed["sets"][0]["os"], "windows", "{message}");
+}
+
+/// `clean` spans every selected discriminant set in one pass: a dirty callgrind and
+/// a dirty criterion run on the same target commit form two sets, and an unfiltered
+/// `clean` removes both — exercising the multi-set plan and its plural rendering.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn clean_removes_dirty_across_multiple_discriminant_sets() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.checkout_new_branch("feature");
+    workspace.seed_dirty_callgrind("2024-01-02", "f1", 200.0);
+    workspace.seed_dirty_criterion("2024-01-02", "f1", "m1", 20.0);
+
+    // Text format exercises the plural "discriminant sets" summary branch.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["clean", "--format", "text"])
+        .await
+        .expect("clean succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    assert!(
+        message.contains("Removed 2 dirty runs across 2 discriminant sets"),
+        "{message}"
+    );
+
+    // Both sets are now empty: a second pass finds nothing to remove.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["clean", "--dry-run", "--format", "json"])
+        .await
+        .expect("clean succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(parsed["totals"]["runs"], 0, "{message}");
+}
+
+/// `--since` removes only the dirty runs on or after the cutoff — the one clean path
+/// that reads object bodies in production (to recover each run's effective time).
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn clean_since_only_removes_runs_on_or_after_the_cutoff() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.checkout_new_branch("feature");
+    workspace.seed_dirty_callgrind("2024-01-02", "f1", 100.0);
+    workspace.seed_dirty_callgrind("2024-01-05", "f2", 200.0);
+
+    // Only the 2024-01-05 run is on or after the cutoff.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["clean", "--since", "2024-01-04", "--format", "json"])
+        .await
+        .expect("clean succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(parsed["totals"]["runs"], 1, "{message}");
+
+    // The on-or-after run is gone; the earlier run survives the cutoff.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&[
+            "clean",
+            "--since",
+            "2024-01-04",
+            "--dry-run",
+            "--format",
+            "json",
+        ])
+        .await
+        .expect("clean succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(
+        parsed["totals"]["runs"], 0,
+        "the late run was removed: {message}"
+    );
+
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["clean", "--dry-run", "--format", "json"])
+        .await
+        .expect("clean succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(
+        parsed["totals"]["runs"], 1,
+        "the early run survived the cutoff: {message}"
+    );
+}
+
 /// Like `analyze`/`list`, `clean` requires a repository to resolve the topology;
 /// without one it errors rather than removing nothing silently.
 #[tokio::test]
