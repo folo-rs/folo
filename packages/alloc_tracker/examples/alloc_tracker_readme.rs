@@ -41,6 +41,10 @@ fn main() {
     // Print results - now shows both mean bytes and mean allocation count
     session.print_to_stdout();
 
+    // Also emit machine-readable JSON files (one per operation) into the Cargo
+    // target directory: target/alloc_tracker/<operation>.json
+    session.write_to_target();
+
     // Session automatically cleans up when dropped
 
     // Debugging unexpected allocations (only with feature enabled)

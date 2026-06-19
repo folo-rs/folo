@@ -17,8 +17,12 @@ version = "0.4.20"
 dependencies = [
  "cpu-time",
  "criterion",
+ "folo_utils",
  "mutants 0.0.4",
+ "serde",
+ "serde_json",
  "static_assertions",
+ "tempfile",
 ]
 
 [[package]]
@@ -26,9 +30,13 @@ name = "alloc_tracker"
 version = "0.5.25"
 dependencies = [
  "criterion",
+ "folo_utils",
  "mutants 0.0.4",
+ "serde",
+ "serde_json",
  "serial_test",
  "static_assertions",
+ "tempfile",
 ]
 
 [[package]]
@@ -619,6 +627,8 @@ name = "folo_utils"
 version = "0.1.7"
 dependencies = [
  "mutants 0.0.4",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
