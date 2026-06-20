@@ -16,7 +16,7 @@ all-features = true
 [dependencies]
 cpu-time = { workspace = true }
 folo_utils = { workspace = true }
-serde = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
