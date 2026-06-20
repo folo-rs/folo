@@ -1,12 +1,26 @@
 //! [`LocalStorage`]: a [`Storage`] backed by a directory tree on the local
 //! filesystem. Object keys map to relative paths under a configured root.
 
+use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::io::AsyncWriteExt;
 
 use super::{Storage, StorageError, is_plain_segment};
+
+/// Filename prefix for the transient files an atomic write renames into place.
+/// The prefix is reserved: real object keys are `.json` files named from commit
+/// hashes and timestamps, so nothing stored ever starts with it, which lets
+/// [`list`](LocalStorage::list) skip a crash-orphaned temp file rather than
+/// mistake it for an object.
+const TEMP_PREFIX: &str = ".cbh-tmp-";
+
+/// Distinguishes concurrent atomic writes within a single process; combined with
+/// the process id it keeps every temp filename unique.
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// A [`Storage`] that persists objects as files under a root directory.
 #[derive(Clone, Debug)]
@@ -48,27 +62,23 @@ impl Storage for LocalStorage {
                 .await
                 .map_err(StorageError::Io)?;
         }
-        // `create_new` makes the write fail rather than clobber an existing
-        // object, upholding the write-once storage contract.
-        let mut file = match tokio::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .await
-        {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+        // Write-once: refuse to replace an existing object. This existence check
+        // races with a concurrent writer of the same key, but the atomic rename
+        // in `write_atomic` guarantees the published object is always complete,
+        // so a lost race degrades only to last-writer-wins, never to a corrupt
+        // or half-written file. Concurrent writers of the same key do not arise
+        // in practice: object keys are partitioned by commit and discriminant,
+        // and duplicate commits are rejected a layer above.
+        match tokio::fs::try_exists(&path).await {
+            Ok(true) => {
                 return Err(StorageError::AlreadyExists {
                     key: key.to_owned(),
                 });
             }
+            Ok(false) => {}
             Err(error) => return Err(StorageError::Io(error)),
-        };
-        file.write_all(bytes).await.map_err(StorageError::Io)?;
-        // Tokio's `File` does not flush its buffer on drop, so an explicit
-        // flush is required to guarantee the bytes reach the filesystem before
-        // a subsequent `get` reads them back.
-        file.flush().await.map_err(StorageError::Io)
+        }
+        write_atomic(&path, bytes).await.map_err(StorageError::Io)
     }
 
     async fn put_overwrite(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
@@ -78,17 +88,9 @@ impl Storage for LocalStorage {
                 .await
                 .map_err(StorageError::Io)?;
         }
-        // `create(true).truncate(true)` replaces an existing object's contents
-        // in full, the deliberate escape hatch from the write-once contract.
-        let mut file = tokio::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&path)
-            .await
-            .map_err(StorageError::Io)?;
-        file.write_all(bytes).await.map_err(StorageError::Io)?;
-        file.flush().await.map_err(StorageError::Io)
+        // The atomic rename replaces any existing object in full, the deliberate
+        // escape hatch from the write-once contract.
+        write_atomic(&path, bytes).await.map_err(StorageError::Io)
     }
 
     async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError> {
@@ -122,6 +124,10 @@ impl Storage for LocalStorage {
                 let path = entry.path();
                 if file_type.is_dir() {
                     stack.push(path);
+                } else if is_temp_file_name(&entry.file_name()) {
+                    // A crash mid-write can orphan a reserved-prefix temp file in
+                    // the tree. It is not a real object, so never surface it.
+                    continue;
                 } else if let Some(key) = relative_key(&self.root, &path) {
                     keys.push(key);
                 }
@@ -178,6 +184,56 @@ fn relative_key(root: &Path, path: &Path) -> Option<String> {
     Some(key)
 }
 
+/// Whether `name` is one of the reserved temp filenames an atomic write uses.
+fn is_temp_file_name(name: &OsStr) -> bool {
+    name.to_str()
+        .is_some_and(|name| name.starts_with(TEMP_PREFIX))
+}
+
+/// A unique temp-file path in the same directory as `target`. Keeping the temp
+/// file beside its destination ensures the later rename stays on one filesystem
+/// and is therefore atomic.
+fn temp_path_for(target: &Path) -> PathBuf {
+    let parent = target.parent().unwrap_or_else(|| Path::new("."));
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    parent.join(format!(
+        "{TEMP_PREFIX}{pid}-{nanos}-{counter}",
+        pid = std::process::id()
+    ))
+}
+
+/// Writes `bytes` to `target` atomically. The data lands in a temp file that is
+/// flushed and then renamed onto `target`, so a crash mid-write can only leave
+/// an orphaned temp file, never a half-written object at the real key. The temp
+/// file is removed on any error so a failed write leaves nothing behind.
+async fn write_atomic(target: &Path, bytes: &[u8]) -> io::Result<()> {
+    let temp = temp_path_for(target);
+    // Close the handle (end of the block) before the rename: Windows refuses to
+    // rename a file that is still open.
+    let written = async {
+        let mut file = tokio::fs::File::create(&temp).await?;
+        file.write_all(bytes).await?;
+        // Tokio's `File` does not flush its buffer on drop, so flush explicitly
+        // to guarantee every byte is durable before the rename publishes it.
+        file.flush().await
+    }
+    .await;
+    if let Err(error) = written {
+        // Best-effort: removing the orphaned temp file cannot recover the
+        // original error we are about to return, so its own result is ignored.
+        let _cleanup = tokio::fs::remove_file(&temp).await;
+        return Err(error);
+    }
+    if let Err(error) = tokio::fs::rename(&temp, target).await {
+        let _cleanup = tokio::fs::remove_file(&temp).await;
+        return Err(error);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -195,6 +251,47 @@ mod tests {
         let bytes = storage.get("v1/folo/run.json").await.unwrap();
 
         assert_eq!(bytes, b"payload");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn put_leaves_no_temp_files_behind() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path());
+
+        storage.put("v1/folo/run.json", b"payload").await.unwrap();
+
+        // The atomic rename consumes the temp file; only the object remains in
+        // its directory, with no orphaned reserved-prefix temp file.
+        let parent = dir.path().join("v1").join("folo");
+        let mut names = Vec::new();
+        let mut entries = tokio::fs::read_dir(&parent).await.unwrap();
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+
+        assert_eq!(names, vec!["run.json".to_owned()]);
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn list_skips_reserved_temp_files() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path());
+        storage.put("v1/a/1.json", b"1").await.unwrap();
+
+        // Simulate a temp file orphaned beside the object by a crashed write.
+        let orphan = dir
+            .path()
+            .join("v1")
+            .join("a")
+            .join(format!("{TEMP_PREFIX}123-456-0"));
+        std::fs::write(&orphan, "partial").unwrap();
+
+        // The orphan is never surfaced as a key.
+        let keys = storage.list("v1/a/").await.unwrap();
+
+        assert_eq!(keys, vec!["v1/a/1.json".to_owned()]);
     }
 
     #[tokio::test]
