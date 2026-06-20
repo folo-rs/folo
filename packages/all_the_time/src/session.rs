@@ -89,7 +89,7 @@ impl Session {
     /// This method is primarily used for testing purposes to inject a fake platform
     /// that does not rely on actual system calls. Automatic output on drop is
     /// disabled so that tests do not print to stdout or write to the target
-    /// directory unless they opt back in.
+    /// directory.
     #[cfg(test)]
     pub(crate) fn with_platform(platform: PlatformFacade) -> Self {
         Self {
