@@ -57,10 +57,14 @@ fn main() {
     println!("=== Thread vs Process Allocation Tracking ===");
     println!();
 
-    let session = Session::new();
+    // The session is dropped at the end of this scope, which prints the recorded
+    // statistics and writes the JSON output files before the note below.
+    {
+        let session = Session::new();
 
-    track_thread_local_allocations(&session);
-    track_process_wide_allocations(&session);
+        track_thread_local_allocations(&session);
+        track_process_wide_allocations(&session);
+    }
 
     println!();
     println!("Note: measure_thread should show much lower allocation counts than measure_process.");

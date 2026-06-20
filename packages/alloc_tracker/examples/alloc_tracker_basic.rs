@@ -52,7 +52,11 @@ fn main() {
         }
     }
 
+    // Dropping the session prints its results to stdout and writes the JSON
+    // output files.
+    drop(session);
+
     println!();
-    println!("When the session is dropped, its results are printed to stdout and");
-    println!("written to target/alloc_tracker/ as machine-readable JSON.");
+    println!("The session's results were printed above and written to");
+    println!("target/alloc_tracker/ as machine-readable JSON.");
 }

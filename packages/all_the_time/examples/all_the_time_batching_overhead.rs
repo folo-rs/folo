@@ -12,53 +12,59 @@ fn main() {
     println!("=== processor time Batching Overhead Demonstration ===");
     println!();
 
-    let session = Session::new();
+    // The session is dropped at the end of this scope, printing its recorded
+    // processor-time statistics before the wall-clock comparison below.
+    let (unbatched_wall_time, batched_wall_time) = {
+        let session = Session::new();
 
-    // Test: Many individual measurements (high overhead)
-    println!("Testing unbatched measurements (1000 individual spans)...");
+        // Test: Many individual measurements (high overhead)
+        println!("Testing unbatched measurements (1000 individual spans)...");
 
-    let start_wall_time = Instant::now();
-    let unbatched_op = session.operation("unbatched_measurements");
+        let start_wall_time = Instant::now();
+        let unbatched_op = session.operation("unbatched_measurements");
 
-    for _ in 0..1000 {
-        let _span = unbatched_op.measure_thread();
-        // Simple operation
-        black_box(42_u64.wrapping_mul(73));
-    }
-
-    let unbatched_wall_time = start_wall_time.elapsed();
-
-    // Test: Single batched measurement (low overhead)
-    println!("Testing batched measurements (1 span covering 1000 iterations)...");
-
-    let start_wall_time = Instant::now();
-    let batched_op = session.operation("batched_measurements");
-
-    {
-        let _span = batched_op.measure_thread().iterations(1000);
         for _ in 0..1000 {
-            // Same simple operation
+            let _span = unbatched_op.measure_thread();
+            // Simple operation
             black_box(42_u64.wrapping_mul(73));
         }
-    }
 
-    let batched_wall_time = start_wall_time.elapsed();
+        let unbatched_wall_time = start_wall_time.elapsed();
 
-    // Test: More substantial work for comparison
-    let substantial_op = session.operation("substantial_work");
+        // Test: Single batched measurement (low overhead)
+        println!("Testing batched measurements (1 span covering 1000 iterations)...");
 
-    {
-        let _span = substantial_op.measure_thread().iterations(5);
-        for _ in 0..5 {
-            let mut sum = 0_u64;
-            for i in 0..50000_u64 {
-                sum = sum.wrapping_add(i.wrapping_mul(i).wrapping_add(i));
+        let start_wall_time = Instant::now();
+        let batched_op = session.operation("batched_measurements");
+
+        {
+            let _span = batched_op.measure_thread().iterations(1000);
+            for _ in 0..1000 {
+                // Same simple operation
+                black_box(42_u64.wrapping_mul(73));
             }
-            black_box(sum);
         }
-    }
 
-    println!();
+        let batched_wall_time = start_wall_time.elapsed();
+
+        // Test: More substantial work for comparison
+        let substantial_op = session.operation("substantial_work");
+
+        {
+            let _span = substantial_op.measure_thread().iterations(5);
+            for _ in 0..5 {
+                let mut sum = 0_u64;
+                for i in 0..50000_u64 {
+                    sum = sum.wrapping_add(i.wrapping_mul(i).wrapping_add(i));
+                }
+                black_box(sum);
+            }
+        }
+
+        println!();
+
+        (unbatched_wall_time, batched_wall_time)
+    };
 
     println!("Wall clock times (includes measurement overhead):");
     println!("  Unbatched approach: {unbatched_wall_time:?}");
