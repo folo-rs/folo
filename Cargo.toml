@@ -32,7 +32,7 @@ fast_time = { version = "0.1.23", path = "packages/fast_time", default-features 
 foldhash = { version = "0.2.0", default-features = false, features = ["std"] }
 folo_ffi = { version = "0.1.15", path = "packages/folo_ffi", default-features = false }
 folo_utils = { version = "0.1.7", path = "packages/folo_utils", default-features = false }
-frozen-collections = { version = "0.8.0", default-features = false }
+frozen-collections = { version = "0.9.1", default-features = false }
 future_deque = { version = "0.1.10", path = "packages/future_deque", default-features = false }
 futures = { version = "0.3.11", default-features = false, features = ["std"] }
 futures-core = { version = "0.3.31", default-features = false }
@@ -44,13 +44,13 @@ futures-core = { version = "0.3.31", default-features = false }
 # and the installed runner causes `*_cg` benches to fail at runtime with VersionMismatch.
 # Pinned with `=` to prevent `cargo update` from drifting Cargo.lock away from the installed
 # runner version. When bumping, update all three locations together.
-gungraun = { version = "=0.19.0", default-features = false }
+gungraun = { version = "=0.19.2", default-features = false }
 hash_hasher = { version = "2.0.0", default-features = false }
 hashbrown = { version = "0.17.1", default-features = false }
 heapless = { version = "0.9.1", default-features = false }
 http = { version = "1.2.0", default-features = false, features = ["std"] }
 infinity_pool = { version = "0.8.18", path = "packages/infinity_pool", default-features = false }
-itertools = { version = "0.14.0", default-features = false, features = [
+itertools = { version = "0.15.0", default-features = false, features = [
     "use_std",
 ] }
 libc = { version = "0.2.172", default-features = false }

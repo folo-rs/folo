@@ -40,12 +40,12 @@ install-tools:
     # any invocation of a `*_cg` bench binary fails with "Failed to run benchmarks: No such
     # file or directory", including the harmless --list call that nextest issues for `--benches`.
     #
-    # The version is pinned to the exact patch matching the `gungraun = "=0.19.0"` workspace
+    # The version is pinned to the exact patch matching the `gungraun = "=0.19.2"` workspace
     # entry in the root Cargo.toml. gungraun-runner enforces strict string equality on the
     # version (see `gungraun-runner::runner::compare_versions`), so any drift between the
     # installed runner and the library causes `*_cg` benches to fail at runtime with
     # VersionMismatch. Keep this line, the workspace Cargo.toml entry, and the install command
     # in `docs/callgrind-benchmarks.md` in sync when bumping.
     if ($IsLinux) {
-        cargo install gungraun-runner --version 0.19.0 --locked
+        cargo install gungraun-runner --version 0.19.2 --locked
     }
