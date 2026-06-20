@@ -654,11 +654,7 @@ impl BenchmarkBatch {
                 "thread count is asserted as non-zero in ctor, so division by zero is impossible",
             );
 
-        Duration::from_nanos(
-            total_elapsed_nanos_per_thread
-                .try_into()
-                .expect("duration overflow is unfathomable within our spacetime boundaries"),
-        )
+        Duration::from_nanos_u128(total_elapsed_nanos_per_thread)
     }
 
     #[expect(

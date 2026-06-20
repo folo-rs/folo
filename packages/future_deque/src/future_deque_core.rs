@@ -114,22 +114,16 @@ impl<T, H> FutureDequeCore<T, H> {
     // making blocking tests hang. Non-blocking tests catch this mutation.
     #[cfg_attr(test, mutants::skip)]
     pub(crate) fn pop_front(&mut self) -> Option<T> {
-        let front_ready = self.slots.front().is_some_and(Slot::is_ready);
-        if front_ready {
-            self.slots.pop_front().and_then(Slot::take_value)
-        } else {
-            None
-        }
+        self.slots
+            .pop_front_if(|slot| slot.is_ready())
+            .and_then(Slot::take_value)
     }
 
     /// Pops the back result if the backmost future has completed.
     pub(crate) fn pop_back(&mut self) -> Option<T> {
-        let back_ready = self.slots.back().is_some_and(Slot::is_ready);
-        if back_ready {
-            self.slots.pop_back().and_then(Slot::take_value)
-        } else {
-            None
-        }
+        self.slots
+            .pop_back_if(|slot| slot.is_ready())
+            .and_then(Slot::take_value)
     }
 }
 

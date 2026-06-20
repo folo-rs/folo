@@ -2,7 +2,6 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 // This is currently impractical to test as we lack the capability to simulate mock processor configurations.
 #![cfg_attr(coverage_nightly, coverage(off))]
-#![expect(clippy::unnecessary_safety_comment, reason = "clippy#16553")]
 
 //! [Criterion][1] benchmark harness designed to compare different modes of distributing work in a
 //! many-processor system with multiple memory regions. This helps highlight the performance impact of

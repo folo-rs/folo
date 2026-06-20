@@ -144,13 +144,11 @@ impl ProcessSpan {
         let total_duration = current_time.saturating_sub(self.start_time);
 
         if self.iterations > 1 {
-            Duration::from_nanos(
+            Duration::from_nanos_u128(
                 total_duration
                     .as_nanos()
                     .checked_div(u128::from(self.iterations))
-                    .expect("guarded by if condition")
-                    .try_into()
-                    .expect("all realistic values fit in u64"),
+                    .expect("guarded by if condition"),
             )
         } else {
             total_duration

@@ -23,8 +23,12 @@ version = "0.4.20"
 dependencies = [
  "cpu-time",
  "criterion",
+ "folo_utils",
  "mutants 0.0.4",
+ "serde",
+ "serde_json",
  "static_assertions",
+ "tempfile",
 ]
 
 [[package]]
@@ -32,9 +36,13 @@ name = "alloc_tracker"
 version = "0.5.25"
 dependencies = [
  "criterion",
+ "folo_utils",
  "mutants 0.0.4",
+ "serde",
+ "serde_json",
  "serial_test",
  "static_assertions",
+ "tempfile",
 ]
 
 [[package]]
@@ -376,9 +384,9 @@ checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "bytes"
-version = "1.11.1"
+version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
+checksum = "8ae3f5d315924270530207e2a68396c3cc547f6dca3fbdca317cfb1a51edb593"
 
 [[package]]
 name = "cargo-bench-history"
@@ -436,9 +444,9 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "cc"
-version = "1.2.64"
+version = "1.2.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dad887fd958be91b5098c0248def011f4523ab786cd411be668777e55063501f"
+checksum = "e228eec9be7c17ccb640b59b36a5cd805ea2a564a4c5e162c2f659fea30d3b96"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -954,6 +962,8 @@ name = "folo_utils"
 version = "0.1.7"
 dependencies = [
  "mutants 0.0.4",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1938,9 +1948,9 @@ dependencies = [
 
 [[package]]
 name = "ohno"
-version = "0.3.5"
+version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82948d54d99b956d012ec2b909ed4331f7064a0726942cc04f8e7ec48ebae9e8"
+checksum = "79eb560d3cafa8521b27ec748f278f9b97a51d4ef1440f0c653698b9b3a6e730"
 dependencies = [
  "ohno_macros",
  "typeid",
@@ -1948,9 +1958,9 @@ dependencies = [
 
 [[package]]
 name = "ohno_macros"
-version = "0.3.3"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b562701c8ca9747dcece39363bdd78fe1e5abe946b6c8e3a2e47282b32149959"
+checksum = "cfd7c906df7de1bbc79f0030405c47be957227d8e0794fa0910a3403c24d4034"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2643,9 +2653,9 @@ dependencies = [
 
 [[package]]
 name = "scc"
-version = "3.7.3"
+version = "3.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36b032630cfe931bea2c3316541f04ef0e20357943fbfe0b6ed01c00f87462d8"
+checksum = "5581cd5dd2cb79cbe9d8137071d67f62f0db926e83a07b4d14561c5b7d423776"
 dependencies = [
  "saa",
  "sdd",
@@ -2976,9 +2986,9 @@ dependencies = [
 
 [[package]]
 name = "thread_aware"
-version = "0.7.3"
+version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02e040c858ab748794884b3fd0842e6a9fe8f0a31d8c9ce709eb934dffc2158f"
+checksum = "36016aecfa686582d7e321bf693b49e90ec0849df839afa6c1459725b677c9be"
 
 [[package]]
 name = "threadpool"
@@ -2991,9 +3001,9 @@ dependencies = [
 
 [[package]]
 name = "tick"
-version = "0.3.3"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d9ea844350038ecc3a1b5a59185419b48298ea143b2468efd2ac87f4465edf0"
+checksum = "9d968536ecf5f064a022fb9825e2e4097fc76efbd1b86ec7b125449b7bcb8d53"
 dependencies = [
  "futures-core",
  "pin-project-lite",
@@ -3377,9 +3387,9 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "unty-next"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9fa66022bbd1ab992fad72bdedcfd07a0023b6f5ecc83d50121e39e3a3caed41"
+checksum = "16062d030850f35054e37746427b9febb74a2f24c9c6dd6fa2d0c13c5f53221e"
 
 [[package]]
 name = "url"
