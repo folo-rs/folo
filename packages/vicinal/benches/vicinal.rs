@@ -448,8 +448,8 @@ fn entrypoint(c: &mut Criterion) {
 
     g.finish();
 
-    allocs.print_to_stdout();
-    times.print_to_stdout();
+    // `allocs` and `times` print their summaries and write JSON to the Cargo
+    // target directory when they are dropped at the end of this function.
 }
 
 criterion_group!(benches, entrypoint);

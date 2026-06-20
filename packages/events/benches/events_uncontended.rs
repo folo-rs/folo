@@ -59,7 +59,8 @@ fn entrypoint(c: &mut Criterion) {
     async_poll_ready(c, &allocs);
     many_waiters(c, &allocs);
 
-    allocs.print_to_stdout();
+    // `allocs` prints its summary and writes JSON to the Cargo target directory
+    // when it is dropped at the end of this function.
 }
 
 /// Measures the overhead of creating a heap-allocated event object.

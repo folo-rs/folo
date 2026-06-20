@@ -34,7 +34,6 @@ dependencies = [
  "mutants 0.0.4",
  "serde",
  "serde_json",
- "serial_test",
  "static_assertions",
  "tempfile",
 ]

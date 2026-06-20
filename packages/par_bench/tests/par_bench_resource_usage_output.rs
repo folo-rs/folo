@@ -17,7 +17,7 @@ static ALLOCATOR: alloc_tracker::Allocator<std::alloc::System> = alloc_tracker::
 
 #[test]
 fn resource_usage_output_provides_meaningful_allocation_data() {
-    let allocs = alloc_tracker::Session::new();
+    let allocs = alloc_tracker::Session::new().no_stdout().no_file();
     let mut pool = ThreadPool::new(
         SystemHardware::current()
             .processors()
@@ -85,7 +85,7 @@ fn resource_usage_output_provides_meaningful_allocation_data() {
 
 #[test]
 fn resource_usage_output_provides_meaningful_processor_time_data() {
-    let processor_time = all_the_time::Session::new();
+    let processor_time = all_the_time::Session::new().no_stdout().no_file();
     let mut pool = ThreadPool::new(
         SystemHardware::current()
             .processors()
@@ -167,8 +167,8 @@ fn resource_usage_output_provides_meaningful_processor_time_data() {
 
 #[test]
 fn resource_usage_output_provides_meaningful_combined_data() {
-    let allocs = alloc_tracker::Session::new();
-    let processor_time = all_the_time::Session::new();
+    let allocs = alloc_tracker::Session::new().no_stdout().no_file();
+    let processor_time = all_the_time::Session::new().no_stdout().no_file();
     let mut pool = ThreadPool::new(
         SystemHardware::current()
             .processors()
@@ -271,7 +271,7 @@ fn resource_usage_output_provides_meaningful_combined_data() {
 
 #[test]
 fn resource_usage_output_handles_no_allocations_gracefully() {
-    let allocs = alloc_tracker::Session::new();
+    let allocs = alloc_tracker::Session::new().no_stdout().no_file();
     let mut pool = ThreadPool::new(
         SystemHardware::current()
             .processors()
@@ -319,7 +319,7 @@ fn resource_usage_output_handles_no_allocations_gracefully() {
 
 #[test]
 fn resource_usage_output_tracks_multiple_operations() {
-    let allocs = alloc_tracker::Session::new();
+    let allocs = alloc_tracker::Session::new().no_stdout().no_file();
     let mut pool = ThreadPool::new(
         SystemHardware::current()
             .processors()

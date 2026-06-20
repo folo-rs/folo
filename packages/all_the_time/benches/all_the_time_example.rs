@@ -87,7 +87,9 @@ fn entrypoint(c: &mut Criterion) {
     });
 
     group.finish();
-    cpu_time.print_to_stdout();
+
+    // `cpu_time` prints its summary and writes JSON to the Cargo target
+    // directory when it is dropped at the end of this function.
 }
 
 criterion_group!(benches, entrypoint);

@@ -10,12 +10,26 @@ use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics, Report};
 /// This type serves as a container for tracking operations and provides
 /// methods to analyze processor time usage patterns across different operations.
 ///
+/// # Output on drop
+///
+/// When a session is dropped it automatically emits its results:
+///
+/// * a human-readable summary is printed to stdout, and
+/// * machine-readable JSON files (one per operation) are written into the Cargo
+///   target directory at `target/all_the_time/<operation>.json`.
+///
+/// A session that recorded no measurable work emits nothing, so a "list
+/// available benchmarks" probe run leaves no output behind. Either output can be
+/// suppressed with [`no_stdout()`](Self::no_stdout) and
+/// [`no_file()`](Self::no_file).
+///
 /// # Examples
 ///
 /// ```
 /// use all_the_time::Session;
 ///
 /// let session = Session::new();
+/// # let session = session.no_stdout().no_file();
 /// let processor_op = session.operation("processor_intensive_work");
 ///
 /// for _ in 0..3 {
@@ -27,16 +41,21 @@ use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics, Report};
 ///     }
 /// }
 ///
-/// // Output statistics of all operations to console.
-/// // Using print_to_stdout() here is important in benchmarks because it will
-/// // print nothing if no spans were recorded, not even an empty line, which can
-/// // be functionally critical for benchmark harness behavior.
-/// session.print_to_stdout();
+/// // When `session` is dropped, the recorded statistics are printed to stdout
+/// // and written to `target/all_the_time/` as machine-readable JSON.
 /// ```
+///
+/// # Panics
+///
+/// Dropping a session panics if writing the JSON output files fails, since a
+/// benchmark that cannot persist its results is not useful. To avoid masking an
+/// in-flight panic, no output is emitted while the thread is already panicking.
 #[derive(Debug)]
 pub struct Session {
     operations: Arc<Mutex<HashMap<String, Arc<Mutex<OperationMetrics>>>>>,
     platform: PlatformFacade,
+    emit_stdout: bool,
+    emit_file: bool,
 }
 
 impl Session {
@@ -48,8 +67,8 @@ impl Session {
     /// use all_the_time::Session;
     ///
     /// let session = Session::new();
-    /// // Processor time tracking is enabled
-    /// // Session will disable tracking when dropped
+    /// // Processor time tracking is enabled. When the session is dropped, its
+    /// // results are printed to stdout and written to the Cargo target directory.
     /// ```
     #[expect(
         clippy::new_without_default,
@@ -60,19 +79,47 @@ impl Session {
         Self {
             operations: Arc::new(Mutex::new(HashMap::new())),
             platform: PlatformFacade::real(),
+            emit_stdout: true,
+            emit_file: true,
         }
     }
 
     /// Creates a new processor time tracking session with a specific platform.
     ///
     /// This method is primarily used for testing purposes to inject a fake platform
-    /// that does not rely on actual system calls.
+    /// that does not rely on actual system calls. Automatic output on drop is
+    /// disabled so that tests do not print to stdout or write to the target
+    /// directory.
     #[cfg(test)]
     pub(crate) fn with_platform(platform: PlatformFacade) -> Self {
         Self {
             operations: Arc::new(Mutex::new(HashMap::new())),
             platform,
+            emit_stdout: false,
+            emit_file: false,
         }
+    }
+
+    /// Disables printing a human-readable summary to stdout when the session is
+    /// dropped.
+    ///
+    /// JSON files are still written to the Cargo target directory unless
+    /// [`no_file()`](Self::no_file) is also used.
+    #[must_use]
+    pub fn no_stdout(mut self) -> Self {
+        self.emit_stdout = false;
+        self
+    }
+
+    /// Disables writing machine-readable JSON files to the Cargo target
+    /// directory when the session is dropped.
+    ///
+    /// A human-readable summary is still printed to stdout unless
+    /// [`no_stdout()`](Self::no_stdout) is also used.
+    #[must_use]
+    pub fn no_file(mut self) -> Self {
+        self.emit_file = false;
+        self
     }
 
     /// Creates or retrieves an operation with the given name.
@@ -87,6 +134,7 @@ impl Session {
     /// use all_the_time::Session;
     ///
     /// let session = Session::new();
+    /// # let session = session.no_stdout().no_file();
     /// let processor_op = session.operation("processor_operations");
     ///
     /// for _ in 0..3 {
@@ -125,6 +173,7 @@ impl Session {
     /// use all_the_time::Session;
     ///
     /// let session = Session::new();
+    /// # let session = session.no_stdout().no_file();
     /// let operation = session.operation("test_work");
     /// let _span = operation.measure_thread();
     /// // Work happens here
@@ -152,17 +201,6 @@ impl Session {
         Report::from_operation_data(&operations_snapshot)
     }
 
-    /// Prints the processor time statistics of all operations to stdout.
-    ///
-    /// This is a convenience method equivalent to `self.to_report().print_to_stdout()`.
-    /// Prints nothing if no spans were captured. This may indicate that the session
-    /// was part of a "list available benchmarks" probe run instead of some real activity,
-    /// in which case printing anything might violate the output protocol the tool is speaking.
-    #[cfg_attr(test, mutants::skip)] // Too difficult to test stdout output reliably - manually tested.
-    pub fn print_to_stdout(&self) {
-        self.to_report().print_to_stdout();
-    }
-
     /// Whether there is any recorded activity in this session.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -171,6 +209,38 @@ impl Session {
             || operations
                 .values()
                 .all(|data| data.lock().expect(ERR_POISONED_LOCK).total_iterations == 0)
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        // Emitting output while the thread is already unwinding would risk a
+        // double panic (which aborts the process) and would obscure the original
+        // failure. See docs/error-handling.md.
+        if std::thread::panicking() {
+            return;
+        }
+
+        // With neither output enabled there is nothing to emit, so skip building
+        // a report entirely.
+        if !(self.emit_stdout || self.emit_file) {
+            return;
+        }
+
+        // A session that recorded no measurable work emits nothing. Returning
+        // early also avoids resolving the Cargo target directory (which may shell
+        // out to `cargo metadata`) during "list available benchmarks" probe runs.
+        if self.is_empty() {
+            return;
+        }
+
+        let report = self.to_report();
+        if self.emit_stdout {
+            report.print_to_stdout();
+        }
+        if self.emit_file {
+            report.write_to_target();
+        }
     }
 }
 

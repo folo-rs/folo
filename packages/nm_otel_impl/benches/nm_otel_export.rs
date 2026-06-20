@@ -69,7 +69,8 @@ fn entrypoint(c: &mut Criterion) {
 
     group.finish();
 
-    allocs.print_to_stdout();
+    // `allocs` prints its summary and writes JSON to the Cargo target directory
+    // when it is dropped at the end of this function.
 }
 
 fn build_publisher() -> Publisher {

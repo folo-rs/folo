@@ -14,7 +14,7 @@ thread_local! {
 
 #[test]
 fn session_can_be_moved_between_threads() {
-    let session = Session::new();
+    let session = Session::new().no_stdout().no_file();
 
     // Move session to another thread
     let handle = thread::spawn(move || {
@@ -36,7 +36,7 @@ fn session_can_be_moved_between_threads() {
 
 #[test]
 fn operation_can_be_moved_between_threads() {
-    let session = Session::new();
+    let session = Session::new().no_stdout().no_file();
     let operation = session.operation("test_op");
 
     // Move operation to another thread
@@ -54,7 +54,7 @@ fn operation_can_be_moved_between_threads() {
 
 #[test]
 fn report_can_be_shared_across_threads() {
-    let session = Session::new();
+    let session = Session::new().no_stdout().no_file();
     // Create an empty report for testing
     let report = session.to_report();
 
@@ -70,8 +70,8 @@ fn report_can_be_shared_across_threads() {
 
 #[test]
 fn reports_can_be_merged_across_threads() {
-    let session1 = Session::new();
-    let session2 = Session::new();
+    let session1 = Session::new().no_stdout().no_file();
+    let session2 = Session::new().no_stdout().no_file();
 
     // Create reports in different threads
     let handle1 = thread::spawn(move || {

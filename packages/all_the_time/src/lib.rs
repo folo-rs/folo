@@ -22,6 +22,7 @@
 //!
 //! # fn main() {
 //! let session = Session::new();
+//! # let session = session.no_stdout().no_file();
 //!
 //! {
 //!     let batch_op = session.operation("batch_work");
@@ -32,33 +33,33 @@
 //!     }
 //! }
 //!
-//! // Output statistics of all operations to console
-//! session.print_to_stdout();
+//! // When `session` is dropped, the recorded statistics are printed to stdout
+//! // and written to the Cargo target directory. No explicit call is required.
 //! # }
 //! ```
 //!
 //! # Machine-readable output
 //!
-//! In addition to printing to the console, you can emit machine-readable JSON
-//! files (one per operation) into the Cargo target directory for later
-//! analysis. Files are written to `target/all_the_time/<operation>.json`, with
-//! operation names sanitized to be filesystem-safe:
+//! Dropping a [`Session`] writes machine-readable JSON files (one per operation)
+//! into the Cargo target directory at `target/all_the_time/<operation>.json`,
+//! with operation names sanitized to be filesystem-safe. A human-readable
+//! summary is also printed to stdout.
 //!
-//! ```no_run
+//! These outputs are produced automatically, so a typical benchmark only needs
+//! to create a session and record work. Either output can be suppressed:
+//!
+//! ```rust
 //! use all_the_time::Session;
 //!
 //! # fn main() {
-//! let session = Session::new();
+//! // Print to stdout but do not write JSON files.
+//! let session = Session::new().no_file();
 //!
-//! {
-//!     let batch_op = session.operation("batch_work");
-//!     let _span = batch_op.measure_thread().iterations(1000);
-//!     for _ in 0..1000 {
-//!         std::hint::black_box(42 * 2);
-//!     }
-//! }
+//! // Or write JSON files but do not print to stdout.
+//! let quiet_session = Session::new().no_stdout();
 //!
-//! session.write_to_target();
+//! // Or suppress both.
+//! let silent_session = Session::new().no_stdout().no_file();
 //! # }
 //! ```
 //!
@@ -71,6 +72,7 @@
 //!
 //! # fn main() {
 //! let session = Session::new();
+//! # let session = session.no_stdout().no_file();
 //!
 //! // Track thread processor time
 //! {
@@ -110,6 +112,7 @@
 //!
 //! # fn main() {
 //! let session = Session::new();
+//! # let session = session.no_stdout().no_file();
 //! let operation = session.operation("work");
 //! let _span = operation.measure_thread();
 //! // Some work happens here

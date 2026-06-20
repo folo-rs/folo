@@ -22,6 +22,7 @@ use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessSpan, ThreadSpan};
 /// use all_the_time::Session;
 ///
 /// let session = Session::new();
+/// # let session = session.no_stdout().no_file();
 /// let operation = session.operation("processor_intensive_work");
 ///
 /// // Simulate multiple operations - note explicit iteration count
@@ -85,6 +86,7 @@ impl Operation {
     /// use all_the_time::Session;
     ///
     /// let session = Session::new();
+    /// # let session = session.no_stdout().no_file();
     /// let operation = session.operation("thread_work");
     /// {
     ///     let _span = operation.measure_thread();
@@ -101,6 +103,7 @@ impl Operation {
     /// use all_the_time::Session;
     ///
     /// let session = Session::new();
+    /// # let session = session.no_stdout().no_file();
     /// let operation = session.operation("batch_ops");
     /// {
     ///     let _span = operation.measure_thread().iterations(10000);
@@ -128,6 +131,7 @@ impl Operation {
     /// use all_the_time::Session;
     ///
     /// let session = Session::new();
+    /// # let session = session.no_stdout().no_file();
     /// let operation = session.operation("process_work");
     /// {
     ///     let _span = operation.measure_process();
@@ -144,6 +148,7 @@ impl Operation {
     /// use all_the_time::Session;
     ///
     /// let session = Session::new();
+    /// # let session = session.no_stdout().no_file();
     /// let operation = session.operation("batch_work");
     /// {
     ///     let _span = operation.measure_process().iterations(1000);

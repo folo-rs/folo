@@ -8,7 +8,7 @@ static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 #[test]
 #[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
 fn alloc_tracker_report_api() {
-    let session = Session::new();
+    let session = Session::new().no_stdout().no_file();
 
     {
         let op = session.operation("test_alloc");

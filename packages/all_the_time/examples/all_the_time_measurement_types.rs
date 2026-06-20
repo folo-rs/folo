@@ -55,12 +55,14 @@ fn main() {
     println!("=== Processor Time Measurement Types Example ===");
     println!();
 
-    let session = Session::new();
+    // The session is dropped at the end of this scope, which prints the recorded
+    // statistics and writes the JSON output files before the note below.
+    {
+        let session = Session::new();
 
-    measure_thread_time(&session);
-    measure_process_time(&session);
-
-    session.print_to_stdout();
+        measure_thread_time(&session);
+        measure_process_time(&session);
+    }
 
     println!();
     println!("Note: measure_thread should show much lower times than measure_process.");

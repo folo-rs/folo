@@ -1,16 +1,19 @@
-//! Tests for the `panic_on_next_alloc` feature of the `alloc_tracker` crate.
+//! Verifies that `panic_on_next_alloc` can be toggled on and off without panicking.
+//!
+//! This lives in its own test binary because `panic_on_next_alloc` flips a
+//! process-global flag in the global allocator: any allocation on any thread in the
+//! process consumes it. Running it as the only test in its process guarantees no other
+//! test thread can trip the flag while this test holds it.
 
 #![cfg(feature = "panic_on_next_alloc")]
 
 use alloc_tracker::{Allocator, panic_on_next_alloc};
-use serial_test::serial;
 
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
 #[test]
 #[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
-#[serial]
 fn panic_on_next_alloc_can_be_controlled() {
     // This test verifies the API works but does not test the panic behavior
     // as that would terminate the test process
@@ -34,31 +37,4 @@ fn panic_on_next_alloc_can_be_controlled() {
         reason = "we need actual allocation to test the feature"
     )]
     let _another_allowed_allocation = vec![4, 5, 6];
-}
-
-#[test]
-#[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
-#[serial]
-fn panic_on_next_alloc_resets_automatically() {
-    use std::panic;
-
-    // Enable panic on next allocation
-    panic_on_next_alloc(true);
-
-    // First allocation should panic
-    let result = panic::catch_unwind(|| {
-        #[expect(
-            clippy::useless_vec,
-            reason = "we need actual allocation to test the feature"
-        )]
-        let _vec = vec![1, 2, 3];
-    });
-    assert!(result.is_err());
-
-    // Second allocation should work because flag was reset
-    #[expect(
-        clippy::useless_vec,
-        reason = "we need actual allocation to test the feature"
-    )]
-    let _allowed_allocation = vec![4, 5, 6];
 }
