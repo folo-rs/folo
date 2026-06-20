@@ -6,6 +6,7 @@
 
 use std::fs::{read_to_string, remove_file};
 use std::hint::black_box;
+use std::io;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
@@ -28,8 +29,12 @@ fn read_json(path: &Path) -> Value {
 
 /// Removes `path` if it exists, leaving a clean slate for an assertion.
 fn remove_if_present(path: &Path) {
-    if path.exists() {
-        remove_file(path).unwrap();
+    // Attempt the removal unconditionally and tolerate a missing file rather than
+    // checking `exists()` first, which would race with parallel test processes.
+    match remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => panic!("failed to remove {}: {error}", path.display()),
     }
 }
 
