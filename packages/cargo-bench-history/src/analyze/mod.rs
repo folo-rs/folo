@@ -18,6 +18,7 @@ pub(crate) mod list;
 mod report;
 mod selection;
 mod series;
+mod stats;
 
 use std::collections::HashMap;
 
@@ -36,7 +37,7 @@ use crate::wiring::{default_config_path, resolve_project_id};
 use crate::{AnalyzeOptions, CleanOptions, ListOptions, RunError, RunOutcome};
 
 use discriminant::{DiscriminantSet, Facets, ParsedKey, parse_key};
-use findings::{RegressionConfig, find_changes};
+use findings::{AnalysisConfig, find_changes};
 use report::{ReportFormat, ReportInput, SetSummary, render};
 use selection::select_commits;
 use series::{LoadedObject, SeriesFilter, build_series};
@@ -89,7 +90,7 @@ where
         metric: options.metric.as_deref(),
     };
     let series = build_series(&dataset.loaded, &dataset.order, &filter);
-    let findings = find_changes(&series, &RegressionConfig::default());
+    let findings = find_changes(&series, &AnalysisConfig::default());
     let regressions = findings
         .iter()
         .filter(|finding| finding.is_regression())
@@ -909,6 +910,62 @@ mod tests {
         git
     }
 
+    /// A linear master history `c0 - c1 - c2 - c3 - c4 - c5`, HEAD at the tip.
+    ///
+    /// Long enough to host a sustained level shift with at least two points on
+    /// each side, which the change-point detector requires before it flags.
+    fn linear6_git() -> FakeGitHistory {
+        let mut git = FakeGitHistory::new();
+        git.commit("c0", None)
+            .commit("c1", Some("c0"))
+            .commit("c2", Some("c1"))
+            .commit("c3", Some("c2"))
+            .commit("c4", Some("c3"))
+            .commit("c5", Some("c4"))
+            .branch("master", "c5")
+            .head("master")
+            .mark_default("master");
+        git
+    }
+
+    /// A six-commit master history `c0..c5` with a feature branch off `c1`,
+    /// HEAD on the feature branch. The longer master line lets `--branch master`
+    /// reconstruct a sustained step.
+    fn feature6_git() -> FakeGitHistory {
+        let mut git = FakeGitHistory::new();
+        git.commit("c0", None)
+            .commit("c1", Some("c0"))
+            .commit("c2", Some("c1"))
+            .commit("c3", Some("c2"))
+            .commit("c4", Some("c3"))
+            .commit("c5", Some("c4"))
+            .commit("f1", Some("c1"))
+            .commit("f2", Some("f1"))
+            .branch("master", "c5")
+            .branch("feature", "f2")
+            .head("feature")
+            .mark_default("master");
+        git
+    }
+
+    /// Seeds a clean linear sustained-step history (`c0..c5` =
+    /// 100,100,100,130,130,130) under the default partition, so the change-point
+    /// detector flags a single major regression at `c3`.
+    fn seed_linear_step(storage: &MemoryStorage) {
+        for (index, value) in [100.0, 100.0, 100.0, 130.0, 130.0, 130.0]
+            .into_iter()
+            .enumerate()
+        {
+            let commit = format!("c{index}");
+            let second = i64::try_from(index).unwrap();
+            store(
+                storage,
+                &clean_key(&commit),
+                &ir_set(second, &commit, value),
+            );
+        }
+    }
+
     fn options() -> AnalyzeOptions {
         AnalyzeOptions::default()
     }
@@ -940,23 +997,10 @@ mod tests {
         }
     }
 
-    /// Seeds a clean linear regression history (`c0..c3` = 100,100,100,130).
-    fn seed_linear_regression(storage: &MemoryStorage) {
-        for (index, value) in [100.0, 100.0, 100.0, 130.0].into_iter().enumerate() {
-            let commit = format!("c{index}");
-            let second = i64::try_from(index).unwrap();
-            store(
-                storage,
-                &clean_key(&commit),
-                &ir_set(second, &commit, value),
-            );
-        }
-    }
-
     #[test]
     fn analyze_without_a_repository_is_an_error() {
         let storage = MemoryStorage::new();
-        seed_linear_regression(&storage);
+        seed_linear_step(&storage);
         let git = FakeGitHistory::new(); // No commits: HEAD does not resolve.
         let error = block_on(analyze_with(
             &git,
@@ -986,8 +1030,8 @@ mod tests {
     #[test]
     fn official_view_detects_a_clean_regression_in_topology_order() {
         let storage = MemoryStorage::new();
-        seed_linear_regression(&storage);
-        let git = linear_git();
+        seed_linear_step(&storage);
+        let git = linear6_git();
         let (report, regressions) = analyze(&git, &storage, "folo", &options());
         assert_eq!(regressions, 1);
         assert!(report.contains("regression"), "{report}");
@@ -1046,12 +1090,18 @@ mod tests {
 
     #[test]
     fn series_order_follows_topology_not_effective_time() {
-        // Topology is c0,c1,c2,c3 but the effective times are reversed; topology
-        // must win, so the regression (the c3 value) is detected as the latest.
+        // Topology is c0..c5 with a sustained step at c3 (100,100,100,130,130,130),
+        // but the effective clock is reversed (c0 newest, c5 oldest). Ordering by
+        // topology reconstructs the rising step and flags a regression; ordering by
+        // effective time would reverse it into a falling step (an improvement, no
+        // regression). So a single detected regression proves topology won.
         let storage = MemoryStorage::new();
-        for (index, value) in [100.0, 100.0, 100.0, 130.0].into_iter().enumerate() {
+        for (index, value) in [100.0, 100.0, 100.0, 130.0, 130.0, 130.0]
+            .into_iter()
+            .enumerate()
+        {
             let commit = format!("c{index}");
-            // Reverse the clock: c0 is newest, c3 is oldest by effective time.
+            // Reverse the clock: c0 is newest, c5 is oldest by effective time.
             let second = 100 - i64::try_from(index).unwrap();
             store(
                 &storage,
@@ -1059,9 +1109,9 @@ mod tests {
                 &ir_set(second, &commit, value),
             );
         }
-        let git = linear_git();
+        let git = linear6_git();
         let (_, regressions) = analyze(&git, &storage, "folo", &options());
-        assert_eq!(regressions, 1, "c3 must be the latest by topology");
+        assert_eq!(regressions, 1, "the step must be read in topology order");
     }
 
     #[test]
@@ -1093,11 +1143,14 @@ mod tests {
 
     #[test]
     fn feature_view_admits_dirty_after_the_merge_base() {
-        // feature branched at c1; a dirty snapshot on f2 (target side) is admitted.
+        // feature branched at c1; the target side rises at f1 and the dirty f2
+        // snapshot sustains the new level. The dirty run is admitted (runs == 4)
+        // and is essential to the flag: without it the lone f1 point cannot satisfy
+        // the change-point detector's persistence requirement.
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
         store(&storage, &clean_key("c1"), &ir_set(1, "c1", 100.0));
-        store(&storage, &clean_key("f1"), &ir_set(2, "f1", 100.0));
+        store(&storage, &clean_key("f1"), &ir_set(2, "f1", 130.0));
         store(&storage, &dirty_key("f2", 3), &ir_set(3, "f2", 130.0));
         let git = feature_git();
 
@@ -1108,7 +1161,7 @@ mod tests {
         let (report, regressions) = analyze(&git, &storage, "folo", &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 4, "the dirty f2 snapshot is admitted");
-        assert_eq!(regressions, 1, "the dirty f2 value is the latest point");
+        assert_eq!(regressions, 1, "the admitted dirty f2 completes the step");
     }
 
     #[test]
@@ -1207,7 +1260,8 @@ mod tests {
     fn dirty_tree_on_base_branch_admits_tip_dirty_runs_with_a_warning() {
         // On the base branch (official view) with a currently-dirty working tree,
         // the dirty snapshots on the tip are the user's in-flight work and ARE
-        // admitted, with a warning that they are ephemeral.
+        // admitted, with a warning that they are ephemeral. Two snapshots at the
+        // raised level complete a sustained step over the clean baseline.
         let storage = MemoryStorage::new();
         for (index, value) in [100.0, 100.0, 100.0].into_iter().enumerate() {
             let commit = format!("c{index}");
@@ -1219,6 +1273,7 @@ mod tests {
             );
         }
         store(&storage, &dirty_key("c3", 300), &ir_set(300, "c3", 130.0));
+        store(&storage, &dirty_key("c3", 400), &ir_set(400, "c3", 130.0));
         let mut git = linear_git();
         git.mark_dirty();
 
@@ -1246,8 +1301,8 @@ mod tests {
         };
 
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-        assert_eq!(parsed["runs"], 4, "the dirty tip snapshot is admitted");
-        assert_eq!(regressions, 1, "the dirty c3 value is the latest point");
+        assert_eq!(parsed["runs"], 5, "both dirty tip snapshots are admitted");
+        assert_eq!(regressions, 1, "the dirty tip snapshots complete the step");
         let warning = parsed["warning"]
             .as_str()
             .expect("the ephemeral-data warning is present");
@@ -1397,9 +1452,13 @@ mod tests {
 
     #[test]
     fn explicit_branch_selects_the_official_master_view() {
-        // From a feature checkout, `--branch master` analyzes master's own history.
+        // From a feature checkout, `--branch master` analyzes master's own history:
+        // six clean commits with a sustained step at c3.
         let storage = MemoryStorage::new();
-        for (index, value) in [100.0, 100.0, 100.0, 130.0].into_iter().enumerate() {
+        for (index, value) in [100.0, 100.0, 100.0, 130.0, 130.0, 130.0]
+            .into_iter()
+            .enumerate()
+        {
             let commit = format!("c{index}");
             let second = i64::try_from(index).unwrap();
             store(
@@ -1408,7 +1467,7 @@ mod tests {
                 &ir_set(second, &commit, value),
             );
         }
-        let git = feature_git();
+        let git = feature6_git();
 
         let opts = AnalyzeOptions {
             branch: Some("master".to_owned()),
@@ -1417,20 +1476,22 @@ mod tests {
         };
         let (report, regressions) = analyze(&git, &storage, "folo", &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-        assert_eq!(parsed["runs"], 4, "master's four commits");
+        assert_eq!(parsed["runs"], 6, "master's six commits");
         assert_eq!(regressions, 1);
     }
 
     #[test]
     fn within_a_commit_clean_precedes_dirty() {
-        // On a target-side commit, a clean run and a dirty snapshot both load; the
-        // clean run is the baseline and the later dirty value is the latest point.
+        // On a target-side commit, a clean run and dirty snapshots both load; the
+        // clean run is the baseline and the later dirty values are the latest
+        // points. Two dirty snapshots at the raised level complete a sustained step.
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
         store(&storage, &clean_key("c1"), &ir_set(1, "c1", 100.0));
         store(&storage, &clean_key("f1"), &ir_set(2, "f1", 100.0));
         store(&storage, &clean_key("f2"), &ir_set(3, "f2", 100.0));
         store(&storage, &dirty_key("f2", 4), &ir_set(4, "f2", 130.0));
+        store(&storage, &dirty_key("f2", 5), &ir_set(5, "f2", 130.0));
         let git = feature_git();
 
         let opts = AnalyzeOptions {
@@ -1438,7 +1499,7 @@ mod tests {
             ..options()
         };
         let (_, regressions) = analyze(&git, &storage, "folo", &opts);
-        assert_eq!(regressions, 1, "the dirty f2 value is the latest point");
+        assert_eq!(regressions, 1, "the dirty f2 values are the latest points");
     }
 
     #[test]
@@ -1601,7 +1662,10 @@ mod tests {
         let storage = MemoryStorage::new();
         let raw_project = "my project/v2";
         let sanitized = sanitize_segment(raw_project);
-        for (index, value) in [100.0, 100.0, 100.0, 130.0].into_iter().enumerate() {
+        for (index, value) in [100.0, 100.0, 100.0, 130.0, 130.0, 130.0]
+            .into_iter()
+            .enumerate()
+        {
             let commit = format!("c{index}");
             let second = i64::try_from(index).unwrap();
             let key = format!(
@@ -1609,7 +1673,7 @@ mod tests {
             );
             store(&storage, &key, &ir_set(second, &commit, value));
         }
-        let git = linear_git();
+        let git = linear6_git();
 
         let (report, regressions) = analyze(&git, &storage, raw_project, &options());
         assert_eq!(
@@ -1622,8 +1686,8 @@ mod tests {
     #[test]
     fn fail_on_regression_is_threaded_into_outcome() {
         let storage = MemoryStorage::new();
-        seed_linear_regression(&storage);
-        let git = linear_git();
+        seed_linear_step(&storage);
+        let git = linear6_git();
 
         let opts = AnalyzeOptions {
             fail_on_regression: true,
@@ -1761,7 +1825,7 @@ mod tests {
     #[test]
     fn unresolvable_base_is_rejected() {
         let storage = MemoryStorage::new();
-        seed_linear_regression(&storage);
+        seed_linear_step(&storage);
         let git = linear_git();
         let opts = AnalyzeOptions {
             base: Some("does-not-exist".to_owned()),

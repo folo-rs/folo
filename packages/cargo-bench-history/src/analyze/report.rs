@@ -12,7 +12,7 @@
 use serde::Serialize;
 
 use crate::analyze::discriminant::DiscriminantSet;
-use crate::analyze::findings::{Direction, Finding, Severity};
+use crate::analyze::findings::{Direction, Finding, FindingMethod, Severity};
 use crate::model::BenchmarkId;
 
 /// The selectable output format of an analysis report.
@@ -196,9 +196,11 @@ fn render_text(input: &ReportInput<'_>) -> String {
         lines.push(format!("Set {}", set_label(summary.set)));
         for finding in &summary.findings {
             lines.push(format!(
-                "  [{}] {} {} {}/{}: {} -> {} ({})",
+                "  [{}] {} via {} ({} confidence) {} {}/{}: {} -> {} ({})",
                 severity_label(finding.severity),
                 direction_label(finding.direction),
+                method_label(finding.method),
+                format_confidence(finding.confidence),
                 finding.set.engine,
                 describe_id(&finding.id),
                 finding.metric,
@@ -249,15 +251,17 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
         ));
         lines.push(String::new());
         lines.push(
-            "| Severity | Direction | Engine | Benchmark | Metric | Baseline | Latest | Change |"
+            "| Severity | Direction | Method | Confidence | Engine | Benchmark | Metric | Baseline | Latest | Change |"
                 .to_owned(),
         );
-        lines.push("| --- | --- | --- | --- | --- | --- | --- | --- |".to_owned());
+        lines.push("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |".to_owned());
         for finding in &summary.findings {
             lines.push(format!(
-                "| {} | {} | {} | {} | {} | {} | {} | {} |",
+                "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
                 severity_label(finding.severity),
                 direction_label(finding.direction),
+                method_label(finding.method),
+                format_confidence(finding.confidence),
                 finding.set.engine,
                 describe_id(&finding.id),
                 finding.metric,
@@ -327,6 +331,19 @@ fn direction_label(direction: Direction) -> &'static str {
     }
 }
 
+/// The lowercase label for the detector that produced a finding.
+fn method_label(method: FindingMethod) -> &'static str {
+    match method {
+        FindingMethod::ChangePoint => "change point",
+        FindingMethod::Drift => "drift",
+    }
+}
+
+/// Formats a detector's confidence as a whole-number percentage.
+fn format_confidence(confidence: f64) -> String {
+    format!("{:.0}%", (confidence * 100.0).clamp(0.0, 100.0))
+}
+
 /// Renders a benchmark identity as `package/group/case/value`, omitting absent
 /// parts. The package-qualified form keeps benchmarks with the same `module_path`
 /// in different packages distinguishable in reports.
@@ -376,12 +393,14 @@ mod tests {
             ),
             metric: "Ir".to_owned(),
             kind: MetricKind::InstructionCount,
+            method: FindingMethod::ChangePoint,
             direction: Direction::Regression,
             severity: Severity::Major,
             baseline: 100.0,
             latest: 130.0,
             delta: 30.0,
             relative_delta: 0.30,
+            confidence: 1.0,
             commit: Some("deadbee".to_owned()),
         }
     }

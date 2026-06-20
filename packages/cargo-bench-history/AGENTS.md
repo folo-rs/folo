@@ -128,10 +128,25 @@ being analyzed:
   dirty snapshots deterministically. Topology — not effective time — is primary, so
   back-dated backfill runs still sort by where their commit sits in history.
   `--since` filters at the object level — whole runs before the cutoff are dropped.
-* `analyze::findings` is the rolling-baseline regression detector (median
-  baseline over a bounded window, MAD-aware threshold, severity tiers). Keep it
-  deterministic and cover boundaries with named value-asserting tests, not
-  threshold guards.
+* `analyze::findings` is the **engine-aware, noise-resistant** detector. It splits
+  metrics into *deterministic* (every Callgrind kind — exact, no noise) and *noisy*
+  (`WallTime` — the sole noisy kind; `is_deterministic` decides). It emits at most
+  one finding per series, of one of two methods: a **change-point** (sustained level
+  shift) located by the **Pettitt** test, or a **drift** (slow monotonic trend) from
+  the **Mann–Kendall** / **Theil–Sen** pair. When both fire, the better-fitting model
+  wins (step vs line residual). Both regimes of a change-point need `min_regime`
+  points (persistence — a single blip never flags). A deterministic step flags on
+  persistence alone (any non-zero step is real). A noisy change additionally requires
+  a significant **Mann–Whitney** rank test, non-overlapping regime CIs (when present),
+  and a practical-magnitude floor; a noisy drift also clears a noise floor of twice
+  the median CI half-width. Noisy candidates pass a **Benjamini–Hochberg** FDR filter;
+  deterministic ones bypass it. **Pettitt only locates the split — its analytic
+  p-value is too conservative on short series, so it is never used as a significance
+  gate.** All math lives in pure, Miri-safe `analyze::stats`; keep it deterministic
+  and cover boundaries with named value-asserting tests, not threshold guards. When
+  seeding test histories, a noisy (Criterion) step needs **≥ 4 points on each side**
+  for the rank test to have power, while a deterministic (Callgrind) step needs only
+  `min_regime` (2) — and a single elevated last point can no longer flag either.
 * `analyze::report` renders text/json/markdown. The top-level aggregate carries a
   `sets` array (one entry per discriminant set). Rendering is infallible: the
   report is plain structs of finite numbers, so the JSON path uses `.expect`

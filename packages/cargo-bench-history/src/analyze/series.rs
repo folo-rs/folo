@@ -31,6 +31,10 @@ pub(crate) struct SeriesPoint {
     pub(crate) commit: Option<String>,
     /// The measured value.
     pub(crate) value: f64,
+    /// Lower confidence-interval bound, when the engine reports one (Criterion).
+    pub(crate) interval_low: Option<f64>,
+    /// Upper confidence-interval bound, when the engine reports one (Criterion).
+    pub(crate) interval_high: Option<f64>,
 }
 
 /// A per-`(set, benchmark, metric)` time series ordered by git topology.
@@ -105,6 +109,8 @@ pub(crate) fn build_series(
                     object_key: object.object_key.clone(),
                     commit: commit.clone(),
                     value: metric.value,
+                    interval_low: metric.interval_low,
+                    interval_high: metric.interval_high,
                 };
                 groups
                     .entry((

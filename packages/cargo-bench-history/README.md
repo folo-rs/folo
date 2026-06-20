@@ -132,7 +132,8 @@ Implemented:
   hardware-independent (`synthetic` partition); Criterion results are partitioned
   by the host target triple and a machine-key hardware fingerprint.
 * `analyze` reconstructs a project's timeline from git history and reports
-  rolling-baseline regressions/improvements in `text`, `json`, or `markdown`,
+  engine-aware, noise-resistant findings — sustained **change-points** and slow
+  **drifts**, separated from measurement jitter — in `text`, `json`, or `markdown`,
   grouped by discriminant set, with optional `--fail-on-regression` CI gating.
 * `list` previews the data set an `analyze` pass would consume (run/series/commit
   counts per discriminant set), or lists the discriminant sets present in storage
@@ -146,5 +147,4 @@ Implemented:
 * Storage backends: the local filesystem, or Azure Blob storage behind the
   `azure` feature.
 
-See `DESIGN.md` for the full design and iteration plan; noise-aware statistical
-findings (change-point and drift detection) are the remaining work.
+See `DESIGN.md` for the full design and iteration plan.

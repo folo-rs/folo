@@ -487,6 +487,8 @@ async fn analyze_metric_filter_excludes_other_metrics() {
         ("2024-01-02", "c2", 100.0),
         ("2024-01-03", "c3", 100.0),
         ("2024-01-04", "c4", 130.0),
+        ("2024-01-05", "c5", 130.0),
+        ("2024-01-06", "c6", 130.0),
     ] {
         workspace.seed_metrics(
             date,
@@ -545,6 +547,8 @@ async fn analyze_falling_cache_hits_is_a_regression() {
         ("2024-01-02", "c2", 1000.0),
         ("2024-01-03", "c3", 1000.0),
         ("2024-01-04", "c4", 700.0),
+        ("2024-01-05", "c5", 700.0),
+        ("2024-01-06", "c6", 700.0),
     ] {
         workspace.seed_metrics(
             date,
@@ -586,6 +590,8 @@ async fn analyze_rising_cache_hits_is_an_improvement() {
         ("2024-01-02", "c2", 700.0),
         ("2024-01-03", "c3", 700.0),
         ("2024-01-04", "c4", 1000.0),
+        ("2024-01-05", "c5", 1000.0),
+        ("2024-01-06", "c6", 1000.0),
     ] {
         workspace.seed_metrics(
             date,
@@ -631,6 +637,8 @@ async fn analyze_ranks_mixed_severity_findings_across_benchmarks() {
     workspace.seed_two_benchmarks("2024-01-02", "c2", 100.0, 100.0);
     workspace.seed_two_benchmarks("2024-01-03", "c3", 100.0, 100.0);
     workspace.seed_two_benchmarks("2024-01-04", "c4", 200.0, 102.0);
+    workspace.seed_two_benchmarks("2024-01-05", "c5", 200.0, 102.0);
+    workspace.seed_two_benchmarks("2024-01-06", "c6", 200.0, 102.0);
 
     let RunOutcome::Analyzed {
         regressions,
@@ -685,6 +693,8 @@ async fn analyze_reports_improvement_without_regression() {
     workspace.seed_callgrind("2024-01-02", "c2", 100.0);
     workspace.seed_callgrind("2024-01-03", "c3", 100.0);
     workspace.seed_callgrind("2024-01-04", "c4", 70.0);
+    workspace.seed_callgrind("2024-01-05", "c5", 70.0);
+    workspace.seed_callgrind("2024-01-06", "c6", 70.0);
 
     let RunOutcome::Analyzed {
         regressions,
@@ -703,6 +713,133 @@ async fn analyze_reports_improvement_without_regression() {
     );
     let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
     assert_eq!(parsed["findings"][0]["direction"], "improvement");
+}
+
+/// Run-to-run jitter on a Criterion `wall_time` series whose underlying mean is
+/// flat produces no finding at all: the rank-sum gate finds no real separation
+/// between the regimes and the trend test finds no monotonic drift, so substantial
+/// per-point noise never manufactures a spurious regression or improvement. This is
+/// the core signal-to-noise guarantee for the noisy engine.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_criterion_jitter_is_not_flagged() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // Eight points oscillating roughly +/-15% around 20ns with no sustained shift.
+    for (date, label, value) in [
+        ("2024-02-01", "d1", 20.0),
+        ("2024-02-02", "d2", 23.0),
+        ("2024-02-03", "d3", 18.0),
+        ("2024-02-04", "d4", 21.0),
+        ("2024-02-05", "d5", 19.0),
+        ("2024-02-06", "d6", 22.0),
+        ("2024-02-07", "d7", 18.0),
+        ("2024-02-08", "d8", 20.0),
+    ] {
+        workspace.seed_criterion(date, label, "mk", value);
+    }
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(
+        regressions, 0,
+        "jitter must not read as a regression: {report}"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert!(
+        parsed["findings"]
+            .as_array()
+            .expect("a findings array")
+            .is_empty(),
+        "noisy jitter around a flat mean produces no findings at all: {report}"
+    );
+}
+
+/// A slow, monotonic Criterion `wall_time` drift is flagged as a `drift` finding
+/// (not a change-point): the Mann-Kendall trend is significant, the Theil-Sen line
+/// fits the gentle ramp better than any single step, and the total movement clears
+/// the noise floor. This exercises the second detector and the model-fit
+/// arbitration that routes ramps to drift and steps to change-point.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_criterion_slow_drift_is_flagged_as_drift() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // A gentle one-nanosecond-per-commit ramp from 20ns to 27ns.
+    for (date, label, value) in [
+        ("2024-02-01", "d1", 20.0),
+        ("2024-02-02", "d2", 21.0),
+        ("2024-02-03", "d3", 22.0),
+        ("2024-02-04", "d4", 23.0),
+        ("2024-02-05", "d5", 24.0),
+        ("2024-02-06", "d6", 25.0),
+        ("2024-02-07", "d7", 26.0),
+        ("2024-02-08", "d8", 27.0),
+    ] {
+        workspace.seed_criterion(date, label, "mk", value);
+    }
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(regressions, 1, "the upward drift is a regression: {report}");
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(parsed["findings"][0]["method"], "drift", "{report}");
+    assert_eq!(parsed["findings"][0]["direction"], "regression", "{report}");
+}
+
+/// A Callgrind series whose instruction count steps up by a single count - far
+/// below the 3% practical floor a noisy engine demands - is still flagged, because
+/// deterministic engines carry no measurement noise and trust any sustained step.
+/// This proves the engine-aware split: the same tiny move would be discarded as
+/// noise on a Criterion series but is a real change on a deterministic one.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_callgrind_tiny_deterministic_step_is_flagged() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_callgrind("2024-01-01", "c1", 1000.0);
+    workspace.seed_callgrind("2024-01-02", "c2", 1000.0);
+    workspace.seed_callgrind("2024-01-03", "c3", 1000.0);
+    workspace.seed_callgrind("2024-01-04", "c4", 1001.0);
+    workspace.seed_callgrind("2024-01-05", "c5", 1001.0);
+    workspace.seed_callgrind("2024-01-06", "c6", 1001.0);
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(
+        regressions, 1,
+        "a one-count deterministic step is real and must flag below the noise floor: {report}"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(parsed["findings"][0]["method"], "change_point", "{report}");
+    assert_eq!(parsed["findings"][0]["direction"], "regression", "{report}");
 }
 
 // ===========================================================================
@@ -825,8 +962,10 @@ async fn analyze_dirty_tree_on_the_base_admits_the_tip_with_a_warning() {
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
     workspace.seed_callgrind("2024-01-02", "c2", 100.0);
     workspace.seed_callgrind("2024-01-03", "c3", 100.0);
-    // A dirty regression snapshot on the tip commit (c3).
+    // Two dirty regression snapshots on the tip commit (c3) complete a sustained
+    // step over the clean baseline.
     workspace.seed_dirty_callgrind("2024-01-04", "c3", 130.0);
+    workspace.seed_dirty_callgrind("2024-01-05", "c3", 130.0);
     // Make the working tree genuinely dirty (an uncommitted, non-ignored file),
     // matching the "evaluating the tool" / "working on the base branch" scenario.
     workspace.make_dirty("uncommitted.txt");
@@ -848,8 +987,8 @@ async fn analyze_dirty_tree_on_the_base_admits_the_tip_with_a_warning() {
     );
     let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
     assert_eq!(
-        parsed["runs"], 4,
-        "the dirty tip snapshot joins the three clean runs: {report}"
+        parsed["runs"], 5,
+        "the dirty tip snapshots join the three clean runs: {report}"
     );
     let warning = parsed["warning"]
         .as_str()
@@ -890,10 +1029,12 @@ async fn analyze_feature_branch_admits_dirty_snapshots() {
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
     workspace.seed_callgrind("2024-01-02", "c2", 100.0);
     workspace.seed_callgrind("2024-01-03", "c3", 100.0);
-    // Branch off master and add a clean point plus a dirty regression on it.
+    // Branch off master and add a clean point plus two dirty regression snapshots
+    // on it (two raised points satisfy the change-point persistence requirement).
     workspace.checkout_new_branch("feature");
     workspace.seed_callgrind("2024-01-04", "f1", 100.0);
     workspace.seed_dirty_callgrind("2024-01-05", "f1", 200.0);
+    workspace.seed_dirty_callgrind("2024-01-06", "f1", 200.0);
 
     // By default (feature is HEAD; base is the detected master) the dirty snapshot
     // on the target side is admitted, so the spike flags.
@@ -932,12 +1073,15 @@ async fn analyze_feature_branch_admits_dirty_snapshots() {
 #[serial]
 async fn analyze_orders_by_topology_not_effective_time() {
     let workspace = Workspace::repo(&storage_only_config());
-    // Topology c1 -> c2 -> c3 -> c4, but effective times strictly descend, so an
-    // effective-time ordering would put the 130 first (a non-regression).
-    workspace.seed_callgrind("2024-04-04", "c1", 100.0);
-    workspace.seed_callgrind("2024-04-03", "c2", 100.0);
-    workspace.seed_callgrind("2024-04-02", "c3", 100.0);
-    workspace.seed_callgrind("2024-04-01", "c4", 130.0);
+    // Topology c1 -> .. -> c6 with a sustained step at c4, but effective times
+    // strictly descend, so an effective-time ordering would reverse the step into
+    // a non-regression (a drop). A flagged regression proves topology order won.
+    workspace.seed_callgrind("2024-04-06", "c1", 100.0);
+    workspace.seed_callgrind("2024-04-05", "c2", 100.0);
+    workspace.seed_callgrind("2024-04-04", "c3", 100.0);
+    workspace.seed_callgrind("2024-04-03", "c4", 130.0);
+    workspace.seed_callgrind("2024-04-02", "c5", 130.0);
+    workspace.seed_callgrind("2024-04-01", "c6", 130.0);
 
     let RunOutcome::Analyzed {
         regressions,
@@ -952,7 +1096,7 @@ async fn analyze_orders_by_topology_not_effective_time() {
     };
     assert_eq!(
         regressions, 1,
-        "topology order must place the 130 last and flag it: {report}"
+        "topology order must place the 130 step last and flag it: {report}"
     );
     let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
     assert_eq!(parsed["findings"][0]["baseline"], 100.0, "{report}");
@@ -1022,18 +1166,18 @@ async fn list_previews_the_analyzed_data_set() {
         panic!("expected a completed outcome");
     };
     let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
-    assert_eq!(parsed["totals"]["runs"], 4, "{message}");
+    assert_eq!(parsed["totals"]["runs"], 6, "{message}");
     assert_eq!(parsed["totals"]["series"], 1, "{message}");
     assert_eq!(parsed["totals"]["discriminant_sets"], 1, "{message}");
 
     let sets = parsed["sets"].as_array().expect("an array of sets");
     assert_eq!(sets.len(), 1, "{message}");
     assert_eq!(sets[0]["engine"], "callgrind", "{message}");
-    assert_eq!(sets[0]["runs"], 4, "{message}");
+    assert_eq!(sets[0]["runs"], 6, "{message}");
 
     let commits = sets[0]["commits"].as_array().expect("an array of commits");
-    assert_eq!(commits.len(), 4, "one run per commit: {message}");
-    // The four seeded commits, oldest first by topology, each one clean run.
+    assert_eq!(commits.len(), 6, "one run per commit: {message}");
+    // The seeded commits, oldest first by topology, each one clean run.
     assert!(
         commits
             .iter()
@@ -1497,6 +1641,8 @@ async fn analyze_os_facet_selects_one_set() {
         ("2024-01-02", "c2", 100.0, 50.0),
         ("2024-01-03", "c3", 100.0, 50.0),
         ("2024-01-04", "c4", 130.0, 50.0),
+        ("2024-01-05", "c5", 130.0, 50.0),
+        ("2024-01-06", "c6", 130.0, 50.0),
     ] {
         workspace.seed_callgrind_in("x86_64-unknown-linux-gnu", "synthetic", date, label, linux);
         workspace.seed_callgrind_in("x86_64-pc-windows-msvc", "synthetic", date, label, windows);
@@ -1534,14 +1680,16 @@ async fn analyze_os_facet_selects_one_set() {
 #[serial]
 async fn analyze_branch_selects_official_line_from_a_feature_checkout() {
     let workspace = Workspace::repo(&storage_only_config());
-    // Master carries a clean regression.
+    // Master carries a clean sustained regression.
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
     workspace.seed_callgrind("2024-01-02", "c2", 100.0);
     workspace.seed_callgrind("2024-01-03", "c3", 100.0);
     workspace.seed_callgrind("2024-01-04", "c4", 130.0);
+    workspace.seed_callgrind("2024-01-05", "c5", 130.0);
+    workspace.seed_callgrind("2024-01-06", "c6", 130.0);
     // A feature branch with an unrelated dirty improvement that master must ignore.
     workspace.checkout_new_branch("feature");
-    workspace.seed_dirty_callgrind("2024-01-05", "f1", 10.0);
+    workspace.seed_dirty_callgrind("2024-01-07", "f1", 10.0);
 
     let RunOutcome::Analyzed {
         regressions,
@@ -1572,7 +1720,7 @@ async fn analyze_branch_selects_official_line_from_a_feature_checkout() {
 #[serial]
 async fn analyze_official_line_follows_first_parent_across_a_merge() {
     let workspace = Workspace::repo(&storage_only_config());
-    // master:  root - c1 - M - c3   (M merges the side branch into master)
+    // master:  root - c1 - M - c3 - c4 - c5 - c6   (M merges the side branch in)
     //                  \   /
     //  side:            sf1 - sf2
     workspace.commit("c1");
@@ -1582,11 +1730,17 @@ async fn analyze_official_line_follows_first_parent_across_a_merge() {
     workspace.checkout("master");
     workspace.merge("side", "M");
     workspace.commit("c3");
+    workspace.commit("c4");
+    workspace.commit("c5");
+    workspace.commit("c6");
 
-    // The first-parent line carries a clean regression on its tip.
+    // The first-parent line carries a clean sustained regression on its tail.
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
     workspace.seed_callgrind("2024-01-02", "M", 100.0);
-    workspace.seed_callgrind("2024-01-03", "c3", 130.0);
+    workspace.seed_callgrind("2024-01-03", "c3", 100.0);
+    workspace.seed_callgrind("2024-01-04", "c4", 130.0);
+    workspace.seed_callgrind("2024-01-05", "c5", 130.0);
+    workspace.seed_callgrind("2024-01-06", "c6", 130.0);
     // Side-branch points sit on the second-parent side and must never leak into the
     // official line; they carry wild values that would distort the series if read.
     workspace.seed_callgrind("2024-01-02", "sf1", 999.0);
@@ -1605,8 +1759,9 @@ async fn analyze_official_line_follows_first_parent_across_a_merge() {
     };
     let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
     assert_eq!(
-        parsed["runs"], 3,
-        "only the first-parent line c1 -> M -> c3 is analyzed, not the side branch: {report}"
+        parsed["runs"], 6,
+        "only the first-parent line c1 -> M -> c3 -> c4 -> c5 -> c6 is analyzed, not \
+         the side branch: {report}"
     );
     assert_eq!(
         regressions, 1,
@@ -1725,6 +1880,8 @@ async fn analyze_architecture_facet_selects_one_set() {
         ("2024-01-02", "c2", 100.0, 50.0),
         ("2024-01-03", "c3", 100.0, 50.0),
         ("2024-01-04", "c4", 130.0, 50.0),
+        ("2024-01-05", "c5", 130.0, 50.0),
+        ("2024-01-06", "c6", 130.0, 50.0),
     ] {
         workspace.seed_callgrind_in("x86_64-unknown-linux-gnu", "synthetic", date, label, x64);
         workspace.seed_callgrind_in("aarch64-unknown-linux-gnu", "synthetic", date, label, arm);
@@ -1768,6 +1925,8 @@ async fn analyze_target_triple_facet_selects_one_set() {
         ("2024-01-02", "c2", 100.0, 50.0),
         ("2024-01-03", "c3", 100.0, 50.0),
         ("2024-01-04", "c4", 130.0, 50.0),
+        ("2024-01-05", "c5", 130.0, 50.0),
+        ("2024-01-06", "c6", 130.0, 50.0),
     ] {
         workspace.seed_callgrind_in("x86_64-unknown-linux-gnu", "synthetic", date, label, x64);
         workspace.seed_callgrind_in("aarch64-unknown-linux-gnu", "synthetic", date, label, arm);
@@ -1873,10 +2032,14 @@ async fn analyze_criterion_feature_branch_admits_dirty_snapshots() {
     workspace.seed_criterion("2024-02-01", "c1", "mk", 20.0);
     workspace.seed_criterion("2024-02-02", "c2", "mk", 20.0);
     workspace.seed_criterion("2024-02-03", "c3", "mk", 20.0);
-    // Branch off master and add a clean point plus a dirty regression on it.
+    // Branch off master, add a clean point, then several dirty snapshots that step
+    // up — enough points on each side for the rank-sum gate to clear the noise.
     workspace.checkout_new_branch("feature");
     workspace.seed_criterion("2024-02-04", "f1", "mk", 20.0);
     workspace.seed_dirty_criterion("2024-02-05", "f1", "mk", 40.0);
+    workspace.seed_dirty_criterion("2024-02-06", "f1", "mk", 40.0);
+    workspace.seed_dirty_criterion("2024-02-07", "f1", "mk", 40.0);
+    workspace.seed_dirty_criterion("2024-02-08", "f1", "mk", 40.0);
 
     let RunOutcome::Analyzed { regressions, .. } = workspace
         .drive(&["analyze"])
@@ -3165,12 +3328,16 @@ impl Workspace {
         self.seed(&key, &result_set_with(effective.as_second(), &sha, metrics));
     }
 
-    /// Seeds a flat history followed by a clear upward step — a regression.
+    /// Seeds a flat history followed by a clear, sustained upward step — a
+    /// regression with enough points on each side to satisfy the change-point
+    /// detector's persistence requirement.
     fn seed_rising_callgrind_history(&self) {
         self.seed_callgrind("2024-01-01", "c1", 100.0);
         self.seed_callgrind("2024-01-02", "c2", 100.0);
         self.seed_callgrind("2024-01-03", "c3", 100.0);
         self.seed_callgrind("2024-01-04", "c4", 130.0);
+        self.seed_callgrind("2024-01-05", "c5", 130.0);
+        self.seed_callgrind("2024-01-06", "c6", 130.0);
     }
 
     /// Seeds one Criterion `wall_time` result set at the given `date` (`YYYY-MM-DD`,
@@ -3202,12 +3369,18 @@ impl Workspace {
         );
     }
 
-    /// Seeds a flat Criterion `wall_time` history then a clear upward step.
+    /// Seeds a flat Criterion `wall_time` history then a clear, sustained upward
+    /// step. Four points on each side give the rank-sum gate enough power to
+    /// distinguish the step from noise.
     fn seed_rising_criterion_history(&self, machine: &str) {
         self.seed_criterion("2024-02-01", "d1", machine, 20.0);
         self.seed_criterion("2024-02-02", "d2", machine, 20.0);
         self.seed_criterion("2024-02-03", "d3", machine, 20.0);
-        self.seed_criterion("2024-02-04", "d4", machine, 30.0);
+        self.seed_criterion("2024-02-04", "d4", machine, 20.0);
+        self.seed_criterion("2024-02-05", "d5", machine, 30.0);
+        self.seed_criterion("2024-02-06", "d6", machine, 30.0);
+        self.seed_criterion("2024-02-07", "d7", machine, 30.0);
+        self.seed_criterion("2024-02-08", "d8", machine, 30.0);
     }
 
     /// Seeds one Callgrind result set carrying two distinct benchmark identities,

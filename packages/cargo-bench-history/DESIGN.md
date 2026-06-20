@@ -1,12 +1,11 @@
 # cargo-bench-history — Design & Implementation Plan
 
 Status: implemented. All of the numbered iterations are shipped — `run`,
-`analyze` (rolling-baseline regression), `install`, the Azure Blob backend,
-the Criterion adapter, the commit-centric storage model (v2), git-aware
-`analyze`, and `backfill`. The remaining statistical findings (change-point and
-drift, §9 #2–#3) are the one deferred follow-up. The resolved design decisions
-are logged in [§13 Decisions & open items](#13-decisions--open-items); the
-iteration mapping is in [§12 Implementation plan](#12-implementation-plan).
+`analyze` (engine-aware change-point + drift detection), `install`, the Azure Blob
+backend, the Criterion adapter, the commit-centric storage model (v2), git-aware
+`analyze`, and `backfill`. The resolved design decisions are logged in
+[§13 Decisions & open items](#13-decisions--open-items); the iteration mapping is
+in [§12 Implementation plan](#12-implementation-plan).
 
 ## 1. Purpose
 
@@ -18,7 +17,9 @@ run” tools:
   time”);
 * step changes attributable to a specific commit, visible only in hindsight once
   the noise averages out;
-* regressions vs. a robust rolling baseline rather than a single noisy neighbour.
+* regressions distinguished from measurement jitter by engine-aware statistics
+  (a change-point or drift that clears the noise floor) rather than a single noisy
+  neighbour.
 
 It stores every result over time (local path or Azure blob), runs in multiple
 environments (dev PC, GitHub Actions, ADO), and partitions data only when the
@@ -687,30 +688,101 @@ for transparency; text/markdown report counts only. Deletion is per object via t
 
 ## 9. Analysis algorithms
 
-Series: per `(BenchmarkId, metric)`, ordered by git first-parent topology (§8.4)
-with runs on one commit sub-ordered by effective time (§6), tagged with
-toolchain/OS so the engine can segment. Findings (severity-ranked):
+Series: per `(DiscriminantSet, BenchmarkId, metric)`, ordered by git first-parent
+topology (§8.4) with runs on one commit sub-ordered by effective time (§6). The
+goal is **high signal-to-noise**: report level shifts and trends that are real,
+and stay silent on measurement jitter. The design is *engine-aware* because the
+two engines have fundamentally different noise profiles, and a single detector
+cannot serve both well:
 
-1. **Rolling-baseline regression/improvement** *(v1 first)* — baseline = median
-   of last *N* comparable points; flag latest if it deviates beyond a
-   noise-aware threshold. Callgrind: exact integers → threshold ≈ 0 (any real
-   delta matters). Criterion: `k·MAD` and/or CI non-overlap to suppress noise.
-2. **Change-point / step detection** — find level shifts in the series and
-   attribute them to the boundary commit (e.g. cumulative-mean split / Pettitt /
-   E-divisive-lite). This is the “degradation after commit XYZ, visible only in
-   hindsight” case.
-3. **Monotonic drift** — robust slope (Theil–Sen) significant and consistent in
-   sign over a long window → “incrementally slower over 12 months”.
+- **Deterministic engines (Callgrind: instruction counts, estimated cycles, cache
+  events, branches).** Output is exact and reproducible; any persistent change is
+  real signal. There is no measurement noise to suppress, so significance testing
+  is neither needed nor appropriate (a perfect integer step over few points has a
+  *high* nonparametric p-value — see below).
+- **Noisy engines (Criterion: wall time).** Output is a noisy estimate with a
+  reported standard deviation and confidence interval. A change must clear both a
+  statistical-significance bar *and* a practical-magnitude bar, and the family of
+  tests across all series is corrected for multiple comparisons.
 
-**Decided:** implement #1 (rolling-baseline regression) end-to-end for iteration
-2 (simplest, immediately useful), with the series/finding abstraction designed so
-#2 and #3 are additive. All math is pure/deterministic → unit-tested with a
-named, Miri-safe case matrix (flat-never-flags, lone-outlier-flags, severity-tier
-boundaries, window-limiting, deterministic tie-breaks), with no real-time delays
-(per workspace conventions). The Criterion adapter records std-dev + CI bounds on
-each `WallTime` metric so noise-aware thresholds (#1's `k·MAD` / CI non-overlap)
-and the change-point/drift findings (#2/#3) can be layered on; those statistical
-refinements are split into a dedicated follow-up iteration.
+`MetricKind::WallTime` is the sole noisy kind (`is_deterministic` returns `false`
+for it and `true` for every Callgrind kind).
+
+### 9.1 Findings
+
+Two finding *methods*, each emitted per series and severity-ranked together:
+
+1. **Change-point (step) detection** — the primary finding. A single most-likely
+   level shift is located with the **Pettitt** nonparametric change-point test
+   (rank-based, distribution-free). The series splits into a *before* regime and
+   an *after* regime at the change index; the finding's `baseline` is the median
+   of *before*, `latest` is the median of *after*, and the change is attributed to
+   the commit at the start of the *after* regime — answering "what changed, and
+   after which commit", visible only in hindsight over noisy data. **Persistence**
+   is built in: both regimes must contain at least `min_regime` points (default
+   2), so a single-commit blip cannot trip it (the regime medians absorb it).
+2. **Monotonic drift** — a separate finding type for slow trends ("incrementally
+   slower over 12 months"). The **Mann–Kendall** trend test establishes that a
+   monotonic trend exists; the **Theil–Sen** robust slope estimates its
+   magnitude; `baseline`/`latest` are the fitted line's endpoints. When both a
+   change-point and a drift fire on one series, the **better-fitting model wins**:
+   the step model and the line model are each scored by their residual against the
+   series, and the drift is kept only when the line fits more tightly than the step
+   (otherwise the change-point is kept, ties favouring it). This routes sharp steps
+   to the change-point method and smooth ramps to drift, so the two methods never
+   double-report one event.
+
+### 9.2 Engine-aware gating
+
+- **Deterministic series.** A change-point is reported when both regimes reach
+  `min_regime` points and the regime medians differ at all (exact change → ~0
+  noise floor; even a one-instruction step is real, ranked `Minor`). No
+  significance test and no FDR — they would wrongly drop genuine small exact
+  steps. Confidence is reported as `1.0`. Drift requires a significant
+  Mann–Kendall trend and clears the practical-magnitude floor.
+- **Noisy series.** The Pettitt test only *locates* the most likely split — its
+  analytic p-value `2·exp(−6K²/(n³+n²))` is too conservative on short series (an
+  obvious ten-point step scores ≈ 0.07), so it is **not** used as a significance
+  gate. A change-point is reported only when *all* of these hold: a **Mann–Whitney
+  U** test of *before* vs *after* has p < `change_alpha` (default 0.05; the regimes
+  are statistically distinguishable, not merely split); the regime **confidence
+  intervals do not overlap** (using the stored CI bounds, when present); and a
+  practical-magnitude floor `|relative delta| ≥ practical_relative` (default 0.03)
+  so a statistically-real-but-tiny 0.5 % wobble stays silent. Confidence is
+  `1 − p_MannWhitney`. Drift requires the Mann–Kendall significance, the same
+  magnitude floor, **and** that the endpoint movement exceeds the per-measurement
+  noise floor (twice the median CI half-width), so run-to-run jitter never reads as
+  a trend.
+
+### 9.3 Multiple-comparison discipline (FDR)
+
+A repository has many benchmarks × metrics; testing each at α = 0.05 would yield a
+flood of false positives. Every **noisy** candidate's p-value enters a single
+**Benjamini–Hochberg** procedure at false-discovery rate `fdr_q` (default 0.10);
+only BH-significant candidates survive. Deterministic candidates bypass BH (they
+carry no measurement-noise false-positive risk and their exact steps would
+otherwise be discarded by the procedure).
+
+### 9.4 Ranking, severity, polarity, and CI gating
+
+Findings rank by descending `severity`, then descending `|relative delta|`, then a
+deterministic identity tie-break (set, benchmark, metric). Severity tiers are
+unchanged (`Major ≥ 10 %`, `Moderate ≥ 3 %`, else `Minor`). Polarity is unchanged:
+every metric is lower-is-better except `CacheEvents` (cache *hits* — higher is
+better). `--fail-on-regression` gates on the total count of regression findings
+across the analyzed history (a regression anywhere fails the run).
+
+### 9.5 Statistical primitives
+
+All math lives in a pure, deterministic, Miri-safe `analyze/stats.rs`:
+`median`, `pettitt` (rank-based `U_t`, `K = max|U_t|`, `p ≈ 2·exp(−6K²/(n³+n²))`,
+used only to locate the split), `mann_whitney_u_pvalue` (tie- and
+continuity-corrected normal approximation), `mann_kendall` (`S`, tie-corrected
+`Var(S)`, `Z`), `theil_sen_line` (median of pairwise slopes plus a median
+intercept), `benjamini_hochberg` (keep-mask at rate `q`), and `normal_cdf`
+(Abramowitz–Stegun erf). Each is unit-tested with named, value-asserting cases on
+hand-computable inputs (no threshold-mutation guards), so the whole detector is
+verifiable without real-time delays per workspace conventions.
 
 ## 10. Crate architecture
 
@@ -753,7 +825,8 @@ src/
     discriminant.rs       # parse v2 keys; DiscriminantSet/Facets
     selection.rs          # split the target ancestry at the merge-base
     series.rs             # per-(BenchmarkId, metric) series in topology order
-    findings.rs           # rolling-baseline regression/improvement detector
+    stats.rs              # pure statistical primitives (Pettitt, Mann-Kendall, ...)
+    findings.rs           # engine-aware change-point + drift detectors
     report.rs             # text|json|markdown multi-set renderer
     list.rs               # `list` data-set preview + `list --discriminants`
     clean.rs              # `clean` removes dirty runs (mirrors list selection)
@@ -882,9 +955,13 @@ adds macOS; mapped to the original request's numbering:
    (resumable; backfill treats the it.6 write-once collision as a skip rather than
    an error), `--ignore-errors`, end-of-run summary.
    Builds on the idempotency (it.6) and the git port (it.7).
-9. ⏳ **Statistical findings** *(deferred)* — noise-aware thresholds (`k·MAD` / CI
-   non-overlap), change-point (Pettitt) and Theil–Sen drift, layered on the
-   Criterion dispersion fields recorded in iteration 5 (§9 #1–#3).
+9. ✅ **Statistical findings** — engine-aware noise-resistant analysis (§9):
+   nonparametric change-point (Pettitt) with built-in persistence + Mann–Whitney
+   and CI-non-overlap gating for noisy engines; Mann–Kendall + Theil–Sen drift as
+   a separate finding type; Benjamini–Hochberg FDR across noisy candidates;
+   deterministic (Callgrind) series bypass significance/FDR so exact steps of any
+   size are reported. Layered on the Criterion dispersion fields recorded in
+   iteration 5.
 
 **Deferred:** a standalone `upload` command (§8.2) — added only if a concrete
 need arises, most likely alongside Criterion. Its harvest → build → store logic
@@ -1059,3 +1136,21 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     parameter), so `clean` can reclaim ephemeral base-branch snapshots regardless of
     the current tree state. `clean` adds a write-once-safe `Storage::delete` (§7) and
     a `--dry-run` preview.
+27. **Engine-aware analysis** — *Decided:* the detector is split by engine noise
+     profile (§9). Deterministic Callgrind metrics use a Pettitt change-point with
+     only a persistence requirement (both regimes ≥ `min_regime`) and a nonzero
+     median difference — no significance test or FDR, because a perfect integer step
+     over few points has a *high* nonparametric p-value and exact steps of any size
+     are real signal. Noisy Criterion wall time uses Pettitt only to *locate* the
+     split (its analytic p-value is too conservative to gate) and requires a
+     significant Mann–Whitney rank test, confidence-interval non-overlap, and a
+     practical-magnitude floor, and every noisy candidate passes through a single
+     Benjamini–Hochberg FDR gate so a repository full of benchmarks does not flood
+     the report with false positives. Monotonic drift (Mann–Kendall significance +
+     Theil–Sen slope, kept over a change-point only when the line fits the series
+     more tightly than a step) is a second finding type for slow trends. `--fail-on-regression` gates on the **total** regression
+     count across the analyzed history (chosen over target-side-only scoping for
+     simplicity, accepting that an old base-history regression can fail later
+     branches until it is addressed). This replaces the single-latest-point
+     rolling-baseline detector of iteration 2, which over-reported on measurement
+     jitter (decision 5 superseded).
