@@ -56,6 +56,11 @@ pub(crate) struct SetSummary<'a> {
 pub(crate) struct ReportInput<'a> {
     /// The project the history belongs to.
     pub(crate) project: &'a str,
+    /// The analysis mode the report was produced in (`history`/`branch`/`tip`).
+    pub(crate) mode: &'a str,
+    /// Whether any finding survived — the at-a-glance signal a downstream
+    /// automation reads to decide whether the report is worth surfacing.
+    pub(crate) notable: bool,
     /// Total stored runs loaded across every set.
     pub(crate) runs: usize,
     /// Total distinct series compared across every set.
@@ -102,6 +107,10 @@ struct JsonSet<'a> {
 struct JsonReport<'a> {
     /// The project the history belongs to.
     project: &'a str,
+    /// The analysis mode (`history`/`branch`/`tip`).
+    mode: &'a str,
+    /// Whether any finding survived — the downstream automation signal.
+    notable: bool,
     /// Total stored runs loaded.
     runs: usize,
     /// Total distinct series compared.
@@ -171,7 +180,7 @@ fn render_text(input: &ReportInput<'_>) -> String {
     let improvements = count_top(input.findings, Direction::Improvement);
 
     let mut lines = vec![
-        format!("Analyzed project {}", input.project),
+        format!("Analyzed project {} ({} mode)", input.project, input.mode),
         format!(
             "  runs: {}  series: {}  regressions: {regressions}  improvements: {improvements}",
             input.runs, input.series
@@ -221,6 +230,7 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
     let mut lines = vec![
         format!("# Benchmark history analysis: {}", input.project),
         String::new(),
+        format!("- Mode: {}", input.mode),
         format!("- Runs analyzed: {}", input.runs),
         format!("- Series compared: {}", input.series),
         format!("- Regressions: {regressions}"),
@@ -300,6 +310,8 @@ fn render_json(input: &ReportInput<'_>) -> String {
 
     let report = JsonReport {
         project: input.project,
+        mode: input.mode,
+        notable: input.notable,
         runs: input.runs,
         series: input.series,
         regressions: count_top(input.findings, Direction::Regression),
@@ -402,6 +414,8 @@ mod tests {
             relative_delta: 0.30,
             confidence: 1.0,
             commit: Some("deadbee".to_owned()),
+            flipped_at: None,
+            series: Vec::new(),
         }
     }
 
@@ -420,6 +434,8 @@ mod tests {
         });
         ReportInput {
             project,
+            mode: "history",
+            notable: !findings.is_empty(),
             runs: findings.len().saturating_add(3),
             series: findings.len().max(1),
             findings,
@@ -445,6 +461,8 @@ mod tests {
     fn text_report_with_no_findings_is_explicit() {
         let input = ReportInput {
             project: "folo",
+            mode: "history",
+            notable: false,
             runs: 3,
             series: 1,
             findings: &[],
@@ -462,6 +480,8 @@ mod tests {
     fn text_report_renders_hint_when_present() {
         let input = ReportInput {
             project: "folo",
+            mode: "history",
+            notable: false,
             runs: 0,
             series: 0,
             findings: &[],
@@ -546,6 +566,8 @@ mod tests {
     fn markdown_report_with_no_findings() {
         let input = ReportInput {
             project: "folo",
+            mode: "history",
+            notable: false,
             runs: 0,
             series: 0,
             findings: &[],
@@ -562,6 +584,8 @@ mod tests {
     fn json_report_includes_hint_field_when_present() {
         let input = ReportInput {
             project: "folo",
+            mode: "history",
+            notable: false,
             runs: 0,
             series: 0,
             findings: &[],
@@ -603,6 +627,8 @@ mod tests {
     fn warning_renders_even_when_there_are_no_findings() {
         let input = ReportInput {
             project: "folo",
+            mode: "history",
+            notable: false,
             runs: 1,
             series: 1,
             findings: &[],
@@ -622,6 +648,8 @@ mod tests {
     fn omitted_warning_is_absent_from_json() {
         let input = ReportInput {
             project: "folo",
+            mode: "history",
+            notable: false,
             runs: 0,
             series: 0,
             findings: &[],

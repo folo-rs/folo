@@ -33,6 +33,16 @@ const MOCK_ENGINE: &str = env!("CARGO_BIN_EXE_cargo-bench-history-mock-engine");
 /// the package, so its `CARGO_PKG_VERSION` matches the version `run` records.
 const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// A fixed clock anchor for `analyze`/`list`'s history-mode default `--since`
+/// window. Seed data lands across 2024; anchoring "now" at 2024-06-01 keeps the
+/// default six-month look-back (cutoff 2023-12-01) inclusive of that data, so the
+/// default window does not silently drop seeded points as wall-clock time passes.
+fn analysis_now() -> Timestamp {
+    "2024-06-01T00:00:00Z"
+        .parse::<Timestamp>()
+        .expect("the fixed analysis anchor is a valid timestamp")
+}
+
 fn command_from(args: &[&str]) -> Command {
     Cli::from_args(&["cargo-bench-history"], args)
         .expect("arguments should parse")
@@ -322,29 +332,12 @@ async fn analyze_detects_criterion_wall_time_regression() {
     );
 }
 
-/// `--fail-on-regression` makes a flagged regression an unsuccessful outcome.
+/// A flagged regression never fails the process: findings are advisory, so the
+/// exit code reflects only whether the tool ran, not what it found.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 #[serial]
-async fn analyze_fail_on_regression_yields_failure() {
-    let workspace = Workspace::repo(&storage_only_config());
-    workspace.seed_rising_callgrind_history();
-
-    let outcome = workspace
-        .drive(&["analyze", "--fail-on-regression"])
-        .await
-        .expect("analysis should succeed");
-    assert!(
-        !outcome.is_success(),
-        "a gated regression must be unsuccessful: {outcome:?}"
-    );
-}
-
-/// Without the gate, a flagged regression is still a successful outcome.
-#[tokio::test]
-#[cfg_attr(miri, ignore)]
-#[serial]
-async fn analyze_regression_without_gate_is_successful() {
+async fn analyze_with_regression_is_always_successful() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_rising_callgrind_history();
 
@@ -352,7 +345,10 @@ async fn analyze_regression_without_gate_is_successful() {
         .drive(&["analyze"])
         .await
         .expect("analysis should succeed");
-    assert!(outcome.is_success(), "{outcome:?}");
+    assert!(
+        outcome.is_success(),
+        "findings must never fail the build: {outcome:?}"
+    );
 }
 
 /// `--format json` renders a structured, parseable report.
@@ -610,7 +606,7 @@ async fn analyze_rising_cache_hits_is_an_improvement() {
         report,
         ..
     } = workspace
-        .drive(&["analyze", "--format", "json"])
+        .drive(&["analyze", "--format", "json", "--include-improvements"])
         .await
         .expect("analysis succeeds")
     else {
@@ -701,7 +697,7 @@ async fn analyze_reports_improvement_without_regression() {
         report,
         ..
     } = workspace
-        .drive(&["analyze", "--format", "json"])
+        .drive(&["analyze", "--format", "json", "--include-improvements"])
         .await
         .expect("analysis succeeds")
     else {
@@ -1101,6 +1097,219 @@ async fn analyze_orders_by_topology_not_effective_time() {
     let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
     assert_eq!(parsed["findings"][0]["baseline"], 100.0, "{report}");
     assert_eq!(parsed["findings"][0]["latest"], 130.0, "{report}");
+}
+
+/// Branch mode judges a feature branch by its *latest* regime, not its journey:
+/// a branch that first improved and then regressed is reported as a regression,
+/// and `flipped_at` points at the commit where the latest (worse) regime began.
+/// The JSON also advertises the resolved mode and the downstream `notable` signal.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_branch_mode_reports_the_latest_regime_with_a_flip() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // A flat clean baseline on master.
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.seed_callgrind("2024-01-02", "c2", 100.0);
+    workspace.seed_callgrind("2024-01-03", "c3", 100.0);
+    // The feature branch first improves (80) then regresses hard (130): the latest
+    // state is what matters, so this must be reported as a regression vs the base.
+    workspace.checkout_new_branch("feature");
+    workspace.seed_callgrind("2024-01-04", "f1", 80.0);
+    workspace.seed_callgrind("2024-01-05", "f2", 80.0);
+    workspace.seed_callgrind("2024-01-06", "f3", 80.0);
+    workspace.seed_callgrind("2024-01-07", "f4", 130.0);
+    workspace.seed_callgrind("2024-01-08", "f5", 130.0);
+    workspace.seed_callgrind("2024-01-09", "f6", 130.0);
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(
+        regressions, 1,
+        "the latest (worse) regime must be reported, not the intermediate improvement: {report}"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(parsed["mode"], "branch", "{report}");
+    assert_eq!(parsed["notable"], true, "{report}");
+    let finding = &parsed["findings"][0];
+    assert_eq!(finding["direction"], "regression", "{report}");
+    assert_eq!(finding["baseline"], 100.0, "{report}");
+    assert_eq!(finding["latest"], 130.0, "{report}");
+    assert!(
+        finding["flipped_at"].is_string(),
+        "the flip should name the commit the latest regime began at: {report}"
+    );
+    assert!(
+        finding["series"].as_array().is_some_and(|s| !s.is_empty()),
+        "the finding should carry the underlying series for charting: {report}"
+    );
+}
+
+/// A feature branch that holds flat at the base level produces no finding in
+/// branch mode: with no change in the latest state there is nothing to report,
+/// and `notable` stays false so downstream automation knows to stay quiet.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_branch_mode_stays_silent_on_a_flat_branch() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.seed_callgrind("2024-01-02", "c2", 100.0);
+    workspace.seed_callgrind("2024-01-03", "c3", 100.0);
+    workspace.checkout_new_branch("feature");
+    workspace.seed_callgrind("2024-01-04", "f1", 100.0);
+    workspace.seed_callgrind("2024-01-05", "f2", 100.0);
+    workspace.seed_callgrind("2024-01-06", "f3", 100.0);
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(regressions, 0, "a flat branch must not flag: {report}");
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(parsed["mode"], "branch", "{report}");
+    assert_eq!(parsed["notable"], false, "{report}");
+    assert!(
+        parsed["findings"].as_array().is_some_and(Vec::is_empty),
+        "{report}"
+    );
+}
+
+/// History mode reports only regressions by default: steady improvement on the
+/// base branch over time is expected and not noteworthy, so a sustained drop is
+/// suppressed unless `--include-improvements` is given, which then surfaces it.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_history_mode_suppresses_improvements_by_default() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // A clean base branch with a sustained downward step (an improvement).
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.seed_callgrind("2024-01-02", "c2", 100.0);
+    workspace.seed_callgrind("2024-01-03", "c3", 100.0);
+    workspace.seed_callgrind("2024-01-04", "c4", 70.0);
+    workspace.seed_callgrind("2024-01-05", "c5", 70.0);
+    workspace.seed_callgrind("2024-01-06", "c6", 70.0);
+
+    // By default history mode stays silent about the improvement.
+    let RunOutcome::Analyzed { report, .. } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(parsed["mode"], "history", "{report}");
+    assert_eq!(parsed["notable"], false, "{report}");
+    assert_eq!(parsed["improvements"], 0, "{report}");
+    assert!(
+        parsed["findings"].as_array().is_some_and(Vec::is_empty),
+        "improvements are suppressed by default in history mode: {report}"
+    );
+
+    // Opting in surfaces the very same improvement.
+    let RunOutcome::Analyzed { report, .. } = workspace
+        .drive(&["analyze", "--format", "json", "--include-improvements"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(parsed["improvements"], 1, "{report}");
+    assert_eq!(
+        parsed["findings"][0]["direction"], "improvement",
+        "{report}"
+    );
+}
+
+/// `--mode tip` overrides auto-detection (which would pick history on a clean base
+/// checkout) and runs the fast tip guard: it flags a regression at the latest
+/// commit but stays silent on an improvement, since the guard cares only about
+/// the level getting worse.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_tip_mode_flags_only_a_tip_regression() {
+    let regressing = Workspace::repo(&storage_only_config());
+    regressing.seed_callgrind("2024-01-01", "c1", 100.0);
+    regressing.seed_callgrind("2024-01-02", "c2", 100.0);
+    regressing.seed_callgrind("2024-01-03", "c3", 100.0);
+    regressing.seed_callgrind("2024-01-04", "c4", 100.0);
+    regressing.seed_callgrind("2024-01-05", "c5", 130.0);
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = regressing
+        .drive(&["analyze", "--mode", "tip", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(regressions, 1, "the tip step up must flag: {report}");
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(parsed["mode"], "tip", "the override must win: {report}");
+
+    let improving = Workspace::repo(&storage_only_config());
+    improving.seed_callgrind("2024-01-01", "c1", 100.0);
+    improving.seed_callgrind("2024-01-02", "c2", 100.0);
+    improving.seed_callgrind("2024-01-03", "c3", 100.0);
+    improving.seed_callgrind("2024-01-04", "c4", 100.0);
+    improving.seed_callgrind("2024-01-05", "c5", 70.0);
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = improving
+        .drive(&["analyze", "--mode", "tip", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(
+        regressions, 0,
+        "tip mode reports regressions only, so a drop stays silent: {report}"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(parsed["improvements"], 0, "{report}");
+}
+
+/// An unrecognized `--mode` is a clear up-front error, not a silent fallback.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_rejects_an_unknown_mode() {
+    let workspace = Workspace::repo(&storage_only_config());
+    let error = workspace
+        .drive(&["analyze", "--mode", "weekly"])
+        .await
+        .expect_err("an unknown mode should be rejected");
+    assert!(
+        error.to_string().contains("unknown analysis mode"),
+        "the error should name the problem: {error}"
+    );
 }
 
 /// `list --discriminants` enumerates exactly the comparable sets present in
@@ -2487,7 +2696,7 @@ async fn run_then_analyze_round_trips_a_sanitizing_project_id() {
             "--target-triple",
             "x86_64-unknown-linux-gnu",
             "--timestamp",
-            "2020-01-01T00:00:00Z",
+            "2024-03-01T00:00:00Z",
         ])
         .await
         .expect("run should succeed");
@@ -2542,7 +2751,7 @@ async fn run_then_analyze_preserves_unusual_identity_characters() {
             "--machine-key",
             "pool",
             "--timestamp",
-            "2020-01-01T00:00:00Z",
+            "2024-03-01T00:00:00Z",
         ])
         .await
         .expect("run should succeed");
@@ -3020,25 +3229,12 @@ impl Workspace {
         workspace
     }
 
-    /// Creates a workspace with `config` plus an initialized git repository whose
-    /// working tree stays *clean* across a `run`: the volatile directories a run
-    /// touches (`.cargo`, `store`, `target`) are git-ignored, so the real probe
-    /// records the root commit as a clean (not dirty) run. Used by the end-to-end
-    /// `run` -> `analyze` round-trip tests.
+    /// Alias for [`repo`](Self::repo): the standard repository already keeps its
+    /// working tree clean across a `run` (the volatile `.cargo`/`store`/`target`
+    /// directories are git-ignored). Retained for call sites that want to spell out
+    /// that a clean tree — and therefore `history`-mode analysis — is intended.
     fn clean_repo(config: &str) -> Self {
-        let workspace = Self::new(config);
-        std::fs::write(
-            workspace.root().join(".gitignore"),
-            "/.cargo/\n/store/\n/target/\n",
-        )
-        .unwrap();
-        workspace.git(&["init", "-b", "master"]);
-        workspace.git(&["config", "user.email", "test@example.invalid"]);
-        workspace.git(&["config", "user.name", "Bench History Test"]);
-        workspace.git(&["config", "commit.gpgsign", "false"]);
-        workspace.git(&["add", ".gitignore"]);
-        workspace.git(&["commit", "-m", "root"]);
-        workspace
+        Self::repo(config)
     }
 
     /// Creates an empty workspace with no configuration file written.
@@ -3097,13 +3293,24 @@ impl Workspace {
     }
 
     /// Initializes a `master`-branch repository with a deterministic identity and
-    /// one empty root commit so `HEAD` always resolves.
+    /// one root commit so `HEAD` always resolves. The volatile directories a run
+    /// touches (`.cargo`, `store`, `target`) are git-ignored, so the working tree
+    /// stays clean unless a test deliberately dirties it (via [`make_dirty`]). A
+    /// clean tree on the base branch is what makes `analyze` pick `history` mode.
+    ///
+    /// [`make_dirty`]: Self::make_dirty
     fn init_repo(&self) {
+        std::fs::write(
+            self.root().join(".gitignore"),
+            "/.cargo/\n/store/\n/target/\n",
+        )
+        .unwrap();
         self.git(&["init", "-b", "master"]);
         self.git(&["config", "user.email", "test@example.invalid"]);
         self.git(&["config", "user.name", "Bench History Test"]);
         self.git(&["config", "commit.gpgsign", "false"]);
-        self.git(&["commit", "--allow-empty", "-m", "root"]);
+        self.git(&["add", ".gitignore"]);
+        self.git(&["commit", "-m", "root"]);
     }
 
     /// Lazily creates an empty commit labeled `label` on the current branch and
@@ -3221,7 +3428,13 @@ impl Workspace {
         let mut bench_command = vec![MOCK_ENGINE.to_owned()];
         bench_command.extend(self.bench.iter().cloned());
 
-        run_with_overrides(&command_from(args), Some(target_root), Some(bench_command)).await
+        run_with_overrides(
+            &command_from(args),
+            Some(target_root),
+            Some(bench_command),
+            Some(analysis_now()),
+        )
+        .await
     }
 
     /// Drives a command the way the production `run` entry does: with no target-root
@@ -3237,7 +3450,13 @@ impl Workspace {
         let mut bench_command = vec![MOCK_ENGINE.to_owned()];
         bench_command.extend(self.bench.iter().cloned());
 
-        run_with_overrides(&command_from(args), None, Some(bench_command)).await
+        run_with_overrides(
+            &command_from(args),
+            None,
+            Some(bench_command),
+            Some(analysis_now()),
+        )
+        .await
     }
 
     /// All stored objects as `(object key, parsed result set)` pairs, sorted by key.

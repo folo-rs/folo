@@ -193,7 +193,13 @@ impl AzureWorkspace {
         // command, which the single bench invocation runs to produce engine output.
         let mut bench_command = vec![MOCK_ENGINE.to_owned()];
         bench_command.extend(self.bench.iter().cloned());
-        run_with_overrides(&command_from(args), Some(target_root), Some(bench_command)).await
+        run_with_overrides(
+            &command_from(args),
+            Some(target_root),
+            Some(bench_command),
+            None,
+        )
+        .await
     }
 }
 

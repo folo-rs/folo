@@ -24,6 +24,8 @@ use crate::text::count_noun;
 use crate::wiring::{default_config_path, resolve_project_id};
 use crate::{ListOptions, RunError, RunOutcome};
 
+use jiff::Timestamp;
+
 use super::discriminant::DiscriminantSet;
 use super::report::ReportFormat;
 use super::series::{LoadedObject, Series, SeriesFilter, build_series};
@@ -34,7 +36,13 @@ use super::{
 
 /// The real `list`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
-pub(crate) async fn execute(options: &ListOptions) -> Result<RunOutcome, RunError> {
+///
+/// `now_override` anchors the history-mode default `--since` lookback to a fixed
+/// instant (see [`execute`](super::execute)); production passes `None`.
+pub(crate) async fn execute(
+    options: &ListOptions,
+    now_override: Option<Timestamp>,
+) -> Result<RunOutcome, RunError> {
     let reporter = StderrReporter::new(options.verbose);
 
     let config_path = options
@@ -54,7 +62,17 @@ pub(crate) async fn execute(options: &ListOptions) -> Result<RunOutcome, RunErro
     let repo = options.repo.clone().unwrap_or(workspace_dir);
     let git = SystemGitHistory::new(repo);
 
-    list_with(&git, &storage, &project_id, &config, options, &reporter).await
+    let now = now_override.unwrap_or_else(Timestamp::now);
+    list_with(
+        &git,
+        &storage,
+        &project_id,
+        &config,
+        options,
+        now,
+        &reporter,
+    )
+    .await
 }
 
 /// Storage- and git-generic `list`: either list the discriminant sets present in
@@ -66,6 +84,7 @@ pub(crate) async fn list_with<G, S>(
     project_id: &str,
     config: &Config,
     options: &ListOptions,
+    now: Timestamp,
     reporter: &dyn Reporter,
 ) -> Result<RunOutcome, RunError>
 where
@@ -92,7 +111,8 @@ where
         });
     }
 
-    let dataset = select_dataset(git, storage, project_id, config, &selection, reporter).await?;
+    let dataset =
+        select_dataset(git, storage, project_id, config, &selection, now, reporter).await?;
     let filter = SeriesFilter {
         metric: options.metric.as_deref(),
     };
@@ -567,6 +587,7 @@ mod tests {
             "folo",
             &config(),
             options,
+            Timestamp::from_second(0).expect("epoch is valid"),
             &RecordingReporter::new(),
         ))
         .expect("listing runs");
@@ -663,6 +684,7 @@ mod tests {
             "folo",
             &config(),
             &options(),
+            Timestamp::from_second(0).expect("epoch is valid"),
             &RecordingReporter::new(),
         ))
         .unwrap_err();

@@ -41,9 +41,10 @@ cargo bench-history backfill --from REF --to REF [--workspace]
 cargo bench-history analyze [--repo PATH] [--branch REF] [--base REF]
                             [--engine NAME] [--target-triple TRIPLE]
                             [--os OS] [--architecture ARCH]
-                            [--machine-key KEY] [--no-dirty] [--since DATE]
+                            [--machine-key KEY] [--no-dirty] [--since WHEN]
                             [--metric NAME] [--format text|json|markdown]
-                            [--fail-on-regression] [--verbose] [--config PATH]
+                            [--mode auto|history|branch|tip]
+                            [--include-improvements] [--verbose] [--config PATH]
 cargo bench-history list [--discriminants] [--repo PATH] [--branch REF]
                          [--base REF] [--engine NAME] [--target-triple TRIPLE]
                          [--os OS] [--architecture ARCH] [--machine-key KEY]
@@ -98,11 +99,33 @@ cargo bench-history clean [--dry-run] [--repo PATH] [--branch REF]
   machine key); `--engine`/`--os`/`--architecture`/`--machine-key` select sets.
   `--target-triple`
   selects by the whole triple instead of `--os`/`--architecture` and cannot be
-  combined with them. `--since`/`--metric`
-  narrow the data and `--fail-on-regression` enables CI gating. When stored runs
-  exist but none enter the analysis (for example because every run is a dirty
-  snapshot on the base branch), the report explains why; `--verbose` adds a
-  per-object diagnostic trail to standard error. Every command accepts `--verbose`.
+  combined with them.
+* `analyze` runs in one of three **modes**, chosen automatically (`--mode auto`,
+  the default) or forced with `--mode`:
+  * **history** — long-range trend watch over the base branch (selected when you
+    analyze a clean checkout of the base branch). It detects sustained
+    change-points and slow drifts, defaults `--since` to the last six months so a
+    scheduled watch does not silently widen as history grows, and reports only
+    **regressions** (steady improvement over time is expected) unless
+    `--include-improvements` is given.
+  * **branch** — "how does my feature compare" (selected for a feature branch, or a
+    dirty base checkout). It judges the branch by its **latest** state versus the
+    base, reporting both regressions and improvements; if the branch got better and
+    then worse, the latest (worse) state is what is reported, and the finding's
+    `flipped_at` names the commit that regime began at.
+  * **tip** — a fast guard that compares only the latest commit against the
+    recently established level, reporting regressions only. Useful as a cheap
+    "did the last commit make things worse" check.
+  Findings are advisory: the exit code reflects only whether the analysis *ran*,
+  never what it found. Downstream automation reads the machine-readable signal from
+  the `json` report — `mode`, the boolean `notable` (any finding survived), each
+  finding's `direction`/`flipped_at`, and the full per-finding `series` for
+  charting. `--since` accepts an RFC 3339 timestamp, a `YYYY-MM-DD` date, or a
+  relative duration such as `6 months` or `30 days ago`; `--metric` narrows to one
+  metric. When stored runs exist but none enter the analysis (for example because
+  every run is a dirty snapshot on the base branch), the report explains why;
+  `--verbose` adds a per-object diagnostic trail to standard error. Every command
+  accepts `--verbose`.
 * `list` previews the data set that an `analyze` pass would consume without
   analyzing it: it accepts the same data-set-selection flags as `analyze`
   (`--repo`/`--branch`/`--base`/`--engine`/`--target-triple`/`--os`/
@@ -134,7 +157,10 @@ Implemented:
 * `analyze` reconstructs a project's timeline from git history and reports
   engine-aware, noise-resistant findings — sustained **change-points** and slow
   **drifts**, separated from measurement jitter — in `text`, `json`, or `markdown`,
-  grouped by discriminant set, with optional `--fail-on-regression` CI gating.
+  grouped by discriminant set. It runs in `history`, `branch`, or `tip` mode
+  (auto-detected, or forced with `--mode`); findings are advisory and never affect
+  the exit code (the `json` report's `mode`/`notable`/`flipped_at`/`series` fields
+  are the downstream signal).
 * `list` previews the data set an `analyze` pass would consume (run/series/commit
   counts per discriminant set), or lists the discriminant sets present in storage
   with `--discriminants`.

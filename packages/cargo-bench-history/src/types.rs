@@ -115,8 +115,12 @@ pub struct AnalyzeOptions {
     pub metric: Option<String>,
     /// Output format selector, if set.
     pub format: Option<String>,
-    /// Exit with failure if a regression is detected.
-    pub fail_on_regression: bool,
+    /// Analysis-mode selector (`auto`, `history`, `branch`, or `tip`), if set.
+    /// `auto` (the default) infers history vs branch mode from the git topology.
+    pub mode: Option<String>,
+    /// In history mode, also report sustained improvements (regressions only by
+    /// default, since improvement over time on the base branch is expected).
+    pub include_improvements: bool,
     /// Emit detailed diagnostic notes to standard error describing each step.
     pub verbose: bool,
 }
@@ -262,28 +266,25 @@ pub enum RunOutcome {
     Analyzed {
         /// The rendered findings report for the requested output format.
         report: String,
-        /// Number of flagged regressions across all analyzed series.
+        /// Number of flagged regressions across all analyzed series, for
+        /// informational use. It never affects the process exit code: findings
+        /// are advisory, so the machine-readable signal lives in the report's
+        /// JSON (`notable`), not in the exit status.
         regressions: usize,
-        /// Whether `--fail-on-regression` was set; with a non-zero
-        /// `regressions` count it makes the command exit unsuccessfully.
-        fail_on_regression: bool,
     },
 }
 
 impl RunOutcome {
     /// Whether the command should be considered successful (exit code zero).
     ///
-    /// Every outcome is successful except an [`Analyzed`](Self::Analyzed) report
-    /// that flagged at least one regression while `--fail-on-regression` was set.
+    /// Every outcome is successful: a finding is never a build-failing condition.
+    /// Only an actual [`RunError`](crate::RunError) (a failure to *run*) yields a
+    /// non-zero exit code. Downstream automation reads notable findings from the
+    /// report JSON rather than from the exit status.
     #[must_use]
     pub fn is_success(&self) -> bool {
         match self {
-            Self::Completed { .. } => true,
-            Self::Analyzed {
-                regressions,
-                fail_on_regression,
-                ..
-            } => !(*fail_on_regression && *regressions > 0),
+            Self::Completed { .. } | Self::Analyzed { .. } => true,
         }
     }
 }
@@ -530,21 +531,13 @@ mod tests {
     }
 
     #[test]
-    fn analyzed_outcome_fails_only_when_gated_and_regressed() {
-        let gated_with_regression = RunOutcome::Analyzed {
-            report: "r".to_owned(),
-            regressions: 1,
-            fail_on_regression: true,
-        };
-        assert!(!gated_with_regression.is_success());
-
-        // A regression without the gate, or the gate without a regression, both
-        // still succeed.
+    fn analyzed_outcome_is_always_successful() {
+        // Findings are advisory and never fail a build: an Analyzed outcome is
+        // successful regardless of how many regressions it flagged.
         assert!(
             RunOutcome::Analyzed {
                 report: "r".to_owned(),
                 regressions: 3,
-                fail_on_regression: false,
             }
             .is_success()
         );
@@ -552,7 +545,6 @@ mod tests {
             RunOutcome::Analyzed {
                 report: "r".to_owned(),
                 regressions: 0,
-                fail_on_regression: true,
             }
             .is_success()
         );

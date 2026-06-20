@@ -57,6 +57,17 @@ pub(crate) struct AnalysisConfig {
     /// Minimum relative magnitude (3%) a noisy move must reach to matter in
     /// practice, regardless of statistical significance.
     pub(crate) practical_relative: f64,
+    /// How many recent base-side points form the level a branch's latest state is
+    /// compared against (branch mode), and the recent base-branch window the newest
+    /// point is compared against (tip mode).
+    pub(crate) compare_window: usize,
+    /// Minimum relative magnitude a noisy *branch* move must reach. Raised above the
+    /// history floor: a feature-branch signal must be high-confidence, since we
+    /// would rather miss a small move than cry wolf on a pull request.
+    pub(crate) branch_practical_relative: f64,
+    /// Multiple of the per-measurement noise floor a noisy branch/tip move with too
+    /// few points to rank-test must exceed before it is trusted.
+    pub(crate) branch_noise_multiple: f64,
 }
 
 impl Default for AnalysisConfig {
@@ -68,6 +79,81 @@ impl Default for AnalysisConfig {
             drift_min_points: 6,
             drift_alpha: 0.05,
             practical_relative: 0.03,
+            compare_window: 8,
+            branch_practical_relative: 0.05,
+            branch_noise_multiple: 2.0,
+        }
+    }
+}
+
+/// Which analysis a [`find_changes`] pass performs.
+///
+/// The mode is auto-detected by the caller from git topology (a clean base branch
+/// whose tip is its own merge-base is [`History`](AnalysisMode::History); anything
+/// with commits — or a dirty working tree — on top of the base is
+/// [`Branch`](AnalysisMode::Branch)) and may be overridden with `--mode`.
+/// [`Tip`](AnalysisMode::Tip) is never auto-selected; it is an explicit guard mode.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AnalysisMode {
+    /// Long-range trend and change-point analysis over a base branch's history.
+    History,
+    /// Latest-state comparison of a feature branch against its base, ignoring the
+    /// intermediate stages the branch passed through.
+    Branch,
+    /// Guard check of the newest point against the recent base-branch level.
+    Tip,
+}
+
+impl AnalysisMode {
+    /// The lowercase wire name of the mode.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::History => "history",
+            Self::Branch => "branch",
+            Self::Tip => "tip",
+        }
+    }
+
+    /// Parses an explicit `--mode` name, if recognized (`auto` is resolved by the
+    /// caller and is not a mode of its own).
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "history" => Some(Self::History),
+            "branch" => Some(Self::Branch),
+            "tip" => Some(Self::Tip),
+            _ => None,
+        }
+    }
+}
+
+/// The context a [`find_changes`] pass runs in: which analysis to perform, the
+/// tuned parameters, where the branch forks from its base (branch mode only), and
+/// whether improvements are reported alongside regressions.
+pub(crate) struct AnalysisContext {
+    /// The analysis to perform.
+    pub(crate) mode: AnalysisMode,
+    /// The tuned analysis parameters.
+    pub(crate) config: AnalysisConfig,
+    /// First-parent topological index of the merge-base commit, splitting base-side
+    /// history from the branch. `None` means no split is known (every point is
+    /// treated as branch-side). Consulted only in [`AnalysisMode::Branch`].
+    pub(crate) merge_base_index: Option<usize>,
+    /// Whether improvements are reported. History mode defaults to regressions only
+    /// (scheduled drift watch); branch mode always reports both; tip mode reports
+    /// regressions only.
+    pub(crate) include_improvements: bool,
+}
+
+impl AnalysisContext {
+    /// Whether a finding of the given `direction` is reported in this mode.
+    fn keeps(&self, direction: Direction) -> bool {
+        match self.mode {
+            AnalysisMode::History => {
+                direction == Direction::Regression || self.include_improvements
+            }
+            AnalysisMode::Branch => true,
+            AnalysisMode::Tip => direction == Direction::Regression,
         }
     }
 }
@@ -104,6 +190,20 @@ pub(crate) enum Severity {
     Major,
 }
 
+/// One point of a finding's underlying series, exposed in the JSON output for
+/// charting and provenance: the commit it was measured against, the value, and
+/// whether it came from a dirty (uncommitted-tree) snapshot.
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct SeriesValue {
+    /// Abbreviated commit the point was measured against, if known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) commit: Option<String>,
+    /// The measured value.
+    pub(crate) value: f64,
+    /// Whether the point is a dirty (uncommitted-tree) snapshot.
+    pub(crate) dirty: bool,
+}
+
 /// One flagged change: where it is, what moved, by how much, and how sure we are.
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct Finding {
@@ -135,7 +235,15 @@ pub(crate) struct Finding {
     /// deterministic step).
     pub(crate) confidence: f64,
     /// Abbreviated commit the change is attributed to, if known.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) commit: Option<String>,
+    /// Where, within a feature branch, the latest regime began — set only in
+    /// branch mode when a within-branch flip is located, naming the commit the
+    /// move starts at, so a "got worse late in the branch" finding can point at it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) flipped_at: Option<String>,
+    /// The full underlying series, oldest-first, so a consumer can draw a chart.
+    pub(crate) series: Vec<SeriesValue>,
 }
 
 impl Finding {
@@ -169,6 +277,20 @@ struct Candidate {
 )]
 fn count_to_f64(count: usize) -> f64 {
     count as f64
+}
+
+/// The full series, oldest-first, as compact [`SeriesValue`] points for the JSON
+/// output (charting and provenance).
+fn series_values(series: &Series) -> Vec<SeriesValue> {
+    series
+        .points
+        .iter()
+        .map(|point| SeriesValue {
+            commit: point.commit.clone(),
+            value: point.value,
+            dirty: point.dirty,
+        })
+        .collect()
 }
 
 /// Whether a metric `kind` is measured by a deterministic engine.
@@ -396,6 +518,8 @@ fn evaluate_change_point(series: &Series, config: &AnalysisConfig) -> Option<Can
             relative_delta,
             confidence: (1.0 - effective_p).clamp(0.0, 1.0),
             commit,
+            flipped_at: None,
+            series: series_values(series),
         },
         bh_p: effective_p,
         deterministic,
@@ -463,6 +587,8 @@ fn evaluate_drift(series: &Series, config: &AnalysisConfig) -> Option<Candidate>
             relative_delta,
             confidence: (1.0 - trend.p_value).clamp(0.0, 1.0),
             commit,
+            flipped_at: None,
+            series: series_values(series),
         },
         bh_p: trend.p_value,
         deterministic,
@@ -471,22 +597,252 @@ fn evaluate_drift(series: &Series, config: &AnalysisConfig) -> Option<Candidate>
     })
 }
 
+/// The last `window` entries of `points` (all of them when shorter).
+fn recent<'a>(points: &[&'a SeriesPoint], window: usize) -> Vec<&'a SeriesPoint> {
+    let start = points.len().saturating_sub(window);
+    points
+        .get(start..)
+        .map(<[&SeriesPoint]>::to_vec)
+        .unwrap_or_default()
+}
+
+/// Splits a series' points into `(base_side, branch_side)` at the merge-base.
+///
+/// A point is branch-side when its commit sits past the merge-base, or when it is
+/// a dirty snapshot exactly at the merge-base (the dirty-base-tip exception, where
+/// the merge-base *is* the tip). With no merge-base every point is branch-side.
+fn split_at_merge_base(
+    points: &[SeriesPoint],
+    merge_base_index: Option<usize>,
+) -> (Vec<&SeriesPoint>, Vec<&SeriesPoint>) {
+    let Some(merge_base) = merge_base_index else {
+        return (Vec::new(), points.iter().collect());
+    };
+    let mut base = Vec::new();
+    let mut branch = Vec::new();
+    for point in points {
+        if point.topo_index > merge_base || (point.topo_index == merge_base && point.dirty) {
+            branch.push(point);
+        } else {
+            base.push(point);
+        }
+    }
+    (base, branch)
+}
+
+/// The branch's *latest regime* and where it began.
+///
+/// A feature branch may have changed direction partway through (improved, then
+/// regressed). We care only about its current state, so a Pettitt split on the
+/// branch values isolates the most recent regime; the split is accepted only when
+/// the within-branch move is practically meaningful, otherwise the whole branch is
+/// one regime with no flip point. Too few points to split leaves the branch whole.
+fn latest_regime<'a>(
+    branch: &[&'a SeriesPoint],
+    config: &AnalysisConfig,
+) -> (Vec<&'a SeriesPoint>, Option<String>) {
+    let whole = || (branch.to_vec(), None);
+    if branch.len() < 3 {
+        return whole();
+    }
+    let values: Vec<f64> = branch.iter().map(|point| point.value).collect();
+    let Some(change) = stats::pettitt(&values) else {
+        return whole();
+    };
+    let tau = change.index;
+    let (Some(before), Some(after)) = (values.get(..tau), values.get(tau..)) else {
+        return whole();
+    };
+    if before.is_empty() || after.is_empty() {
+        return whole();
+    }
+    let (Some(before_median), Some(after_median)) = (stats::median(before), stats::median(after))
+    else {
+        return whole();
+    };
+    // Only treat the split as a real direction change when the within-branch move
+    // clears the practical floor; otherwise the branch is a single regime.
+    if relative_delta_of(after_median - before_median, before_median).abs()
+        < config.practical_relative
+    {
+        return whole();
+    }
+    let after_points = branch
+        .get(tau..)
+        .map(<[&SeriesPoint]>::to_vec)
+        .unwrap_or_default();
+    let flipped_at = branch.get(tau).and_then(|point| point.commit.clone());
+    (after_points, flipped_at)
+}
+
+/// Compares a `before` sample against an `after` sample on the same series and, if
+/// the engine-appropriate gates pass, returns a change-point [`Candidate`].
+///
+/// Deterministic engines flag any non-zero move (their numbers carry no noise). A
+/// noisy engine requires the relative move to clear `practical_floor` and then
+/// either — when both samples have at least two points — a significant Mann–Whitney
+/// difference with non-overlapping confidence intervals, or — when a sample is too
+/// small to rank-test — a move exceeding the per-measurement noise floor. When the
+/// noise floor cannot be estimated for a tiny sample the comparison is skipped: we
+/// would rather miss than flag on jitter.
+fn compare_samples(
+    series: &Series,
+    before: &[&SeriesPoint],
+    after: &[&SeriesPoint],
+    config: &AnalysisConfig,
+    practical_floor: f64,
+    commit: Option<String>,
+    flipped_at: Option<String>,
+) -> Option<Candidate> {
+    let before_values: Vec<f64> = before.iter().map(|point| point.value).collect();
+    let after_values: Vec<f64> = after.iter().map(|point| point.value).collect();
+    let baseline = stats::median(&before_values)?;
+    let latest = stats::median(&after_values)?;
+    let delta = latest - baseline;
+    if delta.abs() <= 0.0 {
+        return None;
+    }
+    let relative_delta = relative_delta_of(delta, baseline);
+
+    let deterministic = is_deterministic(series.kind);
+    let effective_p = if deterministic {
+        0.0
+    } else {
+        if relative_delta.abs() < practical_floor {
+            return None;
+        }
+        if before_values.len() >= 2 && after_values.len() >= 2 {
+            let mann_whitney = stats::mann_whitney_u_pvalue(&before_values, &after_values);
+            if mann_whitney >= config.change_alpha {
+                return None;
+            }
+            if let (Some(before_ci), Some(after_ci)) =
+                (regime_interval(before), regime_interval(after))
+                && !intervals_disjoint(before_ci, after_ci)
+            {
+                return None;
+            }
+            mann_whitney
+        } else {
+            // Too few points to rank-test: trust the move only when its magnitude
+            // clears the measurement noise floor; with no dispersion to compare
+            // against, prefer to miss.
+            let points: Vec<SeriesPoint> = before
+                .iter()
+                .chain(after.iter())
+                .map(|point| (*point).clone())
+                .collect();
+            match median_half_width(&points) {
+                Some(half_width) if delta.abs() > config.branch_noise_multiple * half_width => {
+                    config.change_alpha
+                }
+                _ => return None,
+            }
+        }
+    };
+
+    Some(Candidate {
+        finding: Finding {
+            set: series.set.clone(),
+            id: series.id.clone(),
+            metric: series.metric.clone(),
+            kind: series.kind,
+            method: FindingMethod::ChangePoint,
+            direction: direction_of(delta, series.kind),
+            severity: classify_severity(relative_delta),
+            baseline,
+            latest,
+            delta,
+            relative_delta,
+            confidence: (1.0 - effective_p).clamp(0.0, 1.0),
+            commit,
+            flipped_at,
+            series: series_values(series),
+        },
+        bh_p: effective_p,
+        deterministic,
+        split: None,
+        line: None,
+    })
+}
+
+/// Evaluates a series in *branch* mode: compares the branch's latest state against
+/// the recent base level, in either direction.
+///
+/// The branch's intermediate stages are ignored — only its latest regime matters
+/// (see [`latest_regime`]). A new benchmark introduced on the branch (no base-side
+/// points) or an empty branch yields nothing, since there is no baseline to compare.
+fn evaluate_branch(
+    series: &Series,
+    config: &AnalysisConfig,
+    merge_base_index: Option<usize>,
+) -> Option<Candidate> {
+    let (base, branch) = split_at_merge_base(&series.points, merge_base_index);
+    if base.is_empty() || branch.is_empty() {
+        return None;
+    }
+    let base_window = recent(&base, config.compare_window);
+    let (latest_points, flipped_at) = latest_regime(&branch, config);
+    let commit = branch.last().and_then(|point| point.commit.clone());
+    compare_samples(
+        series,
+        &base_window,
+        &latest_points,
+        config,
+        config.branch_practical_relative,
+        commit,
+        flipped_at,
+    )
+}
+
+/// Evaluates a series in *tip* mode: compares the newest point against the recent
+/// base-branch level. A guard for "did the latest commit regress?".
+fn evaluate_tip(series: &Series, config: &AnalysisConfig) -> Option<Candidate> {
+    let points = &series.points;
+    let n = points.len();
+    if n < 2 {
+        return None;
+    }
+    let all: Vec<&SeriesPoint> = points.iter().collect();
+    let (preceding, tip) = all.split_at(n.saturating_sub(1));
+    let before = recent(preceding, config.compare_window);
+    let commit = tip.first().and_then(|point| point.commit.clone());
+    compare_samples(
+        series,
+        &before,
+        tip,
+        config,
+        config.practical_relative,
+        commit,
+        None,
+    )
+}
+
 /// Evaluates every series and returns the surviving findings, ranked
 /// most-notable first.
 ///
-/// Each series contributes at most one finding: a change-point and a drift may
-/// both fire, in which case the better-fitting model is kept. The surviving noisy
-/// candidates are passed through a Benjamini–Hochberg false-discovery filter at
-/// `config.fdr_q`; deterministic candidates bypass it (their values carry no
-/// measurement noise). Survivors are ordered by descending severity, then
+/// The [`AnalysisContext`] selects the per-series detector: history mode locates a
+/// change-point and a drift and keeps the better-fitting one; branch mode compares
+/// the branch's latest state against its base; tip mode guards the newest point.
+/// Surviving noisy candidates pass a Benjamini–Hochberg false-discovery filter at
+/// `config.fdr_q`; deterministic candidates bypass it. Findings are then filtered
+/// to the directions the mode reports and ordered by descending severity, then
 /// descending relative move, then method, then a deterministic identity tie-break.
-pub(crate) fn find_changes(series: &[Series], config: &AnalysisConfig) -> Vec<Finding> {
+pub(crate) fn find_changes(series: &[Series], context: &AnalysisContext) -> Vec<Finding> {
+    let config = &context.config;
     let mut candidates: Vec<Candidate> = Vec::new();
     for one in series {
-        let values: Vec<f64> = one.points.iter().map(|point| point.value).collect();
-        let change = evaluate_change_point(one, config);
-        let drift = evaluate_drift(one, config);
-        if let Some(chosen) = arbitrate(&values, change, drift) {
+        let chosen = match context.mode {
+            AnalysisMode::History => {
+                let values: Vec<f64> = one.points.iter().map(|point| point.value).collect();
+                let change = evaluate_change_point(one, config);
+                let drift = evaluate_drift(one, config);
+                arbitrate(&values, change, drift)
+            }
+            AnalysisMode::Branch => evaluate_branch(one, config, context.merge_base_index),
+            AnalysisMode::Tip => evaluate_tip(one, config),
+        };
+        if let Some(chosen) = chosen {
             candidates.push(chosen);
         }
     }
@@ -513,6 +869,7 @@ pub(crate) fn find_changes(series: &[Series], config: &AnalysisConfig) -> Vec<Fi
             };
             survive.then_some(candidate.finding)
         })
+        .filter(|finding| context.keeps(finding.direction))
         .collect();
 
     findings.sort_by(|left, right| {
@@ -603,6 +960,20 @@ mod tests {
         findings.into_iter().next().expect("one finding")
     }
 
+    /// Runs the history-mode detector with default config, reporting both
+    /// directions — the default the legacy single-mode tests expect.
+    fn changes(series: &[Series]) -> Vec<Finding> {
+        find_changes(
+            series,
+            &AnalysisContext {
+                mode: AnalysisMode::History,
+                config: AnalysisConfig::default(),
+                merge_base_index: None,
+                include_improvements: true,
+            },
+        )
+    }
+
     #[test]
     fn classify_severity_tiers() {
         assert_eq!(classify_severity(0.20), Severity::Major);
@@ -649,7 +1020,7 @@ mod tests {
     fn deterministic_sustained_step_is_flagged_as_a_major_change_point() {
         // A clean step from 100 to 130 with three points each side.
         let series = series_of(&[100.0, 100.0, 100.0, 130.0, 130.0, 130.0]);
-        let finding = only(find_changes(&[series], &AnalysisConfig::default()));
+        let finding = only(changes(&[series]));
         assert_eq!(finding.method, FindingMethod::ChangePoint);
         assert_eq!(finding.direction, Direction::Regression);
         assert_eq!(finding.severity, Severity::Major);
@@ -668,7 +1039,7 @@ mod tests {
         // A one-instruction step is real on a deterministic engine, so it flags
         // despite being far below any practical-magnitude floor.
         let series = series_of(&[1000.0, 1000.0, 1000.0, 1001.0, 1001.0, 1001.0]);
-        let finding = only(find_changes(&[series], &AnalysisConfig::default()));
+        let finding = only(changes(&[series]));
         assert_eq!(finding.method, FindingMethod::ChangePoint);
         assert_eq!(finding.delta, 1.0);
         assert_eq!(finding.severity, Severity::Minor);
@@ -682,7 +1053,7 @@ mod tests {
             MetricKind::CacheEvents,
             &[],
         );
-        let finding = only(find_changes(&[series], &AnalysisConfig::default()));
+        let finding = only(changes(&[series]));
         assert!(finding.is_regression());
         assert_eq!(finding.delta, -30.0);
     }
@@ -690,7 +1061,7 @@ mod tests {
     #[test]
     fn flat_series_never_flags() {
         let series = series_of(&[100.0, 100.0, 100.0, 100.0, 100.0, 100.0]);
-        assert!(find_changes(&[series], &AnalysisConfig::default()).is_empty());
+        assert!(changes(&[series]).is_empty());
     }
 
     #[test]
@@ -698,7 +1069,7 @@ mod tests {
         // A single spike returns to baseline: the after regime is one point, which
         // fails the persistence requirement.
         let series = series_of(&[100.0, 100.0, 100.0, 100.0, 100.0, 175.0]);
-        assert!(find_changes(&[series], &AnalysisConfig::default()).is_empty());
+        assert!(changes(&[series]).is_empty());
     }
 
     #[test]
@@ -706,14 +1077,14 @@ mod tests {
         // The shift only has one point after it (< min_regime), so it is rejected
         // even though the levels differ.
         let series = series_of(&[100.0, 100.0, 100.0, 100.0, 130.0]);
-        assert!(find_changes(&[series], &AnalysisConfig::default()).is_empty());
+        assert!(changes(&[series]).is_empty());
     }
 
     #[test]
     fn noisy_jitter_around_a_stable_mean_is_not_flagged() {
         // Pure measurement jitter with no real shift must stay silent.
         let series = wall_series(&[100.0, 103.0, 98.0, 101.0, 99.0, 102.0, 97.0, 100.0], 5.0);
-        assert!(find_changes(&[series], &AnalysisConfig::default()).is_empty());
+        assert!(changes(&[series]).is_empty());
     }
 
     #[test]
@@ -726,7 +1097,7 @@ mod tests {
             ],
             2.0,
         );
-        let finding = only(find_changes(&[series], &AnalysisConfig::default()));
+        let finding = only(changes(&[series]));
         assert_eq!(finding.method, FindingMethod::ChangePoint);
         assert_eq!(finding.direction, Direction::Regression);
         assert_eq!(finding.baseline, 100.0);
@@ -746,7 +1117,7 @@ mod tests {
             ],
             1.0,
         );
-        assert!(find_changes(&[series], &AnalysisConfig::default()).is_empty());
+        assert!(changes(&[series]).is_empty());
     }
 
     #[test]
@@ -759,14 +1130,14 @@ mod tests {
             ],
             60.0,
         );
-        assert!(find_changes(&[series], &AnalysisConfig::default()).is_empty());
+        assert!(changes(&[series]).is_empty());
     }
 
     #[test]
     fn deterministic_monotonic_drift_is_flagged() {
         // A steady climb with no single dominant step surfaces as a drift finding.
         let series = series_of(&[100.0, 104.0, 108.0, 112.0, 116.0, 120.0]);
-        let finding = only(find_changes(&[series], &AnalysisConfig::default()));
+        let finding = only(changes(&[series]));
         assert_eq!(finding.method, FindingMethod::Drift);
         assert_eq!(finding.direction, Direction::Regression);
         assert!(finding.delta > 0.0);
@@ -780,7 +1151,7 @@ mod tests {
         // A series that both trends and steps: the two-regime model fits the sharp
         // jump better than a line, so it is reported once, as a change-point.
         let series = series_of(&[100.0, 101.0, 102.0, 160.0, 161.0, 162.0]);
-        let findings = find_changes(&[series], &AnalysisConfig::default());
+        let findings = changes(&[series]);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].method, FindingMethod::ChangePoint);
     }
@@ -808,7 +1179,7 @@ mod tests {
                 )
             })
             .collect();
-        assert!(find_changes(&series, &AnalysisConfig::default()).is_empty());
+        assert!(changes(&series).is_empty());
     }
 
     #[test]
@@ -827,7 +1198,7 @@ mod tests {
                 3.0,
             ));
         }
-        let findings = find_changes(&series, &AnalysisConfig::default());
+        let findings = changes(&series);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].method, FindingMethod::ChangePoint);
         assert_eq!(findings[0].baseline, 100.0);
@@ -838,7 +1209,7 @@ mod tests {
     fn find_changes_ranks_major_before_minor() {
         let major = series_of(&[100.0, 100.0, 100.0, 200.0, 200.0, 200.0]);
         let minor = series_of(&[1000.0, 1000.0, 1000.0, 1020.0, 1020.0, 1020.0]);
-        let findings = find_changes(&[minor, major], &AnalysisConfig::default());
+        let findings = changes(&[minor, major]);
         assert_eq!(findings.len(), 2);
         assert_eq!(findings[0].severity, Severity::Major);
         assert_eq!(findings[1].severity, Severity::Minor);
@@ -858,10 +1229,196 @@ mod tests {
         );
         // Distinguish the identity so both findings are retained.
         smaller.id = BenchmarkId::new(None, "other".to_owned(), Some("case".to_owned()), None);
-        let findings = find_changes(&[smaller, larger], &AnalysisConfig::default());
+        let findings = changes(&[smaller, larger]);
         assert_eq!(findings.len(), 2);
         assert!(findings[0].relative_delta.abs() > findings[1].relative_delta.abs());
         assert_eq!(findings[0].latest, 200.0);
         assert_eq!(findings[1].latest, 150.0);
+    }
+
+    // -- Branch and tip modes -------------------------------------------------
+
+    /// Builds a deterministic (Callgrind) series from explicit
+    /// `(topo_index, value, dirty)` points, so branch/tip splits can be modelled
+    /// precisely. Points are taken in the given order (already topological).
+    fn placed_series(points: &[(usize, f64, bool)]) -> Series {
+        let points = points
+            .iter()
+            .map(|&(topo_index, value, dirty)| SeriesPoint {
+                topo_index,
+                dirty,
+                effective: Timestamp::from_second(i64::try_from(topo_index).unwrap())
+                    .expect("seconds within range"),
+                object_key: format!("v2/p/engine/t/synthetic/commit{topo_index}/clean.json"),
+                commit: Some(format!("commit{topo_index}")),
+                value,
+                interval_low: None,
+                interval_high: None,
+            })
+            .collect();
+        Series {
+            set: DiscriminantSet {
+                engine: "callgrind".to_owned(),
+                target_triple: "t".to_owned(),
+                machine: "synthetic".to_owned(),
+            },
+            id: BenchmarkId::new(None, "group".to_owned(), Some("case".to_owned()), None),
+            metric: "metric".to_owned(),
+            kind: MetricKind::InstructionCount,
+            points,
+        }
+    }
+
+    /// Runs the branch-mode detector with default config and the given merge-base.
+    fn branch_changes(series: &[Series], merge_base_index: Option<usize>) -> Vec<Finding> {
+        find_changes(
+            series,
+            &AnalysisContext {
+                mode: AnalysisMode::Branch,
+                config: AnalysisConfig::default(),
+                merge_base_index,
+                include_improvements: false,
+            },
+        )
+    }
+
+    /// Runs the tip-mode guard with default config.
+    fn tip_changes(series: &[Series]) -> Vec<Finding> {
+        find_changes(
+            series,
+            &AnalysisContext {
+                mode: AnalysisMode::Tip,
+                config: AnalysisConfig::default(),
+                merge_base_index: None,
+                include_improvements: false,
+            },
+        )
+    }
+
+    #[test]
+    fn branch_mode_flags_a_late_regression_against_the_base() {
+        // Base-side flat at 100 (topo 0..2), branch-side flat at 130 (topo 3..5).
+        let series = placed_series(&[
+            (0, 100.0, false),
+            (1, 100.0, false),
+            (2, 100.0, false),
+            (3, 130.0, false),
+            (4, 130.0, false),
+            (5, 130.0, false),
+        ]);
+        let finding = only(branch_changes(&[series], Some(2)));
+        assert_eq!(finding.direction, Direction::Regression);
+        assert_eq!(finding.baseline, 100.0);
+        assert_eq!(finding.latest, 130.0);
+        // A single sustained regime: no within-branch flip is reported.
+        assert_eq!(finding.flipped_at, None);
+    }
+
+    #[test]
+    fn branch_mode_reports_the_latest_state_after_an_intermediate_flip() {
+        // The branch first improved (80) then regressed (130): we report the latest
+        // state (worse than the 100 base) and point at where it flipped.
+        let series = placed_series(&[
+            (0, 100.0, false),
+            (1, 100.0, false),
+            (2, 100.0, false),
+            (3, 80.0, false),
+            (4, 80.0, false),
+            (5, 80.0, false),
+            (6, 130.0, false),
+            (7, 130.0, false),
+            (8, 130.0, false),
+        ]);
+        let finding = only(branch_changes(&[series], Some(2)));
+        assert_eq!(finding.direction, Direction::Regression);
+        assert_eq!(finding.latest, 130.0);
+        // The flip is attributed to the first commit of the worsened regime.
+        assert_eq!(finding.flipped_at.as_deref(), Some("commit6"));
+    }
+
+    #[test]
+    fn branch_mode_is_silent_when_the_branch_matches_the_base() {
+        let series = placed_series(&[
+            (0, 100.0, false),
+            (1, 100.0, false),
+            (2, 100.0, false),
+            (3, 100.0, false),
+            (4, 100.0, false),
+        ]);
+        assert!(branch_changes(&[series], Some(2)).is_empty());
+    }
+
+    #[test]
+    fn branch_mode_reports_an_improvement_over_the_base() {
+        // Branch mode always reports both directions, regardless of
+        // `include_improvements` (which only governs history mode).
+        let series = placed_series(&[
+            (0, 100.0, false),
+            (1, 100.0, false),
+            (2, 100.0, false),
+            (3, 70.0, false),
+            (4, 70.0, false),
+            (5, 70.0, false),
+        ]);
+        let finding = only(branch_changes(&[series], Some(2)));
+        assert_eq!(finding.direction, Direction::Improvement);
+        assert_eq!(finding.latest, 70.0);
+    }
+
+    #[test]
+    fn branch_mode_is_silent_for_a_benchmark_new_on_the_branch() {
+        // Every point is past the merge-base: no base-side baseline to compare to.
+        let series = placed_series(&[(3, 130.0, false), (4, 130.0, false), (5, 130.0, false)]);
+        assert!(branch_changes(&[series], Some(2)).is_empty());
+    }
+
+    #[test]
+    fn branch_mode_admits_a_dirty_snapshot_at_the_merge_base_tip() {
+        // The merge-base is the branch tip (topo 2); a dirty snapshot there is the
+        // branch side, the clean runs at the same/earlier commits are the base.
+        let series = placed_series(&[
+            (0, 100.0, false),
+            (1, 100.0, false),
+            (2, 100.0, false),
+            (2, 130.0, true),
+            (2, 130.0, true),
+        ]);
+        let finding = only(branch_changes(&[series], Some(2)));
+        assert_eq!(finding.direction, Direction::Regression);
+        assert_eq!(finding.latest, 130.0);
+    }
+
+    #[test]
+    fn tip_mode_flags_a_regression_at_the_newest_point() {
+        let series = placed_series(&[
+            (0, 100.0, false),
+            (1, 100.0, false),
+            (2, 100.0, false),
+            (3, 100.0, false),
+            (4, 130.0, false),
+        ]);
+        let finding = only(tip_changes(&[series]));
+        assert_eq!(finding.direction, Direction::Regression);
+        assert_eq!(finding.latest, 130.0);
+        assert_eq!(finding.commit.as_deref(), Some("commit4"));
+    }
+
+    #[test]
+    fn tip_mode_suppresses_an_improvement_at_the_newest_point() {
+        // Tip mode is a regression guard only; a faster tip is not reported.
+        let series = placed_series(&[
+            (0, 100.0, false),
+            (1, 100.0, false),
+            (2, 100.0, false),
+            (3, 100.0, false),
+            (4, 70.0, false),
+        ]);
+        assert!(tip_changes(&[series]).is_empty());
+    }
+
+    #[test]
+    fn tip_mode_needs_at_least_two_points() {
+        let series = placed_series(&[(0, 100.0, false)]);
+        assert!(tip_changes(&[series]).is_empty());
     }
 }

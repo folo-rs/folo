@@ -22,9 +22,9 @@ mod stats;
 
 use std::collections::HashMap;
 
-use jiff::Timestamp;
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
+use jiff::{Span, Timestamp};
 
 use crate::comparability::{EngineSystem, sanitize_segment};
 use crate::config::{Config, load_config};
@@ -37,14 +37,22 @@ use crate::wiring::{default_config_path, resolve_project_id};
 use crate::{AnalyzeOptions, CleanOptions, ListOptions, RunError, RunOutcome};
 
 use discriminant::{DiscriminantSet, Facets, ParsedKey, parse_key};
-use findings::{AnalysisConfig, find_changes};
+use findings::{AnalysisConfig, AnalysisContext, AnalysisMode, find_changes};
 use report::{ReportFormat, ReportInput, SetSummary, render};
 use selection::select_commits;
 use series::{LoadedObject, SeriesFilter, build_series};
 
 /// The real `analyze`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
-pub(crate) async fn execute(options: &AnalyzeOptions) -> Result<RunOutcome, RunError> {
+///
+/// `now_override` anchors the history-mode default `--since` lookback to a fixed
+/// instant; production passes `None` so the anchor is the wall clock, while tests
+/// pass a deterministic instant (the relative-`--since` parsing keeps using the
+/// real clock regardless — only the *default* lookback uses this anchor).
+pub(crate) async fn execute(
+    options: &AnalyzeOptions,
+    now_override: Option<Timestamp>,
+) -> Result<RunOutcome, RunError> {
     let reporter = StderrReporter::new(options.verbose);
 
     let config_path = options
@@ -64,7 +72,17 @@ pub(crate) async fn execute(options: &AnalyzeOptions) -> Result<RunOutcome, RunE
     let repo = options.repo.clone().unwrap_or(workspace_dir);
     let git = SystemGitHistory::new(repo);
 
-    analyze_with(&git, &storage, &project_id, &config, options, &reporter).await
+    let now = now_override.unwrap_or_else(Timestamp::now);
+    analyze_with(
+        &git,
+        &storage,
+        &project_id,
+        &config,
+        options,
+        now,
+        &reporter,
+    )
+    .await
 }
 
 /// Storage- and git-generic `analyze`: facet-filter the stored objects, resolve
@@ -76,6 +94,7 @@ pub(crate) async fn analyze_with<G, S>(
     project_id: &str,
     config: &Config,
     options: &AnalyzeOptions,
+    now: Timestamp,
     reporter: &dyn Reporter,
 ) -> Result<RunOutcome, RunError>
 where
@@ -83,18 +102,26 @@ where
     S: Storage,
 {
     let format = parse_format(options.format.as_deref())?;
-    let selection = Selection::from_analyze(options);
-    let dataset = select_dataset(git, storage, project_id, config, &selection, reporter).await?;
+    let selection = Selection::from_analyze(options)?;
+    let dataset =
+        select_dataset(git, storage, project_id, config, &selection, now, reporter).await?;
 
     let filter = SeriesFilter {
         metric: options.metric.as_deref(),
     };
     let series = build_series(&dataset.loaded, &dataset.order, &filter);
-    let findings = find_changes(&series, &AnalysisConfig::default());
+    let context = AnalysisContext {
+        mode: dataset.mode,
+        config: AnalysisConfig::default(),
+        merge_base_index: dataset.merge_base_index,
+        include_improvements: options.include_improvements,
+    };
+    let findings = find_changes(&series, &context);
     let regressions = findings
         .iter()
         .filter(|finding| finding.is_regression())
         .count();
+    let notable = !findings.is_empty();
 
     // Break the report down by comparable set so each partition reads on its own.
     let mut sets: Vec<DiscriminantSet> = series.iter().map(|one| one.set.clone()).collect();
@@ -136,6 +163,8 @@ where
 
     let input = ReportInput {
         project: project_id,
+        mode: dataset.mode.as_str(),
+        notable,
         runs: dataset.loaded.len(),
         series: series.len(),
         findings: &findings,
@@ -148,7 +177,6 @@ where
     Ok(RunOutcome::Analyzed {
         report,
         regressions,
-        fail_on_regression: options.fail_on_regression,
     })
 }
 
@@ -167,11 +195,13 @@ struct Selection<'a> {
     os: Option<&'a str>,
     architecture: Option<&'a str>,
     machine_key: Option<&'a str>,
+    /// Explicit `--mode` override; `None` lets the mode auto-detect from topology.
+    mode_override: Option<AnalysisMode>,
 }
 
 impl<'a> Selection<'a> {
-    fn from_analyze(options: &'a AnalyzeOptions) -> Self {
-        Self {
+    fn from_analyze(options: &'a AnalyzeOptions) -> Result<Self, RunError> {
+        Ok(Self {
             branch: options.branch.as_deref(),
             base: options.base.as_deref(),
             no_dirty: options.no_dirty,
@@ -181,7 +211,8 @@ impl<'a> Selection<'a> {
             os: options.os.as_deref(),
             architecture: options.architecture.as_deref(),
             machine_key: options.machine_key.as_deref(),
-        }
+            mode_override: parse_mode(options.mode.as_deref())?,
+        })
     }
 
     fn from_list(options: &'a ListOptions) -> Self {
@@ -195,6 +226,7 @@ impl<'a> Selection<'a> {
             os: options.os.as_deref(),
             architecture: options.architecture.as_deref(),
             machine_key: options.machine_key.as_deref(),
+            mode_override: None,
         }
     }
 
@@ -212,6 +244,7 @@ impl<'a> Selection<'a> {
             os: options.os.as_deref(),
             architecture: options.architecture.as_deref(),
             machine_key: options.machine_key.as_deref(),
+            mode_override: None,
         }
     }
 }
@@ -232,6 +265,11 @@ struct SelectedDataSet {
     included_dirty_base_exception: bool,
     /// The target ref the timeline was resolved against (for diagnostics).
     target_ref: String,
+    /// The resolved analysis mode (auto-detected from topology, or overridden).
+    mode: AnalysisMode,
+    /// First-parent topological index of the merge-base, used by branch mode to
+    /// split base-side history from the branch's own commits.
+    merge_base_index: Option<usize>,
 }
 
 /// Parses the `--engine` facet and validates the triple/os/arch exclusivity, then
@@ -324,13 +362,13 @@ async fn select_dataset<G, S>(
     project_id: &str,
     config: &Config,
     selection: &Selection<'_>,
+    now: Timestamp,
     reporter: &dyn Reporter,
 ) -> Result<SelectedDataSet, RunError>
 where
     G: GitHistory,
     S: Storage,
 {
-    let since = parse_since(selection.since)?;
     let (engine, facets) = parsed_facets(selection)?;
     let candidates =
         facet_filtered_candidates(storage, project_id, engine, &facets, reporter).await?;
@@ -340,6 +378,9 @@ where
         order,
         admit_dirty,
         dirty_base_exception,
+        merge_base_index,
+        tip_is_merge_base,
+        dirty_tip_admitted,
     } = resolve_history(
         git,
         config,
@@ -348,6 +389,20 @@ where
         reporter,
     )
     .await?;
+
+    // The mode steers the analysis and the default `--since`: an official base
+    // branch (its tip is its own merge-base, working tree clean) is `history`;
+    // commits — or a dirty tree — on top of the base make it `branch`. An explicit
+    // `--mode` overrides the auto-detection.
+    let mode = selection
+        .mode_override
+        .unwrap_or_else(|| auto_mode(tip_is_merge_base, dirty_tip_admitted));
+    let since = resolve_since(selection.since, mode, now)?;
+    reporter.note(&format!(
+        "analysis mode: {} (since cutoff: {})",
+        mode.as_str(),
+        since.map_or_else(|| "none".to_owned(), |since| since.to_string())
+    ));
 
     // Tally why candidates do not enter the analysis, so a `0 runs` outcome can
     // explain itself (via `--verbose` per object, and via a summary hint when
@@ -437,7 +492,73 @@ where
         },
         included_dirty_base_exception,
         target_ref,
+        mode,
+        merge_base_index,
     })
+}
+
+/// Auto-detects the analysis mode from the resolved topology.
+///
+/// An official base-branch view — the target's tip *is* its own merge-base (or no
+/// base is known) and the working tree is clean — is [`AnalysisMode::History`].
+/// Anything else (commits past the merge-base, or a dirty tree admitting in-flight
+/// snapshots on top of the base) is treated as an unnamed feature branch:
+/// [`AnalysisMode::Branch`]. [`AnalysisMode::Tip`] is never auto-selected.
+fn auto_mode(tip_is_merge_base: bool, dirty_tip_admitted: bool) -> AnalysisMode {
+    if tip_is_merge_base && !dirty_tip_admitted {
+        AnalysisMode::History
+    } else {
+        AnalysisMode::Branch
+    }
+}
+
+/// Resolves the effective `--since` cutoff: an explicit value always wins;
+/// otherwise history mode applies a default look-back so a scheduled trend watch
+/// does not silently widen as history accumulates, while branch and tip modes have
+/// no default (a feature branch's whole history is in scope).
+fn resolve_since(
+    value: Option<&str>,
+    mode: AnalysisMode,
+    now: Timestamp,
+) -> Result<Option<Timestamp>, RunError> {
+    if value.is_some() {
+        return parse_since(value);
+    }
+    if mode == AnalysisMode::History {
+        return default_history_since(now).map(Some);
+    }
+    Ok(None)
+}
+
+/// Default history-mode look-back window: six months before `now`.
+const HISTORY_DEFAULT_LOOKBACK_MONTHS: i32 = 6;
+
+/// The instant [`HISTORY_DEFAULT_LOOKBACK_MONTHS`] before `now`, anchored with
+/// calendar-correct zoned arithmetic (months have no fixed length).
+fn default_history_since(now: Timestamp) -> Result<Timestamp, RunError> {
+    now.to_zoned(TimeZone::UTC)
+        .checked_sub(Span::new().months(HISTORY_DEFAULT_LOOKBACK_MONTHS))
+        .map(|zoned| zoned.timestamp())
+        .map_err(|error| RunError::Analyze {
+            message: format!("default --since window is out of the representable range: {error}"),
+        })
+}
+
+/// Parses the `--mode` option into an explicit [`AnalysisMode`] override.
+///
+/// `auto` (the default when omitted) resolves to `None` so the mode is detected
+/// from topology; `history`, `branch`, and `tip` force that mode.
+fn parse_mode(value: Option<&str>) -> Result<Option<AnalysisMode>, RunError> {
+    match value {
+        None | Some("auto") => Ok(None),
+        Some(name) => AnalysisMode::from_name(name)
+            .map(Some)
+            .ok_or_else(|| RunError::Analyze {
+                message: format!(
+                    "unknown analysis mode {name:?}; expected auto, history, branch, or tip"
+                ),
+            }),
+    }
 }
 
 /// How the base-branch dirty-tip exception is gated.
@@ -470,6 +591,17 @@ struct ResolvedHistory {
     /// Whether a commit's dirty runs are admitted *only* by the base-branch
     /// dirty-tree exception, which triggers the ephemeral-data warning.
     dirty_base_exception: HashMap<String, bool>,
+    /// First-parent topological index of the merge-base, used by branch mode to
+    /// split base-side history from the branch's own commits. `None` when no base
+    /// is known or the merge-base is off the analyzed chain.
+    merge_base_index: Option<usize>,
+    /// Whether the target's tip *is* its own merge-base with the base (or no base
+    /// is known): the signal that this is an official base-branch view.
+    tip_is_merge_base: bool,
+    /// Whether a dirty (uncommitted-tree) snapshot on top of the base is admitted
+    /// — the working tree is dirty under the `WhenWorkingTreeDirty` policy — which
+    /// makes even an on-the-base-branch view an unnamed feature branch.
+    dirty_tip_admitted: bool,
 }
 
 /// Resolves the git topology for a selection: the target ref's first-parent
@@ -560,11 +692,23 @@ where
         .map(|one| (one.commit.clone(), one.dirty_base_exception))
         .collect();
 
+    // The merge-base's topological position (when it is on the analyzed chain)
+    // splits base-side history from the branch's own commits in branch mode.
+    let merge_base_index = merge_base
+        .as_deref()
+        .and_then(|base| order.get(base).copied());
+    // The target's tip is its own merge-base (or no base is known) exactly when
+    // this is an official base-branch view rather than a feature branch.
+    let tip_is_merge_base = merge_base.as_deref().is_none_or(|base| base == target_sha);
+
     Ok(ResolvedHistory {
         target_ref: target_ref.to_owned(),
         order,
         admit_dirty,
         dirty_base_exception,
+        merge_base_index,
+        tip_is_merge_base,
+        dirty_tip_admitted: dirty_tip_exception,
     })
 }
 
@@ -732,12 +876,26 @@ fn validate_triple_exclusivity(
     Ok(())
 }
 
-/// Parses the `--since` option as an RFC 3339 timestamp or a bare `YYYY-MM-DD`
-/// date (interpreted at UTC midnight), if set.
+/// Parses the `--since` option into an absolute cutoff instant, if set.
+///
+/// Three input forms are accepted, tried in order:
+///
+/// * an RFC 3339 timestamp (`2024-01-01T00:00:00Z`),
+/// * a bare `YYYY-MM-DD` date, interpreted at UTC midnight, and
+/// * a relative duration in jiff's friendly or ISO 8601 form (`5 months`,
+///   `5 months ago`, `P6M`, `2w`), interpreted as *that far in the past* —
+///   resolved against the current instant via calendar-correct zoned arithmetic.
+///
+/// The relative form is normalized through [`Span::abs`] before subtracting, so a
+/// duration written with the friendly `ago` suffix (which jiff parses as a
+/// *negative* span) still means "this far back" rather than flipping into the
+/// future. A lower bound in the future is never a sensible cutoff, so both
+/// `5 months` and `5 months ago` resolve to the same past instant.
 fn parse_since(value: Option<&str>) -> Result<Option<Timestamp>, RunError> {
     let Some(value) = value else {
         return Ok(None);
     };
+    let value = value.trim();
     if let Ok(timestamp) = value.parse::<Timestamp>() {
         return Ok(Some(timestamp));
     }
@@ -748,11 +906,29 @@ fn parse_since(value: Option<&str>) -> Result<Option<Timestamp>, RunError> {
             .expect("UTC midnight is always a valid instant");
         return Ok(Some(zoned.timestamp()));
     }
+    if let Ok(span) = value.parse::<Span>() {
+        return Ok(Some(instant_before_now(span)?));
+    }
     Err(RunError::Analyze {
         message: format!(
-            "invalid --since value {value:?}; expected an RFC 3339 timestamp or a YYYY-MM-DD date"
+            "invalid --since value {value:?}; expected an RFC 3339 timestamp, a YYYY-MM-DD \
+             date, or a relative duration such as \"6 months\" or \"30 days ago\""
         ),
     })
+}
+
+/// Resolves a relative [`Span`] to the instant that far before now, treating the
+/// span's magnitude as a look-back regardless of its sign (see [`parse_since`]).
+///
+/// Calendar units (months, years) have no fixed length, so the subtraction is
+/// anchored to the current UTC zoned datetime rather than to a bare duration.
+fn instant_before_now(span: Span) -> Result<Timestamp, RunError> {
+    let now = Timestamp::now().to_zoned(TimeZone::UTC);
+    now.checked_sub(span.abs())
+        .map(|zoned| zoned.timestamp())
+        .map_err(|error| RunError::Analyze {
+            message: format!("--since duration is out of the representable range: {error}"),
+        })
 }
 
 #[cfg(test)]
@@ -970,6 +1146,87 @@ mod tests {
         AnalyzeOptions::default()
     }
 
+    /// A fixed clock anchor for the history-mode default `--since` window in unit
+    /// tests. The seeded data sits at the Unix epoch (`ts(0..)`); anchoring here
+    /// keeps the default six-month look-back well before it, so the default window
+    /// never drops a seeded point.
+    fn now_anchor() -> Timestamp {
+        Timestamp::from_second(0).expect("epoch is a valid timestamp")
+    }
+
+    #[test]
+    fn auto_mode_detects_history_only_for_a_clean_tip_at_the_merge_base() {
+        // A clean base branch whose tip is its own merge-base is history mode.
+        assert_eq!(auto_mode(true, false), AnalysisMode::History);
+        // Commits past the merge-base, or a dirty tree admitting tip snapshots,
+        // make it a (possibly unnamed) feature branch.
+        assert_eq!(auto_mode(false, false), AnalysisMode::Branch);
+        assert_eq!(auto_mode(true, true), AnalysisMode::Branch);
+        assert_eq!(auto_mode(false, true), AnalysisMode::Branch);
+    }
+
+    #[test]
+    fn parse_mode_resolves_auto_to_none_and_rejects_unknown() {
+        assert_eq!(parse_mode(None).expect("none parses"), None);
+        assert_eq!(parse_mode(Some("auto")).expect("auto parses"), None);
+        assert_eq!(
+            parse_mode(Some("history")).expect("history parses"),
+            Some(AnalysisMode::History)
+        );
+        assert_eq!(
+            parse_mode(Some("branch")).expect("branch parses"),
+            Some(AnalysisMode::Branch)
+        );
+        assert_eq!(
+            parse_mode(Some("tip")).expect("tip parses"),
+            Some(AnalysisMode::Tip)
+        );
+        let error = parse_mode(Some("weekly")).unwrap_err();
+        assert!(
+            error.to_string().contains("unknown analysis mode"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn resolve_since_applies_a_default_only_in_history_mode() {
+        let now = "2024-06-01T00:00:00Z".parse::<Timestamp>().unwrap();
+        // History mode without an explicit value falls back to the six-month window.
+        let history = resolve_since(None, AnalysisMode::History, now)
+            .expect("default resolves")
+            .expect("history has a default cutoff");
+        assert_eq!(
+            history,
+            "2023-12-01T00:00:00Z".parse::<Timestamp>().unwrap()
+        );
+        // Branch and tip modes have no default cutoff.
+        assert_eq!(
+            resolve_since(None, AnalysisMode::Branch, now).expect("resolves"),
+            None
+        );
+        assert_eq!(
+            resolve_since(None, AnalysisMode::Tip, now).expect("resolves"),
+            None
+        );
+        // An explicit value always wins, even in branch mode.
+        let explicit = resolve_since(Some("2024-01-01"), AnalysisMode::Branch, now)
+            .expect("explicit parses")
+            .expect("explicit produces a cutoff");
+        assert_eq!(
+            explicit,
+            "2024-01-01T00:00:00Z".parse::<Timestamp>().unwrap()
+        );
+    }
+
+    #[test]
+    fn default_history_since_subtracts_six_calendar_months() {
+        let now = "2024-03-31T00:00:00Z".parse::<Timestamp>().unwrap();
+        // Calendar arithmetic, not a fixed number of days: six months before
+        // 2024-03-31 is 2023-09-30 (September has 30 days).
+        let cutoff = default_history_since(now).expect("resolves");
+        assert_eq!(cutoff, "2023-09-30T00:00:00Z".parse::<Timestamp>().unwrap());
+    }
+
     /// Runs `analyze_with` and unwraps the rendered report and regression count.
     fn analyze(
         git: &FakeGitHistory,
@@ -984,6 +1241,7 @@ mod tests {
             project,
             &config(),
             options,
+            now_anchor(),
             &reporter,
         ))
         .expect("analysis runs");
@@ -1008,6 +1266,7 @@ mod tests {
             "folo",
             &config(),
             &options(),
+            now_anchor(),
             &RecordingReporter::new(),
         ))
         .unwrap_err();
@@ -1225,6 +1484,7 @@ mod tests {
             "folo",
             &config(),
             &opts,
+            now_anchor(),
             &reporter,
         ))
         .expect("analysis runs");
@@ -1288,6 +1548,7 @@ mod tests {
             "folo",
             &config(),
             &opts,
+            now_anchor(),
             &reporter,
         ))
         .expect("analysis runs");
@@ -1407,6 +1668,7 @@ mod tests {
             "folo",
             &config(),
             &opts,
+            now_anchor(),
             &reporter,
         ))
         .expect("analysis runs");
@@ -1576,6 +1838,7 @@ mod tests {
                 "folo",
                 &config(),
                 &conflicting,
+                now_anchor(),
                 &RecordingReporter::new(),
             ))
             .unwrap_err();
@@ -1684,25 +1947,24 @@ mod tests {
     }
 
     #[test]
-    fn fail_on_regression_is_threaded_into_outcome() {
+    fn analyzed_outcome_is_always_successful() {
+        // The exit code no longer depends on findings: even a flagged regression
+        // yields a successful outcome (the signal lives in the report JSON).
         let storage = MemoryStorage::new();
         seed_linear_step(&storage);
         let git = linear6_git();
 
-        let opts = AnalyzeOptions {
-            fail_on_regression: true,
-            ..options()
-        };
         let outcome = block_on(analyze_with(
             &git,
             &storage,
             "folo",
             &config(),
-            &opts,
+            &options(),
+            now_anchor(),
             &RecordingReporter::new(),
         ))
         .expect("analysis runs");
-        assert!(!outcome.is_success(), "a gated regression must fail");
+        assert!(outcome.is_success(), "findings must never fail the build");
     }
 
     #[test]
@@ -1745,6 +2007,7 @@ mod tests {
             "folo",
             &config(),
             &options(),
+            now_anchor(),
             &RecordingReporter::new(),
         ))
         .unwrap_err();
@@ -1763,6 +2026,7 @@ mod tests {
             "folo",
             &config(),
             &options(),
+            now_anchor(),
             &RecordingReporter::new(),
         ))
         .unwrap_err();
@@ -1783,6 +2047,7 @@ mod tests {
             "folo",
             &config(),
             &opts,
+            now_anchor(),
             &RecordingReporter::new(),
         ))
         .unwrap_err();
@@ -1803,6 +2068,7 @@ mod tests {
             "folo",
             &config(),
             &opts,
+            now_anchor(),
             &RecordingReporter::new(),
         ))
         .unwrap_err();
@@ -1837,6 +2103,7 @@ mod tests {
             "folo",
             &config(),
             &opts,
+            now_anchor(),
             &RecordingReporter::new(),
         ))
         .unwrap_err();
@@ -1877,6 +2144,7 @@ mod tests {
             "folo",
             &config,
             &opts,
+            now_anchor(),
             &RecordingReporter::new(),
         ))
         .expect("analysis runs");
@@ -1902,6 +2170,35 @@ mod tests {
             Some("2024-01-01T00:00:00Z".parse().unwrap())
         );
         assert_eq!(parse_since(None).unwrap(), None);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "relative `--since` parsing reads the wall clock")]
+    fn since_accepts_relative_durations_as_look_back() {
+        // A friendly duration resolves to an instant in the past, and the `ago`
+        // suffix (which jiff parses as a negative span) means the same look-back
+        // rather than flipping into the future.
+        let now = Timestamp::now();
+        let plain = parse_since(Some("5 months")).unwrap().expect("a cutoff");
+        let with_ago = parse_since(Some("5 months ago"))
+            .unwrap()
+            .expect("a cutoff");
+        assert!(plain < now, "a look-back must be in the past");
+        assert!(with_ago < now, "the `ago` suffix must still look back");
+        // Both spellings denote the same magnitude, so they land within a tiny
+        // wall-clock window of each other (the two `now` reads differ by µs).
+        let gap = (plain.as_second() - with_ago.as_second()).abs();
+        assert!(gap <= 1, "`5 months` and `5 months ago` agree (gap {gap}s)");
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "relative `--since` parsing reads the wall clock")]
+    fn since_accepts_iso_and_week_durations() {
+        let now = Timestamp::now();
+        for input in ["P6M", "2w", "30 days", "-P1Y"] {
+            let cutoff = parse_since(Some(input)).unwrap().expect("a cutoff");
+            assert!(cutoff < now, "{input:?} must resolve to the past");
+        }
     }
 
     #[test]

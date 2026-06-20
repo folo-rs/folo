@@ -547,11 +547,24 @@ For each selected commit `analyze` reads its directory (`clean.json` and, when
 admitted, `dirty-*.json`), builds per-`(BenchmarkId, metric)` series in topological
 order, runs the finding algorithms (§9), and prints a report.
 
-* `--since <date>` (RFC 3339 timestamp or bare `YYYY-MM-DD`, UTC midnight) drops
-  runs whose effective time predates the cutoff, so the run count and every series
-  share the window.
-* `--metric`, `--format text|json|markdown`, `--fail-on-regression` (CI gating,
-  opt-in; non-zero exit when a regression is found).
+* `--since <when>` drops runs whose effective time predates the cutoff, so the run
+  count and every series share the window. It accepts an RFC 3339 timestamp
+  (`2024-01-01T00:00:00Z`), a bare `YYYY-MM-DD` date (UTC midnight), or a relative
+  duration such as `6 months` or `30 days ago` (resolved against the wall clock).
+  History mode applies a **default** six-month look-back when `--since` is omitted
+  (§9.6) so a scheduled trend watch does not silently widen as history accumulates;
+  branch and tip modes have no default (a feature branch's whole history is in
+  scope).
+* `--mode auto|history|branch|tip` selects the analysis mode (§9.6); `auto` (the
+  default) infers it from topology. `--include-improvements` opts a history-mode
+  analysis into reporting sustained improvements (suppressed by default).
+* `--metric`, `--format text|json|markdown`.
+* **Findings never affect the exit code.** The process exits non-zero only when the
+  analysis fails to *run* (no repo, storage error, …); a finding is advisory. The
+  machine-readable signal lives in the `json` report (§9.6): `mode`, the boolean
+  `notable` (any finding survived), each finding's `direction` and `flipped_at`, and
+  the full per-finding `series`. Downstream automation (a scheduled regression watch
+  posting to a chat, a PR comment bot) reads those rather than the exit status.
 * `--verbose` prints a per-object diagnostic trail to stderr (the listing prefix,
   facet filters, resolved target/base/merge-base, and why each candidate is
   included or excluded). When facet-matching runs were stored but none entered the
@@ -641,7 +654,7 @@ selection flag `analyze` accepts (`--repo`/`--branch`/`--base`/`--engine`/
 `--metric`) selects the same data set here, resolved through the same shared
 selection pipeline (§8.4). The two commands must stay in lockstep — a selection
 parameter added to one is added to the other. `list` omits only the analysis-only
-`--fail-on-regression` (it never analyzes).
+flags `--mode` / `--include-improvements` (it never analyzes).
 
 Instead of findings, `list` reports — per discriminant set — the run, series, and
 per-commit counts of the selected runs (each commit's clean/dirty split), ordered
@@ -769,8 +782,7 @@ Findings rank by descending `severity`, then descending `|relative delta|`, then
 deterministic identity tie-break (set, benchmark, metric). Severity tiers are
 unchanged (`Major ≥ 10 %`, `Moderate ≥ 3 %`, else `Minor`). Polarity is unchanged:
 every metric is lower-is-better except `CacheEvents` (cache *hits* — higher is
-better). `--fail-on-regression` gates on the total count of regression findings
-across the analyzed history (a regression anywhere fails the run).
+better). Findings are advisory and never gate the exit code (§8.4, §9.6).
 
 ### 9.5 Statistical primitives
 
@@ -783,6 +795,82 @@ intercept), `benjamini_hochberg` (keep-mask at rate `q`), and `normal_cdf`
 (Abramowitz–Stegun erf). Each is unit-tested with named, value-asserting cases on
 hand-computable inputs (no threshold-mutation guards), so the whole detector is
 verifiable without real-time delays per workspace conventions.
+
+### 9.6 Analysis modes
+
+The same stored history answers two very different questions, so `analyze` runs in
+one of three **modes**. `--mode auto` (the default) infers the mode from git
+topology; `--mode history|branch|tip` forces it.
+
+**Auto-detection.** The mode is **history** iff the analyzed tip *is* the merge-base
+with the base (i.e. a clean checkout of the base branch — `target == base`, nothing
+private, no admitted dirty tip), and **branch** otherwise (a feature branch, or a
+dirty base checkout whose tip dirty runs were admitted by the §8.4 exception — "an
+unnamed feature branch"). `tip` is never auto-selected; it is an explicit fast
+guard. This matches the two real scenarios:
+
+* **Scheduled trend watch (history).** A nightly/weekly job looks back over the base
+  branch's last months for regressions and slow trends, posting findings to an
+  alert channel. Long-range techniques make sense here because the series is long.
+* **Feature-branch evaluation (branch).** One-to-several runs sit on top of the base
+  and we ask "did this branch change things, for better or worse, *as it stands
+  now*", feeding the answer into a PR comment. Long-range trend analysis is
+  meaningless on one or two points; only the latest state matters.
+
+**Which techniques apply, and why:**
+
+| Technique | history | branch | tip | Rationale |
+|---|---|---|---|---|
+| Change-point (Pettitt + engine gating, §9.1–9.3) | ✅ | — | — | Locates *where* in a long base history a level shifted; needs many points on both sides. |
+| Monotonic drift (Mann–Kendall + Theil–Sen) | ✅ | — | — | Catches slow multi-month trends; meaningless on a handful of branch points. |
+| Benjamini–Hochberg FDR (§9.3) | ✅ | — | — | Controls false positives across the many series a long history produces. |
+| Latest-regime vs base (branch algorithm, below) | — | ✅ | — | Answers "did the branch's *current* state move vs the base", tolerating an early wobble. |
+| Tip-vs-recent guard (below) | — | — | ✅ | Cheap "did the last commit make things worse" check. |
+| Improvements reported | opt-in | ✅ | — | History: improvement over time is expected, so only regressions by default (`--include-improvements` opts in). Branch: both directions (you want to know either way). Tip: a guard, regressions only. |
+
+**Branch algorithm — latest state, not the journey.** A branch may improve and then
+regress; we report the *latest* regime so "it ended up worse" is never masked by an
+earlier gain. The series splits at the merge-base into a base side (clean points ≤
+merge-base) and a branch side (the branch's own commits). Within the branch side,
+**Pettitt locates the most recent regime boundary**: if a within-branch flip clears
+the practical floor, only the after-segment is compared against the base and the
+finding's `flipped_at` names the commit the latest regime began at (so a "got worse
+late in the branch" finding points at the offending commit); with too few points or
+no real flip, the whole branch side is compared. The base-vs-after comparison reuses
+the engine-aware gate (§9.2): a deterministic engine flags any non-zero regime move;
+a noisy engine still requires Mann–Whitney separation, CI non-overlap, and the
+practical floor.
+
+**Tip guard.** Tip mode compares only the *last* point against the recently
+established level (a bounded window of preceding points) using the same engine gate,
+and reports regressions only.
+
+**JSON signal (downstream contract).** Because findings never gate the exit code
+(§8.4), the `json` report is the machine-readable output:
+
+```json
+{
+  "project": "myproj",
+  "mode": "branch",          // resolved mode: history | branch | tip
+  "notable": true,           // did any finding survive? the headline signal
+  "runs": 7, "series": 3,
+  "regressions": 1, "improvements": 0,
+  "findings": [
+    {
+      "metric": "Ir", "kind": "InstructionCount",
+      "method": "change_point", "direction": "regression",
+      "severity": "major", "baseline": 100.0, "latest": 130.0,
+      "delta": 30.0, "relative_delta": 0.30, "confidence": 1.0,
+      "flipped_at": "a1b2c3d",   // branch mode only: where the latest regime began
+      "series": [ { "commit": "…", "value": 100.0, "dirty": false }, … ]
+    }
+  ],
+  "sets": [ … ]              // per-discriminant-set breakdown
+}
+```
+
+A consumer keys off `notable` (post or stay silent), reads each finding's
+`direction`/`severity`/`flipped_at`, and can render the embedded `series` as a chart.
 
 ## 10. Crate architecture
 
@@ -902,10 +990,11 @@ optional **`azure`** feature pulls in `azure_core`, `azure_identity`,
 
 ## 12. Implementation plan
 
-**All nine iterations below were delivered except #9 (statistical findings),
-which is the one deferred follow-up.** They are kept here in their original
-sequence as the historical roadmap and as a map from this design to the shipped
-code.
+**All nine iterations below were delivered.** A later refinement (the three
+analysis modes — §9.6, decision 28) layered the history/branch/tip split and the
+advisory-findings contract on top of iteration 9. They are kept here in their
+original sequence as the historical roadmap and as a map from this design to the
+shipped code.
 
 Phase 0 (foundation, preceded the numbered iterations): crate skeleton +
 `argh` subcommands + `config.rs` + `model.rs` (incl.
@@ -1127,9 +1216,10 @@ Each iteration ships with tests and docs and leaves the tool runnable.
 26. **`list` / `clean` mirror `analyze`'s selection** — *Decided:* `list` (preview
     the data set, no analysis — §8.6) and `clean` (delete the dirty runs from the
     admitting commits — §8.7) reuse `analyze`'s exact data-set-selection pipeline,
-    so a selection flag added to one is added to all three (lockstep). `list` omits
-    `--fail-on-regression`; `clean` omits `--no-dirty` (it targets dirty runs) and
-    `--metric` (deletion is per-object). The one intentional divergence is the
+    so a selection flag added to one is added to all three (lockstep). The
+    analysis-only `--mode` / `--include-improvements` are not part of the selection
+    lockstep (neither `list` nor `clean` analyzes); `clean` omits `--no-dirty` (it
+    targets dirty runs) and `--metric` (deletion is per-object). The one intentional divergence is the
     base-branch tip's dirty exception (decision 22): `analyze`/`list` admit it only
     when the working tree is currently dirty, but `clean` admits it
     **unconditionally** (the shared `resolve_history` helper's `DirtyTipPolicy`
@@ -1148,9 +1238,22 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      Benjamini–Hochberg FDR gate so a repository full of benchmarks does not flood
      the report with false positives. Monotonic drift (Mann–Kendall significance +
      Theil–Sen slope, kept over a change-point only when the line fits the series
-     more tightly than a step) is a second finding type for slow trends. `--fail-on-regression` gates on the **total** regression
-     count across the analyzed history (chosen over target-side-only scoping for
-     simplicity, accepting that an old base-history regression can fail later
-     branches until it is addressed). This replaces the single-latest-point
-     rolling-baseline detector of iteration 2, which over-reported on measurement
-     jitter (decision 5 superseded).
+     more tightly than a step) is a second finding type for slow trends. This
+     replaces the single-latest-point rolling-baseline detector of iteration 2,
+     which over-reported on measurement jitter (decision 5 superseded).
+28. **Analysis modes & advisory findings** — *Decided:* `analyze` runs in one of
+     three modes (§9.6), auto-detected from topology (`--mode auto`) or forced
+     (`--mode history|branch|tip`). **history** (clean base checkout) applies the
+     long-range change-point + drift + FDR techniques, defaults `--since` to a
+     six-month look-back, and reports regressions only (improvement over time is
+     expected; `--include-improvements` opts in). **branch** (feature branch or a
+     dirty base checkout) judges the branch by its **latest regime** vs the base —
+     Pettitt finds the most recent within-branch flip, only the after-segment is
+     compared, and `flipped_at` names where it began — reporting both directions.
+     **tip** is an explicit fast guard comparing the last commit against the recent
+     level, regressions only. **Findings never affect the exit code** — they are
+     advisory, so a regression is never a build-failing gate (the old
+     `--fail-on-regression` flag is removed). Downstream automation reads the `json`
+     report's `mode` / `notable` / per-finding `direction` / `flipped_at` / `series`
+     instead. The two driving scenarios are a scheduled base-branch regression watch
+     (history) and a per-PR feature-branch evaluation (branch).

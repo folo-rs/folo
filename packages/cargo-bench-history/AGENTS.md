@@ -159,6 +159,42 @@ Integration tests build a **real** git repo in a tempdir (`Workspace::repo` /
 `Workspace::clean_repo`) and seed storage keys under the commits' real SHAs so the
 live topology and the stored keys agree.
 
+### Analysis modes (`analyze` only)
+
+`analyze` runs in one of three modes, resolved in `analyze/mod.rs` (`auto_mode`,
+`parse_mode`, `resolve_since`) and dispatched in `analyze::findings::find_changes`
+on `AnalysisMode`:
+
+* **history** — auto-selected when the analyzed tip *is* the merge-base with the
+  base (a clean base-branch checkout: `auto_mode(tip_is_merge_base=true,
+  dirty_tip_admitted=false)`). Applies the long-range change-point + drift + FDR
+  techniques above. `resolve_since` gives it a **default six-month look-back** when
+  `--since` is omitted (`default_history_since`, calendar-correct months via jiff);
+  branch/tip have no default. `AnalysisContext::keeps` reports **regressions only**
+  unless `--include-improvements` (steady improvement on the base branch is
+  expected).
+* **branch** — auto-selected otherwise (a feature branch, or a dirty base checkout
+  whose tip dirty runs were admitted). `evaluate_branch` splits the series at the
+  merge-base (`split_at_merge_base`), then `latest_regime` uses Pettitt to find the
+  most recent within-branch flip and compares **only the after-segment** against the
+  base, setting `Finding::flipped_at` to the commit the latest regime began at — so
+  "got better then worse" reports worse and points at the flip. Reports **both**
+  directions.
+* **tip** — never auto-selected; forced with `--mode tip`. `evaluate_tip` compares
+  the last point against a bounded window of recent preceding points. Reports
+  **regressions only**.
+
+`--mode auto|history|branch|tip` overrides detection (`parse_mode`; `auto`/absent →
+`None` → auto-detect; unknown → `RunError::Analyze`). **Findings never affect the
+exit code** — `RunOutcome::Analyzed` is always a success; the machine-readable
+signal is the `json` report's `mode` / `notable` (any finding survived) /
+per-finding `direction` / `flipped_at` / `series`. There is **no**
+`--fail-on-regression` flag (removed — findings are advisory, never a build gate).
+The two driving scenarios are a scheduled base-branch regression watch (history) and
+a per-PR feature-branch evaluation (branch). Modes apply to `analyze` only; `list`
+and `clean` reuse the same data-set *selection* but never analyze, so `--mode` /
+`--include-improvements` are analyze-only and not part of the selection lockstep.
+
 ## The `list` command
 
 **`list` mirrors `analyze`'s data-set-selection parameters exactly** (a hard
@@ -170,7 +206,8 @@ consume: per discriminant set it reports the run, series, and per-commit counts 
 the selected runs (each commit's clean/dirty split), ordered oldest-first by git
 topology. Whenever you add or change a selection parameter on `analyze`, add the
 same parameter to **both** `list` and `clean` (see below) unless it is genuinely
-inapplicable. `list` has no `--fail-on-regression` (it never analyzes).
+inapplicable. The analysis-only flags `--mode` / `--include-improvements` are not
+part of the selection lockstep (they govern analysis, which `list` never does).
 
 `--list-discriminants` was migrated off `analyze` to **`list --discriminants`**:
 it lists the discriminant sets present in storage without requiring a repository.

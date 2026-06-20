@@ -173,8 +173,10 @@ struct AnalyzeCommand {
     #[argh(switch)]
     no_dirty: bool,
 
-    /// only consider runs on or after this date, in RFC 3339 format, for
-    /// example `2024-01-01T00:00:00Z` (default: no lower bound).
+    /// only consider runs on or after this cutoff: an RFC 3339 timestamp
+    /// (`2024-01-01T00:00:00Z`), a `YYYY-MM-DD` date, or a relative duration
+    /// such as `6 months` or `30 days ago` (default: no lower bound in branch
+    /// mode; the last 6 months in history mode).
     #[argh(option)]
     since: Option<String>,
 
@@ -211,9 +213,18 @@ struct AnalyzeCommand {
     #[argh(option)]
     format: Option<String>,
 
-    /// exit with failure if a regression is detected.
+    /// analysis mode: auto, history, branch, or tip (default: auto). `auto`
+    /// infers history mode (long-range trends on the base branch) from a clean
+    /// checkout of the base branch, and branch mode (latest state vs the base)
+    /// otherwise. `tip` is a fast guard check of the base-branch tip against the
+    /// recently established level.
+    #[argh(option)]
+    mode: Option<String>,
+
+    /// in history mode, also report sustained improvements (by default only
+    /// regressions are reported, since improvement over time is expected).
     #[argh(switch)]
-    fail_on_regression: bool,
+    include_improvements: bool,
 
     /// emit detailed diagnostic notes to standard error (which storage prefix is
     /// listed, which objects are included or excluded and why, the resolved git
@@ -238,7 +249,8 @@ impl AnalyzeCommand {
             machine_key: self.machine_key,
             metric: self.metric,
             format: self.format,
-            fail_on_regression: self.fail_on_regression,
+            mode: self.mode,
+            include_improvements: self.include_improvements,
             verbose: self.verbose,
         }
     }
@@ -272,8 +284,9 @@ struct ListCommand {
     #[argh(switch)]
     no_dirty: bool,
 
-    /// only list runs on or after this date, in RFC 3339 format, for
-    /// example `2024-01-01T00:00:00Z` (default: no lower bound).
+    /// only list runs on or after this cutoff: an RFC 3339 timestamp
+    /// (`2024-01-01T00:00:00Z`), a `YYYY-MM-DD` date, or a relative duration
+    /// such as `6 months` or `30 days ago` (default: no lower bound).
     #[argh(option)]
     since: Option<String>,
 
@@ -370,8 +383,9 @@ struct CleanCommand {
     #[argh(option)]
     base: Option<String>,
 
-    /// only remove runs on or after this date, in RFC 3339 format, for
-    /// example `2024-01-01T00:00:00Z` (default: no lower bound).
+    /// only remove runs on or after this cutoff: an RFC 3339 timestamp
+    /// (`2024-01-01T00:00:00Z`), a `YYYY-MM-DD` date, or a relative duration
+    /// such as `6 months` or `30 days ago` (default: no lower bound).
     #[argh(option)]
     since: Option<String>,
 
@@ -670,11 +684,12 @@ mod tests {
 
     #[test]
     fn analyze_collects_switches() {
-        let command = parse(&["analyze", "--fail-on-regression"]);
+        let command = parse(&["analyze", "--include-improvements", "--mode", "history"]);
         let Command::Analyze(options) = command else {
             panic!("expected analyze command");
         };
-        assert!(options.fail_on_regression);
+        assert!(options.include_improvements);
+        assert_eq!(options.mode.as_deref(), Some("history"));
     }
 
     #[test]
