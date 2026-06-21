@@ -299,8 +299,11 @@ where
 ///
 /// Scope follows cargo's own conventions: with no `--package` filters the whole
 /// workspace is benched (`--workspace`); otherwise each requested package is
-/// passed with `--package`. Any `--bench` filters and passthrough arguments are
-/// appended verbatim. Non-overlapping `--package`/`--bench` runs at one commit
+/// passed with `--package`. Any `--bench` filters are appended next. Passthrough
+/// arguments are forwarded to the benchmark binary, so they follow a `--`
+/// separator that splits them from cargo's own arguments (Criterion's `--noplot`
+/// or Gungraun's `--output-format`, for example, are harness flags cargo would
+/// otherwise reject). Non-overlapping `--package`/`--bench` runs at one commit
 /// therefore exercise disjoint benchmark cases.
 fn build_bench_argv(
     bench_command: &[String],
@@ -327,7 +330,13 @@ fn build_bench_argv(
         argv.push("--bench".to_owned());
         argv.push(bench.clone());
     }
-    argv.extend(options.passthrough.iter().cloned());
+    if !options.passthrough.is_empty() {
+        // The CLI strips the `--` that separates passthrough from the tool's own
+        // arguments, so re-insert one here to forward these flags to the benchmark
+        // binary rather than letting cargo try (and fail) to interpret them.
+        argv.push("--".to_owned());
+        argv.extend(options.passthrough.iter().cloned());
+    }
     Ok(argv)
 }
 
@@ -1557,8 +1566,10 @@ mod tests {
     #[test]
     fn passthrough_arguments_reach_the_runner_verbatim() {
         let runner = FakeRunner::succeeding();
+        // The CLI strips the leading `--` separator, so at runtime the passthrough
+        // vector holds only the forwarded flags.
         let options = RunOptions {
-            passthrough: vec!["--".to_owned(), "--quiet".to_owned()],
+            passthrough: vec!["--quiet".to_owned()],
             ..RunOptions::default()
         };
 
@@ -1572,7 +1583,8 @@ mod tests {
         .unwrap();
 
         // The benchmark command is the mock program, the default `--workspace`
-        // scope, then the passthrough forwarded verbatim.
+        // scope, then a single re-inserted `--` separator followed by the
+        // passthrough forwarded verbatim to the benchmark harness.
         assert_eq!(
             runner
                 .last_command()
@@ -1656,7 +1668,10 @@ mod tests {
         let options = RunOptions {
             packages: vec!["nm".to_owned()],
             benches: vec!["nm_observe".to_owned()],
-            passthrough: vec!["--".to_owned(), "--noplot".to_owned()],
+            // The CLI strips the leading `--` separator, so passthrough arrives
+            // here without it; `build_bench_argv` re-inserts one before the
+            // forwarded flags so cargo forwards them to the benchmark binary.
+            passthrough: vec!["--noplot".to_owned()],
             ..RunOptions::default()
         };
         let argv = build_bench_argv(&mock_bench_command(), &options).unwrap();
@@ -1672,6 +1687,18 @@ mod tests {
                 "--noplot"
             ]
         );
+    }
+
+    #[test]
+    fn build_bench_argv_omits_the_separator_without_passthrough() {
+        // No passthrough means no trailing `--`, so cargo is not handed a bare
+        // separator with nothing after it.
+        let options = RunOptions {
+            packages: vec!["nm".to_owned()],
+            ..RunOptions::default()
+        };
+        let argv = build_bench_argv(&mock_bench_command(), &options).unwrap();
+        assert_eq!(argv, ["mock", "--package", "nm"]);
     }
 
     #[test]

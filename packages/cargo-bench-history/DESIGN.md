@@ -1038,6 +1038,7 @@ src/
   config_writer.rs        # ConfigWriter port (tokio adapter + fake) for `install`
   model.rs                # ResultSet/Record/Metric/BenchmarkId/Context (serde)
   comparability.rs        # ComparabilityKey + commit-centric partition path
+  bless.rs                # BlessingRecord data model + append-only sidecar
   context.rs              # RunContext (CI/git/toolchain + the three timestamps)
   process.rs              # ProcessRunner port (async) + tokio adapter + fake
   probe.rs                # environment probe port (git/rustc) + shell adapter + fake
@@ -1068,8 +1069,9 @@ src/
     report.rs             # text|json|markdown multi-set renderer
     list.rs               # `list` data-set preview + `list --discriminants`
     clean.rs              # `clean` removes dirty runs (mirrors list selection)
+    bless.rs              # `bless`/`unbless` + `list --blessings` audit
   commands/
-    mod.rs run.rs install.rs backfill.rs   # the analyze/list/clean handlers are in analyze/
+    mod.rs run.rs install.rs backfill.rs   # the analyze/list/clean/bless/unbless handlers are in analyze/
 ```
 
 **Async ports & adapters (the testability boundary).** The app is **async by
@@ -1243,7 +1245,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
    strings, `StorageSharedKeyCredential`, and `DefaultAzureCredential` (§7).
 7. **Date/time dependency** — *Decided:* `jiff` for timestamps and `--since`
    parsing.
-8. **`run` invocation** — *Decided (vNext):* `run`/`backfill` invoke the
+8. **`run` invocation** — *Decided:* `run`/`backfill` invoke the
    workspace's benches once with `cargo bench` (no per-engine config); the tool
    injects the union of every supported engine's environment (e.g.
    `GUNGRAUN_SAVE_SUMMARY` for Callgrind) plus `CARGO_TARGET_DIR`, then harvests
@@ -1259,7 +1261,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
    Effective time **does not order a series** (git topology does — decision 24); it
    only names the dirty file, sub-orders runs within one commit, and drives `--since`.
    The tool never assumes ingest time is the effective date.
-10. **Filtering** — *Decided (vNext):* `run`/`backfill` expose first-class scope
+10. **Filtering** — *Decided:* `run`/`backfill` expose first-class scope
     flags — `--workspace` (default), `--package`/`-p NAME`, `--bench NAME` — that
     translate directly to `cargo bench` arguments; everything after `--` is
     forwarded verbatim after them. The `mtime ≥ run-start` harvest captures exactly
@@ -1286,7 +1288,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
 15. **Clock** — *Decided:* the `tick` crate (already a workspace dep) supplies the
     injected clock; `tick::ClockControl` drives deterministic simulated time in
     tests. No hand-rolled clock port; convert its `SystemTime` to `jiff::Timestamp`.
-16. **WSL env propagation** — *Superseded (vNext):* the earlier `WSLENV` bridging
+16. **WSL env propagation** — *Superseded:* the earlier `WSLENV` bridging
     is removed. `run`/`backfill` invoke `cargo bench` in-process, so to collect
     Callgrind data you run the tool natively on Linux/WSL and no env var has to
     cross a WSL boundary (decision 8).
@@ -1368,7 +1370,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     monotonicity hazard (rebases / amended dates no longer misorder) and is the
     reason `analyze` needs a live repo (decision 22). Effective time only sub-orders
     multiple runs sharing one commit and drives the `--since` window.
-25. **No engine configuration (vNext)** — *Decided:* there is no `[engines]` config.
+25. **No engine configuration** — *Decided:* there is no `[engines]` config.
     `run`/`backfill` run the workspace's benches once with `cargo bench`, inject the
     combined environment every supported engine needs, and detect each engine from
     the output tree it wrote (decision 8). Scope is expressed with first-class

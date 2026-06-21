@@ -66,7 +66,7 @@ impl fmt::Display for EngineSystem {
 ///
 /// Resolution order (first match wins):
 ///
-/// 1. An explicit triple (from `--target-triple` or per-engine config).
+/// 1. An explicit triple (from `--target-triple`).
 /// 2. For Callgrind, the OS component is pinned to `linux` because the engine only
 ///    runs under Valgrind — this transparently handles the Windows→WSL case.
 /// 3. Otherwise (natively-run engines such as Criterion) the tool's host triple,

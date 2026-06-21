@@ -30,6 +30,7 @@ use serde::Serialize;
 use crate::analyze::discriminant::DiscriminantSet;
 use crate::analyze::series::{Series, SeriesPoint};
 use crate::analyze::stats;
+use crate::bench::callgrind::L1_HITS_EVENT;
 use crate::model::{BenchmarkId, MetricKind};
 
 /// Tunable parameters of the engine-aware analysis.
@@ -315,24 +316,27 @@ fn is_deterministic(kind: MetricKind) -> bool {
     !matches!(kind, MetricKind::WallTime)
 }
 
-/// Whether a larger value of `kind` indicates better performance.
+/// Whether a larger value of a metric named `name` of `kind` indicates better
+/// performance.
 ///
-/// Cache hit counts are the sole "higher is better" metric (more hits means fewer
-/// misses); every other metric — wall time, instruction counts, estimated cycles,
-/// branch counts — is lower-is-better.
-fn higher_is_better(kind: MetricKind) -> bool {
-    matches!(kind, MetricKind::CacheEvents)
+/// Among the cache-event metrics only L1 hits are higher-is-better (an access
+/// served by L1 is the cheap outcome, so more of them is good). The last-level
+/// and RAM tiers are cache misses escalating to slower memory, so more of them is
+/// worse — like every other metric (wall time, instruction counts, estimated
+/// cycles, branch counts), which are all lower-is-better.
+fn higher_is_better(name: &str, kind: MetricKind) -> bool {
+    matches!(kind, MetricKind::CacheEvents) && name == L1_HITS_EVENT
 }
 
-/// The direction of a change, given the signed delta from the baseline and the
-/// metric's polarity.
+/// The direction of a change, given the signed delta from the baseline, the
+/// metric's `kind`, and its `name` (which distinguishes the cache tiers).
 ///
 /// For a lower-is-better metric a positive delta is a regression; for a
-/// higher-is-better metric (cache hits) the polarity is inverted. The caller only
-/// reaches this with a non-zero delta, so the exact zero case never arises in
+/// higher-is-better metric (L1 cache hits) the polarity is inverted. The caller
+/// only reaches this with a non-zero delta, so the exact zero case never arises in
 /// practice; it is defined as an improvement so the classification is total.
-fn direction_of(delta: f64, kind: MetricKind) -> Direction {
-    let worse = if higher_is_better(kind) {
+fn direction_of(delta: f64, kind: MetricKind, name: &str) -> Direction {
+    let worse = if higher_is_better(name, kind) {
         delta < 0.0
     } else {
         delta > 0.0
@@ -512,7 +516,7 @@ fn evaluate_change_point(series: &Series, config: &AnalysisConfig) -> Option<Can
             metric: series.metric.clone(),
             kind: series.kind,
             method: FindingMethod::ChangePoint,
-            direction: direction_of(delta, series.kind),
+            direction: direction_of(delta, series.kind, &series.metric),
             baseline,
             latest,
             delta,
@@ -584,7 +588,7 @@ fn evaluate_drift(series: &Series, config: &AnalysisConfig) -> Option<Candidate>
             metric: series.metric.clone(),
             kind: series.kind,
             method: FindingMethod::Drift,
-            direction: direction_of(delta, series.kind),
+            direction: direction_of(delta, series.kind, &series.metric),
             baseline,
             latest,
             delta,
@@ -756,7 +760,7 @@ fn compare_samples(
             metric: series.metric.clone(),
             kind: series.kind,
             method: FindingMethod::ChangePoint,
-            direction: direction_of(delta, series.kind),
+            direction: direction_of(delta, series.kind, &series.metric),
             baseline,
             latest,
             delta,
@@ -957,7 +961,7 @@ fn evaluate_resolved_spike(series: &Series, config: &AnalysisConfig) -> Option<C
             metric: series.metric.clone(),
             kind: series.kind,
             method: FindingMethod::ChangePoint,
-            direction: direction_of(deviation, series.kind),
+            direction: direction_of(deviation, series.kind, &series.metric),
             baseline,
             latest: level,
             delta: deviation,
@@ -1068,6 +1072,7 @@ mod tests {
 
     use crate::analyze::discriminant::DiscriminantSet;
     use crate::analyze::series::{Blessing, SeriesPoint};
+    use crate::bench::callgrind::{LL_HITS_EVENT, RAM_HITS_EVENT};
     use crate::model::MetricKind;
 
     use super::*;
@@ -1167,7 +1172,7 @@ mod tests {
     }
 
     /// Runs the history-mode detector with default config, reporting both
-    /// directions — the default the legacy single-mode tests expect.
+    /// directions.
     fn changes(series: &[Series]) -> Vec<Finding> {
         find_changes(
             series,
@@ -1189,34 +1194,52 @@ mod tests {
     #[test]
     fn direction_of_respects_polarity() {
         assert_eq!(
-            direction_of(1.0, MetricKind::InstructionCount),
+            direction_of(1.0, MetricKind::InstructionCount, "Ir"),
             Direction::Regression
         );
         assert_eq!(
-            direction_of(-1.0, MetricKind::InstructionCount),
+            direction_of(-1.0, MetricKind::InstructionCount, "Ir"),
             Direction::Improvement
         );
-        // Cache hits invert: more hits improve, fewer regress.
+        // L1 hits invert: more cheap L1 accesses improve, fewer regress.
         assert_eq!(
-            direction_of(1.0, MetricKind::CacheEvents),
+            direction_of(1.0, MetricKind::CacheEvents, L1_HITS_EVENT),
             Direction::Improvement
         );
         assert_eq!(
-            direction_of(-1.0, MetricKind::CacheEvents),
+            direction_of(-1.0, MetricKind::CacheEvents, L1_HITS_EVENT),
             Direction::Regression
+        );
+        // The slower cache tiers are expensive: more LL/RAM hits regress, like any
+        // lower-is-better metric.
+        assert_eq!(
+            direction_of(1.0, MetricKind::CacheEvents, LL_HITS_EVENT),
+            Direction::Regression
+        );
+        assert_eq!(
+            direction_of(1.0, MetricKind::CacheEvents, RAM_HITS_EVENT),
+            Direction::Regression
+        );
+        assert_eq!(
+            direction_of(-1.0, MetricKind::CacheEvents, RAM_HITS_EVENT),
+            Direction::Improvement
         );
     }
 
     #[test]
     fn direction_of_classifies_a_zero_delta_as_an_improvement() {
         // The classification is total: a zero delta (never reached in practice) is
-        // defined as an improvement for both polarities.
+        // defined as an improvement for every polarity.
         assert_eq!(
-            direction_of(0.0, MetricKind::InstructionCount),
+            direction_of(0.0, MetricKind::InstructionCount, "Ir"),
             Direction::Improvement
         );
         assert_eq!(
-            direction_of(0.0, MetricKind::CacheEvents),
+            direction_of(0.0, MetricKind::CacheEvents, L1_HITS_EVENT),
+            Direction::Improvement
+        );
+        assert_eq!(
+            direction_of(0.0, MetricKind::CacheEvents, LL_HITS_EVENT),
             Direction::Improvement
         );
     }
@@ -1374,15 +1397,34 @@ mod tests {
     }
 
     #[test]
-    fn deterministic_cache_hit_drop_is_a_regression() {
-        let series = series_with(
+    fn deterministic_l1_hit_drop_is_a_regression() {
+        // L1 hits are higher-is-better, so a drop in L1 hits is a regression
+        // (the access shifted to a slower tier).
+        let mut series = series_with(
             &[100.0, 100.0, 100.0, 70.0, 70.0, 70.0],
             MetricKind::CacheEvents,
             &[],
         );
+        series.metric = L1_HITS_EVENT.to_owned();
         let finding = only(changes(&[series]));
         assert!(finding.is_regression());
         assert_eq!(finding.delta, -30.0);
+    }
+
+    #[test]
+    fn deterministic_ram_hit_rise_is_a_regression() {
+        // RAM hits are the expensive tier (lower-is-better), so a rise in RAM
+        // hits is a regression, not the improvement the old whole-bucket polarity
+        // would have reported.
+        let mut series = series_with(
+            &[70.0, 70.0, 70.0, 100.0, 100.0, 100.0],
+            MetricKind::CacheEvents,
+            &[],
+        );
+        series.metric = RAM_HITS_EVENT.to_owned();
+        let finding = only(changes(&[series]));
+        assert!(finding.is_regression());
+        assert_eq!(finding.delta, 30.0);
     }
 
     #[test]

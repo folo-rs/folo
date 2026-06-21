@@ -123,6 +123,14 @@ fn package_name_from_dir(package_dir: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+/// Gungraun cache event-kind names. Only L1 hits are higher-is-better: an access
+/// served by L1 is the cheap outcome. Last-level and RAM hits are the expensive
+/// tiers — an access that falls through to them is a cache miss escalating to
+/// slower memory, so more of them is worse.
+pub(crate) const L1_HITS_EVENT: &str = "L1hits";
+pub(crate) const LL_HITS_EVENT: &str = "LLhits";
+pub(crate) const RAM_HITS_EVENT: &str = "RamHits";
+
 /// Maps a Callgrind event-kind name to the metric category the tool tracks.
 ///
 /// Returns `None` for events that are not tracked (derived rates, raw cache
@@ -131,7 +139,7 @@ fn classify(event_kind: &str) -> Option<MetricKind> {
     match event_kind {
         "Ir" => Some(MetricKind::InstructionCount),
         "EstimatedCycles" => Some(MetricKind::EstimatedCycles),
-        "L1hits" | "LLhits" | "RamHits" => Some(MetricKind::CacheEvents),
+        L1_HITS_EVENT | LL_HITS_EVENT | RAM_HITS_EVENT => Some(MetricKind::CacheEvents),
         "Bc" | "Bcm" | "Bi" | "Bim" => Some(MetricKind::Branches),
         _ => None,
     }

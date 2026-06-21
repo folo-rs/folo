@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn default_template_has_no_engines_section() {
-        // vNext runs all benches via `cargo bench` and detects engines from the
+        // Benches run via a single `cargo bench`, with engines detected from the
         // output, so the starter config declares nothing about engines.
         assert!(!default_template().contains("[engines"));
     }

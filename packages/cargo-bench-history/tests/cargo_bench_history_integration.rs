@@ -606,10 +606,10 @@ async fn analyze_falling_cache_hits_is_a_regression() {
     assert_eq!(parsed["findings"][0]["kind"], "cache_events");
 }
 
-/// Conversely, a rise in cache hits is an improvement, not a regression.
+/// Conversely, a rise in L1 cache hits is an improvement, not a regression.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_rising_cache_hits_is_an_improvement() {
+async fn analyze_rising_l1_cache_hits_is_an_improvement() {
     let workspace = Workspace::repo(&storage_only_config());
     for (date, commit, hits) in [
         ("2024-01-01", "c1", 700.0),
@@ -623,7 +623,7 @@ async fn analyze_rising_cache_hits_is_an_improvement() {
             date,
             commit,
             vec![Metric::new(
-                "LLhits".to_owned(),
+                "L1hits".to_owned(),
                 MetricKind::CacheEvents,
                 hits,
                 Some("count".to_owned()),
@@ -644,10 +644,54 @@ async fn analyze_rising_cache_hits_is_an_improvement() {
     };
     assert_eq!(
         regressions, 0,
-        "more cache hits is not a regression: {report}"
+        "more L1 cache hits is not a regression: {report}"
     );
     let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
     assert_eq!(parsed["findings"][0]["direction"], "improvement");
+}
+
+/// The deeper cache tiers (`LLhits`, `RamHits`) are the expensive ones: an access
+/// served there missed the faster levels, so more of them is worse. A sustained
+/// rise in `RamHits` must therefore read as a regression end to end.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn analyze_rising_ram_hits_is_a_regression() {
+    let workspace = Workspace::repo(&storage_only_config());
+    for (date, commit, hits) in [
+        ("2024-01-01", "c1", 700.0),
+        ("2024-01-02", "c2", 700.0),
+        ("2024-01-03", "c3", 700.0),
+        ("2024-01-04", "c4", 1000.0),
+        ("2024-01-05", "c5", 1000.0),
+        ("2024-01-06", "c6", 1000.0),
+    ] {
+        workspace.seed_metrics(
+            date,
+            commit,
+            vec![Metric::new(
+                "RamHits".to_owned(),
+                MetricKind::CacheEvents,
+                hits,
+                Some("count".to_owned()),
+            )],
+        );
+    }
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(regressions, 1, "more RAM hits is a regression: {report}");
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(parsed["findings"][0]["direction"], "regression");
+    assert_eq!(parsed["findings"][0]["kind"], "cache_events");
 }
 
 /// Two benchmarks regressing by different magnitudes produce two findings that the
@@ -3482,7 +3526,7 @@ struct Workspace {
     /// Arguments passed to the mock benchmark engine that `run`/`backfill` invoke
     /// in place of `cargo bench`. They tell the mock which fixtures to emit (which
     /// `--summary` / `--criterion` cases, or an `--exit-code`), so each engine's
-    /// output tree is produced by the single benchmark command vNext runs.
+    /// output tree is produced by the single benchmark command `run` invokes.
     bench: Vec<String>,
 }
 

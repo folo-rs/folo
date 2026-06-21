@@ -408,9 +408,9 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
 }
 
 // Pure serialization glue, fully exercised by `json_report_is_structured` and
-// `report_renders_every_severity_and_direction_label` in regular CI. Skipped for
-// mutation only: the empty-string mutant is caught fast by those lib tests
-// locally, but tips the 60s cargo-mutants timeout on the slower Windows shards.
+// `report_renders_direction_labels` in regular CI. Skipped for mutation only: the
+// empty-string mutant is caught fast by those lib tests locally, but tips the 60s
+// cargo-mutants timeout on the slower Windows shards.
 #[cfg_attr(test, mutants::skip)]
 fn render_json(input: &ReportInput<'_>) -> String {
     let sets = input

@@ -215,7 +215,7 @@ dirty runs in the §dirty-tree exception, a separate concern).
 exit code** — `RunOutcome::Analyzed` is always a success; the machine-readable
 signal is the `json` report's `mode` / `notable` (any finding survived) /
 per-finding `direction` / `flipped_at` / `series`. There is **no**
-`--fail-on-regression` flag (removed — findings are advisory, never a build gate).
+`--fail-on-regression` flag: findings are advisory, never a build gate.
 The two driving scenarios are a scheduled base-branch regression watch (history) and
 a per-PR feature-branch evaluation (branch). Modes apply to `analyze` only; `list`
 and `clean` reuse the same data-set *selection* but never analyze, so `--mode` /
