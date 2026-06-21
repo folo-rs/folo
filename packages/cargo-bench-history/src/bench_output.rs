@@ -346,6 +346,12 @@ mod tests {
             .unwrap();
     }
 
+    #[test]
+    fn format_mtime_renders_a_known_instant_as_rfc3339() {
+        let time = SystemTime::UNIX_EPOCH + Duration::from_secs(3);
+        assert_eq!(format_mtime(time), "1970-01-01T00:00:03Z");
+    }
+
     fn callgrind_summaries(harvest: Harvest) -> Vec<RawSummary> {
         match harvest {
             Harvest::Callgrind(summaries) => summaries,

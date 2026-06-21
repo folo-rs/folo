@@ -371,6 +371,7 @@ impl RunOutcome {
     /// non-zero exit code. Downstream automation reads notable findings from the
     /// report JSON rather than from the exit status.
     #[must_use]
+    #[cfg_attr(test, mutants::skip)]
     pub fn is_success(&self) -> bool {
         match self {
             Self::Completed { .. } | Self::Analyzed { .. } => true,

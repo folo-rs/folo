@@ -53,7 +53,7 @@ pub use context::{
     CiInfo, CiProvider, GitInfo, RunContext, Timestamps, ToolchainInfo, detect_ci,
     resolve_effective_time,
 };
-pub use dispatch::{run, run_with_overrides};
+pub use dispatch::{Overrides, run, run_with_overrides};
 pub use model::{BenchmarkId, Metric, MetricKind, ResultRecord, ResultSet, SCHEMA_VERSION};
 pub use storage::{LocalStorage, Storage, StorageError};
 pub use types::{

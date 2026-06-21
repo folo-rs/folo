@@ -12,6 +12,7 @@
 //! `--dry-run` previews what would be removed without deleting anything.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use serde::Serialize;
 
@@ -21,7 +22,7 @@ use crate::model::ResultSet;
 use crate::report::{Reporter, StderrReporter};
 use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
-use crate::wiring::{default_config_path, resolve_project_id};
+use crate::wiring::{resolve_config_path, resolve_project_id, resolve_repo};
 use crate::{CleanOptions, RunError, RunOutcome};
 
 use super::discriminant::DiscriminantSet;
@@ -33,25 +34,23 @@ use super::{
 
 /// The real `clean`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
-pub(crate) async fn execute(options: &CleanOptions) -> Result<RunOutcome, RunError> {
+pub(crate) async fn execute(
+    options: &CleanOptions,
+    workspace_dir: &Path,
+) -> Result<RunOutcome, RunError> {
     let reporter = StderrReporter::new(options.verbose);
 
-    let config_path = options
-        .config_path
-        .clone()
-        .unwrap_or_else(default_config_path);
+    let config_path = resolve_config_path(workspace_dir, options.config_path.as_deref());
     reporter.note(&format!(
         "loading configuration from {}",
         config_path.display()
     ));
     let config = load_config(&config_path).await?;
 
-    let workspace_dir = std::env::current_dir().map_err(RunError::Io)?;
-    let project_id = resolve_project_id(&config, &workspace_dir);
-    let storage = build_storage(&config)?;
+    let project_id = resolve_project_id(&config, workspace_dir);
+    let storage = build_storage(&config, workspace_dir)?;
 
-    let repo = options.repo.clone().unwrap_or(workspace_dir);
-    let git = SystemGitHistory::new(repo);
+    let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
 
     clean_with(&git, &storage, &project_id, &config, options, &reporter).await
 }
@@ -723,6 +722,9 @@ mod tests {
         // Two dirty snapshots on the target side, one before and one after the cutoff.
         store(&storage, &dirty_key("f1", 100), &set(100, "f1"));
         store(&storage, &dirty_key("f2", 300), &set(300, "f2"));
+        // A snapshot whose effective time is exactly the cutoff: the cutoff is
+        // inclusive, so it is removed.
+        store(&storage, &dirty_key("f1", 180), &set(180, "f1"));
         let git = feature_git();
 
         let opts = CleanOptions {
@@ -735,6 +737,10 @@ mod tests {
         assert!(
             remaining.contains(&dirty_key("f1", 100)),
             "a run before --since is kept"
+        );
+        assert!(
+            !remaining.contains(&dirty_key("f1", 180)),
+            "a run exactly at --since is removed (inclusive cutoff)"
         );
         assert!(
             !remaining.contains(&dirty_key("f2", 300)),
@@ -759,5 +765,24 @@ mod tests {
         let commits = parsed["sets"][0]["commits"].as_array().unwrap();
         assert_eq!(commits[0]["commit"], "f1", "oldest first: {report}");
         assert_eq!(commits[1]["commit"], "f2");
+    }
+
+    #[test]
+    fn clean_markdown_format_renders_a_table_per_set() {
+        let storage = MemoryStorage::new();
+        store(&storage, &dirty_key("f1", 200), &set(200, "f1"));
+        store(&storage, &dirty_key("f2", 300), &set(300, "f2"));
+        let git = feature_git();
+
+        let opts = CleanOptions {
+            dry_run: true,
+            format: Some("markdown".to_owned()),
+            ..options()
+        };
+        let report = clean(&storage, &git, &opts);
+        assert!(report.contains("# Clean plan for"), "{report}");
+        assert!(report.contains("| Commit | Dirty runs |"), "{report}");
+        assert!(report.contains("| f1 |"), "{report}");
+        assert!(report.contains("**Would remove"), "{report}");
     }
 }

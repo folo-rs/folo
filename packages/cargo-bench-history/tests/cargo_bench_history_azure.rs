@@ -17,12 +17,8 @@ use std::time::Duration;
 
 use argh::FromArgs;
 use azure_core::http::Url;
-use cargo_bench_history::{Cli, Command, RunError, RunOutcome, run_with_overrides};
+use cargo_bench_history::{Cli, Command, Overrides, RunError, RunOutcome, run_with_overrides};
 use serial_test::serial;
-
-#[path = "support/cwd_guard.rs"]
-mod cwd_guard;
-use cwd_guard::CwdGuard;
 
 /// The mock engine binary path, provided by Cargo for the `[[bin]]` target.
 const MOCK_ENGINE: &str = env!("CARGO_BIN_EXE_cargo-bench-history-mock-engine");
@@ -130,9 +126,6 @@ impl AzureWorkspace {
         )
         .unwrap();
         workspace.git(&["init", "-b", "master"]);
-        workspace.git(&["config", "user.email", "test@example.invalid"]);
-        workspace.git(&["config", "user.name", "Bench History Test"]);
-        workspace.git(&["config", "commit.gpgsign", "false"]);
         workspace.git(&["add", ".gitignore"]);
         workspace.git(&["commit", "-m", "root"]);
         workspace
@@ -146,10 +139,29 @@ impl AzureWorkspace {
         self
     }
 
-    /// Runs `git -C <root> <args>`, asserting success.
+    /// Runs `git -C <root> <args>`, asserting success. Each invocation injects the
+    /// committer identity plus `core.fsync=none`/`gc.auto=0` so commits skip the
+    /// per-object disk flush (the dominant per-commit cost on Windows) and no
+    /// background repack fires; this keeps a throwaway repository to `init`/`add`/
+    /// `commit` rather than several extra `git config` spawns.
     fn git(&self, args: &[&str]) -> std::process::Output {
         let root = self.dir.path().to_string_lossy().into_owned();
-        let mut full: Vec<&str> = vec!["-C", root.as_str()];
+        let mut full: Vec<&str> = vec![
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "user.name=Bench History Test",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.fsync=none",
+            "-c",
+            "core.fsyncObjectFiles=false",
+            "-c",
+            "gc.auto=0",
+            "-C",
+            root.as_str(),
+        ];
         full.extend_from_slice(args);
         let output = std::process::Command::new("git")
             .args(&full)
@@ -182,11 +194,9 @@ impl AzureWorkspace {
         std::fs::write(self.dir.path().join(relative), "uncommitted\n").unwrap();
     }
 
-    /// Drives a command with `args` from inside this workspace, pointing the
+    /// Drives a command with `args` against this workspace, pointing the
     /// harvest at the workspace's own `target/` so it is hermetic.
     async fn drive(&self, args: &[&str]) -> Result<RunOutcome, RunError> {
-        let _cwd = CwdGuard::enter(self.dir.path());
-
         let target_root = self.dir.path().join("target");
         // Drive `run`/`backfill` against the mock engine instead of `cargo bench`:
         // the program plus its fixture-describing arguments form the benchmark
@@ -195,9 +205,12 @@ impl AzureWorkspace {
         bench_command.extend(self.bench.iter().cloned());
         run_with_overrides(
             &command_from(args),
-            Some(target_root),
-            Some(bench_command),
-            None,
+            Overrides {
+                workspace_dir: Some(self.dir.path().to_path_buf()),
+                target_root: Some(target_root),
+                bench_command: Some(bench_command),
+                now: None,
+            },
         )
         .await
     }

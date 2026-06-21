@@ -38,12 +38,21 @@ pub(crate) const CRITERION_ESTIMATES_FILE: &str = "estimates.json";
 /// files the tool harvests; Criterion writes `estimates.json` unconditionally, so
 /// it contributes nothing. Duplicate names are de-duplicated, keeping the first.
 pub(crate) fn injected_bench_env() -> Vec<(String, String)> {
+    dedup_env(
+        EngineSystem::ALL
+            .into_iter()
+            .flat_map(injected_env)
+            .collect(),
+    )
+}
+
+/// Keeps the first occurrence of each variable name in `pairs`, dropping any later
+/// repeat so two engines requesting the same variable do not inject it twice.
+fn dedup_env(pairs: Vec<(String, String)>) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = Vec::new();
-    for engine in EngineSystem::ALL {
-        for (name, value) in injected_env(engine) {
-            if !env.iter().any(|(existing, _)| *existing == name) {
-                env.push((name, value));
-            }
+    for (name, value) in pairs {
+        if !env.iter().any(|(existing, _)| *existing == name) {
+            env.push((name, value));
         }
     }
     env
@@ -89,6 +98,24 @@ mod tests {
         assert_eq!(
             injected_bench_env(),
             vec![("GUNGRAUN_SAVE_SUMMARY".to_owned(), "pretty-json".to_owned())]
+        );
+    }
+
+    #[test]
+    fn dedup_env_keeps_the_first_value_and_drops_a_repeat_name() {
+        // A later repeat of an existing name is dropped (first value wins) while a
+        // distinct name is retained, exercising the equality test in the dedup.
+        let pairs = vec![
+            ("A".to_owned(), "1".to_owned()),
+            ("B".to_owned(), "2".to_owned()),
+            ("A".to_owned(), "shadowed".to_owned()),
+        ];
+        assert_eq!(
+            dedup_env(pairs),
+            vec![
+                ("A".to_owned(), "1".to_owned()),
+                ("B".to_owned(), "2".to_owned()),
+            ]
         );
     }
 }

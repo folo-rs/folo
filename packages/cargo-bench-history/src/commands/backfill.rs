@@ -39,7 +39,7 @@ use crate::process::{TokioBenchRunner, capture};
 use crate::report::StderrReporter;
 use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
-use crate::wiring::{default_config_path, resolve_project_id};
+use crate::wiring::{resolve_config_path, resolve_project_id};
 use crate::{BackfillOptions, RunError, RunOptions, RunOutcome};
 
 use super::run::{RunDeps, RunSummary, default_bench_command, run_engines};
@@ -109,20 +109,17 @@ enum CommitOutcome {
 /// orchestrate the range.
 pub(crate) async fn execute(
     options: &BackfillOptions,
+    workspace_dir: &Path,
     bench_command: Option<Vec<String>>,
 ) -> Result<RunOutcome, RunError> {
-    let config_path = options
-        .config_path
-        .clone()
-        .unwrap_or_else(default_config_path);
+    let config_path = resolve_config_path(workspace_dir, options.config_path.as_deref());
     let config = load_config(&config_path).await?;
 
-    let workspace_dir = std::env::current_dir().map_err(RunError::Io)?;
-    let project_id = resolve_project_id(&config, &workspace_dir);
-    let storage = build_storage(&config)?;
+    let project_id = resolve_project_id(&config, workspace_dir);
+    let storage = build_storage(&config, workspace_dir)?;
     let bench_command = bench_command.unwrap_or_else(default_bench_command);
 
-    let git = SystemBackfillGit::new(&workspace_dir);
+    let git = SystemBackfillGit::new(workspace_dir);
     let runner = SystemCommitRunner {
         project_id: &project_id,
         storage: &storage,

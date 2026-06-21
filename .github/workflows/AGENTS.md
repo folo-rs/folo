@@ -57,7 +57,7 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
 
 - **mutants** — `timeout-minutes: 90`, sharded
   - Runs mutation testing (very slow)
-  - Sharded 8 ways per platform via cargo-mutants' native `--shard N/M` support; the
+- Sharded 16 ways per platform via cargo-mutants' native `--shard N/M` support; the
     just recipe accepts the same 1-based `N/M` format as `miri-harder` and translates
     to cargo-mutants' 0-based form internally. Without a SHARD argument the recipe
     runs every mutant in a single job, preserving the local-development experience.

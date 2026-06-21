@@ -12,6 +12,8 @@
 //! sidecars are immutable, so narrowing a blessing means unblessing and
 //! re-blessing the subset to keep.
 
+use std::path::Path;
+
 use jiff::Timestamp;
 
 use crate::bless::BlessingRecord;
@@ -21,7 +23,7 @@ use crate::model::ResultSet;
 use crate::report::{Reporter, StderrReporter};
 use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
-use crate::wiring::{default_config_path, resolve_project_id};
+use crate::wiring::{resolve_config_path, resolve_project_id, resolve_repo};
 use crate::{BlessOptions, RunError, RunOutcome, UnblessOptions};
 
 use super::discriminant::ParsedKey;
@@ -34,26 +36,22 @@ use super::{Selection, facet_filtered_candidates, parsed_facets, resolve_base_re
 /// production passes `None` and uses the wall clock.
 pub(crate) async fn bless(
     options: &BlessOptions,
+    workspace_dir: &Path,
     now_override: Option<Timestamp>,
 ) -> Result<RunOutcome, RunError> {
     let reporter = StderrReporter::new(options.verbose);
 
-    let config_path = options
-        .config_path
-        .clone()
-        .unwrap_or_else(default_config_path);
+    let config_path = resolve_config_path(workspace_dir, options.config_path.as_deref());
     reporter.note(&format!(
         "loading configuration from {}",
         config_path.display()
     ));
     let config = load_config(&config_path).await?;
 
-    let workspace_dir = std::env::current_dir().map_err(RunError::Io)?;
-    let project_id = resolve_project_id(&config, &workspace_dir);
-    let storage = build_storage(&config)?;
+    let project_id = resolve_project_id(&config, workspace_dir);
+    let storage = build_storage(&config, workspace_dir)?;
 
-    let repo = options.repo.clone().unwrap_or(workspace_dir);
-    let git = SystemGitHistory::new(repo);
+    let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
 
     let now = now_override.unwrap_or_else(Timestamp::now);
     bless_with(
@@ -71,25 +69,23 @@ pub(crate) async fn bless(
 
 /// The real `unbless`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
-pub(crate) async fn unbless(options: &UnblessOptions) -> Result<RunOutcome, RunError> {
+pub(crate) async fn unbless(
+    options: &UnblessOptions,
+    workspace_dir: &Path,
+) -> Result<RunOutcome, RunError> {
     let reporter = StderrReporter::new(options.verbose);
 
-    let config_path = options
-        .config_path
-        .clone()
-        .unwrap_or_else(default_config_path);
+    let config_path = resolve_config_path(workspace_dir, options.config_path.as_deref());
     reporter.note(&format!(
         "loading configuration from {}",
         config_path.display()
     ));
     let config = load_config(&config_path).await?;
 
-    let workspace_dir = std::env::current_dir().map_err(RunError::Io)?;
-    let project_id = resolve_project_id(&config, &workspace_dir);
-    let storage = build_storage(&config)?;
+    let project_id = resolve_project_id(&config, workspace_dir);
+    let storage = build_storage(&config, workspace_dir)?;
 
-    let repo = options.repo.clone().unwrap_or(workspace_dir);
-    let git = SystemGitHistory::new(repo);
+    let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
 
     unbless_with(&git, &storage, &project_id, &config, options, &reporter).await
 }

@@ -27,7 +27,7 @@ use crate::process::{BenchRunner, TokioBenchRunner};
 use crate::report::{Reporter, StderrReporter};
 use crate::storage::{Storage, StorageError, build_storage};
 use crate::text::count_noun;
-use crate::wiring::{default_config_path, resolve_project_id};
+use crate::wiring::{resolve_config_path, resolve_project_id};
 use crate::{RunError, RunOptions, RunOutcome};
 
 /// The program and base arguments the production tool runs to benchmark the
@@ -78,33 +78,30 @@ pub(crate) struct RunDeps<'a, R, P, O, S> {
 /// mutating the process environment.
 pub(crate) async fn execute(
     options: &RunOptions,
+    workspace_dir: &Path,
     target_root: Option<PathBuf>,
     bench_command: Option<Vec<String>>,
 ) -> Result<RunOutcome, RunError> {
     let reporter = StderrReporter::new(options.verbose);
 
-    let config_path = options
-        .config_path
-        .clone()
-        .unwrap_or_else(default_config_path);
+    let config_path = resolve_config_path(workspace_dir, options.config_path.as_deref());
     reporter.note(&format!(
         "loading configuration from {}",
         config_path.display()
     ));
     let config = load_config(&config_path).await?;
 
-    let workspace_dir = std::env::current_dir().map_err(RunError::Io)?;
-    let project_id = resolve_project_id(&config, &workspace_dir);
+    let project_id = resolve_project_id(&config, workspace_dir);
     reporter.note(&format!("project id: {project_id}"));
     reporter.note(&format!(
         "storage backend: {}",
         describe_storage(&config.storage)
     ));
-    let storage = build_storage(&config)?;
+    let storage = build_storage(&config, workspace_dir)?;
 
-    let runner = TokioBenchRunner::default();
-    let probe = SystemProbe::default();
-    let target_root = target_root.unwrap_or_else(resolve_target_root);
+    let runner = TokioBenchRunner::in_dir(workspace_dir);
+    let probe = SystemProbe::in_dir(workspace_dir);
+    let target_root = target_root.unwrap_or_else(|| resolve_target_root_in(workspace_dir));
     reporter.note(&format!(
         "cargo target directory (scanned for engine output): {}",
         target_root.display()
@@ -581,10 +578,11 @@ fn timestamp_from(time: SystemTime) -> Timestamp {
     Timestamp::try_from(time).expect("system time is within the supported timestamp range")
 }
 
-/// The cargo target directory, honoring `CARGO_TARGET_DIR`, as an absolute path.
-fn resolve_target_root() -> PathBuf {
-    let base = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    target_root_from(std::env::var_os("CARGO_TARGET_DIR"), &base)
+/// The cargo target directory, honoring `CARGO_TARGET_DIR`, as an absolute path,
+/// resolving a relative target directory against `base` (the workspace directory)
+/// rather than the process working directory.
+fn resolve_target_root_in(base: &Path) -> PathBuf {
+    target_root_from(std::env::var_os("CARGO_TARGET_DIR"), base)
 }
 
 /// Resolves the cargo target directory from an optional `CARGO_TARGET_DIR` value,
@@ -637,6 +635,28 @@ mod tests {
     /// The frozen wall-clock instant used by orchestration tests (2023-11-14Z).
     const FROZEN_UNIX: u64 = 1_700_000_000;
 
+    #[test]
+    fn describe_storage_names_the_backend() {
+        let local = StorageConfig::Local {
+            path: PathBuf::from("/tmp/history"),
+        };
+        let described = describe_storage(&local);
+        assert!(described.contains("local filesystem"), "{described}");
+        assert!(described.contains("history"), "{described}");
+
+        let azure = StorageConfig::Azure {
+            account: "devstoreaccount1".to_owned(),
+            container: "bench".to_owned(),
+            endpoint: None,
+            account_key: None,
+            sas_token: None,
+        };
+        let described = describe_storage(&azure);
+        assert!(described.contains("Azure Blob"), "{described}");
+        assert!(described.contains("devstoreaccount1"), "{described}");
+        assert!(described.contains("bench"), "{described}");
+    }
+
     fn frozen_time() -> SystemTime {
         SystemTime::UNIX_EPOCH
             .checked_add(Duration::from_secs(FROZEN_UNIX))
@@ -688,7 +708,7 @@ mod tests {
         // `target_root_from` for whatever `CARGO_TARGET_DIR` happens to be set
         // (or unset) in this process.
         let base = std::env::current_dir().expect("current directory is available");
-        let resolved = resolve_target_root();
+        let resolved = resolve_target_root_in(&base);
         assert_eq!(
             resolved,
             target_root_from(std::env::var_os("CARGO_TARGET_DIR"), &base)

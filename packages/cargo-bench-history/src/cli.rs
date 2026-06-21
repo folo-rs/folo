@@ -730,6 +730,17 @@ mod tests {
     }
 
     #[test]
+    fn help_lists_every_command() {
+        let help = Cli::help("cargo-bench-history");
+        assert!(!help.is_empty(), "help text is non-empty");
+        for command in [
+            "analyze", "backfill", "bless", "clean", "install", "list", "run", "unbless",
+        ] {
+            assert!(help.contains(command), "help lists {command}: {help}");
+        }
+    }
+
+    #[test]
     fn run_collects_scope_and_passthrough() {
         let command = parse(&[
             "run",

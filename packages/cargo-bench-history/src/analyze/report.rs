@@ -698,6 +698,28 @@ mod tests {
     }
 
     #[test]
+    fn json_per_set_tally_counts_each_direction_independently() {
+        // Two regressions and no improvements in one set: the per-set JSON tally
+        // must report the real counts, not a constant.
+        let set = discriminant_set();
+        let mut second = regression();
+        second.id = BenchmarkId::new(
+            Some("nm".to_owned()),
+            "nm::other".to_owned(),
+            Some("push".to_owned()),
+            None,
+        );
+        let findings = vec![regression(), second];
+        let mut summaries = Vec::new();
+        let input = single_set_input("folo", &set, &findings, &mut summaries);
+        let json = render(&input, ReportFormat::Json, false);
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("report is JSON");
+        let set_json = &parsed["sets"][0];
+        assert_eq!(set_json["regressions"], 2, "{json}");
+        assert_eq!(set_json["improvements"], 0, "{json}");
+    }
+
+    #[test]
     fn markdown_report_renders_a_table_per_set() {
         let set = discriminant_set();
         let findings = vec![regression()];
@@ -926,5 +948,29 @@ mod tests {
         assert_eq!(describe_id(&id), "pkg/group/case/value");
         let bare = BenchmarkId::new(None, "group".to_owned(), None, None);
         assert_eq!(describe_id(&bare), "group");
+    }
+
+    #[test]
+    fn chart_of_needs_at_least_two_points() {
+        // Deterministic, Miri-safe color state for the rasciigraph plot.
+        colored::control::set_override(false);
+        let point = |value: f64| SeriesValue {
+            commit: None,
+            value,
+            dirty: false,
+        };
+        // A single point cannot be plotted.
+        assert!(chart_of(&[point(1.0)], Direction::Regression, 0).is_none());
+        // Exactly two points is the minimum that plots (a `< 2` -> `<= 2` slip
+        // would reject it).
+        assert!(chart_of(&[point(1.0), point(2.0)], Direction::Regression, 0).is_some());
+    }
+
+    #[test]
+    fn significant_decimals_handles_a_value_below_the_search_floor() {
+        // A magnitude smaller than 10^-12 never satisfies the exponent search, so
+        // the exponent stays at its -12 floor, yielding 15 decimal places. This
+        // pins the sign of the `-12` initializer.
+        assert_eq!(significant_decimals(1e-13), 15);
     }
 }

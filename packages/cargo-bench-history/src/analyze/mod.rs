@@ -25,6 +25,8 @@ use std::collections::HashMap;
 use std::io::IsTerminal;
 
 use jiff::civil::Date;
+use std::path::Path;
+
 use jiff::tz::TimeZone;
 use jiff::{Span, Timestamp};
 
@@ -36,7 +38,7 @@ use crate::model::ResultSet;
 use crate::report::{Reporter, StderrReporter};
 use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
-use crate::wiring::{default_config_path, resolve_project_id};
+use crate::wiring::{resolve_config_path, resolve_project_id, resolve_repo};
 use crate::{
     AnalyzeOptions, BlessOptions, CleanOptions, ListOptions, RunError, RunOutcome, UnblessOptions,
 };
@@ -56,29 +58,28 @@ use series::{LoadedObject, SeriesFilter, build_series};
 /// real clock regardless — only the *default* lookback uses this anchor).
 pub(crate) async fn execute(
     options: &AnalyzeOptions,
+    workspace_dir: &Path,
     now_override: Option<Timestamp>,
 ) -> Result<RunOutcome, RunError> {
     let reporter = StderrReporter::new(options.verbose);
 
-    let config_path = options
-        .config_path
-        .clone()
-        .unwrap_or_else(default_config_path);
+    let config_path = resolve_config_path(workspace_dir, options.config_path.as_deref());
     reporter.note(&format!(
         "loading configuration from {}",
         config_path.display()
     ));
     let config = load_config(&config_path).await?;
 
-    let workspace_dir = std::env::current_dir().map_err(RunError::Io)?;
-    let project_id = resolve_project_id(&config, &workspace_dir);
-    let storage = build_storage(&config)?;
+    let project_id = resolve_project_id(&config, workspace_dir);
+    let storage = build_storage(&config, workspace_dir)?;
 
-    let repo = options.repo.clone().unwrap_or(workspace_dir);
-    let git = SystemGitHistory::new(repo);
+    let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
 
     let now = now_override.unwrap_or_else(Timestamp::now);
-    let color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    let color = should_colorize(
+        std::io::stdout().is_terminal(),
+        std::env::var_os("NO_COLOR").is_some(),
+    );
     analyze_with(
         &git,
         &storage,
@@ -90,6 +91,12 @@ pub(crate) async fn execute(
         color,
     )
     .await
+}
+
+/// Whether colored output should be emitted: only to an interactive terminal with
+/// `NO_COLOR` unset.
+fn should_colorize(is_terminal: bool, no_color: bool) -> bool {
+    is_terminal && !no_color
 }
 
 /// Storage- and git-generic `analyze`: facet-filter the stored objects, resolve
@@ -1334,6 +1341,93 @@ mod tests {
     }
 
     #[test]
+    fn should_colorize_only_in_an_interactive_terminal_without_no_color() {
+        assert!(should_colorize(true, false), "terminal, NO_COLOR unset");
+        assert!(!should_colorize(false, false), "not a terminal");
+        assert!(!should_colorize(true, true), "NO_COLOR set");
+        assert!(!should_colorize(false, true), "neither");
+    }
+
+    #[test]
+    fn describe_facets_joins_set_facets_and_reports_none_when_empty() {
+        let empty = Facets {
+            engine: None,
+            target_triple: None,
+            os: None,
+            architecture: None,
+            machine_key: None,
+        };
+        assert_eq!(describe_facets(&empty), "none");
+
+        let full = Facets {
+            engine: Some("criterion"),
+            target_triple: Some("x86_64-pc-windows-msvc"),
+            os: Some("windows"),
+            architecture: Some("x86_64"),
+            machine_key: Some("abcd"),
+        };
+        assert_eq!(
+            describe_facets(&full),
+            "engine=criterion, target_triple=x86_64-pc-windows-msvc, os=windows, \
+             architecture=x86_64, machine=abcd"
+        );
+    }
+
+    #[test]
+    fn empty_history_hint_explains_only_when_runs_were_excluded() {
+        let no_exclusions = ExclusionTally {
+            outside_history: 0,
+            dirty_base: 0,
+            since: 0,
+        };
+        // No candidates at all → a genuinely empty history needs no hint.
+        assert_eq!(empty_history_hint(true, 0, "master", no_exclusions), None);
+        // Runs were actually loaded → no hint.
+        assert_eq!(empty_history_hint(false, 3, "master", no_exclusions), None);
+
+        let tally = ExclusionTally {
+            outside_history: 2,
+            dirty_base: 1,
+            since: 4,
+        };
+        let hint = empty_history_hint(true, 7, "master", tally).expect("a hint");
+        assert!(hint.contains("7 stored runs"), "{hint}");
+        assert!(
+            hint.contains("1 dirty (uncommitted-tree) snapshot"),
+            "{hint}"
+        );
+        assert!(hint.contains("2 runs on commits outside master"), "{hint}");
+        assert!(
+            hint.contains("4 runs older than the --since cutoff"),
+            "{hint}"
+        );
+        assert!(hint.contains("--verbose"), "{hint}");
+
+        // A zero reason omits its line entirely (each `> 0` guard is exercised in
+        // both directions): only the dirty reason is present here.
+        let dirty_only = ExclusionTally {
+            outside_history: 0,
+            dirty_base: 3,
+            since: 0,
+        };
+        let hint = empty_history_hint(true, 3, "master", dirty_only).expect("a hint");
+        assert!(hint.contains("dirty (uncommitted-tree)"), "{hint}");
+        assert!(!hint.contains("outside"), "{hint}");
+        assert!(!hint.contains("--since cutoff"), "{hint}");
+
+        // Only the outside-history reason is present here (dirty omitted).
+        let outside_only = ExclusionTally {
+            outside_history: 2,
+            dirty_base: 0,
+            since: 0,
+        };
+        let hint = empty_history_hint(true, 2, "master", outside_only).expect("a hint");
+        assert!(hint.contains("outside master"), "{hint}");
+        assert!(!hint.contains("dirty (uncommitted-tree)"), "{hint}");
+        assert!(!hint.contains("--since cutoff"), "{hint}");
+    }
+
+    #[test]
     fn parse_mode_resolves_auto_to_none_and_rejects_unknown() {
         assert_eq!(parse_mode(None).expect("none parses"), None);
         assert_eq!(parse_mode(Some("auto")).expect("auto parses"), None);
@@ -1466,6 +1560,83 @@ mod tests {
         assert!(report.contains("regression"), "{report}");
         assert!(report.contains("nm/nm::observe/pull"), "{report}");
         assert!(report.contains("Ir"), "{report}");
+    }
+
+    #[test]
+    fn json_notable_flag_reflects_whether_findings_survived() {
+        // The `notable` signal appears only in the JSON report (the text report
+        // keys off the finding list directly), so assert it there.
+        let mut json = options();
+        json.format = Some("json".to_owned());
+
+        let storage = MemoryStorage::new();
+        seed_linear_step(&storage);
+        let (report, regressions) = analyze(&linear6_git(), &storage, "folo", &json);
+        assert_eq!(regressions, 1);
+        assert!(report.contains("\"notable\": true"), "{report}");
+
+        let empty = MemoryStorage::new();
+        let (report, _) = analyze(&linear_git(), &empty, "folo", &json);
+        assert!(report.contains("\"notable\": false"), "{report}");
+    }
+
+    #[test]
+    fn select_dataset_notes_blessing_sidecars_in_the_partition() {
+        // A blessing sidecar shares the run partition prefix; the verbose trail
+        // calls it out only when at least one is present.
+        let storage = MemoryStorage::new();
+        seed_linear_step(&storage);
+        let record = BlessingRecord::new(
+            "c3".to_owned(),
+            ts(3),
+            ts(3),
+            vec!["nm".to_owned()],
+            None,
+            "0.0.1".to_owned(),
+        );
+        let bless_key =
+            "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/c3/bless-3.json".to_owned();
+        block_on(storage.put(&bless_key, record.to_json().expect("serializes").as_bytes()))
+            .expect("store succeeds");
+
+        let reporter = RecordingReporter::new();
+        block_on(analyze_with(
+            &linear6_git(),
+            &storage,
+            "folo",
+            &config(),
+            &options(),
+            now_anchor(),
+            &reporter,
+            false,
+        ))
+        .expect("analysis runs");
+        assert!(
+            reporter.contains("are blessing sidecars"),
+            "{:?}",
+            reporter.notes()
+        );
+
+        // No sidecar → the note is absent.
+        let clean = MemoryStorage::new();
+        seed_linear_step(&clean);
+        let reporter = RecordingReporter::new();
+        block_on(analyze_with(
+            &linear6_git(),
+            &clean,
+            "folo",
+            &config(),
+            &options(),
+            now_anchor(),
+            &reporter,
+            false,
+        ))
+        .expect("analysis runs");
+        assert!(
+            !reporter.contains("are blessing sidecars"),
+            "{:?}",
+            reporter.notes()
+        );
     }
 
     #[test]
@@ -2426,6 +2597,13 @@ mod tests {
             .expect("a cutoff");
         assert!(plain < now, "a look-back must be in the past");
         assert!(with_ago < now, "the `ago` suffix must still look back");
+        // The cutoff is `now - 5 months`, NOT the 1970 epoch: a constant default
+        // would also satisfy `< now`, so bound it from below at roughly a year back.
+        let one_year_back = now.as_second() - 400 * 24 * 60 * 60;
+        assert!(
+            plain.as_second() > one_year_back,
+            "a 5-month look-back must land near now, not the epoch"
+        );
         // Both spellings denote the same magnitude, so they land within a tiny
         // wall-clock window of each other (the two `now` reads differ by µs).
         let gap = (plain.as_second() - with_ago.as_second()).abs();

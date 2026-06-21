@@ -6,7 +6,7 @@ use std::path::Path;
 use crate::config::default_template;
 use crate::config_writer::{ConfigWriter, TokioConfigWriter};
 use crate::report::{Reporter, StderrReporter};
-use crate::wiring::default_config_path;
+use crate::wiring::resolve_config_path;
 use crate::{InstallOptions, RunError, RunOutcome};
 
 /// Executes the `install` command against the real filesystem.
@@ -14,23 +14,25 @@ use crate::{InstallOptions, RunError, RunOutcome};
 /// # Errors
 ///
 /// Returns [`RunError::Io`] if the configuration file cannot be written.
-pub(crate) async fn execute(options: &InstallOptions) -> Result<RunOutcome, RunError> {
+pub(crate) async fn execute(
+    options: &InstallOptions,
+    workspace_dir: &Path,
+) -> Result<RunOutcome, RunError> {
     let writer = TokioConfigWriter;
     let reporter = StderrReporter::new(options.verbose);
-    execute_install(options, &writer, &reporter).await
+    execute_install(options, workspace_dir, &writer, &reporter).await
 }
 
 /// The filesystem-agnostic orchestration, generic over the [`ConfigWriter`] port
-/// so tests can drive it with an in-memory fake.
+/// so tests can drive it with an in-memory fake. The configuration path is
+/// resolved relative to `workspace_dir` when not given explicitly.
 async fn execute_install<W: ConfigWriter>(
     options: &InstallOptions,
+    workspace_dir: &Path,
     writer: &W,
     reporter: &dyn Reporter,
 ) -> Result<RunOutcome, RunError> {
-    let path = options
-        .config_path
-        .clone()
-        .unwrap_or_else(default_config_path);
+    let path = resolve_config_path(workspace_dir, options.config_path.as_deref());
 
     reporter.note(&format!(
         "writing a starter configuration to {} (only if absent)",
@@ -74,8 +76,15 @@ mod tests {
 
     use crate::config_writer::MemoryConfigWriter;
     use crate::report::RecordingReporter;
+    use crate::wiring::default_config_path;
 
     use super::*;
+
+    /// Tests pass an empty base so `resolve_config_path` leaves the relative
+    /// configuration key untouched, keeping the in-memory writer keys relative.
+    fn no_workspace() -> &'static Path {
+        Path::new("")
+    }
 
     #[test]
     fn fresh_install_writes_the_template_to_the_default_path() {
@@ -83,8 +92,13 @@ mod tests {
         let reporter = RecordingReporter::new();
         let options = InstallOptions::default();
 
-        let outcome = block_on(execute_install(&options, &writer, &reporter))
-            .expect("install should succeed");
+        let outcome = block_on(execute_install(
+            &options,
+            no_workspace(),
+            &writer,
+            &reporter,
+        ))
+        .expect("install should succeed");
 
         let RunOutcome::Completed { message } = outcome else {
             panic!("install should complete: {outcome:?}");
@@ -116,7 +130,13 @@ mod tests {
             verbose: false,
         };
 
-        block_on(execute_install(&options, &writer, &reporter)).expect("install should succeed");
+        block_on(execute_install(
+            &options,
+            no_workspace(),
+            &writer,
+            &reporter,
+        ))
+        .expect("install should succeed");
 
         assert_eq!(writer.written(&path).as_deref(), Some(default_template()));
     }
@@ -128,8 +148,13 @@ mod tests {
         let reporter = RecordingReporter::new();
         let options = InstallOptions::default();
 
-        let outcome = block_on(execute_install(&options, &writer, &reporter))
-            .expect("install should succeed");
+        let outcome = block_on(execute_install(
+            &options,
+            no_workspace(),
+            &writer,
+            &reporter,
+        ))
+        .expect("install should succeed");
 
         let RunOutcome::Completed { message } = outcome else {
             panic!("install should complete: {outcome:?}");

@@ -5,7 +5,10 @@
 //! through this enum rather than a `Box<dyn Storage>`. [`build_storage`] maps a
 //! [`StorageConfig`] to the corresponding variant.
 
+use std::path::Path;
+
 use crate::config::{Config, StorageConfig};
+use crate::wiring::rebase;
 
 use super::local::LocalStorage;
 use super::{Storage, StorageError};
@@ -67,14 +70,24 @@ impl Storage for StorageFacade {
 
 /// Builds the storage backend the configuration selects.
 ///
+/// A relative local-storage path is taken relative to `workspace_dir` (the
+/// process working directory in production), so the configured path resolves the
+/// same regardless of the process current directory.
+///
 /// # Errors
 ///
 /// Returns [`StorageError::Config`] if the selected backend cannot be built —
 /// for example an Azure backend with conflicting authentication settings, or an
 /// Azure backend when the crate was built without the `azure` feature.
-pub(crate) fn build_storage(config: &Config) -> Result<StorageFacade, StorageError> {
+pub(crate) fn build_storage(
+    config: &Config,
+    workspace_dir: &Path,
+) -> Result<StorageFacade, StorageError> {
     match &config.storage {
-        StorageConfig::Local { path } => Ok(StorageFacade::Local(LocalStorage::new(path.clone()))),
+        StorageConfig::Local { path } => Ok(StorageFacade::Local(LocalStorage::new(rebase(
+            workspace_dir,
+            path.clone(),
+        )))),
         #[cfg(feature = "azure")]
         StorageConfig::Azure {
             account,
@@ -142,7 +155,8 @@ mod tests {
     #[test]
     fn build_storage_for_local_yields_a_local_backend() {
         let config = config_with_storage("[storage.local]\npath = \"./data\"\n");
-        let storage = build_storage(&config).expect("local storage always builds");
+        let storage =
+            build_storage(&config, Path::new("/work")).expect("local storage always builds");
         assert!(matches!(storage, StorageFacade::Local(_)));
         assert!(format!("{storage:?}").contains("data"), "{storage:?}");
     }
@@ -151,7 +165,8 @@ mod tests {
     #[test]
     fn build_storage_for_azure_without_feature_is_a_config_error() {
         let config = config_with_storage("[storage.azure]\naccount = \"a\"\ncontainer = \"c\"\n");
-        let error = build_storage(&config).expect_err("azure needs the feature");
+        let error =
+            build_storage(&config, Path::new("/work")).expect_err("azure needs the feature");
         match error {
             StorageError::Config { message } => {
                 assert!(message.contains("azure"), "{message}");
@@ -169,7 +184,7 @@ mod tests {
              endpoint = \"http://127.0.0.1:10000/devstoreaccount1\"\n\
              account_key = \"Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==\"\n",
         );
-        let storage = build_storage(&config).expect("azure storage builds");
+        let storage = build_storage(&config, Path::new("/work")).expect("azure storage builds");
         assert!(matches!(storage, StorageFacade::Azure(_)));
     }
 
@@ -180,7 +195,7 @@ mod tests {
             "[storage.azure]\naccount = \"a\"\ncontainer = \"c\"\n\
              account_key = \"a2V5\"\nsas_token = \"sig=x\"\n",
         );
-        let error = build_storage(&config).expect_err("conflicting auth");
+        let error = build_storage(&config, Path::new("/work")).expect_err("conflicting auth");
         assert!(matches!(error, StorageError::Config { .. }), "{error:?}");
     }
 }

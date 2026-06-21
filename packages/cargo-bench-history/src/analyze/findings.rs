@@ -367,9 +367,8 @@ fn regime_interval(points: &[&SeriesPoint]) -> Option<(f64, f64)> {
         .iter()
         .filter_map(|point| point.interval_high)
         .collect();
-    if lows.is_empty() || highs.is_empty() {
-        return None;
-    }
+    // `median` yields `None` for an empty side, so a regime missing either bound
+    // short-circuits here without a separate emptiness guard.
     Some((stats::median(&lows)?, stats::median(&highs)?))
 }
 
@@ -1128,6 +1127,45 @@ mod tests {
         findings.into_iter().next().expect("one finding")
     }
 
+    /// Builds a minimal [`Candidate`] carrying only the fields [`arbitrate`]
+    /// inspects (`method`, `split`, `line`); every other field is a placeholder.
+    fn candidate(
+        method: FindingMethod,
+        split: Option<usize>,
+        line: Option<(f64, f64)>,
+    ) -> Candidate {
+        Candidate {
+            finding: Finding {
+                set: DiscriminantSet {
+                    engine: "callgrind".to_owned(),
+                    target_triple: "t".to_owned(),
+                    machine: "synthetic".to_owned(),
+                },
+                id: BenchmarkId::new(None, "group".to_owned(), Some("case".to_owned()), None),
+                metric: "metric".to_owned(),
+                kind: MetricKind::InstructionCount,
+                method,
+                direction: Direction::Regression,
+                baseline: 0.0,
+                latest: 0.0,
+                delta: 0.0,
+                relative_delta: 0.0,
+                confidence: 1.0,
+                commit: None,
+                flipped_at: None,
+                active: true,
+                active_from: 0,
+                blessed_at: None,
+                blessed_effective: None,
+                series: Vec::new(),
+            },
+            bh_p: 0.0,
+            deterministic: true,
+            split,
+            line,
+        }
+    }
+
     /// Runs the history-mode detector with default config, reporting both
     /// directions — the default the legacy single-mode tests expect.
     fn changes(series: &[Series]) -> Vec<Finding> {
@@ -1167,6 +1205,144 @@ mod tests {
             direction_of(-1.0, MetricKind::CacheEvents),
             Direction::Regression
         );
+    }
+
+    #[test]
+    fn direction_of_classifies_a_zero_delta_as_an_improvement() {
+        // The classification is total: a zero delta (never reached in practice) is
+        // defined as an improvement for both polarities.
+        assert_eq!(
+            direction_of(0.0, MetricKind::InstructionCount),
+            Direction::Improvement
+        );
+        assert_eq!(
+            direction_of(0.0, MetricKind::CacheEvents),
+            Direction::Improvement
+        );
+    }
+
+    #[test]
+    fn regime_interval_takes_the_median_of_each_bound() {
+        // Half-width 4 around [10,20,30] gives lows [6,16,26] and highs [14,24,34];
+        // their medians are 16 and 24.
+        let series = wall_series(&[10.0, 20.0, 30.0], 4.0);
+        let refs: Vec<&SeriesPoint> = series.points.iter().collect();
+        assert_eq!(regime_interval(&refs), Some((16.0, 24.0)));
+    }
+
+    #[test]
+    fn regime_interval_without_dispersion_is_none() {
+        let series = series_of(&[10.0, 20.0, 30.0]);
+        let refs: Vec<&SeriesPoint> = series.points.iter().collect();
+        assert_eq!(regime_interval(&refs), None);
+    }
+
+    #[test]
+    fn intervals_disjoint_detects_separation_in_both_orders() {
+        // The after regime sits wholly above the before regime.
+        assert!(intervals_disjoint((10.0, 20.0), (30.0, 40.0)));
+        // ...and wholly below it.
+        assert!(intervals_disjoint((30.0, 40.0), (10.0, 20.0)));
+        // Overlapping ranges are not disjoint.
+        assert!(!intervals_disjoint((10.0, 20.0), (15.0, 25.0)));
+        // Touching at a single boundary counts as overlapping, pinning the strict
+        // `<`/`>` comparisons against `<=`/`>=` slips.
+        assert!(!intervals_disjoint((10.0, 20.0), (20.0, 30.0)));
+        assert!(!intervals_disjoint((20.0, 30.0), (10.0, 20.0)));
+    }
+
+    #[test]
+    fn median_half_width_is_the_median_interval_half() {
+        // A uniform half-width of 4 yields a median half-width of 4 (a `+`/`*` slip
+        // in `(high - low) / 2` would instead give the point value or twice the
+        // width).
+        let series = wall_series(&[10.0, 20.0, 30.0], 4.0);
+        assert_eq!(median_half_width(&series.points), Some(4.0));
+    }
+
+    #[test]
+    fn median_half_width_without_dispersion_is_none() {
+        let series = series_of(&[10.0, 20.0, 30.0]);
+        assert_eq!(median_half_width(&series.points), None);
+    }
+
+    #[test]
+    fn step_model_residual_is_the_median_absolute_deviation_per_regime() {
+        // before [1,7] -> median 4 -> residuals 3,3; after [40,40] -> median 40 ->
+        // residuals 0,0; the median of [3,3,0,0] is 1.5.
+        assert_eq!(step_model_residual(&[1.0, 7.0, 40.0, 40.0], 2), Some(1.5));
+    }
+
+    #[test]
+    fn step_model_residual_out_of_range_tau_is_none() {
+        assert_eq!(step_model_residual(&[1.0, 2.0], 5), None);
+    }
+
+    #[test]
+    fn line_model_residual_measures_distance_from_the_fitted_line() {
+        // The line 10 + 2*i predicts [10,12,14,16]; the values deviate by [0,1,0,2],
+        // whose median absolute residual is 0.5.
+        assert_eq!(
+            line_model_residual(&[10.0, 13.0, 14.0, 18.0], 2.0, 10.0),
+            Some(0.5)
+        );
+    }
+
+    #[test]
+    fn arbitrate_breaks_a_residual_tie_in_favour_of_the_change_point() {
+        // Both models fit a flat series perfectly (residual 0): the tie favours the
+        // more specific change-point, so a `line < step` -> `line <= step` slip that
+        // would pick the drift is caught.
+        let values = [0.0, 0.0, 0.0, 0.0];
+        let change = candidate(FindingMethod::ChangePoint, Some(2), None);
+        let drift = candidate(FindingMethod::Drift, None, Some((0.0, 0.0)));
+        let chosen = arbitrate(&values, Some(change), Some(drift)).expect("a candidate");
+        assert_eq!(chosen.finding.method, FindingMethod::ChangePoint);
+    }
+
+    #[test]
+    fn arbitrate_prefers_the_better_fitting_line() {
+        // A pure ramp: the line fits with zero residual while the two-regime split
+        // leaves a positive residual, so the drift candidate wins.
+        let values = [0.0, 1.0, 2.0, 3.0];
+        let change = candidate(FindingMethod::ChangePoint, Some(2), None);
+        let drift = candidate(FindingMethod::Drift, None, Some((1.0, 0.0)));
+        let chosen = arbitrate(&values, Some(change), Some(drift)).expect("a candidate");
+        assert_eq!(chosen.finding.method, FindingMethod::Drift);
+    }
+
+    #[test]
+    fn arbitrate_keeps_the_sole_candidate_that_fires() {
+        let values = [0.0, 0.0, 5.0, 5.0];
+        let change = candidate(FindingMethod::ChangePoint, Some(2), None);
+        let only_change = arbitrate(&values, Some(change), None).expect("a candidate");
+        assert_eq!(only_change.finding.method, FindingMethod::ChangePoint);
+
+        let drift = candidate(FindingMethod::Drift, None, Some((1.0, 0.0)));
+        let only_drift = arbitrate(&values, None, Some(drift)).expect("a candidate");
+        assert_eq!(only_drift.finding.method, FindingMethod::Drift);
+
+        assert!(arbitrate(&values, None, None).is_none());
+    }
+
+    #[test]
+    fn change_point_accepts_a_minimal_before_regime() {
+        // Pettitt splits at tau=2, so the before regime holds exactly `min_regime`
+        // points: a `<=`/`==` slip on the before-regime bound would reject the step.
+        let finding = only(changes(&[series_of(&[100.0, 100.0, 130.0, 130.0, 130.0])]));
+        assert_eq!(finding.method, FindingMethod::ChangePoint);
+        assert_eq!(finding.baseline, 100.0);
+        assert_eq!(finding.latest, 130.0);
+    }
+
+    #[test]
+    fn change_point_accepts_a_minimal_after_regime() {
+        // Pettitt splits at tau=3, so the after regime holds exactly `min_regime`
+        // points: a `<=` slip on the after-regime bound would reject the step.
+        let finding = only(changes(&[series_of(&[100.0, 100.0, 100.0, 130.0, 130.0])]));
+        assert_eq!(finding.method, FindingMethod::ChangePoint);
+        assert_eq!(finding.baseline, 100.0);
+        assert_eq!(finding.latest, 130.0);
     }
 
     #[test]
@@ -1641,6 +1817,16 @@ mod tests {
             finding.blessed_effective.as_deref(),
             Some("1970-01-01T00:00:03Z")
         );
+        // A non-zero active window survives serialization (the `is_zero` skip
+        // predicate must keep it); an unblessed finding omits the field.
+        let json = serde_json::to_string(&finding).expect("finding serializes");
+        assert!(json.contains("\"active_from\":3"), "{json}");
+        let unblessed = only(changes(&[series_of(&[
+            10.0, 10.0, 10.0, 10.0, 20.0, 20.0, 20.0, 20.0,
+        ])]));
+        assert_eq!(unblessed.active_from, 0);
+        let json = serde_json::to_string(&unblessed).expect("finding serializes");
+        assert!(!json.contains("active_from"), "{json}");
     }
 
     #[test]

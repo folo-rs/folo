@@ -13,9 +13,9 @@ use std::path::{Path, PathBuf};
 
 use argh::FromArgs;
 use cargo_bench_history::{
-    BenchmarkId, CiInfo, Cli, Command, GitInfo, Metric, MetricKind, ResultRecord, ResultSet,
-    RunContext, RunError, RunOutcome, SCHEMA_VERSION, Timestamps, ToolchainInfo, default_template,
-    run, run_with_overrides,
+    BenchmarkId, CiInfo, Cli, Command, GitInfo, Metric, MetricKind, Overrides, ResultRecord,
+    ResultSet, RunContext, RunError, RunOutcome, SCHEMA_VERSION, Timestamps, ToolchainInfo,
+    default_template, run, run_with_overrides,
 };
 use jiff::Timestamp;
 use serial_test::serial;
@@ -54,7 +54,6 @@ fn command_from(args: &[&str]) -> Command {
 // ===========================================================================
 
 #[test]
-#[serial]
 fn run_forwards_passthrough_after_separator() {
     let Command::Run(options) = command_from(&["run", "--", "--noplot"]) else {
         panic!("expected run command");
@@ -63,7 +62,6 @@ fn run_forwards_passthrough_after_separator() {
 }
 
 #[test]
-#[serial]
 fn run_collects_package_and_bench_scope() {
     let Command::Run(options) = command_from(&["run", "-p", "nm", "--bench", "nm_observe"]) else {
         panic!("expected run command");
@@ -73,21 +71,18 @@ fn run_collects_package_and_bench_scope() {
 }
 
 #[test]
-#[serial]
 fn unknown_subcommand_is_rejected() {
     Cli::from_args(&["cargo-bench-history"], &["frobnicate"])
         .expect_err("an unknown subcommand should be rejected");
 }
 
 #[test]
-#[serial]
 fn run_rejects_unknown_flag() {
     Cli::from_args(&["cargo-bench-history"], &["run", "--frobnicate"])
         .expect_err("an unknown flag should be rejected");
 }
 
 #[test]
-#[serial]
 fn help_request_lists_subcommands() {
     let early_exit = Cli::from_args(&["cargo-bench-history"], &["--help"])
         .expect_err("help is reported as an early exit");
@@ -104,7 +99,6 @@ fn help_request_lists_subcommands() {
 }
 
 #[test]
-#[serial]
 fn help_text_describes_each_command_in_alphabetical_order() {
     let help = Cli::help("cargo-bench-history");
 
@@ -143,7 +137,6 @@ fn help_text_describes_each_command_in_alphabetical_order() {
 
 #[test]
 #[cfg_attr(miri, ignore)] // Spawns a real process, which Miri cannot do.
-#[serial]
 fn binary_help_exits_success_on_stdout() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_cargo-bench-history"))
         .arg("--help")
@@ -162,7 +155,6 @@ fn binary_help_exits_success_on_stdout() {
 
 #[test]
 #[cfg_attr(miri, ignore)] // Spawns a real process, which Miri cannot do.
-#[serial]
 fn binary_parse_error_exits_failure_on_stderr() {
     // An unknown flag is a parse error whose usage text still mentions `--help`;
     // the exit code must come from the parse status, not a substring match.
@@ -188,7 +180,6 @@ fn binary_parse_error_exits_failure_on_stderr() {
 
 #[test]
 #[cfg_attr(miri, ignore)] // Spawns a real process, which Miri cannot do.
-#[serial]
 fn binary_without_a_subcommand_prints_descriptive_help_to_stderr() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_cargo-bench-history"))
         .output()
@@ -216,7 +207,6 @@ fn binary_without_a_subcommand_prints_descriptive_help_to_stderr() {
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot do.
-#[serial]
 async fn install_writes_config_to_the_default_path() {
     let workspace = Workspace::empty();
 
@@ -239,7 +229,6 @@ async fn install_writes_config_to_the_default_path() {
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot do.
-#[serial]
 async fn install_never_overwrites_an_existing_config() {
     let workspace = Workspace::empty();
     workspace.drive(&["install"]).await.unwrap();
@@ -263,7 +252,6 @@ async fn install_never_overwrites_an_existing_config() {
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot do.
-#[serial]
 async fn install_honors_an_explicit_config_path() {
     let workspace = Workspace::empty();
 
@@ -306,14 +294,14 @@ async fn run_entry_dispatches_without_a_target_root_override() {
 //
 // These seed a project's history directly into the local store (the same layout
 // `run` writes), then drive `analyze` through the lib entry against the real
-// `LocalStorage` adapter. No engine is launched. They are `#[serial]` (CWD) and
-// miri-ignored (real filesystem).
+// `LocalStorage` adapter. No engine is launched. Each test operates on its own
+// temporary workspace (passed explicitly through the API), so they run in
+// parallel; they are miri-ignored (real filesystem).
 // ===========================================================================
 
 /// An empty history analyzes cleanly and reports nothing.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_empty_history_reports_no_changes() {
     let workspace = Workspace::repo(&storage_only_config());
 
@@ -336,7 +324,6 @@ async fn analyze_empty_history_reports_no_changes() {
 /// A rising history is flagged as a regression end to end.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_detects_regression_in_seeded_history() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_rising_callgrind_history();
@@ -363,7 +350,6 @@ async fn analyze_detects_regression_in_seeded_history() {
 /// analyzer reconstructs series across a machine-keyed partition too.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_detects_criterion_wall_time_regression() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_rising_criterion_history("mk-fixed");
@@ -389,7 +375,6 @@ async fn analyze_detects_criterion_wall_time_regression() {
 /// exit code reflects only whether the tool ran, not what it found.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_with_regression_is_always_successful() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_rising_callgrind_history();
@@ -407,7 +392,6 @@ async fn analyze_with_regression_is_always_successful() {
 /// `--format json` renders a structured, parseable report.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_json_format_is_structured() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_rising_callgrind_history();
@@ -429,7 +413,6 @@ async fn analyze_json_format_is_structured() {
 /// `--format markdown` renders a findings table.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_markdown_format_renders_table() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_rising_callgrind_history();
@@ -452,7 +435,6 @@ async fn analyze_markdown_format_renders_table() {
 /// the remaining flat history shows no change.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_since_filters_old_points() {
     let workspace = Workspace::repo(&storage_only_config());
     // A flat recent history (no change), preceded long ago by an unrelated point.
@@ -480,7 +462,6 @@ async fn analyze_since_filters_old_points() {
 /// `--engine` restricts analysis to one engine's partition.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_engine_filters_partition() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
@@ -509,7 +490,6 @@ async fn analyze_engine_filters_partition() {
 /// An unknown `--format` is reported as an analysis error.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_rejects_unknown_format() {
     let workspace = Workspace::repo(&storage_only_config());
 
@@ -527,7 +507,6 @@ async fn analyze_rejects_unknown_format() {
 /// invisible when the filter selects a flat one.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_metric_filter_excludes_other_metrics() {
     let workspace = Workspace::repo(&storage_only_config());
     // `Ir` stays flat while `EstimatedCycles` climbs into a regression.
@@ -588,7 +567,6 @@ async fn analyze_metric_filter_excludes_other_metrics() {
 /// end to end (guards the metric-polarity logic through the real pipeline).
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_falling_cache_hits_is_a_regression() {
     let workspace = Workspace::repo(&storage_only_config());
     for (date, commit, hits) in [
@@ -631,7 +609,6 @@ async fn analyze_falling_cache_hits_is_a_regression() {
 /// Conversely, a rise in cache hits is an improvement, not a regression.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_rising_cache_hits_is_an_improvement() {
     let workspace = Workspace::repo(&storage_only_config());
     for (date, commit, hits) in [
@@ -678,7 +655,6 @@ async fn analyze_rising_cache_hits_is_an_improvement() {
 /// rendering.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_ranks_findings_by_relative_move_across_benchmarks() {
     let workspace = Workspace::repo(&storage_only_config());
     // `alpha` doubles (+100%); `beta` ticks up ~2%.
@@ -729,7 +705,6 @@ async fn analyze_ranks_findings_by_relative_move_across_benchmarks() {
 }
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_reports_improvement_without_regression() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
@@ -765,7 +740,6 @@ async fn analyze_reports_improvement_without_regression() {
 /// the core signal-to-noise guarantee for the noisy engine.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_criterion_jitter_is_not_flagged() {
     let workspace = Workspace::repo(&storage_only_config());
     // Eight points oscillating roughly +/-15% around 20ns with no sustained shift.
@@ -814,7 +788,6 @@ async fn analyze_criterion_jitter_is_not_flagged() {
 /// arbitration that routes ramps to drift and steps to change-point.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_criterion_slow_drift_is_flagged_as_drift() {
     let workspace = Workspace::repo(&storage_only_config());
     // A gentle one-nanosecond-per-commit ramp from 20ns to 27ns.
@@ -855,7 +828,6 @@ async fn analyze_criterion_slow_drift_is_flagged_as_drift() {
 /// noise on a Criterion series but is a real change on a deterministic one.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_callgrind_tiny_deterministic_step_is_flagged() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 1000.0);
@@ -900,7 +872,6 @@ async fn analyze_callgrind_tiny_deterministic_step_is_flagged() {
 /// than an empty success — a series' timeline comes from git, not storage.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_without_a_repository_errors() {
     let workspace = Workspace::new(&storage_only_config());
 
@@ -919,7 +890,6 @@ async fn analyze_without_a_repository_errors() {
 /// spike does not flag and the run count covers only the clean points.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_official_view_excludes_dirty_runs() {
     // A clean working tree, so the base-branch dirty-tree exception does not apply.
     let workspace = Workspace::clean_repo(&storage_only_config());
@@ -957,7 +927,6 @@ async fn analyze_official_view_excludes_dirty_runs() {
 /// fix end to end through the production dispatch.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_hints_when_every_run_is_a_dirty_snapshot_on_the_base() {
     // A clean working tree, so the base-branch dirty-tree exception does not apply
     // and every dirty-on-base snapshot stays excluded (yielding the hint).
@@ -999,7 +968,6 @@ async fn analyze_hints_when_every_run_is_a_dirty_snapshot_on_the_base() {
 /// dispatch with a real dirty git tree.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_dirty_tree_on_the_base_admits_the_tip_with_a_warning() {
     let workspace = Workspace::clean_repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
@@ -1068,7 +1036,6 @@ async fn analyze_dirty_tree_on_the_base_admits_the_tip_with_a_warning() {
 /// into branch mode here.)
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_dirty_tree_without_recorded_dirty_runs_stays_history_mode() {
     let workspace = Workspace::clean_repo(&storage_only_config());
     // A clean base branch with a sustained upward step (a regression). No dirty
@@ -1117,7 +1084,6 @@ async fn analyze_dirty_tree_without_recorded_dirty_runs_stays_history_mode() {
 /// `--no-dirty` suppresses it.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_feature_branch_admits_dirty_snapshots() {
     let workspace = Workspace::repo(&storage_only_config());
     // A flat clean baseline on master.
@@ -1165,7 +1131,6 @@ async fn analyze_feature_branch_admits_dirty_snapshots() {
 /// it, proving ingest/effective time does not reorder the history.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_orders_by_topology_not_effective_time() {
     let workspace = Workspace::repo(&storage_only_config());
     // Topology c1 -> .. -> c6 with a sustained step at c4, but effective times
@@ -1204,7 +1169,6 @@ async fn analyze_orders_by_topology_not_effective_time() {
 /// The JSON also advertises the resolved mode and the downstream `notable` signal.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_branch_mode_reports_the_latest_regime_with_a_flip() {
     let workspace = Workspace::repo(&storage_only_config());
     // A flat clean baseline on master.
@@ -1258,7 +1222,6 @@ async fn analyze_branch_mode_reports_the_latest_regime_with_a_flip() {
 /// and `notable` stays false so downstream automation knows to stay quiet.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_branch_mode_stays_silent_on_a_flat_branch() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
@@ -1295,7 +1258,6 @@ async fn analyze_branch_mode_stays_silent_on_a_flat_branch() {
 /// suppressed unless `--include-improvements` is given, which then surfaces it.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_history_mode_suppresses_improvements_by_default() {
     let workspace = Workspace::repo(&storage_only_config());
     // A clean base branch with a sustained downward step (an improvement).
@@ -1345,7 +1307,6 @@ async fn analyze_history_mode_suppresses_improvements_by_default() {
 /// the level getting worse.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_tip_mode_flags_only_a_tip_regression() {
     let regressing = Workspace::repo(&storage_only_config());
     regressing.seed_callgrind("2024-01-01", "c1", 100.0);
@@ -1398,7 +1359,6 @@ async fn analyze_tip_mode_flags_only_a_tip_regression() {
 /// An unrecognized `--mode` is a clear up-front error, not a silent fallback.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_rejects_an_unknown_mode() {
     let workspace = Workspace::repo(&storage_only_config());
     let error = workspace
@@ -1415,7 +1375,6 @@ async fn analyze_rejects_an_unknown_mode() {
 /// storage, deriving the os/architecture facets from each set's target triple.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn list_discriminants_lists_present_sets() {
     let workspace = Workspace::repo(&storage_only_config());
     // One commit, but two comparable sets: a Linux and a Windows callgrind pool.
@@ -1461,7 +1420,6 @@ async fn list_discriminants_lists_present_sets() {
 /// runs, ordered oldest-first by git topology.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn list_previews_the_analyzed_data_set() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_rising_callgrind_history();
@@ -1498,7 +1456,6 @@ async fn list_previews_the_analyzed_data_set() {
 /// `--os` filter previews only the matching set, exactly as `analyze` would scope it.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn list_facet_selection_mirrors_analyze() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_callgrind_in(
@@ -1533,7 +1490,6 @@ async fn list_facet_selection_mirrors_analyze() {
 /// dropped under `--no-dirty`.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn list_admits_and_excludes_dirty_like_analyze() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
@@ -1574,7 +1530,6 @@ async fn list_admits_and_excludes_dirty_like_analyze() {
 /// topology; without one it errors rather than reporting an empty data set.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn list_without_a_repository_errors() {
     let workspace = Workspace::new(&storage_only_config());
 
@@ -1594,7 +1549,6 @@ async fn list_without_a_repository_errors() {
 /// configured storage.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn clean_removes_dirty_runs_on_a_feature_branch() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
@@ -1647,7 +1601,6 @@ async fn clean_removes_dirty_runs_on_a_feature_branch() {
 /// removes it (the base-tip exception is unconditional for `clean`).
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn clean_removes_the_base_branch_tip_dirty_with_a_clean_tree() {
     let workspace = Workspace::clean_repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
@@ -1697,7 +1650,6 @@ async fn clean_removes_the_base_branch_tip_dirty_with_a_clean_tree() {
 /// real `clean` would, but a follow-up real `clean` still finds and removes them.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn clean_dry_run_reports_without_deleting() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
@@ -1732,7 +1684,6 @@ async fn clean_dry_run_reports_without_deleting() {
 /// criterion snapshot on the same commit untouched.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn clean_scopes_by_engine() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
@@ -1783,7 +1734,6 @@ async fn clean_scopes_by_engine() {
 /// a dirty Windows (criterion) run, and `--os linux` removes only the former.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn clean_scopes_by_os_facet() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
@@ -1825,7 +1775,6 @@ async fn clean_scopes_by_os_facet() {
 /// `clean` removes both — exercising the multi-set plan and its plural rendering.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn clean_removes_dirty_across_multiple_discriminant_sets() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
@@ -1862,7 +1811,6 @@ async fn clean_removes_dirty_across_multiple_discriminant_sets() {
 /// that reads object bodies in production (to recover each run's effective time).
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn clean_since_only_removes_runs_on_or_after_the_cutoff() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
@@ -1920,7 +1868,6 @@ async fn clean_since_only_removes_runs_on_or_after_the_cutoff() {
 /// without one it errors rather than removing nothing silently.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn clean_without_a_repository_errors() {
     let workspace = Workspace::new(&storage_only_config());
 
@@ -1939,7 +1886,6 @@ async fn clean_without_a_repository_errors() {
 /// selection sees only its own.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_os_facet_selects_one_set() {
     let workspace = Workspace::repo(&storage_only_config());
     // Each commit carries both a Linux point (rising into a regression) and a
@@ -1985,7 +1931,6 @@ async fn analyze_os_facet_selects_one_set() {
 /// official line (clean only), independent of the currently checked-out branch.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_branch_selects_official_line_from_a_feature_checkout() {
     let workspace = Workspace::repo(&storage_only_config());
     // Master carries a clean sustained regression.
@@ -2025,7 +1970,6 @@ async fn analyze_branch_selects_official_line_from_a_feature_checkout() {
 /// exercised.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_official_line_follows_first_parent_across_a_merge() {
     let workspace = Workspace::repo(&storage_only_config());
     // master:  root - c1 - M - c3 - c4 - c5 - c6   (M merges the side branch in)
@@ -2085,7 +2029,6 @@ async fn analyze_official_line_follows_first_parent_across_a_merge() {
 /// clean-only. The merged-in default-branch commits stay off the line.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_feature_that_merged_master_admits_dirty_off_chain_merge_base() {
     let workspace = Workspace::repo(&storage_only_config());
     // master:  root - c1 - c2 - c3
@@ -2141,7 +2084,6 @@ async fn analyze_feature_that_merged_master_admits_dirty_off_chain_merge_base() 
 /// key keeping `machine` — dropping it would cross-compare the two machines.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_criterion_machine_keys_stay_isolated() {
     let workspace = Workspace::repo(&storage_only_config());
     // Same commits, same Windows/x86_64 triple, two distinct machine keys.
@@ -2180,7 +2122,6 @@ async fn analyze_criterion_machine_keys_stay_isolated() {
 /// selection sees only its own.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_architecture_facet_selects_one_set() {
     let workspace = Workspace::repo(&storage_only_config());
     for (date, label, x64, arm) in [
@@ -2225,7 +2166,6 @@ async fn analyze_architecture_facet_selects_one_set() {
 /// pinning the exact triple.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_target_triple_facet_selects_one_set() {
     let workspace = Workspace::repo(&storage_only_config());
     for (date, label, x64, arm) in [
@@ -2268,7 +2208,6 @@ async fn analyze_target_triple_facet_selects_one_set() {
 /// silently intersecting two filters of the same dimension.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_target_triple_with_os_is_rejected() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
@@ -2293,7 +2232,6 @@ async fn analyze_target_triple_with_os_is_rejected() {
 }
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_machine_key_facet_selects_one_set() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_rising_criterion_history("mk-rising");
@@ -2333,7 +2271,6 @@ async fn analyze_machine_key_facet_selects_one_set() {
 /// and is suppressed by `--no-dirty`.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_criterion_feature_branch_admits_dirty_snapshots() {
     let workspace = Workspace::repo(&storage_only_config());
     // A flat clean Criterion baseline on master.
@@ -2377,18 +2314,20 @@ async fn analyze_criterion_feature_branch_admits_dirty_snapshots() {
         "with --no-dirty only the flat clean Criterion series remains: {report}"
     );
 }
-// within a temporary workspace. They are `#[serial]` because they mutate the
-// process-wide current directory and `CARGO_TARGET_DIR`, and miri-ignored because
-// they spawn processes and touch the filesystem. Every test in this file is
-// `#[serial]` so that the environment is never accessed concurrently (see
-// `TargetDirGuard`).
+
+// ===========================================================================
+// Real-adapter `run` end-to-end scenarios.
+//
+// These drive `run`/`backfill` against the mock engine within a temporary
+// workspace passed explicitly through the API, so they run in parallel without
+// mutating the process environment. They are miri-ignored because they spawn
+// processes and touch the filesystem.
 // ===========================================================================
 
 /// End-to-end happy path: a successful no-op engine command, one harvested
 /// summary, and a stored set with the expected object key and context.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn run_callgrind_end_to_end_stores_results() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
 
@@ -2448,7 +2387,6 @@ async fn run_callgrind_end_to_end_stores_results() {
 /// subdirectory before writing, standing in for cargo's per-package cwd.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn run_harvests_output_when_the_engine_runs_in_a_package_directory() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&[
         "--chdir",
@@ -2477,7 +2415,6 @@ async fn run_harvests_output_when_the_engine_runs_in_a_package_directory() {
 /// Two summaries under the target tree yield one stored set with one record each.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn run_stores_a_record_per_summary() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&[
         "--summary",
@@ -2515,7 +2452,6 @@ async fn run_stores_a_record_per_summary() {
 /// into one series. Without the package component they would silently merge.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn run_distinguishes_same_module_path_across_packages() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&[
         "--summary",
@@ -2560,7 +2496,6 @@ async fn run_distinguishes_same_module_path_across_packages() {
 /// result.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn run_harvests_colliding_bench_binary_names_in_distinct_packages() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&[
         "--summary",
@@ -2596,7 +2531,6 @@ async fn run_harvests_colliding_bench_binary_names_in_distinct_packages() {
 /// `--no-store` still harvests the output but writes nothing to storage.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn run_no_store_harvests_without_storing() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
 
@@ -2620,7 +2554,6 @@ async fn run_no_store_harvests_without_storing() {
 /// nothing is stored.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn run_propagates_nonzero_engine_exit() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&["--exit-code", "7"]);
 
@@ -2645,7 +2578,6 @@ async fn run_propagates_nonzero_engine_exit() {
 /// is auto-detected and harvested.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn run_criterion_stores_results() {
     let workspace =
         Workspace::new(&storage_only_config()).with_bench(&["--criterion", "grp|capture|now=26.9"]);
@@ -2671,7 +2603,6 @@ async fn run_criterion_stores_results() {
 /// result set per engine in its own partition.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn run_harvests_every_engine_that_produced_output() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&[
         "--summary",
@@ -2705,7 +2636,6 @@ async fn run_harvests_every_engine_that_produced_output() {
 /// `--machine-key` overrides the machine fingerprint in a Criterion partition.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn run_criterion_honors_machine_key_override() {
     let workspace =
         Workspace::new(&storage_only_config()).with_bench(&["--criterion", "grp|capture|now=9"]);
@@ -2734,7 +2664,6 @@ async fn run_criterion_honors_machine_key_override() {
 /// distinct group/function/value identities as separate records.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn run_criterion_collects_distinct_cases_as_records() {
     // Same function name in two different groups, plus a parametrized case: all
     // three identities are distinct and must survive as separate records.
@@ -2784,7 +2713,6 @@ async fn run_criterion_collects_distinct_cases_as_records() {
 /// guards against writer/reader sanitization drift through the real pipeline.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn run_then_analyze_round_trips_a_sanitizing_project_id() {
     let workspace = Workspace::clean_repo(&storage_only_config_with_id("my proj/sub"))
         .with_bench(&["--summary", "grp=single"]);
@@ -2837,7 +2765,6 @@ async fn run_then_analyze_round_trips_a_sanitizing_project_id() {
 /// and the reader keeps both runs in one series.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn run_then_analyze_preserves_unusual_identity_characters() {
     let workspace = Workspace::clean_repo(&storage_only_config())
         .with_bench(&["--criterion", "time.capture|mide tiempo|tamaño 4=18.5"]);
@@ -2893,7 +2820,6 @@ async fn run_then_analyze_preserves_unusual_identity_characters() {
 /// `--config` loads the configuration from a non-default path.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn run_uses_explicit_config_path() {
     // Only the custom path holds a configuration; the default discovery path is
     // absent, so a successful run proves `--config` was honored.
@@ -2912,7 +2838,6 @@ async fn run_uses_explicit_config_path() {
 /// so the second run is refused unless an overwrite is requested.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn re_running_the_same_commit_is_refused_as_a_duplicate() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
 
@@ -2937,7 +2862,6 @@ async fn re_running_the_same_commit_is_refused_as_a_duplicate() {
 /// `--overwrite` replaces an already-stored clean result rather than refusing it.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn overwrite_replaces_the_stored_result() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
 
@@ -2966,8 +2890,9 @@ async fn overwrite_replaces_the_stored_result() {
 // These drive `backfill` against a real git repository (a temporary checkout
 // with empty commits) and the real worktree, process, harvest, and storage
 // adapters: each commit of the range is checked out in a dedicated worktree and
-// the mock engine writes one summary there. They are `#[serial]` (current
-// directory) and `#[cfg_attr(miri, ignore)]` (real git, processes, filesystem).
+// the mock engine writes one summary there. Each test operates on its own
+// temporary repository passed explicitly through the API, so they run in
+// parallel; they are `#[cfg_attr(miri, ignore)]` (real git, processes, filesystem).
 // ===========================================================================
 
 /// A backfill stores one clean result per commit in the range, leaves the primary
@@ -2975,7 +2900,6 @@ async fn overwrite_replaces_the_stored_result() {
 /// `analyze` in git-topology order.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn backfill_stores_one_clean_object_per_commit_and_restores_checkout() {
     let workspace =
         Workspace::clean_repo(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
@@ -3040,7 +2964,6 @@ async fn backfill_stores_one_clean_object_per_commit_and_restores_checkout() {
 /// own commits.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn backfill_spans_a_merge_commit_along_first_parent() {
     let workspace =
         Workspace::clean_repo(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
@@ -3096,7 +3019,6 @@ async fn backfill_spans_a_merge_commit_along_first_parent() {
 /// exists (write-once collision), making backfill resumable without duplicating.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn backfill_skips_already_stored_commits_on_rerun() {
     let workspace =
         Workspace::clean_repo(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
@@ -3129,7 +3051,6 @@ async fn backfill_skips_already_stored_commits_on_rerun() {
 /// succeeds, because the recorded commits never reach the (failing) engine.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn backfill_skips_recorded_commits_without_invoking_the_engine() {
     let workspace =
         Workspace::clean_repo(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
@@ -3169,7 +3090,6 @@ async fn backfill_skips_recorded_commits_without_invoking_the_engine() {
 /// skipping it, leaving exactly one clean object per commit.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn backfill_overwrite_replaces_already_stored_commits() {
     let workspace =
         Workspace::clean_repo(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
@@ -3197,7 +3117,6 @@ async fn backfill_overwrite_replaces_already_stored_commits() {
 /// are stored, but the loop halts at the failure and reports a non-zero exit.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn backfill_stops_on_a_failing_commit_by_default() {
     let workspace = Workspace::clean_repo(&storage_only_config()).with_bench(&[
         "--summary",
@@ -3228,7 +3147,6 @@ async fn backfill_stops_on_a_failing_commit_by_default() {
 /// on either side and reporting the failure in the summary.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn backfill_ignore_errors_continues_past_a_failing_commit() {
     let workspace = Workspace::clean_repo(&storage_only_config()).with_bench(&[
         "--summary",
@@ -3264,7 +3182,6 @@ async fn backfill_ignore_errors_continues_past_a_failing_commit() {
 /// state is irrelevant to what gets measured and stored.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn backfill_ignores_a_dirty_primary_working_tree() {
     let workspace =
         Workspace::clean_repo(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
@@ -3290,7 +3207,6 @@ async fn backfill_ignores_a_dirty_primary_working_tree() {
 /// reversed range) is rejected before any worktree work, storing nothing.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn backfill_rejects_a_range_outside_the_first_parent_history() {
     let workspace =
         Workspace::clean_repo(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
@@ -3310,7 +3226,6 @@ async fn backfill_rejects_a_range_outside_the_first_parent_history() {
 
 /// `backfill --help` is an early exit whose usage text documents the range flags.
 #[test]
-#[serial]
 fn backfill_help_documents_range_flags() {
     let early_exit = Cli::from_args(&["cargo-bench-history"], &["backfill", "--help"])
         .expect_err("help is reported as an early exit");
@@ -3328,7 +3243,6 @@ fn backfill_help_documents_range_flags() {
 /// same data is silent.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_does_not_reflag_a_blessed_regression() {
     let workspace = Workspace::clean_repo(&storage_only_config());
     workspace.seed_rising_callgrind_history();
@@ -3381,7 +3295,6 @@ async fn analyze_does_not_reflag_a_blessed_regression() {
 /// commit, naming the prefix filter it carries.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn list_blessings_reports_the_blessing_recorded_at_head() {
     let workspace = Workspace::clean_repo(&storage_only_config());
     workspace.seed_rising_callgrind_history();
@@ -3419,7 +3332,6 @@ async fn list_blessings_reports_the_blessing_recorded_at_head() {
 /// again — proving the round trip is reversible.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn unbless_restores_a_previously_blessed_regression() {
     let workspace = Workspace::clean_repo(&storage_only_config());
     workspace.seed_rising_callgrind_history();
@@ -3473,7 +3385,6 @@ async fn unbless_restores_a_previously_blessed_regression() {
 /// error with no escape hatch, and records nothing.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn bless_on_a_feature_branch_is_rejected() {
     let workspace = Workspace::clean_repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
@@ -3501,7 +3412,6 @@ async fn bless_on_a_feature_branch_is_rejected() {
 /// inactive finding so a reviewer can audit history that already self-corrected.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-#[serial]
 async fn analyze_include_inactive_surfaces_a_recovered_spike() {
     let workspace = Workspace::clean_repo(&storage_only_config());
     // A flat baseline, a sustained spike, then a return to the baseline level.
@@ -3645,9 +3555,33 @@ impl Workspace {
     /// Runs `git -C <root> <args>`, returning its captured output. The repository
     /// directory is addressed explicitly so commit creation never depends on the
     /// process current directory.
+    ///
+    /// Every invocation injects the committer identity plus throughput-oriented
+    /// config: `core.fsync=none`/`core.fsyncObjectFiles=false` skip the per-object
+    /// disk flush (by far the largest per-commit cost on Windows, where real-time
+    /// antivirus compounds it) and `gc.auto=0` keeps a background repack from firing
+    /// mid-test. The identity is supplied here rather than via separate `git config`
+    /// subprocesses so a fresh repository needs only `init`/`add`/`commit`, not five
+    /// extra process spawns. These settings are safe for throwaway test repositories
+    /// and unknown keys are ignored by older git, so they are inert where unsupported.
     fn git(&self, args: &[&str]) -> std::process::Output {
         let root = self.root().to_string_lossy().into_owned();
-        let mut full: Vec<&str> = vec!["-C", root.as_str()];
+        let mut full: Vec<&str> = vec![
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "user.name=Bench History Test",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.fsync=none",
+            "-c",
+            "core.fsyncObjectFiles=false",
+            "-c",
+            "gc.auto=0",
+            "-C",
+            root.as_str(),
+        ];
         full.extend_from_slice(args);
         let output = std::process::Command::new("git")
             .args(&full)
@@ -3662,25 +3596,51 @@ impl Workspace {
         output
     }
 
-    /// Initializes a `master`-branch repository with a deterministic identity and
-    /// one root commit so `HEAD` always resolves. The volatile directories a run
-    /// touches (`.cargo`, `store`, `target`) are git-ignored, so the working tree
-    /// stays clean unless a test deliberately dirties it (via [`make_dirty`]). A
-    /// clean tree on the base branch is what makes `analyze` pick `history` mode.
+    /// Initializes a `master`-branch repository with one empty root commit so `HEAD`
+    /// always resolves. The volatile directories a run touches (`.cargo`, `store`,
+    /// `target`) are excluded via the repository-local `.git/info/exclude` file —
+    /// untracked, so the root commit can be empty and no `git add` spawn is needed —
+    /// leaving the working tree clean unless a test deliberately dirties it (via
+    /// [`make_dirty`]). A clean tree on the base branch is what makes `analyze` pick
+    /// `history` mode.
     ///
     /// [`make_dirty`]: Self::make_dirty
     fn init_repo(&self) {
+        self.git(&["init", "-b", "master"]);
         std::fs::write(
-            self.root().join(".gitignore"),
+            self.root().join(".git").join("info").join("exclude"),
             "/.cargo/\n/store/\n/target/\n",
         )
         .unwrap();
-        self.git(&["init", "-b", "master"]);
-        self.git(&["config", "user.email", "test@example.invalid"]);
-        self.git(&["config", "user.name", "Bench History Test"]);
-        self.git(&["config", "commit.gpgsign", "false"]);
-        self.git(&["add", ".gitignore"]);
-        self.git(&["commit", "-m", "root"]);
+        self.git(&["commit", "--allow-empty", "-m", "root"]);
+    }
+
+    /// Reads `HEAD`'s commit SHA straight from the `.git` directory, avoiding a
+    /// `git rev-parse` subprocess (process startup dominates these tests on
+    /// Windows). For the small, freshly-created repositories the harness builds the
+    /// branch ref is always loose; a `git rev-parse` fallback covers the unexpected
+    /// (packed refs, detached `HEAD`).
+    fn head_sha(&self) -> String {
+        let git_dir = self.root().join(".git");
+        if let Ok(head) = std::fs::read_to_string(git_dir.join("HEAD")) {
+            let head = head.trim();
+            if let Some(reference) = head.strip_prefix("ref: ") {
+                // `refs/heads/<branch>` uses `/`, which the Windows path APIs accept.
+                if let Ok(sha) = std::fs::read_to_string(git_dir.join(reference)) {
+                    let sha = sha.trim();
+                    if sha.len() == 40 {
+                        return sha.to_owned();
+                    }
+                }
+            } else if head.len() == 40 {
+                return head.to_owned();
+            }
+        }
+        let head = self.git(&["rev-parse", "HEAD"]);
+        String::from_utf8(head.stdout)
+            .expect("a commit SHA is ASCII")
+            .trim()
+            .to_owned()
     }
 
     /// Lazily creates an empty commit labeled `label` on the current branch and
@@ -3694,11 +3654,7 @@ impl Workspace {
             return sha.clone();
         }
         self.git(&["commit", "--allow-empty", "-m", label]);
-        let head = self.git(&["rev-parse", "HEAD"]);
-        let sha = String::from_utf8(head.stdout)
-            .expect("a commit SHA is ASCII")
-            .trim()
-            .to_owned();
+        let sha = self.head_sha();
         self.commits
             .borrow_mut()
             .insert(label.to_owned(), sha.clone());
@@ -3778,13 +3734,8 @@ impl Workspace {
         std::fs::read_to_string(self.root().join(relative)).ok()
     }
 
-    /// Drives a command with `args` from inside this workspace.
+    /// Drives a command with `args` against this workspace.
     async fn drive(&self, args: &[&str]) -> Result<RunOutcome, RunError> {
-        // Restore the working directory when this returns (and before the temp
-        // dir is dropped, which on Windows fails while it is the current
-        // directory), even if the harvest panics.
-        let _cwd = CwdGuard::enter(self.root());
-
         // Point the harvest at this workspace's own `target/` explicitly, so a
         // shared ambient `CARGO_TARGET_DIR` (as `cargo llvm-cov` sets during
         // coverage runs) cannot make the harvester pick up summaries written by
@@ -3800,9 +3751,12 @@ impl Workspace {
 
         run_with_overrides(
             &command_from(args),
-            Some(target_root),
-            Some(bench_command),
-            Some(analysis_now()),
+            Overrides {
+                workspace_dir: Some(self.root().to_path_buf()),
+                target_root: Some(target_root),
+                bench_command: Some(bench_command),
+                now: Some(analysis_now()),
+            },
         )
         .await
     }
@@ -3816,32 +3770,35 @@ impl Workspace {
         bench: &[&str],
         args: &[&str],
     ) -> Result<RunOutcome, RunError> {
-        let _cwd = CwdGuard::enter(self.root());
         let target_root = self.root().join("target");
         let mut bench_command = vec![MOCK_ENGINE.to_owned()];
         bench_command.extend(bench.iter().map(|arg| (*arg).to_owned()));
 
         run_with_overrides(
             &command_from(args),
-            Some(target_root),
-            Some(bench_command),
-            Some(analysis_now()),
+            Overrides {
+                workspace_dir: Some(self.root().to_path_buf()),
+                target_root: Some(target_root),
+                bench_command: Some(bench_command),
+                now: Some(analysis_now()),
+            },
         )
         .await
     }
     ///
     /// [`drive`]: Self::drive
     async fn drive_resolving_target_root(&self, args: &[&str]) -> Result<RunOutcome, RunError> {
-        let _cwd = CwdGuard::enter(self.root());
-
         let mut bench_command = vec![MOCK_ENGINE.to_owned()];
         bench_command.extend(self.bench.iter().cloned());
 
         run_with_overrides(
             &command_from(args),
-            None,
-            Some(bench_command),
-            Some(analysis_now()),
+            Overrides {
+                workspace_dir: Some(self.root().to_path_buf()),
+                target_root: None,
+                bench_command: Some(bench_command),
+                now: Some(analysis_now()),
+            },
         )
         .await
     }

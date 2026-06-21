@@ -80,26 +80,16 @@ fn average_ranks(values: &[f64]) -> Vec<f64> {
     indexed.sort_by(|left, right| left.1.total_cmp(&right.1));
 
     let mut ranks = vec![0.0_f64; values.len()];
-    let len = indexed.len();
     let mut start = 0_usize;
-    while start < len {
-        let base = indexed.get(start).map(|entry| entry.1);
-        let mut end = start.saturating_add(1);
-        while end < len {
-            match (indexed.get(end).map(|entry| entry.1), base) {
-                (Some(current), Some(base)) if same(current, base) => {
-                    end = end.saturating_add(1);
-                }
-                _ => break,
-            }
-        }
+    for group in indexed.chunk_by(|left, right| same(left.1, right.1)) {
+        let end = start.saturating_add(group.len());
         // The 1-based ranks spanned by the tie run are `start+1 ..= end`; their
         // mean is the midpoint of the first and last.
         let first = count_to_f64(start.saturating_add(1));
         let last = count_to_f64(end);
         let average = f64::midpoint(first, last);
-        for entry in indexed.get(start..end).into_iter().flatten() {
-            if let Some(slot) = ranks.get_mut(entry.0) {
+        for &(original_index, _) in group {
+            if let Some(slot) = ranks.get_mut(original_index) {
                 *slot = average;
             }
         }
@@ -113,27 +103,11 @@ fn average_ranks(values: &[f64]) -> Vec<f64> {
 fn tie_group_sizes(values: &[f64]) -> Vec<usize> {
     let mut sorted = values.to_vec();
     sorted.sort_by(f64::total_cmp);
-    let mut groups = Vec::new();
-    let len = sorted.len();
-    let mut start = 0_usize;
-    while start < len {
-        let base = sorted.get(start).copied();
-        let mut end = start.saturating_add(1);
-        while end < len {
-            match (sorted.get(end).copied(), base) {
-                (Some(current), Some(base)) if same(current, base) => {
-                    end = end.saturating_add(1);
-                }
-                _ => break,
-            }
-        }
-        let size = end.saturating_sub(start);
-        if size > 1 {
-            groups.push(size);
-        }
-        start = end;
-    }
-    groups
+    sorted
+        .chunk_by(|left, right| same(*left, *right))
+        .map(<[f64]>::len)
+        .filter(|&size| size > 1)
+        .collect()
 }
 
 /// A located level shift in a series.
@@ -205,7 +179,10 @@ pub(crate) fn pettitt(values: &[f64]) -> Option<ChangePoint> {
 pub(crate) fn mann_whitney_u_pvalue(left: &[f64], right: &[f64]) -> f64 {
     let n1 = left.len();
     let n2 = right.len();
-    if n1 == 0 || n2 == 0 {
+    if n1 == 0 {
+        return 1.0;
+    }
+    if n2 == 0 {
         return 1.0;
     }
     let mut combined = Vec::with_capacity(n1.saturating_add(n2));
@@ -394,6 +371,10 @@ mod tests {
     #[test]
     fn normal_cdf_at_known_points() {
         close(normal_cdf(0.0), 0.5, 1e-6);
+        // The A&S erf approximation makes erf(0) a hair positive, so Φ(0) sits
+        // just above 0.5; this pins the sign branch in `erf` (a flipped sign would
+        // push Φ(0) below 0.5).
+        assert!(normal_cdf(0.0) > 0.5);
         close(normal_cdf(1.96), 0.975, 1e-3);
         close(normal_cdf(-1.96), 0.025, 1e-3);
         // Symmetry: Φ(-z) == 1 − Φ(z).
@@ -450,6 +431,17 @@ mod tests {
     }
 
     #[test]
+    fn pettitt_handles_the_two_point_minimum() {
+        // Two ascending points are the smallest series Pettitt accepts: the only
+        // split is at index 1 with U_1 = 2·1 − 1·3 = −1, so K = 1 (and p clamps to
+        // 1.0). This pins both the `n < 2` lower bound and the `best_abs` seed.
+        let change = pettitt(&[1.0, 2.0]).expect("a change point");
+        assert_eq!(change.index, 1);
+        assert_eq!(change.k_statistic, 1.0);
+        assert_eq!(change.p_value, 1.0);
+    }
+
+    #[test]
     fn mann_whitney_separates_disjoint_samples() {
         // Fully separated samples of five: U = 0, z ≈ 2.507, p ≈ 0.0122.
         let p = mann_whitney_u_pvalue(&[1.0, 2.0, 3.0, 4.0, 5.0], &[11.0, 12.0, 13.0, 14.0, 15.0]);
@@ -466,6 +458,17 @@ mod tests {
     #[test]
     fn mann_whitney_empty_sample_is_one() {
         assert_eq!(mann_whitney_u_pvalue(&[], &[1.0, 2.0]), 1.0);
+        assert_eq!(mann_whitney_u_pvalue(&[1.0, 2.0], &[]), 1.0);
+    }
+
+    #[test]
+    fn mann_whitney_with_ties_uses_the_smaller_u_statistic() {
+        // `right` sits below `left`, so U2 (0.5) is the smaller statistic, and the
+        // repeated 4s/2s exercise the tie correction. The exact tie- and
+        // continuity-corrected p (z ≈ 2.0578) is pinned tightly so the U2,
+        // tie-term, variance, and continuity arithmetic all have to be exact.
+        let p = mann_whitney_u_pvalue(&[3.0, 4.0, 4.0, 5.0], &[1.0, 2.0, 2.0, 3.0]);
+        close(p, 0.039_608_571_971_576_41, 1e-9);
     }
 
     #[test]
@@ -503,6 +506,35 @@ mod tests {
     }
 
     #[test]
+    fn mann_kendall_scores_the_three_point_minimum() {
+        // Three ascending points are the smallest series the trend test scores:
+        // all three pairs rise, so S = 3 (a flipped `n < 3` bound would short out
+        // to S = 0).
+        let result = mann_kendall(&[1.0, 2.0, 3.0]);
+        assert_eq!(result.s, 3.0);
+        close(result.p_value, 0.296_269_924_336_563_4, 1e-9);
+    }
+
+    #[test]
+    fn mann_kendall_zero_trend_with_variance_is_insignificant() {
+        // A non-monotonic series with no ties has S = 0 but positive variance, so
+        // it reaches the sign branch with z = 0 → p ≈ 1.0. A `>`/`<` boundary slip
+        // on the sign test would feed z = ∓1/σ and collapse the p-value.
+        let result = mann_kendall(&[2.0, 4.0, 1.0, 3.0]);
+        assert_eq!(result.s, 0.0);
+        close(result.p_value, 1.0, 1e-6);
+    }
+
+    #[test]
+    fn mann_kendall_tie_correction_shrinks_variance() {
+        // Repeated endpoints (two 1s, two 3s) engage the tie correction; the exact
+        // tie-corrected p pins the `t·(t−1)·(2t+5)` term.
+        let result = mann_kendall(&[1.0, 1.0, 2.0, 3.0, 3.0]);
+        assert_eq!(result.s, 8.0);
+        close(result.p_value, 0.067_577_148_830_175_5, 1e-9);
+    }
+
+    #[test]
     fn theil_sen_fits_a_line() {
         // y = x: slope 1, intercept 1 (positions 0..4, values 1..5).
         assert_eq!(theil_sen_line(&[1.0, 2.0, 3.0, 4.0, 5.0]), Some((1.0, 1.0)));
@@ -523,6 +555,14 @@ mod tests {
     #[test]
     fn theil_sen_needs_two_points() {
         assert_eq!(theil_sen_line(&[1.0]), None);
+    }
+
+    #[test]
+    fn theil_sen_fits_the_two_point_minimum() {
+        // Two points are the smallest line the fit accepts: slope (5−2)/1 = 3,
+        // intercept 2. This pins the `n < 2` lower bound (a slipped `==`/`<=`
+        // boundary would reject this valid two-point series).
+        assert_eq!(theil_sen_line(&[2.0, 5.0]), Some((3.0, 2.0)));
     }
 
     #[test]

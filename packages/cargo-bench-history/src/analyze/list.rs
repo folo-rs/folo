@@ -13,6 +13,7 @@
 //! and, like that listing, needs no repository.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use serde::Serialize;
 
@@ -21,7 +22,7 @@ use crate::git_history::{GitHistory, SystemGitHistory};
 use crate::report::{Reporter, StderrReporter};
 use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
-use crate::wiring::{default_config_path, resolve_project_id};
+use crate::wiring::{resolve_config_path, resolve_project_id, resolve_repo};
 use crate::{ListOptions, RunError, RunOutcome};
 
 use jiff::Timestamp;
@@ -42,26 +43,22 @@ use crate::bless::BlessingRecord;
 /// instant (see [`execute`](super::execute)); production passes `None`.
 pub(crate) async fn execute(
     options: &ListOptions,
+    workspace_dir: &Path,
     now_override: Option<Timestamp>,
 ) -> Result<RunOutcome, RunError> {
     let reporter = StderrReporter::new(options.verbose);
 
-    let config_path = options
-        .config_path
-        .clone()
-        .unwrap_or_else(default_config_path);
+    let config_path = resolve_config_path(workspace_dir, options.config_path.as_deref());
     reporter.note(&format!(
         "loading configuration from {}",
         config_path.display()
     ));
     let config = load_config(&config_path).await?;
 
-    let workspace_dir = std::env::current_dir().map_err(RunError::Io)?;
-    let project_id = resolve_project_id(&config, &workspace_dir);
-    let storage = build_storage(&config)?;
+    let project_id = resolve_project_id(&config, workspace_dir);
+    let storage = build_storage(&config, workspace_dir)?;
 
-    let repo = options.repo.clone().unwrap_or(workspace_dir);
-    let git = SystemGitHistory::new(repo);
+    let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
 
     let now = now_override.unwrap_or_else(Timestamp::now);
     list_with(
@@ -947,6 +944,128 @@ mod tests {
     fn store(storage: &MemoryStorage, key: &str, set: &ResultSet) {
         let json = set.to_json().expect("result set serializes");
         block_on(storage.put(key, json.as_bytes())).expect("store succeeds");
+    }
+
+    fn linux_set() -> DiscriminantSet {
+        DiscriminantSet {
+            engine: "callgrind".to_owned(),
+            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
+            machine: "synthetic".to_owned(),
+        }
+    }
+
+    fn bts(seconds: i64) -> Timestamp {
+        Timestamp::from_second(seconds).expect("seconds within range")
+    }
+
+    #[test]
+    fn append_hint_and_warning_pushes_blank_separated_sections() {
+        let mut lines = vec!["body".to_owned()];
+        append_hint_and_warning(&mut lines, Some("the hint"), Some("the warning"));
+        assert_eq!(
+            lines,
+            vec![
+                "body".to_owned(),
+                String::new(),
+                "the hint".to_owned(),
+                String::new(),
+                "the warning".to_owned(),
+            ]
+        );
+
+        let mut none = vec!["body".to_owned()];
+        append_hint_and_warning(&mut none, None, None);
+        assert_eq!(none, vec!["body".to_owned()]);
+    }
+
+    #[test]
+    fn render_blessings_text_renders_head_and_all_views() {
+        let head = BlessingEntry {
+            set: linux_set(),
+            benchmark: None,
+            commit: "abc123".to_owned(),
+            effective: bts(1_700_000_000),
+            issued_at: Some(bts(1_700_000_500)),
+            prefixes: vec!["nm/observe".to_owned(), "nm/record".to_owned()],
+            reason: Some("accepted tradeoff".to_owned()),
+        };
+        let text = render_blessings_text("folo", false, "abc123", std::slice::from_ref(&head));
+        assert!(
+            text.contains("Blessings for project folo at commit abc123"),
+            "{text}"
+        );
+        assert!(text.contains("os=linux arch=x86_64"), "{text}");
+        assert!(
+            text.contains("abc123 accepts nm/observe, nm/record"),
+            "{text}"
+        );
+        assert!(text.contains("reason: accepted tradeoff"), "{text}");
+
+        let all = BlessingEntry {
+            set: linux_set(),
+            benchmark: Some("nm/observe".to_owned()),
+            commit: "abc123".to_owned(),
+            effective: bts(1_700_000_000),
+            issued_at: None,
+            prefixes: Vec::new(),
+            reason: None,
+        };
+        let text = render_blessings_text("folo", true, "abc123", std::slice::from_ref(&all));
+        assert!(
+            text.contains("Most recent blessings for project folo"),
+            "{text}"
+        );
+        assert!(text.contains("nm/observe  blessed at abc123"), "{text}");
+
+        let empty = render_blessings_text("folo", false, "abc123", &[]);
+        assert!(
+            empty.contains("No blessings recorded at commit abc123."),
+            "{empty}"
+        );
+    }
+
+    #[test]
+    fn render_blessings_markdown_renders_head_and_all_views() {
+        let head = BlessingEntry {
+            set: linux_set(),
+            benchmark: None,
+            commit: "abc123".to_owned(),
+            effective: bts(1_700_000_000),
+            issued_at: Some(bts(1_700_000_500)),
+            prefixes: vec!["nm/observe".to_owned()],
+            reason: Some("accepted tradeoff".to_owned()),
+        };
+        let md = render_blessings_markdown("folo", false, "abc123", std::slice::from_ref(&head));
+        assert!(md.contains("# Blessings for folo at abc123"), "{md}");
+        assert!(
+            md.contains("| Commit | Prefixes | Issued | Reason |"),
+            "{md}"
+        );
+        assert!(md.contains("| abc123 | nm/observe |"), "{md}");
+        assert!(md.contains("accepted tradeoff"), "{md}");
+
+        let all = BlessingEntry {
+            set: linux_set(),
+            benchmark: Some("nm/observe".to_owned()),
+            commit: "abc123".to_owned(),
+            effective: bts(1_700_000_000),
+            issued_at: None,
+            prefixes: Vec::new(),
+            reason: None,
+        };
+        let md = render_blessings_markdown("folo", true, "abc123", std::slice::from_ref(&all));
+        assert!(md.contains("# Most recent blessings for folo"), "{md}");
+        assert!(
+            md.contains("| Benchmark | Blessed at | Effective |"),
+            "{md}"
+        );
+        assert!(md.contains("| nm/observe | abc123 |"), "{md}");
+
+        let empty = render_blessings_markdown("folo", true, "abc123", &[]);
+        assert!(
+            empty.contains("No blessings in the analysis window."),
+            "{empty}"
+        );
     }
 
     /// A linear master history `c0 - c1 - c2 - c3`, HEAD at the tip.

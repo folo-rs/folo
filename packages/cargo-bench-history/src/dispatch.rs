@@ -8,6 +8,35 @@ use jiff::Timestamp;
 use crate::commands;
 use crate::{Command, RunError, RunOutcome};
 
+/// Test-only overrides for [`run_with_overrides`].
+///
+/// Production code calls [`run`], which supplies [`Overrides::default`] — every
+/// field `None`. With all fields `None` a command resolves its workspace from the
+/// process working directory, runs `cargo bench` as the benchmark command with the
+/// conventional target root, and anchors the analysis `--since` window to the wall
+/// clock. Tests set individual fields to drive the full flow hermetically: a
+/// `workspace_dir` lets a command operate on a temporary directory without a global
+/// `chdir`, so the test suite is not forced serial.
+#[doc(hidden)]
+#[derive(Debug, Default)]
+#[expect(
+    clippy::exhaustive_structs,
+    reason = "constructed by the integration and Azure test harnesses by struct literal"
+)]
+pub struct Overrides {
+    /// The workspace directory the command operates on. `None` resolves it from
+    /// the process working directory. Relative `--config`/`--repo`/local-storage
+    /// paths resolve against this directory.
+    pub workspace_dir: Option<PathBuf>,
+    /// The cargo target root scanned for engine output (`run`/`backfill`). `None`
+    /// resolves the conventional target directory under the workspace.
+    pub target_root: Option<PathBuf>,
+    /// The benchmark command `run`/`backfill` invoke instead of `cargo bench`.
+    pub bench_command: Option<Vec<String>>,
+    /// The clock anchor for the analysis default `--since` lookback window.
+    pub now: Option<Timestamp>,
+}
+
 /// Executes a parsed command.
 ///
 /// Every handler is asynchronous: `run` and `analyze` drive IO over the
@@ -19,19 +48,16 @@ use crate::{Command, RunError, RunOutcome};
 /// storage error).
 #[doc(hidden)]
 pub async fn run(command: &Command) -> Result<RunOutcome, RunError> {
-    run_with_overrides(command, None, None, None).await
+    run_with_overrides(command, Overrides::default()).await
 }
 
-/// Executes a parsed command, overriding the cargo target root (for the
-/// `run`/`backfill` harvest), the benchmark command those subcommands invoke, and
-/// the analysis clock anchor.
+/// Executes a parsed command with the given test [`Overrides`].
 ///
 /// This exists so end-to-end tests can drive the full `run`/`backfill` flow
-/// against a mock benchmark program instead of `cargo bench`, without mutating
-/// the process environment, and can pin a deterministic `now` for the analysis
-/// default `--since` window. Production code calls [`run`], which passes `None`
-/// for all three and uses `cargo bench` with the resolved target root and the
-/// wall clock.
+/// against a mock benchmark program instead of `cargo bench`, operate on a
+/// temporary workspace without mutating the process environment or current
+/// directory, and pin a deterministic `now` for the analysis default `--since`
+/// window. Production code calls [`run`], which passes [`Overrides::default`].
 ///
 /// # Errors
 ///
@@ -40,18 +66,31 @@ pub async fn run(command: &Command) -> Result<RunOutcome, RunError> {
 #[doc(hidden)]
 pub async fn run_with_overrides(
     command: &Command,
-    target_root: Option<PathBuf>,
-    bench_command: Option<Vec<String>>,
-    now: Option<Timestamp>,
+    overrides: Overrides,
 ) -> Result<RunOutcome, RunError> {
+    let Overrides {
+        workspace_dir,
+        target_root,
+        bench_command,
+        now,
+    } = overrides;
+    let workspace_dir = match workspace_dir {
+        Some(dir) => dir,
+        None => std::env::current_dir().map_err(RunError::Io)?,
+    };
+    let workspace_dir = workspace_dir.as_path();
     match command {
-        Command::Run(options) => commands::run(options, target_root, bench_command).await,
-        Command::Install(options) => commands::install(options).await,
-        Command::Analyze(options) => commands::analyze(options, now).await,
-        Command::List(options) => commands::list(options, now).await,
-        Command::Clean(options) => commands::clean(options).await,
-        Command::Backfill(options) => commands::backfill(options, bench_command).await,
-        Command::Bless(options) => commands::bless(options, now).await,
-        Command::Unbless(options) => commands::unbless(options).await,
+        Command::Run(options) => {
+            commands::run(options, workspace_dir, target_root, bench_command).await
+        }
+        Command::Install(options) => commands::install(options, workspace_dir).await,
+        Command::Analyze(options) => commands::analyze(options, workspace_dir, now).await,
+        Command::List(options) => commands::list(options, workspace_dir, now).await,
+        Command::Clean(options) => commands::clean(options, workspace_dir).await,
+        Command::Backfill(options) => {
+            commands::backfill(options, workspace_dir, bench_command).await
+        }
+        Command::Bless(options) => commands::bless(options, workspace_dir, now).await,
+        Command::Unbless(options) => commands::unbless(options, workspace_dir).await,
     }
 }

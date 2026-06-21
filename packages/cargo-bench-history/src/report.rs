@@ -38,6 +38,12 @@ impl Reporter for StderrReporter {
         self.verbose
     }
 
+    /// Writes the note to standard error in verbose mode.
+    ///
+    /// A pure standard-error side effect with no return value or observable state,
+    /// so a mutation of its body cannot be caught by a test; the `verbose` flag it
+    /// guards on is covered by `stderr_reporter_reports_enabled_state`.
+    #[cfg_attr(test, mutants::skip)]
     fn note(&self, message: &str) {
         if self.verbose {
             eprintln!("[bench-history] {message}");
