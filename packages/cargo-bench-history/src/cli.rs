@@ -7,8 +7,8 @@ use argh::FromArgs;
 use jiff::Timestamp;
 
 use crate::{
-    AnalyzeOptions, BackfillOptions, BlessOptions, CleanOptions, Command, InstallOptions,
-    ListOptions, RunOptions, UnblessOptions,
+    AnalyzeOptions, BackfillOptions, BlessOptions, Command, InstallOptions, ListOptions,
+    PruneOptions, RunOptions, UnblessOptions,
 };
 
 /// Maintain a history of benchmark results over time and analyze it for trends.
@@ -27,9 +27,9 @@ impl Cli {
             Subcommand::Analyze(command) => Command::Analyze(command.into_options()),
             Subcommand::Backfill(command) => Command::Backfill(command.into_options()),
             Subcommand::Bless(command) => Command::Bless(command.into_options()),
-            Subcommand::Clean(command) => Command::Clean(command.into_options()),
             Subcommand::Install(command) => Command::Install(command.into_options()),
             Subcommand::List(command) => Command::List(command.into_options()),
+            Subcommand::Prune(command) => Command::Prune(command.into_options()),
             Subcommand::Run(command) => Command::Run(command.into_options()),
             Subcommand::Unbless(command) => Command::Unbless(command.into_options()),
         }
@@ -56,9 +56,9 @@ enum Subcommand {
     Analyze(AnalyzeCommand),
     Backfill(BackfillCommand),
     Bless(BlessCommand),
-    Clean(CleanCommand),
     Install(InstallCommand),
     List(ListCommand),
+    Prune(PruneCommand),
     Run(RunCommand),
     Unbless(UnblessCommand),
 }
@@ -392,11 +392,11 @@ impl ListCommand {
     }
 }
 
-/// Remove the dirty runs a matching `analyze`/`list` would include (plus the base
-/// branch tip's); pass `--dry-run` to preview without deleting.
+/// Delete stored runs (and their blessing sidecars) from the data set a matching
+/// `analyze`/`list` would resolve; pass `--dry-run` to preview without deleting.
 #[derive(Debug, FromArgs)]
-#[argh(subcommand, name = "clean")]
-struct CleanCommand {
+#[argh(subcommand, name = "prune")]
+struct PruneCommand {
     /// path to the configuration file (defaults to `.cargo/bench_history.toml`).
     #[argh(option)]
     config: Option<PathBuf>,
@@ -405,7 +405,7 @@ struct CleanCommand {
     #[argh(option)]
     repo: Option<PathBuf>,
 
-    /// target ref whose history is cleaned (defaults to HEAD).
+    /// target ref whose history is pruned (defaults to HEAD).
     #[argh(option)]
     branch: Option<String>,
 
@@ -413,36 +413,63 @@ struct CleanCommand {
     #[argh(option)]
     base: Option<String>,
 
-    /// only remove runs on or after this cutoff: an RFC 3339 timestamp
-    /// (`2024-01-01T00:00:00Z`), a `YYYY-MM-DD` date, or a relative duration
-    /// such as `6 months` or `30 days ago` (default: no lower bound).
+    /// restrict removal to a commit (a full or short SHA, prefix-matched);
+    /// repeatable (default: every commit on the resolved history).
+    #[argh(option)]
+    commit: Vec<String>,
+
+    /// only remove runs whose effective time is on or after this cutoff: an
+    /// RFC 3339 timestamp (`2024-01-01T00:00:00Z`), a `YYYY-MM-DD` date, or a
+    /// relative duration such as `6 months` or `30 days ago` (default: no lower
+    /// bound).
     #[argh(option)]
     since: Option<String>,
 
-    /// restrict the cleanup to a single engine, criterion or callgrind
+    /// only remove runs whose effective time is on or before this cutoff (same
+    /// formats as `--since`), useful for reclaiming old data such as
+    /// `--until "6 months ago"` (default: no upper bound).
+    #[argh(option)]
+    until: Option<String>,
+
+    /// restrict removal to a single engine, criterion or callgrind
     /// (default: every engine).
     #[argh(option)]
     engine: Option<String>,
 
-    /// restrict the cleanup to a single full target triple (for example,
+    /// restrict removal to a single full target triple (for example,
     /// `x86_64-unknown-linux-gnu`). Mutually exclusive with `--os` /
     /// `--architecture`, which select the same dimension by its derived parts.
     #[argh(option)]
     target_triple: Option<String>,
 
-    /// restrict the cleanup to a single operating system (for example, windows).
+    /// restrict removal to a single operating system (for example, windows).
     /// Cannot be combined with `--target-triple`.
     #[argh(option)]
     os: Option<String>,
 
-    /// restrict the cleanup to a single CPU architecture (for example, `x86_64`).
+    /// restrict removal to a single CPU architecture (for example, `x86_64`).
     /// Cannot be combined with `--target-triple`.
     #[argh(option)]
     architecture: Option<String>,
 
-    /// restrict the cleanup to a single machine partition.
+    /// restrict removal to a single machine partition.
     #[argh(option)]
     machine_key: Option<String>,
+
+    /// remove only dirty (uncommitted-tree) snapshots (mutually exclusive with
+    /// `--clean`; exempt from the narrowing guard below).
+    #[argh(switch)]
+    dirty: bool,
+
+    /// remove only clean runs and their blessing sidecars (mutually exclusive
+    /// with `--dirty`).
+    #[argh(switch)]
+    clean: bool,
+
+    /// confirm deleting clean history across an un-narrowed selection (required
+    /// when no facet, `--commit`, `--since`, or `--until` narrows the range).
+    #[argh(switch)]
+    all: bool,
 
     /// preview what would be removed without deleting anything.
     #[argh(switch)]
@@ -459,19 +486,24 @@ struct CleanCommand {
     verbose: bool,
 }
 
-impl CleanCommand {
-    fn into_options(self) -> CleanOptions {
-        CleanOptions {
+impl PruneCommand {
+    fn into_options(self) -> PruneOptions {
+        PruneOptions {
             config_path: self.config,
             repo: self.repo,
             branch: self.branch,
             base: self.base,
+            commit: self.commit,
             since: self.since,
+            until: self.until,
             engine: self.engine,
             target_triple: self.target_triple,
             os: self.os,
             architecture: self.architecture,
             machine_key: self.machine_key,
+            dirty: self.dirty,
+            clean: self.clean,
+            all: self.all,
             dry_run: self.dry_run,
             format: self.format,
             verbose: self.verbose,
@@ -734,7 +766,7 @@ mod tests {
         let help = Cli::help("cargo-bench-history");
         assert!(!help.is_empty(), "help text is non-empty");
         for command in [
-            "analyze", "backfill", "bless", "clean", "install", "list", "run", "unbless",
+            "analyze", "backfill", "bless", "install", "list", "prune", "run", "unbless",
         ] {
             assert!(help.contains(command), "help lists {command}: {help}");
         }
@@ -1047,17 +1079,23 @@ mod tests {
     }
 
     #[test]
-    fn clean_collects_selection_and_dry_run() {
+    fn prune_collects_selection_and_dry_run() {
         let command = parse(&[
-            "clean",
+            "prune",
             "--repo",
             "/work/folo",
             "--branch",
             "feature",
             "--base",
             "master",
+            "--commit",
+            "abc123",
+            "--commit",
+            "def456",
             "--since",
             "2024-01-01T00:00:00Z",
+            "--until",
+            "2024-06-01T00:00:00Z",
             "--engine",
             "callgrind",
             "--os",
@@ -1066,32 +1104,46 @@ mod tests {
             "x86_64",
             "--machine-key",
             "ci-pool",
+            "--dirty",
             "--dry-run",
             "--format",
             "json",
             "--verbose",
         ]);
-        let Command::Clean(options) = command else {
-            panic!("expected clean command");
+        let Command::Prune(options) = command else {
+            panic!("expected prune command");
         };
         assert_eq!(options.repo, Some(PathBuf::from("/work/folo")));
         assert_eq!(options.branch.as_deref(), Some("feature"));
         assert_eq!(options.base.as_deref(), Some("master"));
+        assert_eq!(
+            options.commit,
+            vec!["abc123".to_owned(), "def456".to_owned()]
+        );
         assert_eq!(options.since.as_deref(), Some("2024-01-01T00:00:00Z"));
+        assert_eq!(options.until.as_deref(), Some("2024-06-01T00:00:00Z"));
         assert_eq!(options.engine.as_deref(), Some("callgrind"));
         assert_eq!(options.os.as_deref(), Some("windows"));
         assert_eq!(options.architecture.as_deref(), Some("x86_64"));
         assert_eq!(options.machine_key.as_deref(), Some("ci-pool"));
+        assert!(options.dirty);
+        assert!(!options.clean);
+        assert!(!options.all);
         assert!(options.dry_run);
         assert_eq!(options.format.as_deref(), Some("json"));
         assert!(options.verbose);
     }
 
     #[test]
-    fn clean_parses_target_triple_facet() {
-        let command = parse(&["clean", "--target-triple", "x86_64-unknown-linux-gnu"]);
-        let Command::Clean(options) = command else {
-            panic!("expected clean command");
+    fn prune_parses_target_triple_facet() {
+        let command = parse(&[
+            "prune",
+            "--target-triple",
+            "x86_64-unknown-linux-gnu",
+            "--all",
+        ]);
+        let Command::Prune(options) = command else {
+            panic!("expected prune command");
         };
         assert_eq!(
             options.target_triple.as_deref(),
@@ -1099,6 +1151,7 @@ mod tests {
         );
         assert_eq!(options.os, None);
         assert_eq!(options.architecture, None);
+        assert!(options.all);
         assert!(!options.dry_run);
     }
 

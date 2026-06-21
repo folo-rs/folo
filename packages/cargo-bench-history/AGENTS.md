@@ -218,7 +218,7 @@ per-finding `direction` / `flipped_at` / `series`. There is **no**
 `--fail-on-regression` flag: findings are advisory, never a build gate.
 The two driving scenarios are a scheduled base-branch regression watch (history) and
 a per-PR feature-branch evaluation (branch). Modes apply to `analyze` only; `list`
-and `clean` reuse the same data-set *selection* but never analyze, so `--mode` /
+and `prune` reuse the same data-set *selection* but never analyze, so `--mode` /
 `--include-improvements` / `--include-inactive` are analyze-only and **not** part of
 the selection lockstep.
 
@@ -277,7 +277,7 @@ instead of analyzing, only *previews* which data set an `analyze` pass would
 consume: per discriminant set it reports the run, series, and per-commit counts of
 the selected runs (each commit's clean/dirty split), ordered oldest-first by git
 topology. Whenever you add or change a selection parameter on `analyze`, add the
-same parameter to **both** `list` and `clean` (see below) unless it is genuinely
+same parameter to **both** `list` and `prune` (see below) unless it is genuinely
 inapplicable. The analysis-only flags `--mode` / `--include-improvements` are not
 part of the selection lockstep (they govern analysis, which `list` never does).
 
@@ -299,40 +299,56 @@ and `dirty_base_exception_warning`. `list_with` parses the format, builds a
 `RunOutcome::Completed { message }`. `count_noun` (text.rs) appends `s` when the
 count ≠ 1, so list.rs uses a local `series_noun` to avoid "seriess".
 
-## The `clean` command
+## The `prune` command
 
-**`clean` mirrors `analyze`'s/`list`'s data-set-selection parameters** (the same
+**`prune` mirrors `analyze`'s/`list`'s data-set-selection parameters** (the same
 hard lockstep requirement) — it accepts `--repo`/`--branch`/`--base`/`--engine`/
 `--target-triple`/`--os`/`--architecture`/`--machine-key`/`--since`/`--format`/
-`--config`/`--verbose`. The two selection flags it omits are deliberate:
-`--no-dirty` (cleaning targets dirty runs, so suppressing them is meaningless) and
-`--metric` (deletion is per-object, not per-metric). Instead of analyzing, it
-**deletes** the dirty (uncommitted-tree) runs from exactly the commits that admit
-dirty runs in a selection: the commits unique to the analyzed branch, or the base
-branch's tip when you are on the base branch. Clean runs are never touched.
+`--config`/`--verbose`, plus its own deletion-shaping flags: `--dirty`/`--clean`
+(scope), `--all` (guard override), `--commit SHA` (repeatable, case-insensitive
+SHA-prefix), and `--until` (the inclusive upper bound mirroring `--since`). Instead
+of analyzing, it **deletes** the selected objects.
+
+**Deletion scopes** (`Scope::from_options`): no scope flag → delete the selected
+**clean and dirty** runs (and the blessing sidecars on any removed clean run);
+`--dirty` → dirty snapshots only; `--clean` → clean runs and their blessings only.
+`--dirty` and `--clean` are mutually exclusive.
+
+**Narrowing guard.** A scope that touches clean runs (default or `--clean`) refuses
+an un-narrowed selection unless `--all` is passed: at least one of a facet,
+`--commit`, `--since`, or `--until` must be present (the guard returns
+`RunError::Analyze` mentioning `--all`). The `--dirty` scope is **exempt** — dirty
+data is ephemeral, so a blanket cleanup needs no guard. `--all` is only an override
+for the guard; it never widens the selection.
 
 The one **intentional divergence** from `analyze`/`list`: the base-branch tip's
 dirty runs are admitted **unconditionally** (`DirtyTipPolicy::Always`), whereas
 `analyze`/`list` only admit them when the working tree is currently dirty
-(`DirtyTipPolicy::WhenWorkingTreeDirty`). This is what lets `clean` reclaim
-ephemeral base-branch snapshots regardless of the current tree state. The policy
-is the parameter to the shared `resolve_history` helper in `analyze/mod.rs`
-(extracted from `select_dataset`); `select_dataset` passes `WhenWorkingTreeDirty`,
-`clean` passes `Always`.
+(`DirtyTipPolicy::WhenWorkingTreeDirty`). This is what lets `prune --dirty` reclaim
+ephemeral base-branch snapshots regardless of the current tree state. The policy is
+the parameter to the shared `resolve_history` helper in `analyze/mod.rs` (extracted
+from `select_dataset`); `select_dataset` passes `WhenWorkingTreeDirty`, `prune`
+passes `Always`.
 
-`clean` lives **inside** the analyze module tree as `src/analyze/clean.rs`
-(`pub(crate) mod clean;`), reusing the same `Selection` (built via `from_clean`,
+`prune` lives **inside** the analyze module tree as `src/analyze/prune.rs`
+(`pub(crate) mod prune;`), reusing the same `Selection` (built via `from_prune`,
 which hardwires `no_dirty: false`), `parsed_facets`, `facet_filtered_candidates`,
-and `resolve_history` pipeline. `clean_with` resolves the history, selects the
-dirty objects on the admitting commits, builds a `Plan` (grouped by discriminant
-set, commits oldest-first by topology), and — unless `--dry-run` — deletes each
-key via `Storage::delete`. The JSON report carries `dry_run` plus the deleted
-`keys` per commit for transparency; text/markdown report counts only. `--dry-run`
-builds the same plan but skips the deletes (`verb` switches "Would remove" ↔
+and `resolve_history` pipeline. `prune_with` resolves the history, partitions the
+candidate objects into runs (clean/dirty, via `RunKind`) and blessings, applies the
+scope and `--commit`/`--since`/`--until` filters, then deletes in **two passes**:
+pass 1 removes the selected runs (recording which clean `(set, commit)` pairs were
+removed); pass 2 — only when the scope touches clean runs — removes a blessing
+sidecar iff its `(set, commit)` had its clean run removed (so blessings follow their
+clean run and are never time-filtered directly). `--since`/`--until` fetch each
+candidate's stored body to recover its effective time. The deletions are grouped
+into a `Plan` (by discriminant set, commits oldest-first by topology) and — unless
+`--dry-run` — each key is removed via `Storage::delete`. The JSON report carries
+`dry_run`, the per-commit run/blessing counts, and the deleted `keys` per commit;
+text/markdown report counts only (the `verb` helper switches "Would remove" ↔
 "Removed").
 
-`Storage::delete(&self, key)` was added to the `Storage` trait and all four impls
-(Memory, Local, Azure, Facade) for this command; it returns `StorageError::NotFound`
+`Storage::delete(&self, key)` is on the `Storage` trait and all four impls
+(Memory, Local, Azure, Facade); it returns `StorageError::NotFound`
 when the object is absent (the local/memory impls validate the key first; Azure maps
 a 404 / missing-container fault to `NotFound`).
 

@@ -52,10 +52,11 @@ cargo bench-history list [--discriminants] [--blessings [--all]] [--repo PATH]
                          [--machine-key KEY] [--no-dirty] [--since DATE]
                          [--metric NAME] [--format text|json|markdown]
                          [--verbose] [--config PATH]
-cargo bench-history clean [--dry-run] [--repo PATH] [--branch REF]
-                          [--base REF] [--engine NAME] [--target-triple TRIPLE]
-                          [--os OS] [--architecture ARCH] [--machine-key KEY]
-                          [--since DATE] [--format text|json|markdown]
+cargo bench-history prune [--dry-run] [--all] [--dirty | --clean] [--repo PATH]
+                          [--branch REF] [--base REF] [--engine NAME]
+                          [--target-triple TRIPLE] [--os OS] [--architecture ARCH]
+                          [--machine-key KEY] [--commit SHA] [--since DATE]
+                          [--until DATE] [--format text|json|markdown]
                           [--verbose] [--config PATH]
 cargo bench-history bless <prefix> [<prefix> ...] [--reason TEXT] [--repo PATH]
                           [--base REF] [--engine NAME] [--target-triple TRIPLE]
@@ -155,16 +156,18 @@ cargo bench-history unbless [--repo PATH] [--base REF] [--engine NAME]
   blessings (see `bless` below): the blessings recorded at the current commit, or —
   with `--all` — the most recent blessing of every benchmark across the analysis
   window.
-* `clean` removes the dirty (uncommitted-tree) runs from the same commits a
-  matching `analyze`/`list` pass would draw them from: the commits unique to the
-  analyzed branch, or the base branch's tip commit when you are on the base
-  branch. It accepts the same data-set-selection flags as `analyze` (except
-  `--no-dirty`/`--metric`, which do not apply) and deletes nothing else — clean
-  runs are always left intact. Unlike `analyze`/`list`, the base-branch tip's
-  dirty runs are removed unconditionally (not only when the working tree is
-  currently dirty), so `clean` reclaims ephemeral snapshots regardless of the
-  current tree state. `--dry-run` previews exactly what would be removed without
-  deleting anything.
+* `prune` deletes a chosen portion of the stored data set, using the same
+  data-set-selection pipeline as `analyze`/`list`. With no scope flag it removes the
+  selected **clean and dirty** runs (and the blessing sidecars on any removed clean
+  run); `--dirty` restricts to the ephemeral uncommitted-tree snapshots only, and
+  `--clean` restricts to clean runs and their blessings. Because deleting clean
+  history is irreversible, a clean-touching prune refuses an un-narrowed selection
+  unless `--all` is given — narrow it with a facet, `--commit`, `--since`, or
+  `--until` (the `--dirty` scope is exempt). Like the data-set-selection flags it
+  shares with `analyze`, plus `--commit SHA` (repeatable, SHA-prefix) and `--until`.
+  The base-branch tip's dirty runs are removed unconditionally (regardless of the
+  current tree state), so `prune --dirty` reclaims ephemeral snapshots. `--dry-run`
+  previews exactly what would be removed without deleting anything.
 * `bless` manually accepts an intentional performance change on the base branch so
   history analysis stops re-flagging it. Pass one or more benchmark-id prefixes to
   accept (matched against the qualified `<package>/<group>/<case>/<value>` identity,
@@ -203,8 +206,9 @@ Implemented:
 * `list` previews the data set an `analyze` pass would consume (run/series/commit
   counts per discriminant set), lists the discriminant sets present in storage with
   `--discriminants`, or audits blessings with `--blessings`.
-* `clean` removes dirty runs from the analyzed branch's commits (or the base
-  branch tip), with a `--dry-run` preview.
+* `prune` deletes a chosen portion of the stored data set (clean and/or dirty runs
+  plus their blessings), with a narrowing guard on clean deletion and a `--dry-run`
+  preview.
 * `bless` / `unbless` accept (or revoke) an intentional base-branch regression so
   history analysis re-baselines past it instead of re-flagging it forever.
 * `install` writes a starter `.cargo/bench_history.toml` when one is absent.

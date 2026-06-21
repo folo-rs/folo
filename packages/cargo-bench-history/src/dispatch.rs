@@ -86,7 +86,7 @@ pub async fn run_with_overrides(
         Command::Install(options) => commands::install(options, workspace_dir).await,
         Command::Analyze(options) => commands::analyze(options, workspace_dir, now).await,
         Command::List(options) => commands::list(options, workspace_dir, now).await,
-        Command::Clean(options) => commands::clean(options, workspace_dir).await,
+        Command::Prune(options) => commands::prune(options, workspace_dir).await,
         Command::Backfill(options) => {
             commands::backfill(options, workspace_dir, bench_command).await
         }

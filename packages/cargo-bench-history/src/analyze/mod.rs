@@ -12,10 +12,10 @@
 //! storage- and git-generic orchestrator the in-memory tests drive.
 
 pub(crate) mod bless;
-pub(crate) mod clean;
 mod discriminant;
 mod findings;
 pub(crate) mod list;
+pub(crate) mod prune;
 mod report;
 mod selection;
 mod series;
@@ -40,7 +40,7 @@ use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
 use crate::wiring::{resolve_config_path, resolve_project_id, resolve_repo};
 use crate::{
-    AnalyzeOptions, BlessOptions, CleanOptions, ListOptions, RunError, RunOutcome, UnblessOptions,
+    AnalyzeOptions, BlessOptions, ListOptions, PruneOptions, RunError, RunOutcome, UnblessOptions,
 };
 
 use discriminant::{DiscriminantSet, Facets, ParsedKey, parse_key};
@@ -256,13 +256,14 @@ impl<'a> Selection<'a> {
         }
     }
 
-    fn from_clean(options: &'a CleanOptions) -> Self {
+    fn from_prune(options: &'a PruneOptions) -> Self {
         Self {
             branch: options.branch.as_deref(),
             base: options.base.as_deref(),
-            // `clean` only ever touches dirty runs, so dirty admission is always
-            // on; the base-tip exception is applied unconditionally (see
-            // `DirtyTipPolicy::Always`).
+            // `prune` resolves the data set with dirty admission always on; the
+            // base-tip exception is applied unconditionally (see
+            // `DirtyTipPolicy::Always`), and the per-object scope (`--dirty` /
+            // `--clean`) decides which runs are actually removed.
             no_dirty: false,
             since: options.since.as_deref(),
             engine: options.engine.as_deref(),
@@ -725,7 +726,7 @@ fn parse_mode(value: Option<&str>) -> Result<Option<AnalysisMode>, RunError> {
 /// On a feature branch the target-side commits admit dirty runs unconditionally;
 /// this policy only governs the *base* branch's tip. `analyze`/`list` admit a
 /// base-tip dirty run only when the working tree is currently dirty (the
-/// "evaluating the tool / accidentally on the base branch" case); `clean` removes
+/// "evaluating the tool / accidentally on the base branch" case); `prune` admits
 /// base-tip dirty runs regardless of the current working-tree state.
 #[derive(Clone, Copy)]
 enum DirtyTipPolicy {
@@ -808,7 +809,7 @@ where
 
     // The base-branch dirty-tip exception: `analyze`/`list` admit a base-side tip's
     // dirty runs only when the working tree is currently dirty (`--no-dirty` skips
-    // both the probe and the exception); `clean` admits them unconditionally so it
+    // both the probe and the exception); `prune` admits them unconditionally so it
     // can remove them regardless of the present working-tree state.
     let dirty_tip_exception = match policy {
         DirtyTipPolicy::Always => !selection.no_dirty,
@@ -1030,7 +1031,21 @@ fn validate_triple_exclusivity(
     Ok(())
 }
 
-/// Parses the `--since` option into an absolute cutoff instant, if set.
+/// Parses the `--since` option into an absolute lower-bound instant, if set.
+///
+/// See [`parse_instant`] for the accepted input forms.
+fn parse_since(value: Option<&str>) -> Result<Option<Timestamp>, RunError> {
+    parse_instant(value, "--since")
+}
+
+/// Parses the `--until` option into an absolute upper-bound instant, if set.
+///
+/// See [`parse_instant`] for the accepted input forms.
+fn parse_until(value: Option<&str>) -> Result<Option<Timestamp>, RunError> {
+    parse_instant(value, "--until")
+}
+
+/// Parses a time-cutoff option into an absolute instant, if set.
 ///
 /// Three input forms are accepted, tried in order:
 ///
@@ -1043,9 +1058,9 @@ fn validate_triple_exclusivity(
 /// The relative form is normalized through [`Span::abs`] before subtracting, so a
 /// duration written with the friendly `ago` suffix (which jiff parses as a
 /// *negative* span) still means "this far back" rather than flipping into the
-/// future. A lower bound in the future is never a sensible cutoff, so both
-/// `5 months` and `5 months ago` resolve to the same past instant.
-fn parse_since(value: Option<&str>) -> Result<Option<Timestamp>, RunError> {
+/// future. A cutoff in the future is never a sensible bound, so both `5 months`
+/// and `5 months ago` resolve to the same past instant.
+fn parse_instant(value: Option<&str>, flag: &str) -> Result<Option<Timestamp>, RunError> {
     let Some(value) = value else {
         return Ok(None);
     };
@@ -1061,27 +1076,27 @@ fn parse_since(value: Option<&str>) -> Result<Option<Timestamp>, RunError> {
         return Ok(Some(zoned.timestamp()));
     }
     if let Ok(span) = value.parse::<Span>() {
-        return Ok(Some(instant_before_now(span)?));
+        return Ok(Some(instant_before_now(span, flag)?));
     }
     Err(RunError::Analyze {
         message: format!(
-            "invalid --since value {value:?}; expected an RFC 3339 timestamp, a YYYY-MM-DD \
+            "invalid {flag} value {value:?}; expected an RFC 3339 timestamp, a YYYY-MM-DD \
              date, or a relative duration such as \"6 months\" or \"30 days ago\""
         ),
     })
 }
 
 /// Resolves a relative [`Span`] to the instant that far before now, treating the
-/// span's magnitude as a look-back regardless of its sign (see [`parse_since`]).
+/// span's magnitude as a look-back regardless of its sign (see [`parse_instant`]).
 ///
 /// Calendar units (months, years) have no fixed length, so the subtraction is
 /// anchored to the current UTC zoned datetime rather than to a bare duration.
-fn instant_before_now(span: Span) -> Result<Timestamp, RunError> {
+fn instant_before_now(span: Span, flag: &str) -> Result<Timestamp, RunError> {
     let now = Timestamp::now().to_zoned(TimeZone::UTC);
     now.checked_sub(span.abs())
         .map(|zoned| zoned.timestamp())
         .map_err(|error| RunError::Analyze {
-            message: format!("--since duration is out of the representable range: {error}"),
+            message: format!("{flag} duration is out of the representable range: {error}"),
         })
 }
 

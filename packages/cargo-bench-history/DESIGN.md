@@ -25,8 +25,8 @@ It stores every result over time (local path or Azure blob), runs in multiple
 environments (dev PC, GitHub Actions, ADO), and partitions data only when the
 results are not otherwise comparable.
 
-Commands: `run`, `install`, `analyze`, `backfill`, `list`, `clean`, `bless`,
-`unbless` (plus a deferred `upload` — §8.2 — and `prune` — §8.9).
+Commands: `run`, `install`, `analyze`, `backfill`, `list`, `prune`, `bless`,
+`unbless`.
 
 ## 2. How the benchmark systems work (and what they emit)
 
@@ -134,7 +134,7 @@ flowchart LR
   time** (defaults to the commit date for clean / wall-clock now for dirty,
   overridable with `--timestamp`), the **execution time** (when the benches ran),
   and the **ingest time** (wall clock when stored). The series is ordered by git
-  topology (§8.4), not by effective time; the tool never assumes ingest time is the
+  topology (§8.3), not by effective time; the tool never assumes ingest time is the
   effective date.
 * **RunContext** — metadata attached to every stored run (see §6).
 * **ResultSet** — `{ schema_version, context, results: [ResultRecord] }`; the
@@ -212,7 +212,7 @@ concurrent CI). The path is `<discriminant set>/<commit_sha>/<run file>`:
 The segment **above** `<commit_sha>` is the **discriminant set** — the dimensions
 that make two runs comparable (§4.3). The commit is a directory; **clean vs dirty
 is filename semantics** within it. This layout is dictated by how `analyze` selects
-data (§8.4): storage is **not** a pre-assembled timeline. A series is **pieced
+data (§8.3): storage is **not** a pre-assembled timeline. A series is **pieced
 together at query time** by resolving git history into an ordered set of commits and
 then reading each commit's directory — so the storage key is indexed by *commit*,
 and ordering comes from *git topology*, never from a timestamp baked into the key.
@@ -231,7 +231,7 @@ treated like any other write-once conflict (refused unless `--overwrite`).
 
 Branch is **not** a path component: a commit SHA is globally unique, so the same
 commit on two branches is one point. Branch selection happens at query time via git
-topology (§8.4); branch is recorded only as run metadata (§6).
+topology (§8.3); branch is recorded only as run metadata (§6).
 
 Each path segment (`<project>`, `<target_triple>`, `<machine_key>`, `<commit_sha>`)
 is **sanitized** before the key is built: any character outside `[A-Za-z0-9._-]`
@@ -297,7 +297,7 @@ Captured once per stored run and attached to the `ResultSet`:
   commit's date no longer identifies the code). Either default is overridable with
   `--timestamp <rfc3339>` (squash / rebase, reconstructing from logs, benches not
   tied to one commit). Effective time **no longer orders the series** — git topology
-  does (§8.4). It serves three narrower roles: the dirty filename (`dirty-<unix>`),
+  does (§8.3). It serves three narrower roles: the dirty filename (`dirty-<unix>`),
   the sub-order of multiple runs *within one commit* (clean first, then dirty
   snapshots in the order taken), and the `--since` window filter.
 * **Execution time** — wall clock when the benches actually ran (metadata), read
@@ -306,8 +306,8 @@ Captured once per stored run and attached to the `ResultSet`:
   the `tick::Clock`; **never** used as the effective date.
 * **Git:** commit SHA + short SHA, branch, committer date, dirty flag (`git`).
   Branch is metadata only — query-time topology, not this field, decides series
-  membership (§8.4). Parent lineage is **not** recorded: `analyze` resolves topology
-  from a live repo (§8.4), so storage never needs to reconstruct the commit graph.
+  membership (§8.3). Parent lineage is **not** recorded: `analyze` resolves topology
+  from a live repo (§8.3), so storage never needs to reconstruct the commit graph.
 * **CI:** provider + run id + PR number, detected from env:
   * GitHub Actions: `GITHUB_ACTIONS`, `GITHUB_SHA`, `GITHUB_REF_NAME`,
     `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT`.
@@ -338,8 +338,8 @@ trait Storage {
 `put` is write-once (a re-`put` of an existing key is `StorageError::AlreadyExists`,
 the basis of `run`'s clean-collision refusal — §8.1); `put_overwrite` replaces in
 place (the `--overwrite` escape hatch). `delete` removes one object and returns
-`StorageError::NotFound` when it is absent — used by `clean` (§8.7) to reclaim dirty
-runs.
+`StorageError::NotFound` when it is absent — used by `prune` (§8.6) to delete the
+selected runs.
 
 Storage I/O is **async** (§10): `LocalStorage` over `tokio::fs`, `AzureBlobStorage`
 over async HTTP. `async fn` in a trait is not `dyn`-compatible, so backend
@@ -381,8 +381,8 @@ implement the same trait with no special-casing upstream.
 
 ## 8. Commands
 
-The commands (`run`, `install`, `analyze`, `backfill`, `list`, `clean`, `bless`,
-`unbless`; `upload` and `prune` are deferred — §8.2, §8.9) follow
+The commands (`run`, `install`, `analyze`, `backfill`, `list`, `prune`, `bless`,
+`unbless`) follow
 the established pattern: `main.rs` strips the injected `bench-history` arg, `argh`
 parses (here with **subcommands**), and dispatches to `lib::run`, which returns a
 typed `Outcome`/`Error`.
@@ -458,27 +458,9 @@ point instead of refusing, §4.2), `--verbose` (print a step-by-step diagnostic
 trail to stderr — the benchmark command and injected env, directories scanned,
 files included/skipped-as-stale, and each stored key — to diagnose a run that
 unexpectedly stored nothing). `--engine` is **not** a `run` flag — it is an
-`analyze` facet over stored data (§8.4).
+`analyze` facet over stored data (§8.3).
 
-### 8.2 `cargo bench-history upload` — deferred (run vs upload)
-`run` already does the only thing that *must* happen at execution time — inject
-`GUNGRAUN_SAVE_SUMMARY` so Callgrind even writes a machine-readable summary — and
-then stores the result. A standalone `upload` would merely re-harvest *existing*
-`target/` output without re-running benches, and its value is narrow:
-* **Callgrind:** near-useless on its own — without the run-time env injection
-  there is no `summary.json` to harvest, so the benches had to run under our
-  control anyway, which is exactly what `run` does.
-* **Criterion:** plausible (estimates.json is always written, so output may
-  pre-exist from a separate `cargo bench`), and the engine is now supported — so
-  this is the most likely trigger for un-deferring `upload`.
-
-So `upload` is **deferred**. The harvest → build → store logic already lives in
-reusable pieces (`bench_output.rs` for the harvest, the store step in
-`commands/run.rs`), shared by `run` and `backfill`; exposing it as an `upload`
-subcommand is a thin addition if a concrete need appears. When added it is
-platform-neutral (only reads files).
-
-### 8.3 `cargo bench-history install`
+### 8.2 `cargo bench-history install`
 Generate an example `.cargo/bench_history.toml` if absent; print its path and
 next steps. Never overwrite an existing file (report and exit success). Honors
 `--config <path>` to write somewhere other than the default location. Writing is
@@ -491,7 +473,7 @@ run-time-only `--machine-key` flag, since a committed config would be wrong for
 some checkouts) and the next-steps hint points at `backfill` for seeding an
 existing repository's history.
 
-### 8.4 `cargo bench-history analyze`
+### 8.3 `cargo bench-history analyze`
 
 **Analyze pieces a series together at query time from git topology** — storage is
 indexed by commit (§4.2), not pre-ordered. `analyze` therefore **requires a
@@ -580,7 +562,7 @@ order, runs the finding algorithms (§9), and prints a report.
   `--verbose`, so a `0 runs` outcome is never mistaken for "no data". `--verbose`
   is accepted by every command.
 
-### 8.5 `cargo bench-history backfill`
+### 8.4 `cargo bench-history backfill`
 
 Reconstructs history by checking out each commit in a range and running
 `cargo bench-history run` for it. Bootstraps an existing repo's timeline and is
@@ -600,7 +582,7 @@ progression and does not fan out into commits merged in from side branches.
 range is part of the current branch's history (`git merge-base --is-ancestor
 <from> <to>` and `<to>` an ancestor of — or equal to — `HEAD`); otherwise it
 errors out, because `analyze` only ever surfaces a point when its commit is in the
-analyzed ref's topology (§8.4), so backfilling commits outside the current branch's
+analyzed ref's topology (§8.3), so backfilling commits outside the current branch's
 ancestry would write data that no ordinary analysis can reach.
 
 **Per commit**, in order, the tool first consults storage to decide whether the
@@ -647,7 +629,7 @@ nothing.
 data, run backfill on Linux/WSL — the worktree path is reachable from WSL exactly
 like the primary checkout.
 
-### 8.6 `cargo bench-history list`
+### 8.5 `cargo bench-history list`
 
 `list` previews the exact data set an `analyze` pass would consume, without running
 the analysis — letting the user inspect and confirm the commit range and the
@@ -665,7 +647,7 @@ cargo bench-history list [--discriminants] [--blessings [--all]] \
 selection flag `analyze` accepts (`--repo`/`--branch`/`--base`/`--engine`/
 `--target-triple`/`--os`/`--architecture`/`--machine-key`/`--no-dirty`/`--since`/
 `--metric`) selects the same data set here, resolved through the same shared
-selection pipeline (§8.4). The two commands must stay in lockstep — a selection
+selection pipeline (§8.3). The two commands must stay in lockstep — a selection
 parameter added to one is added to the other. `list` omits only the analysis-only
 flags `--mode` / `--include-improvements` / `--include-inactive` (it never analyzes).
 
@@ -675,7 +657,7 @@ oldest-first by git topology, so the user sees precisely which runs would feed t
 analysis.
 
 `--discriminants` switches to a storage-index listing of the present discriminant
-sets (no repository required). `--blessings` switches to a blessing audit (§8.8): the
+sets (no repository required). `--blessings` switches to a blessing audit (§8.7): the
 sidecars at the current commit by default, or — with `--all` — the most recent
 blessing of every benchmark across the analysis window.
 
@@ -684,40 +666,57 @@ present under `v2/<project>/` (engine / OS / arch / machine key) **without requi
 a repository** (§4.3). This is where the storage-set listing lives, separate from
 the repository-driven data-set preview.
 
-### 8.7 `cargo bench-history clean`
+### 8.6 `cargo bench-history prune`
 
-`clean` removes the dirty (uncommitted-tree) runs from exactly the commits a
-matching `analyze`/`list` pass would admit dirty runs from — the commits unique to
-the analyzed branch, or the base branch's tip when on the base branch. It exists so
-that ephemeral evaluation/experiment snapshots can be reclaimed without hand-deleting
-storage objects.
+`prune` **deletes a chosen portion of the stored data set** — for reclaiming
+storage, discarding a bad run, or dropping the ephemeral uncommitted-tree snapshots
+left behind by evaluation/experiment runs. It selects the data set with the **same
+selection pipeline as `analyze`/`list`** (so the three stay in lockstep) and then
+removes the selected objects rather than reporting on them.
 
 ```
-cargo bench-history clean [--dry-run] \
+cargo bench-history prune [--dry-run] [--all] [--dirty | --clean] \
     [--repo PATH] [--branch REF] [--base REF] \
     [--engine NAME] [--target-triple TRIPLE] [--os OS] [--architecture ARCH] \
-    [--machine-key KEY] [--since DATE] \
+    [--machine-key KEY] [--commit SHA …] [--since DATE] [--until DATE] \
     [--format text|json|markdown] [--verbose] [--config PATH]
 ```
 
-`clean` **mirrors `analyze`'s/`list`'s data-set-selection parameters** through the
-same shared selection pipeline (§8.4) — the same lockstep requirement applies. It
-omits only `--no-dirty` (cleaning *targets* dirty runs) and `--metric` (deletion is
-per-object, not per-metric). Clean runs are never touched.
+**Deletion scopes.** With no scope flag, `prune` removes the selected **clean *and*
+dirty** runs (and the blessing sidecars riding on any removed clean run). `--dirty`
+restricts to the dirty (uncommitted-tree) snapshots only — the "drop the ephemeral
+runs" case. `--clean` restricts to clean runs and their blessings, leaving dirty
+snapshots in place. `--dirty` and `--clean` are mutually exclusive.
 
-The one intentional divergence: the base-branch tip's dirty runs are admitted
-**unconditionally** here, whereas `analyze`/`list` admit them only when the working
-tree is currently dirty (the `DirtyTipPolicy` parameter to the shared
-`resolve_history` helper — `Always` for `clean`, `WhenWorkingTreeDirty` for
-`analyze`/`list`). This lets `clean` reclaim base-branch snapshots regardless of the
-current tree state.
+**Narrowing guard.** Deleting clean benchmark history is destructive and
+irreversible, so a scope that touches clean runs (the default or `--clean`) refuses
+to run against an **un-narrowed** selection: at least one of a facet
+(`--engine`/`--target-triple`/`--os`/`--architecture`/`--machine-key`), `--commit`,
+`--since`, or `--until` must be present, or the explicit `--all` override given. The
+`--dirty` scope is **exempt** — dirty data is ephemeral, so a blanket cleanup needs
+no guard.
+
+**Selection.** `prune` reuses `analyze`'s data-set-selection parameters through the
+shared pipeline. The base-branch tip's dirty runs are admitted
+**unconditionally** (the `DirtyTipPolicy::Always` parameter to the shared
+`resolve_history` helper, versus `WhenWorkingTreeDirty` for `analyze`/`list`), so a
+`prune --dirty` reclaims base-branch snapshots regardless of the current tree state.
+`--commit` (repeatable, case-insensitive SHA-prefix) restricts to specific commits;
+`--since`/`--until` bound the effective time inclusively (both read each candidate's
+stored body to recover its effective time). `prune` is history-scoped (it does not
+take an analyze `--mode`).
+
+**Blessings follow their clean run.** A blessing sidecar is removed only when the
+clean run it annotates is itself removed in the same pass — it is never time-filtered
+directly. So `--dirty` never touches blessings, and `--clean`/default remove a
+commit's blessings exactly when they remove that commit's `clean.json`.
 
 `--dry-run` previews the removal — building the identical plan but skipping the
-deletes. The JSON report carries `dry_run` and the deleted object keys per commit
-for transparency; text/markdown report counts only. Deletion is per object via the
-`Storage::delete` trait method (§7).
+deletes. The JSON report carries `dry_run`, the per-commit run/blessing counts, and
+the deleted object keys for transparency; text/markdown report counts only. Deletion
+is per object via the `Storage::delete` trait method (§7).
 
-### 8.8 `cargo bench-history bless` / `unbless`
+### 8.7 `cargo bench-history bless` / `unbless`
 
 A blessing manually **accepts an intentional performance change on the base branch**
 so history analysis stops re-flagging it. Sometimes a regression is a deliberate
@@ -769,26 +768,16 @@ blessing sidecars, since the accepted data point is gone.
 `unbless` deletes every blessing recorded **at the current commit** in the selected
 sets (a "blessing delete" at HEAD); it does not touch blessings at other commits.
 
-**`list --blessings`** audits blessings (§8.6 extends `list`): with no extra flag it
+**`list --blessings`** audits blessings (§8.5 extends `list`): with no extra flag it
 lists the sidecars at the current commit (what `unbless` would remove); with `--all`
 it rolls up the **most recent** blessing of every benchmark across the analysis
 window (the same data-set selection `analyze` uses), so a reviewer can see which
 benchmarks are currently re-baselined and since which commit.
 
-### 8.9 `cargo bench-history prune` — deferred
-
-A `prune` command to **delete a chosen portion of the stored data set** (for
-reclaiming storage or discarding a bad run), taking the **same data-set-selection
-syntax as `analyze`** (§8.4) and a `--dry-run` safety preview. Deferred — `clean`
-(§8.7) already covers the common "drop the ephemeral dirty runs" case via the same
-selection pipeline and `Storage::delete`, so `prune` is added only when a concrete
-need to delete clean history arises. When added it joins the `analyze`/`list`/`clean`
-selection lockstep (decision 26).
-
 ## 9. Analysis algorithms
 
 Series: per `(DiscriminantSet, BenchmarkId, metric)`, ordered by git first-parent
-topology (§8.4) with runs on one commit sub-ordered by effective time (§6). The
+topology (§8.3) with runs on one commit sub-ordered by effective time (§6). The
 goal is **high signal-to-noise**: report level shifts and trends that are real,
 and stay silent on measurement jitter. The design is *engine-aware* because the
 two engines have fundamentally different noise profiles, and a single detector
@@ -871,7 +860,7 @@ classification: a finding's magnitude is conveyed by its relative-change percent
 and which findings warrant action is left to human (or agent) judgement rather
 than an automatic tier. Polarity is unchanged: every metric is lower-is-better
 except `CacheEvents` (cache *hits* — higher is better). Findings are advisory and
-never gate the exit code (§8.4, §9.6).
+never gate the exit code (§8.3, §9.6).
 
 ### 9.5 Statistical primitives
 
@@ -896,7 +885,7 @@ topology**, never the on-disk working-tree state. The mode is **history** iff th
 analyzed tip *is* the merge-base with the base (i.e. the base branch — `target ==
 base`, nothing private) **and** no dirty run is recorded on top of that tip, and
 **branch** otherwise: either there are commits past the merge-base (a real feature
-branch), or a dirty run is recorded on the base tip and admitted by the §8.4
+branch), or a dirty run is recorded on the base tip and admitted by the §8.3
 exception ("an unnamed feature branch"). Crucially, a dirty *working tree* alone
 does not force branch mode — a dirty checkout that has only ever stored clean runs
 carries no feature-branch data and stays history. `tip` is never auto-selected; it
@@ -940,7 +929,7 @@ established level (a bounded window of preceding points) using the same engine g
 and reports regressions only.
 
 **JSON signal (downstream contract).** Because findings never gate the exit code
-(§8.4), the `json` report is the machine-readable output:
+(§8.3), the `json` report is the machine-readable output:
 
 ```json
 {
@@ -994,7 +983,7 @@ carries an `active` flag and an `active_from` index into its `series`.
 **Resolved spikes (self-corrected).** When a level rose and later returned to its
 prior baseline, the *current* state matches the baseline — there is nothing to act on.
 Such a finding is **inactive**: suppressed by default and surfaced only with
-`--include-inactive` (§8.4). Its `flipped_at` names the commit at which the level
+`--include-inactive` (§8.3). Its `flipped_at` names the commit at which the level
 recovered (the detail line reads "recovers at <commit>" rather than "flips at"). The
 recovered points always remain in the data set and on the chart; the flag only
 governs whether the finding is reported. Detection runs after the active change-point
@@ -1002,7 +991,7 @@ governs whether the finding is reported. Detection runs after the active change-
 regime medians, so the change-point detector is silent) and locates the sustained
 plateau between the rise and the recovery.
 
-**Blessings (manually accepted).** A blessing (§8.8) re-baselines a series from the
+**Blessings (manually accepted).** A blessing (§8.7) re-baselines a series from the
 blessed commit forward. `apply_blessings` picks, per series, the **latest** blessing
 whose prefix matches the benchmark, and sets `active_from` to the first point at or
 after that commit; the detectors then run on the **active segment only**, so the
@@ -1016,7 +1005,7 @@ series was re-baselined records `blessed_at` (the blessing's abbreviated commit)
 
 Blessings load only for commits inside the analysis window (the same topological
 selection as the rest of `analyze`); a blessing on a commit outside the window is not
-consulted. Because blessing requires a clean run at the blessed commit (§8.8), the
+consulted. Because blessing requires a clean run at the blessed commit (§8.7), the
 active segment always begins at a real recorded data point.
 
 **Active period in the chart.** The history-mode chart greys the pre-active prefix
@@ -1070,10 +1059,10 @@ src/
     findings.rs           # engine-aware change-point + drift detectors
     report.rs             # text|json|markdown multi-set renderer
     list.rs               # `list` data-set preview + `list --discriminants`
-    clean.rs              # `clean` removes dirty runs (mirrors list selection)
+    prune.rs              # `prune` deletes selected runs (mirrors list selection)
     bless.rs              # `bless`/`unbless` + `list --blessings` audit
   commands/
-    mod.rs run.rs install.rs backfill.rs   # the analyze/list/clean/bless/unbless handlers are in analyze/
+    mod.rs run.rs install.rs backfill.rs   # the analyze/list/prune/bless/unbless handlers are in analyze/
 ```
 
 **Async ports & adapters (the testability boundary).** The app is **async by
@@ -1185,7 +1174,7 @@ adds macOS; mapped to the original request's numbering:
    (surfaced as `RunError::Duplicate`) + `--overwrite`, and the dirty effective=now
    keying. Re-targets `comparability` and `run`'s store step; small, in-process, heavily
    unit-tested before the git-heavy work builds on it.
-7. ✅ **Git-aware `analyze`** (§8.4, §4.3) — the query model: a read-only git-history
+7. ✅ **Git-aware `analyze`** (§8.3, §4.3) — the query model: a read-only git-history
    port (`rev-list --first-parent`, `merge-base`, default-branch detection) with a
    real adapter + in-memory fake; require-a-repo (else error); target/base ref split
    with clean-only base + clean/dirty private; topology ordering; `--branch` /
@@ -1193,7 +1182,7 @@ adds macOS; mapped to the original request's numbering:
    / `--engine` / `--machine-key`; the set index is listed via `list
    --discriminants`). Largest reshape of an
    existing command; the series engine moves from timestamp order to topology order.
-8. ✅ **`backfill`** (§8.5) — range enumeration + ancestry validation, per-commit
+8. ✅ **`backfill`** (§8.4) — range enumeration + ancestry validation, per-commit
    checkout in a dedicated git worktree, clean-state guards, default skip-existing
    (resumable; backfill treats the it.6 write-once collision as a skip rather than
    an error), `--ignore-errors`, end-of-run summary.
@@ -1205,16 +1194,15 @@ adds macOS; mapped to the original request's numbering:
    deterministic (Callgrind) series bypass significance/FDR so exact steps of any
    size are reported. Layered on the Criterion dispersion fields recorded in
    iteration 5.
+10. ✅ **`prune`** (§8.6) — delete a chosen portion of the stored data set with the
+    `analyze`/`list` selection pipeline, delete-by-default (clean + dirty + their
+    blessings) with `--dirty`/`--clean` scopes, `--commit`/`--since`/`--until`
+    narrowing, a mandatory narrowing guard on clean deletion (`--all` override), and
+    a `--dry-run` preview. The earlier `clean` command (drop the ephemeral dirty
+    runs) is folded in as `prune --dirty`.
 
 **Deferred:**
 
-* A standalone `upload` command (§8.2) — added only if a concrete need arises, most
-  likely alongside Criterion. Its harvest → build → store logic already exists, shared
-  between `run` and `backfill` (`bench_output.rs` plus the store step in
-  `commands/run.rs`).
-* A `prune` command (§8.9) — delete a chosen portion of stored data with the `analyze`
-  selection syntax and a `--dry-run` preview; `clean` (§8.7) covers the common
-  ephemeral-dirty case for now.
 * **`alloc_tracker` / `all_the_time` JSON as additional Criterion-side outputs** —
   these workspace tools already emit per-operation JSON into `target/<crate>/<op>.json`
   (allocations, wall time) alongside the Criterion wall-clock measurements. A future
@@ -1279,10 +1267,11 @@ Each iteration ships with tests and docs and leaves the tool runnable.
 12. **macOS** — *Decided:* first-class for `install` / `analyze` / Criterion /
     Azure and the harvest-store half of `run`; only Callgrind execution is
     unavailable (no Valgrind), and its benches simply produce no output there.
-13. **`run` vs `upload`** — *Decided:* `run` always persists (execute → ingest →
-    store); the standalone `upload` command is **deferred** because its value is
-    marginal for Callgrind and only becomes real with Criterion (iteration 5).
-    The reusable `ingest` module makes adding it later trivial.
+13. **`run` vs `upload`** — *Decided:* `run` always persists (execute → harvest →
+    store). A standalone `upload` (re-harvest existing `target/` output without
+    re-running benches) was considered and **dropped** as irrelevant: for Callgrind it
+    cannot work without `run`'s run-time env injection (no summary is written
+    otherwise), and for Criterion the need never materialized.
 14. **Async runtime** — *Decided:* async by default on Tokio (`#[tokio::main]`,
     `async fn run`); I/O edges (process, fs, storage/HTTP) are async behind small
     ports with real adapters + in-memory fakes, while pure logic stays sync and
@@ -1344,7 +1333,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     `--os` / `--architecture` / `--machine-key` (or `--target-triple` for the whole
     triple, mutually exclusive with `--os` / `--architecture`), each matched set
     producing its own
-    report (§4.3, §8.4); the set index is listed via the `list --discriminants`
+    report (§4.3, §8.3); the set index is listed via the `list --discriminants`
     command. **Dirty-tree base-tip exception:** when the working tree is
     currently dirty (`git status --porcelain` non-empty) and the target tip is
     base-side, that tip's dirty snapshots are admitted (the "evaluating the tool" /
@@ -1366,7 +1355,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     `--overwrite` regenerates them; a build/bench failure stops by
     default and `--ignore-errors` skips and continues with an end-of-run summary,
     while infrastructure failures always abort. Benches are whatever each commit
-    contains, run with `cargo bench` exactly as `run` (§8.5).
+    contains, run with `cargo bench` exactly as `run` (§8.4).
 24. **Series ordering** — *Decided:* **git topology** (first-parent order of the
     resolved commit list), not effective timestamp. This removes the committer-date
     monotonicity hazard (rebases / amended dates no longer misorder) and is the
@@ -1382,19 +1371,22 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     the union of engine env vars yields correct output for every supported engine —
     true for Criterion + Callgrind, where off-Linux the Callgrind benches are
     compiled-out no-ops.
-26. **`list` / `clean` mirror `analyze`'s selection** — *Decided:* `list` (preview
-    the data set, no analysis — §8.6) and `clean` (delete the dirty runs from the
-    admitting commits — §8.7) reuse `analyze`'s exact data-set-selection pipeline,
+26. **`list` / `prune` mirror `analyze`'s selection** — *Decided:* `list` (preview
+    the data set, no analysis — §8.5) and `prune` (delete a chosen portion of the
+    data set — §8.6) reuse `analyze`'s exact data-set-selection pipeline,
     so a selection flag added to one is added to all three (lockstep). The
     analysis-only `--mode` / `--include-improvements` are not part of the selection
-    lockstep (neither `list` nor `clean` analyzes); `clean` omits `--no-dirty` (it
-    targets dirty runs) and `--metric` (deletion is per-object). The one intentional divergence is the
-    base-branch tip's dirty exception (decision 22): `analyze`/`list` admit it only
-    when the working tree is currently dirty, but `clean` admits it
-    **unconditionally** (the shared `resolve_history` helper's `DirtyTipPolicy`
-    parameter), so `clean` can reclaim ephemeral base-branch snapshots regardless of
-    the current tree state. `clean` adds a write-once-safe `Storage::delete` (§7) and
-    a `--dry-run` preview.
+    lockstep (neither `list` nor `prune` analyzes); `prune` adds the deletion-shaping
+    `--dirty`/`--clean`/`--all`/`--commit`/`--until` flags. The one intentional
+    divergence is the base-branch tip's dirty exception (decision 22):
+    `analyze`/`list` admit it only when the working tree is currently dirty, but
+    `prune` admits it **unconditionally** (the shared `resolve_history` helper's
+    `DirtyTipPolicy` parameter), so `prune --dirty` can reclaim ephemeral
+    base-branch snapshots regardless of the current tree state. `prune` adds a
+    write-once-safe `Storage::delete` (§7) and a `--dry-run` preview. (Refined: an
+    earlier dedicated `clean` command — delete only the dirty runs — was folded into
+    `prune` as the `--dirty` scope; deleting clean history is guarded by a mandatory
+    narrowing requirement with an `--all` override.)
 27. **Engine-aware analysis** — *Decided:* the detector is split by engine noise
      profile (§9). Deterministic Callgrind metrics use a Pettitt change-point with
      only a persistence requirement (both regimes ≥ `min_regime`) and a nonzero
@@ -1427,7 +1419,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      instead. The two driving scenarios are a scheduled base-branch regression watch
      (history) and a per-PR feature-branch evaluation (branch).
 29. **Blessings & re-baselining** — *Decided:* an intentional base-branch change can
-     be **blessed** (§8.8) so history analysis stops re-flagging it. A blessing is an
+     be **blessed** (§8.7) so history analysis stops re-flagging it. A blessing is an
      append-only sidecar (`…/<commit>/bless-<issued_unix>.json`) recorded per
      benchmark via prefix filters, base-branch-only with an existing
      `clean.json` at the commit (else hard errors; no `--force`; a dirty working tree

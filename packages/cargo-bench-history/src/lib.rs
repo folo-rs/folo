@@ -57,6 +57,6 @@ pub use dispatch::{Overrides, run, run_with_overrides};
 pub use model::{BenchmarkId, Metric, MetricKind, ResultRecord, ResultSet, SCHEMA_VERSION};
 pub use storage::{LocalStorage, Storage, StorageError};
 pub use types::{
-    AnalyzeOptions, BackfillOptions, BlessOptions, CleanOptions, Command, InstallOptions,
-    ListOptions, RunError, RunOptions, RunOutcome, UnblessOptions,
+    AnalyzeOptions, BackfillOptions, BlessOptions, Command, InstallOptions, ListOptions,
+    PruneOptions, RunError, RunOptions, RunOutcome, UnblessOptions,
 };

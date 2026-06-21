@@ -27,8 +27,9 @@ pub enum Command {
     Analyze(AnalyzeOptions),
     /// List the data set a matching `analyze` pass would include.
     List(ListOptions),
-    /// Remove the dirty runs a matching `analyze`/`list` pass would include.
-    Clean(CleanOptions),
+    /// Delete stored runs (and their blessing sidecars) from the data set a
+    /// matching `analyze`/`list` pass resolves.
+    Prune(PruneOptions),
     /// Replay `run` across a range of historical commits.
     Backfill(BackfillOptions),
     /// Accept a benchmark's current level on the base branch as intentional.
@@ -184,42 +185,57 @@ pub struct ListOptions {
     pub verbose: bool,
 }
 
-/// Options for the `clean` command.
+/// Options for the `prune` command.
 ///
-/// The data-set-selection options mirror [`AnalyzeOptions`]/[`ListOptions`]
-/// (minus `no_dirty`, which is meaningless when the command only ever touches
-/// dirty runs, and `metric`, which is a series filter rather than a run
-/// selector) so a `clean` invocation removes exactly the dirty runs the same
-/// `analyze`/`list` invocation would include.
+/// The data-set-selection options mirror [`AnalyzeOptions`]/[`ListOptions`] so a
+/// `prune` invocation deletes runs from exactly the data set the same
+/// `analyze`/`list` invocation would resolve. By default both clean and dirty
+/// runs are removed (plus the blessing sidecars on every commit whose clean run
+/// is removed); `dirty` restricts removal to dirty (uncommitted-tree) snapshots —
+/// reproducing the former `clean` command — and `clean` to clean runs. The
+/// clean-history scopes refuse an un-narrowed selection unless `all` is set.
 #[doc(hidden)]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 #[expect(
     clippy::exhaustive_structs,
     reason = "constructed and matched by the in-crate binary and integration tests"
 )]
-pub struct CleanOptions {
+pub struct PruneOptions {
     /// Path to the configuration file, if overridden.
     pub config_path: Option<PathBuf>,
     /// Repository to resolve git topology from; defaults to the working directory.
     pub repo: Option<PathBuf>,
-    /// Target ref whose history is cleaned; defaults to `HEAD`.
+    /// Target ref whose history is pruned; defaults to `HEAD`.
     pub branch: Option<String>,
     /// Base ref the target's history is split at; defaults to the detected (or
     /// configured) default branch.
     pub base: Option<String>,
-    /// Only remove runs on or after this date, if set.
+    /// Restrict removal to specific commits (case-insensitive SHA-prefix match);
+    /// repeatable. Empty means every commit on the resolved history.
+    pub commit: Vec<String>,
+    /// Only remove runs whose effective time is on or after this cutoff, if set.
     pub since: Option<String>,
-    /// Restrict the cleanup to a single engine (criterion or callgrind), if set.
+    /// Only remove runs whose effective time is on or before this cutoff, if set.
+    pub until: Option<String>,
+    /// Restrict removal to a single engine (criterion or callgrind), if set.
     pub engine: Option<String>,
-    /// Restrict the cleanup to a single full target triple, if set. Mutually
+    /// Restrict removal to a single full target triple, if set. Mutually
     /// exclusive with `os` / `architecture` (the triple already fixes both).
     pub target_triple: Option<String>,
-    /// Restrict the cleanup to a single operating-system facet, if set.
+    /// Restrict removal to a single operating-system facet, if set.
     pub os: Option<String>,
-    /// Restrict the cleanup to a single CPU-architecture facet, if set.
+    /// Restrict removal to a single CPU-architecture facet, if set.
     pub architecture: Option<String>,
-    /// Restrict the cleanup to a single machine partition, if set.
+    /// Restrict removal to a single machine partition, if set.
     pub machine_key: Option<String>,
+    /// Remove only dirty (uncommitted-tree) snapshots. Mutually exclusive with
+    /// `clean`.
+    pub dirty: bool,
+    /// Remove only clean runs (and their blessing sidecars). Mutually exclusive
+    /// with `dirty`.
+    pub clean: bool,
+    /// Confirm deleting clean history across an un-narrowed selection.
+    pub all: bool,
     /// Preview what would be removed without deleting anything.
     pub dry_run: bool,
     /// Output format selector, if set.

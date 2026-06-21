@@ -113,7 +113,7 @@ fn help_text_describes_each_command_in_alphabetical_order() {
     );
 
     // The commands appear in alphabetical order.
-    let order = ["analyze", "backfill", "clean", "install", "list", "run"];
+    let order = ["analyze", "backfill", "install", "list", "prune", "run"];
     let positions: Vec<usize> = order
         .iter()
         .map(|name| {
@@ -1587,13 +1587,13 @@ async fn list_without_a_repository_errors() {
     assert!(message.contains("requires a git repository"), "{message}");
 }
 
-/// `clean` removes the dirty runs a matching `list`/`analyze` would include on the
-/// target side of a feature branch, leaving the clean runs untouched. The end
-/// state is verified through `list`, proving the production delete path reaches the
-/// configured storage.
+/// `prune --dirty` removes the dirty runs a matching `list`/`analyze` would include
+/// on the target side of a feature branch, leaving the clean runs untouched. The
+/// end state is verified through `list`, proving the production delete path reaches
+/// the configured storage.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn clean_removes_dirty_runs_on_a_feature_branch() {
+async fn prune_dirty_removes_dirty_runs_on_a_feature_branch() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
     workspace.checkout_new_branch("feature");
@@ -1611,11 +1611,11 @@ async fn clean_removes_dirty_runs_on_a_feature_branch() {
     let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
     assert_eq!(parsed["totals"]["runs"], 3, "{message}");
 
-    // Clean removes exactly the one dirty run.
+    // `prune --dirty` removes exactly the one dirty run.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["clean", "--format", "json"])
+        .drive(&["prune", "--dirty", "--format", "json"])
         .await
-        .expect("clean succeeds")
+        .expect("prune succeeds")
     else {
         panic!("expected a completed outcome");
     };
@@ -1641,11 +1641,11 @@ async fn clean_removes_dirty_runs_on_a_feature_branch() {
 }
 
 /// The key divergence from `analyze`/`list`: on the base branch with a *clean*
-/// working tree, `list` hides the base-tip dirty snapshot, yet `clean` still
-/// removes it (the base-tip exception is unconditional for `clean`).
+/// working tree, `list` hides the base-tip dirty snapshot, yet `prune --dirty` still
+/// removes it (the base-tip exception is unconditional for the dirty scope).
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn clean_removes_the_base_branch_tip_dirty_with_a_clean_tree() {
+async fn prune_dirty_removes_the_base_branch_tip_dirty_with_a_clean_tree() {
     let workspace = Workspace::clean_repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
     workspace.seed_dirty_callgrind("2024-01-02", "c1", 200.0);
@@ -1664,11 +1664,11 @@ async fn clean_removes_the_base_branch_tip_dirty_with_a_clean_tree() {
         "list hides the base-tip dirty run with a clean tree: {message}"
     );
 
-    // `clean` removes it anyway.
+    // `prune --dirty` removes it anyway.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["clean", "--format", "json"])
+        .drive(&["prune", "--dirty", "--format", "json"])
         .await
-        .expect("clean succeeds")
+        .expect("prune succeeds")
     else {
         panic!("expected a completed outcome");
     };
@@ -1677,9 +1677,9 @@ async fn clean_removes_the_base_branch_tip_dirty_with_a_clean_tree() {
 
     // A second pass finds nothing left to remove.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["clean", "--dry-run", "--format", "json"])
+        .drive(&["prune", "--dirty", "--dry-run", "--format", "json"])
         .await
-        .expect("clean succeeds")
+        .expect("prune succeeds")
     else {
         panic!("expected a completed outcome");
     };
@@ -1691,19 +1691,19 @@ async fn clean_removes_the_base_branch_tip_dirty_with_a_clean_tree() {
 }
 
 /// `--dry-run` previews the removal without deleting: it reports the same runs a
-/// real `clean` would, but a follow-up real `clean` still finds and removes them.
+/// real `prune` would, but a follow-up real `prune` still finds and removes them.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn clean_dry_run_reports_without_deleting() {
+async fn prune_dry_run_reports_without_deleting() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
     workspace.checkout_new_branch("feature");
     workspace.seed_dirty_callgrind("2024-01-02", "f1", 200.0);
 
     let RunOutcome::Completed { message } = workspace
-        .drive(&["clean", "--dry-run", "--format", "json"])
+        .drive(&["prune", "--dirty", "--dry-run", "--format", "json"])
         .await
-        .expect("clean succeeds")
+        .expect("prune succeeds")
     else {
         panic!("expected a completed outcome");
     };
@@ -1711,11 +1711,11 @@ async fn clean_dry_run_reports_without_deleting() {
     assert_eq!(parsed["dry_run"], true, "{message}");
     assert_eq!(parsed["totals"]["runs"], 1, "{message}");
 
-    // The dry run deleted nothing: a real clean still removes the same run.
+    // The dry run deleted nothing: a real prune still removes the same run.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["clean", "--format", "json"])
+        .drive(&["prune", "--dirty", "--format", "json"])
         .await
-        .expect("clean succeeds")
+        .expect("prune succeeds")
     else {
         panic!("expected a completed outcome");
     };
@@ -1724,22 +1724,29 @@ async fn clean_dry_run_reports_without_deleting() {
     assert_eq!(parsed["totals"]["runs"], 1, "{message}");
 }
 
-/// An engine facet scopes the cleanup: a callgrind-scoped `clean` leaves a dirty
-/// criterion snapshot on the same commit untouched.
+/// An engine facet scopes the prune: a callgrind-scoped `prune --dirty` leaves a
+/// dirty criterion snapshot on the same commit untouched.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn clean_scopes_by_engine() {
+async fn prune_dirty_scopes_by_engine() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
     workspace.checkout_new_branch("feature");
     workspace.seed_dirty_callgrind("2024-01-02", "f1", 200.0);
     workspace.seed_dirty_criterion("2024-01-02", "f1", "m1", 20.0);
 
-    // Clean only the callgrind set.
+    // Prune only the callgrind set.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["clean", "--engine", "callgrind", "--format", "json"])
+        .drive(&[
+            "prune",
+            "--dirty",
+            "--engine",
+            "callgrind",
+            "--format",
+            "json",
+        ])
         .await
-        .expect("clean succeeds")
+        .expect("prune succeeds")
     else {
         panic!("expected a completed outcome");
     };
@@ -1750,10 +1757,11 @@ async fn clean_scopes_by_engine() {
     );
     assert_eq!(parsed["sets"][0]["engine"], "callgrind", "{message}");
 
-    // The criterion dirty snapshot survives: a criterion-scoped clean still finds it.
+    // The criterion dirty snapshot survives: a criterion-scoped prune still finds it.
     let RunOutcome::Completed { message } = workspace
         .drive(&[
-            "clean",
+            "prune",
+            "--dirty",
             "--engine",
             "criterion",
             "--dry-run",
@@ -1761,7 +1769,7 @@ async fn clean_scopes_by_engine() {
             "json",
         ])
         .await
-        .expect("clean succeeds")
+        .expect("prune succeeds")
     else {
         panic!("expected a completed outcome");
     };
@@ -1773,12 +1781,12 @@ async fn clean_scopes_by_engine() {
     assert_eq!(parsed["sets"][0]["engine"], "criterion", "{message}");
 }
 
-/// A non-engine facet (`--os`) scopes the cleanup just like it scopes
-/// `analyze`/`list`: the same target commit hosts a dirty Linux (callgrind) run and
-/// a dirty Windows (criterion) run, and `--os linux` removes only the former.
+/// A non-engine facet (`--os`) scopes the prune just like it scopes `analyze`/`list`:
+/// the same target commit hosts a dirty Linux (callgrind) run and a dirty Windows
+/// (criterion) run, and `--os linux` removes only the former.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn clean_scopes_by_os_facet() {
+async fn prune_dirty_scopes_by_os_facet() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
     workspace.checkout_new_branch("feature");
@@ -1787,9 +1795,9 @@ async fn clean_scopes_by_os_facet() {
 
     // `--os linux` removes only the callgrind (linux) dirty run.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["clean", "--os", "linux", "--format", "json"])
+        .drive(&["prune", "--dirty", "--os", "linux", "--format", "json"])
         .await
-        .expect("clean succeeds")
+        .expect("prune succeeds")
     else {
         panic!("expected a completed outcome");
     };
@@ -1800,9 +1808,17 @@ async fn clean_scopes_by_os_facet() {
 
     // The Windows (criterion) dirty run survives: a `--os windows` pass still finds it.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["clean", "--os", "windows", "--dry-run", "--format", "json"])
+        .drive(&[
+            "prune",
+            "--dirty",
+            "--os",
+            "windows",
+            "--dry-run",
+            "--format",
+            "json",
+        ])
         .await
-        .expect("clean succeeds")
+        .expect("prune succeeds")
     else {
         panic!("expected a completed outcome");
     };
@@ -1814,12 +1830,13 @@ async fn clean_scopes_by_os_facet() {
     assert_eq!(parsed["sets"][0]["os"], "windows", "{message}");
 }
 
-/// `clean` spans every selected discriminant set in one pass: a dirty callgrind and
+/// `prune` spans every selected discriminant set in one pass: a dirty callgrind and
 /// a dirty criterion run on the same target commit form two sets, and an unfiltered
-/// `clean` removes both — exercising the multi-set plan and its plural rendering.
+/// `prune --dirty` removes both — exercising the multi-set plan and its plural
+/// rendering.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn clean_removes_dirty_across_multiple_discriminant_sets() {
+async fn prune_dirty_removes_runs_across_multiple_discriminant_sets() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
     workspace.checkout_new_branch("feature");
@@ -1828,22 +1845,22 @@ async fn clean_removes_dirty_across_multiple_discriminant_sets() {
 
     // Text format exercises the plural "discriminant sets" summary branch.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["clean", "--format", "text"])
+        .drive(&["prune", "--dirty", "--format", "text"])
         .await
-        .expect("clean succeeds")
+        .expect("prune succeeds")
     else {
         panic!("expected a completed outcome");
     };
     assert!(
-        message.contains("Removed 2 dirty runs across 2 discriminant sets"),
+        message.contains("Removed 2 runs across 2 discriminant sets"),
         "{message}"
     );
 
     // Both sets are now empty: a second pass finds nothing to remove.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["clean", "--dry-run", "--format", "json"])
+        .drive(&["prune", "--dirty", "--dry-run", "--format", "json"])
         .await
-        .expect("clean succeeds")
+        .expect("prune succeeds")
     else {
         panic!("expected a completed outcome");
     };
@@ -1851,11 +1868,12 @@ async fn clean_removes_dirty_across_multiple_discriminant_sets() {
     assert_eq!(parsed["totals"]["runs"], 0, "{message}");
 }
 
-/// `--since` removes only the dirty runs on or after the cutoff — the one clean path
-/// that reads object bodies in production (to recover each run's effective time).
+/// `--since` removes only the dirty runs on or after the cutoff — one of the two
+/// scopes that read object bodies in production (to recover each run's effective
+/// time).
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn clean_since_only_removes_runs_on_or_after_the_cutoff() {
+async fn prune_dirty_since_only_removes_runs_on_or_after_the_cutoff() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
     workspace.checkout_new_branch("feature");
@@ -1864,9 +1882,16 @@ async fn clean_since_only_removes_runs_on_or_after_the_cutoff() {
 
     // Only the 2024-01-05 run is on or after the cutoff.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["clean", "--since", "2024-01-04", "--format", "json"])
+        .drive(&[
+            "prune",
+            "--dirty",
+            "--since",
+            "2024-01-04",
+            "--format",
+            "json",
+        ])
         .await
-        .expect("clean succeeds")
+        .expect("prune succeeds")
     else {
         panic!("expected a completed outcome");
     };
@@ -1876,7 +1901,8 @@ async fn clean_since_only_removes_runs_on_or_after_the_cutoff() {
     // The on-or-after run is gone; the earlier run survives the cutoff.
     let RunOutcome::Completed { message } = workspace
         .drive(&[
-            "clean",
+            "prune",
+            "--dirty",
             "--since",
             "2024-01-04",
             "--dry-run",
@@ -1884,7 +1910,7 @@ async fn clean_since_only_removes_runs_on_or_after_the_cutoff() {
             "json",
         ])
         .await
-        .expect("clean succeeds")
+        .expect("prune succeeds")
     else {
         panic!("expected a completed outcome");
     };
@@ -1895,9 +1921,9 @@ async fn clean_since_only_removes_runs_on_or_after_the_cutoff() {
     );
 
     let RunOutcome::Completed { message } = workspace
-        .drive(&["clean", "--dry-run", "--format", "json"])
+        .drive(&["prune", "--dirty", "--dry-run", "--format", "json"])
         .await
-        .expect("clean succeeds")
+        .expect("prune succeeds")
     else {
         panic!("expected a completed outcome");
     };
@@ -1908,17 +1934,255 @@ async fn clean_since_only_removes_runs_on_or_after_the_cutoff() {
     );
 }
 
-/// Like `analyze`/`list`, `clean` requires a repository to resolve the topology;
+/// `--until` removes only the runs on or before the cutoff: the mirror of `--since`,
+/// also reading object bodies to recover each run's effective time.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn prune_dirty_until_only_removes_runs_on_or_before_the_cutoff() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.checkout_new_branch("feature");
+    workspace.seed_dirty_callgrind("2024-01-02", "f1", 100.0);
+    workspace.seed_dirty_callgrind("2024-01-05", "f2", 200.0);
+
+    // Only the 2024-01-02 run is on or before the cutoff.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&[
+            "prune",
+            "--dirty",
+            "--until",
+            "2024-01-03",
+            "--format",
+            "json",
+        ])
+        .await
+        .expect("prune succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(parsed["totals"]["runs"], 1, "{message}");
+
+    // The later run survives the cutoff; only the on-or-before run was removed.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["prune", "--dirty", "--dry-run", "--format", "json"])
+        .await
+        .expect("prune succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(
+        parsed["totals"]["runs"], 1,
+        "the later run survived the cutoff: {message}"
+    );
+}
+
+/// The default scope deletes clean *and* dirty runs (and their blessing sidecars)
+/// for the narrowed selection. A `--commit` selecting one feature commit removes its
+/// clean and dirty runs while leaving the base-branch run intact.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn prune_default_removes_clean_and_dirty_for_a_commit() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.checkout_new_branch("feature");
+    workspace.seed_callgrind("2024-01-02", "f1", 100.0);
+    workspace.seed_dirty_callgrind("2024-01-03", "f1", 200.0);
+    let f1 = workspace.commit("f1");
+
+    // Narrowed to f1, the default scope removes its clean and dirty runs.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["prune", "--commit", &f1, "--format", "json"])
+        .await
+        .expect("prune succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(parsed["totals"]["runs"], 2, "clean + dirty f1: {message}");
+
+    // Only the base-branch clean run remains.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["list", "--branch", "feature", "--format", "json"])
+        .await
+        .expect("listing succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(parsed["totals"]["runs"], 1, "{message}");
+}
+
+/// Deleting clean history is guarded: a default-scope `prune` with no narrowing
+/// predicate refuses to run unless `--all` is given, protecting against an
+/// accidental wipe of the entire data set.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn prune_refuses_an_unnarrowed_clean_scope_without_all() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+
+    let error = workspace
+        .drive(&["prune"])
+        .await
+        .expect_err("an un-narrowed clean prune should be refused");
+    let RunError::Analyze { message } = error else {
+        panic!("expected an analyze error, got {error:?}");
+    };
+    assert!(message.contains("--all"), "{message}");
+
+    // Nothing was deleted: the run is still listed.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["list", "--format", "json"])
+        .await
+        .expect("listing succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(parsed["totals"]["runs"], 1, "{message}");
+}
+
+/// `--all` overrides the narrowing guard and deletes the whole selected data set.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn prune_all_overrides_the_narrowing_guard() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.checkout_new_branch("feature");
+    workspace.seed_callgrind("2024-01-02", "f1", 100.0);
+
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["prune", "--all", "--branch", "feature", "--format", "json"])
+        .await
+        .expect("prune succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(
+        parsed["totals"]["runs"], 2,
+        "both clean runs deleted: {message}"
+    );
+
+    // The data set is empty afterwards.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["list", "--branch", "feature", "--format", "json"])
+        .await
+        .expect("listing succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(parsed["totals"]["runs"], 0, "{message}");
+}
+
+/// `--clean` deletes clean runs (and their blessings) while leaving dirty snapshots
+/// in place — the inverse of `--dirty`.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn prune_clean_scope_removes_clean_and_keeps_dirty() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.checkout_new_branch("feature");
+    workspace.seed_callgrind("2024-01-02", "f1", 100.0);
+    workspace.seed_dirty_callgrind("2024-01-03", "f1", 200.0);
+    let f1 = workspace.commit("f1");
+
+    // `--clean` narrowed to f1 removes only its clean run.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["prune", "--clean", "--commit", &f1, "--format", "json"])
+        .await
+        .expect("prune succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(
+        parsed["totals"]["runs"], 1,
+        "only the clean f1 run: {message}"
+    );
+
+    // The dirty f1 snapshot survives: a `--dirty` pass still finds it.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["prune", "--dirty", "--dry-run", "--format", "json"])
+        .await
+        .expect("prune succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(parsed["totals"]["runs"], 1, "dirty f1 survived: {message}");
+}
+
+/// A blessing sidecar follows its clean run: deleting a commit's clean run with the
+/// default scope also removes the blessing recorded there.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn prune_removes_a_blessing_with_its_clean_run() {
+    let workspace = Workspace::clean_repo(&storage_only_config());
+    workspace.seed_rising_callgrind_history();
+    let head = workspace.head();
+
+    workspace
+        .drive(&["bless", "nm/nm::observe"])
+        .await
+        .expect("blessing the base-branch tip succeeds");
+
+    // The blessing is recorded at HEAD.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["list", "--blessings", "--format", "json"])
+        .await
+        .expect("listing blessings succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(
+        parsed["blessings"].as_array().expect("an array").len(),
+        1,
+        "{message}"
+    );
+
+    // Pruning HEAD's clean run also deletes the blessing that rode on it.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["prune", "--commit", &head, "--format", "json"])
+        .await
+        .expect("prune succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert_eq!(parsed["totals"]["runs"], 1, "the clean HEAD run: {message}");
+    assert_eq!(parsed["totals"]["blessings"], 1, "{message}");
+
+    // The blessing is gone.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["list", "--blessings", "--format", "json"])
+        .await
+        .expect("listing blessings succeeds")
+    else {
+        panic!("expected a completed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
+    assert!(
+        parsed["blessings"].as_array().expect("an array").is_empty(),
+        "the blessing was removed with its clean run: {message}"
+    );
+}
+
+/// Like `analyze`/`list`, `prune` requires a repository to resolve the topology;
 /// without one it errors rather than removing nothing silently.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn clean_without_a_repository_errors() {
+async fn prune_without_a_repository_errors() {
     let workspace = Workspace::new(&storage_only_config());
 
     let error = workspace
-        .drive(&["clean"])
+        .drive(&["prune", "--dirty"])
         .await
-        .expect_err("clean without a repository should fail");
+        .expect_err("prune without a repository should fail");
     let RunError::Analyze { message } = error else {
         panic!("expected an analyze error, got {error:?}");
     };
