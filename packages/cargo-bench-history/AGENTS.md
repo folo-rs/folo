@@ -235,12 +235,14 @@ so history analysis re-baselines past it and stops re-flagging it. Blessings mat
   `reason`, and the issuing commit. Sidecars are append-only and never mutate a
   `clean.json`; `unbless` deletes the sidecar(s) at HEAD, and `run --overwrite`
   drops a commit's stale sidecars when it rewrites that commit.
-* **`bless` rules (all hard errors, no `--force`).** `analyze::bless::bless_with`
-  requires: the current HEAD is the base branch (`merge_base(HEAD, base) == HEAD`),
-  the working tree is clean, and a `clean.json` already exists at HEAD. The on-base
-  check fires **first**. None of those states would survive a history analysis, so a
-  feature-branch / dirty / data-less blessing is rejected rather than silently
-  ignored. `bless <prefix> [<prefix> …]` matches each prefix against the qualified
+* **`bless` rules (hard errors, no `--force`).** `analyze::bless::bless_with`
+  requires: the current HEAD is the base branch (`merge_base(HEAD, base) == HEAD`)
+  and a `clean.json` already exists at HEAD. The on-base
+  check fires **first**. Neither state would survive a history analysis, so a
+  feature-branch / data-less blessing is rejected rather than silently
+  ignored. A **dirty working tree is allowed** (the blessing targets the committed
+  `clean.json` at HEAD) but emits a `Warning: uncommitted changes present …`.
+  `bless <prefix> [<prefix> …]` matches each prefix against the qualified
   `<package>/<group>/<case>/<value>` identity via `starts_with` (per-benchmark, not
   all-or-nothing). It accepts the same discriminant facets as `analyze`.
 * **Effect on analysis — active/inactive segments.** In history mode

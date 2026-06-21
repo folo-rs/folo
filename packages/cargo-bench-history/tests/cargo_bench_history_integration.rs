@@ -3335,6 +3335,40 @@ async fn analyze_does_not_reflag_a_blessed_regression() {
     );
 }
 
+/// A dirty working tree on the base branch does not block blessing: the committed
+/// `clean.json` at HEAD is what gets accepted, so `bless` succeeds but prints a
+/// warning, and the blessing still re-baselines the series.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn bless_on_a_dirty_base_branch_warns_but_succeeds() {
+    let workspace = Workspace::clean_repo(&storage_only_config());
+    workspace.seed_rising_callgrind_history();
+    workspace.make_dirty("uncommitted.txt");
+
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["bless", "nm/nm::observe"])
+        .await
+        .expect("a dirty base-branch tree warns rather than erroring")
+    else {
+        panic!("expected a completed outcome");
+    };
+    assert!(
+        message.contains("Warning: uncommitted changes present"),
+        "{message}"
+    );
+    assert!(message.contains("Blessed"), "{message}");
+
+    // The blessing still took effect: the same data is no longer flagged.
+    let RunOutcome::Analyzed { regressions, .. } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(regressions, 0, "the dirty-tree blessing must still apply");
+}
+
 /// `list --blessings` reports the sidecar a `bless` just recorded at the current
 /// commit, naming the prefix filter it carries.
 #[tokio::test]

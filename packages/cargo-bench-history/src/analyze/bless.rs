@@ -4,10 +4,12 @@
 //!
 //! `bless` writes an append-only [`BlessingRecord`](crate::bless::BlessingRecord)
 //! sidecar into every facet-selected discriminant set that has a stored result at
-//! the current commit. It is base-branch-only with no escape hatch: a dirty
-//! working tree, a commit that is not on the base branch, or the absence of a
-//! stored result at the current commit are all hard errors, because a blessing on
-//! anything else would not survive a history analysis (see DESIGN §8.8). `unbless`
+//! the current commit. It is base-branch-only with no escape hatch: a commit that
+//! is not on the base branch, or the absence of a stored result at the current
+//! commit, are hard errors, because a blessing on anything else would not survive a
+//! history analysis (see DESIGN §8.8). A dirty working tree is allowed — the
+//! blessing applies to the committed `clean.json` recorded at HEAD, which the local
+//! edits do not change — but it emits a warning. `unbless`
 //! deletes every blessing recorded at the current commit in the selected sets;
 //! sidecars are immutable, so narrowing a blessing means unblessing and
 //! re-blessing the subset to keep.
@@ -147,15 +149,11 @@ where
         });
     }
 
-    // A blessing accepts a *committed* level, so the working tree must be clean:
-    // a dirty run is never recorded in history, so blessing one is meaningless.
-    if git.is_dirty().await.map_err(RunError::Io)? {
-        return Err(RunError::Bless {
-            message: "the working tree has uncommitted changes; commit them before blessing so \
-                      the accepted level matches a recorded run"
-                .to_owned(),
-        });
-    }
+    // A blessing accepts the *committed* level recorded at HEAD (`clean.json`), so a
+    // dirty working tree does not change which data point is blessed — the local
+    // edits are simply irrelevant. Warn rather than refuse, so an accidental
+    // uncommitted edit does not block blessing an already-recorded clean run.
+    let working_tree_dirty = git.is_dirty().await.map_err(RunError::Io)?;
 
     let selection = Selection::from_bless(options);
     let (engine, facets) = parsed_facets(&selection)?;
@@ -202,7 +200,15 @@ where
     }
 
     let message = format!(
-        "Blessed {} across {} at commit {short}.",
+        "{}Blessed {} across {} at commit {short}.",
+        if working_tree_dirty {
+            format!(
+                "Warning: uncommitted changes present. Blessing was applied to the existing \
+                 commit at HEAD ({short}).\n"
+            )
+        } else {
+            String::new()
+        },
         count_noun(options.prefixes.len(), "prefix filter"),
         count_noun(sets, "discriminant set"),
     );
@@ -464,18 +470,25 @@ mod tests {
     }
 
     #[test]
-    fn bless_a_dirty_tree_is_an_error() {
+    fn bless_a_dirty_tree_warns_but_still_blesses() {
         let storage = MemoryStorage::new();
         block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes()))
             .expect("seed clean run");
         let mut git = master_git();
         git.mark_dirty();
 
-        let error = drive_bless(&storage, &git, &bless_options(&["all_the_time"]))
-            .expect_err("dirty tree errors");
-        assert!(matches!(error, RunError::Bless { .. }), "{error:?}");
-        assert!(error.to_string().contains("uncommitted"), "{error}");
-        assert!(stored_blessings(&storage).is_empty(), "nothing written");
+        let message = drive_bless(&storage, &git, &bless_options(&["all_the_time"]))
+            .expect("a dirty tree warns rather than erroring");
+        assert!(
+            message.contains("Warning: uncommitted changes present"),
+            "{message}"
+        );
+        assert!(message.contains("Blessed"), "{message}");
+        assert_eq!(
+            stored_blessings(&storage).len(),
+            1,
+            "the committed clean run at HEAD is still blessed"
+        );
     }
 
     #[test]

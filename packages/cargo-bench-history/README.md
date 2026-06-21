@@ -171,10 +171,11 @@ cargo bench-history unbless [--repo PATH] [--base REF] [--engine NAME]
   e.g. `bless all_the_time/read_cell`), optionally with `--reason`. A blessing
   re-baselines the benchmark's history from the current commit forward, so the
   accepted step is no longer reported while the earlier points stay on the chart for
-  context. Blessing is base-branch-only and requires a clean working tree and an
-  existing recorded run at the current commit — a feature-branch, dirty-tree, or
-  data-less blessing is a hard error (no `--force`), because none of those would
-  survive a history analysis. It accepts the same discriminant facets as `analyze`
+  context. Blessing is base-branch-only and requires an
+  existing recorded run at the current commit — a feature-branch or
+  data-less blessing is a hard error (no `--force`), because neither would
+  survive a history analysis. A dirty working tree is allowed (the committed run at
+  HEAD is what gets blessed) but prints a warning. It accepts the same discriminant facets as `analyze`
   (`--engine`/`--target-triple`/`--os`/`--architecture`/`--machine-key`) to scope
   which sets are blessed.
 * `unbless` removes the blessings recorded at the current commit, undoing a `bless`

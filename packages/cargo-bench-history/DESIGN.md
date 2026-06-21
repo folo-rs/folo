@@ -746,14 +746,16 @@ caused trouble must not silently accept every other benchmark that may be trendi
 badly unnoticed. At least one prefix is required. `--reason` records why the change
 was accepted, surfaced in findings and `list --blessings`.
 
-**Base-branch-only, clean tree, existing data point — hard errors otherwise.** A
+**Base-branch-only, existing data point — hard errors otherwise.** A
 blessing is recorded only when **(a)** the current commit is on the base branch
-(`merge_base(HEAD, base) == HEAD`), **(b)** the working tree is clean, and **(c)** a
+(`merge_base(HEAD, base) == HEAD`) and **(b)** a
 `clean.json` already exists at the current commit in each selected set. There is **no
 `--force` escape hatch**: a feature-branch blessing would silently vanish or
-duplicate once the branch is squash-merged, a dirty run never survives history
-analysis, and blessing a commit with no recorded data point is meaningless. Each of
-these is refused with a clear message.
+duplicate once the branch is squash-merged, and blessing a commit with no recorded
+data point is meaningless. Each of these is refused with a clear message. A **dirty
+working tree is allowed** — the blessing applies to the committed `clean.json` at
+HEAD, which local edits do not change — but it emits a `Warning: uncommitted changes
+present …` so an accidental edit is visible.
 
 **Storage: append-only sidecar.** `bless` writes a `BlessingRecord` sidecar
 `…/<commit>/bless-<issued_unix>.json` alongside the commit's `clean.json` in every
@@ -1427,8 +1429,9 @@ Each iteration ships with tests and docs and leaves the tool runnable.
 29. **Blessings & re-baselining** — *Decided:* an intentional base-branch change can
      be **blessed** (§8.8) so history analysis stops re-flagging it. A blessing is an
      append-only sidecar (`…/<commit>/bless-<issued_unix>.json`) recorded per
-     benchmark via prefix filters, base-branch-only with a clean tree and an existing
-     `clean.json` at the commit (all else are hard errors; no `--force`). It
+     benchmark via prefix filters, base-branch-only with an existing
+     `clean.json` at the commit (else hard errors; no `--force`; a dirty working tree
+     is allowed but warns). It
      re-baselines the series from the blessed commit forward — the detectors run on
      the active segment only, while pre-blessing points stay for charting/context
      (§9.7). `unbless` deletes blessings at the current commit; `run --overwrite`
