@@ -28,7 +28,16 @@ async fn main() -> ExitCode {
         .first()
         .expect("std::env::args() always provides at least the program name");
 
-    let cli: Cli = match Cli::from_args(&[program_name], str_args.get(1..).unwrap_or(&[])) {
+    let sub_args = str_args.get(1..).unwrap_or(&[]);
+
+    // With no subcommand, argh emits only a bare list of command names. Show the
+    // full help instead, so each command's description is visible.
+    if sub_args.is_empty() {
+        eprintln!("{}", Cli::help(program_name));
+        return ExitCode::FAILURE;
+    }
+
+    let cli: Cli = match Cli::from_args(&[program_name], sub_args) {
         Ok(cli) => cli,
         Err(early_exit) => {
             // `status` is `Ok` for a `--help`/usage request (print to stdout, exit

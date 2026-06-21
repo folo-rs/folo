@@ -103,6 +103,36 @@ fn help_request_lists_subcommands() {
     );
 }
 
+#[test]
+#[serial]
+fn help_text_describes_each_command_in_alphabetical_order() {
+    let help = Cli::help("cargo-bench-history");
+
+    // Each command is accompanied by its description, not just its bare name.
+    assert!(
+        help.contains("Analyze stored history"),
+        "help should describe `analyze`: {help}"
+    );
+    assert!(
+        help.contains("Replay `run` across a range"),
+        "help should describe `backfill`: {help}"
+    );
+
+    // The commands appear in alphabetical order.
+    let order = ["analyze", "backfill", "clean", "install", "list", "run"];
+    let positions: Vec<usize> = order
+        .iter()
+        .map(|name| {
+            help.find(&format!("\n  {name} "))
+                .unwrap_or_else(|| panic!("help should list `{name}`: {help}"))
+        })
+        .collect();
+    assert!(
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "commands should be listed alphabetically: {help}"
+    );
+}
+
 // ===========================================================================
 // Binary entry point: exit codes and output stream routing.
 //
@@ -153,6 +183,30 @@ fn binary_parse_error_exits_failure_on_stderr() {
     assert!(
         !output.stderr.is_empty(),
         "a parse error should write a diagnostic to stderr"
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Spawns a real process, which Miri cannot do.
+#[serial]
+fn binary_without_a_subcommand_prints_descriptive_help_to_stderr() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_cargo-bench-history"))
+        .output()
+        .expect("binary should run");
+
+    assert!(
+        !output.status.success(),
+        "a missing subcommand should exit non-zero"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Analyze stored history"),
+        "no-subcommand help should describe the commands on stderr: {stderr}"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "no-subcommand help should not write to stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
     );
 }
 

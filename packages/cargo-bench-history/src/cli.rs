@@ -23,25 +23,39 @@ impl Cli {
     #[must_use]
     pub fn into_command(self) -> Command {
         match self.command {
-            Subcommand::Run(command) => Command::Run(command.into_options()),
-            Subcommand::Install(command) => Command::Install(command.into_options()),
             Subcommand::Analyze(command) => Command::Analyze(command.into_options()),
-            Subcommand::List(command) => Command::List(command.into_options()),
-            Subcommand::Clean(command) => Command::Clean(command.into_options()),
             Subcommand::Backfill(command) => Command::Backfill(command.into_options()),
+            Subcommand::Clean(command) => Command::Clean(command.into_options()),
+            Subcommand::Install(command) => Command::Install(command.into_options()),
+            Subcommand::List(command) => Command::List(command.into_options()),
+            Subcommand::Run(command) => Command::Run(command.into_options()),
         }
+    }
+
+    /// The top-level help text, including the command list with descriptions.
+    ///
+    /// Shown when the tool is invoked with no subcommand, so the available
+    /// commands and what each one does are immediately visible.
+    #[must_use]
+    pub fn help(program_name: &str) -> String {
+        // `--help` is always reported as an early exit carrying the rendered
+        // help text, so the `Ok` arm is never taken in practice.
+        Self::from_args(&[program_name], &["--help"])
+            .err()
+            .map(|early_exit| early_exit.output)
+            .unwrap_or_default()
     }
 }
 
 #[derive(Debug, FromArgs)]
 #[argh(subcommand)]
 enum Subcommand {
-    Run(RunCommand),
-    Install(InstallCommand),
     Analyze(AnalyzeCommand),
-    List(ListCommand),
-    Clean(CleanCommand),
     Backfill(BackfillCommand),
+    Clean(CleanCommand),
+    Install(InstallCommand),
+    List(ListCommand),
+    Run(RunCommand),
 }
 
 /// Run the workspace benchmarks (`cargo bench`) and store the results.
@@ -257,10 +271,6 @@ impl AnalyzeCommand {
 }
 
 /// List the data set a matching `analyze` would include, without analyzing it.
-///
-/// The selection options mirror `analyze` exactly, so the listing previews the
-/// exact runs an `analyze` with the same flags would consume — grouped by
-/// comparable discriminant set, with the run, series, and commit counts of each.
 #[derive(Debug, FromArgs)]
 #[argh(subcommand, name = "list")]
 struct ListCommand {
@@ -357,13 +367,8 @@ impl ListCommand {
     }
 }
 
-/// Remove the dirty runs a matching `analyze`/`list` would include.
-///
-/// The selection options mirror `analyze`/`list` (minus `--no-dirty`, meaningless
-/// when only dirty runs are touched, and `--metric`, a series filter), so `clean`
-/// removes exactly the dirty runs a `list` with the same flags would show on the
-/// target side — plus the base-branch tip's dirty runs, which are removed
-/// unconditionally. Pass `--dry-run` to preview without deleting.
+/// Remove the dirty runs a matching `analyze`/`list` would include (plus the base
+/// branch tip's); pass `--dry-run` to preview without deleting.
 #[derive(Debug, FromArgs)]
 #[argh(subcommand, name = "clean")]
 struct CleanCommand {
