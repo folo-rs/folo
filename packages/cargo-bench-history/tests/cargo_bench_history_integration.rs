@@ -355,7 +355,8 @@ async fn analyze_detects_regression_in_seeded_history() {
     };
     assert_eq!(regressions, 1);
     assert!(report.contains("regression"), "{report}");
-    assert!(report.contains("nm::observe/pull/Ir"), "{report}");
+    assert!(report.contains("nm::observe/pull"), "{report}");
+    assert!(report.contains("Ir"), "{report}");
 }
 
 /// A rising Criterion `wall_time` history is flagged as a regression, proving the
@@ -380,10 +381,8 @@ async fn analyze_detects_criterion_wall_time_regression() {
         panic!("expected an analyzed outcome, got {outcome:?}");
     };
     assert_eq!(regressions, 1);
-    assert!(
-        report.contains("time/capture/std_instant/wall_time"),
-        "{report}"
-    );
+    assert!(report.contains("time/capture/std_instant"), "{report}");
+    assert!(report.contains("wall_time"), "{report}");
 }
 
 /// A flagged regression never fails the process: findings are advisory, so the
@@ -446,7 +445,7 @@ async fn analyze_markdown_format_renders_table() {
         report.contains("# Benchmark history analysis: testproj"),
         "{report}"
     );
-    assert!(report.contains("| Severity | Direction |"), "{report}");
+    assert!(report.contains("| Change | Direction |"), "{report}");
 }
 
 /// `--since` excludes points before the cutoff, so an early spike is dropped and
@@ -675,14 +674,14 @@ async fn analyze_rising_cache_hits_is_an_improvement() {
 }
 
 /// Two benchmarks regressing by different magnitudes produce two findings that the
-/// report ranks most-notable first (major before minor), end to end through real
-/// storage and rendering.
+/// report ranks largest-relative-move first, end to end through real storage and
+/// rendering.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 #[serial]
-async fn analyze_ranks_mixed_severity_findings_across_benchmarks() {
+async fn analyze_ranks_findings_by_relative_move_across_benchmarks() {
     let workspace = Workspace::repo(&storage_only_config());
-    // `alpha` doubles (a major regression); `beta` ticks up ~2% (a minor one).
+    // `alpha` doubles (+100%); `beta` ticks up ~2%.
     workspace.seed_two_benchmarks("2024-01-01", "c1", 100.0, 100.0);
     workspace.seed_two_benchmarks("2024-01-02", "c2", 100.0, 100.0);
     workspace.seed_two_benchmarks("2024-01-03", "c3", 100.0, 100.0);
@@ -706,11 +705,9 @@ async fn analyze_ranks_mixed_severity_findings_across_benchmarks() {
     let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
     let findings = parsed["findings"].as_array().expect("findings array");
     assert_eq!(findings.len(), 2, "{report}");
-    // The major regression (alpha, +100%) ranks ahead of the minor one (beta, +2%).
-    assert_eq!(findings[0]["severity"], "major", "{report}");
+    // The larger relative move (alpha, +100%) ranks ahead of the smaller (beta, +2%).
     assert_eq!(findings[0]["package"], "alpha", "{report}");
     assert_eq!(findings[0]["group"], "alpha::bench", "{report}");
-    assert_eq!(findings[1]["severity"], "minor", "{report}");
     assert_eq!(findings[1]["package"], "beta", "{report}");
 
     // The Markdown rendering preserves the same ranked order in its table rows.
@@ -723,15 +720,11 @@ async fn analyze_ranks_mixed_severity_findings_across_benchmarks() {
     else {
         panic!("expected an analyzed outcome");
     };
-    let major_row = markdown
-        .find("| major | regression |")
-        .expect("a major row");
-    let minor_row = markdown
-        .find("| minor | regression |")
-        .expect("a minor row");
+    let alpha_row = markdown.find("alpha::bench").expect("an alpha row");
+    let beta_row = markdown.find("beta::bench").expect("a beta row");
     assert!(
-        major_row < minor_row,
-        "major must precede minor:\n{markdown}"
+        alpha_row < beta_row,
+        "the larger move must precede the smaller:\n{markdown}"
     );
 }
 #[tokio::test]

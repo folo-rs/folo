@@ -9,11 +9,18 @@
 //! ranked findings, and a per-set breakdown follows so each comparable partition
 //! reads as its own section.
 
+use colored::{Color, Colorize};
+use rasciigraph::{Config, plot_colored};
 use serde::Serialize;
 
 use crate::analyze::discriminant::DiscriminantSet;
-use crate::analyze::findings::{Direction, Finding, FindingMethod, Severity};
+use crate::analyze::findings::{Direction, Finding, FindingMethod, SeriesValue};
 use crate::model::BenchmarkId;
+
+/// Height, in rows, of a history-mode finding chart.
+const CHART_HEIGHT: u32 = 4;
+/// Width, in columns, of a history-mode finding chart.
+const CHART_WIDTH: u32 = 48;
 
 /// The selectable output format of an analysis report.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -132,9 +139,13 @@ struct JsonReport<'a> {
 }
 
 /// Renders `input` in the requested `format`.
-pub(crate) fn render(input: &ReportInput<'_>, format: ReportFormat) -> String {
+///
+/// `color` enables ANSI styling in the text format (the headline percentage and
+/// the per-finding chart). The caller decides it from the output terminal so tests
+/// and pipes stay plain; `markdown` and `json` ignore it.
+pub(crate) fn render(input: &ReportInput<'_>, format: ReportFormat, color: bool) -> String {
     match format {
-        ReportFormat::Text => render_text(input),
+        ReportFormat::Text => render_text(input, color),
         ReportFormat::Markdown => render_markdown(input),
         ReportFormat::Json => render_json(input),
     }
@@ -175,7 +186,12 @@ fn set_label(set: &DiscriminantSet) -> String {
     format!("{set} (os={} arch={})", set.os(), set.architecture())
 }
 
-fn render_text(input: &ReportInput<'_>) -> String {
+fn render_text(input: &ReportInput<'_>, color: bool) -> String {
+    // Force `colored` and `rasciigraph` to honor this explicit decision rather
+    // than their own ambient terminal auto-detection, so tests and pipes are
+    // deterministic regardless of how the process is run.
+    colored::control::set_override(color);
+
     let regressions = count_top(input.findings, Direction::Regression);
     let improvements = count_top(input.findings, Direction::Improvement);
 
@@ -197,6 +213,9 @@ fn render_text(input: &ReportInput<'_>) -> String {
         return finish(&lines);
     }
 
+    // A per-commit chart is meaningful only for a history (`master`) timeline; the
+    // branch/tip modes compare against a baseline rather than walking a series.
+    let chart_enabled = input.mode == "history";
     for summary in input.sets {
         if summary.findings.is_empty() {
             continue;
@@ -204,23 +223,67 @@ fn render_text(input: &ReportInput<'_>) -> String {
         lines.push(String::new());
         lines.push(format!("Set {}", set_label(summary.set)));
         for finding in &summary.findings {
-            lines.push(format!(
-                "  [{}] {} via {} ({} confidence) {} {}/{}: {} -> {} ({})",
-                severity_label(finding.severity),
-                direction_label(finding.direction),
-                method_label(finding.method),
-                format_confidence(finding.confidence),
-                finding.set.engine,
-                describe_id(&finding.id),
-                finding.metric,
-                format_value(finding.baseline),
-                format_value(finding.latest),
-                format_percent(finding.relative_delta),
-            ));
+            push_finding_block(&mut lines, finding, chart_enabled);
         }
     }
     push_warning(&mut lines, input.warning);
     finish(&lines)
+}
+
+/// Appends one finding as a paragraph: a leading, direction-colored percentage
+/// headline, a dimmed detail line, and — in history mode — a chart of the metric
+/// over commits.
+fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, chart_enabled: bool) {
+    lines.push(String::new());
+
+    let percent = format_percent(finding.relative_delta);
+    let headline = match finding.direction {
+        Direction::Regression => percent.red().bold(),
+        Direction::Improvement => percent.green().bold(),
+    };
+    lines.push(format!(
+        "{headline}  {} · {}",
+        describe_id(&finding.id).bold(),
+        finding.metric
+    ));
+
+    let mut detail = format!(
+        "    {} via {} · {} confidence · {} → {} · @ {}",
+        direction_label(finding.direction),
+        method_label(finding.method),
+        format_confidence(finding.confidence),
+        format_value(finding.baseline),
+        format_value(finding.latest),
+        finding.commit.as_deref().unwrap_or("unknown"),
+    );
+    if let Some(flipped_at) = &finding.flipped_at {
+        use std::fmt::Write as _;
+        write!(detail, " · flips at {flipped_at}").expect("writing to a String is infallible");
+    }
+    lines.push(detail.dimmed().to_string());
+
+    if chart_enabled && let Some(chart) = chart_of(&finding.series, finding.direction) {
+        lines.push(chart);
+    }
+}
+
+/// Renders a compact line chart of a finding's series values over commits, colored
+/// by direction. Returns `None` when there are too few points to plot.
+fn chart_of(series: &[SeriesValue], direction: Direction) -> Option<String> {
+    let values: Vec<f64> = series.iter().map(|point| point.value).collect();
+    if values.len() < 2 {
+        return None;
+    }
+    let line_color = match direction {
+        Direction::Regression => Color::Red,
+        Direction::Improvement => Color::Green,
+    };
+    let config = Config::default()
+        .with_height(CHART_HEIGHT)
+        .with_width(CHART_WIDTH)
+        .with_series_colors(vec![line_color]);
+    let chart = plot_colored(values, config).to_string();
+    Some(chart.trim_end_matches('\n').to_owned())
 }
 
 fn render_markdown(input: &ReportInput<'_>) -> String {
@@ -261,14 +324,14 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
         ));
         lines.push(String::new());
         lines.push(
-            "| Severity | Direction | Method | Confidence | Engine | Benchmark | Metric | Baseline | Latest | Change |"
+            "| Change | Direction | Method | Confidence | Engine | Benchmark | Metric | Baseline | Latest |"
                 .to_owned(),
         );
-        lines.push("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |".to_owned());
+        lines.push("| --- | --- | --- | --- | --- | --- | --- | --- | --- |".to_owned());
         for finding in &summary.findings {
             lines.push(format!(
-                "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
-                severity_label(finding.severity),
+                "| {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                format_percent(finding.relative_delta),
                 direction_label(finding.direction),
                 method_label(finding.method),
                 format_confidence(finding.confidence),
@@ -277,7 +340,6 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
                 finding.metric,
                 format_value(finding.baseline),
                 format_value(finding.latest),
-                format_percent(finding.relative_delta),
             ));
         }
     }
@@ -326,15 +388,6 @@ fn render_json(input: &ReportInput<'_>) -> String {
     serde_json::to_string_pretty(&report).expect("report structures always serialize to JSON")
 }
 
-/// The lowercase label for a severity tier.
-fn severity_label(severity: Severity) -> &'static str {
-    match severity {
-        Severity::Major => "major",
-        Severity::Moderate => "moderate",
-        Severity::Minor => "minor",
-    }
-}
-
 /// The lowercase label for a change direction.
 fn direction_label(direction: Direction) -> &'static str {
     match direction {
@@ -363,12 +416,52 @@ fn describe_id(id: &BenchmarkId) -> String {
     id.qualified()
 }
 
-/// Formats a measured value, dropping the fraction for integer-valued counts.
+/// Formats a measured value for human-readable display.
+///
+/// Integer-valued counts print whole. Other values keep four significant figures,
+/// counting the integer-part digits toward the four, so the whole number before
+/// the decimal point is never truncated: `0.20970324` becomes `0.2097`,
+/// `96.7664` becomes `96.77`, `0.000001234` keeps all four (`0.000001234`), and a
+/// large `1234567.89` drops its fraction entirely (`1234568`). Trailing zeros are
+/// trimmed. The machine-readable JSON keeps full precision.
 fn format_value(value: f64) -> String {
     if value.fract().abs() <= f64::EPSILON {
-        format!("{value:.0}")
+        return format!("{value:.0}");
+    }
+    let decimals = significant_decimals(value.abs());
+    let formatted = format!("{value:.decimals$}");
+    trim_trailing_zeros(&formatted)
+}
+
+/// The number of decimal places that yields four significant figures for
+/// `magnitude` (a non-negative, non-integer value), while always keeping every
+/// integer-part digit.
+fn significant_decimals(magnitude: f64) -> usize {
+    // Order of magnitude `e` with 10^e <= magnitude < 10^(e+1), found by a bounded
+    // search over the exponent range that covers realistic measurement magnitudes.
+    let mut exponent: i32 = -12;
+    for candidate in (-12..=12).rev() {
+        if magnitude >= 10_f64.powi(candidate) {
+            exponent = candidate;
+            break;
+        }
+    }
+    // Four significant figures: the least significant digit sits three places below
+    // the most significant one. Negative exponents (values below one) add decimal
+    // places; large exponents need none.
+    let places = 3_i32.saturating_sub(exponent).max(0);
+    usize::try_from(places).unwrap_or(0)
+}
+
+/// Trims trailing zeros (and a dangling decimal point) from a formatted decimal.
+fn trim_trailing_zeros(formatted: &str) -> String {
+    if formatted.contains('.') {
+        formatted
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_owned()
     } else {
-        format!("{value}")
+        formatted.to_owned()
     }
 }
 
@@ -407,7 +500,6 @@ mod tests {
             kind: MetricKind::InstructionCount,
             method: FindingMethod::ChangePoint,
             direction: Direction::Regression,
-            severity: Severity::Major,
             baseline: 100.0,
             latest: 130.0,
             delta: 30.0,
@@ -470,7 +562,7 @@ mod tests {
             hint: None,
             warning: None,
         };
-        let report = render(&input, ReportFormat::Text);
+        let report = render(&input, ReportFormat::Text, false);
         assert!(report.contains("Analyzed project folo"), "{report}");
         assert!(report.contains("regressions: 0"), "{report}");
         assert!(report.contains("No notable changes detected."), "{report}");
@@ -489,7 +581,7 @@ mod tests {
             hint: Some("Found 2 stored runs ... dirty snapshots"),
             warning: None,
         };
-        let report = render(&input, ReportFormat::Text);
+        let report = render(&input, ReportFormat::Text, false);
         assert!(report.contains("No notable changes detected."), "{report}");
         assert!(report.contains("Found 2 stored runs"), "{report}");
     }
@@ -500,44 +592,44 @@ mod tests {
         let findings = vec![regression()];
         let mut summaries = Vec::new();
         let input = single_set_input("folo", &set, &findings, &mut summaries);
-        let report = render(&input, ReportFormat::Text);
+        let report = render(&input, ReportFormat::Text, false);
         assert!(report.contains("regressions: 1"), "{report}");
         assert!(report.contains("Set callgrind/"), "{report}");
-        assert!(report.contains("[major] regression"), "{report}");
-        assert!(report.contains("nm::observe/pull/Ir"), "{report}");
-        assert!(report.contains("100 -> 130"), "{report}");
+        // The percentage leads the finding paragraph; severity is gone.
         assert!(report.contains("+30.00%"), "{report}");
+        assert!(!report.contains("[major]"), "{report}");
+        assert!(report.contains("nm::observe/pull · Ir"), "{report}");
+        assert!(
+            report.contains("regression via change point · 100% confidence · 100 → 130"),
+            "{report}"
+        );
     }
 
     #[test]
-    fn report_renders_every_severity_and_direction_label() {
+    fn report_renders_direction_labels() {
         let set = discriminant_set();
-        let mut moderate = regression();
-        moderate.severity = Severity::Moderate;
         let mut improvement = regression();
-        improvement.severity = Severity::Minor;
         improvement.direction = Direction::Improvement;
         improvement.delta = -5.0;
         improvement.relative_delta = -0.05;
-        let findings = vec![regression(), moderate, improvement];
+        let findings = vec![regression(), improvement];
         let mut summaries = Vec::new();
         let input = single_set_input("folo", &set, &findings, &mut summaries);
 
-        let text = render(&input, ReportFormat::Text);
-        assert!(text.contains("[major] regression"), "{text}");
-        assert!(text.contains("[moderate] regression"), "{text}");
-        assert!(text.contains("[minor] improvement"), "{text}");
+        let text = render(&input, ReportFormat::Text, false);
+        assert!(text.contains("regression via change point"), "{text}");
+        assert!(text.contains("improvement via change point"), "{text}");
 
-        let markdown = render(&input, ReportFormat::Markdown);
-        assert!(markdown.contains("| moderate | regression |"), "{markdown}");
-        assert!(markdown.contains("| minor | improvement |"), "{markdown}");
+        let markdown = render(&input, ReportFormat::Markdown, false);
+        assert!(markdown.contains("| +30.00% | regression |"), "{markdown}");
+        assert!(markdown.contains("| -5.00% | improvement |"), "{markdown}");
 
         // The per-set JSON tallies count each direction independently: this set
-        // holds two regressions and one improvement, so neither count is one.
-        let json = render(&input, ReportFormat::Json);
+        // holds one regression and one improvement.
+        let json = render(&input, ReportFormat::Json, false);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("report is JSON");
         let set_json = &parsed["sets"][0];
-        assert_eq!(set_json["regressions"], 2, "{json}");
+        assert_eq!(set_json["regressions"], 1, "{json}");
         assert_eq!(set_json["improvements"], 1, "{json}");
     }
 
@@ -547,7 +639,7 @@ mod tests {
         let findings = vec![regression()];
         let mut summaries = Vec::new();
         let input = single_set_input("folo", &set, &findings, &mut summaries);
-        let report = render(&input, ReportFormat::Markdown);
+        let report = render(&input, ReportFormat::Markdown, false);
         assert!(
             report.contains("# Benchmark history analysis: folo"),
             "{report}"
@@ -558,8 +650,8 @@ mod tests {
             ),
             "{report}"
         );
-        assert!(report.contains("| Severity | Direction |"), "{report}");
-        assert!(report.contains("| major | regression |"), "{report}");
+        assert!(report.contains("| Change | Direction |"), "{report}");
+        assert!(report.contains("| +30.00% | regression |"), "{report}");
     }
 
     #[test]
@@ -575,7 +667,7 @@ mod tests {
             hint: Some("Found 2 stored runs ... commit your working tree"),
             warning: None,
         };
-        let report = render(&input, ReportFormat::Markdown);
+        let report = render(&input, ReportFormat::Markdown, false);
         assert!(report.contains("No notable changes detected."), "{report}");
         assert!(report.contains("commit your working tree"), "{report}");
     }
@@ -593,7 +685,7 @@ mod tests {
             hint: Some("dirty snapshots on base-branch commits"),
             warning: None,
         };
-        let report = render(&input, ReportFormat::Json);
+        let report = render(&input, ReportFormat::Json, false);
         let parsed: serde_json::Value = serde_json::from_str(&report).expect("report is JSON");
         assert_eq!(
             parsed["hint"], "dirty snapshots on base-branch commits",
@@ -609,13 +701,13 @@ mod tests {
         let mut input = single_set_input("folo", &set, &findings, &mut summaries);
         input.warning = Some("Warning: analysis included dirty runs (ephemeral).");
 
-        let text = render(&input, ReportFormat::Text);
+        let text = render(&input, ReportFormat::Text, false);
         assert!(text.trim_end().ends_with("(ephemeral)."), "{text}");
 
-        let markdown = render(&input, ReportFormat::Markdown);
+        let markdown = render(&input, ReportFormat::Markdown, false);
         assert!(markdown.trim_end().ends_with("(ephemeral)."), "{markdown}");
 
-        let json = render(&input, ReportFormat::Json);
+        let json = render(&input, ReportFormat::Json, false);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("report is JSON");
         assert_eq!(
             parsed["warning"], "Warning: analysis included dirty runs (ephemeral).",
@@ -636,11 +728,11 @@ mod tests {
             hint: None,
             warning: Some("Warning: dirty runs were included."),
         };
-        let text = render(&input, ReportFormat::Text);
+        let text = render(&input, ReportFormat::Text, false);
         assert!(text.contains("No notable changes detected."), "{text}");
         assert!(text.trim_end().ends_with("included."), "{text}");
 
-        let markdown = render(&input, ReportFormat::Markdown);
+        let markdown = render(&input, ReportFormat::Markdown, false);
         assert!(markdown.trim_end().ends_with("included."), "{markdown}");
     }
 
@@ -657,7 +749,7 @@ mod tests {
             hint: None,
             warning: None,
         };
-        let report = render(&input, ReportFormat::Json);
+        let report = render(&input, ReportFormat::Json, false);
         let parsed: serde_json::Value = serde_json::from_str(&report).expect("report is JSON");
         assert!(parsed.get("warning").is_none(), "{report}");
     }
@@ -668,7 +760,7 @@ mod tests {
         let findings = vec![regression()];
         let mut summaries = Vec::new();
         let input = single_set_input("folo", &set, &findings, &mut summaries);
-        let report = render(&input, ReportFormat::Json);
+        let report = render(&input, ReportFormat::Json, false);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["project"], "folo");
         assert_eq!(parsed["regressions"], 1);
@@ -679,7 +771,6 @@ mod tests {
         assert_eq!(finding["package"], "nm");
         assert_eq!(finding["group"], "nm::observe");
         assert_eq!(finding["direction"], "regression");
-        assert_eq!(finding["severity"], "major");
         // The per-set breakdown carries the derived facets.
         let set_json = &parsed["sets"][0];
         assert_eq!(set_json["engine"], "callgrind");
@@ -692,6 +783,72 @@ mod tests {
     fn format_value_drops_integer_fraction() {
         assert_eq!(format_value(36.0), "36");
         assert_eq!(format_value(12.5), "12.5");
+    }
+
+    #[test]
+    fn format_value_keeps_four_significant_figures() {
+        // Counting integer-part digits toward the four significant figures.
+        assert_eq!(format_value(0.209_703_243_360_777_45), "0.2097");
+        assert_eq!(format_value(96.766_413_608_934_1), "96.77");
+        assert_eq!(format_value(507.428_215_753_575_5), "507.4");
+        // Sub-decimal values keep all four significant digits past the zeros.
+        assert_eq!(format_value(0.000_001_234), "0.000001234");
+        // A large value drops its fraction entirely; the integer part is never cut.
+        assert_eq!(format_value(1_234_567.89), "1234568");
+        // Trailing zeros are trimmed.
+        assert_eq!(format_value(0.25), "0.25");
+    }
+
+    /// Builds a regression finding whose series steps up over four commits, so a
+    /// history-mode chart has enough points to draw.
+    fn regression_with_series() -> Finding {
+        let mut finding = regression();
+        finding.series = vec![
+            SeriesValue {
+                commit: Some("c0".to_owned()),
+                value: 100.0,
+                dirty: false,
+            },
+            SeriesValue {
+                commit: Some("c1".to_owned()),
+                value: 100.0,
+                dirty: false,
+            },
+            SeriesValue {
+                commit: Some("c2".to_owned()),
+                value: 130.0,
+                dirty: false,
+            },
+            SeriesValue {
+                commit: Some("c3".to_owned()),
+                value: 130.0,
+                dirty: false,
+            },
+        ];
+        finding
+    }
+
+    #[test]
+    fn history_mode_text_draws_a_chart() {
+        let set = discriminant_set();
+        let findings = vec![regression_with_series()];
+        let mut summaries = Vec::new();
+        let mut input = single_set_input("folo", &set, &findings, &mut summaries);
+        input.mode = "history";
+        let text = render(&input, ReportFormat::Text, false);
+        // The rasciigraph axis marker proves a chart was drawn under the finding.
+        assert!(text.contains('┤') || text.contains('┼'), "{text}");
+    }
+
+    #[test]
+    fn branch_mode_text_has_no_chart() {
+        let set = discriminant_set();
+        let findings = vec![regression_with_series()];
+        let mut summaries = Vec::new();
+        let mut input = single_set_input("folo", &set, &findings, &mut summaries);
+        input.mode = "branch";
+        let text = render(&input, ReportFormat::Text, false);
+        assert!(!text.contains('┤') && !text.contains('┼'), "{text}");
     }
 
     #[test]

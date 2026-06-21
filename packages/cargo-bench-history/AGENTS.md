@@ -157,7 +157,16 @@ being analyzed:
 * `analyze::report` renders text/json/markdown. The top-level aggregate carries a
   `sets` array (one entry per discriminant set). Rendering is infallible: the
   report is plain structs of finite numbers, so the JSON path uses `.expect`
-  rather than threading a serialization error nobody can trigger.
+  rather than threading a serialization error nobody can trigger. Findings carry no
+  severity tier — they rank by descending `|relative_delta|`. The `text` report is
+  one paragraph per finding (headline leads with the relative-change percent; dimmed
+  detail line; in **history mode only** a colored `rasciigraph` line chart of the
+  series). `analyze_with` receives an explicit `color: bool` (production computes
+  `stdout().is_terminal() && NO_COLOR unset`; tests pass `false`) and `render_text`
+  calls `colored::control::set_override(color)` so both `colored` styling and the
+  chart honor it deterministically (and stay Miri-safe — no isatty syscall). Text
+  and Markdown values are rounded to four significant figures via `format_value`
+  (the integer part is never truncated); the JSON keeps full `f64` precision.
 
 The read-only `git_history::GitHistory` port (`resolve`, `default_branch`,
 `merge_base`, `first_parent`) has a `SystemGitHistory` adapter that shells

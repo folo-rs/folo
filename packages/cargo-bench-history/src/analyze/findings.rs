@@ -32,11 +32,6 @@ use crate::analyze::series::{Series, SeriesPoint};
 use crate::analyze::stats;
 use crate::model::{BenchmarkId, MetricKind};
 
-/// Relative move at or above which a change is classified [`Severity::Major`].
-const MAJOR_RELATIVE_DELTA: f64 = 0.10;
-/// Relative move at or above which a change is classified [`Severity::Moderate`].
-const MODERATE_RELATIVE_DELTA: f64 = 0.03;
-
 /// Tunable parameters of the engine-aware analysis.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AnalysisConfig {
@@ -180,18 +175,6 @@ pub(crate) enum Direction {
     Improvement,
 }
 
-/// How large a flagged change is, in ascending order of importance.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Severity {
-    /// A small but flagged change.
-    Minor,
-    /// A medium-sized change.
-    Moderate,
-    /// A large change.
-    Major,
-}
-
 /// One point of a finding's underlying series, exposed in the JSON output for
 /// charting and provenance: the commit it was measured against, the value, and
 /// whether it came from a dirty (uncommitted-tree) snapshot.
@@ -223,8 +206,6 @@ pub(crate) struct Finding {
     pub(crate) method: FindingMethod,
     /// Whether the move is a regression or an improvement.
     pub(crate) direction: Direction,
-    /// How large the move is.
-    pub(crate) severity: Severity,
     /// The before-regime representative value the after regime was compared to.
     pub(crate) baseline: f64,
     /// The after-regime representative value.
@@ -300,18 +281,6 @@ fn series_values(series: &Series) -> Vec<SeriesValue> {
 /// Wall time is the sole noisy metric; every Callgrind-derived metric is exact.
 fn is_deterministic(kind: MetricKind) -> bool {
     !matches!(kind, MetricKind::WallTime)
-}
-
-/// Classifies the magnitude of a relative move into a [`Severity`] tier.
-fn classify_severity(relative_delta: f64) -> Severity {
-    let magnitude = relative_delta.abs();
-    if magnitude >= MAJOR_RELATIVE_DELTA {
-        Severity::Major
-    } else if magnitude >= MODERATE_RELATIVE_DELTA {
-        Severity::Moderate
-    } else {
-        Severity::Minor
-    }
 }
 
 /// Whether a larger value of `kind` indicates better performance.
@@ -513,7 +482,6 @@ fn evaluate_change_point(series: &Series, config: &AnalysisConfig) -> Option<Can
             kind: series.kind,
             method: FindingMethod::ChangePoint,
             direction: direction_of(delta, series.kind),
-            severity: classify_severity(relative_delta),
             baseline,
             latest,
             delta,
@@ -582,7 +550,6 @@ fn evaluate_drift(series: &Series, config: &AnalysisConfig) -> Option<Candidate>
             kind: series.kind,
             method: FindingMethod::Drift,
             direction: direction_of(delta, series.kind),
-            severity: classify_severity(relative_delta),
             baseline,
             latest,
             delta,
@@ -751,7 +718,6 @@ fn compare_samples(
             kind: series.kind,
             method: FindingMethod::ChangePoint,
             direction: direction_of(delta, series.kind),
-            severity: classify_severity(relative_delta),
             baseline,
             latest,
             delta,
@@ -828,8 +794,8 @@ fn evaluate_tip(series: &Series, config: &AnalysisConfig) -> Option<Candidate> {
 /// the branch's latest state against its base; tip mode guards the newest point.
 /// Surviving noisy candidates pass a Benjamini–Hochberg false-discovery filter at
 /// `config.fdr_q`; deterministic candidates bypass it. Findings are then filtered
-/// to the directions the mode reports and ordered by descending severity, then
-/// descending relative move, then method, then a deterministic identity tie-break.
+/// to the directions the mode reports and ordered by descending relative move,
+/// then method, then a deterministic identity tie-break.
 pub(crate) fn find_changes(series: &[Series], context: &AnalysisContext) -> Vec<Finding> {
     let config = &context.config;
     let mut candidates: Vec<Candidate> = Vec::new();
@@ -876,14 +842,9 @@ pub(crate) fn find_changes(series: &[Series], context: &AnalysisContext) -> Vec<
 
     findings.sort_by(|left, right| {
         right
-            .severity
-            .cmp(&left.severity)
-            .then_with(|| {
-                right
-                    .relative_delta
-                    .abs()
-                    .total_cmp(&left.relative_delta.abs())
-            })
+            .relative_delta
+            .abs()
+            .total_cmp(&left.relative_delta.abs())
             .then_with(|| left.method.cmp(&right.method))
             .then_with(|| left.set.cmp(&right.set))
             .then_with(|| left.id.cmp(&right.id))
@@ -977,22 +938,6 @@ mod tests {
     }
 
     #[test]
-    fn classify_severity_tiers() {
-        assert_eq!(classify_severity(0.20), Severity::Major);
-        assert_eq!(classify_severity(0.10), Severity::Major);
-        assert_eq!(classify_severity(0.05), Severity::Moderate);
-        assert_eq!(classify_severity(0.03), Severity::Moderate);
-        assert_eq!(classify_severity(0.02), Severity::Minor);
-        assert_eq!(classify_severity(-0.20), Severity::Major);
-    }
-
-    #[test]
-    fn severity_orders_minor_below_major() {
-        assert!(Severity::Minor < Severity::Moderate);
-        assert!(Severity::Moderate < Severity::Major);
-    }
-
-    #[test]
     fn change_point_method_sorts_before_drift() {
         assert!(FindingMethod::ChangePoint < FindingMethod::Drift);
     }
@@ -1019,13 +964,12 @@ mod tests {
     }
 
     #[test]
-    fn deterministic_sustained_step_is_flagged_as_a_major_change_point() {
+    fn deterministic_sustained_step_is_flagged_as_a_change_point() {
         // A clean step from 100 to 130 with three points each side.
         let series = series_of(&[100.0, 100.0, 100.0, 130.0, 130.0, 130.0]);
         let finding = only(changes(&[series]));
         assert_eq!(finding.method, FindingMethod::ChangePoint);
         assert_eq!(finding.direction, Direction::Regression);
-        assert_eq!(finding.severity, Severity::Major);
         assert_eq!(finding.baseline, 100.0);
         assert_eq!(finding.latest, 130.0);
         assert_eq!(finding.delta, 30.0);
@@ -1044,7 +988,6 @@ mod tests {
         let finding = only(changes(&[series]));
         assert_eq!(finding.method, FindingMethod::ChangePoint);
         assert_eq!(finding.delta, 1.0);
-        assert_eq!(finding.severity, Severity::Minor);
         assert_eq!(finding.confidence, 1.0);
     }
 
@@ -1208,17 +1151,18 @@ mod tests {
     }
 
     #[test]
-    fn find_changes_ranks_major_before_minor() {
-        let major = series_of(&[100.0, 100.0, 100.0, 200.0, 200.0, 200.0]);
-        let minor = series_of(&[1000.0, 1000.0, 1000.0, 1020.0, 1020.0, 1020.0]);
-        let findings = changes(&[minor, major]);
+    fn find_changes_ranks_larger_relative_move_first() {
+        let larger = series_of(&[100.0, 100.0, 100.0, 200.0, 200.0, 200.0]);
+        let smaller = series_of(&[1000.0, 1000.0, 1000.0, 1020.0, 1020.0, 1020.0]);
+        let findings = changes(&[smaller, larger]);
         assert_eq!(findings.len(), 2);
-        assert_eq!(findings[0].severity, Severity::Major);
-        assert_eq!(findings[1].severity, Severity::Minor);
+        assert!(findings[0].relative_delta.abs() > findings[1].relative_delta.abs());
+        assert_eq!(findings[0].latest, 200.0);
+        assert_eq!(findings[1].latest, 1020.0);
     }
 
     #[test]
-    fn find_changes_breaks_severity_ties_by_relative_move() {
+    fn find_changes_retains_distinct_identities_ordered_by_move() {
         let larger = series_with(
             &[100.0, 100.0, 100.0, 200.0, 200.0, 200.0],
             MetricKind::InstructionCount,

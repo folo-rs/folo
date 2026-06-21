@@ -730,7 +730,8 @@ for it and `true` for every Callgrind kind).
 
 ### 9.1 Findings
 
-Two finding *methods*, each emitted per series and severity-ranked together:
+Two finding *methods*, each emitted per series and ranked together by descending
+relative move:
 
 1. **Change-point (step) detection** — the primary finding. A single most-likely
    level shift is located with the **Pettitt** nonparametric change-point test
@@ -756,7 +757,7 @@ Two finding *methods*, each emitted per series and severity-ranked together:
 
 - **Deterministic series.** A change-point is reported when both regimes reach
   `min_regime` points and the regime medians differ at all (exact change → ~0
-  noise floor; even a one-instruction step is real, ranked `Minor`). No
+  noise floor; even a one-instruction step is real). No
   significance test and no FDR — they would wrongly drop genuine small exact
   steps. Confidence is reported as `1.0`. Drift requires a significant
   Mann–Kendall trend and clears the practical-magnitude floor.
@@ -783,13 +784,15 @@ only BH-significant candidates survive. Deterministic candidates bypass BH (they
 carry no measurement-noise false-positive risk and their exact steps would
 otherwise be discarded by the procedure).
 
-### 9.4 Ranking, severity, polarity, and CI gating
+### 9.4 Ranking, polarity, and CI gating
 
-Findings rank by descending `severity`, then descending `|relative delta|`, then a
-deterministic identity tie-break (set, benchmark, metric). Severity tiers are
-unchanged (`Major ≥ 10 %`, `Moderate ≥ 3 %`, else `Minor`). Polarity is unchanged:
-every metric is lower-is-better except `CacheEvents` (cache *hits* — higher is
-better). Findings are advisory and never gate the exit code (§8.4, §9.6).
+Findings rank by descending `|relative delta|`, then by method, then a
+deterministic identity tie-break (set, benchmark, metric). There is no severity
+classification: a finding's magnitude is conveyed by its relative-change percent,
+and which findings warrant action is left to human (or agent) judgement rather
+than an automatic tier. Polarity is unchanged: every metric is lower-is-better
+except `CacheEvents` (cache *hits* — higher is better). Findings are advisory and
+never gate the exit code (§8.4, §9.6).
 
 ### 9.5 Statistical primitives
 
@@ -870,7 +873,7 @@ and reports regressions only.
     {
       "metric": "Ir", "kind": "InstructionCount",
       "method": "change_point", "direction": "regression",
-      "severity": "major", "baseline": 100.0, "latest": 130.0,
+      "baseline": 100.0, "latest": 130.0,
       "delta": 30.0, "relative_delta": 0.30, "confidence": 1.0,
       "flipped_at": "a1b2c3d",   // branch mode only: where the latest regime began
       "series": [ { "commit": "…", "value": 100.0, "dirty": false }, … ]
@@ -881,7 +884,19 @@ and reports regressions only.
 ```
 
 A consumer keys off `notable` (post or stay silent), reads each finding's
-`direction`/`severity`/`flipped_at`, and can render the embedded `series` as a chart.
+`direction`/`relative_delta`/`flipped_at`, and can render the embedded `series` as
+a chart. JSON values keep full `f64` precision; only the human-readable text and
+Markdown reports round to four significant figures.
+
+**Text report layout.** The text report renders one paragraph per finding: a bold,
+direction-colored headline leading with the relative-change percent and the
+benchmark identifier + metric, a dimmed detail line (`direction via method ·
+confidence · baseline → latest · @ commit`, plus `· flips at <commit>` in branch
+mode), and — in **history mode only** — a small colored line chart of the series
+over commits drawn with `rasciigraph` (regressions red, improvements green). The
+chart is omitted for branch/tip mode and for non-text formats. Color (ANSI styling
+and chart hue) is enabled only when stdout is a terminal and `NO_COLOR` is unset, so
+piped output and tests stay plain.
 
 ## 10. Crate architecture
 

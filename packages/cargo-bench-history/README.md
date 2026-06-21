@@ -122,7 +122,11 @@ cargo bench-history clean [--dry-run] [--repo PATH] [--branch REF]
   never what it found. Downstream automation reads the machine-readable signal from
   the `json` report — `mode`, the boolean `notable` (any finding survived), each
   finding's `direction`/`flipped_at`, and the full per-finding `series` for
-  charting. `--since` accepts an RFC 3339 timestamp, a `YYYY-MM-DD` date, or a
+  charting. The `text` report renders one paragraph per finding, leading with the
+  relative-change percent, and in **history** mode draws a small colored line chart
+  of the series over commits; values in the `text`/`markdown` reports are rounded to
+  four significant figures while the `json` report keeps full precision. `--since`
+  accepts an RFC 3339 timestamp, a `YYYY-MM-DD` date, or a
   relative duration such as `6 months` or `30 days ago`; `--metric` narrows to one
   metric. When stored runs exist but none enter the analysis (for example because
   every run is a dirty snapshot on the base branch), the report explains why;

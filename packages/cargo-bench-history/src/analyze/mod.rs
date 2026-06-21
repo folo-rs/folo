@@ -21,6 +21,7 @@ mod series;
 mod stats;
 
 use std::collections::HashMap;
+use std::io::IsTerminal;
 
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
@@ -73,6 +74,7 @@ pub(crate) async fn execute(
     let git = SystemGitHistory::new(repo);
 
     let now = now_override.unwrap_or_else(Timestamp::now);
+    let color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
     analyze_with(
         &git,
         &storage,
@@ -81,6 +83,7 @@ pub(crate) async fn execute(
         options,
         now,
         &reporter,
+        color,
     )
     .await
 }
@@ -88,6 +91,13 @@ pub(crate) async fn execute(
 /// Storage- and git-generic `analyze`: facet-filter the stored objects, resolve
 /// the git topology, select the comparable commits, build the series, detect
 /// changes, and render a report for the requested format.
+///
+/// `color` enables ANSI styling and colored charts in the text report; callers
+/// pass the terminal-detection result so piped output and tests stay plain.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "analyze orchestration wires several injected ports plus the rendering color flag"
+)]
 pub(crate) async fn analyze_with<G, S>(
     git: &G,
     storage: &S,
@@ -96,6 +106,7 @@ pub(crate) async fn analyze_with<G, S>(
     options: &AnalyzeOptions,
     now: Timestamp,
     reporter: &dyn Reporter,
+    color: bool,
 ) -> Result<RunOutcome, RunError>
 where
     G: GitHistory,
@@ -172,7 +183,7 @@ where
         hint: hint.as_deref(),
         warning: warning.as_deref(),
     };
-    let report = render(&input, format);
+    let report = render(&input, format, color);
 
     Ok(RunOutcome::Analyzed {
         report,
@@ -1306,6 +1317,7 @@ mod tests {
             options,
             now_anchor(),
             &reporter,
+            false,
         ))
         .expect("analysis runs");
         match outcome {
@@ -1331,6 +1343,7 @@ mod tests {
             &options(),
             now_anchor(),
             &RecordingReporter::new(),
+            false,
         ))
         .unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
@@ -1357,7 +1370,8 @@ mod tests {
         let (report, regressions) = analyze(&git, &storage, "folo", &options());
         assert_eq!(regressions, 1);
         assert!(report.contains("regression"), "{report}");
-        assert!(report.contains("nm::observe/pull/Ir"), "{report}");
+        assert!(report.contains("nm/nm::observe/pull"), "{report}");
+        assert!(report.contains("Ir"), "{report}");
     }
 
     #[test]
@@ -1549,6 +1563,7 @@ mod tests {
             &opts,
             now_anchor(),
             &reporter,
+            false,
         ))
         .expect("analysis runs");
         let RunOutcome::Analyzed { report, .. } = outcome else {
@@ -1613,6 +1628,7 @@ mod tests {
             &opts,
             now_anchor(),
             &reporter,
+            false,
         ))
         .expect("analysis runs");
         let RunOutcome::Analyzed {
@@ -1697,6 +1713,7 @@ mod tests {
             &opts,
             now_anchor(),
             &reporter,
+            false,
         ))
         .expect("analysis runs");
         let RunOutcome::Analyzed {
@@ -1791,6 +1808,7 @@ mod tests {
             &opts,
             now_anchor(),
             &reporter,
+            false,
         ))
         .expect("analysis runs");
         let RunOutcome::Analyzed { report, .. } = outcome else {
@@ -1961,6 +1979,7 @@ mod tests {
                 &conflicting,
                 now_anchor(),
                 &RecordingReporter::new(),
+                false,
             ))
             .unwrap_err();
             assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
@@ -2064,7 +2083,7 @@ mod tests {
             regressions, 1,
             "history stored under the sanitized key must be found"
         );
-        assert!(report.contains("nm::observe/pull/Ir"), "{report}");
+        assert!(report.contains("nm/nm::observe/pull"), "{report}");
     }
 
     #[test]
@@ -2083,6 +2102,7 @@ mod tests {
             &options(),
             now_anchor(),
             &RecordingReporter::new(),
+            false,
         ))
         .expect("analysis runs");
         assert!(outcome.is_success(), "findings must never fail the build");
@@ -2130,6 +2150,7 @@ mod tests {
             &options(),
             now_anchor(),
             &RecordingReporter::new(),
+            false,
         ))
         .unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
@@ -2149,6 +2170,7 @@ mod tests {
             &options(),
             now_anchor(),
             &RecordingReporter::new(),
+            false,
         ))
         .unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
@@ -2170,6 +2192,7 @@ mod tests {
             &opts,
             now_anchor(),
             &RecordingReporter::new(),
+            false,
         ))
         .unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
@@ -2191,6 +2214,7 @@ mod tests {
             &opts,
             now_anchor(),
             &RecordingReporter::new(),
+            false,
         ))
         .unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
@@ -2226,6 +2250,7 @@ mod tests {
             &opts,
             now_anchor(),
             &RecordingReporter::new(),
+            false,
         ))
         .unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
@@ -2267,6 +2292,7 @@ mod tests {
             &opts,
             now_anchor(),
             &RecordingReporter::new(),
+            false,
         ))
         .expect("analysis runs");
         let RunOutcome::Analyzed { report, .. } = outcome else {

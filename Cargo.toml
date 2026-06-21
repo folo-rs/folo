@@ -21,6 +21,7 @@ azure_identity = { version = "1.0.0", default-features = false }
 azure_storage_blob = { version = "1.0.0", default-features = false }
 base64 = { version = "0.22.1", default-features = false }
 cargo-freeze-deps = { version = "0.1.1", path = "packages/cargo-freeze-deps", default-features = false }
+colored = { version = "2.2.0", default-features = false }
 cpu-time = { version = "1.0.0", default-features = false }
 cpulist = { version = "1.1.4", path = "packages/cpulist", default-features = false }
 criterion = { version = "0.8.2", default-features = false }
@@ -89,6 +90,7 @@ pin-project = { version = "1.1.0", default-features = false }
 proc-macro2 = { version = "1.0.103", default-features = false }
 quote = { version = "1.0.42", default-features = false }
 rand = { version = "0.10.1", default-features = false, features = ["std"] }
+rasciigraph = { version = "0.3.0", default-features = false }
 rsevents = { version = "0.3.1", default-features = false }
 scc = { version = "3.0.2", default-features = false }
 scopeguard = { version = "1.2.0", default-features = false }
