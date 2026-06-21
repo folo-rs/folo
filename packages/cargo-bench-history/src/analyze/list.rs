@@ -937,6 +937,39 @@ mod tests {
         ResultSet::new(context, vec![record])
     }
 
+    /// A result set with one record carrying a single metric, so its partition
+    /// reconstructs exactly one series.
+    fn single_metric_set(effective: i64, commit: &str) -> ResultSet {
+        let time = Timestamp::from_second(effective).expect("seconds within range");
+        let context = RunContext::new(
+            Timestamps::new(time, time, time),
+            GitInfo {
+                commit: Some(commit.to_owned()),
+                short_commit: Some(commit.to_owned()),
+                branch: Some("main".to_owned()),
+                dirty: false,
+            },
+            CiInfo::default(),
+            ToolchainInfo::default(),
+            "0.0.1".to_owned(),
+        );
+        let record = ResultRecord::new(
+            BenchmarkId::new(
+                Some("nm".to_owned()),
+                "nm::observe".to_owned(),
+                Some("pull".to_owned()),
+                None,
+            ),
+            vec![Metric::new(
+                "Ir".to_owned(),
+                MetricKind::InstructionCount,
+                100.0,
+                Some("count".to_owned()),
+            )],
+        );
+        ResultSet::new(context, vec![record])
+    }
+
     fn clean_key(commit: &str) -> String {
         format!("v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
     }
@@ -956,6 +989,41 @@ mod tests {
 
     fn bts(seconds: i64) -> Timestamp {
         Timestamp::from_second(seconds).expect("seconds within range")
+    }
+
+    /// A discriminant set distinct from [`linux_set`], for grouping tests.
+    fn mac_set() -> DiscriminantSet {
+        DiscriminantSet {
+            engine: "criterion".to_owned(),
+            target_triple: "aarch64-apple-darwin".to_owned(),
+            machine: "synthetic".to_owned(),
+        }
+    }
+
+    #[test]
+    fn group_by_set_runs_consecutive_entries_of_the_same_set_together() {
+        let entry = |set: DiscriminantSet, benchmark: &str| BlessingEntry {
+            set,
+            benchmark: Some(benchmark.to_owned()),
+            commit: "c0".to_owned(),
+            effective: bts(1),
+            issued_at: None,
+            prefixes: Vec::new(),
+            reason: None,
+        };
+        // Two linux entries then one mac entry: the run of same-set rows collapses
+        // into one group, and the differing set starts a new one.
+        let entries = vec![
+            entry(linux_set(), "a"),
+            entry(linux_set(), "b"),
+            entry(mac_set(), "c"),
+        ];
+        let groups = group_by_set(&entries);
+        assert_eq!(groups.len(), 2, "two distinct sets form two groups");
+        assert_eq!(*groups[0].0, linux_set());
+        assert_eq!(groups[0].1.len(), 2, "both linux rows share one group");
+        assert_eq!(*groups[1].0, mac_set());
+        assert_eq!(groups[1].1.len(), 1, "the mac row is its own group");
     }
 
     #[test]
@@ -1368,6 +1436,45 @@ mod tests {
         assert!(parsed["commit"].is_null(), "{report}");
         let blessings = parsed["blessings"].as_array().unwrap();
         // The two metrics share one blessing, reported once per benchmark.
+        assert_eq!(blessings.len(), 1, "{report}");
+        assert_eq!(blessings[0]["benchmark"], "nm/nm::observe/pull");
+        assert_eq!(blessings[0]["commit"], "c2");
+    }
+
+    #[test]
+    fn list_blessings_all_lists_a_single_metric_benchmark_once() {
+        // A benchmark with exactly one metric forms one series, so the window
+        // roll-up must emit one entry: the dedup `seen.insert` guard keeps a first
+        // occurrence rather than dropping it.
+        let storage = MemoryStorage::new();
+        for index in 0..4 {
+            let commit = format!("c{index}");
+            store(
+                &storage,
+                &clean_key(&commit),
+                &single_metric_set(index, &commit),
+            );
+        }
+        let record = BlessingRecord::new(
+            "c2".to_owned(),
+            Timestamp::from_second(2).expect("seconds within range"),
+            Timestamp::from_second(100).expect("seconds within range"),
+            vec!["nm/nm::observe".to_owned()],
+            None,
+            "0.0.1".to_owned(),
+        );
+        store_bless(&storage, &bless_key("c2", 100), &record);
+        let git = linear_git();
+
+        let opts = ListOptions {
+            blessings: true,
+            all: true,
+            format: Some("json".to_owned()),
+            ..options()
+        };
+        let report = list(&storage, &git, &opts);
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let blessings = parsed["blessings"].as_array().unwrap();
         assert_eq!(blessings.len(), 1, "{report}");
         assert_eq!(blessings[0]["benchmark"], "nm/nm::observe/pull");
         assert_eq!(blessings[0]["commit"], "c2");

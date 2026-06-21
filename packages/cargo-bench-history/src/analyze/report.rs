@@ -293,6 +293,48 @@ fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, chart_enabled:
     }
 }
 
+/// Whether the active window spans the whole series, so no greyed prefix is drawn.
+///
+/// An `active_from` of zero means every point is active; one at or past the end
+/// means there is nothing to grey out. Either way the chart is a single series.
+fn covers_whole_series(active_from: usize, len: usize) -> bool {
+    active_from == 0 || active_from >= len
+}
+
+/// Masks `values` to the greyed pre-blessing prefix: points strictly after
+/// `active_from` become `NaN` (a gap), while the boundary point is kept so the
+/// grey and active lines join.
+fn grey_prefix(values: &[f64], active_from: usize) -> Vec<f64> {
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, &value)| {
+            if index <= active_from {
+                value
+            } else {
+                f64::NAN
+            }
+        })
+        .collect()
+}
+
+/// Masks `values` to the active window: points strictly before `active_from`
+/// become `NaN` (a gap), while the boundary point is kept so the grey and active
+/// lines join.
+fn active_window(values: &[f64], active_from: usize) -> Vec<f64> {
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, &value)| {
+            if index >= active_from {
+                value
+            } else {
+                f64::NAN
+            }
+        })
+        .collect()
+}
+
 /// Renders a compact line chart of a finding's series values over commits, colored
 /// by direction. Returns `None` when there are too few points to plot.
 ///
@@ -312,34 +354,14 @@ fn chart_of(series: &[SeriesValue], direction: Direction, active_from: usize) ->
     let config = Config::default()
         .with_height(CHART_HEIGHT)
         .with_width(CHART_WIDTH);
-    let chart = if active_from == 0 || active_from >= values.len() {
+    let chart = if covers_whole_series(active_from, values.len()) {
         plot_colored(values, config.with_series_colors(vec![line_color])).to_string()
     } else {
         // Two overlaid series: the greyed pre-blessing prefix and the
         // direction-colored active window. They share the boundary point so the
         // line reads as continuous; `NaN` renders as a gap elsewhere.
-        let grey: Vec<f64> = values
-            .iter()
-            .enumerate()
-            .map(|(index, &value)| {
-                if index <= active_from {
-                    value
-                } else {
-                    f64::NAN
-                }
-            })
-            .collect();
-        let active: Vec<f64> = values
-            .iter()
-            .enumerate()
-            .map(|(index, &value)| {
-                if index >= active_from {
-                    value
-                } else {
-                    f64::NAN
-                }
-            })
-            .collect();
+        let grey = grey_prefix(&values, active_from);
+        let active = active_window(&values, active_from);
         let config = config.with_series_colors(vec![Color::BrightBlack, line_color]);
         plot_many_colored(vec![grey, active], config).to_string()
     };
@@ -964,6 +986,79 @@ mod tests {
         // Exactly two points is the minimum that plots (a `< 2` -> `<= 2` slip
         // would reject it).
         assert!(chart_of(&[point(1.0), point(2.0)], Direction::Regression, 0).is_some());
+    }
+
+    #[test]
+    fn covers_whole_series_only_at_the_boundaries() {
+        // `active_from == 0` (everything active) and `active_from >= len` (nothing
+        // to grey) both render a single series; anything in between splits.
+        assert!(covers_whole_series(0, 4), "zero covers the whole series");
+        assert!(covers_whole_series(4, 4), "the end covers the whole series");
+        assert!(
+            covers_whole_series(5, 4),
+            "past the end covers the whole series"
+        );
+        assert!(
+            !covers_whole_series(2, 4),
+            "a mid split does not cover the whole series"
+        );
+        assert!(
+            !covers_whole_series(1, 4),
+            "a near-start split does not cover the whole series"
+        );
+    }
+
+    /// Compares two `f64` slices treating `NaN` as equal to `NaN`, so masked
+    /// (gap) positions can be asserted exactly.
+    fn masks_equal(actual: &[f64], expected: &[f64]) -> bool {
+        actual.len() == expected.len()
+            && actual
+                .iter()
+                .zip(expected)
+                .all(|(a, b)| (a.is_nan() && b.is_nan()) || (a - b).abs() < f64::EPSILON)
+    }
+
+    #[test]
+    fn grey_prefix_keeps_up_to_the_boundary_and_gaps_the_rest() {
+        let values = [0.0, 10.0, 20.0, 30.0];
+        // Points after the boundary become gaps; the boundary itself is kept so
+        // the grey line meets the active line.
+        assert!(
+            masks_equal(&grey_prefix(&values, 2), &[0.0, 10.0, 20.0, f64::NAN]),
+            "{:?}",
+            grey_prefix(&values, 2)
+        );
+        assert!(
+            masks_equal(
+                &grey_prefix(&values, 0),
+                &[0.0, f64::NAN, f64::NAN, f64::NAN]
+            ),
+            "{:?}",
+            grey_prefix(&values, 0)
+        );
+    }
+
+    #[test]
+    fn active_window_gaps_before_the_boundary_and_keeps_the_rest() {
+        let values = [0.0, 10.0, 20.0, 30.0];
+        // Points before the boundary become gaps; from the boundary on they are
+        // kept (the boundary is shared with the grey prefix).
+        assert!(
+            masks_equal(
+                &active_window(&values, 2),
+                &[f64::NAN, f64::NAN, 20.0, 30.0]
+            ),
+            "{:?}",
+            active_window(&values, 2)
+        );
+        assert!(
+            masks_equal(
+                &active_window(&values, 3),
+                &[f64::NAN, f64::NAN, f64::NAN, 30.0]
+            ),
+            "{:?}",
+            active_window(&values, 3)
+        );
     }
 
     #[test]

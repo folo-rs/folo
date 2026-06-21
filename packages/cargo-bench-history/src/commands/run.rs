@@ -1286,6 +1286,50 @@ mod tests {
     }
 
     #[test]
+    fn overwriting_a_dirty_snapshot_keeps_blessing_sidecars() {
+        let storage = MemoryStorage::new();
+        // Blessings accept the clean run's data point, so a blessing sidecar on the
+        // commit must survive when only a dirty snapshot of that commit is rewritten;
+        // invalidation is reserved for a clean overwrite that discards the point.
+        let commit_dir = "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/\
+                          deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+        let bless_key = format!("{commit_dir}/bless-100.json");
+        let record = BlessingRecord::new(
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_owned(),
+            Timestamp::from_second(1).expect("seconds within range"),
+            Timestamp::from_second(100).expect("seconds within range"),
+            vec!["group".to_owned()],
+            None,
+            "0.0.1".to_owned(),
+        );
+        block_on(storage.put(&bless_key, record.to_json().unwrap().as_bytes())).unwrap();
+
+        let overwrite = RunOptions {
+            overwrite: true,
+            ..RunOptions::default()
+        };
+        drive(
+            &overwrite,
+            &FakeRunner::succeeding(),
+            &FakeProbe::dirty(),
+            &FakeOutput::with_two_callgrind_summaries(),
+            &storage,
+        )
+        .unwrap();
+
+        let keys = storage.keys();
+        assert!(
+            keys.iter().any(|key| key == &bless_key),
+            "a dirty overwrite must leave blessings in place: {keys:?}"
+        );
+        assert!(
+            keys.iter()
+                .any(|key| key.ends_with(&format!("/dirty-{FROZEN_UNIX}.json"))),
+            "the dirty snapshot is stored: {keys:?}"
+        );
+    }
+
+    #[test]
     fn two_dirty_runs_at_different_times_coexist() {
         let storage = MemoryStorage::new();
         drive_at(

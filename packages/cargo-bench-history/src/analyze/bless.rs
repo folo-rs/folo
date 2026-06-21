@@ -456,6 +456,10 @@ mod tests {
             .expect_err("off-base errors");
         assert!(matches!(error, RunError::Bless { .. }), "{error:?}");
         assert!(error.to_string().contains("base branch"), "{error}");
+        // The message names both the current commit and the base ref via
+        // `short_sha`, so both must appear verbatim.
+        assert!(error.to_string().contains("f1"), "names HEAD: {error}");
+        assert!(error.to_string().contains("c2"), "names base: {error}");
         assert!(stored_blessings(&storage).is_empty(), "nothing written");
     }
 

@@ -1490,6 +1490,29 @@ mod tests {
     }
 
     #[test]
+    fn noisy_step_exactly_at_the_practical_floor_is_reported() {
+        // The practical-magnitude floor is a strict `<` rejection, so a step whose
+        // relative move EQUALS the floor must still be reported. Pin the floor to
+        // exactly this series' relative delta (30/100) to exercise that boundary: a
+        // `<=` slip would suppress an at-floor regression.
+        let series = wall_series(
+            &[
+                98.0, 100.0, 102.0, 99.0, 101.0, 128.0, 130.0, 132.0, 129.0, 131.0,
+            ],
+            2.0,
+        );
+        let config = AnalysisConfig {
+            practical_relative: 30.0_f64 / 100.0,
+            ..AnalysisConfig::default()
+        };
+        let candidate = evaluate_change_point(&series, &config)
+            .expect("a step equal to the practical floor must be reported");
+        assert_eq!(candidate.finding.baseline, 100.0);
+        assert_eq!(candidate.finding.latest, 130.0);
+        assert_eq!(candidate.finding.relative_delta, config.practical_relative);
+    }
+
+    #[test]
     fn noisy_step_with_overlapping_intervals_is_suppressed() {
         // The point values separate cleanly, but each regime's confidence interval
         // is so wide that they overlap, so the change-point gate rejects it.
