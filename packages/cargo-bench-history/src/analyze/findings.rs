@@ -665,9 +665,8 @@ fn latest_regime<'a>(
     let (Some(before), Some(after)) = (values.get(..tau), values.get(tau..)) else {
         return whole();
     };
-    if before.is_empty() || after.is_empty() {
-        return whole();
-    }
+    // `pettitt` reports a split index in `1..=n-1`, so both sides are non-empty;
+    // an empty side would short-circuit on the `median` guard below regardless.
     let (Some(before_median), Some(after_median)) = (stats::median(before), stats::median(after))
     else {
         return whole();
@@ -793,9 +792,8 @@ fn evaluate_branch(
     merge_base_index: Option<usize>,
 ) -> Option<Candidate> {
     let (base, branch) = split_at_merge_base(&series.points, merge_base_index);
-    if base.is_empty() || branch.is_empty() {
-        return None;
-    }
+    // An empty base or branch yields nothing: `compare_samples` returns `None` once
+    // either sample's median is absent, so no explicit emptiness guard is needed.
     let base_window = recent(&base, config.compare_window);
     let (latest_points, flipped_at) = latest_regime(&branch, config);
     let commit = branch.last().and_then(|point| point.commit.clone());
@@ -1925,5 +1923,238 @@ mod tests {
         assert_eq!(finding.baseline, 10.0);
         assert_eq!(finding.latest, 20.0);
         assert!(finding.flipped_at.is_some());
+    }
+
+    // -- Noisy sample-comparison gates and statistical boundaries -------------
+
+    /// Builds standalone `(value, confidence-half-width)` points for exercising the
+    /// sample-comparison gates directly, independent of any series ordering.
+    fn pts(specs: &[(f64, f64)]) -> Vec<SeriesPoint> {
+        specs
+            .iter()
+            .enumerate()
+            .map(|(index, &(value, half))| SeriesPoint {
+                topo_index: index,
+                dirty: false,
+                effective: Timestamp::from_second(i64::try_from(index).unwrap())
+                    .expect("seconds within range"),
+                object_key: format!("v2/p/engine/t/synthetic/commit{index}/clean.json"),
+                commit: Some(format!("commit{index}")),
+                value,
+                interval_low: Some(value - half),
+                interval_high: Some(value + half),
+            })
+            .collect()
+    }
+
+    /// Compares the `before` and `after` samples on a wall-time (noisy) series,
+    /// passing `floor` as the practical relative floor.
+    fn compare(before: &[SeriesPoint], after: &[SeriesPoint], floor: f64) -> Option<Candidate> {
+        let series = wall_series(&[100.0], 1.0);
+        let before_refs: Vec<&SeriesPoint> = before.iter().collect();
+        let after_refs: Vec<&SeriesPoint> = after.iter().collect();
+        compare_samples(
+            &series,
+            &before_refs,
+            &after_refs,
+            &AnalysisConfig::default(),
+            floor,
+            None,
+            None,
+        )
+    }
+
+    #[test]
+    fn compare_samples_at_the_practical_floor_is_not_suppressed() {
+        // The relative move (0.03) is exactly the floor: the `relative < floor` gate
+        // must be a strict `<` (a `<=`/`==` mutant would suppress it). The 1-vs-1
+        // sample then clears the noise floor (delta 3 > 2 * 0.5).
+        let before = pts(&[(100.0, 0.5)]);
+        let after = pts(&[(103.0, 0.5)]);
+        assert!(compare(&before, &after, 3.0 / 100.0).is_some());
+    }
+
+    #[test]
+    fn compare_samples_prefers_the_small_sample_path_when_one_side_is_tiny() {
+        // Five before-points, one after-point: the `len >= 2 && len >= 2` selects the
+        // small-sample path, where delta 30 clears the floor and flags. An `||`
+        // mutant would rank-test a 5-vs-1 sample, whose Mann-Whitney p stays above
+        // alpha, flagging nothing.
+        let before = pts(&[(100.0, 0.5); 5]);
+        let after = pts(&[(130.0, 0.5)]);
+        assert!(compare(&before, &after, 0.05).is_some());
+    }
+
+    #[test]
+    fn compare_samples_suppresses_a_significant_move_with_overlapping_intervals() {
+        // 5-vs-5 complete separation is Mann-Whitney significant, but the wide
+        // confidence intervals overlap, so the change is rejected. Deleting the `!`
+        // in the interval-overlap guard would let it through.
+        let before = pts(&[(100.0, 2.0); 5]);
+        let after = pts(&[(130.0, 60.0); 5]);
+        assert!(compare(&before, &after, 0.05).is_none());
+    }
+
+    #[test]
+    fn compare_samples_small_sample_clearing_the_noise_floor_has_real_confidence() {
+        // 1-vs-1, delta 30 > 2 * 0.5: flagged. The small-sample path uses
+        // change_alpha as its effective p, so the `1 - p` confidence is below 1 (a
+        // mutated `1 + p` / `1 / p` would clamp to 1). An always-false floor guard or
+        // a `>`->`<` floor comparison would instead suppress it.
+        let before = pts(&[(100.0, 0.5)]);
+        let after = pts(&[(130.0, 0.5)]);
+        let candidate = compare(&before, &after, 0.05).expect("a clear move is flagged");
+        assert!(candidate.finding.confidence < 1.0);
+    }
+
+    #[test]
+    fn compare_samples_small_sample_at_the_noise_floor_is_suppressed() {
+        // 1-vs-1, delta 8 == 2 * 4: the strict `>` noise-floor gate rejects it. A
+        // `>`->`>=`/`==`, the `*`->`+`/`/` arithmetic, or an always-true guard would
+        // each flag it instead.
+        let before = pts(&[(100.0, 4.0)]);
+        let after = pts(&[(108.0, 4.0)]);
+        assert!(compare(&before, &after, 0.05).is_none());
+    }
+
+    #[test]
+    fn tip_mode_flags_a_two_point_regression() {
+        // Two points is the minimum for a tip comparison; `n < 2` must be a strict
+        // `<` (a `<=`/`==` mutant would bail on the two-point case).
+        let series = series_of(&[100.0, 130.0]);
+        let candidate =
+            evaluate_tip(&series, &AnalysisConfig::default()).expect("two points compare");
+        assert_eq!(candidate.finding.direction, Direction::Regression);
+    }
+
+    #[test]
+    fn latest_regime_splits_a_three_point_branch_at_a_real_flip() {
+        // Three points is the minimum to split; `branch.len() < 3` must be a strict
+        // `<` (a `<=`/`==` mutant would keep the branch whole). The 100 -> 130 jump
+        // is a real within-branch flip, so the latest regime is the two 130 points.
+        let series = series_of(&[100.0, 130.0, 130.0]);
+        let branch: Vec<&SeriesPoint> = series.points.iter().collect();
+        let (points, flipped) = latest_regime(&branch, &AnalysisConfig::default());
+        assert_eq!(points.len(), 2);
+        assert!(flipped.is_some());
+    }
+
+    #[test]
+    fn latest_regime_splits_when_the_within_branch_move_is_exactly_at_the_floor() {
+        // The within-branch move (100 -> 103) is exactly the practical floor, so the
+        // split stands: the floor gate must be a strict `<`, not a `<=`.
+        let series = series_of(&[100.0, 103.0, 103.0]);
+        let branch: Vec<&SeriesPoint> = series.points.iter().collect();
+        let config = AnalysisConfig {
+            practical_relative: 3.0 / 100.0,
+            ..AnalysisConfig::default()
+        };
+        let (points, flipped) = latest_regime(&branch, &config);
+        assert_eq!(points.len(), 2);
+        assert!(flipped.is_some());
+    }
+
+    #[test]
+    fn drift_at_the_practical_floor_is_flagged_with_real_confidence() {
+        // A deterministic climb whose relative drift (0.20) is exactly the floor: the
+        // floor gate must be a strict `<`, not a `<=`. Its confidence is 1 - p with
+        // p > 0, so a mutated `1 + p` / `1 / p` would clamp to 1.
+        let series = series_of(&[100.0, 104.0, 108.0, 112.0, 116.0, 120.0]);
+        let config = AnalysisConfig {
+            practical_relative: 20.0 / 100.0,
+            ..AnalysisConfig::default()
+        };
+        let candidate = evaluate_drift(&series, &config).expect("a drift at the floor is flagged");
+        assert_eq!(candidate.finding.method, FindingMethod::Drift);
+        assert!(candidate.finding.confidence < 1.0);
+    }
+
+    #[test]
+    fn noisy_drift_within_the_measurement_noise_floor_is_suppressed() {
+        // The same climb on a noisy engine, but the endpoints (delta 20) do not
+        // separate by more than twice the confidence half-width (12): jitter, not a
+        // trend. The `2.0 * half_width` floor must be a product (a `+` mutant lowers
+        // the floor to 14 and would flag it).
+        let series = wall_series(&[100.0, 104.0, 108.0, 112.0, 116.0, 120.0], 12.0);
+        assert!(evaluate_drift(&series, &AnalysisConfig::default()).is_none());
+    }
+
+    #[test]
+    fn resolved_spike_at_the_minimum_length_reports_the_deviation() {
+        // Exactly min_regime * 3 (6) points is the shortest detectable spike; the
+        // `n < min * 3` gate must be a strict `<`. The plateau (20) deviates from the
+        // baseline (10) by 10 -- the `level - baseline` difference, not a sum or
+        // quotient.
+        let series = series_of(&[10.0, 10.0, 20.0, 20.0, 10.0, 10.0]);
+        let candidate = evaluate_resolved_spike(&series, &AnalysisConfig::default())
+            .expect("a six-point recovered spike is detected");
+        assert_eq!(candidate.finding.delta, 10.0);
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "the 200-point quadratic spike search is slow under Miri"
+    )]
+    fn resolved_spike_at_the_search_size_limit_is_flagged() {
+        // A 200-point history (the inclusive search ceiling) with a recovered plateau
+        // still analyses: the `n > RESOLVED_SPIKE_MAX_POINTS` guard must be a strict
+        // `>`.
+        let mut values = vec![10.0_f64; RESOLVED_SPIKE_MAX_POINTS];
+        for value in values.get_mut(90..110).expect("range within bounds") {
+            *value = 20.0;
+        }
+        let series = series_with(&values, MetricKind::InstructionCount, &[]);
+        assert!(evaluate_resolved_spike(&series, &AnalysisConfig::default()).is_some());
+    }
+
+    #[test]
+    fn resolved_spike_below_the_practical_floor_is_not_a_spike() {
+        // A plateau (1010) only 1% above baseline (1000) is below the 3% practical
+        // floor. The reject gate is `deviation <= 0 || relative < floor`; an `&&`
+        // mutant (needing BOTH) would wrongly surface it.
+        let series = series_of(&[1000.0, 1000.0, 1010.0, 1010.0, 1000.0, 1000.0]);
+        assert!(evaluate_resolved_spike(&series, &AnalysisConfig::default()).is_none());
+    }
+
+    #[test]
+    fn resolved_spike_exactly_at_the_practical_floor_is_a_spike() {
+        // A plateau (103) exactly 3% above baseline (100) meets the floor; the
+        // `relative < floor` gate must be a strict `<` (a `<=`/`==` mutant suppresses
+        // it).
+        let series = series_of(&[100.0, 100.0, 103.0, 103.0, 100.0, 100.0]);
+        let config = AnalysisConfig {
+            practical_relative: 3.0 / 100.0,
+            ..AnalysisConfig::default()
+        };
+        assert!(evaluate_resolved_spike(&series, &config).is_some());
+    }
+
+    #[test]
+    fn noisy_resolved_spike_with_significant_rise_and_recovery_is_flagged() {
+        // A noisy plateau (200) between long baseline/recovery regimes (100): both
+        // the rise and the recovery are Mann-Whitney significant, so the recovered
+        // spike is flagged, with confidence below 1.
+        let values: Vec<f64> = std::iter::repeat_n(100.0_f64, 8)
+            .chain([200.0, 200.0])
+            .chain(std::iter::repeat_n(100.0, 8))
+            .collect();
+        let series = wall_series(&values, 1.0);
+        let candidate = evaluate_resolved_spike(&series, &AnalysisConfig::default())
+            .expect("both gates are significant");
+        assert!(candidate.finding.confidence < 1.0);
+    }
+
+    #[test]
+    fn noisy_resolved_spike_needs_both_gates_significant() {
+        // The rise is Mann-Whitney significant, but the short recovery tail (two
+        // points) is not: `rise_p >= alpha || recovery_p >= alpha` rejects it. An
+        // `&&` mutant (needing both insignificant to reject) would wrongly flag it.
+        let values: Vec<f64> = std::iter::repeat_n(100.0_f64, 8)
+            .chain([200.0, 200.0])
+            .chain([100.0, 100.0])
+            .collect();
+        let series = wall_series(&values, 1.0);
+        assert!(evaluate_resolved_spike(&series, &AnalysisConfig::default()).is_none());
     }
 }
