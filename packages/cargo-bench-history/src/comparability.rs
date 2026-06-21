@@ -190,6 +190,33 @@ impl ComparabilityKey {
         let commit = sanitize_segment(commit);
         format!("{prefix}/{commit}/dirty-{effective_unix}.json")
     }
+
+    /// The object key for a blessing sidecar at `commit`, issued at `issued_unix`.
+    ///
+    /// Layout: `{prefix}/{commit}/bless-{issued_unix}.json`. Blessings are
+    /// append-only sidecars distinguished by their issue time, so several coexist
+    /// on one commit and are unioned at query time.
+    ///
+    /// `commit` is sanitized the same way as the partition components so the
+    /// directory name always forms a single key segment.
+    #[must_use]
+    pub fn bless_key(&self, commit: &str, issued_unix: i64) -> String {
+        let prefix = self.partition_prefix();
+        let commit = sanitize_segment(commit);
+        format!("{prefix}/{commit}/bless-{issued_unix}.json")
+    }
+
+    /// The storage prefix shared by every object recorded at `commit` in this
+    /// partition (`{prefix}/{commit}/`), used to enumerate a commit directory.
+    ///
+    /// `commit` is sanitized the same way as the partition components so the
+    /// directory name always forms a single key segment.
+    #[must_use]
+    pub fn commit_prefix(&self, commit: &str) -> String {
+        let prefix = self.partition_prefix();
+        let commit = sanitize_segment(commit);
+        format!("{prefix}/{commit}/")
+    }
 }
 
 /// Replaces every character that is not safe in a single path segment with `_`,
@@ -312,6 +339,35 @@ mod tests {
             key.dirty_key("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", 1_700_000_000),
             "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/\
              deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/dirty-1700000000.json"
+        );
+    }
+
+    #[test]
+    fn bless_key_is_named_by_commit_and_issue_time() {
+        let key = ComparabilityKey::new(
+            "folo",
+            EngineSystem::Callgrind,
+            "x86_64-unknown-linux-gnu",
+            None,
+        );
+        assert_eq!(
+            key.bless_key("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", 1_700_000_000),
+            "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/\
+             deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/bless-1700000000.json"
+        );
+    }
+
+    #[test]
+    fn commit_prefix_enumerates_one_commit_directory() {
+        let key = ComparabilityKey::new(
+            "folo",
+            EngineSystem::Callgrind,
+            "x86_64-unknown-linux-gnu",
+            None,
+        );
+        assert_eq!(
+            key.commit_prefix("dead/beef"),
+            "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/dead_beef/"
         );
     }
 

@@ -11,6 +11,7 @@
 //! ports. [`execute`] wires the real adapters; [`analyze_with`] is the
 //! storage- and git-generic orchestrator the in-memory tests drive.
 
+pub(crate) mod bless;
 pub(crate) mod clean;
 mod discriminant;
 mod findings;
@@ -27,6 +28,7 @@ use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use jiff::{Span, Timestamp};
 
+use crate::bless::BlessingRecord;
 use crate::comparability::{EngineSystem, sanitize_segment};
 use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
@@ -35,7 +37,9 @@ use crate::report::{Reporter, StderrReporter};
 use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
 use crate::wiring::{default_config_path, resolve_project_id};
-use crate::{AnalyzeOptions, CleanOptions, ListOptions, RunError, RunOutcome};
+use crate::{
+    AnalyzeOptions, BlessOptions, CleanOptions, ListOptions, RunError, RunOutcome, UnblessOptions,
+};
 
 use discriminant::{DiscriminantSet, Facets, ParsedKey, parse_key};
 use findings::{AnalysisConfig, AnalysisContext, AnalysisMode, find_changes};
@@ -120,12 +124,16 @@ where
     let filter = SeriesFilter {
         metric: options.metric.as_deref(),
     };
-    let series = build_series(&dataset.loaded, &dataset.order, &filter);
+    let mut series = build_series(&dataset.loaded, &dataset.order, &filter);
+    // Re-baseline blessed series before detection (history mode only; branch and
+    // tip modes carry an empty blessing map).
+    series::apply_blessings(&mut series, &dataset.blessings);
     let context = AnalysisContext {
         mode: dataset.mode,
         config: AnalysisConfig::default(),
         merge_base_index: dataset.merge_base_index,
         include_improvements: options.include_improvements,
+        include_inactive: options.include_inactive,
     };
     let findings = find_changes(&series, &context);
     let regressions = findings
@@ -258,6 +266,40 @@ impl<'a> Selection<'a> {
             mode_override: None,
         }
     }
+
+    /// Selection facets for `bless`. Only the discriminant facets (and `base`)
+    /// matter: a blessing always acts at the current commit, so it has no
+    /// `branch` / `since` / topology selectors.
+    fn from_bless(options: &'a BlessOptions) -> Self {
+        Self {
+            branch: None,
+            base: options.base.as_deref(),
+            no_dirty: false,
+            since: None,
+            engine: options.engine.as_deref(),
+            target_triple: options.target_triple.as_deref(),
+            os: options.os.as_deref(),
+            architecture: options.architecture.as_deref(),
+            machine_key: options.machine_key.as_deref(),
+            mode_override: None,
+        }
+    }
+
+    /// Selection facets for `unbless`. Mirrors [`from_bless`](Self::from_bless).
+    fn from_unbless(options: &'a UnblessOptions) -> Self {
+        Self {
+            branch: None,
+            base: options.base.as_deref(),
+            no_dirty: false,
+            since: None,
+            engine: options.engine.as_deref(),
+            target_triple: options.target_triple.as_deref(),
+            os: options.os.as_deref(),
+            architecture: options.architecture.as_deref(),
+            machine_key: options.machine_key.as_deref(),
+            mode_override: None,
+        }
+    }
 }
 
 /// The objects an analysis (or listing) draws on, plus the bookkeeping needed to
@@ -281,6 +323,11 @@ struct SelectedDataSet {
     /// First-parent topological index of the merge-base, used by branch mode to
     /// split base-side history from the branch's own commits.
     merge_base_index: Option<usize>,
+    /// Blessings recorded on in-window commits, grouped by discriminant set. Each
+    /// entry pairs the blessed commit's first-parent topological index with its
+    /// record; history-mode re-baselining picks, per series, the latest matching
+    /// blessing. Empty in branch and tip modes (they ignore blessings).
+    blessings: HashMap<DiscriminantSet, Vec<(usize, BlessingRecord)>>,
 }
 
 /// Parses the `--engine` facet and validates the triple/os/arch exclusivity, then
@@ -383,6 +430,19 @@ where
     let (engine, facets) = parsed_facets(selection)?;
     let candidates =
         facet_filtered_candidates(storage, project_id, engine, &facets, reporter).await?;
+
+    // Separate blessing sidecars from run objects: they share the partition prefix
+    // but carry a different payload and are loaded into their own map rather than
+    // the series.
+    let (candidates, bless_candidates): (Vec<_>, Vec<_>) = candidates
+        .into_iter()
+        .partition(|(_, parsed)| !parsed.is_bless());
+    if !bless_candidates.is_empty() {
+        reporter.note(&format!(
+            "{} of those are blessing sidecars",
+            count_noun(bless_candidates.len(), "object")
+        ));
+    }
 
     let ResolvedHistory {
         target_ref,
@@ -525,6 +585,39 @@ where
         count_noun(loaded.len(), "object")
     ));
 
+    // Load the blessing sidecars on in-window commits into a per-set map. A
+    // blessing on a commit outside the analyzed history (or that fails to parse) is
+    // irrelevant and skipped. Branch and tip modes ignore blessings entirely, so
+    // only history mode pays the load.
+    let mut blessings: HashMap<DiscriminantSet, Vec<(usize, BlessingRecord)>> = HashMap::new();
+    if mode == AnalysisMode::History {
+        for (key, parsed) in bless_candidates {
+            let Some(&topo_index) = order.get(&parsed.commit) else {
+                reporter.note(&format!(
+                    "skipping blessing {key}: commit {} is not on {target_ref}'s analyzed history",
+                    parsed.commit
+                ));
+                continue;
+            };
+            let bytes = storage.get(&key).await.map_err(RunError::Storage)?;
+            let text = String::from_utf8(bytes).map_err(|error| RunError::Analyze {
+                message: format!("stored blessing {key} is not valid UTF-8: {error}"),
+            })?;
+            let record = BlessingRecord::from_json(&text).map_err(|error| RunError::Analyze {
+                message: format!("stored blessing {key} is not a valid blessing record: {error}"),
+            })?;
+            reporter.note(&format!(
+                "loaded blessing {key} ({} accepted at {})",
+                count_noun(record.prefixes.len(), "prefix filter"),
+                parsed.commit
+            ));
+            blessings
+                .entry(parsed.set.clone())
+                .or_default()
+                .push((topo_index, record));
+        }
+    }
+
     Ok(SelectedDataSet {
         loaded,
         order,
@@ -538,6 +631,7 @@ where
         target_ref,
         mode,
         merge_base_index,
+        blessings,
     })
 }
 

@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, HashMap};
 use jiff::Timestamp;
 
 use crate::analyze::discriminant::{DiscriminantSet, ParsedKey};
+use crate::bless::BlessingRecord;
 use crate::model::{BenchmarkId, MetricKind, ResultSet};
 
 /// A single observation in a series.
@@ -37,6 +38,21 @@ pub(crate) struct SeriesPoint {
     pub(crate) interval_high: Option<f64>,
 }
 
+/// A blessing that applies to a series: the commit it was issued at, that commit's
+/// topological position, and the accepted level's provenance.
+///
+/// In history analysis a series with a matching blessing is *re-baselined* to the
+/// blessed commit — the detector treats the blessed level as the new baseline and
+/// only sees points from that commit onward, while the pre-blessing points are
+/// retained for charting (drawn greyed). See DESIGN §8.8.
+#[derive(Clone, Debug)]
+pub(crate) struct Blessing {
+    /// Full commit SHA the blessing was issued at (the report anchor).
+    pub(crate) commit: String,
+    /// Effective (committer) time of the blessed commit, for the report anchor.
+    pub(crate) effective: Timestamp,
+}
+
 /// A per-`(set, benchmark, metric)` time series ordered by git topology.
 #[derive(Clone, Debug)]
 pub(crate) struct Series {
@@ -50,6 +66,13 @@ pub(crate) struct Series {
     pub(crate) kind: MetricKind,
     /// Observations ordered by `(topo_index, dirty, effective, object_key)`.
     pub(crate) points: Vec<SeriesPoint>,
+    /// Index into `points` where the active (post-blessing) window begins; `0`
+    /// when the series is unblessed (every point is active). History-mode
+    /// detection considers only `points[active_start..]`, while charts draw the
+    /// whole series with the pre-`active_start` prefix greyed.
+    pub(crate) active_start: usize,
+    /// The blessing that re-baselined this series, if any (the report anchor).
+    pub(crate) blessing: Option<Blessing>,
 }
 
 /// One stored object selected for analysis, ready to be folded into series.
@@ -141,9 +164,48 @@ pub(crate) fn build_series(
                 metric,
                 kind,
                 points,
+                active_start: 0,
+                blessing: None,
             }
         })
         .collect()
+}
+
+/// Re-baselines each series to its latest matching blessing (history mode).
+///
+/// For every series, the most recent blessing (by topological position) whose
+/// prefixes accept the series' benchmark id selects the re-baseline commit. The
+/// series' `active_start` is set to the first point at or after that commit, so the
+/// detector only sees the post-blessing window while the full series is retained
+/// for charting. A series with no matching blessing is left untouched
+/// (`active_start = 0`). Branch and tip modes pass an empty map and so are
+/// unaffected.
+pub(crate) fn apply_blessings(
+    series: &mut [Series],
+    blessings: &HashMap<DiscriminantSet, Vec<(usize, BlessingRecord)>>,
+) {
+    for one in series.iter_mut() {
+        let Some(set_blessings) = blessings.get(&one.set) else {
+            continue;
+        };
+        let latest = set_blessings
+            .iter()
+            .filter(|(_, record)| record.matches(&one.id))
+            .max_by_key(|(topo_index, _)| *topo_index);
+        let Some((topo_index, record)) = latest else {
+            continue;
+        };
+        // The active window starts at the first point on or after the blessed
+        // commit. `points` is already sorted by `topo_index`, so a partition point
+        // locates the boundary.
+        one.active_start = one
+            .points
+            .partition_point(|point| point.topo_index < *topo_index);
+        one.blessing = Some(Blessing {
+            commit: record.commit.clone(),
+            effective: record.effective,
+        });
+    }
 }
 
 #[cfg(test)]
@@ -336,5 +398,89 @@ mod tests {
         let series = build_series(&[object], &order(&["c0"]), &filter);
         assert_eq!(series.len(), 1);
         assert_eq!(series[0].metric, "Ir");
+    }
+
+    fn blessing(prefixes: &[&str], commit: &str, effective: i64) -> BlessingRecord {
+        BlessingRecord::new(
+            commit.to_owned(),
+            ts(effective),
+            ts(effective.saturating_add(1)),
+            prefixes.iter().map(|prefix| (*prefix).to_owned()).collect(),
+            None,
+            "0.0.1".to_owned(),
+        )
+    }
+
+    /// A four-commit `c0..c3` series, ready for blessing tests.
+    fn four_commit_series() -> Vec<Series> {
+        let objects = vec![
+            clean_object("c0", 100, 10.0),
+            clean_object("c1", 200, 20.0),
+            clean_object("c2", 300, 30.0),
+            clean_object("c3", 400, 40.0),
+        ];
+        build_series(
+            &objects,
+            &order(&["c0", "c1", "c2", "c3"]),
+            &SeriesFilter::default(),
+        )
+    }
+
+    #[test]
+    fn apply_blessings_rebaselines_to_the_matching_blessing() {
+        let mut series = four_commit_series();
+        let set = series[0].set.clone();
+        let mut map = HashMap::new();
+        // Blessed at the c2 commit (topological index 2).
+        map.insert(set, vec![(2_usize, blessing(&["group"], "c2full", 300))]);
+
+        apply_blessings(&mut series, &map);
+
+        // The active window begins at the first point on or after c2, so the c0/c1
+        // points are excluded from detection while retained for charts.
+        assert_eq!(series[0].active_start, 2);
+        let recorded = series[0].blessing.as_ref().expect("blessing recorded");
+        assert_eq!(recorded.commit, "c2full");
+    }
+
+    #[test]
+    fn apply_blessings_ignores_a_non_matching_blessing() {
+        let mut series = four_commit_series();
+        let set = series[0].set.clone();
+        let mut map = HashMap::new();
+        // The series' benchmark id is `group/case`; this prefix matches nothing.
+        map.insert(set, vec![(2_usize, blessing(&["other"], "c2full", 300))]);
+
+        apply_blessings(&mut series, &map);
+
+        assert_eq!(series[0].active_start, 0, "no re-baseline");
+        assert!(series[0].blessing.is_none(), "no blessing recorded");
+    }
+
+    #[test]
+    fn apply_blessings_picks_the_latest_matching_blessing() {
+        let mut series = four_commit_series();
+        let set = series[0].set.clone();
+        let mut map = HashMap::new();
+        // Two matching blessings; the later one (c3, index 3) wins.
+        map.insert(
+            set,
+            vec![
+                (1_usize, blessing(&["group"], "c1full", 200)),
+                (3_usize, blessing(&["group"], "c3full", 400)),
+            ],
+        );
+
+        apply_blessings(&mut series, &map);
+
+        assert_eq!(series[0].active_start, 3);
+        assert_eq!(
+            series[0]
+                .blessing
+                .as_ref()
+                .expect("blessing recorded")
+                .commit,
+            "c3full"
+        );
     }
 }

@@ -51,5 +51,7 @@ pub async fn run_with_overrides(
         Command::List(options) => commands::list(options, now).await,
         Command::Clean(options) => commands::clean(options).await,
         Command::Backfill(options) => commands::backfill(options, bench_command).await,
+        Command::Bless(options) => commands::bless(options, now).await,
+        Command::Unbless(options) => commands::unbless(options).await,
     }
 }

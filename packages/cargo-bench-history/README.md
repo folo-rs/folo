@@ -44,17 +44,26 @@ cargo bench-history analyze [--repo PATH] [--branch REF] [--base REF]
                             [--machine-key KEY] [--no-dirty] [--since WHEN]
                             [--metric NAME] [--format text|json|markdown]
                             [--mode auto|history|branch|tip]
-                            [--include-improvements] [--verbose] [--config PATH]
-cargo bench-history list [--discriminants] [--repo PATH] [--branch REF]
-                         [--base REF] [--engine NAME] [--target-triple TRIPLE]
-                         [--os OS] [--architecture ARCH] [--machine-key KEY]
-                         [--no-dirty] [--since DATE] [--metric NAME]
-                         [--format text|json|markdown] [--verbose] [--config PATH]
+                            [--include-improvements] [--include-inactive]
+                            [--verbose] [--config PATH]
+cargo bench-history list [--discriminants] [--blessings [--all]] [--repo PATH]
+                         [--branch REF] [--base REF] [--engine NAME]
+                         [--target-triple TRIPLE] [--os OS] [--architecture ARCH]
+                         [--machine-key KEY] [--no-dirty] [--since DATE]
+                         [--metric NAME] [--format text|json|markdown]
+                         [--verbose] [--config PATH]
 cargo bench-history clean [--dry-run] [--repo PATH] [--branch REF]
                           [--base REF] [--engine NAME] [--target-triple TRIPLE]
                           [--os OS] [--architecture ARCH] [--machine-key KEY]
                           [--since DATE] [--format text|json|markdown]
                           [--verbose] [--config PATH]
+cargo bench-history bless <prefix> [<prefix> ...] [--reason TEXT] [--repo PATH]
+                          [--base REF] [--engine NAME] [--target-triple TRIPLE]
+                          [--os OS] [--architecture ARCH] [--machine-key KEY]
+                          [--verbose] [--config PATH]
+cargo bench-history unbless [--repo PATH] [--base REF] [--engine NAME]
+                            [--target-triple TRIPLE] [--os OS] [--architecture ARCH]
+                            [--machine-key KEY] [--verbose] [--config PATH]
 ```
 
 * `run` executes the workspace's benches once with `cargo bench`, harvests every
@@ -128,7 +137,10 @@ cargo bench-history clean [--dry-run] [--repo PATH] [--branch REF]
   four significant figures while the `json` report keeps full precision. `--since`
   accepts an RFC 3339 timestamp, a `YYYY-MM-DD` date, or a
   relative duration such as `6 months` or `30 days ago`; `--metric` narrows to one
-  metric. When stored runs exist but none enter the analysis (for example because
+  metric. In history mode a spike that has since recovered to its prior level is
+  suppressed by default (its current state already matches the baseline);
+  `--include-inactive` surfaces such resolved findings (marked `active: false`) for
+  auditing. When stored runs exist but none enter the analysis (for example because
   every run is a dirty snapshot on the base branch), the report explains why;
   `--verbose` adds a per-object diagnostic trail to standard error. Every command
   accepts `--verbose`.
@@ -139,7 +151,10 @@ cargo bench-history clean [--dry-run] [--repo PATH] [--branch REF]
   per discriminant set, the run, series, and per-commit counts of the selected
   runs. `--discriminants` instead lists the discriminant sets present in storage
   (no repository required) — useful for discovering which engines, triples, and
-  machine keys have data before scoping an analysis.
+  machine keys have data before scoping an analysis. `--blessings` instead audits
+  blessings (see `bless` below): the blessings recorded at the current commit, or —
+  with `--all` — the most recent blessing of every benchmark across the analysis
+  window.
 * `clean` removes the dirty (uncommitted-tree) runs from the same commits a
   matching `analyze`/`list` pass would draw them from: the commits unique to the
   analyzed branch, or the base branch's tip commit when you are on the base
@@ -150,6 +165,22 @@ cargo bench-history clean [--dry-run] [--repo PATH] [--branch REF]
   currently dirty), so `clean` reclaims ephemeral snapshots regardless of the
   current tree state. `--dry-run` previews exactly what would be removed without
   deleting anything.
+* `bless` manually accepts an intentional performance change on the base branch so
+  history analysis stops re-flagging it. Pass one or more benchmark-id prefixes to
+  accept (matched against the qualified `<package>/<group>/<case>/<value>` identity,
+  e.g. `bless all_the_time/read_cell`), optionally with `--reason`. A blessing
+  re-baselines the benchmark's history from the current commit forward, so the
+  accepted step is no longer reported while the earlier points stay on the chart for
+  context. Blessing is base-branch-only and requires a clean working tree and an
+  existing recorded run at the current commit — a feature-branch, dirty-tree, or
+  data-less blessing is a hard error (no `--force`), because none of those would
+  survive a history analysis. It accepts the same discriminant facets as `analyze`
+  (`--engine`/`--target-triple`/`--os`/`--architecture`/`--machine-key`) to scope
+  which sets are blessed.
+* `unbless` removes the blessings recorded at the current commit, undoing a `bless`
+  so the change is reported again. (To narrow a blessing, `unbless` and re-`bless`
+  the subset to keep — sidecars are append-only.) Use `list --blessings` to see what
+  is currently blessed.
 
 ## Status
 
@@ -166,12 +197,15 @@ Implemented:
   grouped by discriminant set. It runs in `history`, `branch`, or `tip` mode
   (auto-detected, or forced with `--mode`); findings are advisory and never affect
   the exit code (the `json` report's `mode`/`notable`/`flipped_at`/`series` fields
-  are the downstream signal).
+  are the downstream signal). Resolved (self-corrected) spikes are surfaced with
+  `--include-inactive`.
 * `list` previews the data set an `analyze` pass would consume (run/series/commit
-  counts per discriminant set), or lists the discriminant sets present in storage
-  with `--discriminants`.
+  counts per discriminant set), lists the discriminant sets present in storage with
+  `--discriminants`, or audits blessings with `--blessings`.
 * `clean` removes dirty runs from the analyzed branch's commits (or the base
   branch tip), with a `--dry-run` preview.
+* `bless` / `unbless` accept (or revoke) an intentional base-branch regression so
+  history analysis re-baselines past it instead of re-flagging it forever.
 * `install` writes a starter `.cargo/bench_history.toml` when one is absent.
 * `backfill` replays `run` across a commit range in isolated git worktrees,
   bootstrapping history for old commits; it is resumable (skips already-stored

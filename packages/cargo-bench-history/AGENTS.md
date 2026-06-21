@@ -219,7 +219,51 @@ per-finding `direction` / `flipped_at` / `series`. There is **no**
 The two driving scenarios are a scheduled base-branch regression watch (history) and
 a per-PR feature-branch evaluation (branch). Modes apply to `analyze` only; `list`
 and `clean` reuse the same data-set *selection* but never analyze, so `--mode` /
-`--include-improvements` are analyze-only and not part of the selection lockstep.
+`--include-improvements` / `--include-inactive` are analyze-only and **not** part of
+the selection lockstep.
+
+### Blessings and re-baselining (`analyze` history mode only)
+
+A **blessing** manually accepts an intentional performance change on the base branch
+so history analysis re-baselines past it and stops re-flagging it. Blessings matter
+**only in history mode** — branch/tip modes treat the base as fully blessed already
+(they compare against the base, not within it), so they ignore blessings entirely.
+
+* **Data model — append-only sidecars.** A blessing is a
+  `…/<machine|synthetic>/<commit>/bless-<issued_unix>.json` object alongside the
+  commit's `clean.json`. It records the blessed benchmark-id prefixes, an optional
+  `reason`, and the issuing commit. Sidecars are append-only and never mutate a
+  `clean.json`; `unbless` deletes the sidecar(s) at HEAD, and `run --overwrite`
+  drops a commit's stale sidecars when it rewrites that commit.
+* **`bless` rules (all hard errors, no `--force`).** `analyze::bless::bless_with`
+  requires: the current HEAD is the base branch (`merge_base(HEAD, base) == HEAD`),
+  the working tree is clean, and a `clean.json` already exists at HEAD. The on-base
+  check fires **first**. None of those states would survive a history analysis, so a
+  feature-branch / dirty / data-less blessing is rejected rather than silently
+  ignored. `bless <prefix> [<prefix> …]` matches each prefix against the qualified
+  `<package>/<group>/<case>/<value>` identity via `starts_with` (per-benchmark, not
+  all-or-nothing). It accepts the same discriminant facets as `analyze`.
+* **Effect on analysis — active/inactive segments.** In history mode
+  `select_dataset` loads `dataset.blessings` (only for in-window base commits). A
+  blessed benchmark's *active window* starts at `max(last_blessed_commit,
+  first_active_segment_commit)`; the change-point/drift detectors only consider the
+  active segment, so a step that predates the blessing is no longer reported. Earlier
+  (inactive) points stay in the series for charting (greyed) and for any long-range
+  technique that needs more data. A `Finding` carries `active`, `blessed_at`, and
+  `blessed_effective` so a consumer can see what re-baselined it.
+* **Resolved spikes.** Independently of blessings, a spike that has since recovered
+  to its prior level is **inactive by default** — its current state already matches
+  the baseline, so re-flagging it is noise. `--include-inactive` surfaces such
+  findings (`active: false`, `flipped_at` = the recovery commit) for auditing. The
+  JSON `regressions` count and `notable` flag include any inactive finding that is
+  present, but inactive findings are absent by default.
+* **`unbless`** (`unbless_with`) deletes the blessings recorded **at the current
+  commit** only (it never touches later blessings); it reports
+  `"Removed N blessing(s) at commit <short>."` or `"No blessings recorded …"`.
+* **`list --blessings [--all]`** audits blessings without analyzing: the default
+  (`scope: "head"`) lists blessings recorded at HEAD; `--all` (`scope: "window"`)
+  lists the most recent blessing of every benchmark across the analysis window. See
+  `analyze::list::blessings_at_head` / `blessings_across_window`.
 
 ## The `list` command
 
@@ -237,6 +281,9 @@ part of the selection lockstep (they govern analysis, which `list` never does).
 
 `--list-discriminants` was migrated off `analyze` to **`list --discriminants`**:
 it lists the discriminant sets present in storage without requiring a repository.
+`list --blessings [--all]` is the third `list` view (it requires a repository): it
+audits blessings instead of previewing the data set — see the Blessings subsection
+above.
 
 `list` lives **inside** the analyze module tree as `src/analyze/list.rs`
 (`pub(crate) mod list;`), reusing the selection pipeline that was extracted from

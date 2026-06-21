@@ -13,7 +13,7 @@ use std::fmt;
 /// Within a single project all runs that share a discriminant set are comparable;
 /// runs in different sets (a different engine, target triple, or machine key)
 /// never share a series.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Serialize)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, serde::Serialize)]
 pub(crate) struct DiscriminantSet {
     /// Engine identifier (for example, `callgrind`).
     pub(crate) engine: String,
@@ -82,6 +82,24 @@ impl ParsedKey {
     /// Whether the key names a dirty (uncommitted-tree) snapshot.
     pub(crate) fn is_dirty(&self) -> bool {
         self.file.starts_with("dirty-")
+    }
+
+    /// Whether the key names a blessing sidecar rather than a stored run.
+    pub(crate) fn is_bless(&self) -> bool {
+        self.file.starts_with("bless-")
+    }
+
+    /// The blessing sidecar key for this set's commit directory, issued at
+    /// `issued_unix`.
+    ///
+    /// Layout: `v2/{project}/{engine}/{triple}/{machine}/{commit}/bless-{unix}.json`.
+    /// The components are already sanitized (they came from a parsed storage key),
+    /// so the result is a well-formed seven-segment key.
+    pub(crate) fn bless_key(&self, issued_unix: i64) -> String {
+        format!(
+            "v2/{}/{}/{}/{}/{}/bless-{issued_unix}.json",
+            self.project, self.set.engine, self.set.target_triple, self.set.machine, self.commit,
+        )
     }
 }
 
@@ -215,6 +233,28 @@ mod tests {
         assert!(parsed.is_dirty());
         assert_eq!(parsed.set.os(), "windows");
         assert_eq!(parsed.set.machine, "m1");
+    }
+
+    #[test]
+    fn parse_key_recognizes_a_blessing_sidecar() {
+        let parsed = parse_key(
+            "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/bless-1700000000.json",
+        )
+        .expect("a well-formed bless key parses");
+        assert!(parsed.is_bless());
+        assert!(!parsed.is_dirty());
+        assert_eq!(parsed.commit, "abc123");
+    }
+
+    #[test]
+    fn bless_key_targets_the_sets_commit_directory() {
+        let parsed =
+            parse_key("v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/clean.json")
+                .expect("a well-formed key parses");
+        assert_eq!(
+            parsed.bless_key(1_700_000_000),
+            "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/bless-1700000000.json"
+        );
     }
 
     #[test]

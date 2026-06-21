@@ -460,6 +460,13 @@ where
     deps.reporter
         .note(&format!("{engine}: stored {object_key}"));
 
+    // Replacing a clean run discards the data point its blessings accepted, so any
+    // blessing sidecars on this commit no longer describe a stored level. Remove
+    // them on overwrite so a stale blessing cannot silently re-baseline the new run.
+    if options.overwrite && !dirty {
+        invalidate_blessings(deps.storage, &key, commit, deps.reporter).await?;
+    }
+
     Ok(EngineSummary {
         stored: true,
         count,
@@ -488,6 +495,32 @@ async fn store_result<S: Storage>(
         Err(StorageError::AlreadyExists { key }) => Err(RunError::Duplicate { key }),
         Err(error) => Err(error.into()),
     }
+}
+
+/// Deletes every blessing sidecar recorded at `commit` in the partition `key`.
+///
+/// Called when an overwrite replaces a clean run: the blessings accepted the level
+/// of the run being replaced, so they are removed rather than left to re-baseline
+/// the new (possibly different) level.
+async fn invalidate_blessings<S: Storage>(
+    storage: &S,
+    key: &ComparabilityKey,
+    commit: &str,
+    reporter: &dyn Reporter,
+) -> Result<(), RunError> {
+    let prefix = key.commit_prefix(commit);
+    let keys = storage.list(&prefix).await?;
+    for object_key in keys {
+        let is_bless = object_key
+            .rsplit('/')
+            .next()
+            .is_some_and(|name| name.starts_with("bless-"));
+        if is_bless {
+            storage.delete(&object_key).await?;
+            reporter.note(&format!("removed stale blessing {object_key}"));
+        }
+    }
+    Ok(())
 }
 
 /// Parses harvested engine output into result records, naming the offending
@@ -586,6 +619,7 @@ mod tests {
 
     use super::*;
     use crate::bench_output::{Harvest, RawCriterionCase, RawSummary};
+    use crate::bless::BlessingRecord;
     use crate::git::build_snapshot;
     use crate::process::EngineStatus;
     use crate::report::RecordingReporter;
@@ -1145,6 +1179,58 @@ mod tests {
             set.results.len(),
             1,
             "overwrite should replace the contents"
+        );
+    }
+
+    #[test]
+    fn overwriting_a_clean_run_removes_stale_blessing_sidecars() {
+        let storage = MemoryStorage::new();
+        // A first clean run establishes the commit directory.
+        drive(
+            &RunOptions::default(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            &FakeOutput::with_two_callgrind_summaries(),
+            &storage,
+        )
+        .unwrap();
+        let commit_dir = "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/\
+                          deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+        let bless_key = format!("{commit_dir}/bless-100.json");
+        let record = BlessingRecord::new(
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_owned(),
+            Timestamp::from_second(1).expect("seconds within range"),
+            Timestamp::from_second(100).expect("seconds within range"),
+            vec!["group".to_owned()],
+            None,
+            "0.0.1".to_owned(),
+        );
+        block_on(storage.put(&bless_key, record.to_json().unwrap().as_bytes())).unwrap();
+        assert!(storage.keys().iter().any(|key| key == &bless_key));
+
+        // Overwriting the clean run discards the accepted data point, so its
+        // blessing sidecar is removed.
+        let overwrite = RunOptions {
+            overwrite: true,
+            ..RunOptions::default()
+        };
+        drive(
+            &overwrite,
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            &FakeOutput::with_two_callgrind_summaries(),
+            &storage,
+        )
+        .unwrap();
+
+        let keys = storage.keys();
+        assert!(
+            !keys.iter().any(|key| key == &bless_key),
+            "the stale blessing should be gone: {keys:?}"
+        );
+        assert!(
+            keys.iter().any(|key| key.ends_with("/clean.json")),
+            "the clean run survives: {keys:?}"
         );
     }
 

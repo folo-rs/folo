@@ -31,6 +31,10 @@ pub enum Command {
     Clean(CleanOptions),
     /// Replay `run` across a range of historical commits.
     Backfill(BackfillOptions),
+    /// Accept a benchmark's current level on the base branch as intentional.
+    Bless(BlessOptions),
+    /// Remove blessings recorded at the current commit.
+    Unbless(UnblessOptions),
 }
 
 /// Options for the `run` command.
@@ -121,11 +125,13 @@ pub struct AnalyzeOptions {
     /// In history mode, also report sustained improvements (regressions only by
     /// default, since improvement over time on the base branch is expected).
     pub include_improvements: bool,
+    /// In history mode, also report inactive findings: changes that the current
+    /// state no longer reflects (a regression that later recovered). Hidden by
+    /// default since they need no action.
+    pub include_inactive: bool,
     /// Emit detailed diagnostic notes to standard error describing each step.
     pub verbose: bool,
 }
-
-/// Options for the `list` command.
 ///
 /// The data-set-selection options mirror [`AnalyzeOptions`] exactly so a `list`
 /// invocation previews the data set the same `analyze` invocation would consume.
@@ -167,6 +173,13 @@ pub struct ListOptions {
     /// List the discriminant sets present in storage instead of the data set that
     /// would enter the analysis. Does not require a repository.
     pub discriminants: bool,
+    /// List blessings instead of runs: the blessings recorded at the current
+    /// commit, or (with `all`) the most recent blessing of every benchmark in the
+    /// analysis window.
+    pub blessings: bool,
+    /// With `blessings`, list the most recent blessing of every benchmark across
+    /// the whole analysis window rather than only those at the current commit.
+    pub all: bool,
     /// Emit detailed diagnostic notes to standard error describing each step.
     pub verbose: bool,
 }
@@ -245,6 +258,82 @@ pub struct BackfillOptions {
     pub ignore_errors: bool,
     /// Arguments forwarded verbatim to the benchmark command after the scope flags.
     pub passthrough: Vec<String>,
+    /// Emit detailed diagnostic notes to standard error describing each step.
+    pub verbose: bool,
+}
+
+/// Options for the `bless` command.
+///
+/// The data-set-selection options mirror the facet subset of [`AnalyzeOptions`]
+/// (engine, target triple / os / architecture, and machine key) so a `bless`
+/// writes its sidecars into exactly the discriminant sets a matching `analyze`
+/// would consume. It always acts at the current commit (`HEAD`), so it has no
+/// `branch` / `since` / `metric` selectors.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[expect(
+    clippy::exhaustive_structs,
+    reason = "constructed and matched by the in-crate binary and integration tests"
+)]
+pub struct BlessOptions {
+    /// Path to the configuration file, if overridden.
+    pub config_path: Option<PathBuf>,
+    /// Repository to resolve git topology from; defaults to the working directory.
+    pub repo: Option<PathBuf>,
+    /// Base ref the current commit must be on; defaults to the detected (or
+    /// configured) default branch.
+    pub base: Option<String>,
+    /// Restrict the blessing to a single engine (criterion or callgrind), if set.
+    pub engine: Option<String>,
+    /// Restrict the blessing to a single full target triple, if set. Mutually
+    /// exclusive with `os` / `architecture` (the triple already fixes both).
+    pub target_triple: Option<String>,
+    /// Restrict the blessing to a single operating-system facet, if set.
+    pub os: Option<String>,
+    /// Restrict the blessing to a single CPU-architecture facet, if set.
+    pub architecture: Option<String>,
+    /// Restrict the blessing to a single machine partition, if set.
+    pub machine_key: Option<String>,
+    /// Benchmark-id prefixes to accept (matched against the qualified identity).
+    /// At least one is required.
+    pub prefixes: Vec<String>,
+    /// Optional human note recorded with the blessing, if set.
+    pub reason: Option<String>,
+    /// Emit detailed diagnostic notes to standard error describing each step.
+    pub verbose: bool,
+}
+
+/// Options for the `unbless` command.
+///
+/// Mirrors [`BlessOptions`]' selection facets but takes no prefixes: an unbless
+/// removes every blessing recorded at the current commit in the selected sets
+/// (sidecars are immutable, so editing a blessing means unblessing then
+/// re-blessing the subset to keep).
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[expect(
+    clippy::exhaustive_structs,
+    reason = "constructed and matched by the in-crate binary and integration tests"
+)]
+pub struct UnblessOptions {
+    /// Path to the configuration file, if overridden.
+    pub config_path: Option<PathBuf>,
+    /// Repository to resolve git topology from; defaults to the working directory.
+    pub repo: Option<PathBuf>,
+    /// Base ref the current commit must be on; defaults to the detected (or
+    /// configured) default branch.
+    pub base: Option<String>,
+    /// Restrict the unblessing to a single engine (criterion or callgrind), if set.
+    pub engine: Option<String>,
+    /// Restrict the unblessing to a single full target triple, if set. Mutually
+    /// exclusive with `os` / `architecture` (the triple already fixes both).
+    pub target_triple: Option<String>,
+    /// Restrict the unblessing to a single operating-system facet, if set.
+    pub os: Option<String>,
+    /// Restrict the unblessing to a single CPU-architecture facet, if set.
+    pub architecture: Option<String>,
+    /// Restrict the unblessing to a single machine partition, if set.
+    pub machine_key: Option<String>,
     /// Emit detailed diagnostic notes to standard error describing each step.
     pub verbose: bool,
 }
@@ -339,6 +428,12 @@ pub enum RunError {
         /// Human-readable description, including any partial backfill summary.
         message: String,
     },
+    /// A blessing precondition failed (a dirty working tree, a commit not on the
+    /// base branch, no stored result at the current commit, or no prefixes given).
+    Bless {
+        /// Human-readable description of the precondition failure.
+        message: String,
+    },
     /// An underlying I/O operation (process, probe, or harvest) failed.
     Io(io::Error),
 }
@@ -362,6 +457,7 @@ impl fmt::Display for RunError {
             ),
             Self::Analyze { message } => write!(f, "failed to analyze history: {message}"),
             Self::Backfill { message } => write!(f, "backfill failed: {message}"),
+            Self::Bless { message } => write!(f, "blessing failed: {message}"),
             Self::Io(error) => write!(f, "I/O error: {error}"),
         }
     }
@@ -378,7 +474,8 @@ impl Error for RunError {
             | Self::Parse { .. }
             | Self::Duplicate { .. }
             | Self::Analyze { .. }
-            | Self::Backfill { .. } => None,
+            | Self::Backfill { .. }
+            | Self::Bless { .. } => None,
         }
     }
 }

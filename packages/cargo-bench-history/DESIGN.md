@@ -25,8 +25,8 @@ It stores every result over time (local path or Azure blob), runs in multiple
 environments (dev PC, GitHub Actions, ADO), and partitions data only when the
 results are not otherwise comparable.
 
-Commands: `run`, `install`, `analyze`, `backfill`, `list`, `clean` (plus a
-deferred `upload` — §8.2).
+Commands: `run`, `install`, `analyze`, `backfill`, `list`, `clean`, `bless`,
+`unbless` (plus a deferred `upload` — §8.2 — and `prune` — §8.9).
 
 ## 2. How the benchmark systems work (and what they emit)
 
@@ -381,8 +381,8 @@ implement the same trait with no special-casing upstream.
 
 ## 8. Commands
 
-The commands (`run`, `install`, `analyze`, `backfill`, `list`, `clean`; `upload`
-is deferred — §8.2) follow
+The commands (`run`, `install`, `analyze`, `backfill`, `list`, `clean`, `bless`,
+`unbless`; `upload` and `prune` are deferred — §8.2, §8.9) follow
 the established pattern: `main.rs` strips the injected `bench-history` arg, `argh`
 parses (here with **subcommands**), and dispatches to `lib::run`, which returns a
 typed `Outcome`/`Error`.
@@ -559,6 +559,12 @@ order, runs the finding algorithms (§9), and prints a report.
   default) infers it from git topology and the recorded data set (never the on-disk
   working-tree state). `--include-improvements` opts a history-mode analysis into
   reporting sustained improvements (suppressed by default).
+* `--include-inactive` opts a history-mode analysis into reporting **resolved**
+  changes — a spike that has since recovered to its prior level (§9.7). These are
+  suppressed by default (the current state already matches the baseline, so there is
+  nothing to act on) but are useful for auditing history that self-corrected. The
+  underlying points are always part of the data set and the chart regardless of this
+  flag; it only controls whether the recovered finding is surfaced.
 * `--metric`, `--format text|json|markdown`.
 * **Findings never affect the exit code.** The process exits non-zero only when the
   analysis fails to *run* (no repo, storage error, …); a finding is advisory. The
@@ -648,7 +654,7 @@ the analysis — letting the user inspect and confirm the commit range and the
 discriminant sets before committing to an `analyze`.
 
 ```
-cargo bench-history list [--discriminants] \
+cargo bench-history list [--discriminants] [--blessings [--all]] \
     [--repo PATH] [--branch REF] [--base REF] \
     [--engine NAME] [--target-triple TRIPLE] [--os OS] [--architecture ARCH] \
     [--machine-key KEY] [--no-dirty] [--since DATE] [--metric NAME] \
@@ -661,12 +667,17 @@ selection flag `analyze` accepts (`--repo`/`--branch`/`--base`/`--engine`/
 `--metric`) selects the same data set here, resolved through the same shared
 selection pipeline (§8.4). The two commands must stay in lockstep — a selection
 parameter added to one is added to the other. `list` omits only the analysis-only
-flags `--mode` / `--include-improvements` (it never analyzes).
+flags `--mode` / `--include-improvements` / `--include-inactive` (it never analyzes).
 
 Instead of findings, `list` reports — per discriminant set — the run, series, and
 per-commit counts of the selected runs (each commit's clean/dirty split), ordered
 oldest-first by git topology, so the user sees precisely which runs would feed the
 analysis.
+
+`--discriminants` switches to a storage-index listing of the present discriminant
+sets (no repository required). `--blessings` switches to a blessing audit (§8.8): the
+sidecars at the current commit by default, or — with `--all` — the most recent
+blessing of every benchmark across the analysis window.
 
 `--discriminants` switches to a storage index: it lists the discriminant sets
 present under `v2/<project>/` (engine / OS / arch / machine key) **without requiring
@@ -705,6 +716,72 @@ current tree state.
 deletes. The JSON report carries `dry_run` and the deleted object keys per commit
 for transparency; text/markdown report counts only. Deletion is per object via the
 `Storage::delete` trait method (§7).
+
+### 8.8 `cargo bench-history bless` / `unbless`
+
+A blessing manually **accepts an intentional performance change on the base branch**
+so history analysis stops re-flagging it. Sometimes a regression is a deliberate
+tradeoff (a feature is worth some instructions); without a way to record that
+decision, every subsequent `analyze` would keep reporting the same accepted step
+forever. Blessing **re-baselines** the series from the blessed commit forward (§9.7).
+
+```
+cargo bench-history bless <prefix> [<prefix> …] \
+    [--reason TEXT] \
+    [--repo PATH] [--base REF] \
+    [--engine NAME] [--target-triple TRIPLE] [--os OS] [--architecture ARCH] \
+    [--machine-key KEY] [--verbose] [--config PATH]
+
+cargo bench-history unbless \
+    [--repo PATH] [--base REF] \
+    [--engine NAME] [--target-triple TRIPLE] [--os OS] [--architecture ARCH] \
+    [--machine-key KEY] [--verbose] [--config PATH]
+```
+
+**Per-benchmark, prefix-matched.** `bless` takes one or more benchmark-id prefixes
+matched against the qualified identity (`<package>/<group>/<case>/<value>`), so
+`bless all_the_time/read_cell` accepts one benchmark and `bless overhead/groups_`
+accepts a family. Blessing is deliberately scoped: accepting the benchmark that
+caused trouble must not silently accept every other benchmark that may be trending
+badly unnoticed. At least one prefix is required. `--reason` records why the change
+was accepted, surfaced in findings and `list --blessings`.
+
+**Base-branch-only, clean tree, existing data point — hard errors otherwise.** A
+blessing is recorded only when **(a)** the current commit is on the base branch
+(`merge_base(HEAD, base) == HEAD`), **(b)** the working tree is clean, and **(c)** a
+`clean.json` already exists at the current commit in each selected set. There is **no
+`--force` escape hatch**: a feature-branch blessing would silently vanish or
+duplicate once the branch is squash-merged, a dirty run never survives history
+analysis, and blessing a commit with no recorded data point is meaningless. Each of
+these is refused with a clear message.
+
+**Storage: append-only sidecar.** `bless` writes a `BlessingRecord` sidecar
+`…/<commit>/bless-<issued_unix>.json` alongside the commit's `clean.json` in every
+facet-selected discriminant set that has a result at the current commit. The record
+carries the blessed commit, its effective (committer) time, the issue time, the
+prefix filters, the optional reason, and the tool version. Sidecars are **immutable**
+(append-only), so narrowing a blessing means `unbless` then re-bless the subset to
+keep. Overwriting a commit's `clean.json` (a `run --overwrite`) deletes its stale
+blessing sidecars, since the accepted data point is gone.
+
+`unbless` deletes every blessing recorded **at the current commit** in the selected
+sets (a "blessing delete" at HEAD); it does not touch blessings at other commits.
+
+**`list --blessings`** audits blessings (§8.6 extends `list`): with no extra flag it
+lists the sidecars at the current commit (what `unbless` would remove); with `--all`
+it rolls up the **most recent** blessing of every benchmark across the analysis
+window (the same data-set selection `analyze` uses), so a reviewer can see which
+benchmarks are currently re-baselined and since which commit.
+
+### 8.9 `cargo bench-history prune` — deferred
+
+A `prune` command to **delete a chosen portion of the stored data set** (for
+reclaiming storage or discarding a bad run), taking the **same data-set-selection
+syntax as `analyze`** (§8.4) and a `--dry-run` safety preview. Deferred — `clean`
+(§8.7) already covers the common "drop the ephemeral dirty runs" case via the same
+selection pipeline and `Storage::delete`, so `prune` is added only when a concrete
+need to delete clean history arises. When added it joins the `analyze`/`list`/`clean`
+selection lockstep (decision 26).
 
 ## 9. Analysis algorithms
 
@@ -841,6 +918,7 @@ is an explicit fast guard. This matches the two real scenarios:
 | Latest-regime vs base (branch algorithm, below) | — | ✅ | — | Answers "did the branch's *current* state move vs the base", tolerating an early wobble. |
 | Tip-vs-recent guard (below) | — | — | ✅ | Cheap "did the last commit make things worse" check. |
 | Improvements reported | opt-in | ✅ | — | History: improvement over time is expected, so only regressions by default (`--include-improvements` opts in). Branch: both directions (you want to know either way). Tip: a guard, regressions only. |
+| Resolved (inactive) findings reported | opt-in | — | — | History: a self-corrected spike or blessed step is re-baselined away by default (§9.7); `--include-inactive` surfaces it. Branch/tip judge only the latest state, so every finding is active. |
 
 **Branch algorithm — latest state, not the journey.** A branch may improve and then
 regress; we report the *latest* regime so "it ended up worse" is never masked by an
@@ -875,7 +953,11 @@ and reports regressions only.
       "method": "change_point", "direction": "regression",
       "baseline": 100.0, "latest": 130.0,
       "delta": 30.0, "relative_delta": 0.30, "confidence": 1.0,
-      "flipped_at": "a1b2c3d",   // branch mode only: where the latest regime began
+      "flipped_at": "a1b2c3d",   // branch: where the latest regime began;
+                                 // history+inactive: where the level recovered
+      "active": true,            // false for a resolved/blessed finding (§9.7)
+      "blessed_at": "9f8e7d6",   // history only: the blessing that re-baselined this series
+      "blessed_effective": "2024-03-01T00:00:00Z",
       "series": [ { "commit": "…", "value": 100.0, "dirty": false }, … ]
     }
   ],
@@ -884,9 +966,11 @@ and reports regressions only.
 ```
 
 A consumer keys off `notable` (post or stay silent), reads each finding's
-`direction`/`relative_delta`/`flipped_at`, and can render the embedded `series` as
-a chart. JSON values keep full `f64` precision; only the human-readable text and
-Markdown reports round to four significant figures.
+`direction`/`relative_delta`/`flipped_at`/`active`, and can render the embedded
+`series` as a chart. `blessed_at`/`blessed_effective` are present only when the
+series was re-baselined by a blessing (§9.7); `active_from` (omitted when zero) marks
+where the active window begins. JSON values keep full `f64` precision; only the
+human-readable text and Markdown reports round to four significant figures.
 
 **Text report layout.** The text report renders one paragraph per finding: a bold,
 direction-colored headline leading with the relative-change percent and the
@@ -897,6 +981,46 @@ over commits drawn with `rasciigraph` (regressions red, improvements green). The
 chart is omitted for branch/tip mode and for non-text formats. Color (ANSI styling
 and chart hue) is enabled only when stdout is a terminal and `NO_COLOR` is unset, so
 piped output and tests stay plain.
+
+### 9.7 Re-baselining: blessings, resolved spikes, and active/inactive segments
+
+History mode draws a distinction between a change that is **still in effect** and one
+that has **already been addressed**, so a long base-branch history does not keep
+re-flagging events a reviewer has handled. Every history-mode finding therefore
+carries an `active` flag and an `active_from` index into its `series`.
+
+**Resolved spikes (self-corrected).** When a level rose and later returned to its
+prior baseline, the *current* state matches the baseline — there is nothing to act on.
+Such a finding is **inactive**: suppressed by default and surfaced only with
+`--include-inactive` (§8.4). Its `flipped_at` names the commit at which the level
+recovered (the detail line reads "recovers at <commit>" rather than "flips at"). The
+recovered points always remain in the data set and on the chart; the flag only
+governs whether the finding is reported. Detection runs after the active change-point
+/ drift detectors decline (a symmetric up-then-down pulse yields equal before/after
+regime medians, so the change-point detector is silent) and locates the sustained
+plateau between the rise and the recovery.
+
+**Blessings (manually accepted).** A blessing (§8.8) re-baselines a series from the
+blessed commit forward. `apply_blessings` picks, per series, the **latest** blessing
+whose prefix matches the benchmark, and sets `active_from` to the first point at or
+after that commit; the detectors then run on the **active segment only**, so the
+pre-blessing step is no longer re-flagged. Blessings are honoured **only in history
+mode** — branch and tip judge the latest state against the base, which is treated as
+fully blessed by construction, so they ignore blessings entirely. The pre-blessing
+points still feed the chart and any long-range technique that needs context outside
+the active window; they are *excluded from detection*, not discarded. A finding whose
+series was re-baselined records `blessed_at` (the blessing's abbreviated commit) and
+`blessed_effective` (its committer time) for provenance.
+
+Blessings load only for commits inside the analysis window (the same topological
+selection as the rest of `analyze`); a blessing on a commit outside the window is not
+consulted. Because blessing requires a clean run at the blessed commit (§8.8), the
+active segment always begins at a real recorded data point.
+
+**Active period in the chart.** The history-mode chart greys the pre-active prefix
+(the re-baselined-away or pre-recovery history) and draws the active window in the
+finding's direction colour, so the "live" period a finding is really about is visually
+separated from the inactive context that is kept only for continuity.
 
 ## 10. Crate architecture
 
@@ -1078,10 +1202,24 @@ adds macOS; mapped to the original request's numbering:
    size are reported. Layered on the Criterion dispersion fields recorded in
    iteration 5.
 
-**Deferred:** a standalone `upload` command (§8.2) — added only if a concrete
-need arises, most likely alongside Criterion. Its harvest → build → store logic
-already exists, shared between `run` and `backfill` (`bench_output.rs` plus the
-store step in `commands/run.rs`).
+**Deferred:**
+
+* A standalone `upload` command (§8.2) — added only if a concrete need arises, most
+  likely alongside Criterion. Its harvest → build → store logic already exists, shared
+  between `run` and `backfill` (`bench_output.rs` plus the store step in
+  `commands/run.rs`).
+* A `prune` command (§8.9) — delete a chosen portion of stored data with the `analyze`
+  selection syntax and a `--dry-run` preview; `clean` (§8.7) covers the common
+  ephemeral-dirty case for now.
+* **`alloc_tracker` / `all_the_time` JSON as additional Criterion-side outputs** —
+  these workspace tools already emit per-operation JSON into `target/<crate>/<op>.json`
+  (allocations, wall time) alongside the Criterion wall-clock measurements. A future
+  iteration can harvest those JSON files as **extra metrics on the same Criterion runs**
+  (recorded side by side with `WallTime`, e.g. allocation counts / bytes), so a single
+  `run` captures wall time *and* allocation behaviour for a benchmark and `analyze`
+  can flag a regression in either. This is purely additive to the harvest + model
+  (more `Metric` kinds on the existing Criterion `ResultRecord`s); the partition,
+  series, and analysis machinery are unchanged.
 
 Each iteration ships with tests and docs and leaves the tool runnable.
 
@@ -1284,3 +1422,17 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      report's `mode` / `notable` / per-finding `direction` / `flipped_at` / `series`
      instead. The two driving scenarios are a scheduled base-branch regression watch
      (history) and a per-PR feature-branch evaluation (branch).
+29. **Blessings & re-baselining** — *Decided:* an intentional base-branch change can
+     be **blessed** (§8.8) so history analysis stops re-flagging it. A blessing is an
+     append-only sidecar (`…/<commit>/bless-<issued_unix>.json`) recorded per
+     benchmark via prefix filters, base-branch-only with a clean tree and an existing
+     `clean.json` at the commit (all else are hard errors; no `--force`). It
+     re-baselines the series from the blessed commit forward — the detectors run on
+     the active segment only, while pre-blessing points stay for charting/context
+     (§9.7). `unbless` deletes blessings at the current commit; `run --overwrite`
+     drops a commit's stale sidecars; `list --blessings` (`--all` for the window
+     roll-up) audits them. Blessings are honoured **only in history mode** (branch/tip
+     treat the base as fully blessed). Separately, history mode marks a self-corrected
+     spike as an **inactive** finding (`active=false`), suppressed unless
+     `--include-inactive`. The findings JSON gains `active` / `active_from` /
+     `blessed_at` / `blessed_effective`.

@@ -28,11 +28,12 @@ use jiff::Timestamp;
 
 use super::discriminant::DiscriminantSet;
 use super::report::ReportFormat;
-use super::series::{LoadedObject, Series, SeriesFilter, build_series};
+use super::series::{LoadedObject, Series, SeriesFilter, apply_blessings, build_series};
 use super::{
     SelectedDataSet, Selection, dirty_base_exception_warning, empty_history_hint,
     facet_filtered_candidates, parse_format, parsed_facets, select_dataset,
 };
+use crate::bless::BlessingRecord;
 
 /// The real `list`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
@@ -109,6 +110,12 @@ where
         return Ok(RunOutcome::Completed {
             message: render_discriminants(&sets, format),
         });
+    }
+
+    if options.blessings {
+        let message =
+            list_blessings(git, storage, project_id, config, options, now, reporter).await?;
+        return Ok(RunOutcome::Completed { message });
     }
 
     let dataset =
@@ -491,11 +498,387 @@ fn render_discriminants(sets: &[DiscriminantSet], format: ReportFormat) -> Strin
     }
 }
 
+/// One blessing row in a `list --blessings` report.
+#[derive(Clone, Debug)]
+struct BlessingEntry {
+    /// The comparable partition the blessing lives in.
+    set: DiscriminantSet,
+    /// The benchmark this row describes; `Some` only in `--all` mode (the HEAD
+    /// view reports each sidecar once, covering whichever benchmarks its prefixes
+    /// match).
+    benchmark: Option<String>,
+    /// Abbreviated commit the blessing was issued at (the re-baseline point).
+    commit: String,
+    /// Effective (committer) time of the blessed commit.
+    effective: Timestamp,
+    /// When the blessing was issued; `Some` only in the HEAD view.
+    issued_at: Option<Timestamp>,
+    /// Accepted benchmark-id prefixes; populated only in the HEAD view.
+    prefixes: Vec<String>,
+    /// The blessing's human note, if any (HEAD view only).
+    reason: Option<String>,
+}
+
+/// Lists blessings for `list --blessings`.
+///
+/// Default: every blessing recorded at the current commit (HEAD) in the
+/// facet-selected sets — the sidecars a fresh `unbless` would remove. `--all`: the
+/// most recent blessing of every benchmark across the analysis window `analyze`
+/// would resolve, so a user can audit which benchmarks are currently re-baselined.
+async fn list_blessings<G, S>(
+    git: &G,
+    storage: &S,
+    project_id: &str,
+    config: &Config,
+    options: &ListOptions,
+    now: Timestamp,
+    reporter: &dyn Reporter,
+) -> Result<String, RunError>
+where
+    G: GitHistory,
+    S: Storage,
+{
+    let format = parse_format(options.format.as_deref())?;
+    let selection = Selection::from_list(options);
+
+    let (head_label, mut entries) = if options.all {
+        blessings_across_window(
+            git, storage, project_id, config, &selection, options, now, reporter,
+        )
+        .await?
+    } else {
+        blessings_at_head(git, storage, project_id, &selection, reporter).await?
+    };
+    entries.sort_by(|left, right| {
+        left.set
+            .cmp(&right.set)
+            .then_with(|| left.benchmark.cmp(&right.benchmark))
+            .then_with(|| left.commit.cmp(&right.commit))
+    });
+
+    Ok(render_blessings(
+        project_id,
+        options.all,
+        &head_label,
+        &entries,
+        format,
+    ))
+}
+
+/// Collects the blessings recorded at the current commit (HEAD) in the
+/// facet-selected sets, returning the abbreviated HEAD label and the rows.
+async fn blessings_at_head<G, S>(
+    git: &G,
+    storage: &S,
+    project_id: &str,
+    selection: &Selection<'_>,
+    reporter: &dyn Reporter,
+) -> Result<(String, Vec<BlessingEntry>), RunError>
+where
+    G: GitHistory,
+    S: Storage,
+{
+    let head = git
+        .resolve("HEAD")
+        .await
+        .map_err(RunError::Io)?
+        .ok_or_else(|| RunError::Analyze {
+            message: "this command requires a git repository: could not resolve HEAD. \
+                      Run inside a repository (or pass --repo)."
+                .to_owned(),
+        })?;
+    let (engine, facets) = parsed_facets(selection)?;
+    let candidates =
+        facet_filtered_candidates(storage, project_id, engine, &facets, reporter).await?;
+
+    let mut entries = Vec::new();
+    for (key, parsed) in candidates {
+        if !(parsed.is_bless() && parsed.commit == head) {
+            continue;
+        }
+        let bytes = storage.get(&key).await.map_err(RunError::Storage)?;
+        let text = String::from_utf8(bytes).map_err(|error| RunError::Analyze {
+            message: format!("stored object {key} is not valid UTF-8: {error}"),
+        })?;
+        let record = BlessingRecord::from_json(&text).map_err(|error| RunError::Analyze {
+            message: format!("stored object {key} is not a valid blessing: {error}"),
+        })?;
+        reporter.note(&format!("blessing {key}"));
+        entries.push(BlessingEntry {
+            set: parsed.set,
+            benchmark: None,
+            commit: short_sha(&record.commit).to_owned(),
+            effective: record.effective,
+            issued_at: Some(record.issued_at),
+            prefixes: record.prefixes,
+            reason: record.reason,
+        });
+    }
+    Ok((short_sha(&head).to_owned(), entries))
+}
+
+/// Collects the most recent blessing of every benchmark across the analysis window
+/// (`--all`), resolved through the same selection an `analyze` pass would use.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the analyze selection pipeline, which threads the same injected ports"
+)]
+async fn blessings_across_window<G, S>(
+    git: &G,
+    storage: &S,
+    project_id: &str,
+    config: &Config,
+    selection: &Selection<'_>,
+    options: &ListOptions,
+    now: Timestamp,
+    reporter: &dyn Reporter,
+) -> Result<(String, Vec<BlessingEntry>), RunError>
+where
+    G: GitHistory,
+    S: Storage,
+{
+    let dataset =
+        select_dataset(git, storage, project_id, config, selection, now, reporter).await?;
+    let filter = SeriesFilter {
+        metric: options.metric.as_deref(),
+    };
+    let mut series = build_series(&dataset.loaded, &dataset.order, &filter);
+    apply_blessings(&mut series, &dataset.blessings);
+
+    // A benchmark's metrics each form their own series but share a blessing, so the
+    // same `(set, benchmark, commit)` is reported once.
+    let mut seen: std::collections::BTreeSet<(DiscriminantSet, String, String)> =
+        std::collections::BTreeSet::new();
+    let mut entries = Vec::new();
+    for one in &series {
+        let Some(blessing) = &one.blessing else {
+            continue;
+        };
+        let benchmark = one.id.qualified();
+        if !seen.insert((one.set.clone(), benchmark.clone(), blessing.commit.clone())) {
+            continue;
+        }
+        entries.push(BlessingEntry {
+            set: one.set.clone(),
+            benchmark: Some(benchmark),
+            commit: short_sha(&blessing.commit).to_owned(),
+            effective: blessing.effective,
+            issued_at: None,
+            prefixes: Vec::new(),
+            reason: None,
+        });
+    }
+    Ok((String::new(), entries))
+}
+
+/// The first twelve characters of a SHA (all of it when shorter), for display.
+fn short_sha(sha: &str) -> &str {
+    sha.get(..12).unwrap_or(sha)
+}
+
+/// Renders a blessing listing in the requested format.
+fn render_blessings(
+    project: &str,
+    all: bool,
+    head_label: &str,
+    entries: &[BlessingEntry],
+    format: ReportFormat,
+) -> String {
+    match format {
+        ReportFormat::Text => render_blessings_text(project, all, head_label, entries),
+        ReportFormat::Markdown => render_blessings_markdown(project, all, head_label, entries),
+        ReportFormat::Json => render_blessings_json(project, all, head_label, entries),
+    }
+}
+
+/// Groups blessing rows by discriminant set, preserving the entries' (already
+/// sorted) order.
+fn group_by_set(entries: &[BlessingEntry]) -> Vec<(&DiscriminantSet, Vec<&BlessingEntry>)> {
+    let mut groups: Vec<(&DiscriminantSet, Vec<&BlessingEntry>)> = Vec::new();
+    for entry in entries {
+        match groups.last_mut() {
+            Some((set, rows)) if **set == entry.set => rows.push(entry),
+            _ => groups.push((&entry.set, vec![entry])),
+        }
+    }
+    groups
+}
+
+fn render_blessings_text(
+    project: &str,
+    all: bool,
+    head_label: &str,
+    entries: &[BlessingEntry],
+) -> String {
+    let mut lines = if all {
+        vec![format!("Most recent blessings for project {project}")]
+    } else {
+        vec![format!(
+            "Blessings for project {project} at commit {head_label}"
+        )]
+    };
+    if entries.is_empty() {
+        lines.push(String::new());
+        lines.push(if all {
+            "No blessings in the analysis window.".to_owned()
+        } else {
+            format!("No blessings recorded at commit {head_label}.")
+        });
+        return format!("{}\n", lines.join("\n"));
+    }
+    for (set, rows) in group_by_set(entries) {
+        lines.push(String::new());
+        lines.push(format!(
+            "{set} (os={} arch={})",
+            set.os(),
+            set.architecture()
+        ));
+        for row in rows {
+            if let Some(benchmark) = &row.benchmark {
+                lines.push(format!(
+                    "  {benchmark}  blessed at {} ({})",
+                    row.commit, row.effective
+                ));
+            } else {
+                let issued = row
+                    .issued_at
+                    .map_or_else(String::new, |issued| format!(" (issued {issued})"));
+                lines.push(format!(
+                    "  {} accepts {}{issued}",
+                    row.commit,
+                    row.prefixes.join(", ")
+                ));
+                if let Some(reason) = &row.reason {
+                    lines.push(format!("    reason: {reason}"));
+                }
+            }
+        }
+    }
+    format!("{}\n", lines.join("\n"))
+}
+
+fn render_blessings_markdown(
+    project: &str,
+    all: bool,
+    head_label: &str,
+    entries: &[BlessingEntry],
+) -> String {
+    let mut lines = if all {
+        vec![format!("# Most recent blessings for {project}")]
+    } else {
+        vec![format!("# Blessings for {project} at {head_label}")]
+    };
+    if entries.is_empty() {
+        lines.push(String::new());
+        lines.push(if all {
+            "No blessings in the analysis window.".to_owned()
+        } else {
+            "No blessings recorded at this commit.".to_owned()
+        });
+        return format!("{}\n", lines.join("\n"));
+    }
+    for (set, rows) in group_by_set(entries) {
+        lines.push(String::new());
+        lines.push(format!(
+            "## {set} (os={} arch={})",
+            set.os(),
+            set.architecture()
+        ));
+        lines.push(String::new());
+        if all {
+            lines.push("| Benchmark | Blessed at | Effective |".to_owned());
+            lines.push("| --- | --- | --- |".to_owned());
+            for row in rows {
+                lines.push(format!(
+                    "| {} | {} | {} |",
+                    row.benchmark.as_deref().unwrap_or(""),
+                    row.commit,
+                    row.effective
+                ));
+            }
+        } else {
+            lines.push("| Commit | Prefixes | Issued | Reason |".to_owned());
+            lines.push("| --- | --- | --- | --- |".to_owned());
+            for row in rows {
+                let issued = row
+                    .issued_at
+                    .map_or_else(String::new, |issued| issued.to_string());
+                lines.push(format!(
+                    "| {} | {} | {} | {} |",
+                    row.commit,
+                    row.prefixes.join(", "),
+                    issued,
+                    row.reason.as_deref().unwrap_or("")
+                ));
+            }
+        }
+    }
+    format!("{}\n", lines.join("\n"))
+}
+
+fn render_blessings_json(
+    project: &str,
+    all: bool,
+    head_label: &str,
+    entries: &[BlessingEntry],
+) -> String {
+    #[derive(Serialize)]
+    struct JsonBlessing<'a> {
+        engine: &'a str,
+        target_triple: &'a str,
+        os: &'a str,
+        architecture: &'a str,
+        machine: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        benchmark: Option<&'a str>,
+        commit: &'a str,
+        effective: Timestamp,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        issued_at: Option<Timestamp>,
+        #[serde(skip_serializing_if = "<[String]>::is_empty")]
+        prefixes: &'a [String],
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<&'a str>,
+    }
+    #[derive(Serialize)]
+    struct JsonDocument<'a> {
+        project: &'a str,
+        scope: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        commit: Option<&'a str>,
+        blessings: Vec<JsonBlessing<'a>>,
+    }
+
+    let blessings: Vec<JsonBlessing<'_>> = entries
+        .iter()
+        .map(|entry| JsonBlessing {
+            engine: &entry.set.engine,
+            target_triple: &entry.set.target_triple,
+            os: entry.set.os(),
+            architecture: entry.set.architecture(),
+            machine: &entry.set.machine,
+            benchmark: entry.benchmark.as_deref(),
+            commit: &entry.commit,
+            effective: entry.effective,
+            issued_at: entry.issued_at,
+            prefixes: &entry.prefixes,
+            reason: entry.reason.as_deref(),
+        })
+        .collect();
+
+    let document = JsonDocument {
+        project,
+        scope: if all { "window" } else { "head" },
+        commit: (!all).then_some(head_label),
+        blessings,
+    };
+    serde_json::to_string_pretty(&document).expect("blessing list serializes to JSON")
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
-
     use futures::executor::block_on;
     use jiff::Timestamp;
 
@@ -765,5 +1148,109 @@ mod tests {
         let report = list(&storage, &git, &opts);
         assert!(report.contains("Discriminant sets:"), "{report}");
         assert!(report.contains("os=linux"), "{report}");
+    }
+
+    /// The blessing-sidecar key in the same partition as [`clean_key`].
+    fn bless_key(commit: &str, issued_unix: i64) -> String {
+        format!(
+            "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/bless-{issued_unix}.json"
+        )
+    }
+
+    fn store_bless(storage: &MemoryStorage, key: &str, record: &BlessingRecord) {
+        let json = record.to_json().expect("blessing serializes");
+        block_on(storage.put(key, json.as_bytes())).expect("store succeeds");
+    }
+
+    #[test]
+    fn list_blessings_lists_the_sidecars_at_head() {
+        let storage = MemoryStorage::new();
+        // HEAD is c3 in `linear_git`; record a clean run and a blessing there.
+        store(&storage, &clean_key("c3"), &two_metric_set(3, "c3"));
+        let record = BlessingRecord::new(
+            "c3".to_owned(),
+            Timestamp::from_second(3).expect("seconds within range"),
+            Timestamp::from_second(100).expect("seconds within range"),
+            vec!["nm/nm::observe".to_owned()],
+            Some("intentional tradeoff".to_owned()),
+            "0.0.1".to_owned(),
+        );
+        store_bless(&storage, &bless_key("c3", 100), &record);
+        let git = linear_git();
+
+        let opts = ListOptions {
+            blessings: true,
+            format: Some("json".to_owned()),
+            ..options()
+        };
+        let report = list(&storage, &git, &opts);
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(parsed["scope"], "head");
+        assert_eq!(parsed["commit"], "c3");
+        let blessings = parsed["blessings"].as_array().unwrap();
+        assert_eq!(blessings.len(), 1, "{report}");
+        assert_eq!(blessings[0]["commit"], "c3");
+        assert_eq!(blessings[0]["prefixes"][0], "nm/nm::observe");
+        assert_eq!(blessings[0]["reason"], "intentional tradeoff");
+        // The HEAD view reports the sidecar itself, not a per-benchmark roll-up.
+        assert!(blessings[0]["benchmark"].is_null(), "{report}");
+    }
+
+    #[test]
+    fn list_blessings_reports_none_at_head_when_unblessed() {
+        let storage = MemoryStorage::new();
+        store(&storage, &clean_key("c3"), &two_metric_set(3, "c3"));
+        let git = linear_git();
+
+        let opts = ListOptions {
+            blessings: true,
+            ..options()
+        };
+        let report = list(&storage, &git, &opts);
+        assert!(
+            report.contains("No blessings recorded at commit c3."),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn list_blessings_all_rolls_up_the_latest_blessing_per_benchmark() {
+        let storage = MemoryStorage::new();
+        for index in 0..4 {
+            let commit = format!("c{index}");
+            store(
+                &storage,
+                &clean_key(&commit),
+                &two_metric_set(index, &commit),
+            );
+        }
+        // A blessing at c2 (mid-history) accepting the benchmark family.
+        let record = BlessingRecord::new(
+            "c2".to_owned(),
+            Timestamp::from_second(2).expect("seconds within range"),
+            Timestamp::from_second(100).expect("seconds within range"),
+            vec!["nm/nm::observe".to_owned()],
+            None,
+            "0.0.1".to_owned(),
+        );
+        store_bless(&storage, &bless_key("c2", 100), &record);
+        let git = linear_git();
+
+        let opts = ListOptions {
+            blessings: true,
+            all: true,
+            format: Some("json".to_owned()),
+            ..options()
+        };
+        let report = list(&storage, &git, &opts);
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(parsed["scope"], "window");
+        // No HEAD anchor in the window view.
+        assert!(parsed["commit"].is_null(), "{report}");
+        let blessings = parsed["blessings"].as_array().unwrap();
+        // The two metrics share one blessing, reported once per benchmark.
+        assert_eq!(blessings.len(), 1, "{report}");
+        assert_eq!(blessings[0]["benchmark"], "nm/nm::observe/pull");
+        assert_eq!(blessings[0]["commit"], "c2");
     }
 }

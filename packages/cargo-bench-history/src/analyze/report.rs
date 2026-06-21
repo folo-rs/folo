@@ -10,7 +10,7 @@
 //! reads as its own section.
 
 use colored::{Color, Colorize};
-use rasciigraph::{Config, plot_colored};
+use rasciigraph::{Config, plot_colored, plot_many_colored};
 use serde::Serialize;
 
 use crate::analyze::discriminant::DiscriminantSet;
@@ -231,8 +231,8 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
 }
 
 /// Appends one finding as a paragraph: a leading, direction-colored percentage
-/// headline, a dimmed detail line, and — in history mode — a chart of the metric
-/// over commits.
+/// headline, a dimmed detail line, an optional blessing/recovery note, and — in
+/// history mode — a chart of the metric over commits.
 fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, chart_enabled: bool) {
     lines.push(String::new());
 
@@ -241,8 +241,13 @@ fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, chart_enabled:
         Direction::Regression => percent.red().bold(),
         Direction::Improvement => percent.green().bold(),
     };
+    let status = if finding.active {
+        String::new()
+    } else {
+        format!(" {}", "(recovered)".dimmed())
+    };
     lines.push(format!(
-        "{headline}  {} · {}",
+        "{headline}  {} · {}{status}",
         describe_id(&finding.id).bold(),
         finding.metric
     ));
@@ -258,18 +263,44 @@ fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, chart_enabled:
     );
     if let Some(flipped_at) = &finding.flipped_at {
         use std::fmt::Write as _;
-        write!(detail, " · flips at {flipped_at}").expect("writing to a String is infallible");
+        let verb = if finding.active {
+            "flips at"
+        } else {
+            "recovers at"
+        };
+        write!(detail, " · {verb} {flipped_at}").expect("writing to a String is infallible");
     }
     lines.push(detail.dimmed().to_string());
 
-    if chart_enabled && let Some(chart) = chart_of(&finding.series, finding.direction) {
+    // Name the blessing that re-baselined the series, so the reader knows the
+    // history before it is intentionally excluded from detection.
+    if let Some(blessed_at) = &finding.blessed_at {
+        let date = finding
+            .blessed_effective
+            .as_deref()
+            .map_or_else(String::new, |effective| format!(" ({effective})"));
+        lines.push(
+            format!("    blessed at {blessed_at}{date}")
+                .dimmed()
+                .to_string(),
+        );
+    }
+
+    if chart_enabled
+        && let Some(chart) = chart_of(&finding.series, finding.direction, finding.active_from)
+    {
         lines.push(chart);
     }
 }
 
 /// Renders a compact line chart of a finding's series values over commits, colored
 /// by direction. Returns `None` when there are too few points to plot.
-fn chart_of(series: &[SeriesValue], direction: Direction) -> Option<String> {
+///
+/// When `active_from` is past the start, the pre-blessing prefix is drawn greyed
+/// (the level that was re-baselined away) and the active window in the direction
+/// color, so the chart shows the full history while making clear which part the
+/// detector judged.
+fn chart_of(series: &[SeriesValue], direction: Direction, active_from: usize) -> Option<String> {
     let values: Vec<f64> = series.iter().map(|point| point.value).collect();
     if values.len() < 2 {
         return None;
@@ -280,9 +311,38 @@ fn chart_of(series: &[SeriesValue], direction: Direction) -> Option<String> {
     };
     let config = Config::default()
         .with_height(CHART_HEIGHT)
-        .with_width(CHART_WIDTH)
-        .with_series_colors(vec![line_color]);
-    let chart = plot_colored(values, config).to_string();
+        .with_width(CHART_WIDTH);
+    let chart = if active_from == 0 || active_from >= values.len() {
+        plot_colored(values, config.with_series_colors(vec![line_color])).to_string()
+    } else {
+        // Two overlaid series: the greyed pre-blessing prefix and the
+        // direction-colored active window. They share the boundary point so the
+        // line reads as continuous; `NaN` renders as a gap elsewhere.
+        let grey: Vec<f64> = values
+            .iter()
+            .enumerate()
+            .map(|(index, &value)| {
+                if index <= active_from {
+                    value
+                } else {
+                    f64::NAN
+                }
+            })
+            .collect();
+        let active: Vec<f64> = values
+            .iter()
+            .enumerate()
+            .map(|(index, &value)| {
+                if index >= active_from {
+                    value
+                } else {
+                    f64::NAN
+                }
+            })
+            .collect();
+        let config = config.with_series_colors(vec![Color::BrightBlack, line_color]);
+        plot_many_colored(vec![grey, active], config).to_string()
+    };
     Some(chart.trim_end_matches('\n').to_owned())
 }
 
@@ -507,6 +567,10 @@ mod tests {
             confidence: 1.0,
             commit: Some("deadbee".to_owned()),
             flipped_at: None,
+            active: true,
+            active_from: 0,
+            blessed_at: None,
+            blessed_effective: None,
             series: Vec::new(),
         }
     }

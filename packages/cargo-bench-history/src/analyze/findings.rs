@@ -140,6 +140,11 @@ pub(crate) struct AnalysisContext {
     /// (scheduled drift watch); branch mode always reports both; tip mode reports
     /// regressions only.
     pub(crate) include_improvements: bool,
+    /// Whether *inactive* (recovered) findings are reported. History mode hides a
+    /// change whose level has since returned to baseline unless this is set; branch
+    /// and tip modes only ever look at the latest state, so they have no inactive
+    /// findings.
+    pub(crate) include_inactive: bool,
 }
 
 impl AnalysisContext {
@@ -223,10 +228,37 @@ pub(crate) struct Finding {
     /// Where, within a feature branch, the latest regime began — set only in
     /// branch mode when a within-branch flip is located, naming the commit the
     /// move starts at, so a "got worse late in the branch" finding can point at it.
+    /// In history mode, an inactive (recovered) finding sets this to the commit at
+    /// which the level returned to baseline.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) flipped_at: Option<String>,
+    /// Whether the change is still reflected in the latest measured state. An active
+    /// finding's current level still differs from baseline; an inactive one has
+    /// since recovered (history mode only — branch and tip always look at the latest
+    /// state, so their findings are always active).
+    pub(crate) active: bool,
+    /// Index into `series` at which the active (post-blessing) window begins; points
+    /// before it are pre-blessing history, retained for charting but excluded from
+    /// detection. `0` when the series is unblessed.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub(crate) active_from: usize,
+    /// Abbreviated commit of the blessing that re-baselined this series, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) blessed_at: Option<String>,
+    /// Effective (committer) time of the blessed commit, RFC 3339, if blessed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) blessed_effective: Option<String>,
     /// The full underlying series, oldest-first, so a consumer can draw a chart.
     pub(crate) series: Vec<SeriesValue>,
+}
+
+/// Whether a count is zero, for `#[serde(skip_serializing_if)]`.
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde skip predicate signature"
+)]
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 impl Finding {
@@ -489,6 +521,10 @@ fn evaluate_change_point(series: &Series, config: &AnalysisConfig) -> Option<Can
             confidence: (1.0 - effective_p).clamp(0.0, 1.0),
             commit,
             flipped_at: None,
+            active: true,
+            active_from: 0,
+            blessed_at: None,
+            blessed_effective: None,
             series: series_values(series),
         },
         bh_p: effective_p,
@@ -557,6 +593,10 @@ fn evaluate_drift(series: &Series, config: &AnalysisConfig) -> Option<Candidate>
             confidence: (1.0 - trend.p_value).clamp(0.0, 1.0),
             commit,
             flipped_at: None,
+            active: true,
+            active_from: 0,
+            blessed_at: None,
+            blessed_effective: None,
             series: series_values(series),
         },
         bh_p: trend.p_value,
@@ -725,6 +765,10 @@ fn compare_samples(
             confidence: (1.0 - effective_p).clamp(0.0, 1.0),
             commit,
             flipped_at,
+            active: true,
+            active_from: 0,
+            blessed_at: None,
+            blessed_effective: None,
             series: series_values(series),
         },
         bh_p: effective_p,
@@ -786,6 +830,155 @@ fn evaluate_tip(series: &Series, config: &AnalysisConfig) -> Option<Candidate> {
     )
 }
 
+/// The post-blessing window of `series` as a standalone series for detection.
+///
+/// History-mode detection runs on this view so a blessed (re-baselined) series is
+/// only judged from the blessed commit onward; the full series is restored on the
+/// finding afterwards for charting. An unblessed series (`active_start == 0`) yields
+/// an equivalent copy.
+fn active_view(series: &Series) -> Series {
+    if series.active_start == 0 {
+        return series.clone();
+    }
+    let points = series
+        .points
+        .get(series.active_start..)
+        .map(<[SeriesPoint]>::to_vec)
+        .unwrap_or_default();
+    Series {
+        set: series.set.clone(),
+        id: series.id.clone(),
+        metric: series.metric.clone(),
+        kind: series.kind,
+        points,
+        active_start: 0,
+        blessing: None,
+    }
+}
+
+/// Restores the full series onto a history-mode finding and records the re-baseline
+/// provenance, so the chart can grey the pre-blessing prefix and the report can name
+/// the blessing.
+fn stamp_history(finding: &mut Finding, series: &Series) {
+    finding.series = series_values(series);
+    finding.active_from = series.active_start;
+    if let Some(blessing) = &series.blessing {
+        finding.blessed_at = Some(short_commit(&blessing.commit));
+        finding.blessed_effective = Some(blessing.effective.to_string());
+    }
+}
+
+/// Abbreviates a commit SHA for display (first 12 hex digits).
+fn short_commit(commit: &str) -> String {
+    commit.get(..12).unwrap_or(commit).to_owned()
+}
+
+/// Largest interior window size resolved-spike search will scan; longer histories
+/// skip the (quadratic) search rather than stall.
+const RESOLVED_SPIKE_MAX_POINTS: usize = 200;
+
+/// Locates a *recovered* spike in a (re-baselined) history series: a sustained
+/// interior regime that deviated from baseline and has since returned to it.
+///
+/// Such a change is no longer reflected in the latest state, so it is emitted as an
+/// *inactive* finding (only surfaced with `--include-inactive`): `commit` names where
+/// the level rose, `flipped_at` where it recovered, `baseline` the pre-spike level,
+/// and `latest` the spike's own level (its magnitude is what is notable). A
+/// deterministic engine accepts any sustained non-zero plateau; a noisy engine
+/// requires both the rise and the recovery to be Mann–Whitney significant.
+fn evaluate_resolved_spike(series: &Series, config: &AnalysisConfig) -> Option<Candidate> {
+    let points = &series.points;
+    let n = points.len();
+    if n > RESOLVED_SPIKE_MAX_POINTS {
+        return None;
+    }
+    let min = config.min_regime.max(1);
+    // Baseline, elevated middle, and recovery each need at least `min` points.
+    if n < min.checked_mul(3)? {
+        return None;
+    }
+    let values: Vec<f64> = points.iter().map(|point| point.value).collect();
+    let baseline = stats::median(values.get(..min)?)?;
+    let current = stats::median(values.get(n.checked_sub(min)?..)?)?;
+    // Only a spike that has recovered qualifies; a still-elevated tail is an active
+    // change-point, handled by `evaluate_change_point`.
+    if relative_delta_of(current - baseline, baseline).abs() >= config.practical_relative {
+        return None;
+    }
+
+    // Find the most-deviated sustained plateau [start, end) with a baseline segment
+    // [0, start) and a recovery segment [end, n) each at least `min` points long.
+    let mut best: Option<(usize, usize, f64, f64)> = None;
+    let mut start = min;
+    while start <= n.saturating_sub(min.saturating_mul(2)) {
+        let mut end = start.saturating_add(min);
+        while end <= n.saturating_sub(min) {
+            if let Some(segment) = values.get(start..end)
+                && let Some(level) = stats::median(segment)
+            {
+                let deviation = level - baseline;
+                if best.is_none_or(|(_, _, _, best_dev): (usize, usize, f64, f64)| {
+                    deviation.abs() > best_dev.abs()
+                }) {
+                    best = Some((start, end, level, deviation));
+                }
+            }
+            end = end.saturating_add(1);
+        }
+        start = start.saturating_add(1);
+    }
+
+    let (rise, recovery, level, deviation) = best?;
+    if deviation.abs() <= 0.0
+        || relative_delta_of(deviation, baseline).abs() < config.practical_relative
+    {
+        return None;
+    }
+
+    let deterministic = is_deterministic(series.kind);
+    let effective_p = if deterministic {
+        0.0
+    } else {
+        let before = values.get(..rise)?;
+        let segment = values.get(rise..recovery)?;
+        let after = values.get(recovery..)?;
+        let rise_p = stats::mann_whitney_u_pvalue(before, segment);
+        let recovery_p = stats::mann_whitney_u_pvalue(segment, after);
+        if rise_p >= config.change_alpha || recovery_p >= config.change_alpha {
+            return None;
+        }
+        rise_p.max(recovery_p)
+    };
+
+    let relative_delta = relative_delta_of(deviation, baseline);
+    Some(Candidate {
+        finding: Finding {
+            set: series.set.clone(),
+            id: series.id.clone(),
+            metric: series.metric.clone(),
+            kind: series.kind,
+            method: FindingMethod::ChangePoint,
+            direction: direction_of(deviation, series.kind),
+            baseline,
+            latest: level,
+            delta: deviation,
+            relative_delta,
+            confidence: (1.0 - effective_p).clamp(0.0, 1.0),
+            commit: points.get(rise).and_then(|point| point.commit.clone()),
+            flipped_at: points.get(recovery).and_then(|point| point.commit.clone()),
+            active: false,
+            active_from: 0,
+            blessed_at: None,
+            blessed_effective: None,
+            series: series_values(series),
+        },
+        bh_p: effective_p,
+        deterministic,
+        split: Some(rise),
+        line: None,
+    })
+}
+
 /// Evaluates every series and returns the surviving findings, ranked
 /// most-notable first.
 ///
@@ -802,10 +995,20 @@ pub(crate) fn find_changes(series: &[Series], context: &AnalysisContext) -> Vec<
     for one in series {
         let chosen = match context.mode {
             AnalysisMode::History => {
-                let values: Vec<f64> = one.points.iter().map(|point| point.value).collect();
-                let change = evaluate_change_point(one, config);
-                let drift = evaluate_drift(one, config);
-                arbitrate(&values, change, drift)
+                let active = active_view(one);
+                let values: Vec<f64> = active.points.iter().map(|point| point.value).collect();
+                let change = evaluate_change_point(&active, config);
+                let drift = evaluate_drift(&active, config);
+                let mut chosen = arbitrate(&values, change, drift);
+                // A series with no active change may instead carry a recovered spike;
+                // surface it only when inactive findings are requested.
+                if chosen.is_none() && context.include_inactive {
+                    chosen = evaluate_resolved_spike(&active, config);
+                }
+                chosen.map(|mut candidate| {
+                    stamp_history(&mut candidate.finding, one);
+                    candidate
+                })
             }
             AnalysisMode::Branch => evaluate_branch(one, config, context.merge_base_index),
             AnalysisMode::Tip => evaluate_tip(one, config),
@@ -865,7 +1068,7 @@ mod tests {
     use jiff::Timestamp;
 
     use crate::analyze::discriminant::DiscriminantSet;
-    use crate::analyze::series::SeriesPoint;
+    use crate::analyze::series::{Blessing, SeriesPoint};
     use crate::model::MetricKind;
 
     use super::*;
@@ -908,6 +1111,8 @@ mod tests {
             metric: "metric".to_owned(),
             kind,
             points,
+            active_start: 0,
+            blessing: None,
         }
     }
 
@@ -933,6 +1138,7 @@ mod tests {
                 config: AnalysisConfig::default(),
                 merge_base_index: None,
                 include_improvements: true,
+                include_inactive: false,
             },
         )
     }
@@ -1212,6 +1418,8 @@ mod tests {
             metric: "metric".to_owned(),
             kind: MetricKind::InstructionCount,
             points,
+            active_start: 0,
+            blessing: None,
         }
     }
 
@@ -1224,6 +1432,7 @@ mod tests {
                 config: AnalysisConfig::default(),
                 merge_base_index,
                 include_improvements: false,
+                include_inactive: false,
             },
         )
     }
@@ -1237,6 +1446,7 @@ mod tests {
                 config: AnalysisConfig::default(),
                 merge_base_index: None,
                 include_improvements: false,
+                include_inactive: false,
             },
         )
     }
@@ -1366,5 +1576,103 @@ mod tests {
     fn tip_mode_needs_at_least_two_points() {
         let series = placed_series(&[(0, 100.0, false)]);
         assert!(tip_changes(&[series]).is_empty());
+    }
+
+    // -- Blessing (re-baselining) and recovered spikes ------------------------
+
+    /// Runs the history-mode detector reporting both directions *and* inactive
+    /// findings, so a recovered spike surfaces.
+    fn changes_with_inactive(series: &[Series]) -> Vec<Finding> {
+        find_changes(
+            series,
+            &AnalysisContext {
+                mode: AnalysisMode::History,
+                config: AnalysisConfig::default(),
+                merge_base_index: None,
+                include_improvements: true,
+                include_inactive: true,
+            },
+        )
+    }
+
+    #[test]
+    fn history_does_not_reflag_a_blessed_step() {
+        // The unblessed step from 100 to 130 is a change point.
+        let series = series_of(&[100.0, 100.0, 100.0, 130.0, 130.0, 130.0]);
+        assert_eq!(only(changes(std::slice::from_ref(&series))).latest, 130.0);
+
+        // Blessing the post-step level re-baselines the series: the active window
+        // begins at the first elevated point, leaving only the flat 130 regime to
+        // judge, which no longer moves.
+        let mut blessed = series;
+        blessed.active_start = 3;
+        blessed.blessing = Some(Blessing {
+            commit: "abcdef0123456789".to_owned(),
+            effective: Timestamp::from_second(3).expect("seconds within range"),
+        });
+        assert!(changes(&[blessed]).is_empty());
+    }
+
+    #[test]
+    fn history_stamps_blessing_provenance_on_an_active_finding() {
+        // Pre-blessing history (100) is retained for charting but excluded from
+        // detection; a real step *after* the blessed baseline (130 -> 160) still
+        // flags, and the finding carries the blessing provenance and full series.
+        let mut series = series_of(&[
+            100.0, 100.0, 100.0, // pre-blessing prefix (charted, not judged)
+            130.0, 130.0, 130.0, // blessed baseline
+            160.0, 160.0, 160.0, // regression within the active window
+        ]);
+        series.active_start = 3;
+        series.blessing = Some(Blessing {
+            commit: "abcdef0123456789cafe".to_owned(),
+            effective: Timestamp::from_second(3).expect("seconds within range"),
+        });
+        let finding = only(changes(&[series]));
+        assert!(finding.active);
+        assert_eq!(finding.baseline, 130.0);
+        assert_eq!(finding.latest, 160.0);
+        // The full nine-point series is restored for charting...
+        assert_eq!(finding.series.len(), 9);
+        // ...and the active window plus blessing provenance are recorded.
+        assert_eq!(finding.active_from, 3);
+        assert_eq!(finding.blessed_at.as_deref(), Some("abcdef012345"));
+        assert_eq!(
+            finding.blessed_effective.as_deref(),
+            Some("1970-01-01T00:00:03Z")
+        );
+    }
+
+    #[test]
+    fn resolved_spike_is_detected_and_marked_inactive() {
+        // A sustained interior plateau (20) between baseline regimes (10) that has
+        // since recovered: a deterministic engine accepts any non-zero plateau.
+        let spike = series_of(&[10.0, 10.0, 10.0, 10.0, 20.0, 20.0, 10.0, 10.0, 10.0, 10.0]);
+        let candidate = evaluate_resolved_spike(&spike, &AnalysisConfig::default())
+            .expect("a recovered spike is detected");
+        assert!(!candidate.finding.active);
+        assert_eq!(candidate.finding.baseline, 10.0);
+        assert_eq!(candidate.finding.latest, 20.0);
+        assert_eq!(candidate.finding.direction, Direction::Regression);
+        // `commit` names where the level rose, `flipped_at` where it recovered.
+        assert_eq!(candidate.finding.commit.as_deref(), Some("commit3"));
+        assert_eq!(candidate.finding.flipped_at.as_deref(), Some("commit6"));
+    }
+
+    #[test]
+    fn history_surfaces_a_resolved_spike_only_with_include_inactive() {
+        // The spike rose and recovered, so no active change remains: the default
+        // history pass is silent.
+        let spike = series_of(&[10.0, 10.0, 10.0, 10.0, 20.0, 20.0, 10.0, 10.0, 10.0, 10.0]);
+        assert!(changes(std::slice::from_ref(&spike)).is_empty());
+
+        // Requesting inactive findings surfaces it as a recovered spike that is no
+        // longer reflected in the latest state.
+        let finding = only(changes_with_inactive(&[spike]));
+        assert!(!finding.active);
+        assert_eq!(finding.direction, Direction::Regression);
+        assert_eq!(finding.baseline, 10.0);
+        assert_eq!(finding.latest, 20.0);
+        assert!(finding.flipped_at.is_some());
     }
 }

@@ -7,7 +7,8 @@ use argh::FromArgs;
 use jiff::Timestamp;
 
 use crate::{
-    AnalyzeOptions, BackfillOptions, CleanOptions, Command, InstallOptions, ListOptions, RunOptions,
+    AnalyzeOptions, BackfillOptions, BlessOptions, CleanOptions, Command, InstallOptions,
+    ListOptions, RunOptions, UnblessOptions,
 };
 
 /// Maintain a history of benchmark results over time and analyze it for trends.
@@ -25,10 +26,12 @@ impl Cli {
         match self.command {
             Subcommand::Analyze(command) => Command::Analyze(command.into_options()),
             Subcommand::Backfill(command) => Command::Backfill(command.into_options()),
+            Subcommand::Bless(command) => Command::Bless(command.into_options()),
             Subcommand::Clean(command) => Command::Clean(command.into_options()),
             Subcommand::Install(command) => Command::Install(command.into_options()),
             Subcommand::List(command) => Command::List(command.into_options()),
             Subcommand::Run(command) => Command::Run(command.into_options()),
+            Subcommand::Unbless(command) => Command::Unbless(command.into_options()),
         }
     }
 
@@ -52,10 +55,12 @@ impl Cli {
 enum Subcommand {
     Analyze(AnalyzeCommand),
     Backfill(BackfillCommand),
+    Bless(BlessCommand),
     Clean(CleanCommand),
     Install(InstallCommand),
     List(ListCommand),
     Run(RunCommand),
+    Unbless(UnblessCommand),
 }
 
 /// Run the workspace benchmarks (`cargo bench`) and store the results.
@@ -240,6 +245,12 @@ struct AnalyzeCommand {
     #[argh(switch)]
     include_improvements: bool,
 
+    /// in history mode, also report inactive findings: a change the current state
+    /// no longer reflects (a regression that has since recovered). Hidden by
+    /// default since they need no action.
+    #[argh(switch)]
+    include_inactive: bool,
+
     /// emit detailed diagnostic notes to standard error (which storage prefix is
     /// listed, which objects are included or excluded and why, the resolved git
     /// topology).
@@ -265,6 +276,7 @@ impl AnalyzeCommand {
             format: self.format,
             mode: self.mode,
             include_improvements: self.include_improvements,
+            include_inactive: self.include_inactive,
             verbose: self.verbose,
         }
     }
@@ -338,6 +350,17 @@ struct ListCommand {
     #[argh(switch)]
     discriminants: bool,
 
+    /// list blessings instead of runs: the blessings recorded at the current
+    /// commit, or (with --all) the most recent blessing of every benchmark in the
+    /// analysis window.
+    #[argh(switch)]
+    blessings: bool,
+
+    /// with --blessings, list the most recent blessing of every benchmark across
+    /// the whole analysis window rather than only those at the current commit.
+    #[argh(switch)]
+    all: bool,
+
     /// emit detailed diagnostic notes to standard error (which storage prefix is
     /// listed, which objects are included or excluded and why, the resolved git
     /// topology).
@@ -362,6 +385,8 @@ impl ListCommand {
             metric: self.metric,
             format: self.format,
             discriminants: self.discriminants,
+            blessings: self.blessings,
+            all: self.all,
             verbose: self.verbose,
         }
     }
@@ -547,6 +572,143 @@ fn strip_separator(mut passthrough: Vec<String>) -> Vec<String> {
         passthrough.remove(0);
     }
     passthrough
+}
+
+/// Accept a benchmark's current level on the base branch as intentional.
+#[derive(Debug, FromArgs)]
+#[argh(subcommand, name = "bless")]
+struct BlessCommand {
+    /// path to the configuration file (defaults to `.cargo/bench_history.toml`).
+    #[argh(option)]
+    config: Option<PathBuf>,
+
+    /// repository to resolve git topology from (defaults to the working directory).
+    #[argh(option)]
+    repo: Option<PathBuf>,
+
+    /// base ref the current commit must be on (defaults to the default branch).
+    #[argh(option)]
+    base: Option<String>,
+
+    /// restrict the blessing to a single engine, criterion or callgrind
+    /// (default: every engine).
+    #[argh(option)]
+    engine: Option<String>,
+
+    /// restrict the blessing to a single full target triple (for example,
+    /// `x86_64-unknown-linux-gnu`). Mutually exclusive with `--os` /
+    /// `--architecture`, which select the same dimension by its derived parts.
+    #[argh(option)]
+    target_triple: Option<String>,
+
+    /// restrict the blessing to a single operating system (for example, windows).
+    /// Cannot be combined with `--target-triple`.
+    #[argh(option)]
+    os: Option<String>,
+
+    /// restrict the blessing to a single CPU architecture (for example, `x86_64`).
+    /// Cannot be combined with `--target-triple`.
+    #[argh(option)]
+    architecture: Option<String>,
+
+    /// restrict the blessing to a single machine partition.
+    #[argh(option)]
+    machine_key: Option<String>,
+
+    /// optional note recorded with the blessing explaining why the change is
+    /// accepted.
+    #[argh(option)]
+    reason: Option<String>,
+
+    /// emit detailed diagnostic notes to standard error describing each step.
+    #[argh(switch)]
+    verbose: bool,
+
+    /// benchmark-id prefixes to accept, matched against the qualified identity
+    /// (for example, `all_the_time/read_cell` or a family prefix `overhead/groups_`).
+    /// At least one is required.
+    #[argh(positional)]
+    prefixes: Vec<String>,
+}
+
+impl BlessCommand {
+    fn into_options(self) -> BlessOptions {
+        BlessOptions {
+            config_path: self.config,
+            repo: self.repo,
+            base: self.base,
+            engine: self.engine,
+            target_triple: self.target_triple,
+            os: self.os,
+            architecture: self.architecture,
+            machine_key: self.machine_key,
+            prefixes: self.prefixes,
+            reason: self.reason,
+            verbose: self.verbose,
+        }
+    }
+}
+
+/// Remove blessings recorded at the current commit.
+#[derive(Debug, FromArgs)]
+#[argh(subcommand, name = "unbless")]
+struct UnblessCommand {
+    /// path to the configuration file (defaults to `.cargo/bench_history.toml`).
+    #[argh(option)]
+    config: Option<PathBuf>,
+
+    /// repository to resolve git topology from (defaults to the working directory).
+    #[argh(option)]
+    repo: Option<PathBuf>,
+
+    /// base ref the current commit must be on (defaults to the default branch).
+    #[argh(option)]
+    base: Option<String>,
+
+    /// restrict the unblessing to a single engine, criterion or callgrind
+    /// (default: every engine).
+    #[argh(option)]
+    engine: Option<String>,
+
+    /// restrict the unblessing to a single full target triple (for example,
+    /// `x86_64-unknown-linux-gnu`). Mutually exclusive with `--os` /
+    /// `--architecture`, which select the same dimension by its derived parts.
+    #[argh(option)]
+    target_triple: Option<String>,
+
+    /// restrict the unblessing to a single operating system (for example, windows).
+    /// Cannot be combined with `--target-triple`.
+    #[argh(option)]
+    os: Option<String>,
+
+    /// restrict the unblessing to a single CPU architecture (for example, `x86_64`).
+    /// Cannot be combined with `--target-triple`.
+    #[argh(option)]
+    architecture: Option<String>,
+
+    /// restrict the unblessing to a single machine partition.
+    #[argh(option)]
+    machine_key: Option<String>,
+
+    /// emit detailed diagnostic notes to standard error describing each step.
+    #[argh(switch)]
+    verbose: bool,
+}
+
+impl UnblessCommand {
+    fn into_options(self) -> UnblessOptions {
+        UnblessOptions {
+            config_path: self.config,
+            repo: self.repo,
+            base: self.base,
+            engine: self.engine,
+            target_triple: self.target_triple,
+            os: self.os,
+            architecture: self.architecture,
+            machine_key: self.machine_key,
+            verbose: self.verbose,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -799,6 +961,78 @@ mod tests {
         );
         assert_eq!(options.os, None);
         assert_eq!(options.architecture, None);
+    }
+
+    #[test]
+    fn analyze_parses_include_inactive_switch() {
+        let Command::Analyze(options) = parse(&["analyze", "--include-inactive"]) else {
+            panic!("expected analyze command");
+        };
+        assert!(options.include_inactive);
+
+        let Command::Analyze(options) = parse(&["analyze"]) else {
+            panic!("expected analyze command");
+        };
+        assert!(!options.include_inactive);
+    }
+
+    #[test]
+    fn list_parses_blessings_switches() {
+        let Command::List(options) = parse(&["list", "--blessings", "--all"]) else {
+            panic!("expected list command");
+        };
+        assert!(options.blessings);
+        assert!(options.all);
+
+        let Command::List(options) = parse(&["list"]) else {
+            panic!("expected list command");
+        };
+        assert!(!options.blessings);
+        assert!(!options.all);
+    }
+
+    #[test]
+    fn bless_collects_prefixes_facets_and_reason() {
+        let command = parse(&[
+            "bless",
+            "--engine",
+            "callgrind",
+            "--reason",
+            "intentional tradeoff",
+            "all_the_time/read_cell",
+            "overhead/groups_",
+        ]);
+        let Command::Bless(options) = command else {
+            panic!("expected bless command");
+        };
+        assert_eq!(
+            options.prefixes,
+            vec![
+                "all_the_time/read_cell".to_owned(),
+                "overhead/groups_".to_owned()
+            ]
+        );
+        assert_eq!(options.engine.as_deref(), Some("callgrind"));
+        assert_eq!(options.reason.as_deref(), Some("intentional tradeoff"));
+    }
+
+    #[test]
+    fn unbless_parses_facets() {
+        let command = parse(&[
+            "unbless",
+            "--target-triple",
+            "x86_64-unknown-linux-gnu",
+            "--machine-key",
+            "ci-pool",
+        ]);
+        let Command::Unbless(options) = command else {
+            panic!("expected unbless command");
+        };
+        assert_eq!(
+            options.target_triple.as_deref(),
+            Some("x86_64-unknown-linux-gnu")
+        );
+        assert_eq!(options.machine_key.as_deref(), Some("ci-pool"));
     }
 
     #[test]
