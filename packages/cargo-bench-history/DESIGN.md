@@ -596,17 +596,23 @@ errors out, because `analyze` only ever surfaces a point when its commit is in t
 analyzed ref's topology (§8.4), so backfilling commits outside the current branch's
 ancestry would write data that no ordinary analysis can reach.
 
-**Per commit**, in order, the tool: checks out the commit, runs the benches with
-`cargo bench` exactly as §8.1 (no `--timestamp` — each point's effective time is
-its own committer date, §6), harvests every engine that produced output, and
-stores the result. Backfilled runs are always on a **clean** tree, so each is
-keyed by commit (§4.2) and collision-checked:
+**Per commit**, in order, the tool first consults storage to decide whether the
+commit needs benchmarking at all, then (if it does) checks out the commit, runs the
+benches with `cargo bench` exactly as §8.1 (no `--timestamp` — each point's
+effective time is its own committer date, §6), harvests every engine that produced
+output, and stores the result. Backfilled runs are always on a **clean** tree, so
+each is keyed by commit (§4.2) and collision-checked:
 
-* By **default** an existing point for a commit is left untouched and that commit
-  is **skipped** (reported, not an error). This makes backfill **resumable** — an
-  interrupted run can simply be re-issued and it continues where it stopped.
+* By **default** the commits that already have a stored result are listed once up
+  front (a single `list` of the `v2/<project>/` prefix); a commit already present
+  is **skipped before its benches run** (reported, not an error), so no benchmark
+  execution is wasted on commits already covered. This makes backfill **resumable**
+  and cheap to re-issue — an interrupted run simply continues where it stopped. The
+  check is per-commit, not per-engine: a commit with results for only some engines
+  is still skipped (use `--overwrite` to fill it).
 * `--overwrite` regenerates and replaces existing points across the range (for
-  re-running after a broken-infra batch produced bad data).
+  re-running after a broken-infra batch produced bad data, or to re-benchmark every
+  commit after adding a new bench).
 
 **Failure handling.** A *bench/build* failure for a commit (non-zero engine exit,
 or a commit that does not build) **stops** backfill by default; `--ignore-errors`
@@ -1192,9 +1198,10 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     is benchmarked exactly as `run` (no `--timestamp`; effective = its committer
     date) from inside a dedicated **git worktree** so the user's checkout is never
     disturbed and an interruption leaves them in place. Existing points are
-    **skipped** by default (so backfill is resumable — it reuses the it.6 write-once
-    collision and treats it as a skip rather than an error), `--overwrite` regenerates
-    them; a build/bench failure stops by
+    **skipped before they are re-benchmarked** by default (the commits already
+    stored are listed once up front, so backfill is resumable without re-running
+    their benches; the it.6 write-once collision remains a post-bench safety net),
+    `--overwrite` regenerates them; a build/bench failure stops by
     default and `--ignore-errors` skips and continues with an end-of-run summary,
     while infrastructure failures always abort. Benches are whatever each commit
     contains, run with `cargo bench` exactly as `run` (§8.5).

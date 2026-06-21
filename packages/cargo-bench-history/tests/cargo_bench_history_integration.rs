@@ -3079,6 +3079,47 @@ async fn backfill_skips_already_stored_commits_on_rerun() {
     assert_eq!(workspace.stored_objects().len(), 2);
 }
 
+/// The pre-run existence check skips an already-recorded commit *before* it is
+/// benchmarked: a re-run whose engine would fail if it were invoked still
+/// succeeds, because the recorded commits never reach the (failing) engine.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn backfill_skips_recorded_commits_without_invoking_the_engine() {
+    let workspace =
+        Workspace::clean_repo(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
+    let c1 = workspace.commit("c1");
+    let c2 = workspace.commit("c2");
+
+    workspace
+        .drive(&["backfill", "--from", &c1, "--to", &c2])
+        .await
+        .expect("the first backfill should store both commits");
+    assert_eq!(workspace.stored_objects().len(), 2);
+
+    // Re-run with an engine that exits non-zero whenever it actually runs — the
+    // `.git` marker is present in every worktree, so `--fail-if-exists .git` fails
+    // unconditionally. The pre-run check recognizes both commits as already
+    // recorded and skips them before the engine is invoked, so the command still
+    // succeeds; without the pre-check the failing engine would run and abort.
+    let RunOutcome::Completed { message } = workspace
+        .drive_with_bench(
+            &["--summary", "grp=single", "--fail-if-exists", ".git"],
+            &["backfill", "--from", &c1, "--to", &c2],
+        )
+        .await
+        .expect("recorded commits must be skipped before the engine runs")
+    else {
+        panic!("expected a completed outcome");
+    };
+    assert!(
+        message.contains("0 stored, 2 skipped (existing)"),
+        "{message}"
+    );
+    // Nothing changed: the skip path neither re-ran nor rewrote anything.
+    assert_eq!(workspace.stored_objects().len(), 2);
+}
+
 /// `--overwrite` replaces every already-stored commit in the range rather than
 /// skipping it, leaving exactly one clean object per commit.
 #[tokio::test]
@@ -3491,11 +3532,28 @@ impl Workspace {
         .await
     }
 
-    /// Drives a command the way the production `run` entry does: with no target-root
-    /// override, so the real `resolve_target_root` chooses the cargo target
-    /// directory and injects it as `CARGO_TARGET_DIR`. Unlike [`drive`], this
-    /// exercises that resolution rather than pinning the root explicitly, which is
-    /// what lets a test observe whether the injected root is absolute.
+    /// Drives a command with an explicit benchmark command, overriding the
+    /// workspace's configured one for this invocation only. This lets a test make
+    /// the engine behave differently across two drives — for example, succeed on a
+    /// first backfill, then exit non-zero if it is invoked at all on a re-run.
+    async fn drive_with_bench(
+        &self,
+        bench: &[&str],
+        args: &[&str],
+    ) -> Result<RunOutcome, RunError> {
+        let _cwd = CwdGuard::enter(self.root());
+        let target_root = self.root().join("target");
+        let mut bench_command = vec![MOCK_ENGINE.to_owned()];
+        bench_command.extend(bench.iter().map(|arg| (*arg).to_owned()));
+
+        run_with_overrides(
+            &command_from(args),
+            Some(target_root),
+            Some(bench_command),
+            Some(analysis_now()),
+        )
+        .await
+    }
     ///
     /// [`drive`]: Self::drive
     async fn drive_resolving_target_root(&self, args: &[&str]) -> Result<RunOutcome, RunError> {

@@ -79,11 +79,13 @@ cargo bench-history clean [--dry-run] [--repo PATH] [--branch REF]
 * `backfill` replays `run` across the inclusive commit range `--from..--to`,
   bootstrapping history for a repository that adopted the tool late. Each commit
   is checked out in a dedicated git **worktree** (the primary checkout is never
-  touched) and benched there, recording the commit's committer date as the
-  effective time. The range must lie on the current branch's first-parent history
-  and the working tree must be clean. Already-stored commits are skipped (so
-  backfill is resumable) unless `--overwrite` replaces them; a commit that fails to
-  build or benchmark stops the run unless `--ignore-errors` continues past it.
+  touched, so a dirty working tree is fine) and benched there, recording the
+  commit's committer date as the effective time. The range must lie on the current
+  branch's first-parent history. Before benchmarking, commits that already have a
+  stored result are skipped without re-running their benchmarks (so backfill is
+  resumable and cheap to re-run); `--overwrite` re-benchmarks and replaces every
+  commit in the range. A commit that fails to build or benchmark stops the run
+  unless `--ignore-errors` continues past it.
   `--workspace`/`--package`/`--bench`/`--target-triple`/`--machine-key`/`--verbose`
   and a `--` passthrough behave as for `run`.
 * `analyze` reconstructs a timeline from git history and reports notable patterns.

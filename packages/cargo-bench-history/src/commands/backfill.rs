@@ -14,10 +14,15 @@
 //! [`CommitRunner`] reuses the `run` pipeline ([`run_engines`]) against a
 //! worktree-rooted probe, engine runner, and output source.
 //!
-//! A commit whose two engines disagree on collision (one stores, the other is a
-//! duplicate) is reported as skipped-existing; `--overwrite` avoids that by
-//! replacing in place.
+//! Before any commit is benchmarked, the commits that already have a stored
+//! (clean) result are listed once from storage. In the default skip-existing mode
+//! a commit already present is skipped outright, so its (expensive) benchmark
+//! execution never runs; this makes a backfill resumable and cheap to re-run. A
+//! commit with a clean result for only some engines is still skipped — use
+//! `--overwrite` to re-benchmark every commit (for example after adding a new
+//! bench), which replaces results in place rather than colliding with them.
 
+use std::collections::HashSet;
 use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -26,6 +31,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tick::Clock;
 
 use crate::bench_output::FsBenchOutputSource;
+use crate::comparability::sanitize_segment;
 use crate::config::load_config;
 use crate::git_history::{GitHistory, SystemGitHistory};
 use crate::probe::SystemProbe;
@@ -62,6 +68,12 @@ trait BackfillGit {
 
 /// Runs and stores the configured engines for one already-checked-out commit.
 trait CommitRunner {
+    /// The set of commits (by full SHA) that already have a stored clean result
+    /// anywhere under this project's partitions. A commit in this set has already
+    /// been backfilled, so the default skip-existing mode skips it without
+    /// benchmarking. Probed once per backfill.
+    fn recorded_commits(&self) -> impl Future<Output = Result<HashSet<String>, RunError>>;
+
     /// Runs the engines in `worktree` and reports the outcome. Recoverable
     /// build/bench failures are reported as [`CommitOutcome::BenchFailed`];
     /// infrastructure failures (storage, git, I/O, configuration) propagate as
@@ -230,7 +242,19 @@ where
     C: CommitRunner,
 {
     let mut report = BackfillReport::default();
+    // In the default skip-existing mode, list the already-recorded commits once so
+    // commits that were backfilled before are skipped without being benchmarked
+    // again. `--overwrite` re-benchmarks every commit, so the list is not needed.
+    let recorded = if options.overwrite {
+        HashSet::new()
+    } else {
+        runner.recorded_commits().await?
+    };
     for commit in commits {
+        if recorded.contains(commit) {
+            report.skipped_existing.push(commit.clone());
+            continue;
+        }
         git.reset_to(worktree, commit).await.map_err(RunError::Io)?;
         match runner.run(worktree, commit).await? {
             CommitOutcome::Stored { cases } => report.stored.push((commit.clone(), cases)),
@@ -336,6 +360,16 @@ fn map_run_result(result: Result<RunSummary, RunError>) -> Result<CommitOutcome,
         }),
         Err(other) => Err(other),
     }
+}
+
+/// The commit (full SHA) recorded by a stored clean object, or `None` when the key
+/// is not a clean object.
+///
+/// A clean key is `…/<commit>/clean.json`, so the commit is the path segment
+/// immediately before the `clean.json` filename. Dirty snapshots and any other
+/// keys are ignored.
+fn commit_of_clean_key(key: &str) -> Option<&str> {
+    key.strip_suffix("/clean.json")?.rsplit('/').next()
 }
 
 /// The real [`BackfillGit`], shelling out to `git` in a fixed repository.
@@ -453,6 +487,20 @@ struct SystemCommitRunner<'a, S> {
 }
 
 impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
+    async fn recorded_commits(&self) -> Result<HashSet<String>, RunError> {
+        // Every stored object lives under the project's partitions, so one list of
+        // the project prefix yields the full history; the clean objects' commit
+        // segments are the commits already backfilled. A dirty snapshot does not
+        // count as a backfilled commit, so only clean objects contribute.
+        let prefix = format!("v2/{}/", sanitize_segment(self.project_id));
+        let keys = self.storage.list(&prefix).await?;
+        Ok(keys
+            .iter()
+            .filter_map(|key| commit_of_clean_key(key))
+            .map(ToOwned::to_owned)
+            .collect())
+    }
+
     #[cfg_attr(test, mutants::skip)] // Wires real adapters; the result mapping is tested via `map_run_result`.
     async fn run(&self, worktree: &Path, _commit: &str) -> Result<CommitOutcome, RunError> {
         let probe = SystemProbe::in_dir(worktree);
@@ -499,13 +547,14 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::cell::RefCell;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::future::{Future, ready};
 
     use futures::executor::block_on;
 
     use crate::StorageError;
     use crate::git_history::FakeGitHistory;
+    use crate::storage::MemoryStorage;
 
     use super::*;
 
@@ -570,6 +619,7 @@ mod tests {
     /// In-memory [`CommitRunner`] returning canned per-commit results.
     struct FakeCommitRunner {
         outcomes: HashMap<String, FakeResult>,
+        complete: HashSet<String>,
         ran: RefCell<Vec<String>>,
     }
 
@@ -577,6 +627,7 @@ mod tests {
         fn new() -> Self {
             Self {
                 outcomes: HashMap::new(),
+                complete: HashSet::new(),
                 ran: RefCell::new(Vec::new()),
             }
         }
@@ -585,9 +636,19 @@ mod tests {
             self.outcomes.insert(commit.to_owned(), result);
             self
         }
+
+        /// Marks `commit` as already fully recorded, so the pre-run check skips it.
+        fn complete(mut self, commit: &str) -> Self {
+            self.complete.insert(commit.to_owned());
+            self
+        }
     }
 
     impl CommitRunner for FakeCommitRunner {
+        fn recorded_commits(&self) -> impl Future<Output = Result<HashSet<String>, RunError>> {
+            ready(Ok(self.complete.clone()))
+        }
+
         fn run(
             &self,
             _worktree: &Path,
@@ -811,6 +872,146 @@ mod tests {
         assert!(matches!(error, RunError::Io(_)), "{error:?}");
         // The loop stopped at the failing commit; f1 was never reached.
         assert!(runner.ran.borrow().iter().eq(["c0", "c1"].iter()));
+    }
+
+    /// Builds a real [`SystemCommitRunner`] over an in-memory store for testing the
+    /// storage-backed `recorded_commits` query.
+    fn system_runner<'a>(
+        storage: &'a MemoryStorage,
+        options: &'a BackfillOptions,
+    ) -> SystemCommitRunner<'a, MemoryStorage> {
+        SystemCommitRunner {
+            project_id: "proj",
+            storage,
+            tool_version: "0.0.0-test",
+            options,
+            bench_command: &[],
+        }
+    }
+
+    #[test]
+    fn commit_of_clean_key_extracts_the_commit_only_for_clean_objects() {
+        assert_eq!(
+            commit_of_clean_key("v2/proj/callgrind/triple/synthetic/abc123/clean.json"),
+            Some("abc123")
+        );
+        // A dirty snapshot is not a backfilled commit.
+        assert_eq!(
+            commit_of_clean_key("v2/proj/criterion/triple/mk/abc123/dirty-42.json"),
+            None
+        );
+        // An unrelated key contributes nothing.
+        assert_eq!(commit_of_clean_key("v2/proj/index.json"), None);
+    }
+
+    #[test]
+    fn run_commits_skips_a_recorded_commit_without_resetting_or_running_it() {
+        let git = FakeBackfillGit::new(fixture());
+        let runner = FakeCommitRunner::new().complete("c1");
+        let commits = vec!["c0".to_owned(), "c1".to_owned(), "f1".to_owned()];
+
+        let report = block_on(run_commits(
+            &options("c0", "f1"),
+            &git,
+            &runner,
+            &worktree(),
+            &commits,
+        ))
+        .expect("loop completes");
+
+        // c1 was recognized as already recorded and reported as skipped-existing.
+        assert!(report.skipped_existing.iter().eq(std::iter::once(&"c1")));
+        assert!(
+            report
+                .stored
+                .iter()
+                .eq([("c0".to_owned(), 1), ("f1".to_owned(), 1)].iter())
+        );
+        // The expensive work was avoided: c1 was neither reset into the worktree
+        // nor run.
+        assert!(runner.ran.borrow().iter().eq(["c0", "f1"].iter()));
+        assert!(
+            git.resets
+                .borrow()
+                .iter()
+                .map(|(_, commit)| commit.as_str())
+                .eq(["c0", "f1"]),
+            "{:?}",
+            git.resets.borrow()
+        );
+    }
+
+    #[test]
+    fn run_commits_reruns_a_recorded_commit_when_overwriting() {
+        let git = FakeBackfillGit::new(fixture());
+        let runner = FakeCommitRunner::new().complete("c1");
+        let commits = vec!["c0".to_owned(), "c1".to_owned(), "f1".to_owned()];
+        let mut opts = options("c0", "f1");
+        opts.overwrite = true;
+
+        let report =
+            block_on(run_commits(&opts, &git, &runner, &worktree(), &commits)).expect("completes");
+
+        // With --overwrite the pre-check is bypassed: every commit, including the
+        // already-recorded c1, is reset and run.
+        assert!(runner.ran.borrow().iter().eq(["c0", "c1", "f1"].iter()));
+        assert!(report.skipped_existing.is_empty());
+        assert!(
+            report.stored.iter().eq([
+                ("c0".to_owned(), 1),
+                ("c1".to_owned(), 1),
+                ("f1".to_owned(), 1)
+            ]
+            .iter())
+        );
+    }
+
+    #[test]
+    fn recorded_commits_collects_every_clean_commit_across_partitions() {
+        let storage = MemoryStorage::new();
+        let opts = BackfillOptions::default();
+        let runner = system_runner(&storage, &opts);
+
+        // Two engines record c0 (under different partitions); c1 has only a dirty
+        // snapshot; a different project's clean run must not leak in.
+        block_on(storage.put(
+            "v2/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/c0/clean.json",
+            b"{}",
+        ))
+        .expect("seed callgrind c0");
+        block_on(storage.put(
+            "v2/proj/criterion/x86_64-unknown-linux-gnu/mk/c0/clean.json",
+            b"{}",
+        ))
+        .expect("seed criterion c0");
+        block_on(storage.put(
+            "v2/proj/criterion/x86_64-unknown-linux-gnu/mk/c1/dirty-7.json",
+            b"{}",
+        ))
+        .expect("seed dirty c1");
+        block_on(storage.put(
+            "v2/other/callgrind/x86_64-unknown-linux-gnu/synthetic/c9/clean.json",
+            b"{}",
+        ))
+        .expect("seed other project");
+
+        let recorded = block_on(runner.recorded_commits()).expect("query succeeds");
+
+        // Only c0 has a clean result under this project: a dirty-only commit and
+        // another project's commit are excluded.
+        let mut commits: Vec<_> = recorded.into_iter().collect();
+        commits.sort();
+        assert_eq!(commits, vec!["c0".to_owned()]);
+    }
+
+    #[test]
+    fn recorded_commits_is_empty_when_nothing_is_stored() {
+        let storage = MemoryStorage::new();
+        let opts = BackfillOptions::default();
+        let runner = system_runner(&storage, &opts);
+
+        let recorded = block_on(runner.recorded_commits()).expect("query succeeds");
+        assert!(recorded.is_empty());
     }
 
     #[test]
