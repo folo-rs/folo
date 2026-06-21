@@ -88,11 +88,13 @@ impl Default for AnalysisConfig {
 
 /// Which analysis a [`find_changes`] pass performs.
 ///
-/// The mode is auto-detected by the caller from git topology (a clean base branch
-/// whose tip is its own merge-base is [`History`](AnalysisMode::History); anything
-/// with commits — or a dirty working tree — on top of the base is
-/// [`Branch`](AnalysisMode::Branch)) and may be overridden with `--mode`.
-/// [`Tip`](AnalysisMode::Tip) is never auto-selected; it is an explicit guard mode.
+/// The mode is auto-detected by the caller from git topology and the recorded data
+/// set (a base branch whose tip is its own merge-base with no dirty run recorded on
+/// that tip is [`History`](AnalysisMode::History); commits — or a dirty run
+/// recorded — on top of the base make it [`Branch`](AnalysisMode::Branch)) and may
+/// be overridden with `--mode`. The on-disk working-tree state does not affect the
+/// choice. [`Tip`](AnalysisMode::Tip) is never auto-selected; it is an explicit
+/// guard mode.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum AnalysisMode {

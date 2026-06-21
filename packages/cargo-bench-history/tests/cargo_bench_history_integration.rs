@@ -1067,6 +1067,58 @@ async fn analyze_dirty_tree_on_the_base_admits_the_tip_with_a_warning() {
     );
 }
 
+/// The reported corner case, end to end: a *currently-dirty* working tree on the
+/// base branch but with ONLY clean runs recorded (no dirty snapshot on the tip).
+/// Mode auto-detection keys off the recorded data set, not the on-disk tree, so this
+/// stays `history` mode — and the long-range change-point detector still flags the
+/// sustained clean step. (The old behaviour keyed off `git status` and wrongly fell
+/// into branch mode here.)
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_dirty_tree_without_recorded_dirty_runs_stays_history_mode() {
+    let workspace = Workspace::clean_repo(&storage_only_config());
+    // A clean base branch with a sustained upward step (a regression). No dirty
+    // snapshots are recorded anywhere.
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.seed_callgrind("2024-01-02", "c2", 100.0);
+    workspace.seed_callgrind("2024-01-03", "c3", 100.0);
+    workspace.seed_callgrind("2024-01-04", "c4", 130.0);
+    workspace.seed_callgrind("2024-01-05", "c5", 130.0);
+    workspace.seed_callgrind("2024-01-06", "c6", 130.0);
+    // Dirty the working tree, even though no dirty run was ever stored.
+    workspace.make_dirty("uncommitted.txt");
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(
+        parsed["mode"], "history",
+        "a dirty tree with only clean runs is still the official history view: {report}"
+    );
+    assert_eq!(
+        regressions, 1,
+        "history mode flags the sustained clean step: {report}"
+    );
+    assert_eq!(
+        parsed["runs"], 6,
+        "all six clean runs participate; nothing dirty exists: {report}"
+    );
+    assert!(
+        parsed["warning"].is_null(),
+        "no dirty runs are admitted, so nothing is ephemeral: {report}"
+    );
+}
+
 /// A feature view admits dirty snapshots on the branch's own commits (after the
 /// merge-base): a dirty regression on the feature tip flags by default, and
 /// `--no-dirty` suppresses it.

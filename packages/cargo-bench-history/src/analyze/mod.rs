@@ -380,7 +380,6 @@ where
         dirty_base_exception,
         merge_base_index,
         tip_is_merge_base,
-        dirty_tip_admitted,
     } = resolve_history(
         git,
         config,
@@ -390,18 +389,52 @@ where
     )
     .await?;
 
-    // The mode steers the analysis and the default `--since`: an official base
-    // branch (its tip is its own merge-base, working tree clean) is `history`;
-    // commits — or a dirty tree — on top of the base make it `branch`. An explicit
-    // `--mode` overrides the auto-detection.
-    let mode = selection
-        .mode_override
-        .unwrap_or_else(|| auto_mode(tip_is_merge_base, dirty_tip_admitted));
+    // Mode auto-detection keys off the *recorded data set*, not the on-disk
+    // repository state. The branch view exists to compare a feature branch's runs
+    // against its base, so it only applies when there is actually feature-branch
+    // data: commits past the merge-base, or a dirty run recorded on top of the
+    // base tip. A dirty working tree with no dirty run stored on the tip carries no
+    // such data, so it stays the long-range history view.
+    let dirty_tip_run_present = candidates.iter().any(|(_, parsed)| {
+        parsed.is_dirty()
+            && dirty_base_exception
+                .get(parsed.commit.as_str())
+                .copied()
+                .unwrap_or(false)
+    });
+
+    // The mode steers the analysis and the default `--since`. An explicit `--mode`
+    // overrides the auto-detection.
+    let mode = match selection.mode_override {
+        Some(mode) => {
+            reporter.note(&format!(
+                "analysis mode: {} (set explicitly via --mode, overriding auto-detection)",
+                mode.as_str()
+            ));
+            mode
+        }
+        None => {
+            let mode = auto_mode(tip_is_merge_base, dirty_tip_run_present);
+            reporter.note(&format!(
+                "analysis mode: {} (auto-detected because the target tip {} its own merge-base \
+                 with the base branch and {} recorded on top of it; the on-disk working-tree \
+                 state is deliberately not consulted here)",
+                mode.as_str(),
+                if tip_is_merge_base { "is" } else { "is not" },
+                if dirty_tip_run_present {
+                    "a dirty run is"
+                } else {
+                    "no dirty run is"
+                },
+            ));
+            mode
+        }
+    };
     let since = resolve_since(selection.since, mode, now)?;
     reporter.note(&format!(
-        "analysis mode: {} (since cutoff: {})",
-        mode.as_str(),
-        since.map_or_else(|| "none".to_owned(), |since| since.to_string())
+        "since cutoff: {} ({})",
+        since.map_or_else(|| "none".to_owned(), |since| since.to_string()),
+        since_cutoff_reason(selection.since.is_some(), mode)
     ));
 
     // Tally why candidates do not enter the analysis, so a `0 runs` outcome can
@@ -497,18 +530,32 @@ where
     })
 }
 
-/// Auto-detects the analysis mode from the resolved topology.
+/// Auto-detects the analysis mode from the resolved topology and recorded data.
 ///
 /// An official base-branch view — the target's tip *is* its own merge-base (or no
-/// base is known) and the working tree is clean — is [`AnalysisMode::History`].
-/// Anything else (commits past the merge-base, or a dirty tree admitting in-flight
-/// snapshots on top of the base) is treated as an unnamed feature branch:
-/// [`AnalysisMode::Branch`]. [`AnalysisMode::Tip`] is never auto-selected.
-fn auto_mode(tip_is_merge_base: bool, dirty_tip_admitted: bool) -> AnalysisMode {
-    if tip_is_merge_base && !dirty_tip_admitted {
+/// base is known) and no dirty run is recorded on that tip — is
+/// [`AnalysisMode::History`]. Anything else (commits past the merge-base, or a
+/// dirty run actually recorded on top of the base tip) is treated as an unnamed
+/// feature branch: [`AnalysisMode::Branch`]. The detection looks only at the data
+/// set, never at the on-disk working-tree state, so a dirty checkout with no dirty
+/// run stored on the tip still analyzes as history. [`AnalysisMode::Tip`] is never
+/// auto-selected.
+fn auto_mode(tip_is_merge_base: bool, dirty_tip_run_present: bool) -> AnalysisMode {
+    if tip_is_merge_base && !dirty_tip_run_present {
         AnalysisMode::History
     } else {
         AnalysisMode::Branch
+    }
+}
+
+/// Explains, for a verbose note, why the resolved `--since` cutoff is what it is.
+fn since_cutoff_reason(explicit_since: bool, mode: AnalysisMode) -> &'static str {
+    if explicit_since {
+        "from the --since option"
+    } else if mode == AnalysisMode::History {
+        "history-mode default six-month look-back"
+    } else {
+        "no default look-back window outside history mode"
     }
 }
 
@@ -598,10 +645,6 @@ struct ResolvedHistory {
     /// Whether the target's tip *is* its own merge-base with the base (or no base
     /// is known): the signal that this is an official base-branch view.
     tip_is_merge_base: bool,
-    /// Whether a dirty (uncommitted-tree) snapshot on top of the base is admitted
-    /// — the working tree is dirty under the `WhenWorkingTreeDirty` policy — which
-    /// makes even an on-the-base-branch view an unnamed feature branch.
-    dirty_tip_admitted: bool,
 }
 
 /// Resolves the git topology for a selection: the target ref's first-parent
@@ -708,7 +751,6 @@ where
         dirty_base_exception,
         merge_base_index,
         tip_is_merge_base,
-        dirty_tip_admitted: dirty_tip_exception,
     })
 }
 
@@ -1155,14 +1197,35 @@ mod tests {
     }
 
     #[test]
-    fn auto_mode_detects_history_only_for_a_clean_tip_at_the_merge_base() {
-        // A clean base branch whose tip is its own merge-base is history mode.
+    fn auto_mode_uses_tip_topology_and_recorded_dirty_runs_not_repo_state() {
+        // A base branch whose tip is its own merge-base with no dirty run recorded
+        // on the tip is history mode.
         assert_eq!(auto_mode(true, false), AnalysisMode::History);
-        // Commits past the merge-base, or a dirty tree admitting tip snapshots,
-        // make it a (possibly unnamed) feature branch.
+        // Commits past the merge-base, or a dirty run actually recorded on top of
+        // the tip, make it a (possibly unnamed) feature branch.
         assert_eq!(auto_mode(false, false), AnalysisMode::Branch);
         assert_eq!(auto_mode(true, true), AnalysisMode::Branch);
         assert_eq!(auto_mode(false, true), AnalysisMode::Branch);
+    }
+
+    #[test]
+    fn since_cutoff_reason_explains_each_source() {
+        assert_eq!(
+            since_cutoff_reason(true, AnalysisMode::History),
+            "from the --since option"
+        );
+        assert_eq!(
+            since_cutoff_reason(true, AnalysisMode::Branch),
+            "from the --since option"
+        );
+        assert_eq!(
+            since_cutoff_reason(false, AnalysisMode::History),
+            "history-mode default six-month look-back"
+        );
+        assert_eq!(
+            since_cutoff_reason(false, AnalysisMode::Branch),
+            "no default look-back window outside history mode"
+        );
     }
 
     #[test]
@@ -1605,6 +1668,64 @@ mod tests {
         assert!(
             parsed["warning"].is_null(),
             "no warning when the tree is clean"
+        );
+    }
+
+    #[test]
+    fn dirty_working_tree_without_recorded_dirty_runs_stays_history_mode() {
+        // The reported corner case: on the base branch with a currently-dirty
+        // working tree but ONLY clean runs recorded (no dirty run on the tip), mode
+        // auto-detection must look at the *data set*, not the on-disk tree, and pick
+        // history mode — so the long-range change-point detector still flags the
+        // sustained step. The old behaviour keyed off `git.is_dirty()` and wrongly
+        // fell into branch mode here.
+        let storage = MemoryStorage::new();
+        seed_linear_step(&storage);
+        let mut git = linear6_git();
+        git.mark_dirty();
+
+        let opts = AnalyzeOptions {
+            format: Some("json".to_owned()),
+            ..options()
+        };
+        let reporter = RecordingReporter::new();
+        let outcome = block_on(analyze_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &opts,
+            now_anchor(),
+            &reporter,
+        ))
+        .expect("analysis runs");
+        let RunOutcome::Analyzed {
+            report,
+            regressions,
+            ..
+        } = outcome
+        else {
+            panic!("expected an analysis outcome");
+        };
+
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(
+            parsed["mode"], "history",
+            "a dirty tree with only clean runs is still the official history view"
+        );
+        assert_eq!(
+            regressions, 1,
+            "history mode flags the sustained clean step at c3"
+        );
+        assert!(
+            parsed["warning"].is_null(),
+            "no dirty runs are admitted, so nothing is ephemeral"
+        );
+        assert!(
+            reporter.contains("no dirty run is")
+                && reporter.contains("working-tree state is deliberately not consulted"),
+            "the verbose note should explain why history mode was chosen: {:?}",
+            reporter.notes()
         );
     }
 

@@ -51,10 +51,17 @@ stays clean. Tests use the `#[cfg(test)]` `RecordingReporter` (records notes in 
 `bench_output::collect` takes `&dyn Reporter` and notes each directory scanned and
 every file included/excluded/stale; `run` notes the argv, injected env, harvest
 boundary, and each stored key. `analyze_with` notes the listing prefix, facet
-filters, the resolved target/base/merge-base, and why each candidate object is
-included or excluded; `install` notes whether it wrote or left the config. The
-reporter is `&dyn Reporter` (not `+ Sync`), so the run futures stay `!Send` and
-Miri-driven via `block_on`.
+filters, the resolved target/base/merge-base, the **auto-detected mode and the
+reason for it** (which topology/data inputs it considered and that the on-disk
+working tree is deliberately ignored), the resolved `--since` cutoff and where it
+came from, and why each candidate object is included or excluded; `install` notes
+whether it wrote or left the config. The reporter is `&dyn Reporter` (not `+ Sync`),
+so the run futures stay `!Send` and Miri-driven via `block_on`.
+
+Verbose notes must be **explanatory, not conclusion-only** — see
+`docs/standalone-binaries.md`. State the inputs and the rule behind each decision
+(e.g. the mode note names whether the tip is its own merge-base and whether a dirty
+run is recorded) so the logic can be reconstructed from the log.
 
 `analyze` also renders a non-verbose diagnostic *hint* (carried on `ReportInput`/
 `JsonReport`, built by `empty_history_hint`) whenever facet-matching runs were
@@ -166,23 +173,33 @@ live topology and the stored keys agree.
 on `AnalysisMode`:
 
 * **history** — auto-selected when the analyzed tip *is* the merge-base with the
-  base (a clean base-branch checkout: `auto_mode(tip_is_merge_base=true,
-  dirty_tip_admitted=false)`). Applies the long-range change-point + drift + FDR
-  techniques above. `resolve_since` gives it a **default six-month look-back** when
-  `--since` is omitted (`default_history_since`, calendar-correct months via jiff);
-  branch/tip have no default. `AnalysisContext::keeps` reports **regressions only**
-  unless `--include-improvements` (steady improvement on the base branch is
-  expected).
-* **branch** — auto-selected otherwise (a feature branch, or a dirty base checkout
-  whose tip dirty runs were admitted). `evaluate_branch` splits the series at the
-  merge-base (`split_at_merge_base`), then `latest_regime` uses Pettitt to find the
-  most recent within-branch flip and compares **only the after-segment** against the
-  base, setting `Finding::flipped_at` to the commit the latest regime began at — so
-  "got better then worse" reports worse and points at the flip. Reports **both**
+  base **and** no dirty run is recorded on top of that tip (the official base-branch
+  view: `auto_mode(tip_is_merge_base=true, dirty_tip_run_present=false)`). Applies
+  the long-range change-point + drift + FDR techniques above. `resolve_since` gives
+  it a **default six-month look-back** when `--since` is omitted
+  (`default_history_since`, calendar-correct months via jiff); branch/tip have no
+  default. `AnalysisContext::keeps` reports **regressions only** unless
+  `--include-improvements` (steady improvement on the base branch is expected).
+* **branch** — auto-selected otherwise: there are commits past the merge-base (a
+  feature branch), or a dirty run is recorded on the base tip and admitted by the
+  dirty-tree exception. `evaluate_branch` splits the series at the merge-base
+  (`split_at_merge_base`), then `latest_regime` uses Pettitt to find the most recent
+  within-branch flip and compares **only the after-segment** against the base,
+  setting `Finding::flipped_at` to the commit the latest regime began at — so "got
+  better then worse" reports worse and points at the flip. Reports **both**
   directions.
 * **tip** — never auto-selected; forced with `--mode tip`. `evaluate_tip` compares
   the last point against a bounded window of recent preceding points. Reports
   **regressions only**.
+
+Auto-detection is **data-driven, not working-tree-driven.** `dirty_tip_run_present`
+(the second `auto_mode` arg) is computed in `select_dataset` from the recorded
+candidates (a dirty run exists on a commit whose `dirty_base_exception` is set) —
+**not** from `git.is_dirty()`. So a dirty working tree that has only ever stored
+clean runs stays **history** mode; only an actually-recorded dirty run on the base
+tip (or commits past the merge-base) flips it to branch. The on-disk tree state is
+deliberately never consulted for mode selection (it still gates *admission* of
+dirty runs in the §dirty-tree exception, a separate concern).
 
 `--mode auto|history|branch|tip` overrides detection (`parse_mode`; `auto`/absent →
 `None` → auto-detect; unknown → `RunError::Analyze`). **Findings never affect the

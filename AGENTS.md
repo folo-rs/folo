@@ -240,3 +240,13 @@ threads, and the no-version-bumps-on-feature-branches rule.
 
 **Open this when**: creating a pull request; addressing review comments;
 tempted to edit a `Cargo.toml` version field on a feature branch.
+
+### [docs/standalone-binaries.md](docs/standalone-binaries.md)
+
+How standalone binaries (CLI tools, subcommands) are expected to behave: the
+rule that verbose (`--verbose`) logging must be *explanatory* — stating the
+inputs and reasoning behind each decision so the logic can be reconstructed from
+the logs, never just announcing the conclusion.
+
+**Open this when**: adding or editing verbose/diagnostic logging in a CLI tool or
+other standalone binary; deciding what a `--verbose` note should say.

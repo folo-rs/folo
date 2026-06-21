@@ -325,9 +325,21 @@ async fn analyze_feature_and_dirty_round_trip_through_azurite() {
 
     // The official view (master) admits only the two clean master points: the
     // feature commit is off master's first-parent line and the dirty snapshot is
-    // excluded regardless.
+    // excluded regardless. Master's recorded data set is all-clean (the dirty run
+    // sits on the feature branch, off master's line), so mode auto-detection picks
+    // `history` even though the working tree is currently dirty — the decision keys
+    // off the data, not the on-disk tree. `--since` keeps the 2024-dated runs inside
+    // the window history mode would otherwise default to (six months back).
     let RunOutcome::Analyzed { report, .. } = workspace
-        .drive(&["analyze", "--branch", "master", "--format", "json"])
+        .drive(&[
+            "analyze",
+            "--branch",
+            "master",
+            "--since",
+            "2020-01-01",
+            "--format",
+            "json",
+        ])
         .await
         .expect("official analyze should read the history back from Azurite")
     else {
@@ -335,6 +347,10 @@ async fn analyze_feature_and_dirty_round_trip_through_azurite() {
     };
     let parsed: serde_json::Value =
         serde_json::from_str(&report).expect("the json report should parse");
+    assert_eq!(
+        parsed["mode"], "history",
+        "an all-clean master data set is the history view despite the dirty tree: {report}"
+    );
     assert_eq!(
         parsed["runs"], 2,
         "the official line excludes the feature commit and the dirty snapshot: {report}"

@@ -556,8 +556,9 @@ order, runs the finding algorithms (§9), and prints a report.
   branch and tip modes have no default (a feature branch's whole history is in
   scope).
 * `--mode auto|history|branch|tip` selects the analysis mode (§9.6); `auto` (the
-  default) infers it from topology. `--include-improvements` opts a history-mode
-  analysis into reporting sustained improvements (suppressed by default).
+  default) infers it from git topology and the recorded data set (never the on-disk
+  working-tree state). `--include-improvements` opts a history-mode analysis into
+  reporting sustained improvements (suppressed by default).
 * `--metric`, `--format text|json|markdown`.
 * **Findings never affect the exit code.** The process exits non-zero only when the
   analysis fails to *run* (no repo, storage error, …); a finding is advisory. The
@@ -808,12 +809,16 @@ The same stored history answers two very different questions, so `analyze` runs 
 one of three **modes**. `--mode auto` (the default) infers the mode from git
 topology; `--mode history|branch|tip` forces it.
 
-**Auto-detection.** The mode is **history** iff the analyzed tip *is* the merge-base
-with the base (i.e. a clean checkout of the base branch — `target == base`, nothing
-private, no admitted dirty tip), and **branch** otherwise (a feature branch, or a
-dirty base checkout whose tip dirty runs were admitted by the §8.4 exception — "an
-unnamed feature branch"). `tip` is never auto-selected; it is an explicit fast
-guard. This matches the two real scenarios:
+**Auto-detection.** The decision keys off the **recorded data set and git
+topology**, never the on-disk working-tree state. The mode is **history** iff the
+analyzed tip *is* the merge-base with the base (i.e. the base branch — `target ==
+base`, nothing private) **and** no dirty run is recorded on top of that tip, and
+**branch** otherwise: either there are commits past the merge-base (a real feature
+branch), or a dirty run is recorded on the base tip and admitted by the §8.4
+exception ("an unnamed feature branch"). Crucially, a dirty *working tree* alone
+does not force branch mode — a dirty checkout that has only ever stored clean runs
+carries no feature-branch data and stays history. `tip` is never auto-selected; it
+is an explicit fast guard. This matches the two real scenarios:
 
 * **Scheduled trend watch (history).** A nightly/weekly job looks back over the base
   branch's last months for regressions and slow trends, posting findings to an
