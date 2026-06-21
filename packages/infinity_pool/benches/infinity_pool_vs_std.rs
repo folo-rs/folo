@@ -598,7 +598,8 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
 
     group.finish();
 
-    allocs.print_to_stdout();
+    // `allocs` prints its summary and writes JSON to the Cargo target directory
+    // when it is dropped at the end of this function.
 }
 
 criterion_group!(benches, churn_insertion_benchmark);

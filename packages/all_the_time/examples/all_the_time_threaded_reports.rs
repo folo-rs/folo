@@ -64,7 +64,9 @@ fn main() {
 fn worker_thread(thread_name: &str) -> Report {
     println!("🧵 {thread_name} starting work...");
 
-    let session = Session::new();
+    // The caller prints the returned report, so this session opts out of
+    // emitting on drop to avoid duplicate output.
+    let session = Session::new().no_stdout().no_file();
 
     // Each thread does some "common work" that will be merged
     // Using measure_thread() to track per-thread CPU time (avoids double-counting in multithreaded scenarios)

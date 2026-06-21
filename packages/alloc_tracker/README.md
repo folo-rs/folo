@@ -21,14 +21,11 @@ fn main() {
         let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
     }
 
-    // Print results
-    session.print_to_stdout();
-
-    // Also emit machine-readable JSON files (one per operation) into the Cargo
-    // target directory: target/alloc_tracker/<operation>.json
-    session.write_to_target();
-
-    // Session automatically cleans up when dropped
+    // When `session` is dropped it prints a human-readable summary to stdout and
+    // writes machine-readable JSON files (one per operation) into the Cargo
+    // target directory: target/alloc_tracker/<operation>.json.
+    //
+    // Use `Session::new().no_stdout()` or `.no_file()` to suppress either output.
 }
 ```
 

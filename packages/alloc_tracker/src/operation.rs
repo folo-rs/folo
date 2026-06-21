@@ -24,6 +24,7 @@ use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessSpan, ThreadSpan};
 /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 ///
 /// let session = Session::new();
+/// # let session = session.no_stdout().no_file();
 /// let mean_calc = session.operation("string_allocations");
 ///
 /// // Simulate multiple operations
@@ -71,6 +72,7 @@ impl Operation {
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
     /// let session = Session::new();
+    /// # let session = session.no_stdout().no_file();
     /// let operation = session.operation("thread_work");
     /// {
     ///     let _span = operation.measure_thread();
@@ -87,6 +89,7 @@ impl Operation {
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
     /// let session = Session::new();
+    /// # let session = session.no_stdout().no_file();
     /// let operation = session.operation("batch_work");
     /// {
     ///     let _span = operation.measure_thread().iterations(1000);
@@ -117,6 +120,7 @@ impl Operation {
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
     /// let session = Session::new();
+    /// # let session = session.no_stdout().no_file();
     /// let operation = session.operation("process_work");
     /// {
     ///     let _span = operation.measure_process();
@@ -133,6 +137,7 @@ impl Operation {
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
     /// let session = Session::new();
+    /// # let session = session.no_stdout().no_file();
     /// let operation = session.operation("batch_work");
     /// {
     ///     let _span = operation.measure_process().iterations(1000);
@@ -189,7 +194,7 @@ mod tests {
     use crate::allocator::register_fake_allocation;
 
     fn create_test_operation() -> Operation {
-        let session = Session::new();
+        let session = Session::new().no_stdout().no_file();
         session.operation("test")
     }
 
@@ -347,7 +352,7 @@ mod tests {
 
     #[test]
     fn operation_drop_merges_data() {
-        let session = Session::new();
+        let session = Session::new().no_stdout().no_file();
 
         // Create and use operation
         {
@@ -373,7 +378,7 @@ mod tests {
 
     #[test]
     fn multiple_operations_concurrent() {
-        let session = Session::new();
+        let session = Session::new().no_stdout().no_file();
 
         let op1 = session.operation("test");
         let op2 = session.operation("test");

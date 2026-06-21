@@ -17,6 +17,7 @@ use std::time::Duration;
 ///
 /// # fn main() {
 /// let session = Session::new();
+/// # let session = session.no_stdout().no_file();
 /// let operation = session.operation("test_work");
 /// let _span = operation.measure_thread().iterations(100);
 /// for _ in 0..100 {
@@ -38,7 +39,9 @@ use std::time::Duration;
 /// # fn main() {
 /// // Create two separate sessions
 /// let session1 = Session::new();
+/// # let session1 = session1.no_stdout().no_file();
 /// let session2 = Session::new();
+/// # let session2 = session2.no_stdout().no_file();
 ///
 /// // Record some work in each
 /// let op1 = session1.operation("work");
@@ -115,7 +118,9 @@ impl Report {
     ///
     /// # fn main() {
     /// let session1 = Session::new();
+    /// # let session1 = session1.no_stdout().no_file();
     /// let session2 = Session::new();
+    /// # let session2 = session2.no_stdout().no_file();
     ///
     /// // Both sessions record the same operation name
     /// let op1 = session1.operation("common_work");
@@ -196,6 +201,7 @@ impl Report {
     ///
     /// # fn main() {
     /// let session = Session::new();
+    /// # let session = session.no_stdout().no_file();
     /// let operation = session.operation("test_work");
     /// let _span = operation.measure_thread().iterations(100);
     /// for _ in 0..100 {

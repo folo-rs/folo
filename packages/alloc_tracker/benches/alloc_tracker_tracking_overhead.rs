@@ -33,7 +33,9 @@ fn entrypoint(c: &mut Criterion) {
 
     // alloc_tracker overhead measurements
     {
-        let alloc_session = Session::new();
+        // This bench measures tracking overhead itself, so the session suppresses
+        // its own stdout and file output on drop.
+        let alloc_session = Session::new().no_stdout().no_file();
 
         let process_op = alloc_session.operation("empty_process_span");
         group.bench_function("process_span_empty", |b| {

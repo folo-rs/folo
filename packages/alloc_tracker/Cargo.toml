@@ -2,17 +2,13 @@
 name = "alloc_tracker"
 description = "Memory allocation tracking utilities for benchmarks and performance analysis"
 publish = true
-version = "0.5.25"
+version = "0.6.0"
 
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-
-[package.metadata.cargo-udeps.ignore]
-# Depends on enabled features and dev-dependencies cannot be optional.
-development = ["serial_test"]
 
 [package.metadata.docs.rs]
 all-features = true
@@ -29,7 +25,6 @@ serde_json = { workspace = true }
 [dev-dependencies]
 criterion = { workspace = true }
 mutants = { workspace = true }
-serial_test = { workspace = true }
 static_assertions = { workspace = true }
 tempfile = { workspace = true }
 

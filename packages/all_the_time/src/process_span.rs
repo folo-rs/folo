@@ -21,6 +21,7 @@ use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
 /// use all_the_time::Session;
 ///
 /// let session = Session::new();
+/// # let session = session.no_stdout().no_file();
 /// let operation = session.operation("test");
 /// {
 ///     let _span = operation.measure_process();
@@ -38,6 +39,7 @@ use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
 /// use all_the_time::Session;
 ///
 /// let session = Session::new();
+/// # let session = session.no_stdout().no_file();
 /// let operation = session.operation("benchmark");
 /// {
 ///     let _span = operation.measure_process().iterations(1000);
@@ -98,6 +100,7 @@ impl ProcessSpan {
     /// use all_the_time::Session;
     ///
     /// let session = Session::new();
+    /// # let session = session.no_stdout().no_file();
     /// let operation = session.operation("batch_work");
     /// {
     ///     let _span = operation.measure_process().iterations(1000);
@@ -113,6 +116,7 @@ impl ProcessSpan {
     /// use all_the_time::Session;
     ///
     /// let session = Session::new();
+    /// # let session = session.no_stdout().no_file();
     /// let operation = session.operation("dynamic_work");
     /// {
     ///     let span = operation.measure_process();

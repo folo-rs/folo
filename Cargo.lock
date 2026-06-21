@@ -19,12 +19,12 @@ dependencies = [
 
 [[package]]
 name = "all_the_time"
-version = "0.4.20"
+version = "0.5.0"
 dependencies = [
  "cpu-time",
  "criterion",
  "folo_utils",
- "mutants 0.0.4",
+ "mutants",
  "serde",
  "serde_json",
  "static_assertions",
@@ -33,14 +33,13 @@ dependencies = [
 
 [[package]]
 name = "alloc_tracker"
-version = "0.5.25"
+version = "0.6.0"
 dependencies = [
  "criterion",
  "folo_utils",
- "mutants 0.0.4",
+ "mutants",
  "serde",
  "serde_json",
- "serial_test",
  "static_assertions",
  "tempfile",
 ]
@@ -176,12 +175,12 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "awaiter_set"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "criterion",
  "futures",
  "gungraun",
- "mutants 0.0.4",
+ "mutants",
  "simple-mermaid",
  "static_assertions",
 ]
@@ -357,6 +356,12 @@ dependencies = [
 
 [[package]]
 name = "bitflags"
+version = "1.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
+
+[[package]]
+name = "bitflags"
 version = "2.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
@@ -401,7 +406,7 @@ dependencies = [
  "hmac",
  "jiff",
  "many_cpus",
- "mutants 0.0.4",
+ "mutants",
  "serde",
  "serde_json",
  "serial_test",
@@ -414,11 +419,11 @@ dependencies = [
 
 [[package]]
 name = "cargo-detect-package"
-version = "1.0.20"
+version = "1.0.21"
 dependencies = [
  "argh",
  "mockall",
- "mutants 0.0.4",
+ "mutants",
  "serial_test",
  "tempfile",
  "toml",
@@ -426,10 +431,10 @@ dependencies = [
 
 [[package]]
 name = "cargo-freeze-deps"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "argh",
- "mutants 0.0.4",
+ "mutants",
  "semver",
  "serial_test",
  "tempfile",
@@ -655,9 +660,9 @@ dependencies = [
 
 [[package]]
 name = "cpulist"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "new_zealand",
  "ohno",
  "static_assertions",
@@ -733,6 +738,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d5515a3834141de9eafb9717ad39eea8247b5674e6066c404e8c4b365d2a29e"
 dependencies = [
  "cmov",
+]
+
+[[package]]
+name = "defmt"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6e524506490a1953d237cb87b1cfc1e46f88c18f10a22dfe0f507dc6bfc7f7f"
+dependencies = [
+ "bitflags 1.3.2",
+ "defmt-macros",
+]
+
+[[package]]
+name = "defmt-macros"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0a27770e9c8f719a79d8b638281f4d828f77d8fd61e0bd94451b9b85e576a0b"
+dependencies = [
+ "defmt-parser",
+ "proc-macro-error2",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "defmt-parser"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e"
+dependencies = [
+ "thiserror",
 ]
 
 [[package]]
@@ -859,7 +896,7 @@ dependencies = [
 
 [[package]]
 name = "events"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
  "alloc_tracker",
  "awaiter_set",
@@ -868,7 +905,7 @@ dependencies = [
  "futures",
  "gungraun",
  "many_cpus",
- "mutants 0.0.4",
+ "mutants",
  "new_zealand",
  "par_bench",
  "rsevents",
@@ -879,7 +916,7 @@ dependencies = [
 
 [[package]]
 name = "events_once"
-version = "0.5.27"
+version = "0.5.28"
 dependencies = [
  "criterion",
  "futures",
@@ -904,13 +941,13 @@ dependencies = [
 
 [[package]]
 name = "fast_time"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "criterion",
  "gungraun",
  "libc",
  "mockall",
- "mutants 0.0.4",
+ "mutants",
  "static_assertions",
  "windows",
 ]
@@ -939,12 +976,6 @@ dependencies = [
 
 [[package]]
 name = "foldhash"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
-
-[[package]]
-name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
@@ -953,15 +984,15 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 name = "folo_ffi"
 version = "0.1.15"
 dependencies = [
- "mutants 0.0.4",
+ "mutants",
  "static_assertions",
 ]
 
 [[package]]
 name = "folo_utils"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
- "mutants 0.0.4",
+ "mutants",
  "serde",
  "serde_json",
 ]
@@ -986,27 +1017,27 @@ dependencies = [
 
 [[package]]
 name = "frozen-collections"
-version = "0.8.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f80d04e59be9d42b94254781a2b7d6788783d1ffc792e5074f5f112768c316ac"
+checksum = "5d2ae70ff5b0de400d1f640f587aa39f2ee13b660125e26273fef78dbe8a39c5"
 dependencies = [
- "foldhash 0.1.5",
+ "foldhash",
  "frozen-collections-core",
- "rand 0.9.4",
- "rand_chacha 0.9.0",
+ "rand 0.10.1",
+ "rand_chacha 0.10.0",
 ]
 
 [[package]]
 name = "frozen-collections-core"
-version = "0.8.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5646a7f1d16f60a7c564288fcac261dde8865d3fe5864b1dec56778156109064"
+checksum = "af791c17af28de9efe9a18e3dd7e02e8517bbb2d8b84c5d05964b841ad6710f7"
 dependencies = [
  "const-random",
  "equivalent",
- "foldhash 0.1.5",
- "hashbrown 0.15.5",
- "mutants 0.0.3",
+ "foldhash",
+ "hashbrown 0.16.1",
+ "mutants",
 ]
 
 [[package]]
@@ -1017,7 +1048,7 @@ checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 
 [[package]]
 name = "future_deque"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "criterion",
  "events_once",
@@ -1025,7 +1056,7 @@ dependencies = [
  "futures-core",
  "gungraun",
  "infinity_pool",
- "mutants 0.0.4",
+ "mutants",
  "static_assertions",
  "testing",
 ]
@@ -1165,9 +1196,9 @@ checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
 name = "gungraun"
-version = "0.19.0"
+version = "0.19.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a710656785d3ed71a73a1007956874d6ebfdbc2f8660c492bb8d838c91e3f085"
+checksum = "7dcd6043b1ff8096c10cdd5c59930139b52ba63cbd1a3452bc3ff95d996f9334"
 dependencies = [
  "bincode-next",
  "derive_more",
@@ -1177,12 +1208,12 @@ dependencies = [
 
 [[package]]
 name = "gungraun-macros"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cc6269e89921872ec32af29af3a992618b9bd2ef47cbf3704af476066cb7182"
+checksum = "d7f3214bae6cfd6739f4f29edb262bae439c6393a7b7b12c4eeb96417c2e50df"
 dependencies = [
  "derive_more",
- "proc-macro-error2",
+ "proc-macro-error3",
  "proc-macro2",
  "quote",
  "rustc_version",
@@ -1193,9 +1224,9 @@ dependencies = [
 
 [[package]]
 name = "gungraun-runner"
-version = "0.19.0"
+version = "0.19.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12016920cc6ba0a8aefe276c8f19421a3bf7a125385e25697658b9dd66bde024"
+checksum = "6965c4e60026245b5600b05ab4c4af5ae1eaf72b8ec5da86c9cc6af01258d8cc"
 dependencies = [
  "serde",
 ]
@@ -1228,11 +1259,11 @@ checksum = "1b4b9ebce26001bad2e6366295f64e381c1e9c479109202149b9e15e154973e9"
 
 [[package]]
 name = "hashbrown"
-version = "0.15.5"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
+checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
 dependencies = [
- "foldhash 0.1.5",
+ "foldhash",
 ]
 
 [[package]]
@@ -1241,7 +1272,7 @@ version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 dependencies = [
- "foldhash 0.2.0",
+ "foldhash",
 ]
 
 [[package]]
@@ -1497,12 +1528,12 @@ dependencies = [
 
 [[package]]
 name = "infinity_pool"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "alloc_tracker",
  "criterion",
  "gungraun",
- "mutants 0.0.4",
+ "mutants",
  "new_zealand",
  "num-integer",
  "pastey",
@@ -1528,9 +1559,9 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.14.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
+checksum = "8b4baf93f58d4425749ca49a51c50ebab072c5df6994d08fed93541c331481dc"
 dependencies = [
  "either",
 ]
@@ -1543,10 +1574,11 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jiff"
-version = "0.2.28"
+version = "0.2.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4603d3033e49e2b0e31229fcab20a5d40089c607d975cd9c80551dc69eed9102"
+checksum = "34f877a98676d2fb664698d74cc6a51ce6c484ce8c770f05d0108ec9090aeb46"
 dependencies = [
+ "defmt",
  "jiff-static",
  "log",
  "portable-atomic",
@@ -1556,9 +1588,9 @@ dependencies = [
 
 [[package]]
 name = "jiff-static"
-version = "0.2.28"
+version = "0.2.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "782d32378dddf207193ac91cefb848ad41abb58195c95168e1291227a0832b47"
+checksum = "0666b5ab5ecaca213fc2a85b8c0083d9004e84ee2d5f9a7e0017aaf50986f25f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1643,14 +1675,14 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "linked"
-version = "1.0.13"
+version = "1.0.14"
 dependencies = [
  "criterion",
  "gungraun",
  "hash_hasher",
  "linked_macros",
  "many_cpus",
- "mutants 0.0.4",
+ "mutants",
  "new_zealand",
  "par_bench",
  "pastey",
@@ -1661,7 +1693,7 @@ dependencies = [
 
 [[package]]
 name = "linked_macros"
-version = "1.0.13"
+version = "1.0.14"
 dependencies = [
  "linked_macros_impl",
  "proc-macro2",
@@ -1669,7 +1701,7 @@ dependencies = [
 
 [[package]]
 name = "linked_macros_impl"
-version = "1.0.13"
+version = "1.0.14"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1699,9 +1731,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.32"
+version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
+checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "lru-slab"
@@ -1711,7 +1743,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "many_cpus"
-version = "2.4.8"
+version = "2.4.9"
 dependencies = [
  "many_cpus_impl",
  "new_zealand",
@@ -1721,14 +1753,14 @@ dependencies = [
 
 [[package]]
 name = "many_cpus_benchmarking"
-version = "0.1.52"
+version = "0.2.0"
 dependencies = [
  "cpulist",
  "criterion",
  "derive_more",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "many_cpus",
- "mutants 0.0.4",
+ "mutants",
  "new_zealand",
  "nonempty",
  "rand 0.10.1",
@@ -1737,20 +1769,20 @@ dependencies = [
 
 [[package]]
 name = "many_cpus_impl"
-version = "2.4.8"
+version = "2.4.9"
 dependencies = [
  "cpulist",
  "criterion",
  "derive_more",
- "foldhash 0.2.0",
+ "foldhash",
  "folo_ffi",
  "gungraun",
  "heapless",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "libc",
  "many_cpus",
  "mockall",
- "mutants 0.0.4",
+ "mutants",
  "new_zealand",
  "nonempty",
  "par_bench",
@@ -1828,12 +1860,6 @@ dependencies = [
 
 [[package]]
 name = "mutants"
-version = "0.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc0287524726960e07b119cebd01678f852f147742ae0d925e6a520dca956126"
-
-[[package]]
-name = "mutants"
 version = "0.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "add0ac067452ff1aca8c5002111bd6b1c895baee6e45fcbc44e0193aea17be56"
@@ -1844,7 +1870,7 @@ version = "1.0.6"
 
 [[package]]
 name = "nm"
-version = "0.1.39"
+version = "0.1.40"
 dependencies = [
  "nm_impl",
  "static_assertions",
@@ -1852,14 +1878,14 @@ dependencies = [
 
 [[package]]
 name = "nm_impl"
-version = "0.1.39"
+version = "0.1.40"
 dependencies = [
  "criterion",
  "fast_time",
- "foldhash 0.2.0",
+ "foldhash",
  "gungraun",
  "many_cpus",
- "mutants 0.0.4",
+ "mutants",
  "new_zealand",
  "nm",
  "num-traits",
@@ -1869,7 +1895,7 @@ dependencies = [
 
 [[package]]
 name = "nm_otel"
-version = "0.4.10"
+version = "0.4.11"
 dependencies = [
  "nm",
  "nm_otel_impl",
@@ -1883,16 +1909,16 @@ dependencies = [
 
 [[package]]
 name = "nm_otel_impl"
-version = "0.4.10"
+version = "0.4.11"
 dependencies = [
  "alloc_tracker",
  "criterion",
- "foldhash 0.2.0",
+ "foldhash",
  "futures",
  "gungraun",
  "hashbrown 0.17.1",
  "many_cpus",
- "mutants 0.0.4",
+ "mutants",
  "new_zealand",
  "nm",
  "nm_impl",
@@ -2044,14 +2070,14 @@ dependencies = [
 
 [[package]]
 name = "par_bench"
-version = "0.2.42"
+version = "0.2.43"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
  "criterion",
  "derive_more",
  "many_cpus",
- "mutants 0.0.4",
+ "mutants",
  "new_zealand",
  "num-integer",
  "oneshot",
@@ -2201,12 +2227,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "proc-macro-error-attr3"
+version = "3.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34e4dd828515431dd6c4a030d26f7eaed7dd4778226e9d2bb968d65ca4ec3d4d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+]
+
+[[package]]
 name = "proc-macro-error2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11ec05c52be0a07b08061f7dd003e7d7092e0472bc731b4af7bb1ef876109802"
 dependencies = [
  "proc-macro-error-attr2",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "proc-macro-error3"
+version = "3.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ee475e440453418ff1335189eddf7101ba502cd818ab7ae04209bc83aa925aa"
+dependencies = [
+ "proc-macro-error-attr3",
  "proc-macro2",
  "quote",
  "syn",
@@ -2361,6 +2409,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rand_chacha"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e6af7f3e25ded52c41df4e0b1af2d047e45896c2f3281792ed68a1c243daedb"
+dependencies = [
+ "ppv-lite86",
+ "rand_core 0.10.1",
+]
+
+[[package]]
 name = "rand_core"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2390,7 +2448,7 @@ version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
 dependencies = [
- "bitflags",
+ "bitflags 2.13.0",
 ]
 
 [[package]]
@@ -2424,7 +2482,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "region_cached"
-version = "1.0.22"
+version = "1.0.23"
 dependencies = [
  "arc-swap",
  "axum",
@@ -2433,7 +2491,7 @@ dependencies = [
  "gungraun",
  "linked",
  "many_cpus",
- "mutants 0.0.4",
+ "mutants",
  "new_zealand",
  "par_bench",
  "rsevents",
@@ -2446,7 +2504,7 @@ dependencies = [
 
 [[package]]
 name = "region_local"
-version = "1.0.22"
+version = "1.0.23"
 dependencies = [
  "arc-swap",
  "axum",
@@ -2455,7 +2513,7 @@ dependencies = [
  "gungraun",
  "linked",
  "many_cpus",
- "mutants 0.0.4",
+ "mutants",
  "new_zealand",
  "par_bench",
  "rsevents",
@@ -2548,7 +2606,7 @@ version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
 dependencies = [
- "bitflags",
+ "bitflags 2.13.0",
  "errno",
  "libc",
  "linux-raw-sys",
@@ -2691,7 +2749,7 @@ version = "3.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b7f4bc775c73d9a02cde8bf7b2ec4c9d12743edf609006c7facc23998404cd1d"
 dependencies = [
- "bitflags",
+ "bitflags 2.13.0",
  "core-foundation",
  "core-foundation-sys",
  "libc",
@@ -2958,7 +3016,7 @@ name = "testing"
 version = "0.0.1-never"
 dependencies = [
  "deranged",
- "mutants 0.0.4",
+ "mutants",
  "new_zealand",
  "static_assertions",
  "windows",
@@ -3209,7 +3267,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
 dependencies = [
  "async-compression",
- "bitflags",
+ "bitflags 2.13.0",
  "bytes",
  "futures-core",
  "futures-util",
@@ -3422,7 +3480,7 @@ dependencies = [
 
 [[package]]
 name = "vicinal"
-version = "0.1.27"
+version = "0.1.28"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -3433,7 +3491,7 @@ dependencies = [
  "futures",
  "infinity_pool",
  "many_cpus",
- "mutants 0.0.4",
+ "mutants",
  "new_zealand",
  "nm",
  "pin-project",

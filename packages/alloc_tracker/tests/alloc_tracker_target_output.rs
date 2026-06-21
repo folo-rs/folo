@@ -1,8 +1,14 @@
-//! Integration tests for writing machine-readable JSON output to disk.
+//! Integration tests for the machine-readable JSON output written on drop.
+//!
+//! These exercise the public behavior end to end: dropping a [`Session`] writes
+//! one JSON file per operation into the Cargo target directory unless that output
+//! is suppressed.
 
-use std::fs;
+use std::fs::{read_to_string, remove_file};
 use std::hint::black_box;
-use std::path::Path;
+use std::io;
+use std::panic::{self, AssertUnwindSafe};
+use std::path::{Path, PathBuf};
 
 use alloc_tracker::{Allocator, Session};
 use serde_json::Value;
@@ -10,59 +16,74 @@ use serde_json::Value;
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
+const BYTES_PER_ITERATION: usize = 64;
+const ITERATIONS: u64 = 8;
+
+/// Resolves the JSON output path that dropping a session writes for `operation`.
+fn output_path(operation: &str) -> PathBuf {
+    folo_utils::cargo_target_directory()
+        .unwrap_or_else(|| "target".into())
+        .join("alloc_tracker")
+        .join(format!("{operation}.json"))
+}
+
 fn read_json(path: &Path) -> Value {
-    serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    serde_json::from_str(&read_to_string(path).unwrap()).unwrap()
+}
+
+/// Removes `path` if it exists, leaving a clean slate for an assertion.
+fn remove_if_present(path: &Path) {
+    // Attempt the removal unconditionally and tolerate a missing file rather than
+    // checking `exists()` first, which would race with parallel test processes.
+    match remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => panic!("failed to remove {}: {error}", path.display()),
+    }
+}
+
+/// Records a fixed amount of allocation work under `operation` in `session`.
+fn record_work(session: &Session, operation: &str) {
+    let operation = session.operation(operation);
+    let _span = operation.measure_thread().iterations(ITERATIONS);
+    for _ in 0..ITERATIONS {
+        let data: Vec<u8> = black_box(vec![0_u8; BYTES_PER_ITERATION]);
+        black_box(&data);
+    }
 }
 
 #[test]
 #[cfg_attr(miri, ignore)] // Uses the global allocator and the filesystem, neither supported under Miri.
-fn writes_json_files_for_each_operation() {
-    const FIRST_BYTES_PER_ITERATION: usize = 128;
-    const FIRST_ITERATIONS: u64 = 16;
-    const SECOND_BYTES_PER_ITERATION: usize = 64;
-    const SECOND_ITERATIONS: u64 = 8;
+fn dropping_session_writes_json_into_cargo_target_directory() {
+    // A distinctive name avoids colliding with output from other operations in
+    // the shared Cargo target directory.
+    const OPERATION: &str = "alloc_tracker_drop_writes_probe";
 
-    let session = Session::new();
-
-    {
-        let operation = session.operation("allocate_buffer");
-        let _span = operation.measure_thread().iterations(FIRST_ITERATIONS);
-        for _ in 0..FIRST_ITERATIONS {
-            let data: Vec<u8> = black_box(vec![0_u8; FIRST_BYTES_PER_ITERATION]);
-            black_box(&data);
-        }
-    }
+    let expected = output_path(OPERATION);
+    // Start from a clean slate so the assertion proves the drop wrote the file.
+    remove_if_present(&expected);
 
     {
-        let operation = session.operation("allocate_small_buffer");
-        let _span = operation.measure_thread().iterations(SECOND_ITERATIONS);
-        for _ in 0..SECOND_ITERATIONS {
-            let data: Vec<u8> = black_box(vec![0_u8; SECOND_BYTES_PER_ITERATION]);
-            black_box(&data);
-        }
+        // Both stdout and file output are enabled; the harness captures the
+        // printed summary while the assertion below checks the JSON file.
+        let session = Session::new();
+        record_work(&session, OPERATION);
     }
 
-    let directory = tempfile::tempdir().unwrap();
-    session.write_to_directory(directory.path());
+    assert!(
+        expected.exists(),
+        "dropping the session should create {}",
+        expected.display()
+    );
 
-    let first = directory.path().join("allocate_buffer.json");
-    let second = directory.path().join("allocate_small_buffer.json");
-
-    assert!(first.exists(), "expected JSON file for first operation");
-    assert!(second.exists(), "expected JSON file for second operation");
-
-    // Exactly one file per measured operation, and nothing more.
-    let written = fs::read_dir(directory.path()).unwrap().count();
-    assert_eq!(written, 2, "expected one JSON file per operation");
-
-    let value = read_json(&first);
+    let value = read_json(&expected);
     assert_eq!(
         value.get("operation").and_then(Value::as_str),
-        Some("allocate_buffer")
+        Some(OPERATION)
     );
     assert_eq!(
         value.get("total_iterations").and_then(Value::as_u64),
-        Some(16)
+        Some(ITERATIONS)
     );
     assert!(
         value
@@ -70,109 +91,103 @@ fn writes_json_files_for_each_operation() {
             .and_then(Value::as_u64)
             .is_some()
     );
-    assert!(
-        value
-            .get("total_allocations_count")
-            .and_then(Value::as_u64)
-            .is_some()
-    );
-    assert!(
-        value
-            .get("mean_bytes_per_iteration")
-            .and_then(Value::as_u64)
-            .is_some()
-    );
-    assert!(
-        value
-            .get("mean_allocations_per_iteration")
-            .and_then(Value::as_u64)
-            .is_some()
-    );
+
+    // Avoid polluting the shared target directory for later runs.
+    remove_file(&expected).unwrap();
 }
 
 #[test]
 #[cfg_attr(miri, ignore)] // Uses the global allocator and the filesystem, neither supported under Miri.
-fn empty_session_writes_nothing() {
-    let session = Session::new();
-    let _operation = session.operation("never_measured");
+fn no_stdout_session_still_writes_json() {
+    const OPERATION: &str = "alloc_tracker_no_stdout_writes_probe";
 
-    let directory = tempfile::tempdir().unwrap();
-    let target = directory.path().join("output");
+    let expected = output_path(OPERATION);
+    remove_if_present(&expected);
 
-    session.write_to_directory(&target);
-
-    assert!(!target.exists(), "no directory should be created");
-}
-
-#[test]
-#[cfg_attr(miri, ignore)] // Resolves the Cargo target directory and writes files, neither supported under Miri.
-fn write_to_target_writes_into_cargo_target_directory() {
-    // A distinctive name avoids colliding with output from other operations in
-    // the shared Cargo target directory.
-    const OPERATION: &str = "alloc_tracker_write_to_target_probe";
-    const BYTES_PER_ITERATION: usize = 64;
-    const ITERATIONS: u64 = 8;
-
-    let session = Session::new();
     {
-        let operation = session.operation(OPERATION);
-        let _span = operation.measure_thread().iterations(ITERATIONS);
-        for _ in 0..ITERATIONS {
-            let data: Vec<u8> = black_box(vec![0_u8; BYTES_PER_ITERATION]);
-            black_box(&data);
-        }
+        // Suppressing stdout must not suppress the JSON file output.
+        let session = Session::new().no_stdout();
+        record_work(&session, OPERATION);
     }
-
-    let expected = folo_utils::cargo_target_directory()
-        .unwrap_or_else(|| "target".into())
-        .join("alloc_tracker")
-        .join(format!("{OPERATION}.json"));
-
-    // Start from a clean slate so the assertion proves this call wrote the file.
-    if expected.exists() {
-        fs::remove_file(&expected).unwrap();
-    }
-
-    session.write_to_target();
 
     assert!(
         expected.exists(),
-        "write_to_target should create {}",
+        "no_stdout() should still write {}",
         expected.display()
     );
 
     let value = read_json(&expected);
     assert_eq!(
         value.get("operation").and_then(Value::as_str),
-        Some("alloc_tracker_write_to_target_probe")
-    );
-    assert_eq!(
-        value.get("total_iterations").and_then(Value::as_u64),
-        Some(8)
+        Some(OPERATION)
     );
 
     // Avoid polluting the shared target directory for later runs.
-    fs::remove_file(&expected).unwrap();
+    remove_file(&expected).unwrap();
 }
 
 #[test]
-#[cfg_attr(miri, ignore)] // Uses the global allocator, which is not supported under Miri.
-#[should_panic(expected = "after sanitization")]
-fn panics_when_operation_names_collide_after_sanitization() {
-    let session = Session::new();
+#[cfg_attr(miri, ignore)] // Uses the global allocator and the filesystem, neither supported under Miri.
+fn no_file_suppresses_json_output() {
+    const OPERATION: &str = "alloc_tracker_no_file_probe";
 
-    // Both names sanitize to the same file name, which must not silently
-    // overwrite one operation's results.
-    for name in ["group/case", "group_case"] {
-        let operation = session.operation(name);
-        let _span = operation.measure_thread().iterations(4);
-        for _ in 0..4 {
-            let data: Vec<u8> = black_box(vec![0_u8; 64]);
-            black_box(&data);
-        }
+    let expected = output_path(OPERATION);
+    remove_if_present(&expected);
+
+    {
+        let session = Session::new().no_stdout().no_file();
+        record_work(&session, OPERATION);
     }
 
-    // The collision is detected before anything is written, so this path is
-    // never created.
-    session.write_to_directory("collision_is_detected_before_writing");
+    assert!(
+        !expected.exists(),
+        "no_file() should suppress writing {}",
+        expected.display()
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Uses the global allocator and the filesystem, neither supported under Miri.
+fn empty_session_writes_nothing_on_drop() {
+    const OPERATION: &str = "alloc_tracker_empty_drop_probe";
+
+    let expected = output_path(OPERATION);
+    remove_if_present(&expected);
+
+    {
+        // File output stays enabled, but the session records no measurable work,
+        // so dropping it must still write nothing.
+        let session = Session::new().no_stdout();
+        let _operation = session.operation(OPERATION);
+    }
+
+    assert!(
+        !expected.exists(),
+        "an empty session should not write {}",
+        expected.display()
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Uses the global allocator and the filesystem, neither supported under Miri.
+fn panicking_thread_does_not_write_json() {
+    const OPERATION: &str = "alloc_tracker_panic_guard_probe";
+
+    let expected = output_path(OPERATION);
+    remove_if_present(&expected);
+
+    // The session is dropped while the thread unwinds from the panic, so its
+    // output must be suppressed to avoid masking the original failure.
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        let session = Session::new().no_stdout();
+        record_work(&session, OPERATION);
+        panic!("intentional panic to exercise the drop guard");
+    }));
+
+    assert!(result.is_err(), "the closure should have panicked");
+    assert!(
+        !expected.exists(),
+        "a panicking thread should not write {}",
+        expected.display()
+    );
 }

@@ -14,7 +14,7 @@ static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 #[test]
 #[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
 fn no_span_is_empty_session() {
-    let session = Session::new();
+    let session = Session::new().no_stdout().no_file();
 
     let _op = session.operation("test_no_span");
 
@@ -24,7 +24,7 @@ fn no_span_is_empty_session() {
 #[test]
 #[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
 fn span_with_no_allocation_is_not_empty_session() {
-    let session = Session::new();
+    let session = Session::new().no_stdout().no_file();
 
     {
         let op = session.operation("test_no_allocation");
@@ -43,7 +43,7 @@ fn single_thread_allocations() {
     const BYTES_PER_ITERATION: usize = 100;
     const TEST_ITERATIONS: usize = 5;
 
-    let session = Session::new();
+    let session = Session::new().no_stdout().no_file();
 
     // Test process span in single-threaded context
     let process_total = {
@@ -82,7 +82,7 @@ fn multithreaded_allocations_show_span_differences() {
     const MAIN_THREAD_ALLOCATIONS: u32 = 10;
     const TEST_ITERATIONS: usize = 3;
 
-    let session = Session::new();
+    let session = Session::new().no_stdout().no_file();
 
     // Helper function to spawn worker threads that allocate memory
     let spawn_workers = || {
@@ -150,7 +150,7 @@ fn multithreaded_allocations_show_span_differences() {
 fn mixed_span_types_in_multithreaded_context() {
     const ITERATIONS: usize = 3;
 
-    let session = Session::new();
+    let session = Session::new().no_stdout().no_file();
     let mixed_op = session.operation("mixed_multithreaded");
 
     for iteration in 1..=ITERATIONS {
@@ -187,7 +187,7 @@ fn mixed_span_types_in_multithreaded_context() {
 #[test]
 #[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
 fn report_is_empty_matches_session_is_empty() {
-    let session = Session::new();
+    let session = Session::new().no_stdout().no_file();
 
     // Test 1: Both empty initially
     let report = session.to_report();
@@ -220,7 +220,7 @@ fn report_is_empty_matches_session_is_empty() {
 fn report_mean_with_known_allocations() {
     const NUM_ITERATIONS: u64 = 5;
 
-    let session = Session::new();
+    let session = Session::new().no_stdout().no_file();
 
     {
         let operation = session.operation("known_allocation");
@@ -271,7 +271,7 @@ fn process_report_includes_allocations_from_multiple_threads() {
     const SIZE_A: usize = 128; // bytes per allocation in thread A
     const SIZE_B: usize = 256; // bytes per allocation in thread B
 
-    let session = Session::new();
+    let session = Session::new().no_stdout().no_file();
     {
         let op = session.operation("two_thread_process");
         let _span = op.measure_process();

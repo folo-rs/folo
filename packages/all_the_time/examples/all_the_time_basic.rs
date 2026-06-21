@@ -88,7 +88,11 @@ fn main() {
         }
     }
 
-    session.print_to_stdout();
+    // Dropping the session prints its results to stdout and writes the JSON
+    // output files.
+    drop(session);
+
     println!();
-    println!("Session automatically cleaned up when dropped.");
+    println!("The session's results were printed above and written to");
+    println!("target/all_the_time/ as machine-readable JSON.");
 }

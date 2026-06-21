@@ -103,8 +103,10 @@ fn run_benchmark_with_tracking(pool: &mut ThreadPool) -> par_bench::RunSummary<M
         .measure_wrapper(
             // Wrapper begin function: creates tracking sessions and spans before the timed execution.
             |args| {
-                let alloc_session = AllocSession::new();
-                let time_session = TimeSession::new();
+                // The merged reports are printed by the caller, so these
+                // per-thread sessions opt out of emitting on drop.
+                let alloc_session = AllocSession::new().no_stdout().no_file();
+                let time_session = TimeSession::new().no_stdout().no_file();
 
                 // Create operations and start spans that will be active during all iterations.
                 let alloc_operation = alloc_session.operation("benchmark_work");

@@ -25,6 +25,8 @@
 ///
 /// let allocs = AllocSession::new();
 /// let processor_time = TimeSession::new();
+/// # let allocs = allocs.no_stdout().no_file();
+/// # let processor_time = processor_time.no_stdout().no_file();
 /// let mut pool = ThreadPool::new(&SystemHardware::current().processors());
 ///
 /// let run = Run::new()
@@ -83,6 +85,7 @@ pub trait ResourceUsageExt<'a, ThreadState> {
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
     /// let allocs = Session::new();
+    /// # let allocs = allocs.no_stdout().no_file();
     /// let mut pool = ThreadPool::new(&SystemHardware::current().processors());
     ///
     /// let run = Run::new()
@@ -106,6 +109,7 @@ pub trait ResourceUsageExt<'a, ThreadState> {
     /// use par_bench::{ResourceUsageExt, Run, ThreadPool};
     ///
     /// let processor_time = Session::new();
+    /// # let processor_time = processor_time.no_stdout().no_file();
     /// let mut pool = ThreadPool::new(&SystemHardware::current().processors());
     ///
     /// let run = Run::new()
@@ -433,7 +437,7 @@ mod tests {
     #[test]
     #[cfg(all(not(miri), feature = "alloc_tracker"))] // Uses ThreadPool which requires OS threading functions that Miri cannot emulate.
     fn measure_resource_usage_allocs_only() {
-        let allocs = alloc_tracker::Session::new();
+        let allocs = alloc_tracker::Session::new().no_stdout().no_file();
         let mut pool = ThreadPool::new(
             SystemHardware::current()
                 .processors()
@@ -466,7 +470,7 @@ mod tests {
     #[test]
     #[cfg(all(not(miri), feature = "all_the_time"))] // Uses ThreadPool which requires OS threading functions that Miri cannot emulate.
     fn measure_resource_usage_processor_time_only() {
-        let processor_time = all_the_time::Session::new();
+        let processor_time = all_the_time::Session::new().no_stdout().no_file();
         let mut pool = ThreadPool::new(
             SystemHardware::current()
                 .processors()
@@ -505,8 +509,8 @@ mod tests {
     #[test]
     #[cfg(all(not(miri), feature = "alloc_tracker", feature = "all_the_time"))] // Uses ThreadPool which requires OS threading functions that Miri cannot emulate.
     fn measure_resource_usage_combined() {
-        let allocs = alloc_tracker::Session::new();
-        let processor_time = all_the_time::Session::new();
+        let allocs = alloc_tracker::Session::new().no_stdout().no_file();
+        let processor_time = all_the_time::Session::new().no_stdout().no_file();
         let mut pool = ThreadPool::new(
             SystemHardware::current()
                 .processors()
@@ -557,8 +561,8 @@ mod tests {
 
         let mut pool = ThreadPool::new(processors.clone());
 
-        let allocs = alloc_tracker::Session::new();
-        let processor_time = all_the_time::Session::new();
+        let allocs = alloc_tracker::Session::new().no_stdout().no_file();
+        let processor_time = all_the_time::Session::new().no_stdout().no_file();
 
         // Test 1: .measure_resource_usage() before .groups()
         let results1 = Run::new()
@@ -610,7 +614,7 @@ mod tests {
 
         let mut pool = ThreadPool::new(processors.clone());
 
-        let allocs = alloc_tracker::Session::new();
+        let allocs = alloc_tracker::Session::new().no_stdout().no_file();
 
         // Test pattern: Run::new().groups().measure_resource_usage()
         let results = Run::new()
@@ -634,7 +638,7 @@ mod tests {
 
         let mut pool = ThreadPool::new(processors.clone());
 
-        let allocs = alloc_tracker::Session::new();
+        let allocs = alloc_tracker::Session::new().no_stdout().no_file();
 
         // Test original pattern: Run::new().groups().prepare_iter().measure_resource_usage()
         let results = Run::new()
@@ -652,7 +656,7 @@ mod tests {
     #[test]
     #[cfg(all(not(miri), feature = "alloc_tracker"))] // Uses ThreadPool which requires OS threading functions that Miri cannot emulate.
     fn measure_resource_usage_with_thread_state() {
-        let allocs = alloc_tracker::Session::new();
+        let allocs = alloc_tracker::Session::new().no_stdout().no_file();
         let mut pool = ThreadPool::new(
             SystemHardware::current()
                 .processors()
@@ -694,7 +698,7 @@ mod tests {
             return;
         };
 
-        let allocs = alloc_tracker::Session::new();
+        let allocs = alloc_tracker::Session::new().no_stdout().no_file();
         let mut pool = ThreadPool::new(processors);
 
         // Each thread will execute 1000 iterations, but the allocation tracker should

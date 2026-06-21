@@ -19,6 +19,7 @@ use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
 /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 ///
 /// let session = Session::new();
+/// # let session = session.no_stdout().no_file();
 /// let mean_calc = session.operation("test");
 /// {
 ///     let _span = mean_calc.measure_thread();
@@ -68,6 +69,7 @@ impl ThreadSpan {
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
     /// let session = Session::new();
+    /// # let session = session.no_stdout().no_file();
     /// let operation = session.operation("batch_work");
     /// {
     ///     let _span = operation.measure_thread().iterations(1000);

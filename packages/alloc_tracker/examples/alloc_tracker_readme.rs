@@ -38,14 +38,10 @@ fn main() {
         let _string = String::from("Hello"); // Third allocation
     }
 
-    // Print results - now shows both mean bytes and mean allocation count
-    session.print_to_stdout();
-
-    // Also emit machine-readable JSON files (one per operation) into the Cargo
-    // target directory: target/alloc_tracker/<operation>.json
-    session.write_to_target();
-
-    // Session automatically cleans up when dropped
+    // When `session` is dropped it prints a human-readable summary (mean bytes
+    // and mean allocation count) to stdout and writes machine-readable JSON files
+    // (one per operation) into the Cargo target directory:
+    // target/alloc_tracker/<operation>.json
 
     // Debugging unexpected allocations (only with feature enabled)
     #[cfg(feature = "panic_on_next_alloc")]

@@ -68,16 +68,12 @@ fn main() {
         results.mean_duration()
     );
 
-    // Print resource usage statistics
+    // When `allocs` and `processor_time` are dropped here, each prints its
+    // summary and writes JSON into the Cargo target directory.
     #[cfg(feature = "alloc_tracker")]
-    {
-        allocs.print_to_stdout();
-    }
-
+    drop(allocs);
     #[cfg(feature = "all_the_time")]
-    {
-        processor_time.print_to_stdout();
-    }
+    drop(processor_time);
 
     // Access measurement outputs
     let measure_count = results.measure_outputs().count();
