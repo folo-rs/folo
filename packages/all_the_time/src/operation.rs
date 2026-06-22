@@ -166,33 +166,27 @@ impl Operation {
     /// Returns zero duration if no spans have been recorded.
     #[must_use]
     pub fn mean(&self) -> Duration {
-        let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
-        if data.total_iterations == 0 {
-            Duration::ZERO
-        } else {
-            Duration::from_nanos_u128(
-                data.total_processor_time
-                    .as_nanos()
-                    .checked_div(u128::from(data.total_iterations))
-                    .expect("guarded by if condition"),
-            )
-        }
+        self.metrics.lock().expect(ERR_POISONED_LOCK).mean()
     }
 
     /// Returns the total number of spans recorded.
     #[must_use]
     #[cfg(test)]
     pub(crate) fn total_iterations(&self) -> u64 {
-        let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
-        data.total_iterations
+        self.metrics
+            .lock()
+            .expect(ERR_POISONED_LOCK)
+            .total_iterations()
     }
 
     /// Returns the total processor time across all spans.
     #[must_use]
     #[cfg(test)]
     pub(crate) fn total_processor_time(&self) -> Duration {
-        let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
-        data.total_processor_time
+        self.metrics
+            .lock()
+            .expect(ERR_POISONED_LOCK)
+            .total_processor_time()
     }
 }
 

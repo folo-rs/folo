@@ -2,7 +2,8 @@
 //! [`ResultRecord`] model.
 //!
 //! `all_the_time` writes one file per operation under `target/all_the_time/`,
-//! recording the mean processor time a benchmark spends per iteration. Processor
+//! recording the per-iteration processor time a benchmark spends together with
+//! bootstrap dispersion statistics over the operation's measured spans. Processor
 //! time depends on the host hardware, so this engine partitions its history by a
 //! machine key (see [`EngineSystem::is_hardware_dependent`]). The committed
 //! fixtures under `tests/fixtures/all_the_time/` are real `all_the_time` output
@@ -58,18 +59,28 @@ pub(crate) fn parse_all_the_time_operation(
 /// carries no package attribution, so the operation name alone identifies the
 /// series (mirroring the Criterion adapter).
 ///
-/// Only the mean per-iteration value is recorded; `all_the_time` reports no
-/// dispersion, so the metric carries no confidence interval. The processor-time
-/// metric is still treated as noisy by analysis, which then relies on
-/// rank-testing across regimes rather than per-sample interval overlap.
+/// The through-origin slope is preferred as the per-iteration point estimate,
+/// matching the Criterion adapter; output that records no slope falls back to the
+/// mean. When the bootstrap confidence interval is present it is recorded on the
+/// metric, so analysis can apply its interval-overlap gate to processor time the
+/// same way it does for Criterion wall time.
 fn output_to_record(output: &OperationOutput) -> ResultRecord {
     let id = BenchmarkId::new(None, output.operation.clone(), None, None);
+
+    let value = output
+        .slope_processor_time_nanos
+        .unwrap_or_else(|| as_f64(output.mean_processor_time_nanos));
 
     let metric = Metric::new(
         PROCESSOR_TIME_METRIC.to_owned(),
         MetricKind::ProcessorTime,
-        as_f64(output.mean_processor_time_nanos),
+        value,
         Some(TIME_UNIT.to_owned()),
+    )
+    .with_dispersion(
+        output.std_dev_processor_time_nanos,
+        output.interval_low_processor_time_nanos,
+        output.interval_high_processor_time_nanos,
     );
 
     ResultRecord::new(id, vec![metric])
@@ -85,12 +96,21 @@ fn as_f64(value: u64) -> f64 {
 }
 
 /// The subset of an `all_the_time` operation file the tool reads. The `total_*`
-/// fields are ignored in favor of the per-iteration mean, which is comparable
-/// across runs with differing iteration counts.
+/// fields are ignored in favor of the per-iteration slope (or mean), which is
+/// comparable across runs with differing iteration counts. The dispersion fields
+/// are optional so that output recording only a mean still parses.
 #[derive(Debug, Deserialize)]
 struct OperationOutput {
     operation: String,
     mean_processor_time_nanos: u64,
+    #[serde(default)]
+    slope_processor_time_nanos: Option<f64>,
+    #[serde(default)]
+    std_dev_processor_time_nanos: Option<f64>,
+    #[serde(default)]
+    interval_low_processor_time_nanos: Option<f64>,
+    #[serde(default)]
+    interval_high_processor_time_nanos: Option<f64>,
 }
 
 #[cfg(test)]
@@ -106,6 +126,9 @@ mod tests {
 
     const READ_CELL_FIXTURE: &str =
         include_str!("../../tests/fixtures/all_the_time/read_cell.json");
+
+    const READ_CELL_DISPERSION_FIXTURE: &str =
+        include_str!("../../tests/fixtures/all_the_time/read_cell_dispersion.json");
 
     #[test]
     fn parses_identity_from_operation_name() {
@@ -135,14 +158,42 @@ mod tests {
     }
 
     #[test]
-    fn processor_time_carries_no_dispersion() {
-        // `all_the_time` reports only a mean, so no interval or standard deviation
-        // is available; analysis falls back to rank-testing across regimes.
+    fn output_without_dispersion_carries_no_interval() {
+        // Output that records only a mean (no slope or interval) carries no
+        // dispersion, so the point estimate falls back to the mean and analysis
+        // relies on rank-testing across regimes rather than interval overlap.
         let record = parse_all_the_time_operation(READ_CELL_FIXTURE).unwrap();
         let metric = &record.metrics[0];
         assert_eq!(metric.std_dev, None);
         assert_eq!(metric.interval_low, None);
         assert_eq!(metric.interval_high, None);
+    }
+
+    #[test]
+    fn records_dispersion_when_present() {
+        use std::f64::consts::FRAC_1_SQRT_2;
+
+        let record = parse_all_the_time_operation(READ_CELL_DISPERSION_FIXTURE).unwrap();
+        let metric = &record.metrics[0];
+        // The fixture's spans have a sample standard deviation of exactly
+        // sqrt(0.5) = 1/sqrt(2) nanoseconds.
+        assert_eq!(metric.std_dev, Some(FRAC_1_SQRT_2));
+        assert_eq!(metric.interval_low, Some(19.5));
+        assert_eq!(metric.interval_high, Some(20.5));
+    }
+
+    #[test]
+    fn prefers_the_slope_over_the_mean() {
+        // A slope distinct from the mean proves the slope is the chosen point
+        // estimate, matching the Criterion adapter's preference.
+        let json = concat!(
+            "{\"operation\":\"op\",\"mean_processor_time_nanos\":20,",
+            "\"slope_processor_time_nanos\":33.5,",
+            "\"interval_low_processor_time_nanos\":30.0,",
+            "\"interval_high_processor_time_nanos\":37.0}"
+        );
+        let record = parse_all_the_time_operation(json).unwrap();
+        assert_eq!(record.metrics[0].value, 33.5);
     }
 
     #[test]

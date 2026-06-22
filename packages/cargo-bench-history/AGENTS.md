@@ -149,7 +149,8 @@ being analyzed:
   points (persistence — a single blip never flags). A deterministic step flags on
   persistence alone (any non-zero step is real). A noisy change additionally requires
   a significant **Mann–Whitney** rank test, non-overlapping regime CIs (when present —
-  `all_the_time` reports no CI, so that gate is skipped for it),
+  both Criterion and `all_the_time` report a bootstrap CI, so the gate applies to
+  both; only older mean-only output skips it),
   and a practical-magnitude floor; a noisy drift also clears a noise floor of twice
   the median CI half-width. Noisy candidates pass a **Benjamini–Hochberg** FDR filter;
   deterministic ones bypass it. **Pettitt only locates the split — its analytic
@@ -442,10 +443,14 @@ Four benchmark engines are supported, each behind a pure parser in `bench/`:
   dispersion (treated like Callgrind for change-point detection).
 * `bench::all_the_time` parses a flat `target/all_the_time/<operation>.json` file
   into a `ResultRecord` with a single `ProcessorTime` (`processor_time`, unit
-  `ns`) metric from `mean_processor_time_nanos`. `package` is `None`. Processor
-  time is hardware-dependent and noisy → partitioned by the host triple and a
-  machine key; it carries no CI (only a mean), so the noise detector skips the
-  CI-non-overlap gate and relies on the Mann-Whitney/Mann-Kendall tests.
+  `ns`) metric. It prefers the through-origin `slope_processor_time_nanos` as the
+  point estimate (falling back to `mean_processor_time_nanos`) and records the
+  bootstrap confidence interval and standard deviation on the metric, mirroring
+  the Criterion adapter. `package` is `None`. Processor time is hardware-dependent
+  and noisy → partitioned by the host triple and a machine key; because it now
+  carries a CI, the noise detector applies the CI-non-overlap gate to it (older
+  mean-only output without an interval falls back to the
+  Mann-Whitney/Mann-Kendall tests).
 
 There is no engine configuration. `run` and `backfill` invoke `cargo bench` once
 with the combined environment every supported engine needs
@@ -538,10 +543,14 @@ cases that harvest into one result set as separate records.
 
 It accepts `--alloc-tracker OPERATION=BYTES/COUNT` (repeatable), which writes a
 flat `<target-root>/alloc_tracker/<OPERATION>.json` reporting `BYTES` mean bytes
-and `COUNT` mean allocations per iteration, and `--all-the-time OPERATION=NANOS`
-(repeatable), which writes a flat `<target-root>/all_the_time/<OPERATION>.json`
-reporting `NANOS` mean processor-time nanoseconds per iteration — mirroring the
-real crates' one-file-per-operation auto-emitted output.
+and `COUNT` mean allocations per iteration, and
+`--all-the-time OPERATION=NANOS[@LOW:HIGH]` (repeatable), which writes a flat
+`<target-root>/all_the_time/<OPERATION>.json` reporting `NANOS` mean (and slope)
+processor-time nanoseconds per iteration. An optional `@LOW:HIGH` suffix also
+records a bootstrap confidence interval (plus a matching standard deviation, span
+count and min/max), exercising the adapter's dispersion path and the noise
+detector's CI-non-overlap gate on processor time. Both mirror the real crates'
+one-file-per-operation auto-emitted output.
 
 Finally, `--fail-if-exists PATH` exits with code 1 and writes no output when
 `PATH` (relative to the working directory) exists. Backfill runs each engine in a

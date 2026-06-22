@@ -25,6 +25,7 @@ dependencies = [
  "criterion",
  "folo_utils",
  "mutants",
+ "rand 0.10.1",
  "serde",
  "serde_json",
  "static_assertions",

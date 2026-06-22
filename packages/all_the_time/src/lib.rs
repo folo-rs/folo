@@ -45,6 +45,13 @@
 //! with operation names sanitized to be filesystem-safe. A human-readable
 //! summary is also printed to stdout.
 //!
+//! Each JSON file records the total and mean per-iteration processor time
+//! together with bootstrap dispersion statistics over the operation's measured
+//! spans: a through-origin slope point estimate, the standard deviation, a 95%
+//! bootstrap confidence interval, and the observed minimum and maximum. The
+//! bootstrap uses a fixed seed, so the confidence interval is reproducible across
+//! runs of identical measurements. The stdout summary remains mean-only.
+//!
 //! These outputs are produced automatically, so a typical benchmark only needs
 //! to create a session and record work. Either output can be suppressed:
 //!
@@ -142,6 +149,7 @@ mod pal;
 mod process_span;
 mod report;
 mod session;
+mod statistics;
 mod target_output;
 mod thread_span;
 
@@ -151,4 +159,5 @@ pub(crate) use operation_metrics::*;
 pub use process_span::*;
 pub use report::*;
 pub use session::*;
+pub(crate) use statistics::*;
 pub use thread_span::*;

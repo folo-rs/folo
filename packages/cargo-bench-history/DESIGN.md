@@ -123,18 +123,27 @@ The workspace-local `all_the_time` crate measures processor (CPU) time. Its
 `target/all_the_time/<operation>.json`:
 
 * `{ operation, total_iterations, total_processor_time_nanos,
-  mean_processor_time_nanos }` (all `u64`).
-* The adapter (`bench/all_the_time.rs`) reads `operation` and
-  `mean_processor_time_nanos`, mapping it to a single `ProcessorTime`
-  (`processor_time`, unit `ns`) metric.
+  mean_processor_time_nanos, span_count, slope_processor_time_nanos,
+  std_dev_processor_time_nanos, interval_low_processor_time_nanos,
+  interval_high_processor_time_nanos, min_processor_time_nanos,
+  max_processor_time_nanos }`. The `total_*`/`mean_*` counts are `u64`; the
+  dispersion fields (slope, standard deviation, the bootstrap confidence
+  interval bounds, and min/max) are `f64`.
+* The adapter (`bench/all_the_time.rs`) reads `operation`, prefers the
+  through-origin `slope_processor_time_nanos` as the per-iteration point estimate
+  (falling back to `mean_processor_time_nanos`), and records the confidence
+  interval and standard deviation on the metric — mapping it to a single
+  `ProcessorTime` (`processor_time`, unit `ns`) metric.
 
 Key facts:
 
 * Processor time is **hardware-dependent and noisy** (like Criterion wall time) →
   partitions by machine key and is analysed with the noise-aware statistics.
-* `all_the_time` reports only a mean — no confidence interval. The noise detector
-  falls back gracefully to the Mann-Kendall trend and the practical floor,
-  skipping the CI-non-overlap gate when bounds are absent.
+* `all_the_time` reports a bootstrap confidence interval over its measured spans
+  (mirroring Criterion), so the noise detector applies the CI-non-overlap gate to
+  processor time the same way it does for wall time. Older output that records
+  only a mean (no interval) still parses, in which case the detector falls back to
+  the Mann-Kendall trend and the practical floor.
 * `BenchmarkId.package` is `None`; the operation name identifies the series.
 
 ### 2.5 Consequence for the data model
@@ -843,12 +852,12 @@ cannot serve both well:
   appropriate (a perfect integer step over few points has a *high* nonparametric
   p-value — see below).
 - **Noisy engines (Criterion: wall time; `all_the_time`: processor time).** Output
-  is a noisy estimate, sometimes with a reported standard deviation and confidence
-  interval (Criterion) and sometimes only a mean (`all_the_time`). A change must
-  clear both a statistical-significance bar *and* a practical-magnitude bar, and the
-  family of tests across all series is corrected for multiple comparisons. When no
-  confidence interval is reported, the CI-non-overlap gate is skipped and the
-  significance decision rests on the Mann-Whitney/Mann-Kendall tests alone.
+  is a noisy estimate carrying a reported standard deviation and bootstrap
+  confidence interval. A change must clear both a statistical-significance bar *and*
+  a practical-magnitude bar, and the family of tests across all series is corrected
+  for multiple comparisons. When an engine reports no confidence interval (older
+  mean-only output), the CI-non-overlap gate is skipped and the significance
+  decision rests on the Mann-Whitney/Mann-Kendall tests alone.
 
 `MetricKind::WallTime` and `MetricKind::ProcessorTime` are the noisy kinds
 (`is_deterministic` returns `false` for them and `true` for every Callgrind and

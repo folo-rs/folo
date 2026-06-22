@@ -19,6 +19,13 @@ struct OperationOutput<'a> {
     total_iterations: u64,
     total_processor_time_nanos: u64,
     mean_processor_time_nanos: u64,
+    span_count: u64,
+    slope_processor_time_nanos: f64,
+    std_dev_processor_time_nanos: f64,
+    interval_low_processor_time_nanos: f64,
+    interval_high_processor_time_nanos: f64,
+    min_processor_time_nanos: f64,
+    max_processor_time_nanos: f64,
 }
 
 impl Report {
@@ -75,9 +82,11 @@ impl Report {
         let mut file_names: HashMap<String, &str> = HashMap::new();
         let mut outputs: Vec<(PathBuf, String)> = Vec::new();
         for (name, operation) in self.operations() {
-            if operation.total_iterations() == 0 {
+            let Some(statistics) = operation.statistics() else {
+                // Registered but never measured operations have no spans and thus
+                // no statistics, so they leave no output file behind.
                 continue;
-            }
+            };
 
             let file_name = format!("{}.json", folo_utils::sanitize_file_name(name));
             if let Some(previous) = file_names.insert(file_name.clone(), name) {
@@ -93,6 +102,13 @@ impl Report {
                 total_iterations: operation.total_iterations(),
                 total_processor_time_nanos: duration_as_nanos(operation.total_processor_time()),
                 mean_processor_time_nanos: duration_as_nanos(operation.mean()),
+                span_count: statistics.span_count,
+                slope_processor_time_nanos: statistics.slope_nanos,
+                std_dev_processor_time_nanos: statistics.std_dev_nanos,
+                interval_low_processor_time_nanos: statistics.interval_low_nanos,
+                interval_high_processor_time_nanos: statistics.interval_high_nanos,
+                min_processor_time_nanos: statistics.min_nanos,
+                max_processor_time_nanos: statistics.max_nanos,
             };
 
             let json = serde_json::to_string_pretty(&output)
@@ -204,6 +220,33 @@ mod tests {
                 .get("mean_processor_time_nanos")
                 .and_then(Value::as_u64),
             Some(20_000_000)
+        );
+        // A single recorded span yields a span count of one, a slope equal to the
+        // per-iteration mean, and a degenerate interval that collapses onto it.
+        assert_eq!(value.get("span_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            value
+                .get("slope_processor_time_nanos")
+                .and_then(Value::as_f64),
+            Some(20_000_000.0)
+        );
+        assert_eq!(
+            value
+                .get("interval_low_processor_time_nanos")
+                .and_then(Value::as_f64),
+            Some(20_000_000.0)
+        );
+        assert_eq!(
+            value
+                .get("interval_high_processor_time_nanos")
+                .and_then(Value::as_f64),
+            Some(20_000_000.0)
+        );
+        assert_eq!(
+            value
+                .get("std_dev_processor_time_nanos")
+                .and_then(Value::as_f64),
+            Some(0.0)
         );
     }
 

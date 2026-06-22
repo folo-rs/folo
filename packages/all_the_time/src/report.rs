@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration;
 
+use crate::{OperationMetrics, OperationStatistics};
+
 /// Thread-safe processor time tracking report.
 ///
 /// A `Report` contains the captured processor time statistics from a [`Session`](crate::Session)
@@ -68,8 +70,7 @@ pub struct Report {
 /// Processor time statistics for a single operation in a report.
 #[derive(Clone, Debug)]
 pub struct ReportOperation {
-    total_processor_time: Duration,
-    total_iterations: u64,
+    metrics: OperationMetrics,
 }
 
 impl Report {
@@ -84,17 +85,14 @@ impl Report {
 
     /// Creates a report from shared operation data.
     #[must_use]
-    pub(crate) fn from_operation_data(
-        operation_data: &HashMap<String, crate::operation_metrics::OperationMetrics>,
-    ) -> Self {
+    pub(crate) fn from_operation_data(operation_data: &HashMap<String, OperationMetrics>) -> Self {
         let report_operations = operation_data
             .iter()
             .map(|(name, data)| {
                 (
                     name.clone(),
                     ReportOperation {
-                        total_processor_time: data.total_processor_time,
-                        total_iterations: data.total_iterations,
+                        metrics: data.clone(),
                     },
                 )
             })
@@ -149,17 +147,7 @@ impl Report {
         for (name, b_op) in &b.operations {
             merged_operations
                 .entry(name.clone())
-                .and_modify(|a_op| {
-                    a_op.total_processor_time = a_op
-                        .total_processor_time
-                        .checked_add(b_op.total_processor_time)
-                        .expect("merging processor times overflows Duration - this indicates an unrealistic scenario");
-
-                    a_op.total_iterations = a_op
-                        .total_iterations
-                        .checked_add(b_op.total_iterations)
-                        .expect("merging iteration counts overflows u64 - this indicates an unrealistic scenario");
-                })
+                .and_modify(|a_op| a_op.metrics.extend_from(&b_op.metrics))
                 .or_insert_with(|| b_op.clone());
         }
 
@@ -184,7 +172,7 @@ impl Report {
     /// Whether there is any recorded activity in this report.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.operations.is_empty() || self.operations.values().all(|op| op.total_iterations == 0)
+        self.operations.is_empty() || self.operations.values().all(|op| op.metrics.is_empty())
     }
 
     /// Returns an iterator over the operation names and their statistics.
@@ -229,28 +217,27 @@ impl ReportOperation {
     /// Returns the total processor time across all iterations for this operation.
     #[must_use]
     pub fn total_processor_time(&self) -> Duration {
-        self.total_processor_time
+        self.metrics.total_processor_time()
     }
 
     /// Returns the total number of iterations recorded for this operation.
     #[must_use]
     pub fn total_iterations(&self) -> u64 {
-        self.total_iterations
+        self.metrics.total_iterations()
     }
 
     /// Calculates the mean processor time per iteration.
     #[must_use]
     pub fn mean(&self) -> Duration {
-        if self.total_iterations == 0 {
-            Duration::ZERO
-        } else {
-            Duration::from_nanos_u128(
-                self.total_processor_time
-                    .as_nanos()
-                    .checked_div(u128::from(self.total_iterations))
-                    .expect("guarded by if condition"),
-            )
-        }
+        self.metrics.mean()
+    }
+
+    /// Computes dispersion statistics over the recorded spans.
+    ///
+    /// Returns `None` when no spans were recorded.
+    #[must_use]
+    pub(crate) fn statistics(&self) -> Option<OperationStatistics> {
+        self.metrics.statistics()
     }
 }
 
@@ -263,7 +250,7 @@ impl fmt::Display for ReportOperation {
 #[cfg_attr(coverage_nightly, coverage(off))] // Too annoying to test every question mark operator.
 impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.operations.values().all(|op| op.total_iterations == 0) {
+        if self.operations.values().all(|op| op.metrics.is_empty()) {
             writeln!(f, "No processor time statistics captured.")?;
         } else {
             writeln!(f, "Processor time statistics:")?;
@@ -440,7 +427,7 @@ mod tests {
 
         assert_eq!(merged.operations.len(), 1);
         let merged_op = merged.operations.get("test").unwrap();
-        assert_eq!(merged_op.total_iterations, 8); // 5 + 3
+        assert_eq!(merged_op.total_iterations(), 8); // 5 + 3
     }
 
     #[test]

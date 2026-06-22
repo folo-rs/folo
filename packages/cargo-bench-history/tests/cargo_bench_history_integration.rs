@@ -1077,6 +1077,106 @@ async fn analyze_all_the_time_jitter_is_not_flagged() {
     );
 }
 
+/// A sustained processor-time step whose per-regime confidence intervals are
+/// tight and non-overlapping clears the noise detector's CI gate and is reported
+/// as a regression. This proves the bootstrap confidence interval the
+/// `all_the_time` engine now records flows through the adapter into the
+/// CI-non-overlap gate for processor time.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn analyze_all_the_time_step_with_disjoint_intervals_is_a_regression() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // Five points near 100ns then five near 130ns, each with a tight +/-2ns
+    // confidence interval so the two regimes' intervals do not overlap.
+    for (date, label, value) in [
+        ("2024-07-01", "s1", 98.0),
+        ("2024-07-02", "s2", 100.0),
+        ("2024-07-03", "s3", 102.0),
+        ("2024-07-04", "s4", 99.0),
+        ("2024-07-05", "s5", 101.0),
+        ("2024-07-06", "s6", 128.0),
+        ("2024-07-07", "s7", 130.0),
+        ("2024-07-08", "s8", 132.0),
+        ("2024-07-09", "s9", 129.0),
+        ("2024-07-10", "s10", 131.0),
+    ] {
+        workspace.seed_all_the_time_with_interval(date, label, "mk", "read_cell", value, 2.0);
+    }
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(
+        regressions, 1,
+        "a sustained step with disjoint intervals is a regression: {report}"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(parsed["findings"][0]["method"], "change_point", "{report}");
+    assert_eq!(parsed["findings"][0]["direction"], "regression", "{report}");
+    assert_eq!(
+        parsed["findings"][0]["metric"], "processor_time",
+        "{report}"
+    );
+}
+
+/// The same processor-time step values, but with confidence intervals so wide
+/// that the two regimes overlap, is suppressed: the CI-non-overlap gate rejects
+/// it even though the point medians separate cleanly. This is the companion to
+/// [`analyze_all_the_time_step_with_disjoint_intervals_is_a_regression`] — only
+/// the recorded dispersion differs, proving the gate is active on processor time.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn analyze_all_the_time_step_with_overlapping_intervals_is_suppressed() {
+    let workspace = Workspace::repo(&storage_only_config());
+    for (date, label, value) in [
+        ("2024-08-01", "o1", 98.0),
+        ("2024-08-02", "o2", 100.0),
+        ("2024-08-03", "o3", 102.0),
+        ("2024-08-04", "o4", 99.0),
+        ("2024-08-05", "o5", 101.0),
+        ("2024-08-06", "o6", 128.0),
+        ("2024-08-07", "o7", 130.0),
+        ("2024-08-08", "o8", 132.0),
+        ("2024-08-09", "o9", 129.0),
+        ("2024-08-10", "o10", 131.0),
+    ] {
+        // A +/-60ns interval makes the ~100ns and ~130ns regimes overlap.
+        workspace.seed_all_the_time_with_interval(date, label, "mk", "read_cell", value, 60.0);
+    }
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(
+        regressions, 0,
+        "an overlapping-interval step is suppressed by the CI gate: {report}"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert!(
+        parsed["findings"]
+            .as_array()
+            .expect("a findings array")
+            .is_empty(),
+        "wide overlapping intervals suppress the step entirely: {report}"
+    );
+}
+
 // ===========================================================================
 // Real-adapter `analyze` scenarios exercising git topology.
 //
@@ -3203,6 +3303,30 @@ async fn run_all_the_time_is_partitioned_by_machine_key() {
     assert_eq!(processor_time.unit.as_deref(), Some("ns"));
 }
 
+/// An `all_the_time` run whose emitted output carries a bootstrap confidence
+/// interval stores that dispersion on the metric, so the noise detector can
+/// later apply its interval-overlap gate to processor time. This proves the
+/// dispersion fields flow from the engine's JSON through the harvest and adapter
+/// into the stored result set, end to end through the real adapter.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn run_all_the_time_records_dispersion() {
+    let workspace = Workspace::new(&storage_only_config())
+        .with_bench(&["--all-the-time", "read_cell=20@19:21"]);
+
+    workspace
+        .drive(&["run", "--target-triple", "x86_64-unknown-linux-gnu"])
+        .await
+        .expect("run should succeed");
+
+    let (_key, set) = workspace.single_object();
+    let processor_time = metric_named(&set.results[0], "processor_time");
+    assert_eq!(processor_time.value, 20.0);
+    assert_eq!(processor_time.interval_low, Some(19.0));
+    assert_eq!(processor_time.interval_high, Some(21.0));
+    assert_eq!(processor_time.std_dev, Some(1.0));
+}
+
 /// `--machine-key` overrides the machine fingerprint in a Criterion partition.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
@@ -4608,6 +4732,35 @@ impl Workspace {
             &time_result_set(effective.as_second(), &sha, operation, nanos),
         );
     }
+
+    /// Seeds one clean `all_the_time` result set for `operation`, like
+    /// [`Self::seed_all_the_time`], but additionally recording a confidence
+    /// interval of `nanos` ± `half_width` so the noise detector's
+    /// CI-non-overlap gate has dispersion to compare.
+    fn seed_all_the_time_with_interval(
+        &self,
+        date: &str,
+        label: &str,
+        machine: &str,
+        operation: &str,
+        nanos: f64,
+        half_width: f64,
+    ) {
+        let sha = self.commit(label);
+        let effective: Timestamp = format!("{date}T00:00:00Z").parse().unwrap();
+        let key =
+            format!("v2/testproj/all_the_time/x86_64-unknown-linux-gnu/{machine}/{sha}/clean.json");
+        self.seed(
+            &key,
+            &time_result_set_with_dispersion(
+                effective.as_second(),
+                &sha,
+                operation,
+                nanos,
+                half_width,
+            ),
+        );
+    }
 }
 
 /// Builds a Callgrind result set with two records — `alpha::bench/wide` and
@@ -4760,7 +4913,48 @@ fn time_result_set(effective: i64, commit: &str, operation: &str, value: f64) ->
     ResultSet::new(context, vec![record])
 }
 
-/// The `Ir` (instruction count) metric value of a record.
+/// Builds an `all_the_time` result set for `operation` carrying a single
+/// `processor_time` metric at `value` nanoseconds, like [`time_result_set`],
+/// but additionally recording a confidence interval of `value` ± `half_width`
+/// (and a matching standard deviation) so the noise detector can apply its
+/// CI-non-overlap gate to processor time.
+fn time_result_set_with_dispersion(
+    effective: i64,
+    commit: &str,
+    operation: &str,
+    value: f64,
+    half_width: f64,
+) -> ResultSet {
+    let time = Timestamp::from_second(effective).expect("seconds within range");
+    let mut git = GitInfo::default();
+    git.commit = Some(format!("{commit}full"));
+    git.short_commit = Some(commit.to_owned());
+    git.branch = Some("main".to_owned());
+    let context = RunContext::new(
+        Timestamps::new(time, time, time),
+        git,
+        CiInfo::default(),
+        ToolchainInfo::default(),
+        TOOL_VERSION.to_owned(),
+    );
+    let record = ResultRecord::new(
+        BenchmarkId::new(None, operation.to_owned(), None, None),
+        vec![
+            Metric::new(
+                "processor_time".to_owned(),
+                MetricKind::ProcessorTime,
+                value,
+                Some("ns".to_owned()),
+            )
+            .with_dispersion(
+                Some(half_width),
+                Some(value - half_width),
+                Some(value + half_width),
+            ),
+        ],
+    );
+    ResultSet::new(context, vec![record])
+}
 fn ir_of(record: &ResultRecord) -> f64 {
     record
         .metrics
