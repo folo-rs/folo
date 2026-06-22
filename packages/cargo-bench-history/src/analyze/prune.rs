@@ -11,10 +11,10 @@
 //! every commit whose clean run it removes); `--dirty` restricts it to dirty
 //! (uncommitted-tree) snapshots and `--clean` to clean runs (and their blessings).
 //! Because deleting clean history is destructive, the default and `--clean` scopes
-//! refuse an un-narrowed selection unless `--all` is given: narrow with a facet,
-//! `--commit`, `--since`, or `--until`. `--dirty` discards only ephemeral data and
-//! is exempt from that guard. `--dry-run` previews what would be removed without
-//! deleting anything.
+//! refuse an un-narrowed selection unless `--all` is given: narrow with a facet, a
+//! `<commit>` argument, `--since`, or `--until`. `--dirty` discards only ephemeral
+//! data and is exempt from that guard. `--dry-run` previews what would be removed
+//! without deleting anything.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
@@ -133,19 +133,20 @@ where
 
     // Guard the destructive clean-history scopes: refuse an un-narrowed selection
     // unless `--all` confirms it. `--dirty` only discards ephemeral data, so it is
-    // exempt. A facet, `--commit`, `--since`, or `--until` all narrow the range.
+    // exempt. A facet, a `<commit>` argument, `--since`, or `--until` all narrow
+    // the range.
     let narrowed = is_narrowed(options, since.is_some(), until.is_some());
     if scope.touches_clean() && !narrowed && !options.all {
         return Err(RunError::Analyze {
             message: "prune would delete clean benchmark history across the entire selected \
                       range. Narrow the selection with a facet (--engine / --target-triple / \
-                      --machine-key), --commit, --since, or --until, or pass --all to delete \
-                      everything in range."
+                      --machine-key), a <commit> argument, --since, or --until, or pass --all \
+                      to delete everything in range."
                 .to_owned(),
         });
     }
 
-    let facets = resolve_facets(&selection, auto)?;
+    let facets = resolve_facets(&selection, Some(auto))?;
     let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
 
     let ResolvedHistory {
@@ -176,7 +177,7 @@ where
         };
         if !commit_matches(&parsed.commit, &options.commit) {
             reporter.note(&format!(
-                "skipping {key}: commit {} is not in the --commit selection",
+                "skipping {key}: commit {} does not match the requested <commit> arguments",
                 parsed.commit
             ));
             continue;
@@ -298,7 +299,7 @@ where
 }
 
 /// Whether the selection is narrowed enough to permit a clean-history prune
-/// without `--all`: any discriminant facet, an explicit `--commit`, or a
+/// without `--all`: any discriminant facet, an explicit `<commit>` argument, or a
 /// `--since`/`--until` time bound restricts the range.
 fn is_narrowed(options: &PruneOptions, since: bool, until: bool) -> bool {
     facets_present(options) || !options.commit.is_empty() || since || until
@@ -320,7 +321,7 @@ fn facet_narrows(values: &[String]) -> bool {
         .any(|value| !value.eq_ignore_ascii_case("all"))
 }
 
-/// Whether a commit matches the `--commit` selection (case-insensitive prefix
+/// Whether a commit matches the `<commit>` selection (case-insensitive prefix
 /// match, so a short SHA selects the full one). An empty selection matches every
 /// commit.
 fn commit_matches(commit: &str, filters: &[String]) -> bool {
@@ -1249,7 +1250,7 @@ mod tests {
             false,
             false,
         ));
-        // An explicit `--commit` alone narrows it.
+        // An explicit `<commit>` argument alone narrows it.
         assert!(is_narrowed(
             &PruneOptions {
                 commit: vec!["abc".to_owned()],

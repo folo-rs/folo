@@ -316,7 +316,9 @@ directly.)
   * Omitting a facet **auto-detects the current machine**: `--target-triple`
     defaults to the host triple and `--machine-key` to the host fingerprint, so a
     bare `analyze` reports *this* machine's data. `--engine` has no machine-derived
-    value, so its auto-detected default is *all engines*.
+    value, so its auto-detected default is *all engines*. (Exception: the
+    `list discriminants` discovery catalog defaults to *every* stored partition, not
+    the current machine — see §8.5.)
   * Repeating a facet unions its values (`--engine criterion --engine callgrind`).
   * `all` (e.g. `--machine-key all`) removes the filter for that dimension —
     the explicit way to widen past the current machine. It is rejected in
@@ -588,11 +590,11 @@ project's stored data means checking out that project's repo and pointing `analy
 at it.)
 
 **Selecting the discriminant sets.** `list discriminants` prints the sets
-present (§4.3). `--engine`, `--target-triple`, `--machine-key` filter them — each
-repeatable, each accepting `all`, each defaulting to the current machine (engine
-to *all engines*) when omitted (§4.3); every matched set is analyzed independently
-and produces its own report (so a Windows and a Linux nightly pool come out as two
-reports).
+present (§4.3), unfiltered by default. When *analyzing*, `--engine`,
+`--target-triple`, `--machine-key` filter the sets — each repeatable, each accepting
+`all`, each defaulting to the current machine (engine to *all engines*) when omitted
+(§4.3); every matched set is analyzed independently and produces its own report (so a
+Windows and a Linux nightly pool come out as two reports).
 
 **Selecting the commits (the query model).** Two refs frame the analysis:
 * `--context <ref>` — the **target** whose history is analyzed (default: current
@@ -772,7 +774,12 @@ across the analysis window.
 present under `v2/<project>/` (engine / target triple / machine key) **without
 requiring a repository** (§4.3). This is where the storage-set listing lives,
 separate from the repository-driven data-set preview, so it ignores the timeline
-and data-filtering groups.
+and data-filtering groups. Because it is a **discovery catalog**, it is the one
+query view that does *not* default omitted facets to the current machine — with no
+facets it lists every stored partition (so a user can find triples and machine keys
+they do not already know); a facet still narrows it. `--all` is meaningful only for
+`list blessings`; passing it to `runs` or `discriminants` is a clear error rather
+than a silently ignored flag.
 
 ### 8.6 `cargo bench-history prune`
 

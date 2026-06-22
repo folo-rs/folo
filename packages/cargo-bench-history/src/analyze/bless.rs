@@ -172,7 +172,7 @@ where
     let working_tree_dirty = git.is_dirty().await.map_err(RunError::Io)?;
 
     let selection = Selection::from_bless(options);
-    let facets = resolve_facets(&selection, auto)?;
+    let facets = resolve_facets(&selection, Some(auto))?;
     let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
     let clean_at_head: Vec<(String, ParsedKey)> = candidates
         .into_iter()
@@ -249,7 +249,7 @@ where
     let short = short_sha(&head);
 
     let selection = Selection::from_unbless(options);
-    let facets = resolve_facets(&selection, auto)?;
+    let facets = resolve_facets(&selection, Some(auto))?;
     let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
     let blessings_at_head: Vec<String> = candidates
         .into_iter()

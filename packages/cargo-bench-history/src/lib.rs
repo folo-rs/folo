@@ -102,7 +102,9 @@
 //!   per discriminant set.
 //! * `list discriminants` — the discriminant sets present in storage (no
 //!   repository required), for discovering which engines, triples, and machine
-//!   keys have data before scoping an analysis.
+//!   keys have data before scoping an analysis. This is a discovery catalog, so it
+//!   lists *every* stored partition regardless of the current machine; pass a facet
+//!   to narrow it.
 //! * `list blessings` — the blessings recorded at the current commit, or — with
 //!   `--all` — the most recent blessing of every benchmark across the window.
 //!
@@ -137,7 +139,8 @@
 //! * **Discriminant selection** (`--engine`, `--target-triple`, `--machine-key`) —
 //!   chooses which discriminant sets to operate on. Each facet is repeatable
 //!   (union of values) and defaults to the current machine's value when omitted
-//!   (`--engine` defaults to every engine). The literal `all` removes the filter
+//!   (`--engine` defaults to every engine; `list discriminants` is a catalog and
+//!   defaults to every partition). The literal `all` removes the filter
 //!   for that dimension, e.g. `--machine-key all` spans every machine.
 //! * **Timeline selection** (`--context`, `--base`, `--since`, `--until`) —
 //!   `--context` is the ref whose history is analyzed (default `HEAD`); `--base` is

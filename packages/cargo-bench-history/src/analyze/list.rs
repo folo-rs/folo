@@ -9,7 +9,7 @@
 //! comparable discriminant set and reports the run, series, and per-commit counts
 //! of each — letting a user inspect the exact data range an analysis would cover.
 //!
-//! `list --discriminants` lists the distinct discriminant sets present in storage
+//! `list discriminants` lists the distinct discriminant sets present in storage
 //! and, like that listing, needs no repository.
 
 use std::collections::BTreeMap;
@@ -97,13 +97,24 @@ where
     S: Storage,
 {
     let format = parse_format(options.format.as_deref())?;
+    if options.all && options.subject != ListSubject::Blessings {
+        return Err(RunError::Analyze {
+            message: "--all applies only to `list blessings`, where it widens the view from \
+                      the current commit to the most recent blessing of every benchmark in \
+                      the window; it has no meaning for `list runs` or `list discriminants`"
+                .to_owned(),
+        });
+    }
     let selection = Selection::from_list(options);
 
     match options.subject {
         ListSubject::Discriminants => {
             // The discriminant listing is a facet-only view of storage; it never
-            // resolves git topology, so it works without a repository.
-            let facets = resolve_facets(&selection, auto)?;
+            // resolves git topology, so it works without a repository. It is a
+            // discovery catalog, so omitted facets default to no filter (every
+            // stored partition) rather than the current machine — pass `None` so a
+            // user can see machine keys and triples they do not already know.
+            let facets = resolve_facets(&selection, None)?;
             let candidates =
                 facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
             let mut sets: Vec<DiscriminantSet> = candidates
@@ -447,7 +458,8 @@ fn append_hint_and_warning(lines: &mut Vec<String>, hint: Option<&str>, warning:
     }
 }
 
-/// Renders the distinct discriminant sets present in storage for `--discriminants`.
+/// Renders the distinct discriminant sets present in storage for the
+/// `discriminants` subject.
 fn render_discriminants(sets: &[DiscriminantSet], format: ReportFormat) -> String {
     match format {
         ReportFormat::Json => {
@@ -509,7 +521,7 @@ fn render_discriminants(sets: &[DiscriminantSet], format: ReportFormat) -> Strin
     }
 }
 
-/// One blessing row in a `list --blessings` report.
+/// One blessing row in a `list blessings` report.
 #[derive(Clone, Debug)]
 struct BlessingEntry {
     /// The comparable partition the blessing lives in.
@@ -530,7 +542,7 @@ struct BlessingEntry {
     reason: Option<String>,
 }
 
-/// Lists blessings for `list --blessings`.
+/// Lists blessings for `list blessings`.
 ///
 /// Default: every blessing recorded at the current commit (HEAD) in the
 /// facet-selected sets — the sidecars a fresh `unbless` would remove. `--all`: the
@@ -604,7 +616,7 @@ where
                       Run inside a repository (or pass --repo)."
                 .to_owned(),
         })?;
-    let facets = resolve_facets(selection, auto)?;
+    let facets = resolve_facets(selection, Some(auto))?;
     let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
 
     let mut entries = Vec::new();
@@ -1328,7 +1340,7 @@ mod tests {
     }
 
     #[test]
-    fn list_discriminants_defaults_to_the_current_machine_then_widens_with_all() {
+    fn list_discriminants_shows_all_sets_by_default_and_facets_narrow() {
         // The discriminants index never requires a repository.
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("c0"), &two_metric_set(0, "c0"));
@@ -1339,8 +1351,9 @@ mod tests {
         );
         let git = FakeGitHistory::new(); // No repo, but listing does not need one.
 
-        // With no facets the auto-detected triple/machine (linux/synthetic) keep
-        // only the matching set; the windows/m1 partition is filtered out.
+        // With no facets the catalog is unfiltered: it shows every stored partition
+        // — including the windows/m1 set that does not match the current machine —
+        // so a user can discover triples and machine keys they do not already know.
         let opts = ListOptions {
             subject: ListSubject::Discriminants,
             format: Some("json".to_owned()),
@@ -1351,29 +1364,63 @@ mod tests {
         let sets = parsed.as_array().expect("a JSON array of sets");
         assert_eq!(
             sets.len(),
-            1,
-            "auto-detect keeps the current machine: {report}"
+            2,
+            "the default catalog lists every set: {report}"
         );
-        assert_eq!(sets[0]["engine"], "callgrind", "{report}");
-
-        // Widening the triple and machine facets with `all` reveals both partitions.
-        let opts = ListOptions {
-            subject: ListSubject::Discriminants,
-            target_triple: vec!["all".to_owned()],
-            machine_key: vec!["all".to_owned()],
-            format: Some("json".to_owned()),
-            ..options()
-        };
-        let report = list(&storage, &git, &opts);
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-        let sets = parsed.as_array().expect("a JSON array of sets");
-        assert_eq!(sets.len(), 2, "{report}");
         let engines: Vec<&str> = sets
             .iter()
             .map(|set| set["engine"].as_str().unwrap())
             .collect();
         assert!(engines.contains(&"callgrind"), "{report}");
         assert!(engines.contains(&"criterion"), "{report}");
+
+        // An explicit facet still narrows the catalog. (`--engine` is the facet
+        // that always discriminates: synthetic partitions are exempt from the
+        // triple and machine-key filters, but never from the engine filter.)
+        let opts = ListOptions {
+            subject: ListSubject::Discriminants,
+            engine: vec!["criterion".to_owned()],
+            format: Some("json".to_owned()),
+            ..options()
+        };
+        let report = list(&storage, &git, &opts);
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let sets = parsed.as_array().expect("a JSON array of sets");
+        assert_eq!(
+            sets.len(),
+            1,
+            "an explicit engine narrows to its set: {report}"
+        );
+        assert_eq!(sets[0]["engine"], "criterion", "{report}");
+    }
+
+    #[test]
+    fn list_runs_rejects_the_blessings_only_all_switch() {
+        let storage = MemoryStorage::new();
+        let git = linear_git();
+        let opts = ListOptions {
+            subject: ListSubject::Runs,
+            all: true,
+            ..options()
+        };
+        let error = block_on(list_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &opts,
+            &auto(),
+            Timestamp::from_second(0).expect("epoch is valid"),
+            &RecordingReporter::new(),
+        ))
+        .expect_err("--all is rejected for the runs subject");
+        match error {
+            RunError::Analyze { message } => {
+                assert!(message.contains("--all"), "{message}");
+                assert!(message.contains("list blessings"), "{message}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]

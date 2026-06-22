@@ -354,7 +354,9 @@ impl AnalyzeCommand {
 enum ListSubjectArg {
     /// The runs that would enter a matching `analyze` pass.
     Runs,
-    /// The discriminant sets present in storage (no repository required).
+    /// Every discriminant set present in storage (no repository required); a
+    /// discovery catalog that lists all partitions regardless of the current
+    /// machine. Pass a facet to narrow it.
     Discriminants,
     /// The blessings recorded at the current commit (or, with `--all`, across the
     /// whole analysis window).
@@ -401,7 +403,7 @@ struct ListCommand {
 
     /// With the `blessings` subject, list the most recent blessing of every
     /// benchmark across the whole analysis window rather than only those at the
-    /// current commit.
+    /// current commit. Errors if given with any other subject.
     #[arg(long, help_heading = HEADING_FILTER)]
     all: bool,
 }

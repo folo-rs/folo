@@ -324,9 +324,14 @@ inapplicable. The analysis-only flags `--mode` / `--include-improvements` /
 which `list` never does).
 
 `list discriminants` lists the discriminant sets present in storage **without
-requiring a repository** (it ignores the timeline / data-filtering groups). `list
-blessings [--all]` audits blessings instead of previewing the data set (it requires
-a repository) — see the Blessings subsection above.
+requiring a repository** (it ignores the timeline / data-filtering groups). It is a
+**discovery catalog**, so — unlike every other query command — it does **not**
+default omitted facets to the current machine; with no facets it lists *every*
+stored partition (`resolve_facets(&selection, None)`), and a facet narrows it.
+`list blessings [--all]` audits blessings instead of previewing the data set (it
+requires a repository) — see the Blessings subsection above. `--all` is a
+`blessings`-only switch: `list_with` errors (`RunError::Analyze`) if it is passed
+with `runs` or `discriminants` rather than silently ignoring it.
 
 `list` lives **inside** the analyze module tree as `src/analyze/list.rs`
 (`pub(crate) mod list;`), reusing the selection pipeline that was extracted from

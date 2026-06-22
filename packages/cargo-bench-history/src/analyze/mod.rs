@@ -395,7 +395,15 @@ fn resolve_facet(values: &[String], auto: Option<&str>) -> FacetFilter {
 
 /// Resolves every command-line facet into a [`Facets`] filter, validating that any
 /// explicit `--engine` values name a known engine.
-fn resolve_facets(selection: &Selection<'_>, auto: &AutoFacets) -> Result<Facets, RunError> {
+///
+/// `auto` supplies the current-machine defaults for the triple and machine-key
+/// facets when those are omitted. Passing `None` resolves omitted facets to no
+/// filter instead — used by the `discriminants` catalog listing, which is a
+/// discovery view over all stored partitions rather than the current machine's.
+fn resolve_facets(
+    selection: &Selection<'_>,
+    auto: Option<&AutoFacets>,
+) -> Result<Facets, RunError> {
     let engine = resolve_facet(selection.engine, None);
     if let FacetFilter::Explicit(values) = &engine {
         for value in values {
@@ -404,8 +412,8 @@ fn resolve_facets(selection: &Selection<'_>, auto: &AutoFacets) -> Result<Facets
     }
     Ok(Facets {
         engine,
-        target_triple: resolve_facet(selection.target_triple, Some(&auto.triple)),
-        machine_key: resolve_facet(selection.machine_key, Some(&auto.machine_key)),
+        target_triple: resolve_facet(selection.target_triple, auto.map(|a| a.triple.as_str())),
+        machine_key: resolve_facet(selection.machine_key, auto.map(|a| a.machine_key.as_str())),
     })
 }
 
@@ -486,7 +494,7 @@ where
     G: GitHistory,
     S: Storage,
 {
-    let facets = resolve_facets(selection, auto)?;
+    let facets = resolve_facets(selection, Some(auto))?;
     let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
 
     // Separate blessing sidecars from run objects: they share the partition prefix

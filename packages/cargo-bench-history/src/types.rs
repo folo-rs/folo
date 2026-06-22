@@ -146,7 +146,8 @@ pub enum ListSubject {
     /// The runs that would enter a matching `analyze` pass.
     #[default]
     Runs,
-    /// The discriminant sets present in storage (no repository required).
+    /// Every discriminant set present in storage (no repository required),
+    /// regardless of the current machine.
     Discriminants,
     /// The blessings recorded at the current commit (or, with `all`, the most
     /// recent blessing of every benchmark in the analysis window).

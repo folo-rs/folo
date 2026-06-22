@@ -1744,7 +1744,7 @@ async fn analyze_rejects_an_unknown_mode() {
     );
 }
 
-/// `list --discriminants` enumerates exactly the comparable sets present in
+/// `list discriminants` enumerates exactly the comparable sets present in
 /// storage, deriving the os/architecture facets from each set's target triple.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
@@ -1922,6 +1922,25 @@ async fn list_without_a_repository_errors() {
         panic!("expected an analyze error, got {error:?}");
     };
     assert!(message.contains("requires a git repository"), "{message}");
+}
+
+/// `--all` is a `list blessings`-only switch; passing it to another subject is a
+/// clear up-front error rather than a silently ignored flag.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn list_runs_rejects_the_blessings_only_all_switch() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+
+    let error = workspace
+        .drive(&["list", "runs", "--all"])
+        .await
+        .expect_err("--all is rejected for the runs subject");
+    let RunError::Analyze { message } = error else {
+        panic!("expected an analyze error, got {error:?}");
+    };
+    assert!(message.contains("--all"), "{message}");
+    assert!(message.contains("list blessings"), "{message}");
 }
 
 /// `prune --dirty` removes the dirty runs a matching `list`/`analyze` would include
@@ -2352,7 +2371,7 @@ async fn prune_dirty_until_only_removes_runs_on_or_before_the_cutoff() {
 }
 
 /// The default scope deletes clean *and* dirty runs (and their blessing sidecars)
-/// for the narrowed selection. A `--commit` selecting one feature commit removes its
+/// for the narrowed selection. A `<commit>` argument selecting one feature commit removes its
 /// clean and dirty runs while leaving the base-branch run intact.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
@@ -4038,7 +4057,7 @@ async fn bless_on_a_dirty_base_branch_warns_but_succeeds() {
     assert_eq!(regressions, 0, "the dirty-tree blessing must still apply");
 }
 
-/// `list --blessings` reports the sidecar a `bless` just recorded at the current
+/// `list blessings` reports the sidecar a `bless` just recorded at the current
 /// commit, naming the prefix filter it carries.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
