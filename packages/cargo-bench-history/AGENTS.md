@@ -41,6 +41,35 @@ driven in tests by fakes, never by real IO:
 When you add a new IO edge, follow the same pattern: a port trait with an
 `impl Future` return (RPITIT, no `async_trait`), a real adapter, and a fake.
 
+## CLI structure (clap derive + argument groups)
+
+The CLI is built with **clap** (derive API). It was chosen over `argh` because the
+command surface is wide and `argh` cannot group flags under named headings; clap's
+`help_heading` lets each command's `--help` present functionally grouped sections.
+The other workspace cargo tools still use `argh` — their migration is tracked in
+GitHub issue #252; do **not** assume they share this crate's CLI conventions.
+
+Flags are organised into functional groups, applied via `#[command(flatten)]` shared
+arg structs so a group looks identical everywhere it appears (and so analyze/list/
+prune stay in selection lockstep automatically — see those sections):
+
+* **Environment & execution** — `--config`, `--repo`, `--verbose`.
+* **Output** — `--format`.
+* **Benchmark scope** (`run`/`backfill`) — `--workspace`, `--package`/`-p`, `--bench`.
+* **Discriminant selection** — `--engine`, `--target-triple`, `--machine-key`. On
+  query commands each is **repeatable** (a `Vec`), accepts the widening keyword
+  `all`, and auto-detects the current machine when omitted (§4.3). On create commands
+  (`run`/`backfill`) only `--machine-key` is accepted (single override); there is no
+  `--engine`/`--target-triple` and no `all`.
+* **Timeline selection** — `--context` (the target ref, formerly `--branch`),
+  `--base`, `--since`, `--until`.
+* **Data filtering** — `--no-dirty`.
+
+There are **no `--os`/`--architecture` facets** (operate on `--target-triple`
+directly). **Subjects** are bare positional words, not flags: `prune` takes
+`<commit>…`, `bless` takes `<prefix>…`, and `list` takes a required
+`runs|discriminants|blessings` selector (a bare `list` errors and names the three).
+
 ## Verbose diagnostics (`report::Reporter`)
 
 `--verbose` is accepted by every command (`run`/`backfill`/`analyze`/`install`)
@@ -109,17 +138,20 @@ being analyzed:
 
 * **Discriminant facets first.** `analyze::discriminant::parse_key` turns each
   `v2/<project>/<engine>/<triple>/<machine|synthetic>/<commit>/<file>` key into a
-  `DiscriminantSet` (engine, triple, os/arch derived from the triple, machine).
-  `--engine`/`--os`/`--architecture`/`--machine-key` select sets (case-insensitive
-  facet match); each surviving set becomes its own sub-report. `--target-triple`
-  matches the whole triple directly and is mutually exclusive with `--os` /
-  `--architecture` (the triple fixes both — `validate_triple_exclusivity` rejects
-  the combination). The `list --discriminants` command (not `analyze`)
-  prints the present sets and returns **without requiring a repository** (it is a
-  pure index over storage keys).
+  `DiscriminantSet` (engine, triple, machine). `--engine`/`--target-triple`/
+  `--machine-key` select sets — each facet is **repeatable**, accepts the widening
+  keyword `all`, and auto-detects the current machine when omitted (`--target-triple`
+  → host triple, `--machine-key` → host fingerprint, `--engine` → all engines since
+  it has no machine-derived value). A `synthetic` set (Callgrind / `alloc_tracker`)
+  **always passes** the `--machine-key` facet regardless of its value, so the
+  current-machine default still includes every hardware-independent set. Each
+  surviving set becomes its own sub-report. (There are no `--os`/`--architecture`
+  facets — operate on the triple directly.) The `list discriminants` subject (not
+  `analyze`) prints the present sets and returns **without requiring a repository**
+  (it is a pure index over storage keys).
 * **Repository required for analysis.** Resolving a timeline needs git, so when not
   just listing discriminants `analyze` errors if no repository resolves. The target
-  ref is `--branch` (default `HEAD`); the base ref is `--base` >
+  ref is `--context` (default `HEAD`); the base ref is `--base` >
   `config.project.default_branch` > detected default branch (`origin/HEAD` → `main`
   → `master`). `analyze::selection::select_commits` walks the target's
   first-parent ancestry and splits it at the merge-base with the base: commits on
@@ -269,7 +301,7 @@ so history analysis re-baselines past it and stops re-flagging it. Blessings mat
 * **`unbless`** (`unbless_with`) deletes the blessings recorded **at the current
   commit** only (it never touches later blessings); it reports
   `"Removed N blessing(s) at commit <short>."` or `"No blessings recorded …"`.
-* **`list --blessings [--all]`** audits blessings without analyzing: the default
+* **`list blessings [--all]`** audits blessings without analyzing: the default
   (`scope: "head"`) lists blessings recorded at HEAD; `--all` (`scope: "window"`)
   lists the most recent blessing of every benchmark across the analysis window. See
   `analyze::list::blessings_at_head` / `blessings_across_window`.
@@ -277,22 +309,24 @@ so history analysis re-baselines past it and stops re-flagging it. Blessings mat
 ## The `list` command
 
 **`list` mirrors `analyze`'s data-set-selection parameters exactly** (a hard
-requirement — keep them in lockstep). It accepts the same selection flags
-(`--repo`/`--branch`/`--base`/`--engine`/`--target-triple`/`--os`/`--architecture`/
-`--machine-key`/`--no-dirty`/`--since`/`--metric`/`--format`/`--config`) but,
-instead of analyzing, only *previews* which data set an `analyze` pass would
-consume: per discriminant set it reports the run, series, and per-commit counts of
-the selected runs (each commit's clean/dirty split), ordered oldest-first by git
+requirement — keep them in lockstep). It takes a required **subject** — `runs`,
+`discriminants`, or `blessings` — and a bare `list` is an error that names the
+three. `list runs` and `list blessings` accept the same selection flags
+(`--repo`/`--context`/`--base`/`--engine`/`--target-triple`/`--machine-key`/
+`--no-dirty`/`--since`/`--until`/`--metric`/`--format`/`--config`) but, instead of
+analyzing, only *preview* which data set an `analyze` pass would consume: `list
+runs` reports, per discriminant set, the run, series, and per-commit counts of the
+selected runs (each commit's clean/dirty split), ordered oldest-first by git
 topology. Whenever you add or change a selection parameter on `analyze`, add the
 same parameter to **both** `list` and `prune` (see below) unless it is genuinely
-inapplicable. The analysis-only flags `--mode` / `--include-improvements` are not
-part of the selection lockstep (they govern analysis, which `list` never does).
+inapplicable. The analysis-only flags `--mode` / `--include-improvements` /
+`--include-inactive` are not part of the selection lockstep (they govern analysis,
+which `list` never does).
 
-`--list-discriminants` was migrated off `analyze` to **`list --discriminants`**:
-it lists the discriminant sets present in storage without requiring a repository.
-`list --blessings [--all]` is the third `list` view (it requires a repository): it
-audits blessings instead of previewing the data set — see the Blessings subsection
-above.
+`list discriminants` lists the discriminant sets present in storage **without
+requiring a repository** (it ignores the timeline / data-filtering groups). `list
+blessings [--all]` audits blessings instead of previewing the data set (it requires
+a repository) — see the Blessings subsection above.
 
 `list` lives **inside** the analyze module tree as `src/analyze/list.rs`
 (`pub(crate) mod list;`), reusing the selection pipeline that was extracted from
@@ -300,7 +334,7 @@ above.
 fields, built via `from_analyze`/`from_list`), `parsed_facets`,
 `facet_filtered_candidates` (shared by both the discriminants index and the
 topology query), `select_dataset` (git topology + commit selection + object load),
-and `dirty_base_exception_warning`. `list_with` parses the format, builds a
+and `dirty_base_exception_warning`. `list_with` parses the format and subject, builds a
 `Selection`, then either renders the discriminants index (no repo) or runs
 `select_dataset` → `build_listing` → `render_listing`, returning a
 `RunOutcome::Completed { message }`. `count_noun` (text.rs) appends `s` when the
@@ -309,12 +343,12 @@ count ≠ 1, so list.rs uses a local `series_noun` to avoid "seriess".
 ## The `prune` command
 
 **`prune` mirrors `analyze`'s/`list`'s data-set-selection parameters** (the same
-hard lockstep requirement) — it accepts `--repo`/`--branch`/`--base`/`--engine`/
-`--target-triple`/`--os`/`--architecture`/`--machine-key`/`--since`/`--format`/
+hard lockstep requirement) — it accepts `--repo`/`--context`/`--base`/`--engine`/
+`--target-triple`/`--machine-key`/`--since`/`--format`/
 `--config`/`--verbose`, plus its own deletion-shaping flags: `--dirty`/`--clean`
-(scope), `--all` (guard override), `--commit SHA` (repeatable, case-insensitive
-SHA-prefix), and `--until` (the inclusive upper bound mirroring `--since`). Instead
-of analyzing, it **deletes** the selected objects.
+(scope), `--all` (guard override), `<commit>` subjects (repeatable bare positional
+words, case-insensitive SHA-prefix), and `--until` (the inclusive upper bound
+mirroring `--since`). Instead of analyzing, it **deletes** the selected objects.
 
 **Deletion scopes** (`Scope::from_options`): no scope flag → delete the selected
 **clean and dirty** runs (and the blessing sidecars on any removed clean run);
@@ -322,11 +356,13 @@ of analyzing, it **deletes** the selected objects.
 `--dirty` and `--clean` are mutually exclusive.
 
 **Narrowing guard.** A scope that touches clean runs (default or `--clean`) refuses
-an un-narrowed selection unless `--all` is passed: at least one of a facet,
-`--commit`, `--since`, or `--until` must be present (the guard returns
-`RunError::Analyze` mentioning `--all`). The `--dirty` scope is **exempt** — dirty
-data is ephemeral, so a blanket cleanup needs no guard. `--all` is only an override
-for the guard; it never widens the selection.
+an un-narrowed selection unless `--all` is passed. The auto-detected current-machine
+facet defaults and the widening `all` keyword do **not** count as narrowing; the
+user must explicitly pass at least one of a **concrete** (non-`all`) facet value, a
+`<commit>` subject, `--since`, or `--until` (the guard returns `RunError::Analyze`
+mentioning `--all`). The `--dirty` scope is **exempt** — dirty data is ephemeral, so
+a blanket cleanup needs no guard. `--all` is only an override for the guard; it never
+widens the selection (and is distinct from the `all` facet *value*).
 
 The one **intentional divergence** from `analyze`/`list`: the base-branch tip's
 dirty runs are admitted **unconditionally** (`DirtyTipPolicy::Always`), whereas
@@ -342,7 +378,7 @@ passes `Always`.
 which hardwires `no_dirty: false`), `parsed_facets`, `facet_filtered_candidates`,
 and `resolve_history` pipeline. `prune_with` resolves the history, partitions the
 candidate objects into runs (clean/dirty, via `RunKind`) and blessings, applies the
-scope and `--commit`/`--since`/`--until` filters, then deletes in **two passes**:
+scope and `<commit>`/`--since`/`--until` filters, then deletes in **two passes**:
 pass 1 removes the selected runs (recording which clean `(set, commit)` pairs were
 removed); pass 2 — only when the scope touches clean runs — removes a blessing
 sidecar iff its `(set, commit)` had its clean run removed (so blessings follow their
@@ -362,7 +398,9 @@ a 404 / missing-container fault to `NotFound`).
 ## The `backfill` command
 
 `commands::backfill` replays `run` across an inclusive commit range, bootstrapping
-history for commits that predate the tool. It is generic over two ports so the
+history for commits that predate the tool. The range endpoints are **positional
+subjects** — `backfill <from> <to>` (oldest-first inclusive), not `--from`/`--to`
+flags. It is generic over two ports so the
 loop logic runs against Miri-safe fakes:
 
 * `BackfillGit` — `resolve`/`first_parent` (topology, delegating to an embedded
@@ -386,11 +424,11 @@ Key invariants:
   checkout, never from the worktree. A dirty primary working tree is therefore
   fine — there is no clean-tree guard.
 * **Validation precedes any worktree work** (`plan_commits`):
-  require both endpoints to resolve, require `--from` to be a first-parent ancestor
-  of `--to`, and require `--to` to be on `HEAD`'s first-parent history (so the
-  points are later analyzable). The range is enumerated oldest-first and inclusive
-  via `first_parent(to).split_off(position(from))` (avoid `vec[a..]` — clippy
-  `indexing_slicing`).
+  require both endpoints to resolve, require the `<from>` subject to be a first-parent
+  ancestor of the `<to>` subject, and require `<to>` to be on `HEAD`'s first-parent
+  history (so the points are later analyzable). The range is enumerated oldest-first
+  and inclusive via `first_parent(to).split_off(position(from))` (avoid `vec[a..]` —
+  clippy `indexing_slicing`).
 * **Pre-run existence check** (`run_commits`): in the default skip-existing mode,
   `recorded_commits` lists the project prefix (`v2/{project}/`) once and
   `commit_of_clean_key` extracts each clean object's commit segment; a commit in

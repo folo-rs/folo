@@ -1,5 +1,5 @@
 //! Integration tests exercising the public command surface end to end: parse
-//! arguments through `argh`, translate to the typed command, and dispatch through
+//! arguments through `clap`, translate to the typed command, and dispatch through
 //! `run` against the real process, filesystem-harvest, and local-storage adapters.
 #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 #![allow(
@@ -11,7 +11,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use argh::FromArgs;
 use cargo_bench_history::{
     BenchmarkId, CiInfo, Cli, Command, GitInfo, Metric, MetricKind, Overrides, ResultRecord,
     ResultSet, RunContext, RunError, RunOutcome, SCHEMA_VERSION, Timestamps, ToolchainInfo,
@@ -355,7 +354,13 @@ async fn analyze_detects_criterion_wall_time_regression() {
     workspace.seed_rising_criterion_history("mk-fixed");
 
     let outcome = workspace
-        .drive(&["analyze"])
+        .drive(&[
+            "analyze",
+            "--target-triple",
+            "x86_64-pc-windows-msvc",
+            "--machine-key",
+            "mk-fixed",
+        ])
         .await
         .expect("analysis should succeed");
     let RunOutcome::Analyzed {
@@ -805,7 +810,15 @@ async fn analyze_criterion_jitter_is_not_flagged() {
         report,
         ..
     } = workspace
-        .drive(&["analyze", "--format", "json"])
+        .drive(&[
+            "analyze",
+            "--target-triple",
+            "x86_64-pc-windows-msvc",
+            "--machine-key",
+            "mk",
+            "--format",
+            "json",
+        ])
         .await
         .expect("analysis succeeds")
     else {
@@ -853,7 +866,15 @@ async fn analyze_criterion_slow_drift_is_flagged_as_drift() {
         report,
         ..
     } = workspace
-        .drive(&["analyze", "--format", "json"])
+        .drive(&[
+            "analyze",
+            "--target-triple",
+            "x86_64-pc-windows-msvc",
+            "--machine-key",
+            "mk",
+            "--format",
+            "json",
+        ])
         .await
         .expect("analysis succeeds")
     else {
@@ -1015,7 +1036,15 @@ async fn analyze_all_the_time_slow_drift_is_flagged_as_drift() {
         report,
         ..
     } = workspace
-        .drive(&["analyze", "--format", "json"])
+        .drive(&[
+            "analyze",
+            "--target-triple",
+            "x86_64-unknown-linux-gnu",
+            "--machine-key",
+            "mk",
+            "--format",
+            "json",
+        ])
         .await
         .expect("analysis succeeds")
     else {
@@ -1057,7 +1086,15 @@ async fn analyze_all_the_time_jitter_is_not_flagged() {
         report,
         ..
     } = workspace
-        .drive(&["analyze", "--format", "json"])
+        .drive(&[
+            "analyze",
+            "--target-triple",
+            "x86_64-unknown-linux-gnu",
+            "--machine-key",
+            "mk",
+            "--format",
+            "json",
+        ])
         .await
         .expect("analysis succeeds")
     else {
@@ -1108,7 +1145,15 @@ async fn analyze_all_the_time_step_with_disjoint_intervals_is_a_regression() {
         report,
         ..
     } = workspace
-        .drive(&["analyze", "--format", "json"])
+        .drive(&[
+            "analyze",
+            "--target-triple",
+            "x86_64-unknown-linux-gnu",
+            "--machine-key",
+            "mk",
+            "--format",
+            "json",
+        ])
         .await
         .expect("analysis succeeds")
     else {
@@ -1157,7 +1202,15 @@ async fn analyze_all_the_time_step_with_overlapping_intervals_is_suppressed() {
         report,
         ..
     } = workspace
-        .drive(&["analyze", "--format", "json"])
+        .drive(&[
+            "analyze",
+            "--target-triple",
+            "x86_64-unknown-linux-gnu",
+            "--machine-key",
+            "mk",
+            "--format",
+            "json",
+        ])
         .await
         .expect("analysis succeeds")
     else {
@@ -1714,7 +1767,7 @@ async fn list_discriminants_lists_present_sets() {
     );
 
     let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "--discriminants", "--format", "json"])
+        .drive(&["list", "discriminants", "--format", "json"])
         .await
         .expect("listing succeeds")
     else {
@@ -1745,7 +1798,7 @@ async fn list_previews_the_analyzed_data_set() {
     workspace.seed_rising_callgrind_history();
 
     let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "--format", "json"])
+        .drive(&["list", "runs", "--format", "json"])
         .await
         .expect("listing succeeds")
     else {
@@ -1773,7 +1826,8 @@ async fn list_previews_the_analyzed_data_set() {
 }
 
 /// `list` mirrors `analyze`'s facet selection: with two comparable sets present, a
-/// `--os` filter previews only the matching set, exactly as `analyze` would scope it.
+/// `--target-triple` filter previews only the matching set, exactly as `analyze`
+/// would scope it.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn list_facet_selection_mirrors_analyze() {
@@ -1794,7 +1848,14 @@ async fn list_facet_selection_mirrors_analyze() {
     );
 
     let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "--os", "linux", "--format", "json"])
+        .drive(&[
+            "list",
+            "runs",
+            "--target-triple",
+            "x86_64-unknown-linux-gnu",
+            "--format",
+            "json",
+        ])
         .await
         .expect("listing succeeds")
     else {
@@ -1820,7 +1881,7 @@ async fn list_admits_and_excludes_dirty_like_analyze() {
     // By default the dirty snapshot on the target side is included: f1 hosts both a
     // clean and a dirty run, for three runs across two commits.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "--format", "json"])
+        .drive(&["list", "runs", "--format", "json"])
         .await
         .expect("listing succeeds")
     else {
@@ -1836,7 +1897,7 @@ async fn list_admits_and_excludes_dirty_like_analyze() {
 
     // `--no-dirty` drops the dirty snapshot, leaving only the two clean runs.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "--no-dirty", "--format", "json"])
+        .drive(&["list", "runs", "--no-dirty", "--format", "json"])
         .await
         .expect("listing succeeds")
     else {
@@ -1854,7 +1915,7 @@ async fn list_without_a_repository_errors() {
     let workspace = Workspace::new(&storage_only_config());
 
     let error = workspace
-        .drive(&["list"])
+        .drive(&["list", "runs"])
         .await
         .expect_err("listing without a repository should fail");
     let RunError::Analyze { message } = error else {
@@ -1878,7 +1939,7 @@ async fn prune_dirty_removes_dirty_runs_on_a_feature_branch() {
 
     // Before: the target-side dirty snapshot is part of the data set.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "--format", "json"])
+        .drive(&["list", "runs", "--format", "json"])
         .await
         .expect("listing succeeds")
     else {
@@ -1901,7 +1962,7 @@ async fn prune_dirty_removes_dirty_runs_on_a_feature_branch() {
 
     // After: only the two clean runs remain; the dirty snapshot is gone.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "--format", "json"])
+        .drive(&["list", "runs", "--format", "json"])
         .await
         .expect("listing succeeds")
     else {
@@ -1928,7 +1989,7 @@ async fn prune_dirty_removes_the_base_branch_tip_dirty_with_a_clean_tree() {
 
     // With a clean working tree, `list` excludes the base-tip dirty snapshot.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "--format", "json"])
+        .drive(&["list", "runs", "--format", "json"])
         .await
         .expect("listing succeeds")
     else {
@@ -2033,13 +2094,18 @@ async fn prune_dirty_scopes_by_engine() {
     );
     assert_eq!(parsed["sets"][0]["engine"], "callgrind", "{message}");
 
-    // The criterion dirty snapshot survives: a criterion-scoped prune still finds it.
+    // The criterion dirty snapshot survives: a criterion-scoped prune still finds it
+    // once the windows triple and its non-host machine key are named explicitly.
     let RunOutcome::Completed { message } = workspace
         .drive(&[
             "prune",
             "--dirty",
             "--engine",
             "criterion",
+            "--target-triple",
+            "x86_64-pc-windows-msvc",
+            "--machine-key",
+            "m1",
             "--dry-run",
             "--format",
             "json",
@@ -2057,21 +2123,28 @@ async fn prune_dirty_scopes_by_engine() {
     assert_eq!(parsed["sets"][0]["engine"], "criterion", "{message}");
 }
 
-/// A non-engine facet (`--os`) scopes the prune just like it scopes `analyze`/`list`:
+/// A target-triple facet scopes the prune just like it scopes `analyze`/`list`:
 /// the same target commit hosts a dirty Linux (callgrind) run and a dirty Windows
-/// (criterion) run, and `--os linux` removes only the former.
+/// (criterion) run, and `--target-triple <linux>` removes only the former.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn prune_dirty_scopes_by_os_facet() {
+async fn prune_dirty_scopes_by_target_triple_facet() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
     workspace.checkout_new_branch("feature");
     workspace.seed_dirty_callgrind("2024-01-02", "f1", 200.0);
     workspace.seed_dirty_criterion("2024-01-02", "f1", "m1", 20.0);
 
-    // `--os linux` removes only the callgrind (linux) dirty run.
+    // The Linux triple removes only the callgrind (linux) dirty run.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["prune", "--dirty", "--os", "linux", "--format", "json"])
+        .drive(&[
+            "prune",
+            "--dirty",
+            "--target-triple",
+            "x86_64-unknown-linux-gnu",
+            "--format",
+            "json",
+        ])
         .await
         .expect("prune succeeds")
     else {
@@ -2082,13 +2155,16 @@ async fn prune_dirty_scopes_by_os_facet() {
     assert_eq!(parsed["sets"][0]["os"], "linux", "{message}");
     assert_eq!(parsed["sets"][0]["engine"], "callgrind", "{message}");
 
-    // The Windows (criterion) dirty run survives: a `--os windows` pass still finds it.
+    // The Windows (criterion) dirty run survives: a Windows-triple pass still finds
+    // it once the machine facet is widened to its non-host machine key.
     let RunOutcome::Completed { message } = workspace
         .drive(&[
             "prune",
             "--dirty",
-            "--os",
-            "windows",
+            "--target-triple",
+            "x86_64-pc-windows-msvc",
+            "--machine-key",
+            "m1",
             "--dry-run",
             "--format",
             "json",
@@ -2119,9 +2195,20 @@ async fn prune_dirty_removes_runs_across_multiple_discriminant_sets() {
     workspace.seed_dirty_callgrind("2024-01-02", "f1", 200.0);
     workspace.seed_dirty_criterion("2024-01-02", "f1", "m1", 20.0);
 
-    // Text format exercises the plural "discriminant sets" summary branch.
+    // Text format exercises the plural "discriminant sets" summary branch. The
+    // facets widen to every triple/machine so the synthetic callgrind set and the
+    // windows-keyed criterion set are both in scope regardless of host.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["prune", "--dirty", "--format", "text"])
+        .drive(&[
+            "prune",
+            "--dirty",
+            "--target-triple",
+            "all",
+            "--machine-key",
+            "all",
+            "--format",
+            "text",
+        ])
         .await
         .expect("prune succeeds")
     else {
@@ -2134,7 +2221,17 @@ async fn prune_dirty_removes_runs_across_multiple_discriminant_sets() {
 
     // Both sets are now empty: a second pass finds nothing to remove.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["prune", "--dirty", "--dry-run", "--format", "json"])
+        .drive(&[
+            "prune",
+            "--dirty",
+            "--target-triple",
+            "all",
+            "--machine-key",
+            "all",
+            "--dry-run",
+            "--format",
+            "json",
+        ])
         .await
         .expect("prune succeeds")
     else {
@@ -2269,7 +2366,7 @@ async fn prune_default_removes_clean_and_dirty_for_a_commit() {
 
     // Narrowed to f1, the default scope removes its clean and dirty runs.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["prune", "--commit", &f1, "--format", "json"])
+        .drive(&["prune", &f1, "--format", "json"])
         .await
         .expect("prune succeeds")
     else {
@@ -2280,7 +2377,7 @@ async fn prune_default_removes_clean_and_dirty_for_a_commit() {
 
     // Only the base-branch clean run remains.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "--branch", "feature", "--format", "json"])
+        .drive(&["list", "runs", "--context", "feature", "--format", "json"])
         .await
         .expect("listing succeeds")
     else {
@@ -2310,7 +2407,7 @@ async fn prune_refuses_an_unnarrowed_clean_scope_without_all() {
 
     // Nothing was deleted: the run is still listed.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "--format", "json"])
+        .drive(&["list", "runs", "--format", "json"])
         .await
         .expect("listing succeeds")
     else {
@@ -2330,7 +2427,7 @@ async fn prune_all_overrides_the_narrowing_guard() {
     workspace.seed_callgrind("2024-01-02", "f1", 100.0);
 
     let RunOutcome::Completed { message } = workspace
-        .drive(&["prune", "--all", "--branch", "feature", "--format", "json"])
+        .drive(&["prune", "--all", "--context", "feature", "--format", "json"])
         .await
         .expect("prune succeeds")
     else {
@@ -2344,7 +2441,7 @@ async fn prune_all_overrides_the_narrowing_guard() {
 
     // The data set is empty afterwards.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "--branch", "feature", "--format", "json"])
+        .drive(&["list", "runs", "--context", "feature", "--format", "json"])
         .await
         .expect("listing succeeds")
     else {
@@ -2368,7 +2465,7 @@ async fn prune_clean_scope_removes_clean_and_keeps_dirty() {
 
     // `--clean` narrowed to f1 removes only its clean run.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["prune", "--clean", "--commit", &f1, "--format", "json"])
+        .drive(&["prune", &f1, "--clean", "--format", "json"])
         .await
         .expect("prune succeeds")
     else {
@@ -2408,7 +2505,7 @@ async fn prune_removes_a_blessing_with_its_clean_run() {
 
     // The blessing is recorded at HEAD.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "--blessings", "--format", "json"])
+        .drive(&["list", "blessings", "--format", "json"])
         .await
         .expect("listing blessings succeeds")
     else {
@@ -2423,7 +2520,7 @@ async fn prune_removes_a_blessing_with_its_clean_run() {
 
     // Pruning HEAD's clean run also deletes the blessing that rode on it.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["prune", "--commit", &head, "--format", "json"])
+        .drive(&["prune", &head, "--format", "json"])
         .await
         .expect("prune succeeds")
     else {
@@ -2435,7 +2532,7 @@ async fn prune_removes_a_blessing_with_its_clean_run() {
 
     // The blessing is gone.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "--blessings", "--format", "json"])
+        .drive(&["list", "blessings", "--format", "json"])
         .await
         .expect("listing blessings succeeds")
     else {
@@ -2465,12 +2562,12 @@ async fn prune_without_a_repository_errors() {
     assert!(message.contains("requires a git repository"), "{message}");
 }
 
-/// A facet filter (`--os`) restricts analysis to the matching set: the same commits
-/// host a regressing Linux series and a flat Windows series, and each `--os`
-/// selection sees only its own.
+/// A `--target-triple` filter restricts analysis to the matching set: the same
+/// commits host a regressing Linux series and a flat Windows series, and each
+/// triple selection sees only its own.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_os_facet_selects_one_set() {
+async fn analyze_target_triple_facet_isolates_linux_from_windows() {
     let workspace = Workspace::repo(&storage_only_config());
     // Each commit carries both a Linux point (rising into a regression) and a
     // Windows point (flat).
@@ -2486,9 +2583,9 @@ async fn analyze_os_facet_selects_one_set() {
         workspace.seed_callgrind_in("x86_64-pc-windows-msvc", "synthetic", date, label, windows);
     }
 
-    // The Linux facet sees the regression.
+    // The Linux triple sees the regression.
     let RunOutcome::Analyzed { regressions, .. } = workspace
-        .drive(&["analyze", "--os", "linux"])
+        .drive(&["analyze", "--target-triple", "x86_64-unknown-linux-gnu"])
         .await
         .expect("analysis succeeds")
     else {
@@ -2496,13 +2593,13 @@ async fn analyze_os_facet_selects_one_set() {
     };
     assert_eq!(regressions, 1, "the Linux series regresses");
 
-    // The Windows facet sees only the flat series.
+    // The Windows triple sees only the flat series.
     let RunOutcome::Analyzed {
         regressions,
         report,
         ..
     } = workspace
-        .drive(&["analyze", "--os", "windows"])
+        .drive(&["analyze", "--target-triple", "x86_64-pc-windows-msvc"])
         .await
         .expect("analysis succeeds")
     else {
@@ -2533,7 +2630,7 @@ async fn analyze_branch_selects_official_line_from_a_feature_checkout() {
         report,
         ..
     } = workspace
-        .drive(&["analyze", "--branch", "master", "--format", "json"])
+        .drive(&["analyze", "--context", "master", "--format", "json"])
         .await
         .expect("analysis succeeds")
     else {
@@ -2682,7 +2779,15 @@ async fn analyze_criterion_machine_keys_stay_isolated() {
         report,
         ..
     } = workspace
-        .drive(&["analyze", "--format", "json"])
+        .drive(&[
+            "analyze",
+            "--target-triple",
+            "x86_64-pc-windows-msvc",
+            "--machine-key",
+            "all",
+            "--format",
+            "json",
+        ])
         .await
         .expect("analysis succeeds")
     else {
@@ -2701,53 +2806,10 @@ async fn analyze_criterion_machine_keys_stay_isolated() {
     );
 }
 
-/// `--architecture` selects a single comparable set: the same commits host a
-/// regressing `x86_64` series and a flat `aarch64` series, and each `--architecture`
-/// selection sees only its own.
-#[tokio::test]
-#[cfg_attr(miri, ignore)]
-async fn analyze_architecture_facet_selects_one_set() {
-    let workspace = Workspace::repo(&storage_only_config());
-    for (date, label, x64, arm) in [
-        ("2024-01-01", "c1", 100.0, 50.0),
-        ("2024-01-02", "c2", 100.0, 50.0),
-        ("2024-01-03", "c3", 100.0, 50.0),
-        ("2024-01-04", "c4", 130.0, 50.0),
-        ("2024-01-05", "c5", 130.0, 50.0),
-        ("2024-01-06", "c6", 130.0, 50.0),
-    ] {
-        workspace.seed_callgrind_in("x86_64-unknown-linux-gnu", "synthetic", date, label, x64);
-        workspace.seed_callgrind_in("aarch64-unknown-linux-gnu", "synthetic", date, label, arm);
-    }
-
-    let RunOutcome::Analyzed { regressions, .. } = workspace
-        .drive(&["analyze", "--architecture", "x86_64"])
-        .await
-        .expect("analysis succeeds")
-    else {
-        panic!("expected an analyzed outcome");
-    };
-    assert_eq!(regressions, 1, "the x86_64 series regresses");
-
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&["analyze", "--architecture", "aarch64"])
-        .await
-        .expect("analysis succeeds")
-    else {
-        panic!("expected an analyzed outcome");
-    };
-    assert_eq!(regressions, 0, "the aarch64 series is flat: {report}");
-}
-
 /// `--target-triple` selects a single comparable set by its whole partition value:
 /// the same commits host a regressing `x86_64-unknown-linux-gnu` series and a flat
 /// `aarch64-unknown-linux-gnu` series, and each `--target-triple` selection sees
-/// only its own. This complements the derived `--os` / `--architecture` facets by
-/// pinning the exact triple.
+/// only its own.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn analyze_target_triple_facet_selects_one_set() {
@@ -2787,33 +2849,6 @@ async fn analyze_target_triple_facet_selects_one_set() {
     assert_eq!(regressions, 0, "the aarch64 triple is flat: {report}");
 }
 
-/// `--target-triple` and the derived `--os` / `--architecture` facets are mutually
-/// exclusive: combining them is rejected with an explanatory error rather than
-/// silently intersecting two filters of the same dimension.
-#[tokio::test]
-#[cfg_attr(miri, ignore)]
-async fn analyze_target_triple_with_os_is_rejected() {
-    let workspace = Workspace::repo(&storage_only_config());
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
-
-    let error = workspace
-        .drive(&[
-            "analyze",
-            "--target-triple",
-            "x86_64-unknown-linux-gnu",
-            "--os",
-            "linux",
-        ])
-        .await
-        .expect_err("combining --target-triple with --os must be rejected");
-    assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
-    assert!(
-        error
-            .to_string()
-            .contains("--target-triple cannot be combined"),
-        "{error}"
-    );
-}
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn analyze_machine_key_facet_selects_one_set() {
@@ -2825,7 +2860,13 @@ async fn analyze_machine_key_facet_selects_one_set() {
     workspace.seed_criterion("2024-02-04", "d4", "mk-flat", 20.0);
 
     let RunOutcome::Analyzed { regressions, .. } = workspace
-        .drive(&["analyze", "--machine-key", "mk-rising"])
+        .drive(&[
+            "analyze",
+            "--target-triple",
+            "x86_64-pc-windows-msvc",
+            "--machine-key",
+            "mk-rising",
+        ])
         .await
         .expect("analysis succeeds")
     else {
@@ -2838,7 +2879,13 @@ async fn analyze_machine_key_facet_selects_one_set() {
         report,
         ..
     } = workspace
-        .drive(&["analyze", "--machine-key", "mk-flat"])
+        .drive(&[
+            "analyze",
+            "--target-triple",
+            "x86_64-pc-windows-msvc",
+            "--machine-key",
+            "mk-flat",
+        ])
         .await
         .expect("analysis succeeds")
     else {
@@ -2871,7 +2918,13 @@ async fn analyze_criterion_feature_branch_admits_dirty_snapshots() {
     workspace.seed_dirty_criterion("2024-02-08", "f1", "mk", 40.0);
 
     let RunOutcome::Analyzed { regressions, .. } = workspace
-        .drive(&["analyze"])
+        .drive(&[
+            "analyze",
+            "--target-triple",
+            "x86_64-pc-windows-msvc",
+            "--machine-key",
+            "mk",
+        ])
         .await
         .expect("analysis succeeds")
     else {
@@ -2887,7 +2940,14 @@ async fn analyze_criterion_feature_branch_admits_dirty_snapshots() {
         report,
         ..
     } = workspace
-        .drive(&["analyze", "--no-dirty"])
+        .drive(&[
+            "analyze",
+            "--target-triple",
+            "x86_64-pc-windows-msvc",
+            "--machine-key",
+            "mk",
+            "--no-dirty",
+        ])
         .await
         .expect("analysis succeeds")
     else {
@@ -2916,13 +2976,7 @@ async fn run_callgrind_end_to_end_stores_results() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
 
     let outcome = workspace
-        .drive(&[
-            "run",
-            "--target-triple",
-            "x86_64-unknown-linux-gnu",
-            "--timestamp",
-            "2020-01-01T00:00:00Z",
-        ])
+        .drive(&["run", "--timestamp", "2020-01-01T00:00:00Z"])
         .await
         .expect("run should succeed");
     let RunOutcome::Completed { message } = outcome else {
@@ -2933,19 +2987,19 @@ async fn run_callgrind_end_to_end_stores_results() {
     let (key, set) = workspace.single_object();
 
     // Synthetic partition (Callgrind is hardware-independent) under the resolved
-    // triple. The temp workspace is outside any git repository, so the commit
-    // resolves to the `unknown` fallback and the clean tree yields `clean.json`.
+    // triple. `run` auto-detects the triple (Callgrind pins the OS to Linux), so
+    // derive it from the stored context to keep the assertion host-portable. The
+    // temp workspace is outside any git repository, so the commit resolves to the
+    // `unknown` fallback and the clean tree yields `clean.json`.
     let effective: Timestamp = "2020-01-01T00:00:00Z".parse().unwrap();
+    let triple = &set.context.toolchain.target_triple;
+    assert!(triple.ends_with("-unknown-linux-gnu"), "{triple}");
     assert_eq!(
         key,
-        "v2/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/unknown/clean.json"
+        format!("v2/testproj/callgrind/{triple}/synthetic/unknown/clean.json")
     );
 
     assert_eq!(set.schema_version, SCHEMA_VERSION);
-    assert_eq!(
-        set.context.toolchain.target_triple,
-        "x86_64-unknown-linux-gnu"
-    );
     assert_eq!(set.context.tool_version, TOOL_VERSION);
     assert_eq!(set.context.timestamps.effective, effective);
 
@@ -3278,19 +3332,14 @@ async fn run_all_the_time_is_partitioned_by_machine_key() {
         Workspace::new(&storage_only_config()).with_bench(&["--all-the-time", "read_cell=20"]);
 
     workspace
-        .drive(&[
-            "run",
-            "--target-triple",
-            "x86_64-unknown-linux-gnu",
-            "--machine-key",
-            "ci-pool-b",
-        ])
+        .drive(&["run", "--machine-key", "ci-pool-b"])
         .await
         .expect("run should succeed");
 
     let (key, set) = workspace.single_object();
+    let triple = &set.context.toolchain.target_triple;
     assert!(
-        key.contains("/all_the_time/x86_64-unknown-linux-gnu/ci-pool-b/"),
+        key.contains(&format!("/all_the_time/{triple}/ci-pool-b/")),
         "{key}"
     );
     assert!(!key.contains("/synthetic/"), "{key}");
@@ -3314,10 +3363,7 @@ async fn run_all_the_time_records_dispersion() {
     let workspace = Workspace::new(&storage_only_config())
         .with_bench(&["--all-the-time", "read_cell=20@19:21"]);
 
-    workspace
-        .drive(&["run", "--target-triple", "x86_64-unknown-linux-gnu"])
-        .await
-        .expect("run should succeed");
+    workspace.drive(&["run"]).await.expect("run should succeed");
 
     let (_key, set) = workspace.single_object();
     let processor_time = metric_named(&set.results[0], "processor_time");
@@ -3334,22 +3380,17 @@ async fn run_criterion_honors_machine_key_override() {
     let workspace =
         Workspace::new(&storage_only_config()).with_bench(&["--criterion", "grp|capture|now=9"]);
 
-    // Pin the triple so the full partition is deterministic across host platforms;
-    // the override segment is what this test asserts.
+    // `run` auto-detects the triple; this test asserts the machine-key override
+    // segment, so derive the triple from the stored context for a portable key.
     workspace
-        .drive(&[
-            "run",
-            "--target-triple",
-            "x86_64-unknown-linux-gnu",
-            "--machine-key",
-            "ci-pool-a",
-        ])
+        .drive(&["run", "--machine-key", "ci-pool-a"])
         .await
         .expect("run should succeed");
 
-    let (key, _) = workspace.single_object();
+    let (key, set) = workspace.single_object();
+    let triple = &set.context.toolchain.target_triple;
     assert!(
-        key.contains("/criterion/x86_64-unknown-linux-gnu/ci-pool-a/"),
+        key.contains(&format!("/criterion/{triple}/ci-pool-a/")),
         "{key}"
     );
 }
@@ -3412,13 +3453,7 @@ async fn run_then_analyze_round_trips_a_sanitizing_project_id() {
         .with_bench(&["--summary", "grp=single"]);
 
     workspace
-        .drive(&[
-            "run",
-            "--target-triple",
-            "x86_64-unknown-linux-gnu",
-            "--timestamp",
-            "2024-03-01T00:00:00Z",
-        ])
+        .drive(&["run", "--timestamp", "2024-03-01T00:00:00Z"])
         .await
         .expect("run should succeed");
 
@@ -3466,8 +3501,6 @@ async fn run_then_analyze_preserves_unusual_identity_characters() {
     workspace
         .drive(&[
             "run",
-            "--target-triple",
-            "x86_64-unknown-linux-gnu",
             "--machine-key",
             "pool",
             "--timestamp",
@@ -3480,9 +3513,11 @@ async fn run_then_analyze_preserves_unusual_identity_characters() {
     assert_eq!(objects.len(), 1, "{objects:?}");
     let (key, set) = &objects[0];
     // The partition key is identity-free and fully sanitized: none of the
-    // identity's spaces or non-ASCII letters leak into it.
+    // identity's spaces or non-ASCII letters leak into it. `run` auto-detects the
+    // triple, so derive it from the stored context for a portable prefix.
+    let triple = &set.context.toolchain.target_triple;
     assert!(
-        key.starts_with("v2/testproj/criterion/x86_64-unknown-linux-gnu/pool/"),
+        key.starts_with(&format!("v2/testproj/criterion/{triple}/pool/")),
         "{key}"
     );
     assert!(
@@ -3500,7 +3535,7 @@ async fn run_then_analyze_preserves_unusual_identity_characters() {
     // The reader reconstructs the series, proving the unusual identity is a stable
     // series key end to end.
     let RunOutcome::Analyzed { report, .. } = workspace
-        .drive(&["analyze", "--format", "json"])
+        .drive(&["analyze", "--machine-key", "pool", "--format", "json"])
         .await
         .expect("analysis succeeds")
     else {
@@ -3604,15 +3639,7 @@ async fn backfill_stores_one_clean_object_per_commit_and_restores_checkout() {
     let head_before = workspace.head();
 
     let RunOutcome::Completed { message } = workspace
-        .drive(&[
-            "backfill",
-            "--from",
-            &c1,
-            "--to",
-            &c3,
-            "--target-triple",
-            "x86_64-unknown-linux-gnu",
-        ])
+        .drive(&["backfill", &c1, &c3])
         .await
         .expect("backfill should succeed")
     else {
@@ -3620,12 +3647,15 @@ async fn backfill_stores_one_clean_object_per_commit_and_restores_checkout() {
     };
     assert!(message.contains("3 stored"), "{message}");
 
-    // One clean object per commit, keyed by that commit's full SHA.
+    // One clean object per commit, keyed by that commit's full SHA. `backfill`
+    // auto-detects the target triple, so derive it from a stored object to keep
+    // the key assertions correct on every platform CI runs on.
     let objects = workspace.stored_objects();
     assert_eq!(objects.len(), 3, "{objects:?}");
+    let triple = objects[0].1.context.toolchain.target_triple.clone();
+    assert!(triple.ends_with("-unknown-linux-gnu"), "{triple}");
     for sha in [&c1, &c2, &c3] {
-        let expected =
-            format!("v2/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{sha}/clean.json");
+        let expected = format!("v2/testproj/callgrind/{triple}/synthetic/{sha}/clean.json");
         assert!(
             objects.iter().any(|(key, _)| key == &expected),
             "missing {expected} in {objects:?}"
@@ -3673,15 +3703,7 @@ async fn backfill_spans_a_merge_commit_along_first_parent() {
     let c3 = workspace.commit("c3");
 
     let RunOutcome::Completed { message } = workspace
-        .drive(&[
-            "backfill",
-            "--from",
-            &c1,
-            "--to",
-            &c3,
-            "--target-triple",
-            "x86_64-unknown-linux-gnu",
-        ])
+        .drive(&["backfill", &c1, &c3])
         .await
         .expect("backfill should succeed")
     else {
@@ -3691,9 +3713,9 @@ async fn backfill_spans_a_merge_commit_along_first_parent() {
 
     let objects = workspace.stored_objects();
     assert_eq!(objects.len(), 3, "{objects:?}");
+    let triple = objects[0].1.context.toolchain.target_triple.clone();
     for sha in [&c1, &m, &c3] {
-        let expected =
-            format!("v2/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{sha}/clean.json");
+        let expected = format!("v2/testproj/callgrind/{triple}/synthetic/{sha}/clean.json");
         assert!(
             objects.iter().any(|(key, _)| key == &expected),
             "missing {expected} in {objects:?}"
@@ -3720,13 +3742,13 @@ async fn backfill_skips_already_stored_commits_on_rerun() {
     let c2 = workspace.commit("c2");
 
     workspace
-        .drive(&["backfill", "--from", &c1, "--to", &c2])
+        .drive(&["backfill", &c1, &c2])
         .await
         .expect("the first backfill should store both commits");
     assert_eq!(workspace.stored_objects().len(), 2);
 
     let RunOutcome::Completed { message } = workspace
-        .drive(&["backfill", "--from", &c1, "--to", &c2])
+        .drive(&["backfill", &c1, &c2])
         .await
         .expect("a re-run should succeed by skipping")
     else {
@@ -3752,7 +3774,7 @@ async fn backfill_skips_recorded_commits_without_invoking_the_engine() {
     let c2 = workspace.commit("c2");
 
     workspace
-        .drive(&["backfill", "--from", &c1, "--to", &c2])
+        .drive(&["backfill", &c1, &c2])
         .await
         .expect("the first backfill should store both commits");
     assert_eq!(workspace.stored_objects().len(), 2);
@@ -3765,7 +3787,7 @@ async fn backfill_skips_recorded_commits_without_invoking_the_engine() {
     let RunOutcome::Completed { message } = workspace
         .drive_with_bench(
             &["--summary", "grp=single", "--fail-if-exists", ".git"],
-            &["backfill", "--from", &c1, "--to", &c2],
+            &["backfill", &c1, &c2],
         )
         .await
         .expect("recorded commits must be skipped before the engine runs")
@@ -3791,12 +3813,12 @@ async fn backfill_overwrite_replaces_already_stored_commits() {
     let c2 = workspace.commit("c2");
 
     workspace
-        .drive(&["backfill", "--from", &c1, "--to", &c2])
+        .drive(&["backfill", &c1, &c2])
         .await
         .expect("the first backfill should store both commits");
 
     let RunOutcome::Completed { message } = workspace
-        .drive(&["backfill", "--from", &c1, "--to", &c2, "--overwrite"])
+        .drive(&["backfill", &c1, &c2, "--overwrite"])
         .await
         .expect("an overwrite backfill should replace in place")
     else {
@@ -3823,7 +3845,7 @@ async fn backfill_stops_on_a_failing_commit_by_default() {
     let c3 = workspace.commit_removing_file("c3 fixes the build", "BROKEN");
 
     let error = workspace
-        .drive(&["backfill", "--from", &c1, "--to", &c3])
+        .drive(&["backfill", &c1, &c3])
         .await
         .expect_err("a failing commit must stop the backfill");
     let RunError::Backfill { message } = error else {
@@ -3853,7 +3875,7 @@ async fn backfill_ignore_errors_continues_past_a_failing_commit() {
     let c3 = workspace.commit_removing_file("c3 fixes the build", "BROKEN");
 
     let outcome = workspace
-        .drive(&["backfill", "--from", &c1, "--to", &c3, "--ignore-errors"])
+        .drive(&["backfill", &c1, &c3, "--ignore-errors"])
         .await
         .expect("--ignore-errors should complete past the failure");
     // Even though a commit failed to benchmark, `--ignore-errors` makes the
@@ -3883,7 +3905,7 @@ async fn backfill_ignores_a_dirty_primary_working_tree() {
     workspace.make_dirty("uncommitted.txt");
 
     let outcome = workspace
-        .drive(&["backfill", "--from", &c1, "--to", &c1])
+        .drive(&["backfill", &c1, &c1])
         .await
         .expect("a dirty primary tree must not block backfill");
     assert!(
@@ -3908,7 +3930,7 @@ async fn backfill_rejects_a_range_outside_the_first_parent_history() {
     let c2 = workspace.commit("c2");
 
     let error = workspace
-        .drive(&["backfill", "--from", &c2, "--to", &c1])
+        .drive(&["backfill", &c2, &c1])
         .await
         .expect_err("a reversed range must be rejected");
     let RunError::Backfill { message } = error else {
@@ -3918,17 +3940,14 @@ async fn backfill_rejects_a_range_outside_the_first_parent_history() {
     assert!(workspace.stored_objects().is_empty());
 }
 
-/// `backfill --help` is an early exit whose usage text documents the range flags.
+/// `backfill --help` is an early exit whose usage text documents the range
+/// positionals.
 #[test]
-fn backfill_help_documents_range_flags() {
+fn backfill_help_documents_range_positionals() {
     let early_exit = Cli::from_args(&["cargo-bench-history"], &["backfill", "--help"])
         .expect_err("help is reported as an early exit");
-    assert!(
-        early_exit.output.contains("--from"),
-        "{}",
-        early_exit.output
-    );
-    assert!(early_exit.output.contains("--to"), "{}", early_exit.output);
+    assert!(early_exit.output.contains("FROM"), "{}", early_exit.output);
+    assert!(early_exit.output.contains("TO"), "{}", early_exit.output);
 }
 
 /// Blessing a benchmark at HEAD re-baselines its history so a previously flagged
@@ -4034,7 +4053,7 @@ async fn list_blessings_reports_the_blessing_recorded_at_head() {
         .expect("blessing succeeds");
 
     let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "--blessings", "--format", "json"])
+        .drive(&["list", "blessings", "--format", "json"])
         .await
         .expect("listing blessings succeeds")
     else {

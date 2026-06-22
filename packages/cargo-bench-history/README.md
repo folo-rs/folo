@@ -6,220 +6,26 @@ analyzes it for trends that snapshot-only tooling cannot see — for example
 "scenario Y regressed after commit Z, visible only in hindsight against noisy
 data".
 
-## How it works
-
 Most benchmark tooling only reports the current run, or at best compares against
 the previous local run. `cargo-bench-history` instead stores **every** run as an
-immutable record (on the local filesystem or, with the `azure` feature, in an
-Azure Blob container) and reconstructs per-benchmark series in git first-parent
+immutable record — on the local filesystem or, with the `azure` feature, in an
+Azure Blob container — and reconstructs per-benchmark series in git first-parent
 commit order, so historical trends become analyzable.
 
-Results are partitioned only by what makes them fundamentally incomparable —
-project, engine system, target triple, and (for hardware-dependent engines) a
-machine key. Everything else (toolchain version, OS, commit, CI provider) is
-recorded as metadata so its effect stays visible as a step in the timeline rather
-than forking history.
-
-The target engines are the ones this workspace uses: Criterion (wall-clock),
-Callgrind via Gungraun (simulated instruction counts), `alloc_tracker` (heap
-allocations) and `all_the_time` (processor time).
-
-## Commands
-
 ```text
-cargo bench-history run [--workspace] [--package NAME] [--bench NAME]
-                        [--timestamp RFC3339] [--target-triple TRIPLE]
-                        [--machine-key KEY] [--no-store] [--overwrite]
-                        [--verbose] [--config PATH]
-                        -- <args forwarded to cargo bench>
-cargo bench-history install [--verbose] [--config PATH]
-cargo bench-history backfill --from REF --to REF [--workspace]
-                             [--package NAME] [--bench NAME]
-                             [--target-triple TRIPLE] [--machine-key KEY]
-                             [--overwrite] [--ignore-errors] [--verbose]
-                             [--config PATH]
-                             -- <args forwarded to cargo bench>
-cargo bench-history analyze [--repo PATH] [--branch REF] [--base REF]
-                            [--engine NAME] [--target-triple TRIPLE]
-                            [--os OS] [--architecture ARCH]
-                            [--machine-key KEY] [--no-dirty] [--since WHEN]
-                            [--metric NAME] [--format text|json|markdown]
-                            [--mode auto|history|branch|tip]
-                            [--include-improvements] [--include-inactive]
-                            [--verbose] [--config PATH]
-cargo bench-history list [--discriminants] [--blessings [--all]] [--repo PATH]
-                         [--branch REF] [--base REF] [--engine NAME]
-                         [--target-triple TRIPLE] [--os OS] [--architecture ARCH]
-                         [--machine-key KEY] [--no-dirty] [--since DATE]
-                         [--metric NAME] [--format text|json|markdown]
-                         [--verbose] [--config PATH]
-cargo bench-history prune [--dry-run] [--all] [--dirty | --clean] [--repo PATH]
-                          [--branch REF] [--base REF] [--engine NAME]
-                          [--target-triple TRIPLE] [--os OS] [--architecture ARCH]
-                          [--machine-key KEY] [--commit SHA] [--since DATE]
-                          [--until DATE] [--format text|json|markdown]
-                          [--verbose] [--config PATH]
-cargo bench-history bless <prefix> [<prefix> ...] [--reason TEXT] [--repo PATH]
-                          [--base REF] [--engine NAME] [--target-triple TRIPLE]
-                          [--os OS] [--architecture ARCH] [--machine-key KEY]
-                          [--verbose] [--config PATH]
-cargo bench-history unbless [--repo PATH] [--base REF] [--engine NAME]
-                            [--target-triple TRIPLE] [--os OS] [--architecture ARCH]
-                            [--machine-key KEY] [--verbose] [--config PATH]
+# Write a starter .cargo/bench_history.toml.
+cargo bench-history install
+
+# Run the workspace benchmarks and store the results.
+cargo bench-history run
+
+# Analyze the recorded history for regressions and drift.
+cargo bench-history analyze
 ```
 
-* `run` executes the workspace's benches once with `cargo bench`, harvests every
-  supported engine's output, and stores a result set per engine. There is nothing
-  to configure about engines: the run enables the combined environment the engines
-  need and detects each engine from the output it produces (off Linux the Callgrind
-  benches compile to no-ops, so only the host-runnable engines are stored).
-  Scope the run with `--workspace` (the default), `--package`/`-p NAME`, or
-  `--bench NAME`; everything after `--` is forwarded verbatim to `cargo bench`.
-  History is keyed by commit: a clean run writes a single deterministic object per
-  commit, so re-running the same commit is refused unless `--overwrite` replaces
-  the stored result. `--timestamp` overrides the effective time when backfilling
-  history for an old commit; `--machine-key` overrides the hardware fingerprint
-  used to partition hardware-dependent (Criterion, `all_the_time`) results.
-  `--verbose` prints a
-  step-by-step diagnostic trail to standard error (the benchmark command and
-  injected environment, every directory scanned, which output files were included
-  or skipped as stale, and where each result was stored) — useful when a run
-  unexpectedly stores nothing.
-* `install` generates a starter `.cargo/bench_history.toml` if absent, printing
-  its path and next steps (including how to `backfill` history for an existing
-  repository); an existing file is never overwritten.
-* `backfill` replays `run` across the inclusive commit range `--from..--to`,
-  bootstrapping history for a repository that adopted the tool late. Each commit
-  is checked out in a dedicated git **worktree** (the primary checkout is never
-  touched, so a dirty working tree is fine) and benched there, recording the
-  commit's committer date as the effective time. The range must lie on the current
-  branch's first-parent history. Before benchmarking, commits that already have a
-  stored result are skipped without re-running their benchmarks (so backfill is
-  resumable and cheap to re-run); `--overwrite` re-benchmarks and replaces every
-  commit in the range. A commit that fails to build or benchmark stops the run
-  unless `--ignore-errors` continues past it.
-  `--workspace`/`--package`/`--bench`/`--target-triple`/`--machine-key`/`--verbose`
-  and a `--` passthrough behave as for `run`.
-* `analyze` reconstructs a timeline from git history and reports notable patterns.
-  It requires a repository (`--repo` selects one other than the current directory).
-  `--branch` chooses the line to analyze (default `HEAD`) and `--base` the line to
-  branch from (default: the configured or detected default branch); commits up to
-  the merge-base contribute clean runs only, while commits unique to the analyzed
-  branch also contribute dirty snapshots unless `--no-dirty` is given (one
-  exception: if your working tree is currently dirty while you are on the base
-  branch, that branch tip's dirty snapshots are included, and the report warns that
-  this data is ephemeral — switch to a feature branch to persist it). The history
-  is partitioned into *discriminant sets* (engine, target triple, OS, architecture,
-  machine key); `--engine`/`--os`/`--architecture`/`--machine-key` select sets.
-  `--target-triple`
-  selects by the whole triple instead of `--os`/`--architecture` and cannot be
-  combined with them.
-* `analyze` runs in one of three **modes**, chosen automatically (`--mode auto`,
-  the default) or forced with `--mode`:
-  * **history** — long-range trend watch over the base branch (selected when you
-    analyze a clean checkout of the base branch). It detects sustained
-    change-points and slow drifts, defaults `--since` to the last six months so a
-    scheduled watch does not silently widen as history grows, and reports only
-    **regressions** (steady improvement over time is expected) unless
-    `--include-improvements` is given.
-  * **branch** — "how does my feature compare" (selected for a feature branch, or a
-    dirty base checkout). It judges the branch by its **latest** state versus the
-    base, reporting both regressions and improvements; if the branch got better and
-    then worse, the latest (worse) state is what is reported, and the finding's
-    `flipped_at` names the commit that regime began at.
-  * **tip** — a fast guard that compares only the latest commit against the
-    recently established level, reporting regressions only. Useful as a cheap
-    "did the last commit make things worse" check.
-  Findings are advisory: the exit code reflects only whether the analysis *ran*,
-  never what it found. Downstream automation reads the machine-readable signal from
-  the `json` report — `mode`, the boolean `notable` (any finding survived), each
-  finding's `direction`/`flipped_at`, and the full per-finding `series` for
-  charting. The `text` report renders one paragraph per finding, leading with the
-  relative-change percent, and in **history** mode draws a small colored line chart
-  of the series over commits; values in the `text`/`markdown` reports are rounded to
-  four significant figures while the `json` report keeps full precision. `--since`
-  accepts an RFC 3339 timestamp, a `YYYY-MM-DD` date, or a
-  relative duration such as `6 months` or `30 days ago`; `--metric` narrows to one
-  metric. In history mode a spike that has since recovered to its prior level is
-  suppressed by default (its current state already matches the baseline);
-  `--include-inactive` surfaces such resolved findings (marked `active: false`) for
-  auditing. When stored runs exist but none enter the analysis (for example because
-  every run is a dirty snapshot on the base branch), the report explains why;
-  `--verbose` adds a per-object diagnostic trail to standard error. Every command
-  accepts `--verbose`.
-* `list` previews the data set that an `analyze` pass would consume without
-  analyzing it: it accepts the same data-set-selection flags as `analyze`
-  (`--repo`/`--branch`/`--base`/`--engine`/`--target-triple`/`--os`/
-  `--architecture`/`--machine-key`/`--no-dirty`/`--since`/`--metric`) and reports,
-  per discriminant set, the run, series, and per-commit counts of the selected
-  runs. `--discriminants` instead lists the discriminant sets present in storage
-  (no repository required) — useful for discovering which engines, triples, and
-  machine keys have data before scoping an analysis. `--blessings` instead audits
-  blessings (see `bless` below): the blessings recorded at the current commit, or —
-  with `--all` — the most recent blessing of every benchmark across the analysis
-  window.
-* `prune` deletes a chosen portion of the stored data set, using the same
-  data-set-selection pipeline as `analyze`/`list`. With no scope flag it removes the
-  selected **clean and dirty** runs (and the blessing sidecars on any removed clean
-  run); `--dirty` restricts to the ephemeral uncommitted-tree snapshots only, and
-  `--clean` restricts to clean runs and their blessings. Because deleting clean
-  history is irreversible, a clean-touching prune refuses an un-narrowed selection
-  unless `--all` is given — narrow it with a facet, `--commit`, `--since`, or
-  `--until` (the `--dirty` scope is exempt). Like the data-set-selection flags it
-  shares with `analyze`, plus `--commit SHA` (repeatable, SHA-prefix) and `--until`.
-  The base-branch tip's dirty runs are removed unconditionally (regardless of the
-  current tree state), so `prune --dirty` reclaims ephemeral snapshots. `--dry-run`
-  previews exactly what would be removed without deleting anything.
-* `bless` manually accepts an intentional performance change on the base branch so
-  history analysis stops re-flagging it. Pass one or more benchmark-id prefixes to
-  accept (matched against the qualified `<package>/<group>/<case>/<value>` identity,
-  e.g. `bless all_the_time/read_cell`), optionally with `--reason`. A blessing
-  re-baselines the benchmark's history from the current commit forward, so the
-  accepted step is no longer reported while the earlier points stay on the chart for
-  context. Blessing is base-branch-only and requires an
-  existing recorded run at the current commit — a feature-branch or
-  data-less blessing is a hard error (no `--force`), because neither would
-  survive a history analysis. A dirty working tree is allowed (the committed run at
-  HEAD is what gets blessed) but prints a warning. It accepts the same discriminant facets as `analyze`
-  (`--engine`/`--target-triple`/`--os`/`--architecture`/`--machine-key`) to scope
-  which sets are blessed.
-* `unbless` removes the blessings recorded at the current commit, undoing a `bless`
-  so the change is reported again. (To narrow a blessing, `unbless` and re-`bless`
-  the subset to keep — sidecars are append-only.) Use `list --blessings` to see what
-  is currently blessed.
+## See also
 
-## Status
+More details in the [package documentation](https://docs.rs/cargo-bench-history/).
 
-Implemented:
-
-* `run` executes Callgrind (via Gungraun), Criterion, `alloc_tracker` and
-  `all_the_time`, harvests their output (`target/gungraun/**/summary.json`,
-  `target/criterion/**/new/*.json`, `target/alloc_tracker/*.json` and
-  `target/all_the_time/*.json`), and stores one immutable result set per engine per
-  run. Callgrind and `alloc_tracker` results are hardware-independent (`synthetic`
-  partition); Criterion and `all_the_time` results are partitioned by the host
-  target triple and a machine-key hardware fingerprint.
-* `analyze` reconstructs a project's timeline from git history and reports
-  engine-aware, noise-resistant findings — sustained **change-points** and slow
-  **drifts**, separated from measurement jitter — in `text`, `json`, or `markdown`,
-  grouped by discriminant set. It runs in `history`, `branch`, or `tip` mode
-  (auto-detected, or forced with `--mode`); findings are advisory and never affect
-  the exit code (the `json` report's `mode`/`notable`/`flipped_at`/`series` fields
-  are the downstream signal). Resolved (self-corrected) spikes are surfaced with
-  `--include-inactive`.
-* `list` previews the data set an `analyze` pass would consume (run/series/commit
-  counts per discriminant set), lists the discriminant sets present in storage with
-  `--discriminants`, or audits blessings with `--blessings`.
-* `prune` deletes a chosen portion of the stored data set (clean and/or dirty runs
-  plus their blessings), with a narrowing guard on clean deletion and a `--dry-run`
-  preview.
-* `bless` / `unbless` accept (or revoke) an intentional base-branch regression so
-  history analysis re-baselines past it instead of re-flagging it forever.
-* `install` writes a starter `.cargo/bench_history.toml` when one is absent.
-* `backfill` replays `run` across a commit range in isolated git worktrees,
-  bootstrapping history for old commits; it is resumable (skips already-stored
-  commits) and supports `--overwrite` and `--ignore-errors`.
-* Storage backends: the local filesystem, or Azure Blob storage behind the
-  `azure` feature.
-
-See `DESIGN.md` for the full design and iteration plan.
+This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for
+high-performance hardware-aware programming in Rust.

@@ -25,7 +25,6 @@
 
 use std::path::{Path, PathBuf};
 
-use argh::FromArgs;
 use cargo_bench_history::{Cli, Command, MetricKind, ResultSet, RunOutcome, run};
 use serial_test::serial;
 

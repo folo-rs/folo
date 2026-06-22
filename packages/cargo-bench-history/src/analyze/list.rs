@@ -23,7 +23,7 @@ use crate::report::{Reporter, StderrReporter};
 use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
 use crate::wiring::{resolve_config_path, resolve_project_id, resolve_repo};
-use crate::{ListOptions, RunError, RunOutcome};
+use crate::{ListOptions, ListSubject, RunError, RunOutcome};
 
 use jiff::Timestamp;
 
@@ -31,8 +31,8 @@ use super::discriminant::DiscriminantSet;
 use super::report::ReportFormat;
 use super::series::{LoadedObject, Series, SeriesFilter, apply_blessings, build_series};
 use super::{
-    SelectedDataSet, Selection, dirty_base_exception_warning, empty_history_hint,
-    facet_filtered_candidates, parse_format, parsed_facets, select_dataset,
+    AutoFacets, SelectedDataSet, Selection, detect_auto_facets, dirty_base_exception_warning,
+    empty_history_hint, facet_filtered_candidates, parse_format, resolve_facets, select_dataset,
 };
 use crate::bless::BlessingRecord;
 
@@ -59,6 +59,7 @@ pub(crate) async fn execute(
     let storage = build_storage(&config, workspace_dir)?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
+    let auto = detect_auto_facets().await?;
 
     let now = now_override.unwrap_or_else(Timestamp::now);
     list_with(
@@ -67,6 +68,7 @@ pub(crate) async fn execute(
         &project_id,
         &config,
         options,
+        &auto,
         now,
         &reporter,
     )
@@ -74,14 +76,19 @@ pub(crate) async fn execute(
 }
 
 /// Storage- and git-generic `list`: either list the discriminant sets present in
-/// storage (`--discriminants`, no repository required), or resolve the same data
+/// storage (`discriminants`, no repository required), or resolve the same data
 /// set `analyze` would and report its per-set counts.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the analyze selection pipeline, which threads the same injected ports"
+)]
 pub(crate) async fn list_with<G, S>(
     git: &G,
     storage: &S,
     project_id: &str,
     config: &Config,
     options: &ListOptions,
+    auto: &AutoFacets,
     now: Timestamp,
     reporter: &dyn Reporter,
 ) -> Result<RunOutcome, RunError>
@@ -92,52 +99,59 @@ where
     let format = parse_format(options.format.as_deref())?;
     let selection = Selection::from_list(options);
 
-    if options.discriminants {
-        // The discriminant listing is a facet-only view of storage; it never
-        // resolves git topology, so it works without a repository.
-        let (engine, facets) = parsed_facets(&selection)?;
-        let candidates =
-            facet_filtered_candidates(storage, project_id, engine, &facets, reporter).await?;
-        let mut sets: Vec<DiscriminantSet> = candidates
-            .into_iter()
-            .map(|(_, parsed)| parsed.set)
-            .collect();
-        sets.sort();
-        sets.dedup();
-        return Ok(RunOutcome::Completed {
-            message: render_discriminants(&sets, format),
-        });
+    match options.subject {
+        ListSubject::Discriminants => {
+            // The discriminant listing is a facet-only view of storage; it never
+            // resolves git topology, so it works without a repository.
+            let facets = resolve_facets(&selection, auto)?;
+            let candidates =
+                facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
+            let mut sets: Vec<DiscriminantSet> = candidates
+                .into_iter()
+                .map(|(_, parsed)| parsed.set)
+                .collect();
+            sets.sort();
+            sets.dedup();
+            Ok(RunOutcome::Completed {
+                message: render_discriminants(&sets, format),
+            })
+        }
+        ListSubject::Blessings => {
+            let message = list_blessings(
+                git, storage, project_id, config, options, auto, now, reporter,
+            )
+            .await?;
+            Ok(RunOutcome::Completed { message })
+        }
+        ListSubject::Runs => {
+            let dataset = select_dataset(
+                git, storage, project_id, config, &selection, auto, now, reporter,
+            )
+            .await?;
+            let filter = SeriesFilter {
+                metric: options.metric.as_deref(),
+            };
+            let series = build_series(&dataset.loaded, &dataset.order, &filter);
+            let listing = build_listing(project_id, &dataset, &series);
+
+            // The same self-explaining diagnostics `analyze` shows: a hint when
+            // stored runs matched the facets but none entered the selection, and a
+            // warning when a dirty base-branch-tip run was admitted because the
+            // working tree is dirty.
+            let hint = empty_history_hint(
+                dataset.loaded.is_empty(),
+                dataset.candidate_count,
+                &dataset.target_ref,
+                dataset.tally,
+            );
+            let warning = dataset
+                .included_dirty_base_exception
+                .then(dirty_base_exception_warning);
+
+            let message = render_listing(&listing, format, hint.as_deref(), warning.as_deref());
+            Ok(RunOutcome::Completed { message })
+        }
     }
-
-    if options.blessings {
-        let message =
-            list_blessings(git, storage, project_id, config, options, now, reporter).await?;
-        return Ok(RunOutcome::Completed { message });
-    }
-
-    let dataset =
-        select_dataset(git, storage, project_id, config, &selection, now, reporter).await?;
-    let filter = SeriesFilter {
-        metric: options.metric.as_deref(),
-    };
-    let series = build_series(&dataset.loaded, &dataset.order, &filter);
-    let listing = build_listing(project_id, &dataset, &series);
-
-    // The same self-explaining diagnostics `analyze` shows: a hint when stored
-    // runs matched the facets but none entered the selection, and a warning when a
-    // dirty base-branch-tip run was admitted because the working tree is dirty.
-    let hint = empty_history_hint(
-        dataset.loaded.is_empty(),
-        dataset.candidate_count,
-        &dataset.target_ref,
-        dataset.tally,
-    );
-    let warning = dataset
-        .included_dirty_base_exception
-        .then(dirty_base_exception_warning);
-
-    let message = render_listing(&listing, format, hint.as_deref(), warning.as_deref());
-    Ok(RunOutcome::Completed { message })
 }
 
 /// One commit's contribution to a discriminant set, in first-parent order.
@@ -522,12 +536,17 @@ struct BlessingEntry {
 /// facet-selected sets — the sidecars a fresh `unbless` would remove. `--all`: the
 /// most recent blessing of every benchmark across the analysis window `analyze`
 /// would resolve, so a user can audit which benchmarks are currently re-baselined.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the analyze selection pipeline, which threads the same injected ports"
+)]
 async fn list_blessings<G, S>(
     git: &G,
     storage: &S,
     project_id: &str,
     config: &Config,
     options: &ListOptions,
+    auto: &AutoFacets,
     now: Timestamp,
     reporter: &dyn Reporter,
 ) -> Result<String, RunError>
@@ -540,11 +559,11 @@ where
 
     let (head_label, mut entries) = if options.all {
         blessings_across_window(
-            git, storage, project_id, config, &selection, options, now, reporter,
+            git, storage, project_id, config, &selection, options, auto, now, reporter,
         )
         .await?
     } else {
-        blessings_at_head(git, storage, project_id, &selection, reporter).await?
+        blessings_at_head(git, storage, project_id, &selection, auto, reporter).await?
     };
     entries.sort_by(|left, right| {
         left.set
@@ -569,6 +588,7 @@ async fn blessings_at_head<G, S>(
     storage: &S,
     project_id: &str,
     selection: &Selection<'_>,
+    auto: &AutoFacets,
     reporter: &dyn Reporter,
 ) -> Result<(String, Vec<BlessingEntry>), RunError>
 where
@@ -584,9 +604,8 @@ where
                       Run inside a repository (or pass --repo)."
                 .to_owned(),
         })?;
-    let (engine, facets) = parsed_facets(selection)?;
-    let candidates =
-        facet_filtered_candidates(storage, project_id, engine, &facets, reporter).await?;
+    let facets = resolve_facets(selection, auto)?;
+    let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
 
     let mut entries = Vec::new();
     for (key, parsed) in candidates {
@@ -627,6 +646,7 @@ async fn blessings_across_window<G, S>(
     config: &Config,
     selection: &Selection<'_>,
     options: &ListOptions,
+    auto: &AutoFacets,
     now: Timestamp,
     reporter: &dyn Reporter,
 ) -> Result<(String, Vec<BlessingEntry>), RunError>
@@ -634,8 +654,10 @@ where
     G: GitHistory,
     S: Storage,
 {
-    let dataset =
-        select_dataset(git, storage, project_id, config, selection, now, reporter).await?;
+    let dataset = select_dataset(
+        git, storage, project_id, config, selection, auto, now, reporter,
+    )
+    .await?;
     let filter = SeriesFilter {
         metric: options.metric.as_deref(),
     };
@@ -890,6 +912,14 @@ mod tests {
 
     fn config() -> Config {
         parse_config("[storage.local]\npath = \"./data\"\n").expect("config parses")
+    }
+
+    /// The auto-detected facets for the default synthetic partition the tests seed.
+    fn auto() -> AutoFacets {
+        AutoFacets {
+            triple: "x86_64-unknown-linux-gnu".to_owned(),
+            machine_key: "synthetic".to_owned(),
+        }
     }
 
     fn options() -> ListOptions {
@@ -1157,6 +1187,7 @@ mod tests {
             "folo",
             &config(),
             options,
+            &auto(),
             Timestamp::from_second(0).expect("epoch is valid"),
             &RecordingReporter::new(),
         ))
@@ -1254,6 +1285,7 @@ mod tests {
             "folo",
             &config(),
             &options(),
+            &auto(),
             Timestamp::from_second(0).expect("epoch is valid"),
             &RecordingReporter::new(),
         ))
@@ -1263,17 +1295,18 @@ mod tests {
 
     #[test]
     fn list_engine_facet_restricts_the_data_set() {
+        // Two sets in the same triple/machine partition differing only by engine.
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("c0"), &two_metric_set(0, "c0"));
         store(
             &storage,
-            "v2/folo/criterion/x86_64-unknown-linux-gnu/m1/c0/clean.json",
+            "v2/folo/criterion/x86_64-unknown-linux-gnu/synthetic/c0/clean.json",
             &two_metric_set(0, "c0"),
         );
         let git = linear_git();
 
         let opts = ListOptions {
-            engine: Some("callgrind".to_owned()),
+            engine: vec!["callgrind".to_owned()],
             format: Some("json".to_owned()),
             ..options()
         };
@@ -1295,8 +1328,8 @@ mod tests {
     }
 
     #[test]
-    fn list_discriminants_lists_present_sets_without_a_repo() {
-        // `--discriminants` never requires a repository.
+    fn list_discriminants_defaults_to_the_current_machine_then_widens_with_all() {
+        // The discriminants index never requires a repository.
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("c0"), &two_metric_set(0, "c0"));
         store(
@@ -1306,8 +1339,28 @@ mod tests {
         );
         let git = FakeGitHistory::new(); // No repo, but listing does not need one.
 
+        // With no facets the auto-detected triple/machine (linux/synthetic) keep
+        // only the matching set; the windows/m1 partition is filtered out.
         let opts = ListOptions {
-            discriminants: true,
+            subject: ListSubject::Discriminants,
+            format: Some("json".to_owned()),
+            ..options()
+        };
+        let report = list(&storage, &git, &opts);
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let sets = parsed.as_array().expect("a JSON array of sets");
+        assert_eq!(
+            sets.len(),
+            1,
+            "auto-detect keeps the current machine: {report}"
+        );
+        assert_eq!(sets[0]["engine"], "callgrind", "{report}");
+
+        // Widening the triple and machine facets with `all` reveals both partitions.
+        let opts = ListOptions {
+            subject: ListSubject::Discriminants,
+            target_triple: vec!["all".to_owned()],
+            machine_key: vec!["all".to_owned()],
             format: Some("json".to_owned()),
             ..options()
         };
@@ -1329,7 +1382,7 @@ mod tests {
         store(&storage, &clean_key("c0"), &two_metric_set(0, "c0"));
         let git = FakeGitHistory::new();
         let opts = ListOptions {
-            discriminants: true,
+            subject: ListSubject::Discriminants,
             ..options()
         };
         let report = list(&storage, &git, &opts);
@@ -1366,7 +1419,7 @@ mod tests {
         let git = linear_git();
 
         let opts = ListOptions {
-            blessings: true,
+            subject: ListSubject::Blessings,
             format: Some("json".to_owned()),
             ..options()
         };
@@ -1390,7 +1443,7 @@ mod tests {
         let git = linear_git();
 
         let opts = ListOptions {
-            blessings: true,
+            subject: ListSubject::Blessings,
             ..options()
         };
         let report = list(&storage, &git, &opts);
@@ -1424,7 +1477,7 @@ mod tests {
         let git = linear_git();
 
         let opts = ListOptions {
-            blessings: true,
+            subject: ListSubject::Blessings,
             all: true,
             format: Some("json".to_owned()),
             ..options()
@@ -1467,7 +1520,7 @@ mod tests {
         let git = linear_git();
 
         let opts = ListOptions {
-            blessings: true,
+            subject: ListSubject::Blessings,
             all: true,
             format: Some("json".to_owned()),
             ..options()

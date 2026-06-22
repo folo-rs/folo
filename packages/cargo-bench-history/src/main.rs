@@ -8,14 +8,13 @@
 
 use std::process::ExitCode;
 
-use argh::FromArgs;
 use cargo_bench_history::{Cli, RunOutcome, run};
 
 #[cfg_attr(test, mutants::skip)]
 #[tokio::main]
 async fn main() -> ExitCode {
     // When called via `cargo bench-history`, the first argument is "bench-history",
-    // which we strip before handing the rest to argh.
+    // which we strip before parsing the rest.
     let mut env_args: Vec<String> = std::env::args().collect();
 
     if env_args.get(1).is_some_and(|arg| arg == "bench-history") {
@@ -30,8 +29,8 @@ async fn main() -> ExitCode {
 
     let sub_args = str_args.get(1..).unwrap_or(&[]);
 
-    // With no subcommand, argh emits only a bare list of command names. Show the
-    // full help instead, so each command's description is visible.
+    // With no subcommand, show the full help (each command's description) on
+    // stderr and exit non-zero, rather than failing with a bare usage error.
     if sub_args.is_empty() {
         eprintln!("{}", Cli::help(program_name));
         return ExitCode::FAILURE;

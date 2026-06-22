@@ -3,8 +3,8 @@
 //! A *discriminant set* is the `engine / target_triple / machine` triple (within
 //! one project) that makes two runs comparable — the segment of a storage key
 //! above the commit directory (see DESIGN §4.3). Operating system and CPU
-//! architecture are *derived facets* parsed from the target triple so a user can
-//! select sets without memorizing triples.
+//! architecture are *derived facets* parsed from the target triple, kept only for
+//! display in reports and listings (they are no longer selectable filters).
 
 use std::fmt;
 
@@ -34,35 +34,78 @@ impl DiscriminantSet {
         arch_from_triple(&self.target_triple)
     }
 
-    /// Whether this set passes every facet of `facets` that is set.
-    pub(crate) fn matches(&self, facets: &Facets<'_>) -> bool {
-        facet_matches(facets.engine, &self.engine)
-            && facet_matches(facets.target_triple, &self.target_triple)
-            && facet_matches(facets.os, self.os())
-            && facet_matches(facets.architecture, self.architecture())
-            && facet_matches(facets.machine_key, &self.machine)
+    /// Whether this set passes every facet filter.
+    ///
+    /// Hardware-independent (`synthetic`) sets — Callgrind and `alloc_tracker` —
+    /// are exempt from the machine-key facet entirely (their results belong to
+    /// every machine's universe) and from an *auto-detected* target-triple facet
+    /// (the recorded triple is an artifact, e.g. Callgrind pins Linux). An
+    /// explicit `--target-triple` still filters them, as the user asked for that
+    /// precise slice.
+    pub(crate) fn matches(&self, facets: &Facets) -> bool {
+        let synthetic = self.machine == "synthetic";
+        facets.engine.passes(&self.engine, false, false)
+            && facets
+                .target_triple
+                .passes(&self.target_triple, synthetic, false)
+            && facets.machine_key.passes(&self.machine, synthetic, true)
     }
 }
 
-/// The facet filters from the command line; each `None` facet is unconstrained.
+/// A resolved filter for one discriminant facet (engine, target triple, or
+/// machine key).
 ///
-/// `target_triple` matches the whole partition value directly; `os` and
-/// `architecture` are the derived facets. A caller must not set `target_triple`
-/// together with either derived facet (the triple already fixes both) — that
-/// mutual exclusion is enforced before the `Facets` are built (see `analyze`).
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct Facets<'a> {
-    /// Restrict to a single engine (for example, `callgrind`).
-    pub(crate) engine: Option<&'a str>,
-    /// Restrict to a single full target triple (for example,
+/// The variant records how the value was supplied so [`DiscriminantSet::matches`]
+/// can apply the hardware-independent exemption only where intended.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) enum FacetFilter {
+    /// Unconstrained: every set passes. Produced by the `all` keyword, and by
+    /// `--engine`'s omitted default (there is no host engine to auto-detect to).
+    #[default]
+    All,
+    /// The auto-detected current-machine value, used when the facet is omitted.
+    /// A `synthetic` set is exempt, so a bare query still surfaces
+    /// engine-independent history alongside this machine's data.
+    Auto(String),
+    /// Explicit user-provided values; a set passes if it equals one of them
+    /// (case-insensitive).
+    Explicit(Vec<String>),
+}
+
+impl FacetFilter {
+    /// Whether `actual` passes this filter.
+    ///
+    /// `synthetic` marks a hardware-independent set; `exempt_explicit` controls
+    /// whether such a set is also exempt from explicit values (true for the
+    /// machine-key facet — `synthetic` means "no machine" — false for the target
+    /// triple, where an explicit value is a deliberate scope).
+    fn passes(&self, actual: &str, synthetic: bool, exempt_explicit: bool) -> bool {
+        match self {
+            Self::All => true,
+            Self::Auto(value) => synthetic || value.eq_ignore_ascii_case(actual),
+            Self::Explicit(values) => {
+                (exempt_explicit && synthetic)
+                    || values
+                        .iter()
+                        .any(|value| value.eq_ignore_ascii_case(actual))
+            }
+        }
+    }
+}
+
+/// The facet filters from the command line, each resolved to a [`FacetFilter`].
+///
+/// `target_triple` matches the whole partition value directly; the derived `os`
+/// and `architecture` facets were removed (filter on the triple directly).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Facets {
+    /// Restrict to one or more engines (for example, `callgrind`).
+    pub(crate) engine: FacetFilter,
+    /// Restrict to one or more full target triples (for example,
     /// `x86_64-unknown-linux-gnu`).
-    pub(crate) target_triple: Option<&'a str>,
-    /// Restrict to a single operating system (for example, `windows`).
-    pub(crate) os: Option<&'a str>,
-    /// Restrict to a single CPU architecture (for example, `x86_64`).
-    pub(crate) architecture: Option<&'a str>,
-    /// Restrict to a single machine partition.
-    pub(crate) machine_key: Option<&'a str>,
+    pub(crate) target_triple: FacetFilter,
+    /// Restrict to one or more machine partitions.
+    pub(crate) machine_key: FacetFilter,
 }
 
 /// The components a storage key decomposes into.
@@ -139,11 +182,6 @@ pub(crate) fn parse_key(key: &str) -> Option<ParsedKey> {
         commit: (*commit).to_owned(),
         file: (*file).to_owned(),
     })
-}
-
-/// Whether an optional facet constraint is satisfied by `actual` (case-insensitive).
-fn facet_matches(want: Option<&str>, actual: &str) -> bool {
-    want.is_none_or(|want| want.eq_ignore_ascii_case(actual))
 }
 
 /// Derives the CPU architecture from a target triple (its first component).
@@ -269,47 +307,97 @@ mod tests {
     #[test]
     fn matches_requires_every_set_facet() {
         let windows = set("x86_64-pc-windows-msvc");
+        // Explicit target-triple + machine pass.
         assert!(windows.matches(&Facets {
-            os: Some("windows"),
-            architecture: Some("x86_64"),
+            target_triple: FacetFilter::Explicit(vec!["x86_64-pc-windows-msvc".to_owned()]),
+            machine_key: FacetFilter::Explicit(vec!["synthetic".to_owned()]),
             ..Facets::default()
         }));
-        // Case-insensitive on the user-facing facets.
+        // Case-insensitive on the explicit values.
         assert!(windows.matches(&Facets {
-            os: Some("Windows"),
+            target_triple: FacetFilter::Explicit(vec!["X86_64-PC-Windows-MSVC".to_owned()]),
             ..Facets::default()
         }));
+        // A different explicit triple misses.
         assert!(!windows.matches(&Facets {
-            os: Some("linux"),
+            target_triple: FacetFilter::Explicit(vec!["x86_64-unknown-linux-gnu".to_owned()]),
             ..Facets::default()
         }));
+        // A different explicit engine misses.
         assert!(!windows.matches(&Facets {
-            engine: Some("criterion"),
-            ..Facets::default()
-        }));
-        assert!(!windows.matches(&Facets {
-            machine_key: Some("m1"),
+            engine: FacetFilter::Explicit(vec!["criterion".to_owned()]),
             ..Facets::default()
         }));
     }
 
     #[test]
-    fn matches_on_the_full_target_triple() {
+    fn synthetic_set_is_exempt_from_the_machine_key_facet() {
+        let synthetic = set("x86_64-unknown-linux-gnu"); // machine = synthetic
+        // Even an explicit, non-matching machine key includes a synthetic set.
+        assert!(synthetic.matches(&Facets {
+            machine_key: FacetFilter::Explicit(vec!["some-other-machine".to_owned()]),
+            ..Facets::default()
+        }));
+        // And an auto-detected host fingerprint includes it too.
+        assert!(synthetic.matches(&Facets {
+            machine_key: FacetFilter::Auto("host-fingerprint".to_owned()),
+            ..Facets::default()
+        }));
+    }
+
+    #[test]
+    fn synthetic_set_is_exempt_from_an_auto_detected_triple_but_not_an_explicit_one() {
+        let synthetic = set("x86_64-unknown-linux-gnu"); // machine = synthetic
+        // An auto-detected (omitted) triple does not hide engine-independent data.
+        assert!(synthetic.matches(&Facets {
+            target_triple: FacetFilter::Auto("x86_64-pc-windows-msvc".to_owned()),
+            ..Facets::default()
+        }));
+        // An explicit triple is a deliberate scope and filters even synthetic sets.
+        assert!(!synthetic.matches(&Facets {
+            target_triple: FacetFilter::Explicit(vec!["x86_64-pc-windows-msvc".to_owned()]),
+            ..Facets::default()
+        }));
+    }
+
+    #[test]
+    fn hardware_dependent_set_obeys_the_auto_detected_machine_key() {
+        let machine = DiscriminantSet {
+            engine: "criterion".to_owned(),
+            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
+            machine: "m1".to_owned(),
+        };
+        // This machine matches its own auto-detected fingerprint.
+        assert!(machine.matches(&Facets {
+            machine_key: FacetFilter::Auto("m1".to_owned()),
+            ..Facets::default()
+        }));
+        // Another machine's auto-detected fingerprint excludes it.
+        assert!(!machine.matches(&Facets {
+            machine_key: FacetFilter::Auto("m2".to_owned()),
+            ..Facets::default()
+        }));
+    }
+
+    #[test]
+    fn repeated_facet_values_union() {
         let linux = set("x86_64-unknown-linux-gnu");
-        assert!(linux.matches(&Facets {
-            target_triple: Some("x86_64-unknown-linux-gnu"),
+        let windows = set("x86_64-pc-windows-msvc");
+        let either = Facets {
+            target_triple: FacetFilter::Explicit(vec![
+                "x86_64-unknown-linux-gnu".to_owned(),
+                "x86_64-pc-windows-msvc".to_owned(),
+            ]),
             ..Facets::default()
-        }));
-        // Case-insensitive, like the other user-facing facets.
-        assert!(linux.matches(&Facets {
-            target_triple: Some("X86_64-Unknown-Linux-Gnu"),
-            ..Facets::default()
-        }));
-        // A triple that shares the architecture but not the whole value misses.
-        assert!(!linux.matches(&Facets {
-            target_triple: Some("x86_64-pc-windows-msvc"),
-            ..Facets::default()
-        }));
+        };
+        assert!(linux.matches(&either));
+        assert!(windows.matches(&either));
+    }
+
+    #[test]
+    fn all_filter_matches_every_set() {
+        let windows = set("x86_64-pc-windows-msvc");
+        assert!(windows.matches(&Facets::default()));
     }
 
     #[test]

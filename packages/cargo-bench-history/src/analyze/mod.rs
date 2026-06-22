@@ -34,7 +34,9 @@ use crate::bless::BlessingRecord;
 use crate::comparability::{EngineSystem, sanitize_segment};
 use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
+use crate::machine::resolve_machine_key;
 use crate::model::ResultSet;
+use crate::probe::{EnvironmentProbe, SystemProbe};
 use crate::report::{Reporter, StderrReporter};
 use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
@@ -43,7 +45,7 @@ use crate::{
     AnalyzeOptions, BlessOptions, ListOptions, PruneOptions, RunError, RunOutcome, UnblessOptions,
 };
 
-use discriminant::{DiscriminantSet, Facets, ParsedKey, parse_key};
+use discriminant::{DiscriminantSet, FacetFilter, Facets, ParsedKey, parse_key};
 use findings::{AnalysisConfig, AnalysisContext, AnalysisMode, find_changes};
 use report::{ReportFormat, ReportInput, SetSummary, render};
 use selection::select_commits;
@@ -74,6 +76,7 @@ pub(crate) async fn execute(
     let storage = build_storage(&config, workspace_dir)?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
+    let auto = detect_auto_facets().await?;
 
     let now = now_override.unwrap_or_else(Timestamp::now);
     let color = should_colorize(
@@ -86,6 +89,7 @@ pub(crate) async fn execute(
         &project_id,
         &config,
         options,
+        &auto,
         now,
         &reporter,
         color,
@@ -97,6 +101,23 @@ pub(crate) async fn execute(
 /// `NO_COLOR` unset.
 fn should_colorize(is_terminal: bool, no_color: bool) -> bool {
     is_terminal && !no_color
+}
+
+/// Probes the current machine's auto-detect facet values for the query commands.
+///
+/// The host triple comes from `rustc -vV` (with a platform fallback) and the
+/// machine key from the hardware fingerprint. There is no engine probe — a bare
+/// query analyzes every engine. Tests drive the generic orchestrators directly
+/// with deterministic [`AutoFacets`] instead of calling this.
+#[cfg_attr(test, mutants::skip)] // Probes the host environment; the facet resolution it feeds is tested.
+async fn detect_auto_facets() -> Result<AutoFacets, RunError> {
+    let probe = SystemProbe::default();
+    let toolchain = probe.toolchain().await.map_err(RunError::Io)?;
+    let hardware = probe.hardware().await;
+    Ok(AutoFacets {
+        triple: toolchain.host.unwrap_or_default(),
+        machine_key: resolve_machine_key(None, &hardware),
+    })
 }
 
 /// Storage- and git-generic `analyze`: facet-filter the stored objects, resolve
@@ -115,6 +136,7 @@ pub(crate) async fn analyze_with<G, S>(
     project_id: &str,
     config: &Config,
     options: &AnalyzeOptions,
+    auto: &AutoFacets,
     now: Timestamp,
     reporter: &dyn Reporter,
     color: bool,
@@ -125,8 +147,10 @@ where
 {
     let format = parse_format(options.format.as_deref())?;
     let selection = Selection::from_analyze(options)?;
-    let dataset =
-        select_dataset(git, storage, project_id, config, &selection, now, reporter).await?;
+    let dataset = select_dataset(
+        git, storage, project_id, config, &selection, auto, now, reporter,
+    )
+    .await?;
 
     let filter = SeriesFilter {
         metric: options.metric.as_deref(),
@@ -206,21 +230,25 @@ where
     })
 }
 
-/// The data-set selection parameters shared by `analyze` and `list`: which stored
-/// objects to consider (facets + `--since`) and how to resolve the git timeline
-/// (`--repo` is resolved by the caller into the [`GitHistory`] adapter; `--branch` /
-/// `--base` / `--no-dirty` steer the topology query). `--metric` is deliberately
-/// *not* here: it filters which series are built, not which runs load.
+/// The data-set selection parameters shared by the query commands: which stored
+/// objects to consider (facets + `--since` / `--until`) and how to resolve the git
+/// timeline (`--repo` is resolved by the caller into the [`GitHistory`] adapter;
+/// `--context` / `--base` / `--no-dirty` steer the topology query). `--metric` is
+/// deliberately *not* here: it filters which series are built, not which runs load.
+///
+/// Each facet (`engine` / `target_triple` / `machine_key`) carries the raw,
+/// repeatable command-line values; [`resolve_facets`] turns them into
+/// [`FacetFilter`]s, applying the current-machine auto-detect default and the
+/// `all` keyword.
 struct Selection<'a> {
-    branch: Option<&'a str>,
+    context: Option<&'a str>,
     base: Option<&'a str>,
     no_dirty: bool,
     since: Option<&'a str>,
-    engine: Option<&'a str>,
-    target_triple: Option<&'a str>,
-    os: Option<&'a str>,
-    architecture: Option<&'a str>,
-    machine_key: Option<&'a str>,
+    until: Option<&'a str>,
+    engine: &'a [String],
+    target_triple: &'a [String],
+    machine_key: &'a [String],
     /// Explicit `--mode` override; `None` lets the mode auto-detect from topology.
     mode_override: Option<AnalysisMode>,
 }
@@ -228,37 +256,35 @@ struct Selection<'a> {
 impl<'a> Selection<'a> {
     fn from_analyze(options: &'a AnalyzeOptions) -> Result<Self, RunError> {
         Ok(Self {
-            branch: options.branch.as_deref(),
+            context: options.context.as_deref(),
             base: options.base.as_deref(),
             no_dirty: options.no_dirty,
             since: options.since.as_deref(),
-            engine: options.engine.as_deref(),
-            target_triple: options.target_triple.as_deref(),
-            os: options.os.as_deref(),
-            architecture: options.architecture.as_deref(),
-            machine_key: options.machine_key.as_deref(),
+            until: options.until.as_deref(),
+            engine: &options.engine,
+            target_triple: &options.target_triple,
+            machine_key: &options.machine_key,
             mode_override: parse_mode(options.mode.as_deref())?,
         })
     }
 
     fn from_list(options: &'a ListOptions) -> Self {
         Self {
-            branch: options.branch.as_deref(),
+            context: options.context.as_deref(),
             base: options.base.as_deref(),
             no_dirty: options.no_dirty,
             since: options.since.as_deref(),
-            engine: options.engine.as_deref(),
-            target_triple: options.target_triple.as_deref(),
-            os: options.os.as_deref(),
-            architecture: options.architecture.as_deref(),
-            machine_key: options.machine_key.as_deref(),
+            until: options.until.as_deref(),
+            engine: &options.engine,
+            target_triple: &options.target_triple,
+            machine_key: &options.machine_key,
             mode_override: None,
         }
     }
 
     fn from_prune(options: &'a PruneOptions) -> Self {
         Self {
-            branch: options.branch.as_deref(),
+            context: options.context.as_deref(),
             base: options.base.as_deref(),
             // `prune` resolves the data set with dirty admission always on; the
             // base-tip exception is applied unconditionally (see
@@ -266,29 +292,27 @@ impl<'a> Selection<'a> {
             // `--clean`) decides which runs are actually removed.
             no_dirty: false,
             since: options.since.as_deref(),
-            engine: options.engine.as_deref(),
-            target_triple: options.target_triple.as_deref(),
-            os: options.os.as_deref(),
-            architecture: options.architecture.as_deref(),
-            machine_key: options.machine_key.as_deref(),
+            until: options.until.as_deref(),
+            engine: &options.engine,
+            target_triple: &options.target_triple,
+            machine_key: &options.machine_key,
             mode_override: None,
         }
     }
 
     /// Selection facets for `bless`. Only the discriminant facets (and `base`)
     /// matter: a blessing always acts at the current commit, so it has no
-    /// `branch` / `since` / topology selectors.
+    /// `context` / `since` / topology selectors.
     fn from_bless(options: &'a BlessOptions) -> Self {
         Self {
-            branch: None,
+            context: None,
             base: options.base.as_deref(),
             no_dirty: false,
             since: None,
-            engine: options.engine.as_deref(),
-            target_triple: options.target_triple.as_deref(),
-            os: options.os.as_deref(),
-            architecture: options.architecture.as_deref(),
-            machine_key: options.machine_key.as_deref(),
+            until: None,
+            engine: &options.engine,
+            target_triple: &options.target_triple,
+            machine_key: &options.machine_key,
             mode_override: None,
         }
     }
@@ -296,18 +320,32 @@ impl<'a> Selection<'a> {
     /// Selection facets for `unbless`. Mirrors [`from_bless`](Self::from_bless).
     fn from_unbless(options: &'a UnblessOptions) -> Self {
         Self {
-            branch: None,
+            context: None,
             base: options.base.as_deref(),
             no_dirty: false,
             since: None,
-            engine: options.engine.as_deref(),
-            target_triple: options.target_triple.as_deref(),
-            os: options.os.as_deref(),
-            architecture: options.architecture.as_deref(),
-            machine_key: options.machine_key.as_deref(),
+            until: None,
+            engine: &options.engine,
+            target_triple: &options.target_triple,
+            machine_key: &options.machine_key,
             mode_override: None,
         }
     }
+}
+
+/// The current machine's auto-detected facet values, used as the default when a
+/// query facet is omitted (see DESIGN §4.3).
+///
+/// Production probes these once (host triple from `rustc -vV`, machine key from
+/// the hardware fingerprint); tests pass deterministic literals. There is no auto
+/// engine — a bare query analyzes every engine — so only the triple and machine
+/// key are detected.
+#[derive(Clone, Debug)]
+pub(crate) struct AutoFacets {
+    /// The host target triple (`rustc -vV` host).
+    pub(crate) triple: String,
+    /// The host machine fingerprint.
+    pub(crate) machine_key: String,
 }
 
 /// The objects an analysis (or listing) draws on, plus the bookkeeping needed to
@@ -338,25 +376,37 @@ struct SelectedDataSet {
     blessings: HashMap<DiscriminantSet, Vec<(usize, BlessingRecord)>>,
 }
 
-/// Parses the `--engine` facet and validates the triple/os/arch exclusivity, then
-/// assembles the [`Facets`] borrow used to filter stored discriminant sets.
-fn parsed_facets<'a>(
-    selection: &Selection<'a>,
-) -> Result<(Option<EngineSystem>, Facets<'a>), RunError> {
-    let engine = parse_engine(selection.engine)?;
-    validate_triple_exclusivity(
-        selection.target_triple,
-        selection.os,
-        selection.architecture,
-    )?;
-    let facets = Facets {
-        engine: engine.map(EngineSystem::as_str),
-        target_triple: selection.target_triple,
-        os: selection.os,
-        architecture: selection.architecture,
-        machine_key: selection.machine_key,
-    };
-    Ok((engine, facets))
+/// Resolves one facet's raw command-line values into a [`FacetFilter`].
+///
+/// The case-insensitive `all` keyword (anywhere in the list) is an explicit
+/// synonym for no filter. An empty list auto-detects: the current-machine value
+/// when one is supplied (`auto`), else no filter (engine has no host default).
+fn resolve_facet(values: &[String], auto: Option<&str>) -> FacetFilter {
+    if values.iter().any(|value| value.eq_ignore_ascii_case("all")) {
+        return FacetFilter::All;
+    }
+    if values.is_empty() {
+        return auto.map_or(FacetFilter::All, |value| {
+            FacetFilter::Auto(value.to_owned())
+        });
+    }
+    FacetFilter::Explicit(values.to_vec())
+}
+
+/// Resolves every command-line facet into a [`Facets`] filter, validating that any
+/// explicit `--engine` values name a known engine.
+fn resolve_facets(selection: &Selection<'_>, auto: &AutoFacets) -> Result<Facets, RunError> {
+    let engine = resolve_facet(selection.engine, None);
+    if let FacetFilter::Explicit(values) = &engine {
+        for value in values {
+            parse_engine(Some(value))?;
+        }
+    }
+    Ok(Facets {
+        engine,
+        target_triple: resolve_facet(selection.target_triple, Some(&auto.triple)),
+        machine_key: resolve_facet(selection.machine_key, Some(&auto.machine_key)),
+    })
 }
 
 /// Lists the stored objects under the project's partition and keeps the ones whose
@@ -365,8 +415,7 @@ fn parsed_facets<'a>(
 async fn facet_filtered_candidates<S: Storage>(
     storage: &S,
     project_id: &str,
-    engine: Option<EngineSystem>,
-    facets: &Facets<'_>,
+    facets: &Facets,
     reporter: &dyn Reporter,
 ) -> Result<Vec<(String, ParsedKey)>, RunError> {
     // The listing prefix must use the same sanitized project segment that
@@ -374,10 +423,7 @@ async fn facet_filtered_candidates<S: Storage>(
     // character that sanitizes (a space, `/`, a non-ASCII letter, ...) is stored
     // mangled, so listing under the raw id would silently find an empty history.
     let project = sanitize_segment(project_id);
-    let prefix = match engine {
-        Some(engine) => format!("v2/{project}/{}/", engine.as_str()),
-        None => format!("v2/{project}/"),
-    };
+    let prefix = format!("v2/{project}/");
 
     reporter.note(&format!(
         "project id: {project_id} (storage segment: {project})"
@@ -422,12 +468,17 @@ async fn facet_filtered_candidates<S: Storage>(
 /// Resolves the git topology, selects the comparable commits, and loads the
 /// in-selection objects into a [`SelectedDataSet`]. Requires a repository: the
 /// timeline is reconstructed from git history, not from stored timestamps.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the analyze selection pipeline, which threads the same injected ports"
+)]
 async fn select_dataset<G, S>(
     git: &G,
     storage: &S,
     project_id: &str,
     config: &Config,
     selection: &Selection<'_>,
+    auto: &AutoFacets,
     now: Timestamp,
     reporter: &dyn Reporter,
 ) -> Result<SelectedDataSet, RunError>
@@ -435,9 +486,8 @@ where
     G: GitHistory,
     S: Storage,
 {
-    let (engine, facets) = parsed_facets(selection)?;
-    let candidates =
-        facet_filtered_candidates(storage, project_id, engine, &facets, reporter).await?;
+    let facets = resolve_facets(selection, auto)?;
+    let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
 
     // Separate blessing sidecars from run objects: they share the partition prefix
     // but carry a different payload and are loaded into their own map rather than
@@ -515,6 +565,11 @@ where
         since.map_or_else(|| "none".to_owned(), |since| since.to_string()),
         since_cutoff_reason(selection.since.is_some(), mode)
     ));
+    let until = parse_until(selection.until)?;
+    reporter.note(&format!(
+        "until cutoff: {}",
+        until.map_or_else(|| "none".to_owned(), |until| until.to_string())
+    ));
 
     // Tally why candidates do not enter the analysis, so a `0 runs` outcome can
     // explain itself (via `--verbose` per object, and via a summary hint when
@@ -523,12 +578,14 @@ where
     let mut excluded_outside_history = 0_usize;
     let mut excluded_dirty_base = 0_usize;
     let mut excluded_since = 0_usize;
+    let mut excluded_until = 0_usize;
     // Whether at least one dirty run was admitted solely by the base-branch
     // dirty-tree exception, so the report can warn that it is ephemeral.
     let mut included_dirty_base_exception = false;
 
     // Load each in-selection object, admitting a dirty snapshot only on a commit
-    // whose side of the merge-base allows it, then apply the `--since` window.
+    // whose side of the merge-base allows it, then apply the `--since`/`--until`
+    // window.
     let mut loaded: Vec<LoadedObject> = Vec::new();
     for (key, parsed) in candidates {
         if !order.contains_key(&parsed.commit) {
@@ -567,6 +624,13 @@ where
             ));
             continue;
         }
+        if until.is_some_and(|until| result.context.timestamps.effective > until) {
+            excluded_until = excluded_until.saturating_add(1);
+            reporter.note(&format!(
+                "excluding {key}: effective time is after the --until cutoff"
+            ));
+            continue;
+        }
         if parsed.is_dirty()
             && dirty_base_exception
                 .get(parsed.commit.as_str())
@@ -589,7 +653,8 @@ where
     }
     reporter.note(&format!(
         "{} entered the analysis ({excluded_outside_history} outside history, \
-         {excluded_dirty_base} dirty-on-base, {excluded_since} before --since)",
+         {excluded_dirty_base} dirty-on-base, {excluded_since} before --since, \
+         {excluded_until} after --until)",
         count_noun(loaded.len(), "object")
     ));
 
@@ -634,6 +699,7 @@ where
             outside_history: excluded_outside_history,
             dirty_base: excluded_dirty_base,
             since: excluded_since,
+            until: excluded_until,
         },
         included_dirty_base_exception,
         target_ref,
@@ -777,12 +843,12 @@ where
     // Resolving the timeline requires a repository: the topology comes from git
     // history, not from stored timestamps. An unresolvable target ref means there
     // is no repository here (or the branch does not exist), which is an error.
-    let target_ref = selection.branch.unwrap_or("HEAD");
+    let target_ref = selection.context.unwrap_or("HEAD");
     let Some(target_sha) = git.resolve(target_ref).await.map_err(RunError::Io)? else {
         return Err(RunError::Analyze {
             message: format!(
                 "this command requires a git repository: could not resolve {target_ref:?}. \
-                 Run inside a repository (or pass --repo / --branch)."
+                 Run inside a repository (or pass --repo / --context)."
             ),
         });
     };
@@ -920,27 +986,28 @@ fn parse_format(name: Option<&str>) -> Result<ReportFormat, RunError> {
 }
 
 /// A human-readable summary of the active facet filters, for `--verbose` notes.
-fn describe_facets(facets: &Facets<'_>) -> String {
-    let mut parts = Vec::new();
-    if let Some(engine) = facets.engine {
-        parts.push(format!("engine={engine}"));
-    }
-    if let Some(target_triple) = facets.target_triple {
-        parts.push(format!("target_triple={target_triple}"));
-    }
-    if let Some(os) = facets.os {
-        parts.push(format!("os={os}"));
-    }
-    if let Some(architecture) = facets.architecture {
-        parts.push(format!("architecture={architecture}"));
-    }
-    if let Some(machine_key) = facets.machine_key {
-        parts.push(format!("machine={machine_key}"));
-    }
+fn describe_facets(facets: &Facets) -> String {
+    let parts = [
+        ("engine", &facets.engine),
+        ("target_triple", &facets.target_triple),
+        ("machine", &facets.machine_key),
+    ]
+    .into_iter()
+    .filter_map(|(label, filter)| describe_filter(filter).map(|value| format!("{label}={value}")))
+    .collect::<Vec<_>>();
     if parts.is_empty() {
         "none".to_owned()
     } else {
         parts.join(", ")
+    }
+}
+
+/// Renders one facet filter, or `None` when it imposes no constraint.
+fn describe_filter(filter: &FacetFilter) -> Option<String> {
+    match filter {
+        FacetFilter::All => None,
+        FacetFilter::Auto(value) => Some(format!("{value} (auto-detected)")),
+        FacetFilter::Explicit(values) => Some(values.join("|")),
     }
 }
 
@@ -953,6 +1020,8 @@ struct ExclusionTally {
     dirty_base: usize,
     /// Effective time is before the `--since` cutoff.
     since: usize,
+    /// Effective time is after the `--until` cutoff.
+    until: usize,
 }
 
 /// Builds a diagnostic hint for the case where stored runs matched the facet
@@ -978,14 +1047,14 @@ fn empty_history_hint(
         lines.push(format!(
             "  - {} on base-branch commits — only clean runs count on the base \
              branch. Commit your working tree (including the configuration file) and re-run, \
-             or analyze a feature branch with --branch.",
+             or analyze a feature branch with --context.",
             count_noun(tally.dirty_base, "dirty (uncommitted-tree) snapshot")
         ));
     }
     if tally.outside_history > 0 {
         lines.push(format!(
             "  - {} on commits outside {target_ref}'s analyzed history — check out the \
-             branch they were recorded on, or pass --branch.",
+             branch they were recorded on, or pass --context.",
             count_noun(tally.outside_history, "run")
         ));
     }
@@ -995,40 +1064,29 @@ fn empty_history_hint(
             count_noun(tally.since, "run")
         ));
     }
+    if tally.until > 0 {
+        lines.push(format!(
+            "  - {} newer than the --until cutoff.",
+            count_noun(tally.until, "run")
+        ));
+    }
     lines.push("Re-run with --verbose for a per-object explanation.".to_owned());
     Some(lines.join("\n"))
 }
 
-/// Parses the `--engine` facet into an [`EngineSystem`], if set.
+/// Parses an `--engine` facet value into an [`EngineSystem`], if set.
 fn parse_engine(name: Option<&str>) -> Result<Option<EngineSystem>, RunError> {
     match name {
         None => Ok(None),
         Some(name) => EngineSystem::from_name(name)
             .map(Some)
             .ok_or_else(|| RunError::Analyze {
-                message: format!("unknown engine {name:?}; expected criterion or callgrind"),
+                message: format!(
+                    "unknown engine {name:?}; expected one of: criterion, callgrind, \
+                     alloc_tracker, all_the_time"
+                ),
             }),
     }
-}
-
-/// Rejects combining `--target-triple` with the derived `--os` / `--architecture`
-/// facets. The triple already determines both, so accepting them together invites
-/// silently contradictory filters; they are mutually exclusive — specify either the
-/// whole triple or its individual components.
-fn validate_triple_exclusivity(
-    target_triple: Option<&str>,
-    os: Option<&str>,
-    architecture: Option<&str>,
-) -> Result<(), RunError> {
-    if target_triple.is_some() && (os.is_some() || architecture.is_some()) {
-        return Err(RunError::Analyze {
-            message: "--target-triple cannot be combined with --os or --architecture; \
-                      the triple already determines both, so specify either the full \
-                      target triple or its individual components"
-                .to_owned(),
-        });
-    }
-    Ok(())
 }
 
 /// Parses the `--since` option into an absolute lower-bound instant, if set.
@@ -1323,6 +1381,15 @@ mod tests {
         Timestamp::from_second(0).expect("epoch is a valid timestamp")
     }
 
+    /// The auto-detected facets for the default synthetic partition the unit-test
+    /// data is seeded under (`x86_64-unknown-linux-gnu`, `synthetic` machine).
+    fn auto() -> AutoFacets {
+        AutoFacets {
+            triple: "x86_64-unknown-linux-gnu".to_owned(),
+            machine_key: "synthetic".to_owned(),
+        }
+    }
+
     #[test]
     fn auto_mode_uses_tip_topology_and_recorded_dirty_runs_not_repo_state() {
         // A base branch whose tip is its own merge-base with no dirty run recorded
@@ -1366,25 +1433,21 @@ mod tests {
     #[test]
     fn describe_facets_joins_set_facets_and_reports_none_when_empty() {
         let empty = Facets {
-            engine: None,
-            target_triple: None,
-            os: None,
-            architecture: None,
-            machine_key: None,
+            engine: FacetFilter::All,
+            target_triple: FacetFilter::All,
+            machine_key: FacetFilter::All,
         };
         assert_eq!(describe_facets(&empty), "none");
 
         let full = Facets {
-            engine: Some("criterion"),
-            target_triple: Some("x86_64-pc-windows-msvc"),
-            os: Some("windows"),
-            architecture: Some("x86_64"),
-            machine_key: Some("abcd"),
+            engine: FacetFilter::Explicit(vec!["criterion".to_owned()]),
+            target_triple: FacetFilter::Auto("x86_64-pc-windows-msvc".to_owned()),
+            machine_key: FacetFilter::Explicit(vec!["abcd".to_owned()]),
         };
         assert_eq!(
             describe_facets(&full),
-            "engine=criterion, target_triple=x86_64-pc-windows-msvc, os=windows, \
-             architecture=x86_64, machine=abcd"
+            "engine=criterion, target_triple=x86_64-pc-windows-msvc (auto-detected), \
+             machine=abcd"
         );
     }
 
@@ -1394,6 +1457,7 @@ mod tests {
             outside_history: 0,
             dirty_base: 0,
             since: 0,
+            until: 0,
         };
         // No candidates at all → a genuinely empty history needs no hint.
         assert_eq!(empty_history_hint(true, 0, "master", no_exclusions), None);
@@ -1404,6 +1468,7 @@ mod tests {
             outside_history: 2,
             dirty_base: 1,
             since: 4,
+            until: 0,
         };
         let hint = empty_history_hint(true, 7, "master", tally).expect("a hint");
         assert!(hint.contains("7 stored runs"), "{hint}");
@@ -1424,6 +1489,7 @@ mod tests {
             outside_history: 0,
             dirty_base: 3,
             since: 0,
+            until: 0,
         };
         let hint = empty_history_hint(true, 3, "master", dirty_only).expect("a hint");
         assert!(hint.contains("dirty (uncommitted-tree)"), "{hint}");
@@ -1435,9 +1501,25 @@ mod tests {
             outside_history: 2,
             dirty_base: 0,
             since: 0,
+            until: 0,
         };
         let hint = empty_history_hint(true, 2, "master", outside_only).expect("a hint");
         assert!(hint.contains("outside master"), "{hint}");
+        assert!(!hint.contains("dirty (uncommitted-tree)"), "{hint}");
+        assert!(!hint.contains("--since cutoff"), "{hint}");
+
+        // Only the until reason is present here.
+        let until_only = ExclusionTally {
+            outside_history: 0,
+            dirty_base: 0,
+            since: 0,
+            until: 5,
+        };
+        let hint = empty_history_hint(true, 5, "master", until_only).expect("a hint");
+        assert!(
+            hint.contains("5 runs newer than the --until cutoff"),
+            "{hint}"
+        );
         assert!(!hint.contains("dirty (uncommitted-tree)"), "{hint}");
         assert!(!hint.contains("--since cutoff"), "{hint}");
     }
@@ -1518,6 +1600,7 @@ mod tests {
             project,
             &config(),
             options,
+            &auto(),
             now_anchor(),
             &reporter,
             false,
@@ -1544,6 +1627,7 @@ mod tests {
             "folo",
             &config(),
             &options(),
+            &auto(),
             now_anchor(),
             &RecordingReporter::new(),
             false,
@@ -1621,6 +1705,7 @@ mod tests {
             "folo",
             &config(),
             &options(),
+            &auto(),
             now_anchor(),
             &reporter,
             false,
@@ -1642,6 +1727,7 @@ mod tests {
             "folo",
             &config(),
             &options(),
+            &auto(),
             now_anchor(),
             &reporter,
             false,
@@ -1841,6 +1927,7 @@ mod tests {
             "folo",
             &config(),
             &opts,
+            &auto(),
             now_anchor(),
             &reporter,
             false,
@@ -1906,6 +1993,7 @@ mod tests {
             "folo",
             &config(),
             &opts,
+            &auto(),
             now_anchor(),
             &reporter,
             false,
@@ -1991,6 +2079,7 @@ mod tests {
             "folo",
             &config(),
             &opts,
+            &auto(),
             now_anchor(),
             &reporter,
             false,
@@ -2086,6 +2175,7 @@ mod tests {
             "folo",
             &config(),
             &opts,
+            &auto(),
             now_anchor(),
             &reporter,
             false,
@@ -2151,7 +2241,7 @@ mod tests {
         let git = feature6_git();
 
         let opts = AnalyzeOptions {
-            branch: Some("master".to_owned()),
+            context: Some("master".to_owned()),
             format: Some("json".to_owned()),
             ..options()
         };
@@ -2184,8 +2274,9 @@ mod tests {
     }
 
     #[test]
-    fn os_facet_selects_one_set() {
-        // Two sets differing only by OS; `--os windows` reports just the one.
+    fn target_triple_facet_selects_the_windows_set() {
+        // Two sets differing only by triple; an explicit `--target-triple` reports
+        // just the matching one, even though the auto-detected default is Linux.
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
         store(
@@ -2196,7 +2287,7 @@ mod tests {
         let git = linear_git();
 
         let opts = AnalyzeOptions {
-            os: Some("windows".to_owned()),
+            target_triple: vec!["x86_64-pc-windows-msvc".to_owned()],
             format: Some("json".to_owned()),
             ..options()
         };
@@ -2204,6 +2295,10 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 1, "only the windows set is loaded");
         assert_eq!(parsed["sets"].as_array().unwrap().len(), 1, "{report}");
+        assert_eq!(
+            parsed["sets"][0]["target_triple"], "x86_64-pc-windows-msvc",
+            "{report}"
+        );
     }
 
     #[test]
@@ -2219,7 +2314,7 @@ mod tests {
         let git = linear_git();
 
         let opts = AnalyzeOptions {
-            target_triple: Some("x86_64-unknown-linux-gnu".to_owned()),
+            target_triple: vec!["x86_64-unknown-linux-gnu".to_owned()],
             format: Some("json".to_owned()),
             ..options()
         };
@@ -2231,45 +2326,6 @@ mod tests {
             parsed["sets"][0]["target_triple"], "x86_64-unknown-linux-gnu",
             "{report}"
         );
-    }
-
-    #[test]
-    fn target_triple_combined_with_os_or_architecture_is_an_error() {
-        let storage = MemoryStorage::new();
-        store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
-        let git = linear_git();
-
-        for conflicting in [
-            AnalyzeOptions {
-                target_triple: Some("x86_64-unknown-linux-gnu".to_owned()),
-                os: Some("linux".to_owned()),
-                ..options()
-            },
-            AnalyzeOptions {
-                target_triple: Some("x86_64-unknown-linux-gnu".to_owned()),
-                architecture: Some("x86_64".to_owned()),
-                ..options()
-            },
-        ] {
-            let error = block_on(analyze_with(
-                &git,
-                &storage,
-                "folo",
-                &config(),
-                &conflicting,
-                now_anchor(),
-                &RecordingReporter::new(),
-                false,
-            ))
-            .unwrap_err();
-            assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
-            assert!(
-                error
-                    .to_string()
-                    .contains("--target-triple cannot be combined"),
-                "{error}"
-            );
-        }
     }
 
     #[test]
@@ -2294,17 +2350,19 @@ mod tests {
 
     #[test]
     fn engine_facet_narrows_the_listing() {
+        // Two sets in the same triple/machine partition differing only by engine,
+        // so the engine facet alone selects one.
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
         store(
             &storage,
-            "v2/folo/criterion/x86_64-pc-windows-msvc/m1/c0/clean.json",
+            "v2/folo/criterion/x86_64-unknown-linux-gnu/synthetic/c0/clean.json",
             &ir_set(0, "c0", 100.0),
         );
         let git = linear_git();
 
         let opts = AnalyzeOptions {
-            engine: Some("callgrind".to_owned()),
+            engine: vec!["callgrind".to_owned()],
             format: Some("json".to_owned()),
             ..options()
         };
@@ -2380,6 +2438,7 @@ mod tests {
             "folo",
             &config(),
             &options(),
+            &auto(),
             now_anchor(),
             &RecordingReporter::new(),
             false,
@@ -2428,6 +2487,7 @@ mod tests {
             "folo",
             &config(),
             &options(),
+            &auto(),
             now_anchor(),
             &RecordingReporter::new(),
             false,
@@ -2448,6 +2508,7 @@ mod tests {
             "folo",
             &config(),
             &options(),
+            &auto(),
             now_anchor(),
             &RecordingReporter::new(),
             false,
@@ -2470,6 +2531,7 @@ mod tests {
             "folo",
             &config(),
             &opts,
+            &auto(),
             now_anchor(),
             &RecordingReporter::new(),
             false,
@@ -2483,7 +2545,7 @@ mod tests {
         let storage = MemoryStorage::new();
         let git = linear_git();
         let opts = AnalyzeOptions {
-            engine: Some("dhat".to_owned()),
+            engine: vec!["dhat".to_owned()],
             ..options()
         };
         let error = block_on(analyze_with(
@@ -2492,25 +2554,13 @@ mod tests {
             "folo",
             &config(),
             &opts,
+            &auto(),
             now_anchor(),
             &RecordingReporter::new(),
             false,
         ))
         .unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
-    }
-
-    #[test]
-    fn triple_exclusivity_allows_either_side_but_not_both() {
-        // The triple alone, or its derived parts alone, are fine.
-        validate_triple_exclusivity(Some("x86_64-unknown-linux-gnu"), None, None).unwrap();
-        validate_triple_exclusivity(None, Some("linux"), Some("x86_64")).unwrap();
-        validate_triple_exclusivity(None, None, None).unwrap();
-        // Combining the triple with either derived facet is rejected.
-        validate_triple_exclusivity(Some("x86_64-unknown-linux-gnu"), Some("linux"), None)
-            .unwrap_err();
-        validate_triple_exclusivity(Some("x86_64-unknown-linux-gnu"), None, Some("x86_64"))
-            .unwrap_err();
     }
 
     #[test]
@@ -2528,6 +2578,7 @@ mod tests {
             "folo",
             &config(),
             &opts,
+            &auto(),
             now_anchor(),
             &RecordingReporter::new(),
             false,
@@ -2570,6 +2621,7 @@ mod tests {
             "folo",
             &config,
             &opts,
+            &auto(),
             now_anchor(),
             &RecordingReporter::new(),
             false,

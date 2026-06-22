@@ -29,7 +29,10 @@ use crate::wiring::{resolve_config_path, resolve_project_id, resolve_repo};
 use crate::{BlessOptions, RunError, RunOutcome, UnblessOptions};
 
 use super::discriminant::ParsedKey;
-use super::{Selection, facet_filtered_candidates, parsed_facets, resolve_base_ref};
+use super::{
+    AutoFacets, Selection, detect_auto_facets, facet_filtered_candidates, resolve_base_ref,
+    resolve_facets,
+};
 
 /// The real `bless`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
@@ -54,6 +57,7 @@ pub(crate) async fn bless(
     let storage = build_storage(&config, workspace_dir)?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
+    let auto = detect_auto_facets().await?;
 
     let now = now_override.unwrap_or_else(Timestamp::now);
     bless_with(
@@ -62,6 +66,7 @@ pub(crate) async fn bless(
         &project_id,
         &config,
         options,
+        &auto,
         now,
         env!("CARGO_PKG_VERSION"),
         &reporter,
@@ -88,8 +93,18 @@ pub(crate) async fn unbless(
     let storage = build_storage(&config, workspace_dir)?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
+    let auto = detect_auto_facets().await?;
 
-    unbless_with(&git, &storage, &project_id, &config, options, &reporter).await
+    unbless_with(
+        &git,
+        &storage,
+        &project_id,
+        &config,
+        options,
+        &auto,
+        &reporter,
+    )
+    .await
 }
 
 /// Storage- and git-generic `bless`: validate the preconditions, then write a
@@ -105,6 +120,7 @@ pub(crate) async fn bless_with<G, S>(
     project_id: &str,
     config: &Config,
     options: &BlessOptions,
+    auto: &AutoFacets,
     now: Timestamp,
     tool_version: &str,
     reporter: &dyn Reporter,
@@ -156,9 +172,8 @@ where
     let working_tree_dirty = git.is_dirty().await.map_err(RunError::Io)?;
 
     let selection = Selection::from_bless(options);
-    let (engine, facets) = parsed_facets(&selection)?;
-    let candidates =
-        facet_filtered_candidates(storage, project_id, engine, &facets, reporter).await?;
+    let facets = resolve_facets(&selection, auto)?;
+    let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
     let clean_at_head: Vec<(String, ParsedKey)> = candidates
         .into_iter()
         .filter(|(_, parsed)| parsed.commit == head && parsed.file == "clean.json")
@@ -223,6 +238,7 @@ pub(crate) async fn unbless_with<G, S>(
     project_id: &str,
     _config: &Config,
     options: &UnblessOptions,
+    auto: &AutoFacets,
     reporter: &dyn Reporter,
 ) -> Result<RunOutcome, RunError>
 where
@@ -233,9 +249,8 @@ where
     let short = short_sha(&head);
 
     let selection = Selection::from_unbless(options);
-    let (engine, facets) = parsed_facets(&selection)?;
-    let candidates =
-        facet_filtered_candidates(storage, project_id, engine, &facets, reporter).await?;
+    let facets = resolve_facets(&selection, auto)?;
+    let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
     let blessings_at_head: Vec<String> = candidates
         .into_iter()
         .filter(|(_, parsed)| parsed.commit == head && parsed.is_bless())
@@ -305,6 +320,14 @@ mod tests {
 
     fn config() -> Config {
         crate::config::parse_config("[storage.local]\npath = \"./data\"\n").expect("config parses")
+    }
+
+    /// The auto-detected facets for the default synthetic partition the tests seed.
+    fn auto() -> AutoFacets {
+        AutoFacets {
+            triple: "x86_64-unknown-linux-gnu".to_owned(),
+            machine_key: "synthetic".to_owned(),
+        }
     }
 
     fn ts(seconds: i64) -> Timestamp {
@@ -391,6 +414,7 @@ mod tests {
             "folo",
             &config(),
             options,
+            &auto(),
             ts(1_700_000_000),
             "0.0.1",
             &RecordingReporter::new(),
@@ -518,6 +542,7 @@ mod tests {
             "folo",
             &config(),
             &UnblessOptions::default(),
+            &auto(),
             &RecordingReporter::new(),
         ))
         .expect("unblesses");
@@ -540,6 +565,7 @@ mod tests {
             "folo",
             &config(),
             &UnblessOptions::default(),
+            &auto(),
             &RecordingReporter::new(),
         ))
         .expect("unbless runs");

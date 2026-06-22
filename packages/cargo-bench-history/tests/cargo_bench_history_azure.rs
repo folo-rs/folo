@@ -15,7 +15,6 @@ use std::net::{TcpStream, ToSocketAddrs as _};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use argh::FromArgs;
 use azure_core::http::Url;
 use cargo_bench_history::{Cli, Command, Overrides, RunError, RunOutcome, run_with_overrides};
 use serial_test::serial;
@@ -346,7 +345,7 @@ async fn analyze_feature_and_dirty_round_trip_through_azurite() {
     let RunOutcome::Analyzed { report, .. } = workspace
         .drive(&[
             "analyze",
-            "--branch",
+            "--context",
             "master",
             "--since",
             "2020-01-01",

@@ -82,21 +82,16 @@ impl fmt::Display for EngineSystem {
 ///
 /// Resolution order (first match wins):
 ///
-/// 1. An explicit triple (from `--target-triple`).
-/// 2. For Callgrind, the OS component is pinned to `linux` because the engine only
+/// 1. For Callgrind, the OS component is pinned to `linux` because the engine only
 ///    runs under Valgrind — this transparently handles the Windows→WSL case.
-/// 3. Otherwise (natively-run engines such as Criterion, `alloc_tracker`, and
+/// 2. Otherwise (natively-run engines such as Criterion, `alloc_tracker`, and
 ///    `all_the_time`) the tool's host triple, whose architecture a WSL guest
 ///    shares.
+///
+/// The triple is **always auto-detected**: there is no `--target-triple` override
+/// on `run`/`backfill` (a misdeclared triple would silently misfile data).
 #[must_use]
-pub fn resolve_target_triple(
-    explicit: Option<&str>,
-    engine: EngineSystem,
-    host_triple: &str,
-) -> String {
-    if let Some(triple) = explicit {
-        return triple.to_owned();
-    }
+pub fn resolve_target_triple(engine: EngineSystem, host_triple: &str) -> String {
     match engine {
         EngineSystem::Callgrind => normalize_os_to_linux(host_triple),
         EngineSystem::Criterion | EngineSystem::AllocTracker | EngineSystem::AllTheTime => {
@@ -269,31 +264,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn explicit_triple_wins() {
-        let triple = resolve_target_triple(
-            Some("custom-triple"),
-            EngineSystem::Callgrind,
-            "x86_64-pc-windows-msvc",
-        );
-        assert_eq!(triple, "custom-triple");
-    }
-
-    #[test]
     fn callgrind_pins_windows_host_to_linux() {
-        let triple = resolve_target_triple(None, EngineSystem::Callgrind, "x86_64-pc-windows-msvc");
+        let triple = resolve_target_triple(EngineSystem::Callgrind, "x86_64-pc-windows-msvc");
         assert_eq!(triple, "x86_64-unknown-linux-gnu");
     }
 
     #[test]
     fn callgrind_keeps_linux_host_verbatim() {
-        let triple =
-            resolve_target_triple(None, EngineSystem::Callgrind, "aarch64-unknown-linux-gnu");
+        let triple = resolve_target_triple(EngineSystem::Callgrind, "aarch64-unknown-linux-gnu");
         assert_eq!(triple, "aarch64-unknown-linux-gnu");
     }
 
     #[test]
     fn criterion_uses_host_triple() {
-        let triple = resolve_target_triple(None, EngineSystem::Criterion, "x86_64-pc-windows-msvc");
+        let triple = resolve_target_triple(EngineSystem::Criterion, "x86_64-pc-windows-msvc");
         assert_eq!(triple, "x86_64-pc-windows-msvc");
     }
 
@@ -304,7 +288,7 @@ mod tests {
         // separate series rather than being conflated under a pinned triple.
         for engine in [EngineSystem::AllocTracker, EngineSystem::AllTheTime] {
             assert_eq!(
-                resolve_target_triple(None, engine, "x86_64-pc-windows-msvc"),
+                resolve_target_triple(engine, "x86_64-pc-windows-msvc"),
                 "x86_64-pc-windows-msvc"
             );
         }

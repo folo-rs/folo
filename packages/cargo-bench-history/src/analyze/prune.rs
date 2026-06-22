@@ -33,8 +33,9 @@ use crate::{PruneOptions, RunError, RunOutcome};
 use super::discriminant::DiscriminantSet;
 use super::report::ReportFormat;
 use super::{
-    DirtyTipPolicy, ResolvedHistory, Selection, facet_filtered_candidates, parse_format,
-    parse_since, parse_until, parsed_facets, resolve_history,
+    AutoFacets, DirtyTipPolicy, ResolvedHistory, Selection, detect_auto_facets,
+    facet_filtered_candidates, parse_format, parse_since, parse_until, resolve_facets,
+    resolve_history,
 };
 
 /// Which objects a prune pass deletes.
@@ -94,8 +95,18 @@ pub(crate) async fn execute(
     let storage = build_storage(&config, workspace_dir)?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
+    let auto = detect_auto_facets().await?;
 
-    prune_with(&git, &storage, &project_id, &config, options, &reporter).await
+    prune_with(
+        &git,
+        &storage,
+        &project_id,
+        &config,
+        options,
+        &auto,
+        &reporter,
+    )
+    .await
 }
 
 /// Storage- and git-generic `prune`: resolve the selected commit topology, choose
@@ -107,6 +118,7 @@ pub(crate) async fn prune_with<G, S>(
     project_id: &str,
     config: &Config,
     options: &PruneOptions,
+    auto: &AutoFacets,
     reporter: &dyn Reporter,
 ) -> Result<RunOutcome, RunError>
 where
@@ -126,16 +138,15 @@ where
     if scope.touches_clean() && !narrowed && !options.all {
         return Err(RunError::Analyze {
             message: "prune would delete clean benchmark history across the entire selected \
-                      range. Narrow the selection with a facet (--engine / --os / \
-                      --architecture / --target-triple / --machine-key), --commit, --since, \
-                      or --until, or pass --all to delete everything in range."
+                      range. Narrow the selection with a facet (--engine / --target-triple / \
+                      --machine-key), --commit, --since, or --until, or pass --all to delete \
+                      everything in range."
                 .to_owned(),
         });
     }
 
-    let (engine, facets) = parsed_facets(&selection)?;
-    let candidates =
-        facet_filtered_candidates(storage, project_id, engine, &facets, reporter).await?;
+    let facets = resolve_facets(&selection, auto)?;
+    let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
 
     let ResolvedHistory {
         target_ref,
@@ -293,13 +304,20 @@ fn is_narrowed(options: &PruneOptions, since: bool, until: bool) -> bool {
     facets_present(options) || !options.commit.is_empty() || since || until
 }
 
-/// Whether any discriminant facet is set, which narrows the selection.
+/// Whether any discriminant facet carries a **concrete** narrowing value. An
+/// omitted facet (auto-detect) and the widening `all` keyword do not narrow.
 fn facets_present(options: &PruneOptions) -> bool {
-    options.engine.is_some()
-        || options.target_triple.is_some()
-        || options.os.is_some()
-        || options.architecture.is_some()
-        || options.machine_key.is_some()
+    facet_narrows(&options.engine)
+        || facet_narrows(&options.target_triple)
+        || facet_narrows(&options.machine_key)
+}
+
+/// Whether a repeatable facet's values include at least one concrete (non-`all`)
+/// entry. An empty list (auto-detect) or an `all`-only list does not narrow.
+fn facet_narrows(values: &[String]) -> bool {
+    values
+        .iter()
+        .any(|value| !value.eq_ignore_ascii_case("all"))
 }
 
 /// Whether a commit matches the `--commit` selection (case-insensitive prefix
@@ -655,6 +673,14 @@ mod tests {
         parse_config("[storage.local]\npath = \"./data\"\n").expect("config parses")
     }
 
+    /// The auto-detected facets for the default synthetic partition the tests seed.
+    fn auto() -> AutoFacets {
+        AutoFacets {
+            triple: "x86_64-unknown-linux-gnu".to_owned(),
+            machine_key: "synthetic".to_owned(),
+        }
+    }
+
     /// Default options select the `--dirty` scope, which is exempt from the
     /// narrowing guard, so most fixtures need no extra flags.
     fn dirty_options() -> PruneOptions {
@@ -768,6 +794,7 @@ mod tests {
             "folo",
             &config(),
             options,
+            &auto(),
             &RecordingReporter::new(),
         ))
         .expect("prune runs");
@@ -922,6 +949,7 @@ mod tests {
             "folo",
             &config(),
             &PruneOptions::default(),
+            &auto(),
             &RecordingReporter::new(),
         ))
         .unwrap_err();
@@ -966,6 +994,7 @@ mod tests {
             "folo",
             &config(),
             &opts,
+            &auto(),
             &RecordingReporter::new(),
         ))
         .unwrap_err();
@@ -1044,6 +1073,7 @@ mod tests {
             "folo",
             &config(),
             &dirty_options(),
+            &auto(),
             &RecordingReporter::new(),
         ))
         .unwrap_err();
@@ -1062,12 +1092,13 @@ mod tests {
         store(&storage, &dirty_key("f1", 200), &set(200, "f1"));
         // A criterion dirty run on the same commit must survive an engine-scoped
         // callgrind prune.
-        let criterion_dirty = "v2/folo/criterion/x86_64-unknown-linux-gnu/m1/f1/dirty-200.json";
+        let criterion_dirty =
+            "v2/folo/criterion/x86_64-unknown-linux-gnu/synthetic/f1/dirty-200.json";
         store(&storage, criterion_dirty, &set(200, "f1"));
         let git = feature_git();
 
         let opts = PruneOptions {
-            engine: Some("callgrind".to_owned()),
+            engine: vec!["callgrind".to_owned()],
             ..dirty_options()
         };
         prune(&storage, &git, &opts);
@@ -1212,7 +1243,7 @@ mod tests {
         // A facet alone narrows the range.
         assert!(is_narrowed(
             &PruneOptions {
-                engine: Some("callgrind".to_owned()),
+                engine: vec!["callgrind".to_owned()],
                 ..PruneOptions::default()
             },
             false,
@@ -1242,23 +1273,20 @@ mod tests {
     fn facets_present_detects_each_facet_independently() {
         assert!(!facets_present(&PruneOptions::default()));
         assert!(facets_present(&PruneOptions {
-            engine: Some("callgrind".to_owned()),
+            engine: vec!["callgrind".to_owned()],
             ..PruneOptions::default()
         }));
         assert!(facets_present(&PruneOptions {
-            target_triple: Some("x86_64-unknown-linux-gnu".to_owned()),
+            target_triple: vec!["x86_64-unknown-linux-gnu".to_owned()],
             ..PruneOptions::default()
         }));
         assert!(facets_present(&PruneOptions {
-            os: Some("windows".to_owned()),
+            machine_key: vec!["m1".to_owned()],
             ..PruneOptions::default()
         }));
-        assert!(facets_present(&PruneOptions {
-            architecture: Some("x86_64".to_owned()),
-            ..PruneOptions::default()
-        }));
-        assert!(facets_present(&PruneOptions {
-            machine_key: Some("m1".to_owned()),
+        // The widening `all` keyword is not a concrete narrowing value.
+        assert!(!facets_present(&PruneOptions {
+            engine: vec!["all".to_owned()],
             ..PruneOptions::default()
         }));
     }

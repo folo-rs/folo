@@ -36,19 +36,19 @@ azure = [
 ]
 
 [dependencies]
-argh = { workspace = true }
 azure_core = { workspace = true, optional = true }
 # The `default` feature on these two crates is load-bearing, not gratuitous: it
 # transitively enables `azure_core/default`, which selects the reqwest + rustls
 # HTTP transport. Without it the SDK still compiles, but `new_http_client()`
 # panics at runtime the moment any blob request is made (there is no transport),
 # and neither `cargo check` nor the emulator-less test runs catch that. This is
-# the same "defaults pick a backend" situation that keeps `clap`/`argh` on their
+# the same "defaults pick a backend" situation that keeps `clap` on its
 # defaults. The workspace declarations keep `default-features = false`, so the
 # defaults are scoped to this package alone.
 azure_identity = { workspace = true, optional = true, features = ["default"] }
 azure_storage_blob = { workspace = true, optional = true, features = ["default"] }
 base64 = { workspace = true, optional = true, features = ["std"] }
+clap = { workspace = true, features = ["derive"] }
 colored = { workspace = true }
 futures = { workspace = true, optional = true }
 hmac = { workspace = true, optional = true }

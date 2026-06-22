@@ -30,7 +30,7 @@ use crate::process::{BenchRunner, TokioBenchRunner};
 use crate::report::{Reporter, StderrReporter};
 use crate::storage::{Storage, StorageError, build_storage};
 use crate::text::count_noun;
-use crate::wiring::{resolve_config_path, resolve_project_id};
+use crate::wiring::{resolve_config_path, resolve_project_id, resolve_repo};
 use crate::{RunError, RunOptions, RunOutcome};
 
 /// The program and base arguments the production tool runs to benchmark the
@@ -87,24 +87,30 @@ pub(crate) async fn execute(
 ) -> Result<RunOutcome, RunError> {
     let reporter = StderrReporter::new(options.verbose);
 
-    let config_path = resolve_config_path(workspace_dir, options.config_path.as_deref());
+    // `--repo` selects the repository the run operates on (where benches run, git
+    // state is read, and output is harvested), relative to the ambient base; it
+    // defaults to the base directory itself.
+    let base = resolve_repo(workspace_dir, options.repo.as_deref());
+    let base = base.as_path();
+
+    let config_path = resolve_config_path(base, options.config_path.as_deref());
     reporter.note(&format!(
         "loading configuration from {}",
         config_path.display()
     ));
     let config = load_config(&config_path).await?;
 
-    let project_id = resolve_project_id(&config, workspace_dir);
+    let project_id = resolve_project_id(&config, base);
     reporter.note(&format!("project id: {project_id}"));
     reporter.note(&format!(
         "storage backend: {}",
         describe_storage(&config.storage)
     ));
-    let storage = build_storage(&config, workspace_dir)?;
+    let storage = build_storage(&config, base)?;
 
-    let runner = TokioBenchRunner::in_dir(workspace_dir);
-    let probe = SystemProbe::in_dir(workspace_dir);
-    let target_root = target_root.unwrap_or_else(|| resolve_target_root_in(workspace_dir));
+    let runner = TokioBenchRunner::in_dir(base);
+    let probe = SystemProbe::in_dir(base);
+    let target_root = target_root.unwrap_or_else(|| resolve_target_root_in(base));
     reporter.note(&format!(
         "cargo target directory (scanned for engine output): {}",
         target_root.display()
@@ -402,11 +408,7 @@ where
     let dirty = shared.git.info.dirty;
     let committer_default = if dirty { None } else { shared.git.committer };
     let effective = resolve_effective_time(options.timestamp, committer_default, ingest);
-    let target_triple = resolve_target_triple(
-        options.target_triple.as_deref(),
-        engine,
-        &shared.host_triple,
-    );
+    let target_triple = resolve_target_triple(engine, &shared.host_triple);
 
     let context = RunContext::new(
         Timestamps::new(effective, execution, ingest),

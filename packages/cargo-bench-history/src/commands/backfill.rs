@@ -39,7 +39,7 @@ use crate::process::{TokioBenchRunner, capture};
 use crate::report::StderrReporter;
 use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
-use crate::wiring::{resolve_config_path, resolve_project_id};
+use crate::wiring::{resolve_config_path, resolve_project_id, resolve_repo};
 use crate::{BackfillOptions, RunError, RunOptions, RunOutcome};
 
 use super::run::{RunDeps, RunSummary, default_bench_command, run_engines};
@@ -112,14 +112,20 @@ pub(crate) async fn execute(
     workspace_dir: &Path,
     bench_command: Option<Vec<String>>,
 ) -> Result<RunOutcome, RunError> {
-    let config_path = resolve_config_path(workspace_dir, options.config_path.as_deref());
+    // `--repo` selects the repository to backfill (where git history is read and
+    // worktrees are created), relative to the ambient base; it defaults to the
+    // base directory itself.
+    let base = resolve_repo(workspace_dir, options.repo.as_deref());
+    let base = base.as_path();
+
+    let config_path = resolve_config_path(base, options.config_path.as_deref());
     let config = load_config(&config_path).await?;
 
-    let project_id = resolve_project_id(&config, workspace_dir);
-    let storage = build_storage(&config, workspace_dir)?;
+    let project_id = resolve_project_id(&config, base);
+    let storage = build_storage(&config, base)?;
     let bench_command = bench_command.unwrap_or_else(default_bench_command);
 
-    let git = SystemBackfillGit::new(workspace_dir);
+    let git = SystemBackfillGit::new(base);
     let runner = SystemCommitRunner {
         project_id: &project_id,
         storage: &storage,
@@ -512,10 +518,10 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
         // and dates from its commit, so no `--timestamp` override is used.
         let run_options = RunOptions {
             config_path: None,
+            repo: None,
             packages: self.options.packages.clone(),
             benches: self.options.benches.clone(),
             timestamp: None,
-            target_triple: self.options.target_triple.clone(),
             machine_key: self.options.machine_key.clone(),
             no_store: false,
             overwrite: self.options.overwrite,

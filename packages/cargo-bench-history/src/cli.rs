@@ -1,25 +1,88 @@
-//! Argument parsing: the `argh` subcommand surface and its translation into the
+//! Argument parsing: the `clap` subcommand surface and its translation into the
 //! typed [`Command`](crate::Command) model.
+//!
+//! The wide option surface is organized into named help groups (Environment,
+//! Output, Discriminant selection, Timeline selection, Data filtering, Benchmark
+//! scope) so `--help` makes the relationship between options legible. Shared
+//! groups are factored into [`clap::Args`] structs and `#[command(flatten)]`ed
+//! into each subcommand so the same option means the same thing everywhere.
 
 use std::path::PathBuf;
 
-use argh::FromArgs;
+use clap::{Args, Parser, Subcommand as ClapSubcommand, ValueEnum};
 use jiff::Timestamp;
 
 use crate::{
     AnalyzeOptions, BackfillOptions, BlessOptions, Command, InstallOptions, ListOptions,
-    PruneOptions, RunOptions, UnblessOptions,
+    ListSubject, PruneOptions, RunOptions, UnblessOptions,
 };
 
+const HEADING_ENV: &str = "Environment and execution";
+const HEADING_OUTPUT: &str = "Output";
+const HEADING_DISCRIMINANT: &str = "Discriminant selection";
+const HEADING_TIMELINE: &str = "Timeline selection";
+const HEADING_FILTER: &str = "Data filtering";
+const HEADING_SCOPE: &str = "Benchmark scope";
+const HEADING_ANALYSIS: &str = "Analysis";
+
 /// Maintain a history of benchmark results over time and analyze it for trends.
-#[derive(Debug, FromArgs)]
+#[derive(Debug, Parser)]
+#[command(
+    name = "cargo-bench-history",
+    about = "Maintain a history of benchmark results over time and analyze it for trends.",
+    disable_help_subcommand = true,
+    disable_version_flag = true
+)]
 pub struct Cli {
-    /// the subcommand to execute.
-    #[argh(subcommand)]
+    /// The subcommand to execute.
+    #[command(subcommand)]
     command: Subcommand,
 }
 
+/// A parse outcome that should terminate the program before execution.
+///
+/// This is either a help/usage request (success, printed to stdout) or a parse
+/// error (failure, printed to stderr). Mirrors the shape the binary entry point
+/// consumes.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct EarlyExit {
+    /// The rendered message (help text or error) to print.
+    pub output: String,
+    /// `Ok` for a help/usage request (exit success), `Err` for a parse error.
+    pub status: Result<(), ()>,
+}
+
+impl EarlyExit {
+    /// Classifies a `clap` parse error into the success/failure early-exit shape.
+    fn from_clap(error: &clap::Error) -> Self {
+        use clap::error::ErrorKind;
+        let success = matches!(
+            error.kind(),
+            ErrorKind::DisplayHelp
+                | ErrorKind::DisplayVersion
+                | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        );
+        Self {
+            output: error.to_string(),
+            status: if success { Ok(()) } else { Err(()) },
+        }
+    }
+}
+
 impl Cli {
+    /// Parses an argument vector (program name followed by its arguments) into the
+    /// typed CLI, returning an [`EarlyExit`] for a help request or a parse error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EarlyExit`] when the arguments request help/usage or fail to
+    /// parse.
+    pub fn from_args(command_name: &[&str], args: &[&str]) -> Result<Self, EarlyExit> {
+        let argv: Vec<&str> = command_name.iter().chain(args).copied().collect();
+        Self::try_parse_from(argv).map_err(|error| EarlyExit::from_clap(&error))
+    }
+
     /// Translates the parsed arguments into the typed command model.
     #[must_use]
     pub fn into_command(self) -> Command {
@@ -50,112 +113,163 @@ impl Cli {
     }
 }
 
-#[derive(Debug, FromArgs)]
-#[argh(subcommand)]
+#[derive(ClapSubcommand, Debug)]
 enum Subcommand {
+    /// Analyze stored history for notable patterns.
     Analyze(AnalyzeCommand),
+    /// Replay `run` across a range of historical commits.
     Backfill(BackfillCommand),
+    /// Accept a benchmark's current level on the base branch as intentional.
     Bless(BlessCommand),
+    /// Generate a starter configuration file.
     Install(InstallCommand),
+    /// List the data set a matching `analyze` would include, without analyzing it.
     List(ListCommand),
+    /// Delete stored runs (and their blessing sidecars) from the resolved data set.
     Prune(PruneCommand),
+    /// Run the workspace benchmarks (`cargo bench`) and store the results.
     Run(RunCommand),
+    /// Remove blessings recorded at the current commit.
     Unbless(UnblessCommand),
 }
 
-/// Run the workspace benchmarks (`cargo bench`) and store the results.
-#[derive(Debug, FromArgs)]
-#[argh(subcommand, name = "run")]
-struct RunCommand {
-    /// path to the configuration file (defaults to `.cargo/bench_history.toml`).
-    #[argh(option)]
+/// Environment and execution options shared by every command that reads a
+/// repository's git state.
+#[derive(Args, Debug)]
+#[command(next_help_heading = HEADING_ENV)]
+struct EnvArgs {
+    /// Path to the configuration file (defaults to `.cargo/bench_history.toml`).
+    #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
 
-    /// benchmark the entire workspace; overrides --package (this is the default
-    /// when no --package is given).
-    #[argh(switch)]
+    /// Repository to resolve git state from (defaults to the working directory).
+    #[arg(long, value_name = "PATH")]
+    repo: Option<PathBuf>,
+
+    /// Emit detailed diagnostic notes to standard error describing each step.
+    #[arg(long)]
+    verbose: bool,
+}
+
+/// The repeatable, `all`-aware discriminant facets used by every query command.
+///
+/// Each facet auto-detects the current machine when omitted (`--engine` has no
+/// machine-derived value, so it auto-detects to every engine); repeating a facet
+/// unions its values; the literal `all` removes the filter for that dimension.
+#[derive(Args, Debug)]
+#[command(next_help_heading = HEADING_DISCRIMINANT)]
+struct QueryFacetArgs {
+    /// Restrict to these engines, e.g. `criterion`/`callgrind` (repeatable; `all`
+    /// matches every engine; default: every engine).
+    #[arg(long, value_name = "NAME")]
+    engine: Vec<String>,
+
+    /// Restrict to these full target triples, e.g. `x86_64-unknown-linux-gnu`
+    /// (repeatable; `all` matches every triple; default: this machine's triple).
+    #[arg(long, value_name = "TRIPLE")]
+    target_triple: Vec<String>,
+
+    /// Restrict to these machine partitions (repeatable; `all` matches every
+    /// machine; default: this machine's fingerprint).
+    #[arg(long, value_name = "KEY")]
+    machine_key: Vec<String>,
+}
+
+/// Timeline selection shared by `analyze`/`list`/`prune`.
+#[derive(Args, Debug)]
+#[command(next_help_heading = HEADING_TIMELINE)]
+struct TimelineArgs {
+    /// Target ref whose history is used (defaults to HEAD).
+    #[arg(long, value_name = "REF")]
+    context: Option<String>,
+
+    /// Base ref the target's history is split at (defaults to the default branch).
+    #[arg(long, value_name = "REF")]
+    base: Option<String>,
+
+    /// Only consider runs on or after this cutoff: an RFC 3339 timestamp, a
+    /// `YYYY-MM-DD` date, or a relative duration such as `6 months ago`.
+    #[arg(long, value_name = "WHEN")]
+    since: Option<String>,
+
+    /// Only consider runs on or before this cutoff (same formats as `--since`).
+    #[arg(long, value_name = "WHEN")]
+    until: Option<String>,
+}
+
+/// Run the workspace benchmarks (`cargo bench`) and store the results.
+#[derive(Args, Debug)]
+struct RunCommand {
+    #[command(flatten)]
+    env: EnvArgs,
+
+    /// Benchmark the entire workspace; overrides `--package` (the default when no
+    /// `--package` is given).
+    #[arg(long, help_heading = HEADING_SCOPE)]
     workspace: bool,
 
-    /// benchmark only this package; repeatable, for example `-p nm -p many_cpus`
+    /// Benchmark only this package; repeatable, e.g. `-p nm -p many_cpus`
     /// (default: the whole workspace).
-    #[argh(option, short = 'p', long = "package")]
+    #[arg(long = "package", short = 'p', value_name = "NAME", help_heading = HEADING_SCOPE)]
     package: Vec<String>,
 
-    /// benchmark only this bench target; repeatable (default: every bench target).
-    #[argh(option)]
+    /// Benchmark only this bench target; repeatable (default: every bench target).
+    #[arg(long, value_name = "NAME", help_heading = HEADING_SCOPE)]
     bench: Vec<String>,
 
-    /// override the effective timestamp, in RFC 3339 format, for example
-    /// `2024-01-31T14:30:00Z`; used when backfilling history (default: the
-    /// commit time for a clean run, otherwise the current time).
-    #[argh(option)]
-    timestamp: Option<Timestamp>,
-
-    /// override the recorded target triple used for partitioning.
-    #[argh(option)]
-    target_triple: Option<String>,
-
-    /// override the machine fingerprint used to partition hardware-dependent
+    /// Override the machine fingerprint used to partition hardware-dependent
     /// results (for example, a CI machine-pool name).
-    #[argh(option)]
+    #[arg(long, value_name = "KEY", help_heading = HEADING_DISCRIMINANT)]
     machine_key: Option<String>,
 
-    /// harvest and build results without storing them.
-    #[argh(switch)]
+    /// Override the effective timestamp, in RFC 3339 format
+    /// (`2024-01-31T14:30:00Z`); used when backfilling history (default: the
+    /// commit time for a clean run, otherwise the current time).
+    #[arg(long, value_name = "RFC3339", help_heading = HEADING_ENV)]
+    timestamp: Option<Timestamp>,
+
+    /// Harvest and build results without storing them.
+    #[arg(long, help_heading = HEADING_ENV)]
     no_store: bool,
 
-    /// replace an already-stored result for this run instead of refusing it as
-    /// a duplicate.
-    #[argh(switch)]
+    /// Replace an already-stored result for this run instead of refusing it as a
+    /// duplicate.
+    #[arg(long, help_heading = HEADING_ENV)]
     overwrite: bool,
 
-    /// emit detailed diagnostic notes to standard error (which directories are
-    /// scanned, which files are included or skipped, what is stored where).
-    #[argh(switch)]
-    verbose: bool,
-
-    /// arguments after `--` forwarded verbatim to `cargo bench` after the scope
+    /// Arguments after `--` forwarded verbatim to `cargo bench` after the scope
     /// flags.
-    #[argh(positional, greedy)]
+    #[arg(last = true, value_name = "ARGS")]
     passthrough: Vec<String>,
 }
 
 impl RunCommand {
     fn into_options(self) -> RunOptions {
-        // An explicit `--workspace` benches the whole workspace, taking precedence
-        // over any `--package` filters; otherwise the packages (possibly empty,
-        // meaning the whole workspace) select the scope.
-        let packages = if self.workspace {
-            Vec::new()
-        } else {
-            self.package
-        };
         RunOptions {
-            config_path: self.config,
-            packages,
+            config_path: self.env.config,
+            repo: self.env.repo,
+            packages: resolve_packages(self.workspace, self.package),
             benches: self.bench,
             timestamp: self.timestamp,
-            target_triple: self.target_triple,
             machine_key: self.machine_key,
             no_store: self.no_store,
             overwrite: self.overwrite,
-            passthrough: strip_separator(self.passthrough),
-            verbose: self.verbose,
+            passthrough: self.passthrough,
+            verbose: self.env.verbose,
         }
     }
 }
 
 /// Generate a starter configuration file.
-#[derive(Debug, FromArgs)]
-#[argh(subcommand, name = "install")]
+#[derive(Args, Debug)]
 struct InstallCommand {
-    /// path to the configuration file to generate.
-    #[argh(option)]
+    /// Path to the configuration file to generate.
+    #[arg(long, value_name = "PATH", help_heading = HEADING_ENV)]
     config: Option<PathBuf>,
 
-    /// emit detailed diagnostic notes to standard error (which path is written,
+    /// Emit detailed diagnostic notes to standard error (which path is written,
     /// or that an existing configuration was left unchanged).
-    #[argh(switch)]
+    #[arg(long, help_heading = HEADING_ENV)]
     verbose: bool,
 }
 
@@ -169,578 +283,357 @@ impl InstallCommand {
 }
 
 /// Analyze stored history for notable patterns.
-#[derive(Debug, FromArgs)]
-#[argh(subcommand, name = "analyze")]
+#[derive(Args, Debug)]
 struct AnalyzeCommand {
-    /// path to the configuration file (defaults to `.cargo/bench_history.toml`).
-    #[argh(option)]
-    config: Option<PathBuf>,
+    #[command(flatten)]
+    env: EnvArgs,
 
-    /// repository to resolve git topology from (defaults to the working directory).
-    #[argh(option)]
-    repo: Option<PathBuf>,
-
-    /// target ref whose history is analyzed (defaults to HEAD).
-    #[argh(option)]
-    branch: Option<String>,
-
-    /// base ref the target's history is split at (defaults to the default branch).
-    #[argh(option)]
-    base: Option<String>,
-
-    /// exclude dirty (uncommitted-tree) snapshots from the analysis.
-    #[argh(switch)]
-    no_dirty: bool,
-
-    /// only consider runs on or after this cutoff: an RFC 3339 timestamp
-    /// (`2024-01-01T00:00:00Z`), a `YYYY-MM-DD` date, or a relative duration
-    /// such as `6 months` or `30 days ago` (default: no lower bound in branch
-    /// mode; the last 6 months in history mode).
-    #[argh(option)]
-    since: Option<String>,
-
-    /// restrict analysis to a single engine, criterion or callgrind
-    /// (default: every engine).
-    #[argh(option)]
-    engine: Option<String>,
-
-    /// restrict analysis to a single full target triple (for example,
-    /// `x86_64-unknown-linux-gnu`). Mutually exclusive with `--os` /
-    /// `--architecture`, which select the same dimension by its derived parts.
-    #[argh(option)]
-    target_triple: Option<String>,
-
-    /// restrict analysis to a single operating system (for example, windows).
-    /// Cannot be combined with `--target-triple`.
-    #[argh(option)]
-    os: Option<String>,
-
-    /// restrict analysis to a single CPU architecture (for example, `x86_64`).
-    /// Cannot be combined with `--target-triple`.
-    #[argh(option)]
-    architecture: Option<String>,
-
-    /// restrict analysis to a single machine partition.
-    #[argh(option)]
-    machine_key: Option<String>,
-
-    /// restrict analysis to a single metric name (for example, Ir).
-    #[argh(option)]
-    metric: Option<String>,
-
-    /// output format: text, json, or markdown (default: text).
-    #[argh(option)]
+    /// Output format: text, json, or markdown (default: text).
+    #[arg(long, value_name = "FORMAT", help_heading = HEADING_OUTPUT)]
     format: Option<String>,
 
-    /// analysis mode: auto, history, branch, or tip (default: auto). `auto`
-    /// infers history mode (long-range trends on the base branch) from a clean
-    /// checkout of the base branch, and branch mode (latest state vs the base)
-    /// otherwise. `tip` is a fast guard check of the base-branch tip against the
-    /// recently established level.
-    #[argh(option)]
+    #[command(flatten)]
+    facets: QueryFacetArgs,
+
+    #[command(flatten)]
+    timeline: TimelineArgs,
+
+    /// Exclude dirty (uncommitted-tree) snapshots from the analysis.
+    #[arg(long, help_heading = HEADING_FILTER)]
+    no_dirty: bool,
+
+    /// Restrict analysis to a single metric name (for example, Ir).
+    #[arg(long, value_name = "NAME", help_heading = HEADING_FILTER)]
+    metric: Option<String>,
+
+    /// Analysis mode: auto, history, branch, or tip (default: auto). `auto` infers
+    /// history mode (long-range trends on the base branch) from a clean checkout
+    /// of the base branch, and branch mode (latest state vs the base) otherwise.
+    /// `tip` is a fast guard check of the base-branch tip against the recently
+    /// established level.
+    #[arg(long, value_name = "MODE", help_heading = HEADING_ANALYSIS)]
     mode: Option<String>,
 
-    /// in history mode, also report sustained improvements (by default only
+    /// In history mode, also report sustained improvements (by default only
     /// regressions are reported, since improvement over time is expected).
-    #[argh(switch)]
+    #[arg(long, help_heading = HEADING_ANALYSIS)]
     include_improvements: bool,
 
-    /// in history mode, also report inactive findings: a change the current state
+    /// In history mode, also report inactive findings: a change the current state
     /// no longer reflects (a regression that has since recovered). Hidden by
     /// default since they need no action.
-    #[argh(switch)]
+    #[arg(long, help_heading = HEADING_ANALYSIS)]
     include_inactive: bool,
-
-    /// emit detailed diagnostic notes to standard error (which storage prefix is
-    /// listed, which objects are included or excluded and why, the resolved git
-    /// topology).
-    #[argh(switch)]
-    verbose: bool,
 }
 
 impl AnalyzeCommand {
     fn into_options(self) -> AnalyzeOptions {
         AnalyzeOptions {
-            config_path: self.config,
-            repo: self.repo,
-            branch: self.branch,
-            base: self.base,
+            config_path: self.env.config,
+            repo: self.env.repo,
+            context: self.timeline.context,
+            base: self.timeline.base,
             no_dirty: self.no_dirty,
-            since: self.since,
-            engine: self.engine,
-            target_triple: self.target_triple,
-            os: self.os,
-            architecture: self.architecture,
-            machine_key: self.machine_key,
+            since: self.timeline.since,
+            until: self.timeline.until,
+            engine: self.facets.engine,
+            target_triple: self.facets.target_triple,
+            machine_key: self.facets.machine_key,
             metric: self.metric,
             format: self.format,
             mode: self.mode,
             include_improvements: self.include_improvements,
             include_inactive: self.include_inactive,
-            verbose: self.verbose,
+            verbose: self.env.verbose,
+        }
+    }
+}
+
+/// What a `list` invocation enumerates.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ListSubjectArg {
+    /// The runs that would enter a matching `analyze` pass.
+    Runs,
+    /// The discriminant sets present in storage (no repository required).
+    Discriminants,
+    /// The blessings recorded at the current commit (or, with `--all`, across the
+    /// whole analysis window).
+    Blessings,
+}
+
+impl From<ListSubjectArg> for ListSubject {
+    fn from(subject: ListSubjectArg) -> Self {
+        match subject {
+            ListSubjectArg::Runs => Self::Runs,
+            ListSubjectArg::Discriminants => Self::Discriminants,
+            ListSubjectArg::Blessings => Self::Blessings,
         }
     }
 }
 
 /// List the data set a matching `analyze` would include, without analyzing it.
-#[derive(Debug, FromArgs)]
-#[argh(subcommand, name = "list")]
+#[derive(Args, Debug)]
 struct ListCommand {
-    /// path to the configuration file (defaults to `.cargo/bench_history.toml`).
-    #[argh(option)]
-    config: Option<PathBuf>,
+    /// What to list: `runs`, `discriminants`, or `blessings`.
+    #[arg(value_name = "runs|discriminants|blessings")]
+    subject: ListSubjectArg,
 
-    /// repository to resolve git topology from (defaults to the working directory).
-    #[argh(option)]
-    repo: Option<PathBuf>,
+    #[command(flatten)]
+    env: EnvArgs,
 
-    /// target ref whose history is listed (defaults to HEAD).
-    #[argh(option)]
-    branch: Option<String>,
-
-    /// base ref the target's history is split at (defaults to the default branch).
-    #[argh(option)]
-    base: Option<String>,
-
-    /// exclude dirty (uncommitted-tree) snapshots from the listing.
-    #[argh(switch)]
-    no_dirty: bool,
-
-    /// only list runs on or after this cutoff: an RFC 3339 timestamp
-    /// (`2024-01-01T00:00:00Z`), a `YYYY-MM-DD` date, or a relative duration
-    /// such as `6 months` or `30 days ago` (default: no lower bound).
-    #[argh(option)]
-    since: Option<String>,
-
-    /// restrict the listing to a single engine, criterion or callgrind
-    /// (default: every engine).
-    #[argh(option)]
-    engine: Option<String>,
-
-    /// restrict the listing to a single full target triple (for example,
-    /// `x86_64-unknown-linux-gnu`). Mutually exclusive with `--os` /
-    /// `--architecture`, which select the same dimension by its derived parts.
-    #[argh(option)]
-    target_triple: Option<String>,
-
-    /// restrict the listing to a single operating system (for example, windows).
-    /// Cannot be combined with `--target-triple`.
-    #[argh(option)]
-    os: Option<String>,
-
-    /// restrict the listing to a single CPU architecture (for example, `x86_64`).
-    /// Cannot be combined with `--target-triple`.
-    #[argh(option)]
-    architecture: Option<String>,
-
-    /// restrict the listing to a single machine partition.
-    #[argh(option)]
-    machine_key: Option<String>,
-
-    /// restrict the listing to a single metric name (for example, Ir).
-    #[argh(option)]
-    metric: Option<String>,
-
-    /// output format: text, json, or markdown (default: text).
-    #[argh(option)]
+    /// Output format: text, json, or markdown (default: text).
+    #[arg(long, value_name = "FORMAT", help_heading = HEADING_OUTPUT)]
     format: Option<String>,
 
-    /// list the discriminant sets present in storage instead of the data set the
-    /// analysis would include (does not require a repository).
-    #[argh(switch)]
-    discriminants: bool,
+    #[command(flatten)]
+    facets: QueryFacetArgs,
 
-    /// list blessings instead of runs: the blessings recorded at the current
-    /// commit, or (with --all) the most recent blessing of every benchmark in the
-    /// analysis window.
-    #[argh(switch)]
-    blessings: bool,
+    #[command(flatten)]
+    timeline: TimelineArgs,
 
-    /// with --blessings, list the most recent blessing of every benchmark across
-    /// the whole analysis window rather than only those at the current commit.
-    #[argh(switch)]
+    /// Exclude dirty (uncommitted-tree) snapshots from the listing.
+    #[arg(long, help_heading = HEADING_FILTER)]
+    no_dirty: bool,
+
+    /// Restrict the listing to a single metric name (for example, Ir).
+    #[arg(long, value_name = "NAME", help_heading = HEADING_FILTER)]
+    metric: Option<String>,
+
+    /// With the `blessings` subject, list the most recent blessing of every
+    /// benchmark across the whole analysis window rather than only those at the
+    /// current commit.
+    #[arg(long, help_heading = HEADING_FILTER)]
     all: bool,
-
-    /// emit detailed diagnostic notes to standard error (which storage prefix is
-    /// listed, which objects are included or excluded and why, the resolved git
-    /// topology).
-    #[argh(switch)]
-    verbose: bool,
 }
 
 impl ListCommand {
     fn into_options(self) -> ListOptions {
         ListOptions {
-            config_path: self.config,
-            repo: self.repo,
-            branch: self.branch,
-            base: self.base,
+            subject: self.subject.into(),
+            config_path: self.env.config,
+            repo: self.env.repo,
+            context: self.timeline.context,
+            base: self.timeline.base,
             no_dirty: self.no_dirty,
-            since: self.since,
-            engine: self.engine,
-            target_triple: self.target_triple,
-            os: self.os,
-            architecture: self.architecture,
-            machine_key: self.machine_key,
+            since: self.timeline.since,
+            until: self.timeline.until,
+            engine: self.facets.engine,
+            target_triple: self.facets.target_triple,
+            machine_key: self.facets.machine_key,
             metric: self.metric,
             format: self.format,
-            discriminants: self.discriminants,
-            blessings: self.blessings,
             all: self.all,
-            verbose: self.verbose,
+            verbose: self.env.verbose,
         }
     }
 }
 
 /// Delete stored runs (and their blessing sidecars) from the data set a matching
 /// `analyze`/`list` would resolve; pass `--dry-run` to preview without deleting.
-#[derive(Debug, FromArgs)]
-#[argh(subcommand, name = "prune")]
+#[derive(Args, Debug)]
 struct PruneCommand {
-    /// path to the configuration file (defaults to `.cargo/bench_history.toml`).
-    #[argh(option)]
-    config: Option<PathBuf>,
-
-    /// repository to resolve git topology from (defaults to the working directory).
-    #[argh(option)]
-    repo: Option<PathBuf>,
-
-    /// target ref whose history is pruned (defaults to HEAD).
-    #[argh(option)]
-    branch: Option<String>,
-
-    /// base ref the target's history is split at (defaults to the default branch).
-    #[argh(option)]
-    base: Option<String>,
-
-    /// restrict removal to a commit (a full or short SHA, prefix-matched);
+    /// Restrict removal to these commits (a full or short SHA, prefix-matched);
     /// repeatable (default: every commit on the resolved history).
-    #[argh(option)]
+    #[arg(value_name = "COMMIT")]
     commit: Vec<String>,
 
-    /// only remove runs whose effective time is on or after this cutoff: an
-    /// RFC 3339 timestamp (`2024-01-01T00:00:00Z`), a `YYYY-MM-DD` date, or a
-    /// relative duration such as `6 months` or `30 days ago` (default: no lower
-    /// bound).
-    #[argh(option)]
-    since: Option<String>,
+    #[command(flatten)]
+    env: EnvArgs,
 
-    /// only remove runs whose effective time is on or before this cutoff (same
-    /// formats as `--since`), useful for reclaiming old data such as
-    /// `--until "6 months ago"` (default: no upper bound).
-    #[argh(option)]
-    until: Option<String>,
-
-    /// restrict removal to a single engine, criterion or callgrind
-    /// (default: every engine).
-    #[argh(option)]
-    engine: Option<String>,
-
-    /// restrict removal to a single full target triple (for example,
-    /// `x86_64-unknown-linux-gnu`). Mutually exclusive with `--os` /
-    /// `--architecture`, which select the same dimension by its derived parts.
-    #[argh(option)]
-    target_triple: Option<String>,
-
-    /// restrict removal to a single operating system (for example, windows).
-    /// Cannot be combined with `--target-triple`.
-    #[argh(option)]
-    os: Option<String>,
-
-    /// restrict removal to a single CPU architecture (for example, `x86_64`).
-    /// Cannot be combined with `--target-triple`.
-    #[argh(option)]
-    architecture: Option<String>,
-
-    /// restrict removal to a single machine partition.
-    #[argh(option)]
-    machine_key: Option<String>,
-
-    /// remove only dirty (uncommitted-tree) snapshots (mutually exclusive with
-    /// `--clean`; exempt from the narrowing guard below).
-    #[argh(switch)]
-    dirty: bool,
-
-    /// remove only clean runs and their blessing sidecars (mutually exclusive
-    /// with `--dirty`).
-    #[argh(switch)]
-    clean: bool,
-
-    /// confirm deleting clean history across an un-narrowed selection (required
-    /// when no facet, `--commit`, `--since`, or `--until` narrows the range).
-    #[argh(switch)]
-    all: bool,
-
-    /// preview what would be removed without deleting anything.
-    #[argh(switch)]
-    dry_run: bool,
-
-    /// output format: text, json, or markdown (default: text).
-    #[argh(option)]
+    /// Output format: text, json, or markdown (default: text).
+    #[arg(long, value_name = "FORMAT", help_heading = HEADING_OUTPUT)]
     format: Option<String>,
 
-    /// emit detailed diagnostic notes to standard error (which storage prefix is
-    /// listed, which objects are selected or skipped and why, the resolved git
-    /// topology, and each deletion).
-    #[argh(switch)]
-    verbose: bool,
+    #[command(flatten)]
+    facets: QueryFacetArgs,
+
+    #[command(flatten)]
+    timeline: TimelineArgs,
+
+    /// Remove only dirty (uncommitted-tree) snapshots (mutually exclusive with
+    /// `--clean`; exempt from the narrowing guard).
+    #[arg(long, help_heading = HEADING_FILTER)]
+    dirty: bool,
+
+    /// Remove only clean runs and their blessing sidecars (mutually exclusive with
+    /// `--dirty`).
+    #[arg(long, help_heading = HEADING_FILTER)]
+    clean: bool,
+
+    /// Confirm deleting clean history across an un-narrowed selection (required
+    /// when no facet, `<commit>`, `--since`, or `--until` narrows the range).
+    #[arg(long, help_heading = HEADING_FILTER)]
+    all: bool,
+
+    /// Preview what would be removed without deleting anything.
+    #[arg(long, help_heading = HEADING_FILTER)]
+    dry_run: bool,
 }
 
 impl PruneCommand {
     fn into_options(self) -> PruneOptions {
         PruneOptions {
-            config_path: self.config,
-            repo: self.repo,
-            branch: self.branch,
-            base: self.base,
+            config_path: self.env.config,
+            repo: self.env.repo,
+            context: self.timeline.context,
+            base: self.timeline.base,
             commit: self.commit,
-            since: self.since,
-            until: self.until,
-            engine: self.engine,
-            target_triple: self.target_triple,
-            os: self.os,
-            architecture: self.architecture,
-            machine_key: self.machine_key,
+            since: self.timeline.since,
+            until: self.timeline.until,
+            engine: self.facets.engine,
+            target_triple: self.facets.target_triple,
+            machine_key: self.facets.machine_key,
             dirty: self.dirty,
             clean: self.clean,
             all: self.all,
             dry_run: self.dry_run,
             format: self.format,
-            verbose: self.verbose,
+            verbose: self.env.verbose,
         }
     }
 }
 
 /// Replay `run` across a range of historical commits.
-#[derive(Debug, FromArgs)]
-#[argh(subcommand, name = "backfill")]
+#[derive(Args, Debug)]
 struct BackfillCommand {
-    /// path to the configuration file (defaults to `.cargo/bench_history.toml`).
-    #[argh(option)]
-    config: Option<PathBuf>,
-
-    /// oldest commit of the range to backfill, inclusive; a SHA, tag, or ref
-    /// such as `HEAD~20`.
-    #[argh(option)]
+    /// Oldest commit of the range to backfill, inclusive; a SHA, tag, or ref such
+    /// as `HEAD~20`.
+    #[arg(value_name = "FROM")]
     from: String,
 
-    /// newest commit of the range to backfill, inclusive; a SHA, tag, or ref
-    /// such as `HEAD` (must be on the current branch's first-parent history).
-    #[argh(option)]
+    /// Newest commit of the range to backfill, inclusive; a SHA, tag, or ref such
+    /// as `HEAD` (must be on the current branch's first-parent history).
+    #[arg(value_name = "TO")]
     to: String,
 
-    /// benchmark the entire workspace; overrides --package (this is the default
-    /// when no --package is given).
-    #[argh(switch)]
+    #[command(flatten)]
+    env: EnvArgs,
+
+    /// Benchmark the entire workspace; overrides `--package` (the default when no
+    /// `--package` is given).
+    #[arg(long, help_heading = HEADING_SCOPE)]
     workspace: bool,
 
-    /// benchmark only this package; repeatable, for example `-p nm -p many_cpus`
+    /// Benchmark only this package; repeatable, e.g. `-p nm -p many_cpus`
     /// (default: the whole workspace).
-    #[argh(option, short = 'p', long = "package")]
+    #[arg(long = "package", short = 'p', value_name = "NAME", help_heading = HEADING_SCOPE)]
     package: Vec<String>,
 
-    /// benchmark only this bench target; repeatable (default: every bench target).
-    #[argh(option)]
+    /// Benchmark only this bench target; repeatable (default: every bench target).
+    #[arg(long, value_name = "NAME", help_heading = HEADING_SCOPE)]
     bench: Vec<String>,
 
-    /// override the recorded target triple used for partitioning.
-    #[argh(option)]
-    target_triple: Option<String>,
-
-    /// override the machine fingerprint used to partition hardware-dependent
+    /// Override the machine fingerprint used to partition hardware-dependent
     /// results (for example, a CI machine-pool name).
-    #[argh(option)]
+    #[arg(long, value_name = "KEY", help_heading = HEADING_DISCRIMINANT)]
     machine_key: Option<String>,
 
-    /// replace already-stored results for the backfilled commits instead of
+    /// Replace already-stored results for the backfilled commits instead of
     /// skipping them as duplicates.
-    #[argh(switch)]
+    #[arg(long, help_heading = HEADING_ENV)]
     overwrite: bool,
 
-    /// continue past commits whose build or benchmark fails instead of stopping.
-    #[argh(switch)]
+    /// Continue past commits whose build or benchmark fails instead of stopping.
+    #[arg(long, help_heading = HEADING_ENV)]
     ignore_errors: bool,
 
-    /// emit detailed diagnostic notes to standard error for each commit's run
-    /// (which directories are scanned, which files are included or skipped).
-    #[argh(switch)]
-    verbose: bool,
-
-    /// arguments after `--` forwarded verbatim to `cargo bench` after the scope
+    /// Arguments after `--` forwarded verbatim to `cargo bench` after the scope
     /// flags.
-    #[argh(positional, greedy)]
+    #[arg(last = true, value_name = "ARGS")]
     passthrough: Vec<String>,
 }
 
 impl BackfillCommand {
     fn into_options(self) -> BackfillOptions {
-        let packages = if self.workspace {
-            Vec::new()
-        } else {
-            self.package
-        };
         BackfillOptions {
-            config_path: self.config,
+            config_path: self.env.config,
+            repo: self.env.repo,
             from: self.from,
             to: self.to,
-            packages,
+            packages: resolve_packages(self.workspace, self.package),
             benches: self.bench,
-            target_triple: self.target_triple,
             machine_key: self.machine_key,
             overwrite: self.overwrite,
             ignore_errors: self.ignore_errors,
-            passthrough: strip_separator(self.passthrough),
-            verbose: self.verbose,
+            passthrough: self.passthrough,
+            verbose: self.env.verbose,
         }
     }
 }
 
-/// Removes a single leading `--` separator from forwarded arguments, if present.
-///
-/// `argh` strips the separator that ends its own option parsing, but this guards
-/// the case where one is captured by the greedy positional regardless.
-fn strip_separator(mut passthrough: Vec<String>) -> Vec<String> {
-    if passthrough.first().is_some_and(|arg| arg == "--") {
-        passthrough.remove(0);
-    }
-    passthrough
-}
-
 /// Accept a benchmark's current level on the base branch as intentional.
-#[derive(Debug, FromArgs)]
-#[argh(subcommand, name = "bless")]
+#[derive(Args, Debug)]
 struct BlessCommand {
-    /// path to the configuration file (defaults to `.cargo/bench_history.toml`).
-    #[argh(option)]
-    config: Option<PathBuf>,
+    /// Benchmark-id prefixes to accept, matched against the qualified identity
+    /// (for example, `all_the_time/read_cell` or a family prefix
+    /// `overhead/groups_`). At least one is required.
+    #[arg(value_name = "PREFIX")]
+    prefixes: Vec<String>,
 
-    /// repository to resolve git topology from (defaults to the working directory).
-    #[argh(option)]
-    repo: Option<PathBuf>,
+    #[command(flatten)]
+    env: EnvArgs,
 
-    /// base ref the current commit must be on (defaults to the default branch).
-    #[argh(option)]
+    /// Base ref the current commit must be on (defaults to the default branch).
+    #[arg(long, value_name = "REF", help_heading = HEADING_TIMELINE)]
     base: Option<String>,
 
-    /// restrict the blessing to a single engine, criterion or callgrind
-    /// (default: every engine).
-    #[argh(option)]
-    engine: Option<String>,
+    #[command(flatten)]
+    facets: QueryFacetArgs,
 
-    /// restrict the blessing to a single full target triple (for example,
-    /// `x86_64-unknown-linux-gnu`). Mutually exclusive with `--os` /
-    /// `--architecture`, which select the same dimension by its derived parts.
-    #[argh(option)]
-    target_triple: Option<String>,
-
-    /// restrict the blessing to a single operating system (for example, windows).
-    /// Cannot be combined with `--target-triple`.
-    #[argh(option)]
-    os: Option<String>,
-
-    /// restrict the blessing to a single CPU architecture (for example, `x86_64`).
-    /// Cannot be combined with `--target-triple`.
-    #[argh(option)]
-    architecture: Option<String>,
-
-    /// restrict the blessing to a single machine partition.
-    #[argh(option)]
-    machine_key: Option<String>,
-
-    /// optional note recorded with the blessing explaining why the change is
+    /// Optional note recorded with the blessing explaining why the change is
     /// accepted.
-    #[argh(option)]
+    #[arg(long, value_name = "TEXT", help_heading = HEADING_ENV)]
     reason: Option<String>,
-
-    /// emit detailed diagnostic notes to standard error describing each step.
-    #[argh(switch)]
-    verbose: bool,
-
-    /// benchmark-id prefixes to accept, matched against the qualified identity
-    /// (for example, `all_the_time/read_cell` or a family prefix `overhead/groups_`).
-    /// At least one is required.
-    #[argh(positional)]
-    prefixes: Vec<String>,
 }
 
 impl BlessCommand {
     fn into_options(self) -> BlessOptions {
         BlessOptions {
-            config_path: self.config,
-            repo: self.repo,
+            config_path: self.env.config,
+            repo: self.env.repo,
             base: self.base,
-            engine: self.engine,
-            target_triple: self.target_triple,
-            os: self.os,
-            architecture: self.architecture,
-            machine_key: self.machine_key,
+            engine: self.facets.engine,
+            target_triple: self.facets.target_triple,
+            machine_key: self.facets.machine_key,
             prefixes: self.prefixes,
             reason: self.reason,
-            verbose: self.verbose,
+            verbose: self.env.verbose,
         }
     }
 }
 
 /// Remove blessings recorded at the current commit.
-#[derive(Debug, FromArgs)]
-#[argh(subcommand, name = "unbless")]
+#[derive(Args, Debug)]
 struct UnblessCommand {
-    /// path to the configuration file (defaults to `.cargo/bench_history.toml`).
-    #[argh(option)]
-    config: Option<PathBuf>,
+    #[command(flatten)]
+    env: EnvArgs,
 
-    /// repository to resolve git topology from (defaults to the working directory).
-    #[argh(option)]
-    repo: Option<PathBuf>,
-
-    /// base ref the current commit must be on (defaults to the default branch).
-    #[argh(option)]
+    /// Base ref the current commit must be on (defaults to the default branch).
+    #[arg(long, value_name = "REF", help_heading = HEADING_TIMELINE)]
     base: Option<String>,
 
-    /// restrict the unblessing to a single engine, criterion or callgrind
-    /// (default: every engine).
-    #[argh(option)]
-    engine: Option<String>,
-
-    /// restrict the unblessing to a single full target triple (for example,
-    /// `x86_64-unknown-linux-gnu`). Mutually exclusive with `--os` /
-    /// `--architecture`, which select the same dimension by its derived parts.
-    #[argh(option)]
-    target_triple: Option<String>,
-
-    /// restrict the unblessing to a single operating system (for example, windows).
-    /// Cannot be combined with `--target-triple`.
-    #[argh(option)]
-    os: Option<String>,
-
-    /// restrict the unblessing to a single CPU architecture (for example, `x86_64`).
-    /// Cannot be combined with `--target-triple`.
-    #[argh(option)]
-    architecture: Option<String>,
-
-    /// restrict the unblessing to a single machine partition.
-    #[argh(option)]
-    machine_key: Option<String>,
-
-    /// emit detailed diagnostic notes to standard error describing each step.
-    #[argh(switch)]
-    verbose: bool,
+    #[command(flatten)]
+    facets: QueryFacetArgs,
 }
 
 impl UnblessCommand {
     fn into_options(self) -> UnblessOptions {
         UnblessOptions {
-            config_path: self.config,
-            repo: self.repo,
+            config_path: self.env.config,
+            repo: self.env.repo,
             base: self.base,
-            engine: self.engine,
-            target_triple: self.target_triple,
-            os: self.os,
-            architecture: self.architecture,
-            machine_key: self.machine_key,
-            verbose: self.verbose,
+            engine: self.facets.engine,
+            target_triple: self.facets.target_triple,
+            machine_key: self.facets.machine_key,
+            verbose: self.env.verbose,
         }
     }
+}
+
+/// Resolves the benchmark scope: an explicit `--workspace` clears any `--package`
+/// filters (an empty package list means the whole workspace).
+fn resolve_packages(workspace: bool, package: Vec<String>) -> Vec<String> {
+    if workspace { Vec::new() } else { package }
 }
 
 #[cfg(test)]
@@ -817,11 +710,18 @@ mod tests {
     }
 
     #[test]
-    fn run_parses_timestamp_override() {
-        let command = parse(&["run", "--timestamp", "2024-01-01T00:00:00Z"]);
+    fn run_parses_repo_and_timestamp() {
+        let command = parse(&[
+            "run",
+            "--repo",
+            "/work/folo",
+            "--timestamp",
+            "2024-01-01T00:00:00Z",
+        ]);
         let Command::Run(options) = command else {
             panic!("expected run command");
         };
+        assert_eq!(options.repo, Some(PathBuf::from("/work/folo")));
         let expected: Timestamp = "2024-01-01T00:00:00Z".parse().unwrap();
         assert_eq!(options.timestamp, Some(expected));
     }
@@ -903,22 +803,24 @@ mod tests {
     }
 
     #[test]
-    fn analyze_collects_topology_and_facet_options() {
+    fn analyze_collects_topology_and_repeatable_facets() {
         let command = parse(&[
             "analyze",
             "--repo",
             "/work/folo",
-            "--branch",
+            "--context",
             "feature",
             "--base",
             "master",
+            "--until",
+            "2024-06-01T00:00:00Z",
             "--no-dirty",
             "--engine",
             "callgrind",
-            "--os",
-            "windows",
-            "--architecture",
-            "x86_64",
+            "--engine",
+            "criterion",
+            "--target-triple",
+            "all",
             "--machine-key",
             "ci-pool",
         ]);
@@ -926,84 +828,27 @@ mod tests {
             panic!("expected analyze command");
         };
         assert_eq!(options.repo, Some(PathBuf::from("/work/folo")));
-        assert_eq!(options.branch.as_deref(), Some("feature"));
+        assert_eq!(options.context.as_deref(), Some("feature"));
         assert_eq!(options.base.as_deref(), Some("master"));
+        assert_eq!(options.until.as_deref(), Some("2024-06-01T00:00:00Z"));
         assert!(options.no_dirty);
-        assert_eq!(options.engine.as_deref(), Some("callgrind"));
-        assert_eq!(options.os.as_deref(), Some("windows"));
-        assert_eq!(options.architecture.as_deref(), Some("x86_64"));
-        assert_eq!(options.machine_key.as_deref(), Some("ci-pool"));
+        assert_eq!(
+            options.engine,
+            vec!["callgrind".to_owned(), "criterion".to_owned()]
+        );
+        assert_eq!(options.target_triple, vec!["all".to_owned()]);
+        assert_eq!(options.machine_key, vec!["ci-pool".to_owned()]);
     }
 
     #[test]
-    fn analyze_parses_target_triple_facet() {
-        let command = parse(&["analyze", "--target-triple", "x86_64-unknown-linux-gnu"]);
-        let Command::Analyze(options) = command else {
+    fn analyze_facets_default_to_empty() {
+        let Command::Analyze(options) = parse(&["analyze"]) else {
             panic!("expected analyze command");
         };
-        assert_eq!(
-            options.target_triple.as_deref(),
-            Some("x86_64-unknown-linux-gnu")
-        );
-        assert_eq!(options.os, None);
-        assert_eq!(options.architecture, None);
-    }
-
-    #[test]
-    fn list_collects_selection_and_discriminants() {
-        let command = parse(&[
-            "list",
-            "--repo",
-            "/work/folo",
-            "--branch",
-            "feature",
-            "--base",
-            "master",
-            "--no-dirty",
-            "--engine",
-            "callgrind",
-            "--os",
-            "windows",
-            "--architecture",
-            "x86_64",
-            "--machine-key",
-            "ci-pool",
-            "--metric",
-            "Ir",
-            "--format",
-            "json",
-            "--discriminants",
-            "--verbose",
-        ]);
-        let Command::List(options) = command else {
-            panic!("expected list command");
-        };
-        assert_eq!(options.repo, Some(PathBuf::from("/work/folo")));
-        assert_eq!(options.branch.as_deref(), Some("feature"));
-        assert_eq!(options.base.as_deref(), Some("master"));
-        assert!(options.no_dirty);
-        assert_eq!(options.engine.as_deref(), Some("callgrind"));
-        assert_eq!(options.os.as_deref(), Some("windows"));
-        assert_eq!(options.architecture.as_deref(), Some("x86_64"));
-        assert_eq!(options.machine_key.as_deref(), Some("ci-pool"));
-        assert_eq!(options.metric.as_deref(), Some("Ir"));
-        assert_eq!(options.format.as_deref(), Some("json"));
-        assert!(options.discriminants);
-        assert!(options.verbose);
-    }
-
-    #[test]
-    fn list_parses_target_triple_facet() {
-        let command = parse(&["list", "--target-triple", "x86_64-unknown-linux-gnu"]);
-        let Command::List(options) = command else {
-            panic!("expected list command");
-        };
-        assert_eq!(
-            options.target_triple.as_deref(),
-            Some("x86_64-unknown-linux-gnu")
-        );
-        assert_eq!(options.os, None);
-        assert_eq!(options.architecture, None);
+        assert!(options.engine.is_empty());
+        assert!(options.target_triple.is_empty());
+        assert!(options.machine_key.is_empty());
+        assert!(options.until.is_none());
     }
 
     #[test]
@@ -1020,17 +865,81 @@ mod tests {
     }
 
     #[test]
-    fn list_parses_blessings_switches() {
-        let Command::List(options) = parse(&["list", "--blessings", "--all"]) else {
+    fn list_requires_a_subject() {
+        let parsed = Cli::from_args(&["cargo-bench-history"], &["list"]);
+        let early = parsed.expect_err("bare list must error");
+        assert!(early.status.is_err(), "a missing subject is a parse error");
+        for subject in ["runs", "discriminants", "blessings"] {
+            assert!(
+                early.output.contains(subject),
+                "the error names the {subject} subject: {}",
+                early.output
+            );
+        }
+    }
+
+    #[test]
+    fn list_runs_collects_selection() {
+        let command = parse(&[
+            "list",
+            "runs",
+            "--repo",
+            "/work/folo",
+            "--context",
+            "feature",
+            "--base",
+            "master",
+            "--no-dirty",
+            "--engine",
+            "callgrind",
+            "--target-triple",
+            "x86_64-unknown-linux-gnu",
+            "--machine-key",
+            "ci-pool",
+            "--metric",
+            "Ir",
+            "--format",
+            "json",
+            "--verbose",
+        ]);
+        let Command::List(options) = command else {
             panic!("expected list command");
         };
-        assert!(options.blessings);
+        assert_eq!(options.subject, ListSubject::Runs);
+        assert_eq!(options.repo, Some(PathBuf::from("/work/folo")));
+        assert_eq!(options.context.as_deref(), Some("feature"));
+        assert_eq!(options.base.as_deref(), Some("master"));
+        assert!(options.no_dirty);
+        assert_eq!(options.engine, vec!["callgrind".to_owned()]);
+        assert_eq!(
+            options.target_triple,
+            vec!["x86_64-unknown-linux-gnu".to_owned()]
+        );
+        assert_eq!(options.machine_key, vec!["ci-pool".to_owned()]);
+        assert_eq!(options.metric.as_deref(), Some("Ir"));
+        assert_eq!(options.format.as_deref(), Some("json"));
+        assert!(options.verbose);
+    }
+
+    #[test]
+    fn list_discriminants_selects_the_subject() {
+        let Command::List(options) = parse(&["list", "discriminants"]) else {
+            panic!("expected list command");
+        };
+        assert_eq!(options.subject, ListSubject::Discriminants);
+    }
+
+    #[test]
+    fn list_blessings_collects_all_switch() {
+        let Command::List(options) = parse(&["list", "blessings", "--all"]) else {
+            panic!("expected list command");
+        };
+        assert_eq!(options.subject, ListSubject::Blessings);
         assert!(options.all);
 
-        let Command::List(options) = parse(&["list"]) else {
+        let Command::List(options) = parse(&["list", "blessings"]) else {
             panic!("expected list command");
         };
-        assert!(!options.blessings);
         assert!(!options.all);
     }
 
@@ -1055,7 +964,7 @@ mod tests {
                 "overhead/groups_".to_owned()
             ]
         );
-        assert_eq!(options.engine.as_deref(), Some("callgrind"));
+        assert_eq!(options.engine, vec!["callgrind".to_owned()]);
         assert_eq!(options.reason.as_deref(), Some("intentional tradeoff"));
     }
 
@@ -1072,36 +981,32 @@ mod tests {
             panic!("expected unbless command");
         };
         assert_eq!(
-            options.target_triple.as_deref(),
-            Some("x86_64-unknown-linux-gnu")
+            options.target_triple,
+            vec!["x86_64-unknown-linux-gnu".to_owned()]
         );
-        assert_eq!(options.machine_key.as_deref(), Some("ci-pool"));
+        assert_eq!(options.machine_key, vec!["ci-pool".to_owned()]);
     }
 
     #[test]
-    fn prune_collects_selection_and_dry_run() {
+    fn prune_collects_commits_selection_and_dry_run() {
         let command = parse(&[
             "prune",
+            "abc123",
+            "def456",
             "--repo",
             "/work/folo",
-            "--branch",
+            "--context",
             "feature",
             "--base",
             "master",
-            "--commit",
-            "abc123",
-            "--commit",
-            "def456",
             "--since",
             "2024-01-01T00:00:00Z",
             "--until",
             "2024-06-01T00:00:00Z",
             "--engine",
             "callgrind",
-            "--os",
-            "windows",
-            "--architecture",
-            "x86_64",
+            "--target-triple",
+            "x86_64-unknown-linux-gnu",
             "--machine-key",
             "ci-pool",
             "--dirty",
@@ -1114,7 +1019,7 @@ mod tests {
             panic!("expected prune command");
         };
         assert_eq!(options.repo, Some(PathBuf::from("/work/folo")));
-        assert_eq!(options.branch.as_deref(), Some("feature"));
+        assert_eq!(options.context.as_deref(), Some("feature"));
         assert_eq!(options.base.as_deref(), Some("master"));
         assert_eq!(
             options.commit,
@@ -1122,10 +1027,12 @@ mod tests {
         );
         assert_eq!(options.since.as_deref(), Some("2024-01-01T00:00:00Z"));
         assert_eq!(options.until.as_deref(), Some("2024-06-01T00:00:00Z"));
-        assert_eq!(options.engine.as_deref(), Some("callgrind"));
-        assert_eq!(options.os.as_deref(), Some("windows"));
-        assert_eq!(options.architecture.as_deref(), Some("x86_64"));
-        assert_eq!(options.machine_key.as_deref(), Some("ci-pool"));
+        assert_eq!(options.engine, vec!["callgrind".to_owned()]);
+        assert_eq!(
+            options.target_triple,
+            vec!["x86_64-unknown-linux-gnu".to_owned()]
+        );
+        assert_eq!(options.machine_key, vec!["ci-pool".to_owned()]);
         assert!(options.dirty);
         assert!(!options.clean);
         assert!(!options.all);
@@ -1135,7 +1042,7 @@ mod tests {
     }
 
     #[test]
-    fn prune_parses_target_triple_facet() {
+    fn prune_parses_all_confirm_flag() {
         let command = parse(&[
             "prune",
             "--target-triple",
@@ -1146,29 +1053,24 @@ mod tests {
             panic!("expected prune command");
         };
         assert_eq!(
-            options.target_triple.as_deref(),
-            Some("x86_64-unknown-linux-gnu")
+            options.target_triple,
+            vec!["x86_64-unknown-linux-gnu".to_owned()]
         );
-        assert_eq!(options.os, None);
-        assert_eq!(options.architecture, None);
+        assert!(options.commit.is_empty());
         assert!(options.all);
         assert!(!options.dry_run);
     }
 
     #[test]
-    fn backfill_collects_range_options_and_passthrough() {
+    fn backfill_collects_range_and_passthrough() {
         let command = parse(&[
             "backfill",
-            "--from",
             "abc123",
-            "--to",
             "def456",
             "--package",
             "nm",
             "--bench",
             "nm_observe",
-            "--target-triple",
-            "x86_64-unknown-linux-gnu",
             "--machine-key",
             "ci-pool",
             "--overwrite",
@@ -1183,10 +1085,6 @@ mod tests {
         assert_eq!(options.to, "def456");
         assert_eq!(options.packages, vec!["nm".to_owned()]);
         assert_eq!(options.benches, vec!["nm_observe".to_owned()]);
-        assert_eq!(
-            options.target_triple.as_deref(),
-            Some("x86_64-unknown-linux-gnu")
-        );
         assert_eq!(options.machine_key.as_deref(), Some("ci-pool"));
         assert!(options.overwrite);
         assert!(options.ignore_errors);
@@ -1195,40 +1093,21 @@ mod tests {
 
     #[test]
     fn backfill_requires_from_and_to() {
-        let parsed = Cli::from_args(&["cargo-bench-history"], &["backfill", "--from", "abc123"]);
-        assert!(parsed.is_err(), "missing --to must be rejected");
+        let parsed = Cli::from_args(&["cargo-bench-history"], &["backfill", "abc123"]);
+        assert!(parsed.is_err(), "a missing `to` must be rejected");
     }
 
     #[test]
     fn backfill_parses_verbose_switch() {
-        let Command::Backfill(options) = parse(&[
-            "backfill",
-            "--from",
-            "abc123",
-            "--to",
-            "def456",
-            "--verbose",
-        ]) else {
+        let Command::Backfill(options) = parse(&["backfill", "abc123", "def456", "--verbose"])
+        else {
             panic!("expected backfill command");
         };
         assert!(options.verbose);
 
-        let Command::Backfill(options) = parse(&["backfill", "--from", "abc123", "--to", "def456"])
-        else {
+        let Command::Backfill(options) = parse(&["backfill", "abc123", "def456"]) else {
             panic!("expected backfill command");
         };
         assert!(!options.verbose);
-    }
-
-    #[test]
-    fn strip_separator_removes_only_leading_marker() {
-        assert_eq!(
-            strip_separator(vec!["--".to_owned(), "a".to_owned()]),
-            vec!["a".to_owned()]
-        );
-        assert_eq!(
-            strip_separator(vec!["a".to_owned(), "--".to_owned()]),
-            vec!["a".to_owned(), "--".to_owned()]
-        );
     }
 }
