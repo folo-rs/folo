@@ -16,13 +16,23 @@ pub enum EngineSystem {
     Criterion,
     /// Callgrind (via Gungraun) instruction counts: simulated, hardware-independent.
     Callgrind,
+    /// `alloc_tracker` allocation counts and bytes: deterministic and
+    /// hardware-independent (the same code allocates the same way on any machine).
+    AllocTracker,
+    /// `all_the_time` processor-time measurements: hardware-dependent and noisy.
+    AllTheTime,
 }
 
 impl EngineSystem {
     /// Every supported engine, in a stable order used to inject the combined
     /// benchmark environment and to harvest each engine's output tree after the
     /// single `cargo bench` invocation.
-    pub const ALL: [Self; 2] = [Self::Callgrind, Self::Criterion];
+    pub const ALL: [Self; 4] = [
+        Self::Callgrind,
+        Self::Criterion,
+        Self::AllocTracker,
+        Self::AllTheTime,
+    ];
 
     /// The stable lowercase identifier used in storage paths and config keys.
     #[must_use]
@@ -30,6 +40,8 @@ impl EngineSystem {
         match self {
             Self::Criterion => "criterion",
             Self::Callgrind => "callgrind",
+            Self::AllocTracker => "alloc_tracker",
+            Self::AllTheTime => "all_the_time",
         }
     }
 
@@ -39,6 +51,8 @@ impl EngineSystem {
         match name {
             "criterion" => Some(Self::Criterion),
             "callgrind" => Some(Self::Callgrind),
+            "alloc_tracker" => Some(Self::AllocTracker),
+            "all_the_time" => Some(Self::AllTheTime),
             _ => None,
         }
     }
@@ -46,12 +60,14 @@ impl EngineSystem {
     /// Whether results from this engine depend on the host hardware.
     ///
     /// Hardware-dependent engines require a machine key in their partition;
-    /// hardware-independent ones use the literal `synthetic` instead.
+    /// hardware-independent ones use the literal `synthetic` instead. Allocation
+    /// counts and bytes are a property of the code, not the machine, so
+    /// `alloc_tracker` is hardware-independent; processor time obviously is not.
     #[must_use]
     pub fn is_hardware_dependent(self) -> bool {
         match self {
-            Self::Criterion => true,
-            Self::Callgrind => false,
+            Self::Criterion | Self::AllTheTime => true,
+            Self::Callgrind | Self::AllocTracker => false,
         }
     }
 }
@@ -69,8 +85,9 @@ impl fmt::Display for EngineSystem {
 /// 1. An explicit triple (from `--target-triple`).
 /// 2. For Callgrind, the OS component is pinned to `linux` because the engine only
 ///    runs under Valgrind — this transparently handles the Windows→WSL case.
-/// 3. Otherwise (natively-run engines such as Criterion) the tool's host triple,
-///    whose architecture a WSL guest shares.
+/// 3. Otherwise (natively-run engines such as Criterion, `alloc_tracker`, and
+///    `all_the_time`) the tool's host triple, whose architecture a WSL guest
+///    shares.
 #[must_use]
 pub fn resolve_target_triple(
     explicit: Option<&str>,
@@ -82,7 +99,9 @@ pub fn resolve_target_triple(
     }
     match engine {
         EngineSystem::Callgrind => normalize_os_to_linux(host_triple),
-        EngineSystem::Criterion => host_triple.to_owned(),
+        EngineSystem::Criterion | EngineSystem::AllocTracker | EngineSystem::AllTheTime => {
+            host_triple.to_owned()
+        }
     }
 }
 
@@ -279,9 +298,56 @@ mod tests {
     }
 
     #[test]
+    fn native_engines_use_host_triple_verbatim() {
+        // The natively-run engines (unlike Callgrind) record the host triple as-is,
+        // so allocation and processor-time results on Windows and Linux stay in
+        // separate series rather than being conflated under a pinned triple.
+        for engine in [EngineSystem::AllocTracker, EngineSystem::AllTheTime] {
+            assert_eq!(
+                resolve_target_triple(None, engine, "x86_64-pc-windows-msvc"),
+                "x86_64-pc-windows-msvc"
+            );
+        }
+    }
+
+    #[test]
     fn hardware_dependence_matches_engine() {
         assert!(EngineSystem::Criterion.is_hardware_dependent());
+        assert!(EngineSystem::AllTheTime.is_hardware_dependent());
         assert!(!EngineSystem::Callgrind.is_hardware_dependent());
+        assert!(!EngineSystem::AllocTracker.is_hardware_dependent());
+    }
+
+    #[test]
+    fn alloc_tracker_uses_a_synthetic_partition() {
+        // Allocation counts are a property of the code, not the machine, so
+        // `alloc_tracker` carries no machine key.
+        let key = ComparabilityKey::new(
+            "folo",
+            EngineSystem::AllocTracker,
+            "x86_64-pc-windows-msvc",
+            None,
+        );
+        assert_eq!(
+            key.partition_prefix(),
+            "v2/folo/alloc_tracker/x86_64-pc-windows-msvc/synthetic"
+        );
+    }
+
+    #[test]
+    fn all_the_time_partitions_by_machine_key() {
+        // Processor time depends on the machine, so `all_the_time` carries a
+        // machine fingerprint.
+        let key = ComparabilityKey::new(
+            "folo",
+            EngineSystem::AllTheTime,
+            "x86_64-pc-windows-msvc",
+            Some("abc123"),
+        );
+        assert_eq!(
+            key.partition_prefix(),
+            "v2/folo/all_the_time/x86_64-pc-windows-msvc/abc123"
+        );
     }
 
     #[test]
@@ -375,11 +441,13 @@ mod tests {
     fn engine_system_display_matches_as_str() {
         assert_eq!(EngineSystem::Criterion.to_string(), "criterion");
         assert_eq!(EngineSystem::Callgrind.to_string(), "callgrind");
+        assert_eq!(EngineSystem::AllocTracker.to_string(), "alloc_tracker");
+        assert_eq!(EngineSystem::AllTheTime.to_string(), "all_the_time");
     }
 
     #[test]
     fn engine_system_from_name_roundtrips() {
-        for engine in [EngineSystem::Criterion, EngineSystem::Callgrind] {
+        for engine in EngineSystem::ALL {
             assert_eq!(EngineSystem::from_name(engine.as_str()), Some(engine));
         }
         assert_eq!(EngineSystem::from_name("dhat"), None);

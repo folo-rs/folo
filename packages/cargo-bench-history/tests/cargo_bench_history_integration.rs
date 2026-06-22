@@ -901,6 +901,182 @@ async fn analyze_callgrind_tiny_deterministic_step_is_flagged() {
     assert_eq!(parsed["findings"][0]["direction"], "regression", "{report}");
 }
 
+/// An `alloc_tracker` series whose allocated-bytes count steps up is flagged as a
+/// `change_point`: allocation statistics are a deterministic property of the code,
+/// so - like Callgrind instruction counts - any sustained step is a real change,
+/// trusted below the noise floor a noisy engine would demand.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn analyze_alloc_tracker_step_is_flagged_as_change_point() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // A flat allocated-bytes baseline that steps up by one byte at the fourth
+    // commit; the allocation count stays constant throughout.
+    workspace.seed_alloc_tracker("2024-03-01", "a1", "allocate_vec", 200.0, 2.0);
+    workspace.seed_alloc_tracker("2024-03-02", "a2", "allocate_vec", 200.0, 2.0);
+    workspace.seed_alloc_tracker("2024-03-03", "a3", "allocate_vec", 200.0, 2.0);
+    workspace.seed_alloc_tracker("2024-03-04", "a4", "allocate_vec", 201.0, 2.0);
+    workspace.seed_alloc_tracker("2024-03-05", "a5", "allocate_vec", 201.0, 2.0);
+    workspace.seed_alloc_tracker("2024-03-06", "a6", "allocate_vec", 201.0, 2.0);
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(
+        regressions, 1,
+        "a one-byte deterministic step is real and must flag: {report}"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(parsed["findings"][0]["method"], "change_point", "{report}");
+    assert_eq!(parsed["findings"][0]["direction"], "regression", "{report}");
+    assert_eq!(
+        parsed["findings"][0]["metric"], "allocated_bytes",
+        "{report}"
+    );
+    assert!(report.contains("allocate_vec"), "{report}");
+}
+
+/// A gapped `alloc_tracker` history - where some commits measure a different
+/// operation - reconstructs each series across only the commits that measured it,
+/// treating an unmeasured commit as a missing observation rather than a drop to
+/// zero. The `allocate_vec` series spanning the gaps still surfaces its real step.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn analyze_alloc_tracker_ignores_gaps_in_a_sparse_history() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // `allocate_vec` is measured only at every other commit; the intervening
+    // commits measure `free_box` instead, leaving `allocate_vec` unobserved there.
+    workspace.seed_alloc_tracker("2024-04-01", "g1", "allocate_vec", 200.0, 2.0);
+    workspace.seed_alloc_tracker("2024-04-02", "g2", "free_box", 8.0, 1.0);
+    workspace.seed_alloc_tracker("2024-04-03", "g3", "allocate_vec", 200.0, 2.0);
+    workspace.seed_alloc_tracker("2024-04-04", "g4", "free_box", 8.0, 1.0);
+    workspace.seed_alloc_tracker("2024-04-05", "g5", "allocate_vec", 260.0, 2.0);
+    workspace.seed_alloc_tracker("2024-04-06", "g6", "allocate_vec", 260.0, 2.0);
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    // Only `allocate_vec`'s allocated-bytes step is a finding. A gap read as a drop
+    // to zero would manufacture wild swings; instead the series is contiguous.
+    assert_eq!(
+        regressions, 1,
+        "the gapped series' real step flags: {report}"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(parsed["findings"][0]["method"], "change_point", "{report}");
+    assert_eq!(parsed["findings"][0]["direction"], "regression", "{report}");
+    assert!(report.contains("allocate_vec"), "{report}");
+    assert!(
+        !report.contains("free_box"),
+        "the flat two-point free_box series produces no finding: {report}"
+    );
+}
+
+/// A slow, monotonic `all_the_time` processor-time drift is flagged as a `drift`
+/// finding. Processor time is a noisy, hardware-dependent measurement (like
+/// Criterion wall time), so a gentle ramp clears the noise floor only via the
+/// trend detector - even though `all_the_time` reports no confidence interval, the
+/// detector falls back gracefully to the Mann-Kendall trend and practical floor.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn analyze_all_the_time_slow_drift_is_flagged_as_drift() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // A gentle one-nanosecond-per-commit ramp from 20ns to 27ns.
+    for (date, label, value) in [
+        ("2024-05-01", "t1", 20.0),
+        ("2024-05-02", "t2", 21.0),
+        ("2024-05-03", "t3", 22.0),
+        ("2024-05-04", "t4", 23.0),
+        ("2024-05-05", "t5", 24.0),
+        ("2024-05-06", "t6", 25.0),
+        ("2024-05-07", "t7", 26.0),
+        ("2024-05-08", "t8", 27.0),
+    ] {
+        workspace.seed_all_the_time(date, label, "mk", "read_cell", value);
+    }
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(regressions, 1, "the upward drift is a regression: {report}");
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert_eq!(parsed["findings"][0]["method"], "drift", "{report}");
+    assert_eq!(parsed["findings"][0]["direction"], "regression", "{report}");
+    assert_eq!(
+        parsed["findings"][0]["metric"], "processor_time",
+        "{report}"
+    );
+}
+
+/// Per-point noise in an `all_the_time` processor-time series never manufactures a
+/// spurious finding: oscillation around a flat mean clears neither the trend test
+/// nor the change-point gate, so the noisy engine produces nothing.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn analyze_all_the_time_jitter_is_not_flagged() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // Eight points oscillating roughly +/-15% around 20ns with no sustained shift.
+    for (date, label, value) in [
+        ("2024-06-01", "j1", 20.0),
+        ("2024-06-02", "j2", 23.0),
+        ("2024-06-03", "j3", 18.0),
+        ("2024-06-04", "j4", 21.0),
+        ("2024-06-05", "j5", 19.0),
+        ("2024-06-06", "j6", 22.0),
+        ("2024-06-07", "j7", 18.0),
+        ("2024-06-08", "j8", 20.0),
+    ] {
+        workspace.seed_all_the_time(date, label, "mk", "read_cell", value);
+    }
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&["analyze", "--format", "json"])
+        .await
+        .expect("analysis succeeds")
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(
+        regressions, 0,
+        "jitter must not read as a regression: {report}"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+    assert!(
+        parsed["findings"]
+            .as_array()
+            .expect("a findings array")
+            .is_empty(),
+        "noisy jitter around a flat mean produces no findings at all: {report}"
+    );
+}
+
 // ===========================================================================
 // Real-adapter `analyze` scenarios exercising git topology.
 //
@@ -2907,8 +3083,9 @@ async fn run_criterion_stores_results() {
 }
 
 /// A single benchmark run harvests every engine that produced output: the mock
-/// writes both a Callgrind summary and a Criterion case, so the run stores one
-/// result set per engine in its own partition.
+/// writes a Callgrind summary, a Criterion case, an `alloc_tracker` operation and
+/// an `all_the_time` operation, so the run stores one result set per engine in its
+/// own partition.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn run_harvests_every_engine_that_produced_output() {
@@ -2917,16 +3094,23 @@ async fn run_harvests_every_engine_that_produced_output() {
         "grp=single",
         "--criterion",
         "grp|capture|now=12.5",
+        "--alloc-tracker",
+        "allocate_vec=200/2",
+        "--all-the-time",
+        "read_cell=20",
     ]);
 
     let outcome = workspace.drive(&["run"]).await.expect("run should succeed");
     let RunOutcome::Completed { message } = outcome else {
         panic!("expected completion, got {outcome:?}");
     };
-    assert!(message.contains("Stored 2"), "{message}");
+    assert!(message.contains("Stored 4"), "{message}");
 
     let objects = workspace.stored_objects();
-    assert_eq!(objects.len(), 2, "{objects:?}");
+    assert_eq!(objects.len(), 4, "{objects:?}");
+    // Deterministic engines (Callgrind instruction counts, allocation statistics)
+    // land in the `synthetic` partition; hardware-dependent engines (Criterion
+    // wall time, `all_the_time` processor time) carry a machine fingerprint.
     assert!(
         objects
             .iter()
@@ -2939,6 +3123,84 @@ async fn run_harvests_every_engine_that_produced_output() {
             .any(|(key, _)| key.contains("/criterion/") && !key.contains("/synthetic/")),
         "{objects:?}"
     );
+    assert!(
+        objects
+            .iter()
+            .any(|(key, _)| key.contains("/alloc_tracker/") && key.contains("/synthetic/")),
+        "{objects:?}"
+    );
+    assert!(
+        objects
+            .iter()
+            .any(|(key, _)| key.contains("/all_the_time/") && !key.contains("/synthetic/")),
+        "{objects:?}"
+    );
+}
+
+/// An `alloc_tracker` run stores allocation statistics in the `synthetic`
+/// partition (allocation counts are a deterministic property of the code, not the
+/// hardware), carrying both the byte and the count metric.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn run_alloc_tracker_stores_results() {
+    let workspace = Workspace::new(&storage_only_config())
+        .with_bench(&["--alloc-tracker", "allocate_vec=200/2"]);
+
+    let outcome = workspace.drive(&["run"]).await.expect("run should succeed");
+    assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+    let (key, set) = workspace.single_object();
+    assert!(key.contains("/alloc_tracker/"), "{key}");
+    assert!(key.contains("/synthetic/"), "{key}");
+    assert_eq!(set.results.len(), 1);
+    let record = &set.results[0];
+    assert_eq!(record.id.group, "allocate_vec");
+    assert_eq!(record.metrics.len(), 2, "{:?}", record.metrics);
+
+    let bytes = metric_named(record, "allocated_bytes");
+    assert_eq!(bytes.kind, MetricKind::AllocationBytes);
+    assert_eq!(bytes.value, 200.0);
+    assert_eq!(bytes.unit.as_deref(), Some("bytes"));
+
+    let count = metric_named(record, "allocations");
+    assert_eq!(count.kind, MetricKind::AllocationCount);
+    assert_eq!(count.value, 2.0);
+    assert_eq!(count.unit.as_deref(), Some("count"));
+}
+
+/// An `all_the_time` run stores processor time in a machine-fingerprinted
+/// partition (processor time is hardware-dependent), and `--machine-key` overrides
+/// the fingerprint.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn run_all_the_time_is_partitioned_by_machine_key() {
+    let workspace =
+        Workspace::new(&storage_only_config()).with_bench(&["--all-the-time", "read_cell=20"]);
+
+    workspace
+        .drive(&[
+            "run",
+            "--target-triple",
+            "x86_64-unknown-linux-gnu",
+            "--machine-key",
+            "ci-pool-b",
+        ])
+        .await
+        .expect("run should succeed");
+
+    let (key, set) = workspace.single_object();
+    assert!(
+        key.contains("/all_the_time/x86_64-unknown-linux-gnu/ci-pool-b/"),
+        "{key}"
+    );
+    assert!(!key.contains("/synthetic/"), "{key}");
+    assert_eq!(set.results.len(), 1);
+    let record = &set.results[0];
+    assert_eq!(record.id.group, "read_cell");
+    let processor_time = metric_named(record, "processor_time");
+    assert_eq!(processor_time.kind, MetricKind::ProcessorTime);
+    assert_eq!(processor_time.value, 20.0);
+    assert_eq!(processor_time.unit.as_deref(), Some("ns"));
 }
 
 /// `--machine-key` overrides the machine fingerprint in a Criterion partition.
@@ -4301,6 +4563,51 @@ impl Workspace {
             &two_benchmark_result_set(effective.as_second(), &sha, alpha, beta),
         );
     }
+
+    /// Seeds one clean `alloc_tracker` result set for `operation` at the given
+    /// `date` and commit `label`, recording `bytes` mean bytes and `allocs` mean
+    /// allocations per iteration. Allocation counts are deterministic, so the
+    /// partition is `synthetic` (no machine key).
+    fn seed_alloc_tracker(
+        &self,
+        date: &str,
+        label: &str,
+        operation: &str,
+        bytes: f64,
+        allocs: f64,
+    ) {
+        let sha = self.commit(label);
+        let effective: Timestamp = format!("{date}T00:00:00Z").parse().unwrap();
+        let key = format!(
+            "v2/testproj/alloc_tracker/x86_64-unknown-linux-gnu/synthetic/{sha}/clean.json"
+        );
+        self.seed(
+            &key,
+            &alloc_result_set(effective.as_second(), &sha, operation, bytes, allocs),
+        );
+    }
+
+    /// Seeds one clean `all_the_time` result set for `operation` at the given
+    /// `date` and commit `label`, recording `nanos` mean processor-time nanoseconds
+    /// per iteration in the `machine`-keyed partition (processor time is
+    /// hardware-dependent).
+    fn seed_all_the_time(
+        &self,
+        date: &str,
+        label: &str,
+        machine: &str,
+        operation: &str,
+        nanos: f64,
+    ) {
+        let sha = self.commit(label);
+        let effective: Timestamp = format!("{date}T00:00:00Z").parse().unwrap();
+        let key =
+            format!("v2/testproj/all_the_time/x86_64-unknown-linux-gnu/{machine}/{sha}/clean.json");
+        self.seed(
+            &key,
+            &time_result_set(effective.as_second(), &sha, operation, nanos),
+        );
+    }
 }
 
 /// Builds a Callgrind result set with two records — `alpha::bench/wide` and
@@ -4383,6 +4690,76 @@ fn criterion_result_set(effective: i64, commit: &str, value: f64) -> ResultSet {
     ResultSet::new(context, vec![record])
 }
 
+/// Builds an `alloc_tracker` result set for `operation` carrying an
+/// `allocation_bytes` and an `allocation_count` metric, stamped with the effective
+/// second and abbreviated `commit`.
+fn alloc_result_set(
+    effective: i64,
+    commit: &str,
+    operation: &str,
+    bytes: f64,
+    allocs: f64,
+) -> ResultSet {
+    let time = Timestamp::from_second(effective).expect("seconds within range");
+    let mut git = GitInfo::default();
+    git.commit = Some(format!("{commit}full"));
+    git.short_commit = Some(commit.to_owned());
+    git.branch = Some("main".to_owned());
+    let context = RunContext::new(
+        Timestamps::new(time, time, time),
+        git,
+        CiInfo::default(),
+        ToolchainInfo::default(),
+        TOOL_VERSION.to_owned(),
+    );
+    let record = ResultRecord::new(
+        BenchmarkId::new(None, operation.to_owned(), None, None),
+        vec![
+            Metric::new(
+                "allocated_bytes".to_owned(),
+                MetricKind::AllocationBytes,
+                bytes,
+                Some("bytes".to_owned()),
+            ),
+            Metric::new(
+                "allocations".to_owned(),
+                MetricKind::AllocationCount,
+                allocs,
+                Some("count".to_owned()),
+            ),
+        ],
+    );
+    ResultSet::new(context, vec![record])
+}
+
+/// Builds an `all_the_time` result set for `operation` carrying a single
+/// `processor_time` metric at `value` nanoseconds, stamped with the effective
+/// second and abbreviated `commit`.
+fn time_result_set(effective: i64, commit: &str, operation: &str, value: f64) -> ResultSet {
+    let time = Timestamp::from_second(effective).expect("seconds within range");
+    let mut git = GitInfo::default();
+    git.commit = Some(format!("{commit}full"));
+    git.short_commit = Some(commit.to_owned());
+    git.branch = Some("main".to_owned());
+    let context = RunContext::new(
+        Timestamps::new(time, time, time),
+        git,
+        CiInfo::default(),
+        ToolchainInfo::default(),
+        TOOL_VERSION.to_owned(),
+    );
+    let record = ResultRecord::new(
+        BenchmarkId::new(None, operation.to_owned(), None, None),
+        vec![Metric::new(
+            "processor_time".to_owned(),
+            MetricKind::ProcessorTime,
+            value,
+            Some("ns".to_owned()),
+        )],
+    );
+    ResultSet::new(context, vec![record])
+}
+
 /// The `Ir` (instruction count) metric value of a record.
 fn ir_of(record: &ResultRecord) -> f64 {
     record
@@ -4391,6 +4768,15 @@ fn ir_of(record: &ResultRecord) -> f64 {
         .find(|metric| metric.name == "Ir")
         .expect("instruction count should be present")
         .value
+}
+
+/// The metric named `name` within a record.
+fn metric_named<'a>(record: &'a ResultRecord, name: &str) -> &'a Metric {
+    record
+        .metrics
+        .iter()
+        .find(|metric| metric.name == name)
+        .unwrap_or_else(|| panic!("metric {name:?} should be present"))
 }
 
 /// Escapes a string for embedding in a TOML basic (double-quoted) string, so a

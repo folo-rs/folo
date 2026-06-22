@@ -1,12 +1,17 @@
 //! Benchmark-engine adapters: per-engine environment injection, the WSL env
 //! propagation rule, and parsing of each engine's output into the model.
 //!
-//! Two engines are supported: Callgrind (via Gungraun, deterministic instruction
-//! counts) and Criterion (wall-clock timings).
+//! Four engines are supported: Callgrind (via Gungraun, deterministic
+//! instruction counts), Criterion (wall-clock timings), `alloc_tracker`
+//! (deterministic allocation counts) and `all_the_time` (processor time).
 
+pub(crate) mod all_the_time;
+pub(crate) mod alloc_tracker;
 pub(crate) mod callgrind;
 pub(crate) mod criterion;
 
+pub(crate) use all_the_time::parse_all_the_time_operation;
+pub(crate) use alloc_tracker::parse_alloc_tracker_operation;
 pub(crate) use callgrind::parse_callgrind_summary;
 pub(crate) use criterion::parse_criterion_case;
 
@@ -29,6 +34,14 @@ pub(crate) const CRITERION_BENCHMARK_FILE: &str = "benchmark.json";
 
 /// File name Criterion writes with a benchmark case's statistical estimates.
 pub(crate) const CRITERION_ESTIMATES_FILE: &str = "estimates.json";
+
+/// Directory under the cargo target root where `alloc_tracker` writes its
+/// per-operation JSON files.
+pub(crate) const ALLOC_TRACKER_DIR: &str = "alloc_tracker";
+
+/// Directory under the cargo target root where `all_the_time` writes its
+/// per-operation JSON files.
+pub(crate) const ALL_THE_TIME_DIR: &str = "all_the_time";
 
 /// The environment variables to inject so every supported engine emits
 /// machine-readable output during the single `cargo bench` invocation.
@@ -61,14 +74,16 @@ fn dedup_env(pairs: Vec<(String, String)>) -> Vec<(String, String)> {
 /// The environment variables to inject so an engine emits machine-readable output.
 ///
 /// Callgrind needs `GUNGRAUN_SAVE_SUMMARY=pretty-json` so Gungraun writes the
-/// `summary.json` files the tool harvests. Criterion writes `estimates.json`
-/// unconditionally, so it needs nothing.
+/// `summary.json` files the tool harvests. Criterion, `alloc_tracker` and
+/// `all_the_time` write their output unconditionally, so they need nothing.
 fn injected_env(engine: EngineSystem) -> Vec<(String, String)> {
     match engine {
         EngineSystem::Callgrind => {
             vec![("GUNGRAUN_SAVE_SUMMARY".to_owned(), "pretty-json".to_owned())]
         }
-        EngineSystem::Criterion => Vec::new(),
+        EngineSystem::Criterion | EngineSystem::AllocTracker | EngineSystem::AllTheTime => {
+            Vec::new()
+        }
     }
 }
 
@@ -89,6 +104,14 @@ mod tests {
     #[test]
     fn criterion_injects_nothing() {
         assert!(injected_env(EngineSystem::Criterion).is_empty());
+    }
+
+    #[test]
+    fn auto_emitting_engines_inject_nothing() {
+        // `alloc_tracker` and `all_the_time` write their JSON on `Session` drop,
+        // so neither needs any environment variable injected.
+        assert!(injected_env(EngineSystem::AllocTracker).is_empty());
+        assert!(injected_env(EngineSystem::AllTheTime).is_empty());
     }
 
     #[test]

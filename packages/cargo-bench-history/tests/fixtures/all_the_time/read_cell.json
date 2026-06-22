@@ -1,0 +1,6 @@
+{
+  "operation": "read_cell",
+  "total_iterations": 4,
+  "total_processor_time_nanos": 80000000,
+  "mean_processor_time_nanos": 20000000
+}

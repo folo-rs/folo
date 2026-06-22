@@ -20,8 +20,9 @@ machine key. Everything else (toolchain version, OS, commit, CI provider) is
 recorded as metadata so its effect stays visible as a step in the timeline rather
 than forking history.
 
-The initial target engines are the ones this workspace uses: Criterion
-(wall-clock) and Callgrind via Gungraun (simulated instruction counts).
+The target engines are the ones this workspace uses: Criterion (wall-clock),
+Callgrind via Gungraun (simulated instruction counts), `alloc_tracker` (heap
+allocations) and `all_the_time` (processor time).
 
 ## Commands
 
@@ -69,16 +70,17 @@ cargo bench-history unbless [--repo PATH] [--base REF] [--engine NAME]
 
 * `run` executes the workspace's benches once with `cargo bench`, harvests every
   supported engine's output, and stores a result set per engine. There is nothing
-  to configure about engines: the run enables the combined environment Criterion
-  and Callgrind need and detects each engine from the output it produces (off
-  Linux the Callgrind benches compile to no-ops, so only Criterion is stored).
+  to configure about engines: the run enables the combined environment the engines
+  need and detects each engine from the output it produces (off Linux the Callgrind
+  benches compile to no-ops, so only the host-runnable engines are stored).
   Scope the run with `--workspace` (the default), `--package`/`-p NAME`, or
   `--bench NAME`; everything after `--` is forwarded verbatim to `cargo bench`.
   History is keyed by commit: a clean run writes a single deterministic object per
   commit, so re-running the same commit is refused unless `--overwrite` replaces
   the stored result. `--timestamp` overrides the effective time when backfilling
   history for an old commit; `--machine-key` overrides the hardware fingerprint
-  used to partition hardware-dependent (Criterion) results. `--verbose` prints a
+  used to partition hardware-dependent (Criterion, `all_the_time`) results.
+  `--verbose` prints a
   step-by-step diagnostic trail to standard error (the benchmark command and
   injected environment, every directory scanned, which output files were included
   or skipped as stale, and where each result was stored) — useful when a run
@@ -190,11 +192,13 @@ cargo bench-history unbless [--repo PATH] [--base REF] [--engine NAME]
 
 Implemented:
 
-* `run` executes Callgrind (via Gungraun) and Criterion, harvests their output
-  (`target/gungraun/**/summary.json` and `target/criterion/**/new/*.json`), and
-  stores one immutable result set per engine per run. Callgrind results are
-  hardware-independent (`synthetic` partition); Criterion results are partitioned
-  by the host target triple and a machine-key hardware fingerprint.
+* `run` executes Callgrind (via Gungraun), Criterion, `alloc_tracker` and
+  `all_the_time`, harvests their output (`target/gungraun/**/summary.json`,
+  `target/criterion/**/new/*.json`, `target/alloc_tracker/*.json` and
+  `target/all_the_time/*.json`), and stores one immutable result set per engine per
+  run. Callgrind and `alloc_tracker` results are hardware-independent (`synthetic`
+  partition); Criterion and `all_the_time` results are partitioned by the host
+  target triple and a machine-key hardware fingerprint.
 * `analyze` reconstructs a project's timeline from git history and reports
   engine-aware, noise-resistant findings — sustained **change-points** and slow
   **drifts**, separated from measurement jitter — in `text`, `json`, or `markdown`,

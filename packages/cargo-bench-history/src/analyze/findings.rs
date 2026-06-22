@@ -311,9 +311,10 @@ fn series_values(series: &Series) -> Vec<SeriesValue> {
 
 /// Whether a metric `kind` is measured by a deterministic engine.
 ///
-/// Wall time is the sole noisy metric; every Callgrind-derived metric is exact.
+/// Wall time and processor time are the noisy metrics; every Callgrind- and
+/// `alloc_tracker`-derived metric is exact.
 fn is_deterministic(kind: MetricKind) -> bool {
-    !matches!(kind, MetricKind::WallTime)
+    !matches!(kind, MetricKind::WallTime | MetricKind::ProcessorTime)
 }
 
 /// Whether a larger value of a metric named `name` of `kind` indicates better
@@ -1222,6 +1223,30 @@ mod tests {
             direction_of(-1.0, MetricKind::CacheEvents, RAM_HITS_EVENT),
             Direction::Improvement
         );
+    }
+
+    #[test]
+    fn allocation_and_processor_time_metrics_are_lower_is_better() {
+        // The `alloc_tracker` and `all_the_time` metrics all improve as they
+        // shrink, so more bytes / allocations / processor time is a regression.
+        for kind in [
+            MetricKind::AllocationBytes,
+            MetricKind::AllocationCount,
+            MetricKind::ProcessorTime,
+        ] {
+            assert!(!higher_is_better("whatever", kind));
+            assert_eq!(direction_of(1.0, kind, "whatever"), Direction::Regression);
+            assert_eq!(direction_of(-1.0, kind, "whatever"), Direction::Improvement);
+        }
+    }
+
+    #[test]
+    fn allocation_metrics_are_deterministic_but_processor_time_is_not() {
+        // Allocation byte/count totals are an exact property of the code, so they
+        // are treated as deterministic; processor time is noisy like wall time.
+        assert!(is_deterministic(MetricKind::AllocationBytes));
+        assert!(is_deterministic(MetricKind::AllocationCount));
+        assert!(!is_deterministic(MetricKind::ProcessorTime));
     }
 
     #[test]

@@ -13,8 +13,8 @@ use std::time::{Duration, SystemTime};
 use jiff::Timestamp;
 
 use crate::bench::{
-    CRITERION_BENCHMARK_FILE, CRITERION_DIR, CRITERION_ESTIMATES_FILE, CRITERION_NEW_DIR,
-    GUNGRAUN_DIR, SUMMARY_FILE,
+    ALL_THE_TIME_DIR, ALLOC_TRACKER_DIR, CRITERION_BENCHMARK_FILE, CRITERION_DIR,
+    CRITERION_ESTIMATES_FILE, CRITERION_NEW_DIR, GUNGRAUN_DIR, SUMMARY_FILE,
 };
 use crate::comparability::EngineSystem;
 use crate::report::Reporter;
@@ -46,6 +46,17 @@ pub(crate) struct RawCriterionCase {
     pub(crate) estimates: String,
 }
 
+/// One harvested flat per-operation file: its path and raw contents. Used by the
+/// `alloc_tracker` and `all_the_time` engines, which each write one JSON file per
+/// operation directly under their engine directory.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RawOperationFile {
+    /// Filesystem path the file was read from.
+    pub(crate) path: PathBuf,
+    /// Raw file contents (engine-specific JSON).
+    pub(crate) content: String,
+}
+
 /// The output harvested for a run, in the shape each engine produces.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Harvest {
@@ -53,6 +64,10 @@ pub(crate) enum Harvest {
     Callgrind(Vec<RawSummary>),
     /// Criterion benchmark/estimates pairs.
     Criterion(Vec<RawCriterionCase>),
+    /// `alloc_tracker` per-operation files.
+    AllocTracker(Vec<RawOperationFile>),
+    /// `all_the_time` per-operation files.
+    AllTheTime(Vec<RawOperationFile>),
 }
 
 /// Collects the output an engine produced during a run.
@@ -246,6 +261,69 @@ impl FsBenchOutputSource {
         ));
         Ok(cases)
     }
+
+    /// Walks `{target_root}/{engine_dir}` for fresh top-level `*.json` files.
+    ///
+    /// `alloc_tracker` and `all_the_time` each write one flat JSON file per
+    /// operation directly under their engine directory (no nesting), so only the
+    /// immediate `*.json` entries no older than the run-start boundary are
+    /// harvested. `label` names the engine in diagnostic notes.
+    async fn collect_flat(
+        &self,
+        engine_dir: &str,
+        label: &str,
+        since: SystemTime,
+        reporter: &dyn Reporter,
+    ) -> io::Result<Vec<RawOperationFile>> {
+        let threshold = since.checked_sub(MTIME_SLACK).unwrap_or(since);
+        let json_extension = OsStr::new("json");
+
+        let root = self.target_root.join(engine_dir);
+        reporter.note(&format!(
+            "{label}: scanning {} for *.json files modified at or after {}",
+            root.display(),
+            format_mtime(threshold)
+        ));
+
+        let mut files = Vec::new();
+        let mut entries = match tokio::fs::read_dir(&root).await {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                note_missing_dir(reporter, label, &root, &root);
+                return Ok(files);
+            }
+            Err(error) => return Err(error),
+        };
+
+        while let Some(entry) = entries.next_entry().await? {
+            let file_type = entry.file_type().await?;
+            let path = entry.path();
+            if !file_type.is_file() || path.extension() != Some(json_extension) {
+                continue;
+            }
+            let modified = entry.metadata().await?.modified()?;
+            if modified >= threshold {
+                if reporter.enabled() {
+                    reporter.note(&format!("{label}: including {}", path.display()));
+                }
+                let content = tokio::fs::read_to_string(&path).await?;
+                files.push(RawOperationFile { path, content });
+            } else if reporter.enabled() {
+                reporter.note(&format!(
+                    "{label}: excluding {} (modified {}, older than the run boundary)",
+                    path.display(),
+                    format_mtime(modified)
+                ));
+            }
+        }
+
+        files.sort_by(|left, right| left.path.cmp(&right.path));
+        reporter.note(&format!(
+            "{label}: harvested {}",
+            count_noun(files.len(), "fresh operation file")
+        ));
+        Ok(files)
+    }
 }
 
 impl BenchOutputSource for FsBenchOutputSource {
@@ -261,6 +339,14 @@ impl BenchOutputSource for FsBenchOutputSource {
             )),
             EngineSystem::Criterion => Ok(Harvest::Criterion(
                 self.collect_criterion(since, reporter).await?,
+            )),
+            EngineSystem::AllocTracker => Ok(Harvest::AllocTracker(
+                self.collect_flat(ALLOC_TRACKER_DIR, "alloc_tracker", since, reporter)
+                    .await?,
+            )),
+            EngineSystem::AllTheTime => Ok(Harvest::AllTheTime(
+                self.collect_flat(ALL_THE_TIME_DIR, "all_the_time", since, reporter)
+                    .await?,
             )),
         }
     }
@@ -355,14 +441,21 @@ mod tests {
     fn callgrind_summaries(harvest: Harvest) -> Vec<RawSummary> {
         match harvest {
             Harvest::Callgrind(summaries) => summaries,
-            Harvest::Criterion(_) => panic!("expected callgrind harvest"),
+            _ => panic!("expected callgrind harvest"),
         }
     }
 
     fn criterion_cases(harvest: Harvest) -> Vec<RawCriterionCase> {
         match harvest {
             Harvest::Criterion(cases) => cases,
-            Harvest::Callgrind(_) => panic!("expected criterion harvest"),
+            _ => panic!("expected criterion harvest"),
+        }
+    }
+
+    fn operation_files(harvest: Harvest) -> Vec<RawOperationFile> {
+        match harvest {
+            Harvest::AllocTracker(files) | Harvest::AllTheTime(files) => files,
+            _ => panic!("expected a flat per-operation harvest"),
         }
     }
 
@@ -540,6 +633,87 @@ mod tests {
         let source = FsBenchOutputSource::new(dir.path());
 
         let error = harvest(&source, EngineSystem::Criterion, SystemTime::UNIX_EPOCH)
+            .await
+            .unwrap_err();
+
+        assert_ne!(error.kind(), io::ErrorKind::NotFound, "{error}");
+    }
+
+    fn write_operation_file(root: &Path, engine_dir: &str, name: &str, content: &str) -> PathBuf {
+        let path = root.join(engine_dir).join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn flat_engine_collects_fresh_top_level_json_only() {
+        let dir = tempdir().unwrap();
+        // Two fresh operation files plus a non-JSON sibling and a nested directory,
+        // neither of which is a flat per-operation file.
+        write_operation_file(dir.path(), ALLOC_TRACKER_DIR, "allocate_vec.json", "a");
+        write_operation_file(dir.path(), ALLOC_TRACKER_DIR, "grow_map.json", "b");
+        write_operation_file(dir.path(), ALLOC_TRACKER_DIR, "notes.txt", "ignore me");
+        write_operation_file(dir.path(), ALLOC_TRACKER_DIR, "nested/inner.json", "deep");
+
+        let source = FsBenchOutputSource::new(dir.path());
+        let since = SystemTime::now() - Duration::from_mins(1);
+        let harvest = harvest(&source, EngineSystem::AllocTracker, since)
+            .await
+            .unwrap();
+
+        let files = operation_files(harvest);
+        let contents: Vec<&str> = files.iter().map(|file| file.content.as_str()).collect();
+        assert_eq!(
+            contents,
+            vec!["a", "b"],
+            "only fresh top-level *.json files should be harvested, sorted by path"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn flat_engine_excludes_files_older_than_the_boundary() {
+        let dir = tempdir().unwrap();
+        let fresh = write_operation_file(dir.path(), ALL_THE_TIME_DIR, "read_cell.json", "fresh");
+        let stale = write_operation_file(dir.path(), ALL_THE_TIME_DIR, "write_cell.json", "stale");
+
+        let since = SystemTime::now();
+        set_mtime(&fresh, since - Duration::from_secs(1));
+        set_mtime(&stale, since - Duration::from_hours(1));
+
+        let source = FsBenchOutputSource::new(dir.path());
+        let harvest = harvest(&source, EngineSystem::AllTheTime, since)
+            .await
+            .unwrap();
+
+        let files = operation_files(harvest);
+        let contents: Vec<&str> = files.iter().map(|file| file.content.as_str()).collect();
+        assert_eq!(contents, vec!["fresh"]);
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn flat_engine_missing_tree_yields_no_files() {
+        let dir = tempdir().unwrap();
+        let source = FsBenchOutputSource::new(dir.path());
+
+        let harvest = harvest(&source, EngineSystem::AllocTracker, SystemTime::UNIX_EPOCH)
+            .await
+            .unwrap();
+
+        assert!(operation_files(harvest).is_empty());
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn flat_engine_unreadable_tree_reports_error() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join(ALLOC_TRACKER_DIR), "not a directory").unwrap();
+        let source = FsBenchOutputSource::new(dir.path());
+
+        let error = harvest(&source, EngineSystem::AllocTracker, SystemTime::UNIX_EPOCH)
             .await
             .unwrap_err();
 

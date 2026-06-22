@@ -31,8 +31,10 @@ Commands: `run`, `install`, `analyze`, `backfill`, `list`, `prune`, `bless`,
 ## 2. How the benchmark systems work (and what they emit)
 
 Understanding the producers is mandatory: comparability and parsing both depend
-on it. Initial scope is what this workspace uses — **Criterion** (wall-clock) and
-**Callgrind via Gungraun** (simulated instruction counts).
+on it. Scope is what this workspace uses — **Criterion** (wall-clock),
+**Callgrind via Gungraun** (simulated instruction counts), and the two
+workspace-local measurement crates **`alloc_tracker`** (heap allocations) and
+**`all_the_time`** (processor time).
 
 ### 2.1 Criterion (wall-clock, hardware-dependent)
 
@@ -91,9 +93,53 @@ Key facts:
   to the JSON summary. Tiny but real: that is what `run` does (sets the env var /
   arg). We therefore **implement `run`, but it stays thin.**
 
-### 2.3 Consequence for the data model
+### 2.3 `alloc_tracker` (heap allocations, hardware-independent)
 
-The two systems differ in units, noise, and hardware-dependence. Both, however,
+The workspace-local `alloc_tracker` crate measures how much a benchmark allocates.
+Its `Session` auto-emits, on drop, one flat JSON file per operation under
+`target/alloc_tracker/<operation>.json`:
+
+* `{ operation, total_iterations, total_bytes_allocated, total_allocations_count,
+  mean_bytes_per_iteration, mean_allocations_per_iteration }` (all `u64`).
+* The adapter (`bench/alloc_tracker.rs`) reads `operation` and the two `mean_*`
+  fields, mapping them to an `AllocationBytes` (`allocated_bytes`) and an
+  `AllocationCount` (`allocations`) metric. The `total_*` fields are ignored — the
+  per-iteration means are comparable across runs with differing iteration counts.
+
+Key facts:
+
+* Allocation behaviour is a **deterministic property of the code**, independent of
+  the hardware → partitions under `synthetic`, never reads a machine key, and (like
+  Callgrind) trusts any sustained step below the noise floor a noisy engine demands.
+* The output carries no dispersion (no CI, no standard deviation): an allocation
+  count is exact.
+* Like Criterion, the on-disk files carry no package, so `BenchmarkId.package` is
+  `None` and the operation name alone identifies the series.
+
+### 2.4 `all_the_time` (processor time, hardware-dependent)
+
+The workspace-local `all_the_time` crate measures processor (CPU) time. Its
+`Session` auto-emits, on drop, one flat JSON file per operation under
+`target/all_the_time/<operation>.json`:
+
+* `{ operation, total_iterations, total_processor_time_nanos,
+  mean_processor_time_nanos }` (all `u64`).
+* The adapter (`bench/all_the_time.rs`) reads `operation` and
+  `mean_processor_time_nanos`, mapping it to a single `ProcessorTime`
+  (`processor_time`, unit `ns`) metric.
+
+Key facts:
+
+* Processor time is **hardware-dependent and noisy** (like Criterion wall time) →
+  partitions by machine key and is analysed with the noise-aware statistics.
+* `all_the_time` reports only a mean — no confidence interval. The noise detector
+  falls back gracefully to the Mann-Kendall trend and the practical floor,
+  skipping the CI-non-overlap gate when bounds are absent.
+* `BenchmarkId.package` is `None`; the operation name identifies the series.
+
+### 2.5 Consequence for the data model
+
+The systems differ in units, noise, and hardware-dependence. All, however,
 reduce to the same shape: *a stable benchmark identity → a set of named numeric
 metrics*. That shared shape is the foundation of the model in §3.
 
@@ -126,9 +172,11 @@ flowchart LR
   kept separate so reports can render the full `qualified()` form or a compact
   `short()` tail. Renaming a benchmark starts a new series (documented caveat;
   see §13).
-* **Metric** — `{ name, unit, value: f64, kind }` where `kind ∈ {Wallclock,
-  InstructionCount, CacheHits, EstimatedCycles, Branches, …}`. Criterion also
-  carries the confidence interval and std-dev so analysis can be noise-aware.
+* **Metric** — `{ name, unit, value: f64, kind }` where `kind ∈ {WallTime,
+  InstructionCount, CacheEvents, EstimatedCycles, Branches, AllocationBytes,
+  AllocationCount, ProcessorTime, …}`. Noisy engines (Criterion, `all_the_time`)
+  also carry the confidence interval and std-dev where available so analysis can be
+  noise-aware.
 * **ResultRecord** — one `BenchmarkId` + its metrics from a single run.
 * **Timestamps** — every run carries three distinct times (§6): the **effective
   time** (defaults to the commit date for clean / wall-clock now for dirty,
@@ -155,11 +203,12 @@ ComparabilityKey =
 
 * `project` — workspace identity (config `project.id`, default = repo/workspace
   dir name).
-* `system` — `criterion` | `callgrind` (different units & semantics).
-* `target_triple` — `x86_64-unknown-linux-gnu` etc. Even Callgrind counts are
-  not comparable across architectures.
-* `machine_key` — **only for hardware-dependent systems** (Criterion). Omitted
-  (literal `synthetic`) for Callgrind.
+* `system` — `criterion` | `callgrind` | `alloc_tracker` | `all_the_time`
+  (different units & semantics).
+* `target_triple` — `x86_64-unknown-linux-gnu` etc. Even hardware-independent
+  counts (Callgrind, `alloc_tracker`) are not comparable across architectures.
+* `machine_key` — **only for hardware-dependent systems** (Criterion,
+  `all_the_time`). Omitted (literal `synthetic`) for Callgrind and `alloc_tracker`.
 
 Deliberately **metadata, not partition** (so a change is *visible* as a timeline
 step, which is the whole point of the tool): rustc/cargo version, OS/libc,
@@ -285,8 +334,9 @@ the computed fingerprint.
   `foldhash`/`DefaultHasher` (seeded / not stable). A golden unit test pins a
   fixed profile to its hex digest so an accidental change to the canonical form
   is caught.
-* Computed only for **hardware-dependent** systems (Criterion). Callgrind
-  partitions under `synthetic` and never reads the machine key.
+* Computed only for **hardware-dependent** systems (Criterion, `all_the_time`).
+  Callgrind and `alloc_tracker` partition under `synthetic` and never read the
+  machine key.
 
 ## 6. Run context (environment detection)
 
@@ -393,8 +443,8 @@ typed `Outcome`/`Error`.
 workspace's benches once with `cargo bench` and harvests whichever engines
 produced output. There is no `[engines]` configuration: the tool enables the
 combined environment every supported engine needs and then inspects each output
-tree to see which engines actually ran. This works because Criterion and Callgrind
-can both be driven from a single `cargo bench` invocation, and off-Linux the
+tree to see which engines actually ran. This works because all supported engines
+can be driven from a single `cargo bench` invocation, and off-Linux the
 Callgrind (`_cg`) benches compile to `#[cfg(target_os = "linux")]` no-ops, so they
 simply produce no output — no OS logic is needed in the tool.
 
@@ -402,7 +452,8 @@ simply produce no output — no OS logic is needed in the tool.
 
 1. **Injects the combined bench environment via environment variables** (not
    appended args). Env is robust regardless of how the benches launch. Callgrind
-   needs `GUNGRAUN_SAVE_SUMMARY=pretty-json`; Criterion needs nothing. The union of
+   needs `GUNGRAUN_SAVE_SUMMARY=pretty-json`; Criterion, `alloc_tracker` and
+   `all_the_time` need nothing (they auto-emit JSON on drop). The union of
    every supported engine's env (`injected_bench_env`, iterating `EngineSystem::ALL`)
    is set unconditionally — an engine that did not run merely ignores its variable.
    * **Target directory pinning:** the tool also injects `CARGO_TARGET_DIR` set
@@ -418,7 +469,9 @@ simply produce no output — no OS logic is needed in the tool.
    below). A non-zero exit aborts the run.
 3. **Harvests every supported engine's output location**
    (`target/gungraun/**/summary.json` for Callgrind,
-   `target/criterion/**/new/estimates.json` for Criterion), filtered to files with
+   `target/criterion/**/new/estimates.json` for Criterion,
+   `target/alloc_tracker/*.json` and `target/all_the_time/*.json` for the two
+   workspace measurement crates), filtered to files with
    `mtime ≥ run-start` so stale cases from earlier runs are not re-ingested. Each
    tree is attributed to its engine; an engine whose tree produced no cases is
    silently skipped.
@@ -784,17 +837,24 @@ two engines have fundamentally different noise profiles, and a single detector
 cannot serve both well:
 
 - **Deterministic engines (Callgrind: instruction counts, estimated cycles, cache
-  events, branches).** Output is exact and reproducible; any persistent change is
-  real signal. There is no measurement noise to suppress, so significance testing
-  is neither needed nor appropriate (a perfect integer step over few points has a
-  *high* nonparametric p-value — see below).
-- **Noisy engines (Criterion: wall time).** Output is a noisy estimate with a
-  reported standard deviation and confidence interval. A change must clear both a
-  statistical-significance bar *and* a practical-magnitude bar, and the family of
-  tests across all series is corrected for multiple comparisons.
+  events, branches; `alloc_tracker`: allocated bytes and allocation counts).**
+  Output is exact and reproducible; any persistent change is real signal. There is
+  no measurement noise to suppress, so significance testing is neither needed nor
+  appropriate (a perfect integer step over few points has a *high* nonparametric
+  p-value — see below).
+- **Noisy engines (Criterion: wall time; `all_the_time`: processor time).** Output
+  is a noisy estimate, sometimes with a reported standard deviation and confidence
+  interval (Criterion) and sometimes only a mean (`all_the_time`). A change must
+  clear both a statistical-significance bar *and* a practical-magnitude bar, and the
+  family of tests across all series is corrected for multiple comparisons. When no
+  confidence interval is reported, the CI-non-overlap gate is skipped and the
+  significance decision rests on the Mann-Whitney/Mann-Kendall tests alone.
 
-`MetricKind::WallTime` is the sole noisy kind (`is_deterministic` returns `false`
-for it and `true` for every Callgrind kind).
+`MetricKind::WallTime` and `MetricKind::ProcessorTime` are the noisy kinds
+(`is_deterministic` returns `false` for them and `true` for every Callgrind and
+`alloc_tracker` kind). All non-deterministic-output kinds are lower-is-better; only
+the L1 cache-hit metric is higher-is-better (the LL/RAM tiers are miss-escalation
+costs).
 
 ### 9.1 Findings
 
@@ -1043,6 +1103,8 @@ src/
     mod.rs                # combined engine env injection + per-engine harvest glob
     callgrind.rs          # Gungraun summary v6 serde + mapping
     criterion.rs          # Criterion estimates/benchmark JSON -> WallTime records
+    alloc_tracker.rs      # alloc_tracker JSON -> Allocation{Bytes,Count} records
+    all_the_time.rs       # all_the_time JSON -> ProcessorTime records
   bench_output.rs         # BenchOutputSource port: harvest target/ -> fresh cases
   storage/
     mod.rs                # Storage trait (async) + in-memory fake

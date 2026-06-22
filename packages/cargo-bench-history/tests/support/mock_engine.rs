@@ -10,6 +10,8 @@
 //! ```text
 //! cargo-bench-history-mock-engine [--exit-code N] [--summary GROUP=KIND]...
 //!                                 [--criterion GROUP|FUNCTION|VALUE=NANOS]...
+//!                                 [--alloc-tracker OPERATION=BYTES/COUNT]...
+//!                                 [--all-the-time OPERATION=NANOS]...
 //!                                 [--fail-if-exists PATH]
 //! ```
 //!
@@ -34,6 +36,13 @@
 //! `GROUP`/`FUNCTION`/`VALUE` (an empty `VALUE` omits the parameter component) and
 //! whose wall-clock slope estimate is `NANOS` nanoseconds. The on-disk directory is
 //! derived from the identity, so distinct identities never share a directory.
+//!
+//! `--alloc-tracker OPERATION=BYTES/COUNT` writes an `alloc_tracker`
+//! `<OPERATION>.json` file reporting `BYTES` mean bytes and `COUNT` mean
+//! allocations per iteration. `--all-the-time OPERATION=NANOS` writes an
+//! `all_the_time` `<OPERATION>.json` file reporting `NANOS` mean processor-time
+//! nanoseconds per iteration. Both write one flat JSON file per operation under
+//! their respective engine directory, mirroring the real tools.
 //!
 //! `--fail-if-exists PATH` exits with code 1 and writes no output when `PATH`
 //! (relative to the working directory) exists. Backfill runs each engine in a
@@ -74,11 +83,26 @@ struct CriterionCase {
     nanos: f64,
 }
 
+/// A parsed `alloc_tracker` operation request: its name and per-iteration means.
+struct AllocOperation {
+    operation: String,
+    mean_bytes: u64,
+    mean_allocations: u64,
+}
+
+/// A parsed `all_the_time` operation request: its name and per-iteration mean.
+struct TimeOperation {
+    operation: String,
+    mean_nanos: u64,
+}
+
 #[cfg_attr(coverage_nightly, coverage(off))]
 fn main() -> ExitCode {
     let mut exit_code: u8 = 0;
     let mut summaries: Vec<(String, String)> = Vec::new();
     let mut criterion_cases: Vec<CriterionCase> = Vec::new();
+    let mut alloc_operations: Vec<AllocOperation> = Vec::new();
+    let mut time_operations: Vec<TimeOperation> = Vec::new();
     let mut fail_if_exists: Option<PathBuf> = None;
     let mut chdir: Option<PathBuf> = None;
 
@@ -107,6 +131,18 @@ fn main() -> ExitCode {
                     .next()
                     .expect("--criterion requires GROUP|FUNCTION|VALUE=NANOS");
                 criterion_cases.push(parse_criterion_arg(&value));
+            }
+            "--alloc-tracker" => {
+                let value = args
+                    .next()
+                    .expect("--alloc-tracker requires OPERATION=BYTES/COUNT");
+                alloc_operations.push(parse_alloc_arg(&value));
+            }
+            "--all-the-time" => {
+                let value = args
+                    .next()
+                    .expect("--all-the-time requires OPERATION=NANOS");
+                time_operations.push(parse_time_arg(&value));
             }
             "--fail-if-exists" => {
                 let value = args.next().expect("--fail-if-exists requires a PATH");
@@ -154,6 +190,14 @@ fn main() -> ExitCode {
 
     for case in &criterion_cases {
         write_criterion_case(&target_root, case);
+    }
+
+    for operation in &alloc_operations {
+        write_alloc_operation(&target_root, operation);
+    }
+
+    for operation in &time_operations {
+        write_time_operation(&target_root, operation);
     }
 
     ExitCode::from(exit_code)
@@ -250,6 +294,84 @@ fn write_criterion_case(target_root: &std::path::Path, case: &CriterionCase) {
     });
     std::fs::write(dir.join("estimates.json"), estimates.to_string())
         .expect("estimates.json should be writable");
+}
+
+/// Parses an `OPERATION=BYTES/COUNT` argument into an [`AllocOperation`].
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn parse_alloc_arg(value: &str) -> AllocOperation {
+    let (operation, stats) = value
+        .split_once('=')
+        .expect("--alloc-tracker value must be OPERATION=BYTES/COUNT");
+    let (bytes, count) = stats
+        .split_once('/')
+        .expect("--alloc-tracker stats must be BYTES/COUNT");
+    assert!(
+        !operation.is_empty(),
+        "--alloc-tracker OPERATION must be non-empty"
+    );
+    AllocOperation {
+        operation: operation.to_owned(),
+        mean_bytes: bytes.parse().expect("BYTES must be a number"),
+        mean_allocations: count.parse().expect("COUNT must be a number"),
+    }
+}
+
+/// Parses an `OPERATION=NANOS` argument into a [`TimeOperation`].
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn parse_time_arg(value: &str) -> TimeOperation {
+    let (operation, nanos) = value
+        .split_once('=')
+        .expect("--all-the-time value must be OPERATION=NANOS");
+    assert!(
+        !operation.is_empty(),
+        "--all-the-time OPERATION must be non-empty"
+    );
+    TimeOperation {
+        operation: operation.to_owned(),
+        mean_nanos: nanos.parse().expect("NANOS must be a number"),
+    }
+}
+
+/// Writes one `alloc_tracker` `<operation>.json` file under `alloc_tracker/`.
+///
+/// The shape mirrors the real tool: `total_*` fields derive from the per-iteration
+/// means over a fixed iteration count, though the harvest reads only the means.
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn write_alloc_operation(target_root: &std::path::Path, operation: &AllocOperation) {
+    const ITERATIONS: u64 = 4;
+    let dir = target_root.join("alloc_tracker");
+    std::fs::create_dir_all(&dir).expect("alloc_tracker directory should be creatable");
+
+    let output = serde_json::json!({
+        "operation": operation.operation,
+        "total_iterations": ITERATIONS,
+        "total_bytes_allocated": operation.mean_bytes.saturating_mul(ITERATIONS),
+        "total_allocations_count": operation.mean_allocations.saturating_mul(ITERATIONS),
+        "mean_bytes_per_iteration": operation.mean_bytes,
+        "mean_allocations_per_iteration": operation.mean_allocations,
+    });
+    let file = dir.join(format!("{}.json", safe_segment(&operation.operation)));
+    std::fs::write(file, output.to_string()).expect("alloc_tracker file should be writable");
+}
+
+/// Writes one `all_the_time` `<operation>.json` file under `all_the_time/`.
+///
+/// The shape mirrors the real tool: `total_*` fields derive from the per-iteration
+/// mean over a fixed iteration count, though the harvest reads only the mean.
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn write_time_operation(target_root: &std::path::Path, operation: &TimeOperation) {
+    const ITERATIONS: u64 = 4;
+    let dir = target_root.join("all_the_time");
+    std::fs::create_dir_all(&dir).expect("all_the_time directory should be creatable");
+
+    let output = serde_json::json!({
+        "operation": operation.operation,
+        "total_iterations": ITERATIONS,
+        "total_processor_time_nanos": operation.mean_nanos.saturating_mul(ITERATIONS),
+        "mean_processor_time_nanos": operation.mean_nanos,
+    });
+    let file = dir.join(format!("{}.json", safe_segment(&operation.operation)));
+    std::fs::write(file, output.to_string()).expect("all_the_time file should be writable");
 }
 
 /// Validates that `segment` is safe to use as a single filesystem path component:

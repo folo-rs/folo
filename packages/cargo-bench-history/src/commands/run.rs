@@ -11,7 +11,10 @@ use std::time::SystemTime;
 use jiff::Timestamp;
 use tick::Clock;
 
-use crate::bench::{injected_bench_env, parse_callgrind_summary, parse_criterion_case};
+use crate::bench::{
+    injected_bench_env, parse_all_the_time_operation, parse_alloc_tracker_operation,
+    parse_callgrind_summary, parse_criterion_case,
+};
 use crate::bench_output::{BenchOutputSource, FsBenchOutputSource, Harvest};
 use crate::comparability::{ComparabilityKey, EngineSystem, resolve_target_triple};
 use crate::config::{StorageConfig, load_config};
@@ -557,6 +560,30 @@ fn parse_harvest(harvest: &Harvest) -> Result<Vec<ResultRecord>, RunError> {
             }
             Ok(records)
         }
+        Harvest::AllocTracker(files) => {
+            let mut records = Vec::with_capacity(files.len());
+            for file in files {
+                let record = parse_alloc_tracker_operation(&file.content).map_err(|error| {
+                    RunError::Parse {
+                        message: format!("{}: {error}", file.path.display()),
+                    }
+                })?;
+                records.push(record);
+            }
+            Ok(records)
+        }
+        Harvest::AllTheTime(files) => {
+            let mut records = Vec::with_capacity(files.len());
+            for file in files {
+                let record = parse_all_the_time_operation(&file.content).map_err(|error| {
+                    RunError::Parse {
+                        message: format!("{}: {error}", file.path.display()),
+                    }
+                })?;
+                records.push(record);
+            }
+            Ok(records)
+        }
     }
 }
 
@@ -625,7 +652,7 @@ mod tests {
     use futures::executor::block_on;
 
     use super::*;
-    use crate::bench_output::{Harvest, RawCriterionCase, RawSummary};
+    use crate::bench_output::{Harvest, RawCriterionCase, RawOperationFile, RawSummary};
     use crate::bless::BlessingRecord;
     use crate::git::build_snapshot;
     use crate::process::EngineStatus;
@@ -640,6 +667,10 @@ mod tests {
         include_str!("../../tests/fixtures/criterion/std_instant/benchmark.json");
     const CRITERION_ESTIMATES_FIXTURE: &str =
         include_str!("../../tests/fixtures/criterion/std_instant/estimates.json");
+    const ALLOC_TRACKER_FIXTURE: &str =
+        include_str!("../../tests/fixtures/alloc_tracker/allocate_vec.json");
+    const ALL_THE_TIME_FIXTURE: &str =
+        include_str!("../../tests/fixtures/all_the_time/read_cell.json");
 
     /// The frozen wall-clock instant used by orchestration tests (2023-11-14Z).
     const FROZEN_UNIX: u64 = 1_700_000_000;
@@ -880,6 +911,8 @@ mod tests {
     struct FakeOutput {
         callgrind: Vec<RawSummary>,
         criterion: Vec<RawCriterionCase>,
+        alloc: Vec<RawOperationFile>,
+        time: Vec<RawOperationFile>,
     }
 
     impl FakeOutput {
@@ -936,6 +969,26 @@ mod tests {
                 ..Self::default()
             }
         }
+
+        fn with_alloc_tracker_operation() -> Self {
+            Self {
+                alloc: vec![RawOperationFile {
+                    path: PathBuf::from("alloc_tracker/allocate_vec.json"),
+                    content: ALLOC_TRACKER_FIXTURE.to_owned(),
+                }],
+                ..Self::default()
+            }
+        }
+
+        fn with_all_the_time_operation() -> Self {
+            Self {
+                time: vec![RawOperationFile {
+                    path: PathBuf::from("all_the_time/read_cell.json"),
+                    content: ALL_THE_TIME_FIXTURE.to_owned(),
+                }],
+                ..Self::default()
+            }
+        }
     }
 
     impl BenchOutputSource for FakeOutput {
@@ -948,6 +1001,8 @@ mod tests {
             Ok(match engine {
                 EngineSystem::Callgrind => Harvest::Callgrind(self.callgrind.clone()),
                 EngineSystem::Criterion => Harvest::Criterion(self.criterion.clone()),
+                EngineSystem::AllocTracker => Harvest::AllocTracker(self.alloc.clone()),
+                EngineSystem::AllTheTime => Harvest::AllTheTime(self.time.clone()),
             })
         }
     }
@@ -1605,6 +1660,81 @@ mod tests {
             other => panic!("expected parse error, got {other:?}"),
         }
         assert!(storage.keys().is_empty());
+    }
+
+    #[test]
+    fn alloc_tracker_output_is_stored_in_a_synthetic_partition() {
+        let storage = MemoryStorage::new();
+        let outcome = drive(
+            &RunOptions::default(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            &FakeOutput::with_alloc_tracker_operation(),
+            &storage,
+        )
+        .unwrap();
+
+        let RunOutcome::Completed { message } = outcome else {
+            panic!("expected completion");
+        };
+        assert!(message.contains("Stored 1"), "{message}");
+
+        // Allocation counts are deterministic, so the partition is `synthetic`
+        // rather than a machine key.
+        let keys = storage.keys();
+        assert_eq!(keys.len(), 1, "{keys:?}");
+        assert!(keys[0].contains("/alloc_tracker/"), "{keys:?}");
+        assert!(keys[0].contains("/synthetic/"), "{keys:?}");
+
+        let bytes = block_on(storage.get(&keys[0])).unwrap();
+        let set = ResultSet::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
+        assert_eq!(set.results.len(), 1);
+        let kinds: Vec<crate::MetricKind> = set.results[0].metrics.iter().map(|m| m.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                crate::MetricKind::AllocationBytes,
+                crate::MetricKind::AllocationCount
+            ]
+        );
+    }
+
+    #[test]
+    fn all_the_time_output_is_partitioned_by_machine_key() {
+        let storage = MemoryStorage::new();
+        let options = RunOptions {
+            machine_key: Some("ci-pool-a".to_owned()),
+            ..RunOptions::default()
+        };
+        let outcome = drive(
+            &options,
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            &FakeOutput::with_all_the_time_operation(),
+            &storage,
+        )
+        .unwrap();
+
+        let RunOutcome::Completed { message } = outcome else {
+            panic!("expected completion");
+        };
+        assert!(message.contains("Stored 1"), "{message}");
+
+        // Processor time depends on the host, so it is partitioned by machine key.
+        let keys = storage.keys();
+        assert_eq!(keys.len(), 1, "{keys:?}");
+        assert!(
+            keys[0].contains("/all_the_time/x86_64-pc-windows-msvc/ci-pool-a/"),
+            "{keys:?}"
+        );
+
+        let bytes = block_on(storage.get(&keys[0])).unwrap();
+        let set = ResultSet::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
+        assert_eq!(set.results.len(), 1);
+        assert_eq!(
+            set.results[0].metrics[0].kind,
+            crate::MetricKind::ProcessorTime
+        );
     }
 
     #[test]

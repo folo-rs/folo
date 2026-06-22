@@ -247,6 +247,12 @@ pub enum MetricKind {
     CacheEvents,
     /// Branch / branch-miss counts (Callgrind).
     Branches,
+    /// Bytes allocated per iteration (`alloc_tracker`); deterministic.
+    AllocationBytes,
+    /// Allocation count per iteration (`alloc_tracker`); deterministic.
+    AllocationCount,
+    /// Processor time per iteration (`all_the_time`); hardware-dependent and noisy.
+    ProcessorTime,
 }
 
 #[cfg(test)]
@@ -301,6 +307,22 @@ mod tests {
     fn metric_kind_serializes_snake_case() {
         let json = serde_json::to_string(&MetricKind::InstructionCount).unwrap();
         assert_eq!(json, "\"instruction_count\"");
+    }
+
+    #[test]
+    fn new_engine_metric_kinds_serialize_snake_case() {
+        // The `alloc_tracker` and `all_the_time` engines round-trip through the
+        // stored JSON, so their kinds must keep their snake_case wire names.
+        for (kind, expected) in [
+            (MetricKind::AllocationBytes, "\"allocation_bytes\""),
+            (MetricKind::AllocationCount, "\"allocation_count\""),
+            (MetricKind::ProcessorTime, "\"processor_time\""),
+        ] {
+            let json = serde_json::to_string(&kind).unwrap();
+            assert_eq!(json, expected);
+            let parsed: MetricKind = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, kind);
+        }
     }
 
     #[test]

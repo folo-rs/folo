@@ -19,10 +19,13 @@ driven in tests by fakes, never by real IO:
   `FakeProbe` returns canned `GitSnapshot`/`RustcInfo`/`HardwareProfile`.
 * `bench_output::BenchOutputSource` — real `FsBenchOutputSource` walks the
   engine's output tree and returns a `Harvest` enum: `Harvest::Callgrind` from
-  `target/gungraun/**/summary.json` or `Harvest::Criterion` from
+  `target/gungraun/**/summary.json`, `Harvest::Criterion` from
   `target/criterion/**/new/{benchmark,estimates}.json` (only `new/` dirs holding
-  both files, `mtime`-scoped to the run). Fake `FakeOutput` is engine-aware and
-  returns in-memory `RawSummary` or `RawCriterionCase` values.
+  both files), `Harvest::AllocTracker` from `target/alloc_tracker/*.json` and
+  `Harvest::AllTheTime` from `target/all_the_time/*.json` (the two flat
+  one-file-per-operation trees, scanned by `collect_flat`) — all `mtime`-scoped to
+  the run. Fake `FakeOutput` is engine-aware and returns in-memory `RawSummary`,
+  `RawCriterionCase` or `RawOperationFile` values.
 * `storage::Storage` — real `LocalStorage` and (behind the `azure` feature)
   `AzureBlobStorage`, selected at runtime by the `StorageFacade` enum that
   `build_storage` returns; fake `MemoryStorage`. `put` is **write-once** (an
@@ -136,23 +139,26 @@ being analyzed:
   back-dated backfill runs still sort by where their commit sits in history.
   `--since` filters at the object level — whole runs before the cutoff are dropped.
 * `analyze::findings` is the **engine-aware, noise-resistant** detector. It splits
-  metrics into *deterministic* (every Callgrind kind — exact, no noise) and *noisy*
-  (`WallTime` — the sole noisy kind; `is_deterministic` decides). It emits at most
+  metrics into *deterministic* (every Callgrind kind plus the `alloc_tracker`
+  allocation kinds — exact, no noise) and *noisy* (`WallTime` and `ProcessorTime`;
+  `is_deterministic` decides). It emits at most
   one finding per series, of one of two methods: a **change-point** (sustained level
   shift) located by the **Pettitt** test, or a **drift** (slow monotonic trend) from
   the **Mann–Kendall** / **Theil–Sen** pair. When both fire, the better-fitting model
   wins (step vs line residual). Both regimes of a change-point need `min_regime`
   points (persistence — a single blip never flags). A deterministic step flags on
   persistence alone (any non-zero step is real). A noisy change additionally requires
-  a significant **Mann–Whitney** rank test, non-overlapping regime CIs (when present),
+  a significant **Mann–Whitney** rank test, non-overlapping regime CIs (when present —
+  `all_the_time` reports no CI, so that gate is skipped for it),
   and a practical-magnitude floor; a noisy drift also clears a noise floor of twice
   the median CI half-width. Noisy candidates pass a **Benjamini–Hochberg** FDR filter;
   deterministic ones bypass it. **Pettitt only locates the split — its analytic
   p-value is too conservative on short series, so it is never used as a significance
   gate.** All math lives in pure, Miri-safe `analyze::stats`; keep it deterministic
   and cover boundaries with named value-asserting tests, not threshold guards. When
-  seeding test histories, a noisy (Criterion) step needs **≥ 4 points on each side**
-  for the rank test to have power, while a deterministic (Callgrind) step needs only
+  seeding test histories, a noisy (Criterion / `all_the_time`) step needs **≥ 4
+  points on each side** for the rank test to have power, while a deterministic
+  (Callgrind / `alloc_tracker`) step needs only
   `min_regime` (2) — and a single elevated last point can no longer flag either.
 * `analyze::report` renders text/json/markdown. The top-level aggregate carries a
   `sets` array (one entry per discriminant set). Rendering is infallible: the
@@ -410,9 +416,9 @@ marker file is present in the checked-out worktree, so a commit that tracks the
 marker stands in for one that fails to build. Helpers `commit_with_file` /
 `commit_removing_file` / `make_dirty` build the needed histories.
 
-## Engine adapters (Callgrind and Criterion)
+## Engine adapters (Callgrind, Criterion, `alloc_tracker`, `all_the_time`)
 
-Two benchmark engines are supported, each behind a pure parser in `bench/`:
+Four benchmark engines are supported, each behind a pure parser in `bench/`:
 
 * `bench::callgrind` parses a Gungraun v6 `summary.json` into a `ResultRecord`
   (instruction count, cache hits, estimated cycles, branches). `package` comes
@@ -427,17 +433,32 @@ Two benchmark engines are supported, each behind a pure parser in `bench/`:
   files carry no package and `target/criterion/` is flat, so it is unrecoverable;
   the workspace's crate-prefixed group ids keep series distinct anyway. Criterion
   is hardware-dependent → partitioned by the host triple and a machine key.
+* `bench::alloc_tracker` parses a flat `target/alloc_tracker/<operation>.json`
+  file (one per operation, auto-emitted on `Session` drop) into a `ResultRecord`
+  with an `AllocationBytes` (`allocated_bytes`) and an `AllocationCount`
+  (`allocations`) metric, both from the `mean_*_per_iteration` fields. `package`
+  is `None`; the operation name is the identity. Allocation behaviour is a
+  deterministic property of the code → `synthetic` partition, no machine key, no
+  dispersion (treated like Callgrind for change-point detection).
+* `bench::all_the_time` parses a flat `target/all_the_time/<operation>.json` file
+  into a `ResultRecord` with a single `ProcessorTime` (`processor_time`, unit
+  `ns`) metric from `mean_processor_time_nanos`. `package` is `None`. Processor
+  time is hardware-dependent and noisy → partitioned by the host triple and a
+  machine key; it carries no CI (only a mean), so the noise detector skips the
+  CI-non-overlap gate and relies on the Mann-Whitney/Mann-Kendall tests.
 
 There is no engine configuration. `run` and `backfill` invoke `cargo bench` once
 with the combined environment every supported engine needs
-(`injected_bench_env`, today `GUNGRAUN_SAVE_SUMMARY=pretty-json`), then harvest
-both output trees (`target/criterion/**`, `target/gungraun/**`); an engine that
-produced no cases (for example Callgrind off Linux, where the `_cg` benches are
-`#[cfg(target_os = "linux")]` no-ops) is silently skipped. Scope a run with
-`--workspace` (the default), `--package`/`-p NAME` (repeatable), or `--bench NAME`
-(repeatable) — these translate to the matching `cargo bench` arguments. `--engine`
-is **not** a `run`/`backfill` flag; it is an `analyze` facet over already-stored
-data. `EngineSystem::ALL` enumerates the engines harvested per run.
+(`injected_bench_env`, today `GUNGRAUN_SAVE_SUMMARY=pretty-json`; the other three
+engines auto-emit JSON on drop and need no env), then harvest every output tree
+(`target/criterion/**`, `target/gungraun/**`, `target/alloc_tracker/*.json`,
+`target/all_the_time/*.json`); an engine that produced no cases (for example
+Callgrind off Linux, where the `_cg` benches are `#[cfg(target_os = "linux")]`
+no-ops) is silently skipped. Scope a run with `--workspace` (the default),
+`--package`/`-p NAME` (repeatable), or `--bench NAME` (repeatable) — these
+translate to the matching `cargo bench` arguments. `--engine` is **not** a
+`run`/`backfill` flag; it is an `analyze` facet over already-stored data.
+`EngineSystem::ALL` enumerates the engines harvested per run.
 
 ## Machine key
 
@@ -450,8 +471,8 @@ test pins a fixed profile to its digest. `resolve_machine_key` prefers an explic
 `--machine-key` override (a CLI-only flag — the config file is committed, so it must
 not carry a machine key that would be wrong for some checkouts) over the
 fingerprint. The key is
-computed only when `engine.is_hardware_dependent()` (Criterion); Callgrind never
-reads it.
+computed only when `engine.is_hardware_dependent()` (Criterion, `all_the_time`);
+Callgrind and `alloc_tracker` never read it.
 
 All time comes from an injected `tick::Clock`. Production uses
 `Clock::new_tokio()`; tests use `Clock::new_frozen_at(...)` for deterministic
@@ -515,6 +536,13 @@ estimate is `NANOS` nanoseconds (an empty `VALUE` omits the parameter component)
 Distinct identities never share a directory, so one run can emit several Criterion
 cases that harvest into one result set as separate records.
 
+It accepts `--alloc-tracker OPERATION=BYTES/COUNT` (repeatable), which writes a
+flat `<target-root>/alloc_tracker/<OPERATION>.json` reporting `BYTES` mean bytes
+and `COUNT` mean allocations per iteration, and `--all-the-time OPERATION=NANOS`
+(repeatable), which writes a flat `<target-root>/all_the_time/<OPERATION>.json`
+reporting `NANOS` mean processor-time nanoseconds per iteration — mirroring the
+real crates' one-file-per-operation auto-emitted output.
+
 Finally, `--fail-if-exists PATH` exits with code 1 and writes no output when
 `PATH` (relative to the working directory) exists. Backfill runs each engine in a
 checked-out worktree, so a commit that tracks the named marker file stands in for
@@ -574,13 +602,15 @@ coverage-gated there).
 
 ## Fixture-golden canaries
 
-`tests/fixtures/callgrind/*.summary.json` are **real** Gungraun output and
+`tests/fixtures/callgrind/*.summary.json` are **real** Gungraun output,
 `tests/fixtures/criterion/*/{benchmark,estimates}.json` are **real** Criterion
-output, both committed verbatim. They are schema-drift canaries used by the parser
+output, and `tests/fixtures/alloc_tracker/*.json` + `tests/fixtures/all_the_time/
+*.json` are **real** `alloc_tracker` / `all_the_time` output, all committed
+verbatim. They are schema-drift canaries used by the parser
 tests, the orchestration tests, and the integration test. Do not hand-edit them to
 make a test pass — regenerate the Callgrind fixtures from `just bench-cg` (and the
-Criterion fixtures from a `cargo bench` run) if the upstream schema genuinely
-changes, and update the parser/tests to match.
+Criterion / `alloc_tracker` / `all_the_time` fixtures from a `cargo bench` run) if
+the upstream schema genuinely changes, and update the parser/tests to match.
 
 ## Azure Blob storage (`azure` feature)
 
