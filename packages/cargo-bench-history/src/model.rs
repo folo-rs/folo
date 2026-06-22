@@ -265,7 +265,7 @@ mod tests {
     fn sample_context() -> RunContext {
         let epoch = "2024-01-01T00:00:00Z".parse().unwrap();
         RunContext::new(
-            Timestamps::new(epoch, epoch, epoch),
+            Timestamps::new(epoch, epoch),
             GitInfo::default(),
             CiInfo::default(),
             ToolchainInfo::default(),

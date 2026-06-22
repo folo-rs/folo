@@ -187,12 +187,13 @@ flowchart LR
   also carry the confidence interval and std-dev where available so analysis can be
   noise-aware.
 * **ResultRecord** — one `BenchmarkId` + its metrics from a single run.
-* **Timestamps** — every run carries three distinct times (§6): the **effective
-  time** (defaults to the commit date for clean / wall-clock now for dirty,
-  overridable with `--timestamp`), the **execution time** (when the benches ran),
-  and the **ingest time** (wall clock when stored). The series is ordered by git
-  topology (§8.3), not by effective time; the tool never assumes ingest time is the
-  effective date.
+* **Timestamps** — every run carries two distinct times (§6): the **commit
+  timestamp** (the benchmarked commit's committer date — for a dirty snapshot, the
+  commit it is based on) and the **observation timestamp** (wall clock when the
+  benches ran and were stored). The series is ordered by git topology (§8.3) using
+  the commit timestamp only as a within-commit tiebreak; the observation timestamp is
+  provenance only and never orders anything. There is no "effective timestamp"
+  concept and no `--timestamp` override.
 * **RunContext** — metadata attached to every stored run (see §6).
 * **ResultSet** — `{ schema_version, context, results: [ResultRecord] }`; the
   unit of storage (one immutable file per run).
@@ -261,7 +262,7 @@ concurrent CI). The path is `<discriminant set>/<commit_sha>/<run file>`:
 ```
 <root>/v2/<project>/<engine>/<target_triple>/<machine_key|synthetic>/<commit_sha>/
     clean.json                       # ≤1 per commit — the canonical point
-    dirty-<effective_unix>.json      # 0..N snapshots taken on top of this base commit
+    dirty-<observation_unix>.json    # 0..N snapshots taken on top of this base commit
 ```
 
 The segment **above** `<commit_sha>` is the **discriminant set** — the dimensions
@@ -279,10 +280,11 @@ deterministic key `…/<commit>/clean.json`. Collision detection rides on the
 second clean `run`/`backfill` of the same commit fails atomically (non-zero exit,
 nothing written) with no separate exists-check round-trip or TOCTOU window;
 `--overwrite` switches to a replacing write (e.g. to clobber data from broken infra). A
-**dirty** run is keyed by its effective time, `…/<commit>/dirty-<effective_unix>.json`,
-so successive snapshots on the same base commit coexist (effective defaults to
-wall-clock now, §6, spreading them in the order taken); a same-timestamp collision is
-treated like any other write-once conflict (refused unless `--overwrite`).
+**dirty** run is keyed by its observation time,
+`…/<commit>/dirty-<observation_unix>.json`, so successive snapshots on the same base
+commit coexist (the observation time is wall-clock now, §6, spreading them in the
+order taken); a same-timestamp collision is treated like any other write-once
+conflict (refused unless `--overwrite`).
 
 Branch is **not** a path component: a commit SHA is globally unique, so the same
 commit on two branches is one point. Branch selection happens at query time via git
@@ -378,18 +380,15 @@ the computed fingerprint.
 
 Captured once per stored run and attached to the `ResultSet`:
 
-* **Effective time** — for a **clean** run, defaults to the benchmarked commit's
-  committer date; for a **dirty** run, defaults to **wall-clock now** (the base
-  commit's date no longer identifies the code). Either default is overridable with
-  `--timestamp <rfc3339>` (squash / rebase, reconstructing from logs, benches not
-  tied to one commit). Effective time **no longer orders the series** — git topology
-  does (§8.3). It serves three narrower roles: the dirty filename (`dirty-<unix>`),
-  the sub-order of multiple runs *within one commit* (clean first, then dirty
-  snapshots in the order taken), and the `--since` window filter.
-* **Execution time** — wall clock when the benches actually ran (metadata), read
-  from an injected `tick::Clock` (§10) so tests drive it deterministically.
-* **Ingest time** — wall clock when the ResultSet was stored (metadata), also from
-  the `tick::Clock`; **never** used as the effective date.
+* **Commit timestamp** — the benchmarked commit's committer date (for a **dirty**
+  run, the committer date of the commit it is based on). This is the run's position
+  on the timeline. It is **not** the primary series order — git topology is (§8.3) —
+  but it is the within-commit tiebreak and the `--since`/`--until` window filter. The
+  commit timestamp is never overridable from the CLI; the timeline is the git graph.
+* **Observation timestamp** — wall clock when the benches ran and were stored,
+  read from an injected `tick::Clock` (§10) so tests drive it deterministically.
+  Provenance only; **never** used to order a series. It names the dirty filename
+  (`dirty-<observation_unix>`) so concurrent dirty snapshots of one commit coexist.
 * **Git:** commit SHA + short SHA, branch, committer date, dirty flag (`git`).
   Branch is metadata only — query-time topology, not this field, decides series
   membership (§8.3). Parent lineage is **not** recorded: `analyze` resolves topology
@@ -405,8 +404,8 @@ Captured once per stored run and attached to the `ResultSet`:
   differ under WSL).
 * **Provenance:** cargo-bench-history version + schema version + machine_key.
 
-`jiff` parses `--timestamp` and formats stored times as RFC 3339 (UTC). Git and
-env access go through a small PAL so the logic is unit-testable without a real
+`jiff` parses `--since`/`--until` and formats stored times as RFC 3339 (UTC). Git
+and env access go through a small PAL so the logic is unit-testable without a real
 repo or CI.
 
 ## 7. Storage abstraction
@@ -476,15 +475,17 @@ The commands (`run`, `install`, `analyze`, `backfill`, `list`, `prune`, `bless`,
 named `clap` help heading so `--help` reads as a small set of labelled groups
 rather than one flat list:
 
-* **Environment & execution** — `--config`, `--repo`, `--verbose` (and `--help`).
+* **Environment and execution** — `--config`, `--repo`, `--verbose`, `--dry-run`
+  (on `prune`), and `--help`.
 * **Output** — `--format` (text / json / markdown), on the reporting commands.
 * **Benchmark scope** — `--workspace`, `--package`/`-p`, `--bench`, on the
   executing commands.
 * **Discriminant selection** — `--engine`, `--target-triple`, `--machine-key`
   (§4.3): repeatable + `all` in query mode; only `--machine-key` in create mode.
-* **Timeline selection** — `--base`, `--context` (the ref the command runs in
+* **Commit selection** — `--base`, `--context` (the ref the command runs in
   context of; defaults to `HEAD`), `--since`, `--until`. `--since` defaults to
-  six months back uniformly; `--until` has no upper bound by default.
+  six months back uniformly; `--until` has no upper bound by default. These filter
+  by each commit's committer date, not by when a run executed.
 * **Data filtering** — `--no-dirty`.
 * **Subjects** — bare positional words, never flags: `list <runs|discriminants|
   blessings>`, `bless <prefix…>`, `prune <commit…>`, `backfill <from> <to>`.
@@ -536,7 +537,7 @@ simply produce no output — no OS logic is needed in the tool.
    by default (non-zero exit, via the write-once `put` contract, §4.2) unless
    `--overwrite`, which makes re-runs idempotent and safe to repeat. A **dirty**
    snapshot writes
-   `…/<commit>/dirty-<effective_unix>.json` and coexists with prior snapshots (only a
+   `…/<commit>/dirty-<observation_unix>.json` and coexists with prior snapshots (only a
    same-timestamp clash is a conflict). An engine that harvests **zero** cases stores
    nothing (an empty set carries no comparable data and would only inflate `analyze`'s
    run count); the summary reports the empty harvest, and other engines in the same
@@ -557,15 +558,15 @@ exactly what gets ingested. Note that two non-overlapping partial runs at the sa
 commit (different `--package`/`--bench` subsets) do **not** merge: each stores its
 own `clean.json` and the second collides with the first (§4.2) — gaps in coverage
 are expected to come from *different commits* covering different subsets, not from
-multiple partial runs at one commit. Other flags: `--timestamp <rfc3339>`
-(override effective time for backfill, §6), `--machine-key <key>` (override the
-hardware fingerprint, §4.1), `--no-store`, `--overwrite` (replace an existing
+multiple partial runs at one commit. Other flags: `--machine-key <key>` (override
+the hardware fingerprint, §4.1), `--no-store`, `--overwrite` (replace an existing
 same-commit point instead of refusing, §4.2), `--verbose` (print a step-by-step
 diagnostic trail to stderr — the benchmark command and injected env, directories
 scanned, files included/skipped-as-stale, and each stored key — to diagnose a run
-that unexpectedly stored nothing). The target triple is always auto-detected
-(§4.1) — there is no `--target-triple` override. `--engine` is **not** a `run`
-flag — it is an `analyze` facet over stored data (§8.3).
+that unexpectedly stored nothing). The commit timestamp is always the benchmarked
+commit's committer date (§6) — there is no `--timestamp` override. The target triple
+is always auto-detected (§4.1) — there is no `--target-triple` override. `--engine`
+is **not** a `run` flag — it is an `analyze` facet over stored data (§8.3).
 
 ### 8.2 `cargo bench-history install`
 Generate an example `.cargo/bench_history.toml` if absent; print its path and
@@ -612,7 +613,7 @@ This single rule covers both use cases: an "official" view is just
 `--context <default>` (target == base ⇒ everything is base ⇒ clean-only); the
 "how does my feature fit in" view is the default (clean default-branch baseline,
 then the branch's own clean + dirty snapshots). Series are **ordered by git
-topology**; multiple runs on one commit sub-order by effective time (§6). Branch
+topology**; multiple runs on one commit sub-order by commit time (§6). Branch
 *metadata* on a run is never consulted — membership is purely topological, so a
 dirty snapshot taken on a shared base commit (scratch work before committing) is
 excluded from an official view until it is committed.
@@ -636,8 +637,8 @@ For each selected commit `analyze` reads its directory (`clean.json` and, when
 admitted, `dirty-*.json`), builds per-`(BenchmarkId, metric)` series in topological
 order, runs the finding algorithms (§9), and prints a report.
 
-* `--since <when>` drops runs whose effective time predates the cutoff, and
-  `--until <when>` drops runs after an upper cutoff, so the run count and every
+* `--since <when>` drops commits whose committer date predates the cutoff, and
+  `--until <when>` drops commits after an upper cutoff, so the run count and every
   series share the window. Both accept an RFC 3339 timestamp
   (`2024-01-01T00:00:00Z`), a bare `YYYY-MM-DD` date (UTC midnight), or a relative
   duration such as `6 months` or `30 days ago` (resolved against the wall clock).
@@ -655,7 +656,12 @@ order, runs the finding algorithms (§9), and prints a report.
   nothing to act on) but are useful for auditing history that self-corrected. The
   underlying points are always part of the data set and the chart regardless of this
   flag; it only controls whether the recovered finding is surfaced.
-* `--metric`, `--format text|json|markdown`.
+* `<prefix…>` positional subjects scope the analysis to benchmarks whose id starts
+  with any given prefix (e.g. `analyze my_pkg/`), matched the same way `bless` matches
+  (§8.7). Omitting them analyzes every benchmark. There is no `--metric` filter:
+  metrics are an internal detail users are not expected to know; scope by benchmark
+  prefix instead.
+* `--format text|json|markdown`.
 * **Findings never affect the exit code.** The process exits non-zero only when the
   analysis fails to *run* (no repo, storage error, …); a finding is advisory. The
   machine-readable signal lives in the `json` report (§9.6): `mode`, the boolean
@@ -686,19 +692,18 @@ cargo bench-history backfill <from> <to> \
 **first-parent** mainline of the current branch — `git rev-list --reverse
 --first-parent <from>^..<to>` — so the timeline follows the linear branch
 progression and does not fan out into commits merged in from side branches.
-The `<from>` and `<to>` subjects (bare positional commits) are both inclusive. Before doing anything the tool verifies the
-range is part of the current branch's history (`git merge-base --is-ancestor
-<from> <to>` and `<to>` an ancestor of — or equal to — `HEAD`); otherwise it
-errors out, because `analyze` only ever surfaces a point when its commit is in the
-analyzed ref's topology (§8.3), so backfilling commits outside the current branch's
-ancestry would write data that no ordinary analysis can reach.
+The `<from>` and `<to>` subjects (bare positional commits) are both inclusive. Before doing anything the tool verifies both endpoints resolve and that `<from>`
+is a first-parent ancestor of `<to>`; the range is then derived purely from
+`<to>`'s first-parent history, so backfilling does **not** depend on the current
+checkout or branch (you can backfill any range whose endpoints form a first-parent
+line, regardless of where `HEAD` sits).
 
 **Per commit**, in order, the tool first consults storage to decide whether the
 commit needs benchmarking at all, then (if it does) checks out the commit, runs the
-benches with `cargo bench` exactly as §8.1 (no `--timestamp` — each point's
-effective time is its own committer date, §6), harvests every engine that produced
-output, and stores the result. Backfilled runs are always on a **clean** tree, so
-each is keyed by commit (§4.2) and collision-checked:
+benches with `cargo bench` exactly as §8.1 (no `--timestamp` override exists — each
+point's commit timestamp is its own committer date, §6), harvests every engine that
+produced output, and stores the result. Backfilled runs are always on a **clean**
+tree, so each is keyed by commit (§4.2) and collision-checked:
 
 * By **default** the commits that already have a stored result are listed once up
   front (a single `list` of the `v2/<project>/` prefix); a commit already present
@@ -747,7 +752,7 @@ discriminant sets before committing to an `analyze`.
 cargo bench-history list <runs|discriminants|blessings> [--all] \
     [--repo PATH] [--context REF] [--base REF] \
     [--engine NAME …] [--target-triple TRIPLE …] [--machine-key KEY …] \
-    [--no-dirty] [--since DATE] [--until DATE] [--metric NAME] \
+    [--no-dirty] [--since DATE] [--until DATE] \
     [--format text|json|markdown] [--verbose] [--config PATH]
 ```
 
@@ -755,7 +760,7 @@ cargo bench-history list <runs|discriminants|blessings> [--all] \
 `list` is an error that names the three. For `runs` and `blessings`, `list`
 **mirrors `analyze`'s data-set-selection parameters exactly**: every selection
 flag `analyze` accepts (`--repo`/`--context`/`--base`/`--engine`/
-`--target-triple`/`--machine-key`/`--no-dirty`/`--since`/`--until`/`--metric`)
+`--target-triple`/`--machine-key`/`--no-dirty`/`--since`/`--until`)
 selects the same data set here, resolved through the same shared selection
 pipeline (§8.3). The two commands must stay in lockstep — a selection parameter
 added to one is added to the other. `list` omits only the analysis-only flags
@@ -790,42 +795,50 @@ selection pipeline as `analyze`/`list`** (so the three stay in lockstep) and the
 removes the selected objects rather than reporting on them.
 
 ```
-cargo bench-history prune [<commit> …] [--dry-run] [--all] [--dirty | --clean] \
+cargo bench-history prune (--clean | --dirty | --all) [<commit> …] \
+    [--dry-run] [--prune-base] \
     [--repo PATH] [--context REF] [--base REF] \
     [--engine NAME …] [--target-triple TRIPLE …] [--machine-key KEY …] \
     [--since DATE] [--until DATE] \
     [--format text|json|markdown] [--verbose] [--config PATH]
 ```
 
-**Deletion scopes.** With no scope flag, `prune` removes the selected **clean *and*
-dirty** runs (and the blessing sidecars riding on any removed clean run). `--dirty`
-restricts to the dirty (uncommitted-tree) snapshots only — the "drop the ephemeral
-runs" case. `--clean` restricts to clean runs and their blessings, leaving dirty
-snapshots in place. `--dirty` and `--clean` are mutually exclusive.
+**Deletion scope is required.** The user must say which kinds of run to delete:
+`--clean` removes clean runs and the blessing sidecars riding on them; `--dirty`
+removes the dirty (uncommitted-tree) snapshots only — the "drop the ephemeral runs"
+case; `--all` removes both (the same as `--clean --dirty`). Exactly one of these is
+required — there is no default scope, so a bare `prune` is an error that names the
+three. This explicit choice is the only "what to delete" knob; there is no separate
+narrowing guard.
 
-**Narrowing guard.** Deleting clean benchmark history is destructive and
-irreversible, so a scope that touches clean runs (the default or `--clean`) refuses
-to run against an **un-narrowed** selection. The auto-detected current-machine
-defaults (§4.3) and the widening `all` keyword do **not** count as narrowing; the
-user must explicitly pass at least one of: a **concrete** (non-`all`) facet value
-(`--engine`/`--target-triple`/`--machine-key`), a `<commit>` subject, `--since`, or
-`--until` — or the explicit `--all` confirm flag. The `--dirty` scope is **exempt**
-— dirty data is ephemeral, so a blanket cleanup needs no guard. (`--all` is a prune
-confirm switch; it is distinct from the `all` *value* a facet may take.)
+**Commit range (Design B).** `prune` walks the selected commits from `--context`
+(default `HEAD`) back toward `--base` (default the project's default branch). It
+deletes only the commits **strictly after** the merge-base of context and base —
+i.e. the context branch's own commits — and **preserves** the shared base history.
+The whole base branch's data set is deleted only when `--context` resolves to the
+**same** commit as `--base` (pruning the base in its own context). The `<commit>`
+subjects (repeatable, case-insensitive SHA-prefix) further restrict deletion to
+specific commits within that range; `--since`/`--until` bound it by each commit's
+committer date inclusively.
+
+**Base-branch guard (`--prune-base`).** Because deleting the base branch's data set
+wipes the mainline history every feature analysis compares against, that case
+(context == base) is refused unless the user passes `--prune-base`. Without the
+flag, `prune` stops with a warning naming the base branch ("Warning: this will
+delete benchmark history of the `<name>` branch, which is the base branch. Confirm
+with --prune-base if this is correct."). The guard depends solely on whether the
+context resolves to the base commit — not on which `<commit>` subjects were given.
 
 **Selection.** `prune` reuses `analyze`'s data-set-selection parameters through the
-shared pipeline. The base-branch tip's dirty runs are admitted
-**unconditionally** (the `DirtyTipPolicy::Always` parameter to the shared
-`resolve_history` helper, versus `WhenWorkingTreeDirty` for `analyze`/`list`), so a
-`prune --dirty` reclaims base-branch snapshots regardless of the current tree state.
-The `<commit>` subjects (repeatable, case-insensitive SHA-prefix) restrict to
-specific commits; `--since`/`--until` bound the effective time inclusively (both
-read each candidate's stored body to recover its effective time). `prune` is
-history-scoped (it does not take an analyze `--mode`).
+shared pipeline (so the commands stay in lockstep). The base-branch tip's dirty runs
+are admitted **unconditionally** (the `DirtyTipPolicy::Always` parameter to the
+shared `resolve_history` helper, versus `WhenWorkingTreeDirty` for `analyze`/`list`),
+so a `prune --dirty` reclaims base-branch snapshots regardless of the current tree
+state. `prune` is history-scoped (it does not take an analyze `--mode`).
 
 **Blessings follow their clean run.** A blessing sidecar is removed only when the
 clean run it annotates is itself removed in the same pass — it is never time-filtered
-directly. So `--dirty` never touches blessings, and `--clean`/default remove a
+directly. So `--dirty` never touches blessings, and `--clean`/`--all` remove a
 commit's blessings exactly when they remove that commit's `clean.json`.
 
 `--dry-run` previews the removal — building the identical plan but skipping the
@@ -842,14 +855,13 @@ decision, every subsequent `analyze` would keep reporting the same accepted step
 forever. Blessing **re-baselines** the series from the blessed commit forward (§9.7).
 
 ```
-cargo bench-history bless <prefix> [<prefix> …] \
-    [--reason TEXT] \
-    [--repo PATH] [--base REF] \
+cargo bench-history bless (<prefix> [<prefix> …] | --all) \
+    [--context REF] [--base REF] \
     [--engine NAME …] [--target-triple TRIPLE …] [--machine-key KEY …] \
     [--verbose] [--config PATH]
 
 cargo bench-history unbless \
-    [--repo PATH] [--base REF] \
+    [--context REF] [--base REF] \
     [--engine NAME …] [--target-triple TRIPLE …] [--machine-key KEY …] \
     [--verbose] [--config PATH]
 ```
@@ -859,31 +871,40 @@ matched against the qualified identity (`<package>/<group>/<case>/<value>`), so
 `bless all_the_time/read_cell` accepts one benchmark and `bless overhead/groups_`
 accepts a family. Blessing is deliberately scoped: accepting the benchmark that
 caused trouble must not silently accept every other benchmark that may be trending
-badly unnoticed. At least one prefix is required. `--reason` records why the change
-was accepted, surfaced in findings and `list blessings`.
+badly unnoticed. At least one prefix is required **unless `--all` is given**, which
+blesses every benchmark recorded at the context commit (the deliberate "accept the
+whole commit" case); `--all` and explicit prefixes are mutually exclusive.
+
+**Bless any commit, not just HEAD.** Both `bless` and `unbless` operate on a
+`--context` ref (default `HEAD`), so a user can bless or unbless a commit other than
+the one currently checked out. `--base` is the ref the context commit must sit on
+(default the project's default branch).
 
 **Base-branch-only, existing data point — hard errors otherwise.** A
-blessing is recorded only when **(a)** the current commit is on the base branch
-(`merge_base(HEAD, base) == HEAD`) and **(b)** a
-`clean.json` already exists at the current commit in each selected set. There is **no
-`--force` escape hatch**: a feature-branch blessing would silently vanish or
-duplicate once the branch is squash-merged, and blessing a commit with no recorded
-data point is meaningless. Each of these is refused with a clear message. A **dirty
-working tree is allowed** — the blessing applies to the committed `clean.json` at
-HEAD, which local edits do not change — but it emits a `Warning: uncommitted changes
-present …` so an accidental edit is visible.
+blessing is recorded only when **(a)** the context commit is on the base branch
+(`merge_base(context, base) == context`) and **(b)** a `clean.json` already exists at
+the context commit in each selected set. There is **no `--force` escape hatch**: a
+feature-branch blessing would silently vanish or duplicate once the branch is
+squash-merged, and blessing a commit with no recorded data point is meaningless.
+Each of these is refused with a clear message. A **dirty working tree is allowed** —
+the blessing applies to the committed `clean.json` at the context commit, which local
+edits do not change — but it emits a `Warning: uncommitted changes present …` so an
+accidental edit is visible.
 
 **Storage: append-only sidecar.** `bless` writes a `BlessingRecord` sidecar
 `…/<commit>/bless-<issued_unix>.json` alongside the commit's `clean.json` in every
-facet-selected discriminant set that has a result at the current commit. The record
-carries the blessed commit, its effective (committer) time, the issue time, the
-prefix filters, the optional reason, and the tool version. Sidecars are **immutable**
-(append-only), so narrowing a blessing means `unbless` then re-bless the subset to
-keep. Overwriting a commit's `clean.json` (a `run --overwrite`) deletes its stale
-blessing sidecars, since the accepted data point is gone.
+facet-selected discriminant set that has a result at the context commit. The record
+carries the blessed commit, its committer time, the issue time, the prefix filters,
+and the tool version. Sidecars are **immutable** (append-only), so narrowing a
+blessing means `unbless` then re-bless the subset to keep. Overwriting a commit's
+`clean.json` (a `run --overwrite`) deletes its stale blessing sidecars, since the
+accepted data point is gone.
 
-`unbless` deletes every blessing recorded **at the current commit** in the selected
-sets (a "blessing delete" at HEAD); it does not touch blessings at other commits.
+`unbless` deletes every blessing recorded **at the context commit** in the selected
+sets; it does not touch blessings at other commits. Blessings issued at **later**
+commits remain in effect, so the timeline may still be blessed past the context
+commit — to fully un-bless a benchmark you must remove every blessing along its
+timeline.
 
 **`list blessings`** audits blessings (§8.5 extends `list`): with no extra flag it
 lists the sidecars at the current commit (what `unbless` would remove); with `--all`
@@ -894,7 +915,7 @@ benchmarks are currently re-baselined and since which commit.
 ## 9. Analysis algorithms
 
 Series: per `(DiscriminantSet, BenchmarkId, metric)`, ordered by git first-parent
-topology (§8.3) with runs on one commit sub-ordered by effective time (§6). The
+topology (§8.3) with runs on one commit sub-ordered by commit time (§6). The
 goal is **high signal-to-noise**: report level shifts and trends that are real,
 and stay silent on measurement jitter. The design is *engine-aware* because the
 two engines have fundamentally different noise profiles, and a single detector
@@ -1155,7 +1176,7 @@ src/
   model.rs                # ResultSet/Record/Metric/BenchmarkId/Context (serde)
   comparability.rs        # ComparabilityKey + commit-centric partition path
   bless.rs                # BlessingRecord data model + append-only sidecar
-  context.rs              # RunContext (CI/git/toolchain + the three timestamps)
+  context.rs              # RunContext (CI/git/toolchain + commit/observation times)
   process.rs              # ProcessRunner port (async) + tokio adapter + fake
   probe.rs                # environment probe port (git/rustc) + shell adapter + fake
   git.rs                  # pure parse of git output -> GitSnapshot
@@ -1223,7 +1244,7 @@ adapter plus an in-lib `#[cfg(test)]` in-memory fake:
   (`Clock::new_tokio()` in prod) is injected into orchestration; tests use
   `tick::ClockControl` (its `test-util` feature) for deterministic simulated time.
   `tick` is machine-centric (`SystemTime`); convert to `jiff::Timestamp` for
-  stored/effective times.
+  stored commit/observation times.
 
 Orchestration takes injected ports — `run_with(&ports, &clock, &opts)` — and the
 public async entry wires the real adapters. **Miri strategy:** pure logic runs
@@ -1269,8 +1290,8 @@ shipped code.
 
 Phase 0 (foundation, preceded the numbered iterations): crate skeleton +
 CLI subcommands + `config.rs` + `model.rs` (incl.
-the three timestamps) + `Storage` trait + `comparability` (incl. target-triple
-resolution, §4.1) + `RunContext` (git/CI + effective time). Small and
+the timestamps) + `Storage` trait + `comparability` (incl. target-triple
+resolution, §4.1) + `RunContext` (git/CI + commit/observation times). Small and
 high-leverage; the iterations built on it.
 
 The plan folds the original "upload" step into "run" (run always persists) and
@@ -1323,11 +1344,14 @@ adds macOS; mapped to the original request's numbering:
    size are reported. Layered on the Criterion dispersion fields recorded in
    iteration 5.
 10. ✅ **`prune`** (§8.6) — delete a chosen portion of the stored data set with the
-    `analyze`/`list` selection pipeline, delete-by-default (clean + dirty + their
-    blessings) with `--dirty`/`--clean` scopes, `<commit>`/`--since`/`--until`
-    narrowing, a mandatory narrowing guard on clean deletion (`--all` override), and
-    a `--dry-run` preview. The earlier `clean` command (drop the ephemeral dirty
-    runs) is folded in as `prune --dirty`.
+    `analyze`/`list` selection pipeline. A **required** scope (`--clean`, `--dirty`,
+    or `--all`) says what to delete; Design B walks the selected commits from
+    `--context` back to the merge-base with `--base`, deleting only the context
+    branch's own commits and preserving the shared base history. Deleting the base
+    branch's own data set (context == base) requires the `--prune-base` guard.
+    `<commit>`/`--since`/`--until` further narrow the range, and `--dry-run` previews.
+    The earlier `clean` command (drop the ephemeral dirty runs) is folded in as
+    `prune --dirty`.
 
 **Deferred:**
 
@@ -1373,12 +1397,17 @@ Each iteration ships with tests and docs and leaves the tool runnable.
    *(Superseded: the earlier per-engine `command`/`os`/`extra_args` config and
    `WSLENV` bridging are gone — to collect Callgrind data, run the tool natively on
    Linux/WSL.)*
-9. **Effective time vs ingest time** — *Decided:* every run records three times —
-   effective, execution, and ingest (wall clock). Effective defaults to the commit
-   committer date (clean) or wall-clock now (dirty), overridable with `--timestamp`.
-   Effective time **does not order a series** (git topology does — decision 24); it
-   only names the dirty file, sub-orders runs within one commit, and drives `--since`.
-   The tool never assumes ingest time is the effective date.
+9. **Commit time vs observation time** — *Decided:* every run records two times —
+   the **commit timestamp** (the benchmarked commit's committer date; for a dirty
+   snapshot, the commit it is based on) and the **observation timestamp** (wall clock
+   when the run executed and was stored). The commit timestamp is the run's timeline
+   position and is never overridable from the CLI — the timeline is the git graph. It
+   **does not order a series** (git topology does — decision 24); it only sub-orders
+   runs within one commit and drives the `--since`/`--until` window. The observation
+   timestamp is provenance only — it names the dirty file and is never used to order
+   anything. *(Superseded: an earlier model recorded three times — effective,
+   execution, ingest — with a `--timestamp` override of the effective time; the
+   effective-time concept and `--timestamp` are gone.)*
 10. **Filtering** — *Decided:* `run`/`backfill` expose first-class scope
     flags — `--workspace` (default), `--package`/`-p NAME`, `--bench NAME` — that
     translate directly to `cargo bench` arguments; everything after `--` is
@@ -1441,11 +1470,11 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     key` override the fingerprint (§5). Computed only for Criterion.
 21. **Storage layout & point identity** — *Decided:* **commit-centric** v2 layout
     `v2/<project>/<engine>/<triple>/<machine|synthetic>/<commit>/{clean.json |
-    dirty-<effective_unix>.json}` (§4.2). The commit is a path segment, so a clean
+    dirty-<observation_unix>.json}` (§4.2). The commit is a path segment, so a clean
     point has the single deterministic key `…/<commit>/clean.json` and collision
     detection rides on the write-once `put` contract — refused (as
     `RunError::Duplicate`) unless `--overwrite`. Dirty
-    snapshots are keyed by effective time (default wall-clock now) and coexist; only
+    snapshots are keyed by observation time (wall-clock now) and coexist; only
     a same-timestamp clash is a conflict. Branch is **not** in the key (a SHA is
     globally unique); it is metadata only, and series membership is decided by
     query-time topology, not by it. Schema bumped `v1→v2` (pre-release, no migration).
@@ -1456,7 +1485,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     (`--base`, default the detected default branch): base-ancestry commits contribute
     **clean only**, target-unique commits contribute **clean + dirty** (`--no-dirty`
     to drop dirty). Series are ordered by **git topology** (decision 24 supersedes the
-    old effective-time ordering); runs within one commit sub-order by effective time.
+    old effective-time ordering); runs within one commit sub-order by commit time.
     Discriminant sets are selected via the repeatable facets `--engine` /
     `--target-triple` / `--machine-key`, each accepting the widening keyword `all`
     and auto-detecting the current machine when omitted (decision 29, §4.3); each
@@ -1469,25 +1498,28 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     ephemeral-data **warning** to the report. Rationale: these are the user's
     in-flight changes, so showing them (with a nudge to branch) beats a confusing
     `0 runs`; persisting them is still refused so committed history stays clean.
-23. **`backfill`** — *Decided:* a dedicated command (not a `run` flag) that walks
-    the **first-parent** mainline of the current branch oldest-first
-    (`git rev-list --reverse --first-parent <from>^..<to>`, endpoints inclusive),
-    validating the range is in the branch's ancestry before starting. Each commit
-    is benchmarked exactly as `run` (no `--timestamp`; effective = its committer
-    date) from inside a dedicated **git worktree** so the user's checkout is never
-    disturbed and an interruption leaves them in place. Existing points are
-    **skipped before they are re-benchmarked** by default (the commits already
-    stored are listed once up front, so backfill is resumable without re-running
-    their benches; the it.6 write-once collision remains a post-bench safety net),
-    `--overwrite` regenerates them; a build/bench failure stops by
+23. **`backfill`** — *Decided:* a dedicated command (not a `run` flag) that replays
+    `run` across an inclusive first-parent commit range oldest-first
+    (`<from>` … `<to>`). It requires both endpoints to resolve and `<from>` to be a
+    first-parent ancestor of `<to>`, then derives the range purely from `<to>`'s
+    first-parent history — it does **not** depend on the current checkout or branch,
+    so any range whose endpoints form a first-parent line can be backfilled. Each
+    commit is benchmarked exactly as `run` (no `--timestamp` override; the commit
+    timestamp is its own committer date) from inside a dedicated **git worktree** so
+    the user's checkout is never disturbed and an interruption leaves them in place.
+    Existing points are **skipped before they are re-benchmarked** by default (the
+    commits already stored are listed once up front, so backfill is resumable without
+    re-running their benches; the it.6 write-once collision remains a post-bench safety
+    net), `--overwrite` regenerates them; a build/bench failure stops by
     default and `--ignore-errors` skips and continues with an end-of-run summary,
     while infrastructure failures always abort. Benches are whatever each commit
     contains, run with `cargo bench` exactly as `run` (§8.4).
 24. **Series ordering** — *Decided:* **git topology** (first-parent order of the
-    resolved commit list), not effective timestamp. This removes the committer-date
+    resolved commit list), not commit timestamp. This removes the committer-date
     monotonicity hazard (rebases / amended dates no longer misorder) and is the
-    reason `analyze` needs a live repo (decision 22). Effective time only sub-orders
-    multiple runs sharing one commit and drives the `--since` window.
+    reason `analyze` needs a live repo (decision 22). The commit timestamp only
+    sub-orders multiple runs sharing one commit and drives the `--since`/`--until`
+    window.
 25. **No engine configuration** — *Decided:* there is no `[engines]` config.
     `run`/`backfill` run the workspace's benches once with `cargo bench`, inject the
     combined environment every supported engine needs, and detect each engine from
@@ -1548,26 +1580,29 @@ Each iteration ships with tests and docs and leaves the tool runnable.
 29. **Blessings & re-baselining** — *Decided:* an intentional base-branch change can
      be **blessed** (§8.7) so history analysis stops re-flagging it. A blessing is an
      append-only sidecar (`…/<commit>/bless-<issued_unix>.json`) recorded per
-     benchmark via prefix filters, base-branch-only with an existing
+     benchmark via prefix filters (or `--all` to accept every benchmark at the
+     commit), base-branch-only with an existing
      `clean.json` at the commit (else hard errors; no `--force`; a dirty working tree
-     is allowed but warns). It
+     is allowed but warns). Both `bless` and `unbless` operate on a `--context` ref
+     (default `HEAD`), so any base-branch commit can be (un)blessed, not just the
+     checked-out one. It
      re-baselines the series from the blessed commit forward — the detectors run on
      the active segment only, while pre-blessing points stay for charting/context
-     (§9.7). `unbless` deletes blessings at the current commit; `run --overwrite`
-     drops a commit's stale sidecars; `list blessings` (`--all` for the window
-     roll-up) audits them. Blessings are honoured **only in history mode** (branch/tip
-     treat the base as fully blessed). Separately, history mode marks a self-corrected
-     spike as an **inactive** finding (`active=false`), suppressed unless
-     `--include-inactive`. The findings JSON gains `active` / `active_from` /
-     `blessed_at` / `blessed_effective`.
+     (§9.7). `unbless` deletes blessings at the context commit (later blessings stay
+     in effect); `run --overwrite` drops a commit's stale sidecars; `list blessings`
+     (`--all` for the window roll-up) audits them. Blessings are honoured **only in
+     history mode** (branch/tip treat the base as fully blessed). Separately, history
+     mode marks a self-corrected spike as an **inactive** finding (`active=false`),
+     suppressed unless `--include-inactive`. The findings JSON gains `active` /
+     `active_from` / `blessed_at`.
 30. **CLI library & grouped arguments** — *Decided:* the CLI is built with `clap`
      (derive), chosen over `argh` because `argh` cannot group flags under named
      headings and the command surface is wide enough that an ungrouped flat help
      list is hard to navigate. Flags are organised into functional groups via clap
-     `help_heading`s — **Environment & execution** (`--config`/`--repo`/`--verbose`),
-     **Output** (`--format`), **Benchmark scope** (`--workspace`/`--package`/
-     `--bench`), **Discriminant selection** (`--engine`/`--target-triple`/
-     `--machine-key`), **Timeline selection** (`--context`/`--base`/`--since`/
+     `help_heading`s — **Environment and execution** (`--config`/`--repo`/`--verbose`/
+     `--dry-run`), **Output** (`--format`), **Benchmark scope** (`--workspace`/
+     `--package`/`--bench`), **Discriminant selection** (`--engine`/`--target-triple`/
+     `--machine-key`), **Commit selection** (`--context`/`--base`/`--since`/
      `--until`), and **Data filtering** (`--no-dirty`) — shared across commands via
      flattened arg structs so a given group looks identical everywhere it appears.
      Consequent CLI-shape changes: the `--os`/`--architecture` facets are dropped

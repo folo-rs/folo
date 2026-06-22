@@ -139,9 +139,7 @@ where
                 git, storage, project_id, config, &selection, auto, now, reporter,
             )
             .await?;
-            let filter = SeriesFilter {
-                metric: options.metric.as_deref(),
-            };
+            let filter = SeriesFilter::default();
             let series = build_series(&dataset.loaded, &dataset.order, &filter);
             let listing = build_listing(project_id, &dataset, &series);
 
@@ -532,14 +530,12 @@ struct BlessingEntry {
     benchmark: Option<String>,
     /// Abbreviated commit the blessing was issued at (the re-baseline point).
     commit: String,
-    /// Effective (committer) time of the blessed commit.
-    effective: Timestamp,
+    /// Committer date of the blessed commit.
+    commit_time: Timestamp,
     /// When the blessing was issued; `Some` only in the HEAD view.
     issued_at: Option<Timestamp>,
     /// Accepted benchmark-id prefixes; populated only in the HEAD view.
     prefixes: Vec<String>,
-    /// The blessing's human note, if any (HEAD view only).
-    reason: Option<String>,
 }
 
 /// Lists blessings for `list blessings`.
@@ -571,7 +567,7 @@ where
 
     let (head_label, mut entries) = if options.all {
         blessings_across_window(
-            git, storage, project_id, config, &selection, options, auto, now, reporter,
+            git, storage, project_id, config, &selection, auto, now, reporter,
         )
         .await?
     } else {
@@ -636,10 +632,9 @@ where
             set: parsed.set,
             benchmark: None,
             commit: short_sha(&record.commit).to_owned(),
-            effective: record.effective,
+            commit_time: record.commit_time,
             issued_at: Some(record.issued_at),
             prefixes: record.prefixes,
-            reason: record.reason,
         });
     }
     Ok((short_sha(&head).to_owned(), entries))
@@ -657,7 +652,6 @@ async fn blessings_across_window<G, S>(
     project_id: &str,
     config: &Config,
     selection: &Selection<'_>,
-    options: &ListOptions,
     auto: &AutoFacets,
     now: Timestamp,
     reporter: &dyn Reporter,
@@ -670,9 +664,7 @@ where
         git, storage, project_id, config, selection, auto, now, reporter,
     )
     .await?;
-    let filter = SeriesFilter {
-        metric: options.metric.as_deref(),
-    };
+    let filter = SeriesFilter::default();
     let mut series = build_series(&dataset.loaded, &dataset.order, &filter);
     apply_blessings(&mut series, &dataset.blessings);
 
@@ -693,10 +685,9 @@ where
             set: one.set.clone(),
             benchmark: Some(benchmark),
             commit: short_sha(&blessing.commit).to_owned(),
-            effective: blessing.effective,
+            commit_time: blessing.commit_time,
             issued_at: None,
             prefixes: Vec::new(),
-            reason: None,
         });
     }
     Ok((String::new(), entries))
@@ -768,7 +759,7 @@ fn render_blessings_text(
             if let Some(benchmark) = &row.benchmark {
                 lines.push(format!(
                     "  {benchmark}  blessed at {} ({})",
-                    row.commit, row.effective
+                    row.commit, row.commit_time
                 ));
             } else {
                 let issued = row
@@ -779,9 +770,6 @@ fn render_blessings_text(
                     row.commit,
                     row.prefixes.join(", ")
                 ));
-                if let Some(reason) = &row.reason {
-                    lines.push(format!("    reason: {reason}"));
-                }
             }
         }
     }
@@ -817,29 +805,28 @@ fn render_blessings_markdown(
         ));
         lines.push(String::new());
         if all {
-            lines.push("| Benchmark | Blessed at | Effective |".to_owned());
+            lines.push("| Benchmark | Blessed at | Commit time |".to_owned());
             lines.push("| --- | --- | --- |".to_owned());
             for row in rows {
                 lines.push(format!(
                     "| {} | {} | {} |",
                     row.benchmark.as_deref().unwrap_or(""),
                     row.commit,
-                    row.effective
+                    row.commit_time
                 ));
             }
         } else {
-            lines.push("| Commit | Prefixes | Issued | Reason |".to_owned());
-            lines.push("| --- | --- | --- | --- |".to_owned());
+            lines.push("| Commit | Prefixes | Issued |".to_owned());
+            lines.push("| --- | --- | --- |".to_owned());
             for row in rows {
                 let issued = row
                     .issued_at
                     .map_or_else(String::new, |issued| issued.to_string());
                 lines.push(format!(
-                    "| {} | {} | {} | {} |",
+                    "| {} | {} | {} |",
                     row.commit,
                     row.prefixes.join(", "),
                     issued,
-                    row.reason.as_deref().unwrap_or("")
                 ));
             }
         }
@@ -863,13 +850,11 @@ fn render_blessings_json(
         #[serde(skip_serializing_if = "Option::is_none")]
         benchmark: Option<&'a str>,
         commit: &'a str,
-        effective: Timestamp,
+        commit_time: Timestamp,
         #[serde(skip_serializing_if = "Option::is_none")]
         issued_at: Option<Timestamp>,
         #[serde(skip_serializing_if = "<[String]>::is_empty")]
         prefixes: &'a [String],
-        #[serde(skip_serializing_if = "Option::is_none")]
-        reason: Option<&'a str>,
     }
     #[derive(Serialize)]
     struct JsonDocument<'a> {
@@ -890,10 +875,9 @@ fn render_blessings_json(
             machine: &entry.set.machine,
             benchmark: entry.benchmark.as_deref(),
             commit: &entry.commit,
-            effective: entry.effective,
+            commit_time: entry.commit_time,
             issued_at: entry.issued_at,
             prefixes: &entry.prefixes,
-            reason: entry.reason.as_deref(),
         })
         .collect();
 
@@ -943,7 +927,7 @@ mod tests {
     fn two_metric_set(effective: i64, commit: &str) -> ResultSet {
         let time = Timestamp::from_second(effective).expect("seconds within range");
         let context = RunContext::new(
-            Timestamps::new(time, time, time),
+            Timestamps::new(time, time),
             GitInfo {
                 commit: Some(commit.to_owned()),
                 short_commit: Some(commit.to_owned()),
@@ -984,7 +968,7 @@ mod tests {
     fn two_benchmark_set(effective: i64, commit: &str) -> ResultSet {
         let time = Timestamp::from_second(effective).expect("seconds within range");
         let context = RunContext::new(
-            Timestamps::new(time, time, time),
+            Timestamps::new(time, time),
             GitInfo {
                 commit: Some(commit.to_owned()),
                 short_commit: Some(commit.to_owned()),
@@ -1019,7 +1003,7 @@ mod tests {
     fn single_metric_set(effective: i64, commit: &str) -> ResultSet {
         let time = Timestamp::from_second(effective).expect("seconds within range");
         let context = RunContext::new(
-            Timestamps::new(time, time, time),
+            Timestamps::new(time, time),
             GitInfo {
                 commit: Some(commit.to_owned()),
                 short_commit: Some(commit.to_owned()),
@@ -1083,10 +1067,9 @@ mod tests {
             set,
             benchmark: Some(benchmark.to_owned()),
             commit: "c0".to_owned(),
-            effective: bts(1),
+            commit_time: bts(1),
             issued_at: None,
             prefixes: Vec::new(),
-            reason: None,
         };
         // Two linux entries then one mac entry: the run of same-set rows collapses
         // into one group, and the differing set starts a new one.
@@ -1129,10 +1112,9 @@ mod tests {
             set: linux_set(),
             benchmark: None,
             commit: "abc123".to_owned(),
-            effective: bts(1_700_000_000),
+            commit_time: bts(1_700_000_000),
             issued_at: Some(bts(1_700_000_500)),
             prefixes: vec!["nm/observe".to_owned(), "nm/record".to_owned()],
-            reason: Some("accepted tradeoff".to_owned()),
         };
         let text = render_blessings_text("folo", false, "abc123", std::slice::from_ref(&head));
         assert!(
@@ -1144,16 +1126,14 @@ mod tests {
             text.contains("abc123 accepts nm/observe, nm/record"),
             "{text}"
         );
-        assert!(text.contains("reason: accepted tradeoff"), "{text}");
 
         let all = BlessingEntry {
             set: linux_set(),
             benchmark: Some("nm/observe".to_owned()),
             commit: "abc123".to_owned(),
-            effective: bts(1_700_000_000),
+            commit_time: bts(1_700_000_000),
             issued_at: None,
             prefixes: Vec::new(),
-            reason: None,
         };
         let text = render_blessings_text("folo", true, "abc123", std::slice::from_ref(&all));
         assert!(
@@ -1175,33 +1155,27 @@ mod tests {
             set: linux_set(),
             benchmark: None,
             commit: "abc123".to_owned(),
-            effective: bts(1_700_000_000),
+            commit_time: bts(1_700_000_000),
             issued_at: Some(bts(1_700_000_500)),
             prefixes: vec!["nm/observe".to_owned()],
-            reason: Some("accepted tradeoff".to_owned()),
         };
         let md = render_blessings_markdown("folo", false, "abc123", std::slice::from_ref(&head));
         assert!(md.contains("# Blessings for folo at abc123"), "{md}");
-        assert!(
-            md.contains("| Commit | Prefixes | Issued | Reason |"),
-            "{md}"
-        );
+        assert!(md.contains("| Commit | Prefixes | Issued |"), "{md}");
         assert!(md.contains("| abc123 | nm/observe |"), "{md}");
-        assert!(md.contains("accepted tradeoff"), "{md}");
 
         let all = BlessingEntry {
             set: linux_set(),
             benchmark: Some("nm/observe".to_owned()),
             commit: "abc123".to_owned(),
-            effective: bts(1_700_000_000),
+            commit_time: bts(1_700_000_000),
             issued_at: None,
             prefixes: Vec::new(),
-            reason: None,
         };
         let md = render_blessings_markdown("folo", true, "abc123", std::slice::from_ref(&all));
         assert!(md.contains("# Most recent blessings for folo"), "{md}");
         assert!(
-            md.contains("| Benchmark | Blessed at | Effective |"),
+            md.contains("| Benchmark | Blessed at | Commit time |"),
             "{md}"
         );
         assert!(md.contains("| nm/observe | abc123 |"), "{md}");
@@ -1557,7 +1531,6 @@ mod tests {
             Timestamp::from_second(3).expect("seconds within range"),
             Timestamp::from_second(100).expect("seconds within range"),
             vec!["nm/nm::observe".to_owned()],
-            Some("intentional tradeoff".to_owned()),
             "0.0.1".to_owned(),
         );
         store_bless(&storage, &bless_key("c3", 100), &record);
@@ -1576,7 +1549,6 @@ mod tests {
         assert_eq!(blessings.len(), 1, "{report}");
         assert_eq!(blessings[0]["commit"], "c3");
         assert_eq!(blessings[0]["prefixes"][0], "nm/nm::observe");
-        assert_eq!(blessings[0]["reason"], "intentional tradeoff");
         // The HEAD view reports the sidecar itself, not a per-benchmark roll-up.
         assert!(blessings[0]["benchmark"].is_null(), "{report}");
     }
@@ -1607,7 +1579,6 @@ mod tests {
             Timestamp::from_second(3).expect("seconds within range"),
             Timestamp::from_second(100).expect("seconds within range"),
             vec!["nm/nm::observe".to_owned()],
-            Some("intentional tradeoff".to_owned()),
             "0.0.1".to_owned(),
         );
         store_bless(&storage, &bless_key("c3", 100), &record);
@@ -1723,7 +1694,6 @@ mod tests {
             Timestamp::from_second(2).expect("seconds within range"),
             Timestamp::from_second(100).expect("seconds within range"),
             vec!["nm/nm::observe".to_owned()],
-            None,
             "0.0.1".to_owned(),
         );
         store_bless(&storage, &bless_key("c2", 100), &record);
@@ -1766,7 +1736,6 @@ mod tests {
             Timestamp::from_second(2).expect("seconds within range"),
             Timestamp::from_second(100).expect("seconds within range"),
             vec!["nm/nm::observe".to_owned()],
-            None,
             "0.0.1".to_owned(),
         );
         store_bless(&storage, &bless_key("c2", 100), &record);
@@ -1832,7 +1801,6 @@ mod tests {
             Timestamp::from_second(1).expect("seconds within range"),
             Timestamp::from_second(100).expect("seconds within range"),
             vec!["nm/nm::observe".to_owned()],
-            None,
             "0.0.1".to_owned(),
         );
         store_bless(&storage, &bless_key("c1", 100), &record);

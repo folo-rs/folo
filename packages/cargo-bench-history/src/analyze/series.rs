@@ -7,7 +7,7 @@
 //! their commit, supplied as a `commit -> index` map — so the timeline reflects
 //! the history the runs were measured against rather than when they were ingested.
 //! Within a single commit, clean runs precede dirty snapshots, and ties break by
-//! effective time and then the storage key for determinism.
+//! commit time and then the storage key for determinism.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -24,8 +24,8 @@ pub(crate) struct SeriesPoint {
     pub(crate) topo_index: usize,
     /// Whether the observation came from a dirty (uncommitted-tree) snapshot.
     pub(crate) dirty: bool,
-    /// Effective time of the run (a within-commit, within-cleanliness tie-break).
-    pub(crate) effective: Timestamp,
+    /// Commit time of the run (a within-commit, within-cleanliness tie-break).
+    pub(crate) commit_time: Timestamp,
     /// Storage key the observation came from (final tie-break and provenance).
     pub(crate) object_key: String,
     /// Abbreviated commit the run was measured against, if known.
@@ -49,8 +49,8 @@ pub(crate) struct SeriesPoint {
 pub(crate) struct Blessing {
     /// Full commit SHA the blessing was issued at (the report anchor).
     pub(crate) commit: String,
-    /// Effective (committer) time of the blessed commit, for the report anchor.
-    pub(crate) effective: Timestamp,
+    /// Committer date of the blessed commit, for the report anchor.
+    pub(crate) commit_time: Timestamp,
 }
 
 /// A per-`(set, benchmark, metric)` time series ordered by git topology.
@@ -89,8 +89,24 @@ pub(crate) struct LoadedObject {
 /// Filters applied while building series from stored runs.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct SeriesFilter<'a> {
-    /// Keep only metrics with this exact name, if set.
-    pub(crate) metric: Option<&'a str>,
+    /// Keep only series whose benchmark identity's qualified id starts with one of
+    /// these prefixes. Empty keeps every series.
+    pub(crate) prefixes: &'a [String],
+}
+
+/// Whether `prefixes` accepts `id` (an empty prefix list accepts every id).
+///
+/// The match is a raw `starts_with` against the benchmark's qualified identity,
+/// mirroring blessing-prefix matching so the same prefix selects the same family
+/// of benchmarks in `bless` and `analyze`.
+fn prefixes_accept(prefixes: &[String], id: &BenchmarkId) -> bool {
+    if prefixes.is_empty() {
+        return true;
+    }
+    let qualified = id.qualified();
+    prefixes
+        .iter()
+        .any(|prefix| qualified.starts_with(prefix.as_str()))
 }
 
 /// Reconstructs every series from the selected `objects`.
@@ -117,18 +133,18 @@ pub(crate) fn build_series(
             continue;
         };
         let dirty = object.key.is_dirty();
-        let effective = object.result.context.timestamps.effective;
+        let commit_time = object.result.context.timestamps.commit;
         let commit = object.result.context.git.short_commit.clone();
 
         for record in &object.result.results {
+            if !prefixes_accept(filter.prefixes, &record.id) {
+                continue;
+            }
             for metric in &record.metrics {
-                if filter.metric.is_some_and(|want| metric.name != want) {
-                    continue;
-                }
                 let point = SeriesPoint {
                     topo_index,
                     dirty,
-                    effective,
+                    commit_time,
                     object_key: object.object_key.clone(),
                     commit: commit.clone(),
                     value: metric.value,
@@ -155,7 +171,7 @@ pub(crate) fn build_series(
                 left.topo_index
                     .cmp(&right.topo_index)
                     .then_with(|| left.dirty.cmp(&right.dirty))
-                    .then_with(|| left.effective.cmp(&right.effective))
+                    .then_with(|| left.commit_time.cmp(&right.commit_time))
                     .then_with(|| left.object_key.cmp(&right.object_key))
             });
             Series {
@@ -203,7 +219,7 @@ pub(crate) fn apply_blessings(
             .partition_point(|point| point.topo_index < *topo_index);
         one.blessing = Some(Blessing {
             commit: record.commit.clone(),
-            effective: record.effective,
+            commit_time: record.commit_time,
         });
     }
 }
@@ -241,7 +257,7 @@ mod tests {
         package: Option<&str>,
     ) -> ResultSet {
         let context = RunContext::new(
-            Timestamps::new(effective, effective, effective),
+            Timestamps::new(effective, effective),
             GitInfo {
                 commit: Some(format!("{commit}full")),
                 short_commit: Some(commit.to_owned()),
@@ -301,8 +317,8 @@ mod tests {
     }
 
     #[test]
-    fn build_series_orders_points_by_topology_not_effective_time() {
-        // Topology is c0,c1,c2 but the effective times are deliberately reversed;
+    fn build_series_orders_points_by_topology_not_commit_time() {
+        // Topology is c0,c1,c2 but the commit times are deliberately reversed;
         // topology must win so the values come out in commit order.
         let objects = vec![
             clean_object("c2", 100, 30.0),
@@ -322,7 +338,7 @@ mod tests {
     #[test]
     fn build_series_orders_clean_before_dirty_within_a_commit() {
         // One commit with a clean run plus two dirty snapshots; clean comes first,
-        // then the dirty snapshots ordered by effective time.
+        // then the dirty snapshots ordered by commit time.
         let objects = vec![
             dirty_object("c0", 300, 33.0),
             dirty_object("c0", 200, 22.0),
@@ -386,18 +402,31 @@ mod tests {
     }
 
     #[test]
-    fn build_series_applies_metric_filter() {
-        let mut object = clean_object("c0", 100, 10.0);
-        object.result.results[0].metrics.push(Metric::new(
-            "EstimatedCycles".to_owned(),
-            MetricKind::EstimatedCycles,
-            99.0,
-            Some("count".to_owned()),
-        ));
-        let filter = SeriesFilter { metric: Some("Ir") };
-        let series = build_series(&[object], &order(&["c0"]), &filter);
-        assert_eq!(series.len(), 1);
-        assert_eq!(series[0].metric, "Ir");
+    fn build_series_applies_prefix_filter() {
+        // Two benchmarks in different packages; a prefix selects only one family.
+        let foo_key =
+            "v2/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/c0/clean.json".to_owned();
+        let bar_key =
+            "v2/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/c1/clean.json".to_owned();
+        let objects = vec![
+            LoadedObject {
+                key: parse_key(&foo_key).expect("key parses"),
+                object_key: foo_key,
+                result: result_set_for_package(ts(100), "c0", 10.0, Some("foo")),
+            },
+            LoadedObject {
+                key: parse_key(&bar_key).expect("key parses"),
+                object_key: bar_key,
+                result: result_set_for_package(ts(200), "c1", 20.0, Some("bar")),
+            },
+        ];
+        let prefixes = vec!["foo/".to_owned()];
+        let filter = SeriesFilter {
+            prefixes: &prefixes,
+        };
+        let series = build_series(&objects, &order(&["c0", "c1"]), &filter);
+        assert_eq!(series.len(), 1, "only the foo-prefixed benchmark is kept");
+        assert_eq!(series[0].id.qualified(), "foo/group/case");
     }
 
     fn blessing(prefixes: &[&str], commit: &str, effective: i64) -> BlessingRecord {
@@ -406,7 +435,6 @@ mod tests {
             ts(effective),
             ts(effective.saturating_add(1)),
             prefixes.iter().map(|prefix| (*prefix).to_owned()).collect(),
-            None,
             "0.0.1".to_owned(),
         )
     }

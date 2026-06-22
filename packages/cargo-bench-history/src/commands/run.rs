@@ -18,9 +18,7 @@ use crate::bench::{
 use crate::bench_output::{BenchOutputSource, FsBenchOutputSource, Harvest};
 use crate::comparability::{ComparabilityKey, EngineSystem, resolve_target_triple};
 use crate::config::{StorageConfig, load_config};
-use crate::context::{
-    CiInfo, RunContext, Timestamps, ToolchainInfo, detect_ci, resolve_effective_time,
-};
+use crate::context::{CiInfo, RunContext, Timestamps, ToolchainInfo, detect_ci};
 use crate::git::GitSnapshot;
 use crate::host::RustcInfo;
 use crate::machine::{HardwareProfile, resolve_machine_key};
@@ -399,19 +397,16 @@ where
         });
     }
 
-    let execution = timestamp_from(run_start);
-    let ingest: Timestamp = deps.clock.system_time_as();
-    // A clean run records the committed code, so its effective time defaults to the
-    // commit's committer date. A dirty snapshot does not correspond to any commit,
-    // so it defaults to the wall clock instead. An explicit `--timestamp` overrides
-    // either default (notably for backfilling historical data points).
+    let observation = timestamp_from(run_start);
+    // A run records the benchmarked commit, so its timeline position is that
+    // commit's committer date (for a dirty snapshot, the commit it is based on).
+    // When no commit is available the observation time stands in.
     let dirty = shared.git.info.dirty;
-    let committer_default = if dirty { None } else { shared.git.committer };
-    let effective = resolve_effective_time(options.timestamp, committer_default, ingest);
+    let commit_time = shared.git.committer.unwrap_or(observation);
     let target_triple = resolve_target_triple(engine, &shared.host_triple);
 
     let context = RunContext::new(
-        Timestamps::new(effective, execution, ingest),
+        Timestamps::new(commit_time, observation),
         shared.git.info.clone(),
         shared.ci.clone(),
         ToolchainInfo {
@@ -439,16 +434,16 @@ where
     // History is organized by commit, so the full commit SHA names the directory
     // (`analyze` resolves which commits to read from git topology). A clean run is
     // keyed solely by its commit and so is deterministic; a dirty snapshot adds its
-    // effective time so concurrent snapshots of the same commit coexist.
+    // observation time so concurrent snapshots of the same commit coexist.
     let commit = shared.git.info.commit.as_deref().unwrap_or("unknown");
     let object_key = if dirty {
-        key.dirty_key(commit, effective.as_second())
+        key.dirty_key(commit, observation.as_second())
     } else {
         key.clean_key(commit)
     };
 
     deps.reporter.note(&format!(
-        "{engine}: {} at commit {commit} ({}), effective {effective}{} -> {object_key}",
+        "{engine}: {} at commit {commit} ({}), commit time {commit_time}{} -> {object_key}",
         count_noun(count, "case"),
         if dirty { "dirty" } else { "clean" },
         machine_key
@@ -1243,34 +1238,6 @@ mod tests {
     }
 
     #[test]
-    fn backfill_timestamp_records_the_override_as_the_effective_time() {
-        // Clean keys no longer embed the effective time, so a backfill override is
-        // verified by the stored effective timestamp rather than by the object key.
-        let options = RunOptions {
-            timestamp: Some("2020-01-01T00:00:00Z".parse().unwrap()),
-            ..RunOptions::default()
-        };
-        let storage = MemoryStorage::new();
-
-        drive(
-            &options,
-            &FakeRunner::succeeding(),
-            &FakeProbe::new(),
-            &FakeOutput::with_two_callgrind_summaries(),
-            &storage,
-        )
-        .unwrap();
-
-        let keys = storage.keys();
-        assert!(keys[0].ends_with("/clean.json"), "{keys:?}");
-
-        let bytes = block_on(storage.get(&keys[0])).unwrap();
-        let set = ResultSet::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
-        let expected: Timestamp = "2020-01-01T00:00:00Z".parse().unwrap();
-        assert_eq!(set.context.timestamps.effective, expected);
-    }
-
-    #[test]
     fn clean_re_run_of_the_same_commit_is_refused_as_a_duplicate() {
         let storage = MemoryStorage::new();
         drive(
@@ -1364,7 +1331,6 @@ mod tests {
             Timestamp::from_second(1).expect("seconds within range"),
             Timestamp::from_second(100).expect("seconds within range"),
             vec!["group".to_owned()],
-            None,
             "0.0.1".to_owned(),
         );
         block_on(storage.put(&bless_key, record.to_json().unwrap().as_bytes())).unwrap();
@@ -1397,7 +1363,7 @@ mod tests {
     }
 
     #[test]
-    fn dirty_run_is_keyed_by_effective_time() {
+    fn dirty_run_is_keyed_by_observation_time() {
         let storage = MemoryStorage::new();
         drive(
             &RunOptions::default(),
@@ -1432,7 +1398,6 @@ mod tests {
             Timestamp::from_second(1).expect("seconds within range"),
             Timestamp::from_second(100).expect("seconds within range"),
             vec!["group".to_owned()],
-            None,
             "0.0.1".to_owned(),
         );
         block_on(storage.put(&bless_key, record.to_json().unwrap().as_bytes())).unwrap();

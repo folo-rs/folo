@@ -7,8 +7,6 @@ use std::fmt;
 use std::io;
 use std::path::PathBuf;
 
-use jiff::Timestamp;
-
 use crate::{ConfigError, StorageError};
 
 /// A fully parsed command ready to execute.
@@ -56,8 +54,6 @@ pub struct RunOptions {
     pub packages: Vec<String>,
     /// Restrict the run to these benchmark targets (`--bench`); empty means all.
     pub benches: Vec<String>,
-    /// Override for the effective timestamp (backfill), if set.
-    pub timestamp: Option<Timestamp>,
     /// Override for the machine fingerprint (hardware-dependent engines), if set.
     pub machine_key: Option<String>,
     /// Harvest and build results without storing them.
@@ -104,9 +100,9 @@ pub struct AnalyzeOptions {
     pub base: Option<String>,
     /// Exclude dirty (uncommitted-tree) snapshots from the target side.
     pub no_dirty: bool,
-    /// Only consider runs on or after this date, if set.
+    /// Only consider commits made on or after this cutoff, if set.
     pub since: Option<String>,
-    /// Only consider runs on or before this date, if set.
+    /// Only consider commits made on or before this cutoff, if set.
     pub until: Option<String>,
     /// Restrict analysis to these engines (repeatable). Empty auto-detects every
     /// engine; the `all` keyword is an explicit synonym for no filter.
@@ -118,8 +114,9 @@ pub struct AnalyzeOptions {
     /// auto-detects the current machine's fingerprint; `all` matches every
     /// machine.
     pub machine_key: Vec<String>,
-    /// Restrict analysis to a single metric name, if set.
-    pub metric: Option<String>,
+    /// Restrict analysis to benchmarks whose qualified identity starts with one of
+    /// these prefixes (repeatable). Empty means every benchmark.
+    pub prefixes: Vec<String>,
     /// Output format selector, if set.
     pub format: Option<String>,
     /// Analysis-mode selector (`auto`, `history`, `branch`, or `tip`), if set.
@@ -178,9 +175,9 @@ pub struct ListOptions {
     pub base: Option<String>,
     /// Exclude dirty (uncommitted-tree) snapshots from the target side.
     pub no_dirty: bool,
-    /// Only consider runs on or after this date, if set.
+    /// Only consider commits made on or after this cutoff, if set.
     pub since: Option<String>,
-    /// Only consider runs on or before this date, if set.
+    /// Only consider commits made on or before this cutoff, if set.
     pub until: Option<String>,
     /// Restrict the listing to these engines (repeatable). Empty auto-detects
     /// every engine; the `all` keyword is an explicit synonym for no filter.
@@ -192,8 +189,6 @@ pub struct ListOptions {
     /// auto-detects the current machine's fingerprint; `all` matches every
     /// machine.
     pub machine_key: Vec<String>,
-    /// Restrict the listing to a single metric name, if set.
-    pub metric: Option<String>,
     /// Output format selector, if set.
     pub format: Option<String>,
     /// With `blessings`, list the most recent blessing of every benchmark across
@@ -207,11 +202,12 @@ pub struct ListOptions {
 ///
 /// The data-set-selection options mirror [`AnalyzeOptions`]/[`ListOptions`] so a
 /// `prune` invocation deletes runs from exactly the data set the same
-/// `analyze`/`list` invocation would resolve. By default both clean and dirty
-/// runs are removed (plus the blessing sidecars on every commit whose clean run
-/// is removed); `dirty` restricts removal to dirty (uncommitted-tree) snapshots —
-/// reproducing the former `clean` command — and `clean` to clean runs. The
-/// clean-history scopes refuse an un-narrowed selection unless `all` is set.
+/// `analyze`/`list` invocation would resolve. The caller must say which kinds of
+/// run to delete: `clean` removes clean runs (plus the blessing sidecars on every
+/// commit whose clean run is removed), `dirty` removes dirty (uncommitted-tree)
+/// snapshots, and setting both removes everything. Pruning the base branch's own
+/// data set (when `context` resolves to the same commit as `base`) requires
+/// `prune_base` as a safety guard.
 #[doc(hidden)]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 #[expect(
@@ -225,15 +221,15 @@ pub struct PruneOptions {
     pub repo: Option<PathBuf>,
     /// Target ref whose history is pruned; defaults to `HEAD`.
     pub context: Option<String>,
-    /// Base ref the target's history is split at; defaults to the detected (or
+    /// Base ref the context branched off from; defaults to the detected (or
     /// configured) default branch.
     pub base: Option<String>,
     /// Restrict removal to specific commits (case-insensitive SHA-prefix match);
-    /// repeatable. Empty means every commit on the resolved history.
+    /// repeatable. Empty means every one of the selected commits.
     pub commit: Vec<String>,
-    /// Only remove runs whose effective time is on or after this cutoff, if set.
+    /// Only prune commits made on or after this cutoff, if set.
     pub since: Option<String>,
-    /// Only remove runs whose effective time is on or before this cutoff, if set.
+    /// Only prune commits made on or before this cutoff, if set.
     pub until: Option<String>,
     /// Restrict removal to these engines (repeatable). Empty auto-detects every
     /// engine; the `all` keyword is an explicit synonym for no filter.
@@ -245,14 +241,13 @@ pub struct PruneOptions {
     /// auto-detects the current machine's fingerprint; `all` matches every
     /// machine.
     pub machine_key: Vec<String>,
-    /// Remove only dirty (uncommitted-tree) snapshots. Mutually exclusive with
-    /// `clean`.
-    pub dirty: bool,
-    /// Remove only clean runs (and their blessing sidecars). Mutually exclusive
-    /// with `dirty`.
+    /// Remove clean runs (and their blessing sidecars).
     pub clean: bool,
-    /// Confirm deleting clean history across an un-narrowed selection.
-    pub all: bool,
+    /// Remove dirty (uncommitted-tree) snapshots.
+    pub dirty: bool,
+    /// Confirm pruning the base branch's own data set (when `context` resolves to
+    /// the same commit as `base`).
+    pub prune_base: bool,
     /// Preview what would be removed without deleting anything.
     pub dry_run: bool,
     /// Output format selector, if set.
@@ -314,7 +309,10 @@ pub struct BlessOptions {
     pub config_path: Option<PathBuf>,
     /// Repository to resolve git topology from; defaults to the working directory.
     pub repo: Option<PathBuf>,
-    /// Base ref the current commit must be on; defaults to the detected (or
+    /// Commit to bless; defaults to `HEAD`. The blessing is recorded against the
+    /// `clean.json` stored at this commit.
+    pub context: Option<String>,
+    /// Base ref the context commit must be on; defaults to the detected (or
     /// configured) default branch.
     pub base: Option<String>,
     /// Restrict the blessing to these engines (repeatable). Empty auto-detects
@@ -328,10 +326,10 @@ pub struct BlessOptions {
     /// machine.
     pub machine_key: Vec<String>,
     /// Benchmark-id prefixes to accept (matched against the qualified identity).
-    /// At least one is required.
+    /// At least one is required unless `all` is set.
     pub prefixes: Vec<String>,
-    /// Optional human note recorded with the blessing, if set.
-    pub reason: Option<String>,
+    /// Accept every benchmark at the context commit (no prefixes required).
+    pub all: bool,
     /// Emit detailed diagnostic notes to standard error describing each step.
     pub verbose: bool,
 }
@@ -353,7 +351,10 @@ pub struct UnblessOptions {
     pub config_path: Option<PathBuf>,
     /// Repository to resolve git topology from; defaults to the working directory.
     pub repo: Option<PathBuf>,
-    /// Base ref the current commit must be on; defaults to the detected (or
+    /// Commit to unbless; defaults to `HEAD`. Only blessings recorded at this
+    /// commit are removed.
+    pub context: Option<String>,
+    /// Base ref the context commit must be on; defaults to the detected (or
     /// configured) default branch.
     pub base: Option<String>,
     /// Restrict the unblessing to these engines (repeatable). Empty auto-detects

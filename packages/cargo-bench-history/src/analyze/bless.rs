@@ -1,18 +1,20 @@
 //! The `bless` / `unbless` commands: manually accept (or revoke acceptance of) a
-//! benchmark's current level on the base branch, so history analysis stops
-//! re-flagging an intentional change.
+//! benchmark's level on the base branch, so history analysis stops re-flagging an
+//! intentional change.
 //!
 //! `bless` writes an append-only [`BlessingRecord`](crate::bless::BlessingRecord)
 //! sidecar into every facet-selected discriminant set that has a stored result at
-//! the current commit. It is base-branch-only with no escape hatch: a commit that
-//! is not on the base branch, or the absence of a stored result at the current
-//! commit, are hard errors, because a blessing on anything else would not survive a
-//! history analysis (see DESIGN §8.8). A dirty working tree is allowed — the
-//! blessing applies to the committed `clean.json` recorded at HEAD, which the local
-//! edits do not change — but it emits a warning. `unbless`
-//! deletes every blessing recorded at the current commit in the selected sets;
-//! sidecars are immutable, so narrowing a blessing means unblessing and
-//! re-blessing the subset to keep.
+//! the context commit (`HEAD` by default, or `--context <ref>`). It is
+//! base-branch-only with no escape hatch: a context commit that is not on the base
+//! branch, or the absence of a stored result there, are hard errors, because a
+//! blessing on anything else would not survive a history analysis (see DESIGN
+//! §8.8). When blessing `HEAD`, a dirty working tree is allowed — the blessing
+//! applies to the committed `clean.json` recorded at `HEAD`, which the local edits
+//! do not change — but it emits a warning. `unbless` deletes every blessing
+//! recorded at the context commit in the selected sets; sidecars are immutable, so
+//! narrowing a blessing means unblessing and re-blessing the subset to keep.
+//! Blessings issued at later commits are unaffected, so the timeline can stay
+//! blessed past the context commit.
 
 use std::path::Path;
 
@@ -129,15 +131,22 @@ where
     G: GitHistory,
     S: Storage,
 {
-    if options.prefixes.is_empty() {
+    let prefixes = if options.all {
+        // An empty prefix accepts every benchmark (every qualified id starts with
+        // the empty string), so `--all` blesses the whole commit.
+        vec![String::new()]
+    } else if options.prefixes.is_empty() {
         return Err(RunError::Bless {
-            message: "at least one benchmark-id prefix is required; for example \
+            message: "at least one benchmark-id prefix is required (or pass --all); for example \
                       `bless all_the_time/read_cell`"
                 .to_owned(),
         });
-    }
+    } else {
+        options.prefixes.clone()
+    };
 
-    let head = resolve_head(git).await?;
+    let context = options.context.as_deref().unwrap_or("HEAD");
+    let head = resolve_commit(git, context).await?;
     let short = short_sha(&head);
 
     // Blessing is base-branch-only: a feature-branch blessing would silently
@@ -157,7 +166,7 @@ where
     if !on_base {
         return Err(RunError::Bless {
             message: format!(
-                "the current commit {short} is not on the base branch {}; blessings are only \
+                "the context commit {short} is not on the base branch {}; blessings are only \
                  allowed on the base branch, since a feature-branch blessing would not survive \
                  a squash merge",
                 short_sha(&base)
@@ -165,11 +174,13 @@ where
         });
     }
 
-    // A blessing accepts the *committed* level recorded at HEAD (`clean.json`), so a
-    // dirty working tree does not change which data point is blessed — the local
-    // edits are simply irrelevant. Warn rather than refuse, so an accidental
-    // uncommitted edit does not block blessing an already-recorded clean run.
-    let working_tree_dirty = git.is_dirty().await.map_err(RunError::Io)?;
+    // A blessing accepts the *committed* level recorded at the context commit
+    // (`clean.json`), so a dirty working tree does not change which data point is
+    // blessed — the local edits are simply irrelevant. Warn rather than refuse, so
+    // an accidental uncommitted edit does not block blessing an already-recorded
+    // clean run. The warning is only relevant when blessing the checked-out commit.
+    let working_tree_dirty =
+        options.context.is_none() && git.is_dirty().await.map_err(RunError::Io)?;
 
     let selection = Selection::from_bless(options);
     let facets = resolve_facets(&selection, Some(auto))?;
@@ -181,7 +192,7 @@ where
     if clean_at_head.is_empty() {
         return Err(RunError::Bless {
             message: format!(
-                "no stored result at the current commit {short}; record a run there before \
+                "no stored result at the context commit {short}; record a run there before \
                  blessing (a blessing accepts an existing data point)"
             ),
         });
@@ -190,16 +201,15 @@ where
     let issued_unix = now.as_second();
     let mut sets = 0_usize;
     for (clean_key, parsed) in &clean_at_head {
-        // The blessed commit's effective time is the committer date already
-        // recorded on its run, so the blessing labels and anchors consistently
-        // without a separate probe.
-        let effective = load_effective(storage, clean_key).await?;
+        // The blessed commit's commit time is the committer date already recorded
+        // on its run, so the blessing labels and anchors consistently without a
+        // separate probe.
+        let commit_time = load_commit_time(storage, clean_key).await?;
         let record = BlessingRecord::new(
             head.clone(),
-            effective,
+            commit_time,
             now,
-            options.prefixes.clone(),
-            options.reason.clone(),
+            prefixes.clone(),
             tool_version.to_owned(),
         );
         let json = record
@@ -214,8 +224,13 @@ where
         sets = sets.saturating_add(1);
     }
 
+    let scope = if options.all {
+        "all benchmarks".to_owned()
+    } else {
+        count_noun(prefixes.len(), "prefix filter")
+    };
     let message = format!(
-        "{}Blessed {} across {} at commit {short}.",
+        "{}Blessed {scope} across {} at commit {short}.",
         if working_tree_dirty {
             format!(
                 "Warning: uncommitted changes present. Blessing was applied to the existing \
@@ -224,7 +239,6 @@ where
         } else {
             String::new()
         },
-        count_noun(options.prefixes.len(), "prefix filter"),
         count_noun(sets, "discriminant set"),
     );
     Ok(RunOutcome::Completed { message })
@@ -245,7 +259,8 @@ where
     G: GitHistory,
     S: Storage,
 {
-    let head = resolve_head(git).await?;
+    let context = options.context.as_deref().unwrap_or("HEAD");
+    let head = resolve_commit(git, context).await?;
     let short = short_sha(&head);
 
     let selection = Selection::from_unbless(options);
@@ -275,20 +290,23 @@ where
     Ok(RunOutcome::Completed { message })
 }
 
-/// Resolves `HEAD` to a full commit SHA, mapping an unresolvable `HEAD` (not a
-/// repository) to a clear blessing error.
-async fn resolve_head<G: GitHistory>(git: &G) -> Result<String, RunError> {
-    git.resolve("HEAD")
+/// Resolves a context ref (for example `HEAD` or a commit SHA) to a full commit
+/// SHA, mapping an unresolvable ref (not a repository, or an unknown ref) to a
+/// clear blessing error.
+async fn resolve_commit<G: GitHistory>(git: &G, reference: &str) -> Result<String, RunError> {
+    git.resolve(reference)
         .await
         .map_err(RunError::Io)?
         .ok_or_else(|| RunError::Bless {
-            message: "could not resolve HEAD; run this inside a git repository (or pass --repo)"
-                .to_owned(),
+            message: format!(
+                "could not resolve {reference}; run this inside a git repository (or pass --repo) \
+                 and check the ref exists"
+            ),
         })
 }
 
-/// Reads the effective (committer) time recorded on the clean result at `key`.
-async fn load_effective<S: Storage>(storage: &S, key: &str) -> Result<Timestamp, RunError> {
+/// Reads the commit time (committer date) recorded on the clean result at `key`.
+async fn load_commit_time<S: Storage>(storage: &S, key: &str) -> Result<Timestamp, RunError> {
     let bytes = storage.get(key).await.map_err(RunError::Storage)?;
     let text = String::from_utf8(bytes).map_err(|error| RunError::Bless {
         message: format!("stored object {key} is not valid UTF-8: {error}"),
@@ -296,7 +314,7 @@ async fn load_effective<S: Storage>(storage: &S, key: &str) -> Result<Timestamp,
     let result = ResultSet::from_json(&text).map_err(|error| RunError::Bless {
         message: format!("stored object {key} is not a valid result set: {error}"),
     })?;
-    Ok(result.context.timestamps.effective)
+    Ok(result.context.timestamps.commit)
 }
 
 /// The first twelve characters of a SHA (all of it when shorter), for messages.
@@ -338,7 +356,7 @@ mod tests {
     fn clean_run_json(commit: &str, effective: i64) -> String {
         let time = ts(effective);
         let context = RunContext::new(
-            Timestamps::new(time, time, time),
+            Timestamps::new(time, time),
             GitInfo {
                 commit: Some(commit.to_owned()),
                 short_commit: Some(commit.to_owned()),
@@ -445,14 +463,14 @@ mod tests {
             blessings[0]
         );
 
-        // The record carries the requested prefix, blessed commit, and effective
-        // time read from the run it accepts.
+        // The record carries the requested prefix, blessed commit, and commit time
+        // read from the run it accepts.
         let bytes = block_on(storage.get(&blessings[0])).expect("read sidecar");
         let record = BlessingRecord::from_json(&String::from_utf8(bytes).expect("utf-8"))
             .expect("valid blessing");
         assert_eq!(record.prefixes, vec!["all_the_time/read_cell".to_owned()]);
         assert_eq!(record.commit, "c2");
-        assert_eq!(record.effective, ts(1000));
+        assert_eq!(record.commit_time, ts(1000));
     }
 
     #[test]
@@ -513,6 +531,105 @@ mod tests {
             1,
             "the committed clean run at HEAD is still blessed"
         );
+    }
+
+    #[test]
+    fn bless_with_a_context_targets_an_earlier_commit() {
+        let storage = MemoryStorage::new();
+        // A clean run exists at c1, an earlier commit than HEAD (c2).
+        block_on(storage.put(&clean_key("c1"), clean_run_json("c1", 1000).as_bytes()))
+            .expect("seed clean run");
+        let options = BlessOptions {
+            context: Some("c1".to_owned()),
+            ..bless_options(&["all_the_time/read_cell"])
+        };
+
+        let message = drive_bless(&storage, &master_git(), &options).expect("blesses c1");
+        assert!(message.contains("at commit c1"), "{message}");
+
+        let blessings = stored_blessings(&storage);
+        assert_eq!(blessings.len(), 1, "one sidecar written: {blessings:?}");
+        assert!(
+            blessings[0].contains("/c1/bless-"),
+            "sidecar in the c1 commit dir: {}",
+            blessings[0]
+        );
+    }
+
+    #[test]
+    fn bless_with_an_explicit_context_does_not_warn_about_a_dirty_tree() {
+        let storage = MemoryStorage::new();
+        block_on(storage.put(&clean_key("c1"), clean_run_json("c1", 1000).as_bytes()))
+            .expect("seed clean run");
+        let mut git = master_git();
+        git.mark_dirty();
+        let options = BlessOptions {
+            context: Some("c1".to_owned()),
+            ..bless_options(&["all_the_time/read_cell"])
+        };
+
+        let message = drive_bless(&storage, &git, &options).expect("blesses c1");
+        assert!(
+            !message.contains("Warning"),
+            "an explicit context ignores the working tree: {message}"
+        );
+    }
+
+    #[test]
+    fn bless_all_writes_an_empty_prefix_accepting_every_benchmark() {
+        let storage = MemoryStorage::new();
+        block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes()))
+            .expect("seed clean run");
+        let options = BlessOptions {
+            all: true,
+            ..BlessOptions::default()
+        };
+
+        let message = drive_bless(&storage, &master_git(), &options).expect("blesses everything");
+        assert!(message.contains("all benchmarks"), "{message}");
+
+        let blessings = stored_blessings(&storage);
+        assert_eq!(blessings.len(), 1, "one sidecar written: {blessings:?}");
+        let bytes = block_on(storage.get(&blessings[0])).expect("read sidecar");
+        let record = BlessingRecord::from_json(&String::from_utf8(bytes).expect("utf-8"))
+            .expect("valid blessing");
+        // An empty prefix matches every qualified id.
+        assert_eq!(record.prefixes, vec![String::new()]);
+    }
+
+    #[test]
+    fn unbless_with_a_context_removes_blessings_at_an_earlier_commit() {
+        let storage = MemoryStorage::new();
+        block_on(storage.put(&clean_key("c1"), clean_run_json("c1", 1000).as_bytes()))
+            .expect("seed clean run");
+        let git = master_git();
+        let bless = BlessOptions {
+            context: Some("c1".to_owned()),
+            ..bless_options(&["all_the_time/read_cell"])
+        };
+        drive_bless(&storage, &git, &bless).expect("blesses c1");
+        assert_eq!(stored_blessings(&storage).len(), 1, "blessed once");
+
+        let unbless = UnblessOptions {
+            context: Some("c1".to_owned()),
+            ..UnblessOptions::default()
+        };
+        let outcome = block_on(unbless_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &unbless,
+            &auto(),
+            &RecordingReporter::new(),
+        ))
+        .expect("unblesses c1");
+        let message = match outcome {
+            RunOutcome::Completed { message } => message,
+            RunOutcome::Analyzed { .. } => panic!("unbless returns a Completed outcome"),
+        };
+        assert!(message.contains("at commit c1"), "{message}");
+        assert!(stored_blessings(&storage).is_empty(), "sidecar deleted");
     }
 
     #[test]
@@ -619,10 +736,10 @@ mod tests {
     }
 
     #[test]
-    fn load_effective_rejects_a_non_utf8_object() {
+    fn load_commit_time_rejects_a_non_utf8_object() {
         let storage = MemoryStorage::new();
         block_on(storage.put(&clean_key("c2"), &[0xff, 0xfe, 0x00])).expect("seed corrupt bytes");
-        let error = block_on(load_effective(&storage, &clean_key("c2"))).unwrap_err();
+        let error = block_on(load_commit_time(&storage, &clean_key("c2"))).unwrap_err();
         match error {
             RunError::Bless { message } => {
                 assert!(message.contains("is not valid UTF-8"), "{message}");
@@ -632,11 +749,11 @@ mod tests {
     }
 
     #[test]
-    fn load_effective_rejects_an_invalid_result_set() {
+    fn load_commit_time_rejects_an_invalid_result_set() {
         let storage = MemoryStorage::new();
         block_on(storage.put(&clean_key("c2"), b"{ not a valid result set"))
             .expect("seed invalid json");
-        let error = block_on(load_effective(&storage, &clean_key("c2"))).unwrap_err();
+        let error = block_on(load_commit_time(&storage, &clean_key("c2"))).unwrap_err();
         match error {
             RunError::Bless { message } => {
                 assert!(message.contains("is not a valid result set"), "{message}");

@@ -188,21 +188,21 @@ impl ComparabilityKey {
     }
 
     /// The object key for a dirty (uncommitted-changes) snapshot at `commit`,
-    /// taken at `effective_unix`.
+    /// observed at `observation_unix`.
     ///
-    /// Layout: `{prefix}/{commit}/dirty-{effective_unix}.json`. Because a dirty
+    /// Layout: `{prefix}/{commit}/dirty-{observation_unix}.json`. Because a dirty
     /// snapshot does not correspond to committed code, it is distinguished by its
-    /// effective time rather than by the commit alone, so multiple dirty snapshots
-    /// on the same base commit coexist; only two snapshots sharing an effective
+    /// observation time rather than by the commit alone, so multiple dirty snapshots
+    /// on the same base commit coexist; only two snapshots sharing an observation
     /// second collide.
     ///
     /// `commit` is sanitized the same way as the partition components so the
     /// directory name always forms a single key segment.
     #[must_use]
-    pub fn dirty_key(&self, commit: &str, effective_unix: i64) -> String {
+    pub fn dirty_key(&self, commit: &str, observation_unix: i64) -> String {
         let prefix = self.partition_prefix();
         let commit = sanitize_segment(commit);
-        format!("{prefix}/{commit}/dirty-{effective_unix}.json")
+        format!("{prefix}/{commit}/dirty-{observation_unix}.json")
     }
 
     /// The object key for a blessing sidecar at `commit`, issued at `issued_unix`.
@@ -378,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn dirty_key_is_named_by_commit_and_effective_time() {
+    fn dirty_key_is_named_by_commit_and_observation_time() {
         let key = ComparabilityKey::new(
             "folo",
             EngineSystem::Callgrind,

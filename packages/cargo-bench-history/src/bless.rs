@@ -28,9 +28,9 @@ pub(crate) struct BlessingRecord {
     pub(crate) schema_version: u32,
     /// Full commit SHA the blessing was issued at (the blessed data point).
     pub(crate) commit: String,
-    /// Effective time of the blessed commit (its committer date), used to label
-    /// and anchor the blessing in reports and charts.
-    pub(crate) effective: Timestamp,
+    /// Committer date of the blessed commit, used to label and anchor the
+    /// blessing in reports and charts.
+    pub(crate) commit_time: Timestamp,
     /// Wall-clock time at which the blessing was issued (provenance).
     pub(crate) issued_at: Timestamp,
     /// Benchmark-id prefixes this blessing accepts, matched against
@@ -38,9 +38,6 @@ pub(crate) struct BlessingRecord {
     /// `foo/bar` accepts `foo/bar` and `foo/bar/baz`; append a trailing `/` to
     /// require a whole-segment boundary.
     pub(crate) prefixes: Vec<String>,
-    /// Optional human note explaining why the change was accepted.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) reason: Option<String>,
     /// Version of the tool that issued the blessing.
     pub(crate) tool_version: String,
 }
@@ -49,19 +46,17 @@ impl BlessingRecord {
     /// Creates a blessing record stamped with the current schema version.
     pub(crate) fn new(
         commit: String,
-        effective: Timestamp,
+        commit_time: Timestamp,
         issued_at: Timestamp,
         prefixes: Vec<String>,
-        reason: Option<String>,
         tool_version: String,
     ) -> Self {
         Self {
             schema_version: BLESS_SCHEMA_VERSION,
             commit,
-            effective,
+            commit_time,
             issued_at,
             prefixes,
-            reason,
             tool_version,
         }
     }
@@ -125,7 +120,6 @@ mod tests {
             ts(1_700_000_000),
             ts(1_700_000_100),
             prefixes.iter().map(|prefix| (*prefix).to_owned()).collect(),
-            None,
             "0.0.1".to_owned(),
         )
     }
@@ -137,18 +131,11 @@ mod tests {
             ts(1_700_000_000),
             ts(1_700_000_100),
             vec!["all_the_time/read_cell".to_owned()],
-            Some("intentional tradeoff".to_owned()),
             "1.2.3".to_owned(),
         );
         let json = original.to_json().expect("serializes");
         let parsed = BlessingRecord::from_json(&json).expect("deserializes");
         assert_eq!(parsed, original);
-    }
-
-    #[test]
-    fn reason_is_omitted_when_absent() {
-        let json = record(&["foo"]).to_json().expect("serializes");
-        assert!(!json.contains("reason"), "absent reason is not serialized");
     }
 
     #[test]

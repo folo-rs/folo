@@ -226,7 +226,7 @@ async fn run_stores_results_in_azurite() {
     let workspace = AzureWorkspace::new(&azure_config()).with_bench(&["--summary", "grp=single"]);
 
     let outcome = workspace
-        .drive(&["run", "--timestamp", "2024-01-01T00:00:00Z"])
+        .drive(&["run"])
         .await
         .expect("run should store to Azurite");
     let RunOutcome::Completed { message } = outcome else {
@@ -247,14 +247,14 @@ async fn run_then_analyze_round_trips_through_azurite() {
     let workspace = AzureWorkspace::new(&azure_config()).with_bench(&["--summary", "grp=single"]);
 
     workspace
-        .drive(&["run", "--timestamp", "2024-01-01T00:00:00Z"])
+        .drive(&["run"])
         .await
         .expect("first run should store to Azurite");
     // A clean run is keyed by its commit, so the second point needs its own
     // commit; otherwise it would collide with the first on the same clean key.
     workspace.commit("second");
     workspace
-        .drive(&["run", "--timestamp", "2024-01-02T00:00:00Z"])
+        .drive(&["run"])
         .await
         .expect("second run should store to Azurite");
 
@@ -296,12 +296,12 @@ async fn analyze_feature_and_dirty_round_trip_through_azurite() {
 
     // master: root - c2   (two clean points on the official line).
     workspace
-        .drive(&["run", "--timestamp", "2024-01-01T00:00:00Z"])
+        .drive(&["run"])
         .await
         .expect("clean run on root should store");
     workspace.commit("c2");
     workspace
-        .drive(&["run", "--timestamp", "2024-01-02T00:00:00Z"])
+        .drive(&["run"])
         .await
         .expect("clean run on c2 should store");
 
@@ -309,12 +309,12 @@ async fn analyze_feature_and_dirty_round_trip_through_azurite() {
     workspace.checkout_new_branch("feature");
     workspace.commit("f1");
     workspace
-        .drive(&["run", "--timestamp", "2024-01-03T00:00:00Z"])
+        .drive(&["run"])
         .await
         .expect("clean run on f1 should store");
     workspace.make_dirty("uncommitted.txt");
     workspace
-        .drive(&["run", "--timestamp", "2024-01-04T00:00:00Z"])
+        .drive(&["run"])
         .await
         .expect("dirty run on f1 should store");
 
@@ -340,8 +340,9 @@ async fn analyze_feature_and_dirty_round_trip_through_azurite() {
     // excluded regardless. Master's recorded data set is all-clean (the dirty run
     // sits on the feature branch, off master's line), so mode auto-detection picks
     // `history` even though the working tree is currently dirty — the decision keys
-    // off the data, not the on-disk tree. `--since` keeps the 2024-dated runs inside
-    // the window history mode would otherwise default to (six months back).
+    // off the data, not the on-disk tree. `--since 2020-01-01` is a generous lower
+    // bound that keeps the freshly-committed runs inside the window history mode
+    // would otherwise default to (six months back).
     let RunOutcome::Analyzed { report, .. } = workspace
         .drive(&[
             "analyze",

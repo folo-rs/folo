@@ -4,7 +4,7 @@
 //! and supports ad-hoc "what did this look like N commits ago" investigations. It
 //! checks out each commit of a range in a dedicated git **worktree** (never the
 //! primary checkout) and runs the configured engines there exactly as the `run`
-//! command does, recording each commit's committer date as the effective time
+//! command does, recording each commit's committer date as the commit timestamp
 //! (see DESIGN §8.5).
 //!
 //! Like `run`, the orchestration is generic over small ports so the loop logic is
@@ -178,9 +178,9 @@ where
 
 /// Validates the request and resolves the oldest-first, inclusive commit range.
 ///
-/// Requires both endpoints to resolve, requires `--from` to be a first-parent
-/// ancestor of `--to`, and requires `--to` to be part of `HEAD`'s history (so
-/// `analyze` will surface the backfilled points).
+/// Requires both endpoints to resolve and requires `--from` to be a first-parent
+/// ancestor of `--to`. The range is derived purely from `--to`'s first-parent
+/// history, so backfilling does not depend on the current checkout.
 async fn plan_commits<G: BackfillGit>(
     options: &BackfillOptions,
     git: &G,
@@ -198,19 +198,6 @@ async fn plan_commits<G: BackfillGit>(
                 options.from, options.to
             ),
         })?;
-
-    if let Some(head) = git.resolve("HEAD").await.map_err(RunError::Io)? {
-        let head_ancestry = git.first_parent(&head).await.map_err(RunError::Io)?;
-        if !head_ancestry.iter().any(|commit| commit == &to) {
-            return Err(RunError::Backfill {
-                message: format!(
-                    "--to ({}) is not part of the current branch's history; \
-                     check out a branch that contains it before backfilling",
-                    options.to
-                ),
-            });
-        }
-    }
 
     Ok(ancestry.split_off(start))
 }
@@ -517,13 +504,12 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
         let reporter = StderrReporter::new(self.options.verbose);
 
         // A backfilled run is always clean (the worktree is a pristine checkout)
-        // and dates from its commit, so no `--timestamp` override is used.
+        // and takes its timeline position from the commit's committer date.
         let run_options = RunOptions {
             config_path: None,
             repo: None,
             packages: self.options.packages.clone(),
             benches: self.options.benches.clone(),
-            timestamp: None,
             machine_key: self.options.machine_key.clone(),
             no_store: false,
             overwrite: self.options.overwrite,
@@ -743,16 +729,14 @@ mod tests {
     }
 
     #[test]
-    fn plan_rejects_a_to_outside_the_current_branch_history() {
-        // HEAD is at feature; c3 (master tip) is not part of feature's history.
+    fn plan_backfills_a_to_outside_the_current_branch_history() {
+        // HEAD is at feature; c3 (master tip) is not part of feature's history,
+        // yet a range built purely from --to's first-parent ancestry still plans.
         let git = FakeBackfillGit::new(fixture());
-        let error = block_on(plan_commits(&options("c0", "c3"), &git)).expect_err("refuse");
-        let RunError::Backfill { message } = error else {
-            panic!("expected a backfill error, got {error:?}");
-        };
+        let commits = block_on(plan_commits(&options("c0", "c3"), &git)).expect("range plans");
         assert!(
-            message.contains("not part of the current branch"),
-            "{message}"
+            commits.iter().eq(["c0", "c1", "c2", "c3"].iter()),
+            "the range is derived from --to, independent of the checkout: {commits:?}"
         );
     }
 

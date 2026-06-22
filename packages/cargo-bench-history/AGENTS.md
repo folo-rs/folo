@@ -61,14 +61,19 @@ prune stay in selection lockstep automatically — see those sections):
   `all`, and auto-detects the current machine when omitted (§4.3). On create commands
   (`run`/`backfill`) only `--machine-key` is accepted (single override); there is no
   `--engine`/`--target-triple` and no `all`.
-* **Timeline selection** — `--context` (the target ref, formerly `--branch`),
-  `--base`, `--since`, `--until`.
+* **Commit selection** — `--context` (the target ref, formerly `--branch`),
+  `--base`, `--since`, `--until`. `--since`/`--until` filter by **commit** timestamp.
 * **Data filtering** — `--no-dirty`.
+
+`--dry-run` (a `prune` execution flag) lives in the **environment & execution**
+group, not data filtering.
 
 There are **no `--os`/`--architecture` facets** (operate on `--target-triple`
 directly). **Subjects** are bare positional words, not flags: `prune` takes
-`<commit>…`, `bless` takes `<prefix>…`, and `list` takes a required
-`runs|discriminants|blessings` selector (a bare `list` errors and names the three).
+`<commit>…`, `bless` and `analyze` take `<prefix>…` (benchmark-id prefixes, used
+respectively to choose what to accept and to scope the analysis), and `list` takes
+a required `runs|discriminants|blessings` selector (a bare `list` errors and names
+the three).
 
 ## Verbose diagnostics (`report::Reporter`)
 
@@ -111,16 +116,19 @@ makes a `0 runs` result self-explanatory without needing `--verbose`.
   clean working tree at that commit. It is deterministic, so a re-run of the same
   commit maps to the same key; the write-once `put` turns that into a
   `RunError::Duplicate` (refused) unless `--overwrite` switches to `put_overwrite`.
-* `dirty_key(commit, effective_unix)` → `…/<commit>/dirty-<effective_unix>.json` —
-  a snapshot of an uncommitted tree, distinguished by its effective second so
+* `dirty_key(commit, observation_unix)` → `…/<commit>/dirty-<observation_unix>.json`
+  — a snapshot of an uncommitted tree, distinguished by its observation second so
   multiple dirty snapshots on one base commit coexist; only a same-second clash is
   a conflict.
 
 The commit segment is the **full** SHA (`git.info.commit`, `unknown` when there is
 no repo), because the git-aware `analyze` reads `v2/.../<full_sha>/` directories
 resolved from `git rev-list`. The `run` store step picks clean vs dirty from
-`git.info.dirty`; clean effective time defaults to the committer date, dirty to
-wall-clock now, and `--timestamp` overrides either. There is no run-id in the key.
+`git.info.dirty`. Timestamps are split into a **commit** timestamp (the committer
+date, which orders the series) and an **observation** timestamp (wall-clock now,
+provenance only); there is no "effective timestamp" concept and no `--timestamp`
+override. A dirty key uses the observation second so concurrent snapshots coexist.
+There is no run-id in the key.
 
 ## The `analyze` command
 
@@ -166,10 +174,12 @@ being analyzed:
   `SelectedCommit::dirty_base_exception` flags the tip so `analyze` knows to warn.
 * `analyze::series` reconstructs one series per `(location, benchmark, metric)`
   ordered by **git topology** (first-parent index of the commit), then within a
-  commit by `(dirty, effective, object key)` so a clean point precedes same-commit
-  dirty snapshots deterministically. Topology — not effective time — is primary, so
+  commit by `(dirty, commit time, object key)` so a clean point precedes same-commit
+  dirty snapshots deterministically. Topology — not commit time — is primary, so
   back-dated backfill runs still sort by where their commit sits in history.
-  `--since` filters at the object level — whole runs before the cutoff are dropped.
+  `--since`/`--until` filter at the object level by **commit** timestamp — whole runs
+  outside the window are dropped. Bare `<prefix>` positionals scope the analysis to
+  benchmarks whose qualified id starts with one of the prefixes (`series::prefixes_accept`).
 * `analyze::findings` is the **engine-aware, noise-resistant** detector. It splits
   metrics into *deterministic* (every Callgrind kind plus the `alloc_tracker`
   allocation kinds — exact, no noise) and *noisy* (`WallTime` and `ProcessorTime`;
@@ -270,20 +280,23 @@ so history analysis re-baselines past it and stops re-flagging it. Blessings mat
 
 * **Data model — append-only sidecars.** A blessing is a
   `…/<machine|synthetic>/<commit>/bless-<issued_unix>.json` object alongside the
-  commit's `clean.json`. It records the blessed benchmark-id prefixes, an optional
-  `reason`, and the issuing commit. Sidecars are append-only and never mutate a
-  `clean.json`; `unbless` deletes the sidecar(s) at HEAD, and `run --overwrite`
-  drops a commit's stale sidecars when it rewrites that commit.
+  commit's `clean.json`. It records the blessed benchmark-id prefixes and the
+  issuing commit (there is **no** `reason` field — it was removed to keep the model
+  small). Sidecars are append-only and never mutate a `clean.json`; `unbless`
+  deletes the sidecar(s) at the context commit, and `run --overwrite` drops a
+  commit's stale sidecars when it rewrites that commit.
 * **`bless` rules (hard errors, no `--force`).** `analyze::bless::bless_with`
-  requires: the current HEAD is the base branch (`merge_base(HEAD, base) == HEAD`)
-  and a `clean.json` already exists at HEAD. The on-base
-  check fires **first**. Neither state would survive a history analysis, so a
-  feature-branch / data-less blessing is rejected rather than silently
-  ignored. A **dirty working tree is allowed** (the blessing targets the committed
-  `clean.json` at HEAD) but emits a `Warning: uncommitted changes present …`.
-  `bless <prefix> [<prefix> …]` matches each prefix against the qualified
+  requires: the context commit (HEAD by default, or `--context <ref>`) is on the
+  base branch (`merge_base(context, base) == context`) and a `clean.json` already
+  exists at that commit. The on-base check fires **first**. Neither state would
+  survive a history analysis, so a feature-branch / data-less blessing is rejected
+  rather than silently ignored. A **dirty working tree is allowed** (the blessing
+  targets the committed `clean.json`) but emits a `Warning: uncommitted changes
+  present …`. `bless <prefix> [<prefix> …]` matches each prefix against the qualified
   `<package>/<group>/<case>/<value>` identity via `starts_with` (per-benchmark, not
-  all-or-nothing). It accepts the same discriminant facets as `analyze`.
+  all-or-nothing); `--all` (mutually exclusive with `<prefix>`) accepts **every**
+  benchmark recorded at the context commit. It accepts the same discriminant facets
+  as `analyze`.
 * **Effect on analysis — active/inactive segments.** In history mode
   `select_dataset` loads `dataset.blessings` (only for in-window base commits). A
   blessed benchmark's *active window* starts at `max(last_blessed_commit,
@@ -298,9 +311,11 @@ so history analysis re-baselines past it and stops re-flagging it. Blessings mat
   findings (`active: false`, `flipped_at` = the recovery commit) for auditing. The
   JSON `regressions` count and `notable` flag include any inactive finding that is
   present, but inactive findings are absent by default.
-* **`unbless`** (`unbless_with`) deletes the blessings recorded **at the current
-  commit** only (it never touches later blessings); it reports
-  `"Removed N blessing(s) at commit <short>."` or `"No blessings recorded …"`.
+* **`unbless`** (`unbless_with`) deletes the blessings recorded **at the context
+  commit** (HEAD by default, or `--context <ref>`) only — it never touches blessings
+  defined at later commits, so the timeline can remain blessed past the unblessed
+  commit. It reports `"Removed <count> blessing[s] at commit <short>."` (via
+  `count_noun`, which computes the singular/plural) or `"No blessings recorded …"`.
 * **`list blessings [--all]`** audits blessings without analyzing: the default
   (`scope: "head"`) lists blessings recorded at HEAD; `--all` (`scope: "window"`)
   lists the most recent blessing of every benchmark across the analysis window. See
@@ -313,7 +328,7 @@ requirement — keep them in lockstep). It takes a required **subject** — `run
 `discriminants`, or `blessings` — and a bare `list` is an error that names the
 three. `list runs` and `list blessings` accept the same selection flags
 (`--repo`/`--context`/`--base`/`--engine`/`--target-triple`/`--machine-key`/
-`--no-dirty`/`--since`/`--until`/`--metric`/`--format`/`--config`) but, instead of
+`--no-dirty`/`--since`/`--until`/`--format`/`--config`) but, instead of
 analyzing, only *preview* which data set an `analyze` pass would consume: `list
 runs` reports, per discriminant set, the run, series, and per-commit counts of the
 selected runs (each commit's clean/dirty split), ordered oldest-first by git
@@ -349,25 +364,32 @@ count ≠ 1, so list.rs uses a local `series_noun` to avoid "seriess".
 
 **`prune` mirrors `analyze`'s/`list`'s data-set-selection parameters** (the same
 hard lockstep requirement) — it accepts `--repo`/`--context`/`--base`/`--engine`/
-`--target-triple`/`--machine-key`/`--since`/`--format`/
-`--config`/`--verbose`, plus its own deletion-shaping flags: `--dirty`/`--clean`
-(scope), `--all` (guard override), `<commit>` subjects (repeatable bare positional
-words, case-insensitive SHA-prefix), and `--until` (the inclusive upper bound
-mirroring `--since`). Instead of analyzing, it **deletes** the selected objects.
+`--target-triple`/`--machine-key`/`--since`/`--until`/`--format`/
+`--config`/`--verbose`, plus its own deletion-shaping flags: `--dirty`/`--clean`/
+`--all` (scope, **required** — exactly one kind of run must be named), `--prune-base`
+(base-branch confirmation), `--dry-run`, and `<commit>` subjects (repeatable bare
+positional words, case-insensitive SHA-prefix). Instead of analyzing, it **deletes**
+the selected objects.
 
-**Deletion scopes** (`Scope::from_options`): no scope flag → delete the selected
-**clean and dirty** runs (and the blessing sidecars on any removed clean run);
-`--dirty` → dirty snapshots only; `--clean` → clean runs and their blessings only.
-`--dirty` and `--clean` are mutually exclusive.
+**Deletion scopes** (`Scope::from_options`, fed from the clap `PruneCommitArgs`):
+`--dirty` → dirty snapshots only; `--clean` → clean runs and their blessings only;
+`--all` → both. A scope is **required** — the clap `ArgGroup("prune-kind")` is
+`required(true)`, so a bare `prune` is rejected at parse time. `--all` expands in
+`into_options` (`clean = self.clean || self.all`, `dirty = self.dirty || self.all`);
+`Scope::from_options` maps `(clean, dirty)` → `All`/`Clean`/`Dirty` and errors on
+`(false, false)` (defence in depth behind the clap group).
 
-**Narrowing guard.** A scope that touches clean runs (default or `--clean`) refuses
-an un-narrowed selection unless `--all` is passed. The auto-detected current-machine
-facet defaults and the widening `all` keyword do **not** count as narrowing; the
-user must explicitly pass at least one of a **concrete** (non-`all`) facet value, a
-`<commit>` subject, `--since`, or `--until` (the guard returns `RunError::Analyze`
-mentioning `--all`). The `--dirty` scope is **exempt** — dirty data is ephemeral, so
-a blanket cleanup needs no guard. `--all` is only an override for the guard; it never
-widens the selection (and is distinct from the `all` facet *value*).
+**Base-branch preservation (Design B) + the `--prune-base` guard.** Pruning never
+touches base-branch history: `commit_is_eligible(index, merge_base_index,
+tip_is_merge_base)` removes only commits **strictly after** the merge-base with
+`--base` (the context branch's own commits); base-side commits are skipped with a
+note. When the context resolves onto the base branch itself (`context == base`, i.e.
+`tip_is_merge_base`), the whole selection *is* base-branch history, so `prune_with`
+refuses with a `RunError::Analyze` naming the base branch unless `--prune-base`
+confirms it (`resolve_base_name` resolves the branch name for the message, mirroring
+`resolve_base_ref` precedence). There is **no** narrowing guard and no `--all`
+override of one — the base-branch guard is the only protection against a large
+accidental delete.
 
 The one **intentional divergence** from `analyze`/`list`: the base-branch tip's
 dirty runs are admitted **unconditionally** (`DirtyTipPolicy::Always`), whereas
@@ -381,14 +403,16 @@ passes `Always`.
 `prune` lives **inside** the analyze module tree as `src/analyze/prune.rs`
 (`pub(crate) mod prune;`), reusing the same `Selection` (built via `from_prune`,
 which hardwires `no_dirty: false`), `parsed_facets`, `facet_filtered_candidates`,
-and `resolve_history` pipeline. `prune_with` resolves the history, partitions the
-candidate objects into runs (clean/dirty, via `RunKind`) and blessings, applies the
-scope and `<commit>`/`--since`/`--until` filters, then deletes in **two passes**:
-pass 1 removes the selected runs (recording which clean `(set, commit)` pairs were
-removed); pass 2 — only when the scope touches clean runs — removes a blessing
-sidecar iff its `(set, commit)` had its clean run removed (so blessings follow their
-clean run and are never time-filtered directly). `--since`/`--until` fetch each
-candidate's stored body to recover its effective time. The deletions are grouped
+and `resolve_history` pipeline. `prune_with` resolves the history, applies the
+`--prune-base` guard, partitions the candidate objects into runs (clean/dirty, via
+`RunKind`) and blessings, applies the eligibility / scope / `<commit>` /
+`--since`/`--until` filters, then deletes in **two passes**: pass 1 removes the
+selected runs (recording which clean `(set, commit)` pairs were removed); pass 2 —
+only when the scope touches clean runs — removes a blessing sidecar iff its
+`(set, commit)` had its clean run removed (so blessings follow their clean run and
+are never time-filtered directly). `--since`/`--until` fetch each candidate's stored
+body (`load_commit_timestamp`) to recover its **commit** timestamp. The deletions
+are grouped
 into a `Plan` (by discriminant set, commits oldest-first by topology) and — unless
 `--dry-run` — each key is removed via `Storage::delete`. The JSON report carries
 `dry_run`, the per-commit run/blessing counts, and the deleted `keys` per commit;
@@ -429,11 +453,12 @@ Key invariants:
   checkout, never from the worktree. A dirty primary working tree is therefore
   fine — there is no clean-tree guard.
 * **Validation precedes any worktree work** (`plan_commits`):
-  require both endpoints to resolve, require the `<from>` subject to be a first-parent
-  ancestor of the `<to>` subject, and require `<to>` to be on `HEAD`'s first-parent
-  history (so the points are later analyzable). The range is enumerated oldest-first
-  and inclusive via `first_parent(to).split_off(position(from))` (avoid `vec[a..]` —
-  clippy `indexing_slicing`).
+  require both endpoints to resolve and require the `<from>` subject to be a
+  first-parent ancestor of the `<to>` subject. The range does **not** have to lie on
+  `HEAD`'s history — any first-parent chain from `<from>` to `<to>` is backfillable.
+  The range is enumerated oldest-first and inclusive via
+  `first_parent(to).split_off(position(from))` (avoid `vec[a..]` — clippy
+  `indexing_slicing`).
 * **Pre-run existence check** (`run_commits`): in the default skip-existing mode,
   `recorded_commits` lists the project prefix (`v2/{project}/`) once and
   `commit_of_clean_key` extracts each clean object's commit segment; a commit in

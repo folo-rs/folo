@@ -248,7 +248,7 @@ pub(crate) struct Finding {
     pub(crate) blessed_at: Option<String>,
     /// Effective (committer) time of the blessed commit, RFC 3339, if blessed.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) blessed_effective: Option<String>,
+    pub(crate) blessed_commit_time: Option<String>,
     /// The full underlying series, oldest-first, so a consumer can draw a chart.
     pub(crate) series: Vec<SeriesValue>,
 }
@@ -528,7 +528,7 @@ fn evaluate_change_point(series: &Series, config: &AnalysisConfig) -> Option<Can
             active: true,
             active_from: 0,
             blessed_at: None,
-            blessed_effective: None,
+            blessed_commit_time: None,
             series: series_values(series),
         },
         bh_p: effective_p,
@@ -600,7 +600,7 @@ fn evaluate_drift(series: &Series, config: &AnalysisConfig) -> Option<Candidate>
             active: true,
             active_from: 0,
             blessed_at: None,
-            blessed_effective: None,
+            blessed_commit_time: None,
             series: series_values(series),
         },
         bh_p: trend.p_value,
@@ -771,7 +771,7 @@ fn compare_samples(
             active: true,
             active_from: 0,
             blessed_at: None,
-            blessed_effective: None,
+            blessed_commit_time: None,
             series: series_values(series),
         },
         bh_p: effective_p,
@@ -866,7 +866,7 @@ fn stamp_history(finding: &mut Finding, series: &Series) {
     finding.active_from = series.active_start;
     if let Some(blessing) = &series.blessing {
         finding.blessed_at = Some(short_commit(&blessing.commit));
-        finding.blessed_effective = Some(blessing.effective.to_string());
+        finding.blessed_commit_time = Some(blessing.commit_time.to_string());
     }
 }
 
@@ -971,7 +971,7 @@ fn evaluate_resolved_spike(series: &Series, config: &AnalysisConfig) -> Option<C
             active: false,
             active_from: 0,
             blessed_at: None,
-            blessed_effective: None,
+            blessed_commit_time: None,
             series: series_values(series),
         },
         bh_p: effective_p,
@@ -1094,7 +1094,7 @@ mod tests {
                 SeriesPoint {
                     topo_index: index,
                     dirty: false,
-                    effective: Timestamp::from_second(i64::try_from(index).unwrap())
+                    commit_time: Timestamp::from_second(i64::try_from(index).unwrap())
                         .expect("seconds within range"),
                     object_key: format!("v2/p/engine/t/synthetic/commit{index}/clean.json"),
                     commit: Some(format!("commit{index}")),
@@ -1160,7 +1160,7 @@ mod tests {
                 active: true,
                 active_from: 0,
                 blessed_at: None,
-                blessed_effective: None,
+                blessed_commit_time: None,
                 series: Vec::new(),
             },
             bh_p: 0.0,
@@ -1663,7 +1663,7 @@ mod tests {
             .map(|&(topo_index, value, dirty)| SeriesPoint {
                 topo_index,
                 dirty,
-                effective: Timestamp::from_second(i64::try_from(topo_index).unwrap())
+                commit_time: Timestamp::from_second(i64::try_from(topo_index).unwrap())
                     .expect("seconds within range"),
                 object_key: format!("v2/p/engine/t/synthetic/commit{topo_index}/clean.json"),
                 commit: Some(format!("commit{topo_index}")),
@@ -1872,7 +1872,7 @@ mod tests {
         blessed.active_start = 3;
         blessed.blessing = Some(Blessing {
             commit: "abcdef0123456789".to_owned(),
-            effective: Timestamp::from_second(3).expect("seconds within range"),
+            commit_time: Timestamp::from_second(3).expect("seconds within range"),
         });
         assert!(changes(&[blessed]).is_empty());
     }
@@ -1890,7 +1890,7 @@ mod tests {
         series.active_start = 3;
         series.blessing = Some(Blessing {
             commit: "abcdef0123456789cafe".to_owned(),
-            effective: Timestamp::from_second(3).expect("seconds within range"),
+            commit_time: Timestamp::from_second(3).expect("seconds within range"),
         });
         let finding = only(changes(&[series]));
         assert!(finding.active);
@@ -1902,7 +1902,7 @@ mod tests {
         assert_eq!(finding.active_from, 3);
         assert_eq!(finding.blessed_at.as_deref(), Some("abcdef012345"));
         assert_eq!(
-            finding.blessed_effective.as_deref(),
+            finding.blessed_commit_time.as_deref(),
             Some("1970-01-01T00:00:03Z")
         );
         // A non-zero active window survives serialization (the `is_zero` skip
@@ -1961,7 +1961,7 @@ mod tests {
             .map(|(index, &(value, half))| SeriesPoint {
                 topo_index: index,
                 dirty: false,
-                effective: Timestamp::from_second(i64::try_from(index).unwrap())
+                commit_time: Timestamp::from_second(i64::try_from(index).unwrap())
                     .expect("seconds within range"),
                 object_key: format!("v2/p/engine/t/synthetic/commit{index}/clean.json"),
                 commit: Some(format!("commit{index}")),

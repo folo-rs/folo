@@ -2,15 +2,14 @@
 //! typed [`Command`](crate::Command) model.
 //!
 //! The wide option surface is organized into named help groups (Environment,
-//! Output, Discriminant selection, Timeline selection, Data filtering, Benchmark
+//! Output, Discriminant selection, Commit selection, Data filtering, Benchmark
 //! scope) so `--help` makes the relationship between options legible. Shared
 //! groups are factored into [`clap::Args`] structs and `#[command(flatten)]`ed
 //! into each subcommand so the same option means the same thing everywhere.
 
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand as ClapSubcommand, ValueEnum};
-use jiff::Timestamp;
+use clap::{ArgGroup, Args, Parser, Subcommand as ClapSubcommand, ValueEnum};
 
 use crate::{
     AnalyzeOptions, BackfillOptions, BlessOptions, Command, InstallOptions, ListOptions,
@@ -20,7 +19,7 @@ use crate::{
 const HEADING_ENV: &str = "Environment and execution";
 const HEADING_OUTPUT: &str = "Output";
 const HEADING_DISCRIMINANT: &str = "Discriminant selection";
-const HEADING_TIMELINE: &str = "Timeline selection";
+const HEADING_COMMIT: &str = "Commit selection";
 const HEADING_FILTER: &str = "Data filtering";
 const HEADING_SCOPE: &str = "Benchmark scope";
 const HEADING_ANALYSIS: &str = "Analysis";
@@ -139,6 +138,8 @@ enum Subcommand {
 #[command(next_help_heading = HEADING_ENV)]
 struct EnvArgs {
     /// Path to the configuration file (defaults to `.cargo/bench_history.toml`).
+    /// A relative path is resolved against the working directory (not the target
+    /// repository).
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
 
@@ -175,24 +176,25 @@ struct QueryFacetArgs {
     machine_key: Vec<String>,
 }
 
-/// Timeline selection shared by `analyze`/`list`/`prune`.
+/// Commit selection shared by `analyze`/`list`.
 #[derive(Args, Debug)]
-#[command(next_help_heading = HEADING_TIMELINE)]
+#[command(next_help_heading = HEADING_COMMIT)]
 struct TimelineArgs {
     /// Target ref whose history is used (defaults to HEAD).
     #[arg(long, value_name = "REF")]
     context: Option<String>,
 
-    /// Base ref the target's history is split at (defaults to the default branch).
+    /// Base ref the target branched off from (defaults to the default branch).
     #[arg(long, value_name = "REF")]
     base: Option<String>,
 
-    /// Only consider runs on or after this cutoff: an RFC 3339 timestamp, a
-    /// `YYYY-MM-DD` date, or a relative duration such as `6 months ago`.
+    /// Only consider commits made on or after this cutoff: an RFC 3339 timestamp,
+    /// a `YYYY-MM-DD` date, or a relative duration such as `6 months ago`.
     #[arg(long, value_name = "WHEN")]
     since: Option<String>,
 
-    /// Only consider runs on or before this cutoff (same formats as `--since`).
+    /// Only consider commits made on or before this cutoff (same formats as
+    /// `--since`).
     #[arg(long, value_name = "WHEN")]
     until: Option<String>,
 }
@@ -203,9 +205,14 @@ struct RunCommand {
     #[command(flatten)]
     env: EnvArgs,
 
-    /// Benchmark the entire workspace; overrides `--package` (the default when no
-    /// `--package` is given).
-    #[arg(long, help_heading = HEADING_SCOPE)]
+    /// Override the machine fingerprint used to partition hardware-dependent
+    /// results (for example, a CI machine-pool name).
+    #[arg(long, value_name = "KEY", help_heading = HEADING_DISCRIMINANT)]
+    machine_key: Option<String>,
+
+    /// Benchmark the entire workspace (the default when no `--package` is given);
+    /// conflicts with `--package`.
+    #[arg(long, help_heading = HEADING_SCOPE, conflicts_with = "package")]
     workspace: bool,
 
     /// Benchmark only this package; repeatable, e.g. `-p nm -p many_cpus`
@@ -216,17 +223,6 @@ struct RunCommand {
     /// Benchmark only this bench target; repeatable (default: every bench target).
     #[arg(long, value_name = "NAME", help_heading = HEADING_SCOPE)]
     bench: Vec<String>,
-
-    /// Override the machine fingerprint used to partition hardware-dependent
-    /// results (for example, a CI machine-pool name).
-    #[arg(long, value_name = "KEY", help_heading = HEADING_DISCRIMINANT)]
-    machine_key: Option<String>,
-
-    /// Override the effective timestamp, in RFC 3339 format
-    /// (`2024-01-31T14:30:00Z`); used when backfilling history (default: the
-    /// commit time for a clean run, otherwise the current time).
-    #[arg(long, value_name = "RFC3339", help_heading = HEADING_ENV)]
-    timestamp: Option<Timestamp>,
 
     /// Harvest and build results without storing them.
     #[arg(long, help_heading = HEADING_ENV)]
@@ -250,7 +246,6 @@ impl RunCommand {
             repo: self.env.repo,
             packages: resolve_packages(self.workspace, self.package),
             benches: self.bench,
-            timestamp: self.timestamp,
             machine_key: self.machine_key,
             no_store: self.no_store,
             overwrite: self.overwrite,
@@ -285,6 +280,12 @@ impl InstallCommand {
 /// Analyze stored history for notable patterns.
 #[derive(Args, Debug)]
 struct AnalyzeCommand {
+    /// Benchmark-id prefixes to analyze, matched against the qualified identity
+    /// (for example, `all_the_time/read_cell` or a family prefix
+    /// `overhead/groups_`); repeatable (default: every benchmark).
+    #[arg(value_name = "PREFIX")]
+    prefixes: Vec<String>,
+
     #[command(flatten)]
     env: EnvArgs,
 
@@ -302,26 +303,25 @@ struct AnalyzeCommand {
     #[arg(long, help_heading = HEADING_FILTER)]
     no_dirty: bool,
 
-    /// Restrict analysis to a single metric name (for example, Ir).
-    #[arg(long, value_name = "NAME", help_heading = HEADING_FILTER)]
-    metric: Option<String>,
-
     /// Analysis mode: auto, history, branch, or tip (default: auto). `auto` infers
-    /// history mode (long-range trends on the base branch) from a clean checkout
-    /// of the base branch, and branch mode (latest state vs the base) otherwise.
-    /// `tip` is a fast guard check of the base-branch tip against the recently
-    /// established level.
+    /// history mode (long-range base-branch trends) from a clean base-branch
+    /// checkout, and branch mode (this branch's latest state vs the base)
+    /// otherwise. Use `tip` as a fast post-merge guard that only checks whether the
+    /// base-branch tip just regressed against its recently established level,
+    /// skipping the full-history scan.
     #[arg(long, value_name = "MODE", help_heading = HEADING_ANALYSIS)]
     mode: Option<String>,
 
     /// In history mode, also report sustained improvements (by default only
-    /// regressions are reported, since improvement over time is expected).
+    /// regressions are reported, since improvement over time is expected). Branch
+    /// and tip modes always report all findings, so this flag has no effect there.
     #[arg(long, help_heading = HEADING_ANALYSIS)]
     include_improvements: bool,
 
     /// In history mode, also report inactive findings: a change the current state
     /// no longer reflects (a regression that has since recovered). Hidden by
-    /// default since they need no action.
+    /// default since they need no action. Branch and tip modes always report all
+    /// findings, so this flag has no effect there.
     #[arg(long, help_heading = HEADING_ANALYSIS)]
     include_inactive: bool,
 }
@@ -339,7 +339,7 @@ impl AnalyzeCommand {
             engine: self.facets.engine,
             target_triple: self.facets.target_triple,
             machine_key: self.facets.machine_key,
-            metric: self.metric,
+            prefixes: self.prefixes,
             format: self.format,
             mode: self.mode,
             include_improvements: self.include_improvements,
@@ -397,10 +397,6 @@ struct ListCommand {
     #[arg(long, help_heading = HEADING_FILTER)]
     no_dirty: bool,
 
-    /// Restrict the listing to a single metric name (for example, Ir).
-    #[arg(long, value_name = "NAME", help_heading = HEADING_FILTER)]
-    metric: Option<String>,
-
     /// With the `blessings` subject, list the most recent blessing of every
     /// benchmark across the whole analysis window rather than only those at the
     /// current commit. Errors if given with any other subject.
@@ -422,7 +418,6 @@ impl ListCommand {
             engine: self.facets.engine,
             target_triple: self.facets.target_triple,
             machine_key: self.facets.machine_key,
-            metric: self.metric,
             format: self.format,
             all: self.all,
             verbose: self.env.verbose,
@@ -431,16 +426,34 @@ impl ListCommand {
 }
 
 /// Delete stored runs (and their blessing sidecars) from the data set a matching
-/// `analyze`/`list` would resolve; pass `--dry-run` to preview without deleting.
+/// `analyze`/`list` would resolve.
+///
+/// You must say which kinds of run to delete with `--clean`, `--dirty`, or
+/// `--all`. Pruning walks the selected commits from `--context` back to `--base`;
+/// deleting the base branch's own data set requires the `--prune-base` guard.
 #[derive(Args, Debug)]
+#[command(group(
+    ArgGroup::new("prune-kind")
+        .args(["clean", "dirty", "all"])
+        .required(true)
+))]
 struct PruneCommand {
     /// Restrict removal to these commits (a full or short SHA, prefix-matched);
-    /// repeatable (default: every commit on the resolved history).
+    /// repeatable (default: every one of the selected commits).
     #[arg(value_name = "COMMIT")]
     commit: Vec<String>,
 
     #[command(flatten)]
     env: EnvArgs,
+
+    /// Preview what would be removed without deleting anything.
+    #[arg(long, help_heading = HEADING_ENV)]
+    dry_run: bool,
+
+    /// Confirm pruning the base branch's own data set (required when `--context`
+    /// resolves to the same commit as `--base`).
+    #[arg(long, help_heading = HEADING_ENV)]
+    prune_base: bool,
 
     /// Output format: text, json, or markdown (default: text).
     #[arg(long, value_name = "FORMAT", help_heading = HEADING_OUTPUT)]
@@ -450,44 +463,66 @@ struct PruneCommand {
     facets: QueryFacetArgs,
 
     #[command(flatten)]
-    timeline: TimelineArgs,
+    commit_selection: PruneCommitArgs,
 
-    /// Remove only dirty (uncommitted-tree) snapshots (mutually exclusive with
-    /// `--clean`; exempt from the narrowing guard).
-    #[arg(long, help_heading = HEADING_FILTER)]
-    dirty: bool,
-
-    /// Remove only clean runs and their blessing sidecars (mutually exclusive with
-    /// `--dirty`).
+    /// Remove only clean runs and their blessing sidecars.
     #[arg(long, help_heading = HEADING_FILTER)]
     clean: bool,
 
-    /// Confirm deleting clean history across an un-narrowed selection (required
-    /// when no facet, `<commit>`, `--since`, or `--until` narrows the range).
+    /// Remove only dirty (uncommitted-tree) snapshots.
+    #[arg(long, help_heading = HEADING_FILTER)]
+    dirty: bool,
+
+    /// Remove both clean runs (with their blessing sidecars) and dirty snapshots
+    /// (the same as `--clean --dirty`).
     #[arg(long, help_heading = HEADING_FILTER)]
     all: bool,
+}
 
-    /// Preview what would be removed without deleting anything.
-    #[arg(long, help_heading = HEADING_FILTER)]
-    dry_run: bool,
+/// Commit selection for `prune`: the range of commits whose data is removed.
+#[derive(Args, Debug)]
+#[command(next_help_heading = HEADING_COMMIT)]
+struct PruneCommitArgs {
+    /// Target ref whose data set is pruned, walking back until the base ref
+    /// (defaults to HEAD).
+    #[arg(long, value_name = "REF")]
+    context: Option<String>,
+
+    /// Base ref that the context branched off from; pruning stops on reaching it
+    /// (defaults to the default branch).
+    #[arg(long, value_name = "REF")]
+    base: Option<String>,
+
+    /// Only prune commits made on or after this cutoff: an RFC 3339 timestamp, a
+    /// `YYYY-MM-DD` date, or a relative duration such as `6 months ago`.
+    #[arg(long, value_name = "WHEN")]
+    since: Option<String>,
+
+    /// Only prune commits made on or before this cutoff (same formats as
+    /// `--since`).
+    #[arg(long, value_name = "WHEN")]
+    until: Option<String>,
 }
 
 impl PruneCommand {
     fn into_options(self) -> PruneOptions {
+        // `--all` is the union of the two specific kinds.
+        let clean = self.clean || self.all;
+        let dirty = self.dirty || self.all;
         PruneOptions {
             config_path: self.env.config,
             repo: self.env.repo,
-            context: self.timeline.context,
-            base: self.timeline.base,
+            context: self.commit_selection.context,
+            base: self.commit_selection.base,
             commit: self.commit,
-            since: self.timeline.since,
-            until: self.timeline.until,
+            since: self.commit_selection.since,
+            until: self.commit_selection.until,
             engine: self.facets.engine,
             target_triple: self.facets.target_triple,
             machine_key: self.facets.machine_key,
-            dirty: self.dirty,
-            clean: self.clean,
-            all: self.all,
+            clean,
+            dirty,
+            prune_base: self.prune_base,
             dry_run: self.dry_run,
             format: self.format,
             verbose: self.env.verbose,
@@ -504,16 +539,21 @@ struct BackfillCommand {
     from: String,
 
     /// Newest commit of the range to backfill, inclusive; a SHA, tag, or ref such
-    /// as `HEAD` (must be on the current branch's first-parent history).
+    /// as `HEAD`. Must be reachable from `<FROM>` along first-parent history.
     #[arg(value_name = "TO")]
     to: String,
 
     #[command(flatten)]
     env: EnvArgs,
 
-    /// Benchmark the entire workspace; overrides `--package` (the default when no
-    /// `--package` is given).
-    #[arg(long, help_heading = HEADING_SCOPE)]
+    /// Override the machine fingerprint used to partition hardware-dependent
+    /// results (for example, a CI machine-pool name).
+    #[arg(long, value_name = "KEY", help_heading = HEADING_DISCRIMINANT)]
+    machine_key: Option<String>,
+
+    /// Benchmark the entire workspace (the default when no `--package` is given);
+    /// conflicts with `--package`.
+    #[arg(long, help_heading = HEADING_SCOPE, conflicts_with = "package")]
     workspace: bool,
 
     /// Benchmark only this package; repeatable, e.g. `-p nm -p many_cpus`
@@ -524,11 +564,6 @@ struct BackfillCommand {
     /// Benchmark only this bench target; repeatable (default: every bench target).
     #[arg(long, value_name = "NAME", help_heading = HEADING_SCOPE)]
     bench: Vec<String>,
-
-    /// Override the machine fingerprint used to partition hardware-dependent
-    /// results (for example, a CI machine-pool name).
-    #[arg(long, value_name = "KEY", help_heading = HEADING_DISCRIMINANT)]
-    machine_key: Option<String>,
 
     /// Replace already-stored results for the backfilled commits instead of
     /// skipping them as duplicates.
@@ -568,24 +603,28 @@ impl BackfillCommand {
 struct BlessCommand {
     /// Benchmark-id prefixes to accept, matched against the qualified identity
     /// (for example, `all_the_time/read_cell` or a family prefix
-    /// `overhead/groups_`). At least one is required.
+    /// `overhead/groups_`). At least one is required unless `--all` is given.
     #[arg(value_name = "PREFIX")]
     prefixes: Vec<String>,
 
     #[command(flatten)]
     env: EnvArgs,
 
-    /// Base ref the current commit must be on (defaults to the default branch).
-    #[arg(long, value_name = "REF", help_heading = HEADING_TIMELINE)]
+    /// Accept every benchmark recorded at the context commit, with no prefixes.
+    #[arg(long, conflicts_with = "prefixes")]
+    all: bool,
+
+    /// Commit to bless (defaults to HEAD). Use this to bless a commit other than
+    /// the one currently checked out.
+    #[arg(long, value_name = "REF", help_heading = HEADING_COMMIT)]
+    context: Option<String>,
+
+    /// Base ref the context commit must be on (defaults to the default branch).
+    #[arg(long, value_name = "REF", help_heading = HEADING_COMMIT)]
     base: Option<String>,
 
     #[command(flatten)]
     facets: QueryFacetArgs,
-
-    /// Optional note recorded with the blessing explaining why the change is
-    /// accepted.
-    #[arg(long, value_name = "TEXT", help_heading = HEADING_ENV)]
-    reason: Option<String>,
 }
 
 impl BlessCommand {
@@ -593,25 +632,35 @@ impl BlessCommand {
         BlessOptions {
             config_path: self.env.config,
             repo: self.env.repo,
+            context: self.context,
             base: self.base,
             engine: self.facets.engine,
             target_triple: self.facets.target_triple,
             machine_key: self.facets.machine_key,
             prefixes: self.prefixes,
-            reason: self.reason,
+            all: self.all,
             verbose: self.env.verbose,
         }
     }
 }
 
-/// Remove blessings recorded at the current commit.
+/// Remove blessings recorded at the context commit.
+///
+/// Only blessings recorded at the context commit are removed. Blessings issued
+/// at later commits remain in effect, so the timeline may still be blessed past
+/// the context commit.
 #[derive(Args, Debug)]
 struct UnblessCommand {
     #[command(flatten)]
     env: EnvArgs,
 
-    /// Base ref the current commit must be on (defaults to the default branch).
-    #[arg(long, value_name = "REF", help_heading = HEADING_TIMELINE)]
+    /// Commit to unbless (defaults to HEAD). Use this to unbless a commit other
+    /// than the one currently checked out.
+    #[arg(long, value_name = "REF", help_heading = HEADING_COMMIT)]
+    context: Option<String>,
+
+    /// Base ref the context commit must be on (defaults to the default branch).
+    #[arg(long, value_name = "REF", help_heading = HEADING_COMMIT)]
     base: Option<String>,
 
     #[command(flatten)]
@@ -623,6 +672,7 @@ impl UnblessCommand {
         UnblessOptions {
             config_path: self.env.config,
             repo: self.env.repo,
+            context: self.context,
             base: self.base,
             engine: self.facets.engine,
             target_triple: self.facets.target_triple,
@@ -632,8 +682,9 @@ impl UnblessCommand {
     }
 }
 
-/// Resolves the benchmark scope: an explicit `--workspace` clears any `--package`
-/// filters (an empty package list means the whole workspace).
+/// Resolves the benchmark scope. `--workspace` and `--package` are mutually
+/// exclusive at the CLI level, so `--workspace` simply yields the empty package
+/// list that means "the whole workspace" — the same as passing no scope at all.
 fn resolve_packages(workspace: bool, package: Vec<String>) -> Vec<String> {
     if workspace { Vec::new() } else { package }
 }
@@ -693,13 +744,33 @@ mod tests {
     }
 
     #[test]
-    fn run_workspace_flag_overrides_package_filters() {
-        let command = parse(&["run", "--workspace", "-p", "nm"]);
-        let Command::Run(options) = command else {
-            panic!("expected run command");
-        };
-        // An explicit --workspace clears the package scope.
-        assert!(options.packages.is_empty());
+    fn run_workspace_and_package_conflict() {
+        let error = Cli::from_args(
+            &["cargo-bench-history"],
+            &["run", "--workspace", "-p", "nm"],
+        )
+        .expect_err("--workspace with --package should be rejected");
+        assert_eq!(error.status, Err(()));
+        assert!(
+            error.output.contains("cannot be used with"),
+            "{}",
+            error.output
+        );
+    }
+
+    #[test]
+    fn backfill_workspace_and_package_conflict() {
+        let error = Cli::from_args(
+            &["cargo-bench-history"],
+            &["backfill", "abc", "def", "--workspace", "-p", "nm"],
+        )
+        .expect_err("--workspace with --package should be rejected");
+        assert_eq!(error.status, Err(()));
+        assert!(
+            error.output.contains("cannot be used with"),
+            "{}",
+            error.output
+        );
     }
 
     #[test]
@@ -712,20 +783,12 @@ mod tests {
     }
 
     #[test]
-    fn run_parses_repo_and_timestamp() {
-        let command = parse(&[
-            "run",
-            "--repo",
-            "/work/folo",
-            "--timestamp",
-            "2024-01-01T00:00:00Z",
-        ]);
+    fn run_parses_repo() {
+        let command = parse(&["run", "--repo", "/work/folo"]);
         let Command::Run(options) = command else {
             panic!("expected run command");
         };
         assert_eq!(options.repo, Some(PathBuf::from("/work/folo")));
-        let expected: Timestamp = "2024-01-01T00:00:00Z".parse().unwrap();
-        assert_eq!(options.timestamp, Some(expected));
     }
 
     #[test]
@@ -898,8 +961,6 @@ mod tests {
             "x86_64-unknown-linux-gnu",
             "--machine-key",
             "ci-pool",
-            "--metric",
-            "Ir",
             "--format",
             "json",
             "--verbose",
@@ -918,7 +979,6 @@ mod tests {
             vec!["x86_64-unknown-linux-gnu".to_owned()]
         );
         assert_eq!(options.machine_key, vec!["ci-pool".to_owned()]);
-        assert_eq!(options.metric.as_deref(), Some("Ir"));
         assert_eq!(options.format.as_deref(), Some("json"));
         assert!(options.verbose);
     }
@@ -946,13 +1006,13 @@ mod tests {
     }
 
     #[test]
-    fn bless_collects_prefixes_facets_and_reason() {
+    fn bless_collects_prefixes_facets_and_context() {
         let command = parse(&[
             "bless",
             "--engine",
             "callgrind",
-            "--reason",
-            "intentional tradeoff",
+            "--context",
+            "abc123",
             "all_the_time/read_cell",
             "overhead/groups_",
         ]);
@@ -967,13 +1027,37 @@ mod tests {
             ]
         );
         assert_eq!(options.engine, vec!["callgrind".to_owned()]);
-        assert_eq!(options.reason.as_deref(), Some("intentional tradeoff"));
+        assert_eq!(options.context.as_deref(), Some("abc123"));
+        assert!(!options.all);
+    }
+
+    #[test]
+    fn bless_all_switch_needs_no_prefixes() {
+        let Command::Bless(options) = parse(&["bless", "--all"]) else {
+            panic!("expected bless command");
+        };
+        assert!(options.all);
+        assert!(options.prefixes.is_empty());
+    }
+
+    #[test]
+    fn bless_all_conflicts_with_prefixes() {
+        let error = Cli::from_args(&["cargo-bench-history"], &["bless", "--all", "foo/bar"])
+            .expect_err("--all with a prefix should be rejected");
+        assert_eq!(error.status, Err(()));
+        assert!(
+            error.output.contains("cannot be used with"),
+            "{}",
+            error.output
+        );
     }
 
     #[test]
     fn unbless_parses_facets() {
         let command = parse(&[
             "unbless",
+            "--context",
+            "abc123",
             "--target-triple",
             "x86_64-unknown-linux-gnu",
             "--machine-key",
@@ -982,6 +1066,7 @@ mod tests {
         let Command::Unbless(options) = command else {
             panic!("expected unbless command");
         };
+        assert_eq!(options.context.as_deref(), Some("abc123"));
         assert_eq!(
             options.target_triple,
             vec!["x86_64-unknown-linux-gnu".to_owned()]
@@ -1037,14 +1122,13 @@ mod tests {
         assert_eq!(options.machine_key, vec!["ci-pool".to_owned()]);
         assert!(options.dirty);
         assert!(!options.clean);
-        assert!(!options.all);
         assert!(options.dry_run);
         assert_eq!(options.format.as_deref(), Some("json"));
         assert!(options.verbose);
     }
 
     #[test]
-    fn prune_parses_all_confirm_flag() {
+    fn prune_all_expands_to_clean_and_dirty() {
         let command = parse(&[
             "prune",
             "--target-triple",
@@ -1059,7 +1143,8 @@ mod tests {
             vec!["x86_64-unknown-linux-gnu".to_owned()]
         );
         assert!(options.commit.is_empty());
-        assert!(options.all);
+        assert!(options.clean, "--all enables clean removal");
+        assert!(options.dirty, "--all enables dirty removal");
         assert!(!options.dry_run);
     }
 

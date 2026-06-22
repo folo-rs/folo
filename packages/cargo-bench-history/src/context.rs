@@ -2,8 +2,8 @@
 //! in time, in history (git), and in its execution environment (CI, toolchain,
 //! host).
 //!
-//! Only the *effective* timestamp orders a series; the execution and ingest
-//! timestamps are recorded for provenance and are never used for ordering.
+//! Only the *commit* timestamp orders a series; the observation timestamp is
+//! recorded for provenance and is never used for ordering.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 #[non_exhaustive]
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct RunContext {
-    /// The three timestamps describing this run (see [`Timestamps`]).
+    /// The timestamps describing this run (see [`Timestamps`]).
     pub timestamps: Timestamps,
     /// Information about the git commit the benchmarks were run against.
     pub git: GitInfo,
@@ -44,30 +44,29 @@ impl RunContext {
     }
 }
 
-/// The three distinct timestamps every run carries.
+/// The timestamps every run carries.
 ///
-/// Only `effective` is used to order a series; the other two are provenance
-/// metadata. `effective` defaults to the benchmarked commit's committer date but
-/// can be overridden (e.g. when backfilling history for an old commit).
+/// `commit` is the run's position on the timeline; `observation` is provenance
+/// metadata and is never used for ordering. `commit` is the committer date of
+/// the benchmarked commit (for a dirty snapshot, the commit it is based on).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Timestamps {
-    /// Timeline position of this data point.
-    pub effective: Timestamp,
-    /// Wall-clock time at which the benchmarks were executed.
-    pub execution: Timestamp,
-    /// Wall-clock time at which the result set was stored.
-    pub ingest: Timestamp,
+    /// Committer date of the benchmarked commit; the run's timeline position. For
+    /// a dirty snapshot it is the committer date of the commit it is based on.
+    pub commit: Timestamp,
+    /// Wall-clock time at which the run was observed (benchmarks executed and
+    /// stored). Provenance only; never used to order a series.
+    pub observation: Timestamp,
 }
 
 impl Timestamps {
-    /// Creates a timestamp triple.
+    /// Creates a timestamp pair.
     #[must_use]
-    pub fn new(effective: Timestamp, execution: Timestamp, ingest: Timestamp) -> Self {
+    pub fn new(commit: Timestamp, observation: Timestamp) -> Self {
         Self {
-            effective,
-            execution,
-            ingest,
+            commit,
+            observation,
         }
     }
 }
@@ -147,20 +146,6 @@ pub fn detect_ci(get: impl Fn(&str) -> Option<String>) -> CiInfo {
     CiInfo::default()
 }
 
-/// Resolves the effective timestamp for a run.
-///
-/// Resolution order: an explicit override (e.g. `--timestamp`) wins; otherwise
-/// the benchmarked commit's committer date is used; if neither is available the
-/// `fallback` (typically the current time) is used.
-#[must_use]
-pub fn resolve_effective_time(
-    override_ts: Option<Timestamp>,
-    committer_date: Option<Timestamp>,
-    fallback: Timestamp,
-) -> Timestamp {
-    override_ts.or(committer_date).unwrap_or(fallback)
-}
-
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -201,25 +186,5 @@ mod tests {
     fn detect_ci_defaults_to_local() {
         let ci = detect_ci(env_from(&[]));
         assert_eq!(ci.provider, CiProvider::Local);
-    }
-
-    #[test]
-    fn resolve_effective_time_prefers_override() {
-        let override_ts: Timestamp = "2020-01-01T00:00:00Z".parse().unwrap();
-        let committer: Timestamp = "2021-01-01T00:00:00Z".parse().unwrap();
-        let fallback: Timestamp = "2022-01-01T00:00:00Z".parse().unwrap();
-        let resolved = resolve_effective_time(Some(override_ts), Some(committer), fallback);
-        assert_eq!(resolved, override_ts);
-    }
-
-    #[test]
-    fn resolve_effective_time_falls_back_to_committer_then_fallback() {
-        let committer: Timestamp = "2021-01-01T00:00:00Z".parse().unwrap();
-        let fallback: Timestamp = "2022-01-01T00:00:00Z".parse().unwrap();
-        assert_eq!(
-            resolve_effective_time(None, Some(committer), fallback),
-            committer
-        );
-        assert_eq!(resolve_effective_time(None, None, fallback), fallback);
     }
 }

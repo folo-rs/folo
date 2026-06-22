@@ -59,9 +59,9 @@
 //! combined environment the engines need and detects each engine from the output
 //! it produces (off Linux the Callgrind benches compile to no-ops, so only the
 //! host-runnable engines are stored). Re-running the same clean commit is refused
-//! as a duplicate unless `--overwrite` replaces the stored result. `--timestamp`
-//! overrides the effective time when seeding history for an old commit;
-//! `--no-store` harvests and reports without writing.
+//! as a duplicate unless `--overwrite` replaces the stored result; `--no-store`
+//! harvests and reports without writing. A run is positioned on the timeline by
+//! its commit's committer date, never by when the benchmarks happened to execute.
 //!
 //! ## `install`
 //!
@@ -75,8 +75,9 @@
 //! history for a repository that adopted the tool late. Each commit is checked out
 //! in a dedicated git **worktree** (the primary checkout is never touched, so a
 //! dirty working tree is fine) and benched there, recording the commit's committer
-//! date as the effective time. The range must lie on the current branch's
-//! first-parent history. Commits that already have a stored result are skipped
+//! date as its timeline position. The range `<from> <to>` only needs to form a
+//! first-parent chain; it does not have to lie on the current branch. Commits that
+//! already have a stored result are skipped
 //! (so backfill is resumable and cheap to re-run); `--overwrite` re-benches the
 //! whole range. A commit that fails to build or bench stops the run unless
 //! `--ignore-errors` continues past it.
@@ -86,12 +87,14 @@
 //! Reconstructs a timeline from git history and reports notable patterns. It
 //! requires a repository. Commits up to the merge-base with the base branch
 //! contribute clean runs only, while commits unique to the analyzed branch also
-//! contribute dirty snapshots unless `--no-dirty` is given. Findings are
-//! *advisory*: the exit code reflects only whether the analysis ran, never what it
-//! found. Downstream automation reads the machine-readable signal from the `json`
-//! report — `mode`, the boolean `notable` (any finding survived), each finding's
-//! `direction`/`flipped_at`, and the full per-finding `series` for charting. See
-//! [Analyze modes](#analyze-modes) below.
+//! contribute dirty snapshots unless `--no-dirty` is given. Pass one or more
+//! benchmark-id prefixes (matched against the qualified
+//! `<package>/<group>/<case>/<value>` identity) to scope the analysis to a subset
+//! of benchmarks. Findings are *advisory*: the exit code reflects only whether the
+//! analysis ran, never what it found. Downstream automation reads the
+//! machine-readable signal from the `json` report — `mode`, the boolean `notable`
+//! (any finding survived), each finding's `direction`/`flipped_at`, and the full
+//! per-finding `series` for charting. See [Analyze modes](#analyze-modes) below.
 //!
 //! ## `list`
 //!
@@ -111,25 +114,29 @@
 //! ## `prune`
 //!
 //! Deletes a chosen portion of the stored data, using the same selection pipeline
-//! as `analyze`/`list`. With no scope flag it removes the selected **clean and
-//! dirty** runs (and the blessing sidecars on any removed clean run); `--dirty`
-//! restricts to ephemeral uncommitted-tree snapshots, and `--clean` to clean runs
-//! and their blessings. Because deleting clean history is irreversible, a
-//! clean-touching prune refuses an un-narrowed selection unless `--all` is given —
-//! narrow it with a facet, a `<commit>` argument, `--since`, or `--until` (the
-//! `--dirty` scope is exempt). `--dry-run` previews without deleting.
+//! as `analyze`/`list`. A scope is required: `--dirty` removes ephemeral
+//! uncommitted-tree snapshots, `--clean` removes clean runs and their blessing
+//! sidecars, and `--all` removes both. Pruning preserves base-branch history — only
+//! the context branch's own commits (those after the merge-base with `--base`) are
+//! removed. When the context resolves onto the base branch itself, the whole
+//! selection *is* base-branch history, so the deletion is refused unless
+//! `--prune-base` confirms it. Narrow the selection with a facet, a `<commit>`
+//! argument, `--since`, or `--until`. `--dry-run` previews without deleting.
 //!
 //! ## `bless` / `unbless`
 //!
 //! `bless` accepts an intentional performance change on the base branch so history
 //! analysis stops re-flagging it. Pass one or more benchmark-id prefixes to accept
 //! (matched against the qualified `<package>/<group>/<case>/<value>` identity, e.g.
-//! `bless all_the_time/read_cell`), optionally with `--reason`. A blessing
-//! re-baselines the benchmark's history from the current commit forward, so the
-//! accepted step is no longer reported while earlier points stay on the chart for
-//! context. Blessing is base-branch-only and requires an existing recorded run at
-//! the current commit. `unbless` removes the blessings recorded at the current
-//! commit, undoing a `bless`.
+//! `bless all_the_time/read_cell`), or `--all` to accept every benchmark recorded
+//! at the commit. A blessing re-baselines the benchmark's history from the blessed
+//! commit forward, so the accepted step is no longer reported while earlier points
+//! stay on the chart for context. Blessing is base-branch-only and requires an
+//! existing recorded run at the blessed commit. By default `bless`/`unbless` act on
+//! `HEAD`; `--context <ref>` blesses or unblesses another commit instead. `unbless`
+//! removes the blessings recorded at that commit — note that any blessings defined
+//! at *later* commits remain in force, so the timeline may stay blessed past the
+//! unblessed commit.
 //!
 //! # Selecting data: options shared by the query commands
 //!
@@ -142,14 +149,13 @@
 //!   (`--engine` defaults to every engine; `list discriminants` is a catalog and
 //!   defaults to every partition). The literal `all` removes the filter
 //!   for that dimension, e.g. `--machine-key all` spans every machine.
-//! * **Timeline selection** (`--context`, `--base`, `--since`, `--until`) —
+//! * **Commit selection** (`--context`, `--base`, `--since`, `--until`) —
 //!   `--context` is the ref whose history is analyzed (default `HEAD`); `--base` is
 //!   the ref it branched from (default: the configured or detected default branch),
-//!   which determines the merge-base split. `--since`/`--until` bound the window
-//!   and accept an RFC 3339 timestamp, a `YYYY-MM-DD` date, or a relative duration
-//!   such as `6 months ago`.
-//! * **Data filtering** (`--no-dirty`, `--metric`) — exclude dirty snapshots, or
-//!   narrow to a single metric.
+//!   which determines the merge-base split. `--since`/`--until` bound the window by
+//!   **commit** timestamp and accept an RFC 3339 timestamp, a `YYYY-MM-DD` date, or
+//!   a relative duration such as `6 months ago`.
+//! * **Data filtering** (`--no-dirty`) — exclude dirty snapshots.
 //!
 //! # Analyze modes
 //!
@@ -218,10 +224,7 @@ pub use comparability::{ComparabilityKey, EngineSystem, resolve_target_triple};
 pub use config::{
     Config, ConfigError, ProjectConfig, StorageConfig, default_template, parse_config,
 };
-pub use context::{
-    CiInfo, CiProvider, GitInfo, RunContext, Timestamps, ToolchainInfo, detect_ci,
-    resolve_effective_time,
-};
+pub use context::{CiInfo, CiProvider, GitInfo, RunContext, Timestamps, ToolchainInfo, detect_ci};
 pub use dispatch::{Overrides, run, run_with_overrides};
 pub use model::{BenchmarkId, Metric, MetricKind, ResultRecord, ResultSet, SCHEMA_VERSION};
 pub use storage::{LocalStorage, Storage, StorageError};

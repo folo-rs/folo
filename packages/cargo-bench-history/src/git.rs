@@ -6,7 +6,7 @@ use jiff::Timestamp;
 use crate::context::GitInfo;
 
 /// A git snapshot: the recorded [`GitInfo`] plus the committer date used as the
-/// default effective time.
+/// commit timestamp.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct GitSnapshot {
     /// Commit, branch and dirty-state facts recorded with the run.

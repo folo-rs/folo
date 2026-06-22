@@ -508,42 +508,21 @@ async fn analyze_rejects_unknown_format() {
     assert!(message.contains("unknown report format"), "{message}");
 }
 
-/// `--metric` narrows analysis to one metric: a regression in another metric is
-/// invisible when the filter selects a flat one.
+/// A benchmark-id prefix narrows analysis to the matching benchmarks: a
+/// regression in another benchmark is invisible when the filter selects a flat one.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_metric_filter_excludes_other_metrics() {
+async fn analyze_prefix_filter_excludes_other_benchmarks() {
     let workspace = Workspace::repo(&storage_only_config());
-    // `Ir` stays flat while `EstimatedCycles` climbs into a regression.
-    for (date, commit, cycles) in [
-        ("2024-01-01", "c1", 100.0),
-        ("2024-01-02", "c2", 100.0),
-        ("2024-01-03", "c3", 100.0),
-        ("2024-01-04", "c4", 130.0),
-        ("2024-01-05", "c5", 130.0),
-        ("2024-01-06", "c6", 130.0),
-    ] {
-        workspace.seed_metrics(
-            date,
-            commit,
-            vec![
-                Metric::new(
-                    "Ir".to_owned(),
-                    MetricKind::InstructionCount,
-                    50.0,
-                    Some("count".to_owned()),
-                ),
-                Metric::new(
-                    "EstimatedCycles".to_owned(),
-                    MetricKind::EstimatedCycles,
-                    cycles,
-                    Some("count".to_owned()),
-                ),
-            ],
-        );
-    }
+    // `alpha` stays flat while `beta` climbs into a regression.
+    workspace.seed_two_benchmarks("2024-01-01", "c1", 100.0, 100.0);
+    workspace.seed_two_benchmarks("2024-01-02", "c2", 100.0, 100.0);
+    workspace.seed_two_benchmarks("2024-01-03", "c3", 100.0, 100.0);
+    workspace.seed_two_benchmarks("2024-01-04", "c4", 100.0, 130.0);
+    workspace.seed_two_benchmarks("2024-01-05", "c5", 100.0, 130.0);
+    workspace.seed_two_benchmarks("2024-01-06", "c6", 100.0, 130.0);
 
-    // Unfiltered, the cycles climb flags as a regression.
+    // Unfiltered, the `beta` climb flags as a regression.
     let RunOutcome::Analyzed { regressions, .. } = workspace
         .drive(&["analyze"])
         .await
@@ -551,21 +530,21 @@ async fn analyze_metric_filter_excludes_other_metrics() {
     else {
         panic!("expected an analyzed outcome");
     };
-    assert_eq!(regressions, 1, "the cycles climb should flag unfiltered");
+    assert_eq!(regressions, 1, "the beta climb should flag unfiltered");
 
-    // Restricting to the flat `Ir` metric hides it.
+    // Restricting to the flat `alpha` benchmark family hides it.
     let RunOutcome::Analyzed {
         regressions,
         report,
         ..
     } = workspace
-        .drive(&["analyze", "--metric", "Ir"])
+        .drive(&["analyze", "alpha/"])
         .await
         .expect("analysis succeeds")
     else {
         panic!("expected an analyzed outcome");
     };
-    assert_eq!(regressions, 0, "the Ir series is flat: {report}");
+    assert_eq!(regressions, 0, "the alpha series is flat: {report}");
 }
 
 /// Cache hit counts are higher-is-better, so a sustained drop is a regression
@@ -1499,15 +1478,15 @@ async fn analyze_feature_branch_admits_dirty_snapshots() {
     );
 }
 
-/// The series timeline follows git topology, not the runs' effective timestamps:
+/// The series timeline follows git topology, not the runs' commit timestamps:
 /// seeding the regressing commit last in topology but earliest in time still flags
-/// it, proving ingest/effective time does not reorder the history.
+/// it, proving commit time does not reorder the history.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_orders_by_topology_not_effective_time() {
+async fn analyze_orders_by_topology_not_commit_time() {
     let workspace = Workspace::repo(&storage_only_config());
-    // Topology c1 -> .. -> c6 with a sustained step at c4, but effective times
-    // strictly descend, so an effective-time ordering would reverse the step into
+    // Topology c1 -> .. -> c6 with a sustained step at c4, but commit times
+    // strictly descend, so a commit-time ordering would reverse the step into
     // a non-regression (a drop). A flagged regression proves topology order won.
     workspace.seed_callgrind("2024-04-06", "c1", 100.0);
     workspace.seed_callgrind("2024-04-05", "c2", 100.0);
@@ -2020,9 +1999,9 @@ async fn prune_dirty_removes_the_base_branch_tip_dirty_with_a_clean_tree() {
         "list hides the base-tip dirty run with a clean tree: {message}"
     );
 
-    // `prune --dirty` removes it anyway.
+    // `prune --dirty` removes it anyway (with the base-branch guard confirmed).
     let RunOutcome::Completed { message } = workspace
-        .drive(&["prune", "--dirty", "--format", "json"])
+        .drive(&["prune", "--dirty", "--prune-base", "--format", "json"])
         .await
         .expect("prune succeeds")
     else {
@@ -2033,7 +2012,14 @@ async fn prune_dirty_removes_the_base_branch_tip_dirty_with_a_clean_tree() {
 
     // A second pass finds nothing left to remove.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["prune", "--dirty", "--dry-run", "--format", "json"])
+        .drive(&[
+            "prune",
+            "--dirty",
+            "--prune-base",
+            "--dry-run",
+            "--format",
+            "json",
+        ])
         .await
         .expect("prune succeeds")
     else {
@@ -2327,7 +2313,7 @@ async fn prune_dirty_since_only_removes_runs_on_or_after_the_cutoff() {
 }
 
 /// `--until` removes only the runs on or before the cutoff: the mirror of `--since`,
-/// also reading object bodies to recover each run's effective time.
+/// also reading object bodies to recover each run's commit time.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn prune_dirty_until_only_removes_runs_on_or_before_the_cutoff() {
@@ -2370,12 +2356,12 @@ async fn prune_dirty_until_only_removes_runs_on_or_before_the_cutoff() {
     );
 }
 
-/// The default scope deletes clean *and* dirty runs (and their blessing sidecars)
+/// The `--all` scope deletes clean *and* dirty runs (and their blessing sidecars)
 /// for the narrowed selection. A `<commit>` argument selecting one feature commit removes its
 /// clean and dirty runs while leaving the base-branch run intact.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn prune_default_removes_clean_and_dirty_for_a_commit() {
+async fn prune_all_removes_clean_and_dirty_for_a_commit() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
     workspace.checkout_new_branch("feature");
@@ -2383,9 +2369,9 @@ async fn prune_default_removes_clean_and_dirty_for_a_commit() {
     workspace.seed_dirty_callgrind("2024-01-03", "f1", 200.0);
     let f1 = workspace.commit("f1");
 
-    // Narrowed to f1, the default scope removes its clean and dirty runs.
+    // Narrowed to f1, the `--all` scope removes its clean and dirty runs.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["prune", &f1, "--format", "json"])
+        .drive(&["prune", &f1, "--all", "--format", "json"])
         .await
         .expect("prune succeeds")
     else {
@@ -2406,40 +2392,28 @@ async fn prune_default_removes_clean_and_dirty_for_a_commit() {
     assert_eq!(parsed["totals"]["runs"], 1, "{message}");
 }
 
-/// Deleting clean history is guarded: a default-scope `prune` with no narrowing
-/// predicate refuses to run unless `--all` is given, protecting against an
-/// accidental wipe of the entire data set.
-#[tokio::test]
-#[cfg_attr(miri, ignore)]
-async fn prune_refuses_an_unnarrowed_clean_scope_without_all() {
-    let workspace = Workspace::repo(&storage_only_config());
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
-
-    let error = workspace
-        .drive(&["prune"])
-        .await
-        .expect_err("an un-narrowed clean prune should be refused");
-    let RunError::Analyze { message } = error else {
-        panic!("expected an analyze error, got {error:?}");
-    };
-    assert!(message.contains("--all"), "{message}");
-
-    // Nothing was deleted: the run is still listed.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "runs", "--format", "json"])
-        .await
-        .expect("listing succeeds")
-    else {
-        panic!("expected a completed outcome");
-    };
-    let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
-    assert_eq!(parsed["totals"]["runs"], 1, "{message}");
+/// `prune` requires a scope: invoking it without `--clean`, `--dirty`, or `--all`
+/// is rejected at parse time, protecting against an accidental wipe with no intent.
+#[test]
+fn prune_requires_a_scope() {
+    let error = Cli::from_args(&["cargo-bench-history"], &["prune"])
+        .expect_err("prune without a scope should be rejected");
+    assert!(
+        error
+            .output
+            .contains("the following required arguments were not provided")
+            || error.output.contains("required"),
+        "the error should name the missing required scope: {}",
+        error.output
+    );
 }
 
-/// `--all` overrides the narrowing guard and deletes the whole selected data set.
+/// `--all` deletes the whole selected data set, but Design B preserves base-branch
+/// history: pruning the feature context removes only the feature-unique commits,
+/// leaving the base commit at the merge-base intact.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn prune_all_overrides_the_narrowing_guard() {
+async fn prune_all_removes_only_the_feature_side() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_callgrind("2024-01-01", "c1", 100.0);
     workspace.checkout_new_branch("feature");
@@ -2454,11 +2428,11 @@ async fn prune_all_overrides_the_narrowing_guard() {
     };
     let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
     assert_eq!(
-        parsed["totals"]["runs"], 2,
-        "both clean runs deleted: {message}"
+        parsed["totals"]["runs"], 1,
+        "only the feature-unique run is deleted: {message}"
     );
 
-    // The data set is empty afterwards.
+    // The base commit survives; only the base-branch baseline remains.
     let RunOutcome::Completed { message } = workspace
         .drive(&["list", "runs", "--context", "feature", "--format", "json"])
         .await
@@ -2467,7 +2441,10 @@ async fn prune_all_overrides_the_narrowing_guard() {
         panic!("expected a completed outcome");
     };
     let parsed: serde_json::Value = serde_json::from_str(&message).expect("valid JSON");
-    assert_eq!(parsed["totals"]["runs"], 0, "{message}");
+    assert_eq!(
+        parsed["totals"]["runs"], 1,
+        "the base-branch run is preserved: {message}"
+    );
 }
 
 /// `--clean` deletes clean runs (and their blessings) while leaving dirty snapshots
@@ -2537,9 +2514,10 @@ async fn prune_removes_a_blessing_with_its_clean_run() {
         "{message}"
     );
 
-    // Pruning HEAD's clean run also deletes the blessing that rode on it.
+    // Pruning HEAD's clean run also deletes the blessing that rode on it. The
+    // checkout is the base branch tip, so the base-branch guard must be confirmed.
     let RunOutcome::Completed { message } = workspace
-        .drive(&["prune", &head, "--format", "json"])
+        .drive(&["prune", &head, "--all", "--prune-base", "--format", "json"])
         .await
         .expect("prune succeeds")
     else {
@@ -2627,7 +2605,7 @@ async fn analyze_target_triple_facet_isolates_linux_from_windows() {
     assert_eq!(regressions, 0, "the Windows series is flat: {report}");
 }
 
-/// From a feature checkout, `--branch master` analyzes the default branch's
+/// From a feature checkout, `--context master` analyzes the default branch's
 /// official line (clean only), independent of the currently checked-out branch.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
@@ -2994,10 +2972,7 @@ async fn analyze_criterion_feature_branch_admits_dirty_snapshots() {
 async fn run_callgrind_end_to_end_stores_results() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
 
-    let outcome = workspace
-        .drive(&["run", "--timestamp", "2020-01-01T00:00:00Z"])
-        .await
-        .expect("run should succeed");
+    let outcome = workspace.drive(&["run"]).await.expect("run should succeed");
     let RunOutcome::Completed { message } = outcome else {
         panic!("expected completion, got {outcome:?}");
     };
@@ -3010,7 +2985,6 @@ async fn run_callgrind_end_to_end_stores_results() {
     // derive it from the stored context to keep the assertion host-portable. The
     // temp workspace is outside any git repository, so the commit resolves to the
     // `unknown` fallback and the clean tree yields `clean.json`.
-    let effective: Timestamp = "2020-01-01T00:00:00Z".parse().unwrap();
     let triple = &set.context.toolchain.target_triple;
     assert!(triple.ends_with("-unknown-linux-gnu"), "{triple}");
     assert_eq!(
@@ -3020,7 +2994,12 @@ async fn run_callgrind_end_to_end_stores_results() {
 
     assert_eq!(set.schema_version, SCHEMA_VERSION);
     assert_eq!(set.context.tool_version, TOOL_VERSION);
-    assert_eq!(set.context.timestamps.effective, effective);
+    // Outside a git repository there is no committer date, so the commit time
+    // falls back to the observation time.
+    assert_eq!(
+        set.context.timestamps.commit,
+        set.context.timestamps.observation
+    );
 
     assert_eq!(set.results.len(), 1);
     let record = &set.results[0];
@@ -3471,10 +3450,7 @@ async fn run_then_analyze_round_trips_a_sanitizing_project_id() {
     let workspace = Workspace::clean_repo(&storage_only_config_with_id("my proj/sub"))
         .with_bench(&["--summary", "grp=single"]);
 
-    workspace
-        .drive(&["run", "--timestamp", "2024-03-01T00:00:00Z"])
-        .await
-        .expect("run should succeed");
+    workspace.drive(&["run"]).await.expect("run should succeed");
 
     // The writer sanitizes `my proj/sub` to `my_proj_sub` for the partition.
     let objects = workspace.stored_objects();
@@ -3518,13 +3494,7 @@ async fn run_then_analyze_preserves_unusual_identity_characters() {
         .with_bench(&["--criterion", "time.capture|mide tiempo|tamaño 4=18.5"]);
 
     workspace
-        .drive(&[
-            "run",
-            "--machine-key",
-            "pool",
-            "--timestamp",
-            "2024-03-01T00:00:00Z",
-        ])
+        .drive(&["run", "--machine-key", "pool"])
         .await
         .expect("run should succeed");
 
@@ -4067,7 +4037,7 @@ async fn list_blessings_reports_the_blessing_recorded_at_head() {
     let head = workspace.head();
 
     workspace
-        .drive(&["bless", "nm/nm::observe", "--reason", "accepted tradeoff"])
+        .drive(&["bless", "nm/nm::observe"])
         .await
         .expect("blessing succeeds");
 
@@ -4085,7 +4055,6 @@ async fn list_blessings_reports_the_blessing_recorded_at_head() {
     let blessings = parsed["blessings"].as_array().expect("an array");
     assert_eq!(blessings.len(), 1, "{message}");
     assert_eq!(blessings[0]["commit"], short_head, "{message}");
-    assert_eq!(blessings[0]["reason"], "accepted tradeoff", "{message}");
     assert!(
         blessings[0]["prefixes"]
             .as_array()
@@ -4811,7 +4780,7 @@ fn two_benchmark_result_set(effective: i64, commit: &str, alpha: f64, beta: f64)
     git.short_commit = Some(commit.to_owned());
     git.branch = Some("main".to_owned());
     let context = RunContext::new(
-        Timestamps::new(time, time, time),
+        Timestamps::new(time, time),
         git,
         CiInfo::default(),
         ToolchainInfo::default(),
@@ -4858,7 +4827,7 @@ fn criterion_result_set(effective: i64, commit: &str, value: f64) -> ResultSet {
     git.short_commit = Some(commit.to_owned());
     git.branch = Some("main".to_owned());
     let context = RunContext::new(
-        Timestamps::new(time, time, time),
+        Timestamps::new(time, time),
         git,
         CiInfo::default(),
         ToolchainInfo::default(),
@@ -4897,7 +4866,7 @@ fn alloc_result_set(
     git.short_commit = Some(commit.to_owned());
     git.branch = Some("main".to_owned());
     let context = RunContext::new(
-        Timestamps::new(time, time, time),
+        Timestamps::new(time, time),
         git,
         CiInfo::default(),
         ToolchainInfo::default(),
@@ -4933,7 +4902,7 @@ fn time_result_set(effective: i64, commit: &str, operation: &str, value: f64) ->
     git.short_commit = Some(commit.to_owned());
     git.branch = Some("main".to_owned());
     let context = RunContext::new(
-        Timestamps::new(time, time, time),
+        Timestamps::new(time, time),
         git,
         CiInfo::default(),
         ToolchainInfo::default(),
@@ -4969,7 +4938,7 @@ fn time_result_set_with_dispersion(
     git.short_commit = Some(commit.to_owned());
     git.branch = Some("main".to_owned());
     let context = RunContext::new(
-        Timestamps::new(time, time, time),
+        Timestamps::new(time, time),
         git,
         CiInfo::default(),
         ToolchainInfo::default(),
@@ -5036,7 +5005,7 @@ fn result_set_with(effective: i64, commit: &str, metrics: Vec<Metric>) -> Result
     git.short_commit = Some(commit.to_owned());
     git.branch = Some("main".to_owned());
     let context = RunContext::new(
-        Timestamps::new(time, time, time),
+        Timestamps::new(time, time),
         git,
         CiInfo::default(),
         ToolchainInfo::default(),

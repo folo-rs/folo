@@ -153,7 +153,7 @@ where
     .await?;
 
     let filter = SeriesFilter {
-        metric: options.metric.as_deref(),
+        prefixes: &options.prefixes,
     };
     let mut series = build_series(&dataset.loaded, &dataset.order, &filter);
     // Re-baseline blessed series before detection (history mode only; branch and
@@ -233,8 +233,9 @@ where
 /// The data-set selection parameters shared by the query commands: which stored
 /// objects to consider (facets + `--since` / `--until`) and how to resolve the git
 /// timeline (`--repo` is resolved by the caller into the [`GitHistory`] adapter;
-/// `--context` / `--base` / `--no-dirty` steer the topology query). `--metric` is
-/// deliberately *not* here: it filters which series are built, not which runs load.
+/// `--context` / `--base` / `--no-dirty` steer the topology query). Analyze's
+/// benchmark-prefix scope is deliberately *not* here: it filters which series are
+/// built, not which runs load.
 ///
 /// Each facet (`engine` / `target_triple` / `machine_key`) carries the raw,
 /// repeatable command-line values; [`resolve_facets`] turns them into
@@ -625,17 +626,17 @@ where
         let result = ResultSet::from_json(&text).map_err(|error| RunError::Analyze {
             message: format!("stored object {key} is not a valid result set: {error}"),
         })?;
-        if since.is_some_and(|since| result.context.timestamps.effective < since) {
+        if since.is_some_and(|since| result.context.timestamps.commit < since) {
             excluded_since = excluded_since.saturating_add(1);
             reporter.note(&format!(
-                "excluding {key}: effective time is before the --since cutoff"
+                "excluding {key}: commit time is before the --since cutoff"
             ));
             continue;
         }
-        if until.is_some_and(|until| result.context.timestamps.effective > until) {
+        if until.is_some_and(|until| result.context.timestamps.commit > until) {
             excluded_until = excluded_until.saturating_add(1);
             reporter.note(&format!(
-                "excluding {key}: effective time is after the --until cutoff"
+                "excluding {key}: commit time is after the --until cutoff"
             ));
             continue;
         }
@@ -983,6 +984,28 @@ async fn resolve_base_ref<G: GitHistory>(
     Ok(None)
 }
 
+/// Resolves the *display name* of the base ref (without resolving it to a SHA),
+/// for diagnostics such as the `prune --prune-base` guard.
+///
+/// Mirrors [`resolve_base_ref`]'s precedence: an explicit `--base`, then the
+/// configured `project.default_branch` (only when it resolves), then the
+/// repository's detected default branch. Returns `None` when no base can be named.
+async fn resolve_base_name<G: GitHistory>(
+    git: &G,
+    config: &Config,
+    base: Option<&str>,
+) -> Result<Option<String>, RunError> {
+    if let Some(base) = base {
+        return Ok(Some(base.to_owned()));
+    }
+    if let Some(default) = config.project.default_branch.as_deref()
+        && git.resolve(default).await.map_err(RunError::Io)?.is_some()
+    {
+        return Ok(Some(default.to_owned()));
+    }
+    git.default_branch().await.map_err(RunError::Io)
+}
+
 /// Parses the `--format` option, defaulting to text.
 fn parse_format(name: Option<&str>) -> Result<ReportFormat, RunError> {
     match name {
@@ -1196,7 +1219,7 @@ mod tests {
     fn ir_set(effective: i64, commit: &str, value: f64) -> ResultSet {
         let time = ts(effective);
         let context = RunContext::new(
-            Timestamps::new(time, time, time),
+            Timestamps::new(time, time),
             GitInfo {
                 commit: Some(commit.to_owned()),
                 short_commit: Some(commit.to_owned()),
@@ -1239,7 +1262,7 @@ mod tests {
     fn two_metric_set(effective: i64, commit: &str, ir: f64, cycles: f64) -> ResultSet {
         let time = ts(effective);
         let context = RunContext::new(
-            Timestamps::new(time, time, time),
+            Timestamps::new(time, time),
             GitInfo {
                 commit: Some(commit.to_owned()),
                 short_commit: Some(commit.to_owned()),
@@ -1340,7 +1363,7 @@ mod tests {
     }
 
     /// A six-commit master history `c0..c5` with a feature branch off `c1`,
-    /// HEAD on the feature branch. The longer master line lets `--branch master`
+    /// HEAD on the feature branch. The longer master line lets `--context master`
     /// reconstruct a sustained step.
     fn feature6_git() -> FakeGitHistory {
         let mut git = FakeGitHistory::new();
@@ -1738,7 +1761,6 @@ mod tests {
             ts(3),
             ts(3),
             vec!["nm".to_owned()],
-            None,
             "0.0.1".to_owned(),
         );
         let bless_key =
@@ -1851,7 +1873,6 @@ mod tests {
             ts(3),
             ts(3),
             vec!["nm".to_owned()],
-            None,
             "0.0.1".to_owned(),
         );
         let bless_key =
@@ -1930,11 +1951,11 @@ mod tests {
     }
 
     #[test]
-    fn series_order_follows_topology_not_effective_time() {
+    fn series_order_follows_topology_not_commit_time() {
         // Topology is c0..c5 with a sustained step at c3 (100,100,100,130,130,130),
-        // but the effective clock is reversed (c0 newest, c5 oldest). Ordering by
+        // but the commit clock is reversed (c0 newest, c5 oldest). Ordering by
         // topology reconstructs the rising step and flags a regression; ordering by
-        // effective time would reverse it into a falling step (an improvement, no
+        // commit time would reverse it into a falling step (an improvement, no
         // regression). So a single detected regression proves topology won.
         let storage = MemoryStorage::new();
         for (index, value) in [100.0, 100.0, 100.0, 130.0, 130.0, 130.0]
@@ -1942,7 +1963,7 @@ mod tests {
             .enumerate()
         {
             let commit = format!("c{index}");
-            // Reverse the clock: c0 is newest, c5 is oldest by effective time.
+            // Reverse the clock: c0 is newest, c5 is oldest by commit time.
             let second = 100 - i64::try_from(index).unwrap();
             store(
                 &storage,
@@ -2362,7 +2383,7 @@ mod tests {
 
     #[test]
     fn explicit_branch_selects_the_official_master_view() {
-        // From a feature checkout, `--branch master` analyzes master's own history:
+        // From a feature checkout, `--context master` analyzes master's own history:
         // six clean commits with a sustained step at c3.
         let storage = MemoryStorage::new();
         for (index, value) in [100.0, 100.0, 100.0, 130.0, 130.0, 130.0]
@@ -2884,28 +2905,5 @@ mod tests {
     fn since_rejects_garbage() {
         let error = parse_since(Some("not-a-date")).unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
-    }
-
-    #[test]
-    fn metric_filter_limits_series() {
-        let storage = MemoryStorage::new();
-        let mut set = ir_set(0, "c0", 10.0);
-        set.results[0].metrics.push(Metric::new(
-            "EstimatedCycles".to_owned(),
-            MetricKind::EstimatedCycles,
-            20.0,
-            Some("count".to_owned()),
-        ));
-        store(&storage, &clean_key("c0"), &set);
-        let git = linear_git();
-
-        let opts = AnalyzeOptions {
-            metric: Some("Ir".to_owned()),
-            format: Some("json".to_owned()),
-            ..options()
-        };
-        let (report, _) = analyze(&git, &storage, "folo", &opts);
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-        assert_eq!(parsed["series"], 1, "only the Ir metric forms a series");
     }
 }

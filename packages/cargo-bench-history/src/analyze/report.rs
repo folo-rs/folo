@@ -276,7 +276,7 @@ fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, chart_enabled:
     // history before it is intentionally excluded from detection.
     if let Some(blessed_at) = &finding.blessed_at {
         let date = finding
-            .blessed_effective
+            .blessed_commit_time
             .as_deref()
             .map_or_else(String::new, |effective| format!(" ({effective})"));
         lines.push(
@@ -592,7 +592,7 @@ mod tests {
             active: true,
             active_from: 0,
             blessed_at: None,
-            blessed_effective: None,
+            blessed_commit_time: None,
             series: Vec::new(),
         }
     }
@@ -738,7 +738,7 @@ mod tests {
         let set = discriminant_set();
         let mut blessed = regression();
         blessed.blessed_at = Some("c3".to_owned());
-        blessed.blessed_effective = Some("2024-01-01T00:00:00Z".to_owned());
+        blessed.blessed_commit_time = Some("2024-01-01T00:00:00Z".to_owned());
         let findings = vec![blessed];
         let mut summaries = Vec::new();
         let input = single_set_input("folo", &set, &findings, &mut summaries);

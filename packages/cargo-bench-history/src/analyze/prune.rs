@@ -7,14 +7,16 @@
 //! ([`DirtyTipPolicy::Always`](super::DirtyTipPolicy)) — a deletion tool sees every
 //! stored run as a candidate, regardless of the present working-tree state.
 //!
-//! By default `prune` deletes clean *and* dirty runs (plus the blessing sidecars on
-//! every commit whose clean run it removes); `--dirty` restricts it to dirty
-//! (uncommitted-tree) snapshots and `--clean` to clean runs (and their blessings).
-//! Because deleting clean history is destructive, the default and `--clean` scopes
-//! refuse an un-narrowed selection unless `--all` is given: narrow with a facet, a
-//! `<commit>` argument, `--since`, or `--until`. `--dirty` discards only ephemeral
-//! data and is exempt from that guard. `--dry-run` previews what would be removed
-//! without deleting anything.
+//! The caller must say which kinds of run to delete: `--clean` removes clean runs
+//! (plus the blessing sidecars on every commit whose clean run it removes),
+//! `--dirty` removes dirty (uncommitted-tree) snapshots, and `--all` removes both.
+//!
+//! `prune` cleans only the *context branch's own* commits — those after the
+//! merge-base with the base ref — so base-branch history is preserved by default.
+//! When the context resolves onto the base branch itself (`context == base`), the
+//! whole selection is base-branch history, so the destructive `--prune-base` guard
+//! is required to confirm it. `--dry-run` previews what would be removed without
+//! deleting anything.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
@@ -34,8 +36,8 @@ use super::discriminant::DiscriminantSet;
 use super::report::ReportFormat;
 use super::{
     AutoFacets, DirtyTipPolicy, ResolvedHistory, Selection, detect_auto_facets,
-    facet_filtered_candidates, parse_format, parse_since, parse_until, resolve_facets,
-    resolve_history,
+    facet_filtered_candidates, parse_format, parse_since, parse_until, resolve_base_name,
+    resolve_facets, resolve_history,
 };
 
 /// Which objects a prune pass deletes.
@@ -50,18 +52,19 @@ enum Scope {
 }
 
 impl Scope {
-    /// Resolves the deletion scope from the mutually exclusive `--dirty`/`--clean`
-    /// switches.
+    /// Resolves the deletion scope from the `--clean`/`--dirty`/`--all` switches.
+    /// The CLI requires exactly one of them; setting both `clean` and `dirty`
+    /// (what `--all` expands to) deletes everything.
     fn from_options(options: &PruneOptions) -> Result<Self, RunError> {
-        match (options.dirty, options.clean) {
-            (true, true) => Err(RunError::Analyze {
-                message: "--dirty and --clean are mutually exclusive: --dirty removes only \
-                          dirty runs, --clean only clean runs; omit both to remove every run"
+        match (options.clean, options.dirty) {
+            (true, true) => Ok(Self::All),
+            (false, true) => Ok(Self::Dirty),
+            (true, false) => Ok(Self::Clean),
+            (false, false) => Err(RunError::Analyze {
+                message: "specify which runs to delete: --clean (clean runs and their \
+                          blessings), --dirty (dirty snapshots), or --all (both)"
                     .to_owned(),
             }),
-            (true, false) => Ok(Self::Dirty),
-            (false, true) => Ok(Self::Clean),
-            (false, false) => Ok(Self::All),
         }
     }
 
@@ -131,21 +134,6 @@ where
     let scope = Scope::from_options(options)?;
     let selection = Selection::from_prune(options);
 
-    // Guard the destructive clean-history scopes: refuse an un-narrowed selection
-    // unless `--all` confirms it. `--dirty` only discards ephemeral data, so it is
-    // exempt. A facet, a `<commit>` argument, `--since`, or `--until` all narrow
-    // the range.
-    let narrowed = is_narrowed(options, since.is_some(), until.is_some());
-    if scope.touches_clean() && !narrowed && !options.all {
-        return Err(RunError::Analyze {
-            message: "prune would delete clean benchmark history across the entire selected \
-                      range. Narrow the selection with a facet (--engine / --target-triple / \
-                      --machine-key), a <commit> argument, --since, or --until, or pass --all \
-                      to delete everything in range."
-                .to_owned(),
-        });
-    }
-
     let facets = resolve_facets(&selection, Some(auto))?;
     let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
 
@@ -153,8 +141,25 @@ where
         target_ref,
         order,
         admit_dirty,
+        merge_base_index,
+        tip_is_merge_base,
         ..
     } = resolve_history(git, config, &selection, DirtyTipPolicy::Always, reporter).await?;
+
+    // The `--prune-base` guard: when the context resolves onto the base branch
+    // itself (`context == base`), the whole selection is base-branch history.
+    // Refuse to delete it without explicit confirmation.
+    if tip_is_merge_base && !options.prune_base {
+        let base = resolve_base_name(git, config, selection.base)
+            .await?
+            .unwrap_or_else(|| target_ref.clone());
+        return Err(RunError::Analyze {
+            message: format!(
+                "this will delete benchmark history of the {base} branch, which is the base \
+                 branch. Confirm with --prune-base if this is correct."
+            ),
+        });
+    }
 
     // Separate blessing sidecars from runs: a blessing is removed only when the
     // commit's clean run is removed (it references that run), so it is selected in
@@ -175,6 +180,17 @@ where
             ));
             continue;
         };
+        // Preserve base-branch history: unless this is a base-branch prune, only
+        // the commits after the merge-base (the context branch's own commits) are
+        // eligible for removal.
+        if !commit_is_eligible(index, merge_base_index, tip_is_merge_base) {
+            reporter.note(&format!(
+                "skipping {key}: commit {} is on the base branch (preserved; prune from \
+                 the base branch with --prune-base to remove it)",
+                parsed.commit
+            ));
+            continue;
+        }
         if !commit_matches(&parsed.commit, &options.commit) {
             reporter.note(&format!(
                 "skipping {key}: commit {} does not match the requested <commit> arguments",
@@ -221,23 +237,23 @@ where
             RunKind::Bless => unreachable!("blessings were partitioned out"),
         }
 
-        // The time window requires the object's effective time, so a corrupt run
+        // The time window filters on the commit's own timestamp, so a corrupt run
         // surfaces only under `--since`/`--until`.
         if since.is_some() || until.is_some() {
-            let effective = load_effective(storage, &key).await?;
+            let committed = load_commit_timestamp(storage, &key).await?;
             if let Some(since) = since
-                && effective < since
+                && committed < since
             {
                 reporter.note(&format!(
-                    "skipping {key}: effective time is before the --since cutoff"
+                    "skipping {key}: its commit predates the --since cutoff"
                 ));
                 continue;
             }
             if let Some(until) = until
-                && effective > until
+                && committed > until
             {
                 reporter.note(&format!(
-                    "skipping {key}: effective time is after the --until cutoff"
+                    "skipping {key}: its commit is after the --until cutoff"
                 ));
                 continue;
             }
@@ -298,27 +314,24 @@ where
     Ok(RunOutcome::Completed { message })
 }
 
-/// Whether the selection is narrowed enough to permit a clean-history prune
-/// without `--all`: any discriminant facet, an explicit `<commit>` argument, or a
-/// `--since`/`--until` time bound restricts the range.
-fn is_narrowed(options: &PruneOptions, since: bool, until: bool) -> bool {
-    facets_present(options) || !options.commit.is_empty() || since || until
-}
-
-/// Whether any discriminant facet carries a **concrete** narrowing value. An
-/// omitted facet (auto-detect) and the widening `all` keyword do not narrow.
-fn facets_present(options: &PruneOptions) -> bool {
-    facet_narrows(&options.engine)
-        || facet_narrows(&options.target_triple)
-        || facet_narrows(&options.machine_key)
-}
-
-/// Whether a repeatable facet's values include at least one concrete (non-`all`)
-/// entry. An empty list (auto-detect) or an `all`-only list does not narrow.
-fn facet_narrows(values: &[String]) -> bool {
-    values
-        .iter()
-        .any(|value| !value.eq_ignore_ascii_case("all"))
+/// Whether a commit at `index` (its first-parent position) is eligible for
+/// removal. When pruning the base branch itself (`tip_is_merge_base`), every
+/// selected commit is eligible. Otherwise only the context branch's own commits —
+/// those strictly after the merge-base — are eligible, so base-branch history is
+/// preserved. A `None` merge-base means no base ancestry is shared, so every
+/// commit is the context branch's own.
+fn commit_is_eligible(
+    index: usize,
+    merge_base_index: Option<usize>,
+    tip_is_merge_base: bool,
+) -> bool {
+    if tip_is_merge_base {
+        return true;
+    }
+    match merge_base_index {
+        Some(merge_base_index) => index > merge_base_index,
+        None => true,
+    }
 }
 
 /// Whether a commit matches the `<commit>` selection (case-insensitive prefix
@@ -334,9 +347,12 @@ fn commit_matches(commit: &str, filters: &[String]) -> bool {
         .any(|filter| commit.starts_with(&filter.to_ascii_lowercase()))
 }
 
-/// Fetches and parses a stored run's effective timestamp for the time-window
+/// Fetches and parses a stored run's commit timestamp for the time-window
 /// filters.
-async fn load_effective<S: Storage>(storage: &S, key: &str) -> Result<jiff::Timestamp, RunError> {
+async fn load_commit_timestamp<S: Storage>(
+    storage: &S,
+    key: &str,
+) -> Result<jiff::Timestamp, RunError> {
     let bytes = storage.get(key).await.map_err(RunError::Storage)?;
     let text = String::from_utf8(bytes).map_err(|error| RunError::Analyze {
         message: format!("stored object {key} is not valid UTF-8: {error}"),
@@ -344,7 +360,7 @@ async fn load_effective<S: Storage>(storage: &S, key: &str) -> Result<jiff::Time
     let result = ResultSet::from_json(&text).map_err(|error| RunError::Analyze {
         message: format!("stored object {key} is not a valid result set: {error}"),
     })?;
-    Ok(result.context.timestamps.effective)
+    Ok(result.context.timestamps.commit)
 }
 
 /// Which kind of object a removal item names.
@@ -682,20 +698,22 @@ mod tests {
         }
     }
 
-    /// Default options select the `--dirty` scope, which is exempt from the
-    /// narrowing guard, so most fixtures need no extra flags.
+    /// Most fixtures exercise the `--dirty` scope. Base-branch fixtures
+    /// (`linear_git`, HEAD on the base) also set `prune_base` so the base-branch
+    /// guard does not reject them; it is inert on feature-branch fixtures.
     fn dirty_options() -> PruneOptions {
         PruneOptions {
             dirty: true,
+            prune_base: true,
             ..PruneOptions::default()
         }
     }
 
-    /// A minimal result set with the given effective time and commit.
-    fn set(effective: i64, commit: &str) -> ResultSet {
-        let time = Timestamp::from_second(effective).expect("seconds within range");
+    /// A minimal result set with the given commit time (seconds) and commit.
+    fn set(commit_second: i64, commit: &str) -> ResultSet {
+        let time = Timestamp::from_second(commit_second).expect("seconds within range");
         let context = RunContext::new(
-            Timestamps::new(time, time, time),
+            Timestamps::new(time, time),
             GitInfo {
                 commit: Some(commit.to_owned()),
                 short_commit: Some(commit.to_owned()),
@@ -899,7 +917,7 @@ mod tests {
     }
 
     #[test]
-    fn default_scope_removes_clean_dirty_and_blessings_for_a_commit() {
+    fn all_scope_removes_clean_dirty_and_blessings_for_a_commit() {
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("f1"), &set(0, "f1"));
         store(&storage, &dirty_key("f1", 200), &set(200, "f1"));
@@ -910,6 +928,8 @@ mod tests {
         let git = feature_git();
 
         let opts = PruneOptions {
+            clean: true,
+            dirty: true,
             commit: vec!["f1".to_owned()],
             format: Some("json".to_owned()),
             ..PruneOptions::default()
@@ -973,6 +993,8 @@ mod tests {
         let git = feature_git();
 
         let opts = PruneOptions {
+            clean: true,
+            dirty: true,
             commit: vec!["f1".to_owned()],
             ..PruneOptions::default()
         };
@@ -985,7 +1007,7 @@ mod tests {
     }
 
     #[test]
-    fn unnarrowed_clean_deletion_is_refused_without_all() {
+    fn prune_requires_a_scope() {
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("f1"), &set(0, "f1"));
         let git = feature_git();
@@ -1002,6 +1024,8 @@ mod tests {
         .unwrap_err();
         match error {
             RunError::Analyze { message } => {
+                assert!(message.contains("--clean"), "{message}");
+                assert!(message.contains("--dirty"), "{message}");
                 assert!(message.contains("--all"), "{message}");
             }
             other => panic!("unexpected error: {other:?}"),
@@ -1011,27 +1035,42 @@ mod tests {
     }
 
     #[test]
-    fn all_flag_overrides_the_narrowing_guard() {
+    fn all_scope_keeps_base_side_history_on_a_feature_branch() {
         let storage = MemoryStorage::new();
         for commit in ["c0", "c1", "f1", "f2"] {
             store(&storage, &clean_key(commit), &set(0, commit));
         }
         let git = feature_git();
 
+        // `--all` (clean + dirty) on a feature branch deletes only the branch's own
+        // commits; the base-branch ancestors (c0, c1) are preserved.
         let opts = PruneOptions {
-            all: true,
+            clean: true,
+            dirty: true,
             ..PruneOptions::default()
         };
         prune(&storage, &git, &opts);
-        assert!(keys(&storage).is_empty(), "--all removes every clean run");
+
+        let remaining = keys(&storage);
+        assert!(
+            remaining.contains(&clean_key("c0")),
+            "base-side c0 survives"
+        );
+        assert!(
+            remaining.contains(&clean_key("c1")),
+            "base-side c1 survives"
+        );
+        assert!(!remaining.contains(&clean_key("f1")), "branch f1 removed");
+        assert!(!remaining.contains(&clean_key("f2")), "branch f2 removed");
     }
 
     #[test]
-    fn dirty_and_clean_are_mutually_exclusive() {
+    fn base_prune_requires_prune_base() {
         let storage = MemoryStorage::new();
-        let git = feature_git();
+        store(&storage, &clean_key("c3"), &set(0, "c3"));
+        let git = linear_git(); // HEAD on master, which is the base branch.
+
         let opts = PruneOptions {
-            dirty: true,
             clean: true,
             ..PruneOptions::default()
         };
@@ -1047,10 +1086,34 @@ mod tests {
         .unwrap_err();
         match error {
             RunError::Analyze { message } => {
-                assert!(message.contains("mutually exclusive"), "{message}");
+                assert!(message.contains("--prune-base"), "{message}");
+                assert!(
+                    message.contains("master"),
+                    "names the base branch: {message}"
+                );
             }
             other => panic!("unexpected error: {other:?}"),
         }
+        // Nothing was deleted without confirmation.
+        assert!(keys(&storage).contains(&clean_key("c3")), "kept");
+    }
+
+    #[test]
+    fn prune_base_confirms_base_branch_deletion() {
+        let storage = MemoryStorage::new();
+        store(&storage, &clean_key("c3"), &set(0, "c3"));
+        let git = linear_git();
+
+        let opts = PruneOptions {
+            clean: true,
+            prune_base: true,
+            ..PruneOptions::default()
+        };
+        prune(&storage, &git, &opts);
+        assert!(
+            !keys(&storage).contains(&clean_key("c3")),
+            "--prune-base confirms deleting the base-branch run"
+        );
     }
 
     #[test]
@@ -1168,7 +1231,7 @@ mod tests {
         // Two dirty snapshots on the target side, one before and one after the cutoff.
         store(&storage, &dirty_key("f1", 100), &set(100, "f1"));
         store(&storage, &dirty_key("f2", 300), &set(300, "f2"));
-        // A snapshot whose effective time is exactly the cutoff: the cutoff is
+        // A snapshot whose commit time is exactly the cutoff: the cutoff is
         // inclusive, so it is removed.
         store(&storage, &dirty_key("f1", 180), &set(180, "f1"));
         let git = feature_git();
@@ -1303,56 +1366,26 @@ mod tests {
     }
 
     #[test]
-    fn is_narrowed_accepts_any_single_narrowing_predicate() {
-        // A facet alone narrows the range.
-        assert!(is_narrowed(
-            &PruneOptions {
-                engine: vec!["callgrind".to_owned()],
-                ..PruneOptions::default()
-            },
-            false,
-            false,
-        ));
-        // An explicit `<commit>` argument alone narrows it.
-        assert!(is_narrowed(
-            &PruneOptions {
-                commit: vec!["abc".to_owned()],
-                ..PruneOptions::default()
-            },
-            false,
-            false,
-        ));
-        // `--since` alone narrows it.
-        assert!(is_narrowed(&PruneOptions::default(), true, false));
-        // `--until` alone narrows it (the guard against deleting the whole tail).
-        assert!(is_narrowed(&PruneOptions::default(), false, true));
+    fn commit_is_eligible_excludes_base_side_commits_on_a_feature_branch() {
+        // A feature branch merged off the base at index 1: only commits after the
+        // merge-base (indices 2, 3) are the branch's own and eligible for removal.
+        assert!(!commit_is_eligible(0, Some(1), false), "base-side c0");
+        assert!(
+            !commit_is_eligible(1, Some(1), false),
+            "the merge-base itself"
+        );
+        assert!(commit_is_eligible(2, Some(1), false), "branch-side f1");
+        assert!(commit_is_eligible(3, Some(1), false), "branch-side f2");
     }
 
     #[test]
-    fn is_narrowed_rejects_an_unconstrained_selection() {
-        assert!(!is_narrowed(&PruneOptions::default(), false, false));
-    }
-
-    #[test]
-    fn facets_present_detects_each_facet_independently() {
-        assert!(!facets_present(&PruneOptions::default()));
-        assert!(facets_present(&PruneOptions {
-            engine: vec!["callgrind".to_owned()],
-            ..PruneOptions::default()
-        }));
-        assert!(facets_present(&PruneOptions {
-            target_triple: vec!["x86_64-unknown-linux-gnu".to_owned()],
-            ..PruneOptions::default()
-        }));
-        assert!(facets_present(&PruneOptions {
-            machine_key: vec!["m1".to_owned()],
-            ..PruneOptions::default()
-        }));
-        // The widening `all` keyword is not a concrete narrowing value.
-        assert!(!facets_present(&PruneOptions {
-            engine: vec!["all".to_owned()],
-            ..PruneOptions::default()
-        }));
+    fn commit_is_eligible_admits_every_commit_on_the_base_branch() {
+        // On the base branch (tip is its own merge-base), every commit is eligible.
+        assert!(commit_is_eligible(0, Some(3), true));
+        assert!(commit_is_eligible(3, Some(3), true));
+        // With no shared base ancestry, every commit is the context's own.
+        assert!(commit_is_eligible(0, None, false));
+        assert!(commit_is_eligible(5, None, false));
     }
 
     #[test]
@@ -1413,10 +1446,10 @@ mod tests {
     }
 
     #[test]
-    fn load_effective_rejects_a_non_utf8_object() {
+    fn load_commit_timestamp_rejects_a_non_utf8_object() {
         let storage = MemoryStorage::new();
         block_on(storage.put(&clean_key("c2"), &[0xff, 0xfe, 0x00])).expect("seed corrupt bytes");
-        let error = block_on(load_effective(&storage, &clean_key("c2"))).unwrap_err();
+        let error = block_on(load_commit_timestamp(&storage, &clean_key("c2"))).unwrap_err();
         match error {
             RunError::Analyze { message } => {
                 assert!(message.contains("is not valid UTF-8"), "{message}");
@@ -1426,11 +1459,11 @@ mod tests {
     }
 
     #[test]
-    fn load_effective_rejects_an_invalid_result_set() {
+    fn load_commit_timestamp_rejects_an_invalid_result_set() {
         let storage = MemoryStorage::new();
         block_on(storage.put(&clean_key("c2"), b"{ not a valid result set"))
             .expect("seed invalid json");
-        let error = block_on(load_effective(&storage, &clean_key("c2"))).unwrap_err();
+        let error = block_on(load_commit_timestamp(&storage, &clean_key("c2"))).unwrap_err();
         match error {
             RunError::Analyze { message } => {
                 assert!(message.contains("is not a valid result set"), "{message}");
