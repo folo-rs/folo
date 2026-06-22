@@ -2134,6 +2134,22 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "the 200-point quadratic spike search is slow under Miri"
+    )]
+    fn resolved_spike_beyond_the_search_size_limit_is_skipped() {
+        // One point past the inclusive search ceiling is rejected outright: the
+        // `n > RESOLVED_SPIKE_MAX_POINTS` guard caps the quadratic plateau search.
+        let mut values = vec![10.0_f64; RESOLVED_SPIKE_MAX_POINTS + 1];
+        for value in values.get_mut(90..110).expect("range within bounds") {
+            *value = 20.0;
+        }
+        let series = series_with(&values, MetricKind::InstructionCount, &[]);
+        assert!(evaluate_resolved_spike(&series, &AnalysisConfig::default()).is_none());
+    }
+
+    #[test]
     fn resolved_spike_below_the_practical_floor_is_not_a_spike() {
         // A plateau (1010) only 1% above baseline (1000) is below the 3% practical
         // floor. The reject gate is `deviation <= 0 || relative < floor`; an `&&`
@@ -2180,6 +2196,49 @@ mod tests {
             .chain([100.0, 100.0])
             .collect();
         let series = wall_series(&values, 1.0);
+        assert!(evaluate_resolved_spike(&series, &AnalysisConfig::default()).is_none());
+    }
+
+    #[test]
+    fn relative_delta_against_a_zero_baseline_is_a_full_magnitude_move() {
+        // A move away from a (near-)zero baseline is proportionally unbounded, so its
+        // sign is returned at full magnitude to rank as a major change.
+        assert_eq!(relative_delta_of(5.0, 0.0), 1.0);
+        assert_eq!(relative_delta_of(-5.0, 0.0), -1.0);
+    }
+
+    #[test]
+    fn compare_samples_below_the_practical_floor_is_suppressed() {
+        // A 1% relative move sits below the 5% floor on a noisy series, so the
+        // comparison is dropped before any rank test.
+        let before = pts(&[(100.0, 0.5)]);
+        let after = pts(&[(101.0, 0.5)]);
+        assert!(compare(&before, &after, 0.05).is_none());
+    }
+
+    #[test]
+    fn compare_samples_suppresses_a_clear_move_the_rank_test_cannot_confirm() {
+        // Two-versus-two complete separation clears the practical floor but its
+        // Mann-Whitney p-value (0.33 for n1 = n2 = 2) stays above alpha, so the
+        // change is not significant and is suppressed.
+        let before = pts(&[(100.0, 0.5), (100.0, 0.5)]);
+        let after = pts(&[(106.0, 0.5), (106.0, 0.5)]);
+        assert!(compare(&before, &after, 0.05).is_none());
+    }
+
+    #[test]
+    fn resolved_spike_shorter_than_three_regimes_is_not_a_spike() {
+        // Five points cannot hold a baseline, an elevated middle, and a recovery of
+        // at least `min_regime` (2) each, so the `n < min * 3` gate rejects it.
+        let series = series_of(&[10.0, 10.0, 20.0, 20.0, 10.0]);
+        assert!(evaluate_resolved_spike(&series, &AnalysisConfig::default()).is_none());
+    }
+
+    #[test]
+    fn resolved_spike_with_a_still_elevated_tail_is_not_a_spike() {
+        // The recovery tail (30) stays far above the baseline (10), so the series has
+        // not recovered; an active change-point handles it instead.
+        let series = series_of(&[10.0, 10.0, 20.0, 20.0, 30.0, 30.0]);
         assert!(evaluate_resolved_spike(&series, &AnalysisConfig::default()).is_none());
     }
 }

@@ -979,6 +979,41 @@ mod tests {
         ResultSet::new(context, vec![record])
     }
 
+    /// A result set with two single-metric benchmarks that share a group but differ
+    /// by case, so its partition reconstructs two distinct series.
+    fn two_benchmark_set(effective: i64, commit: &str) -> ResultSet {
+        let time = Timestamp::from_second(effective).expect("seconds within range");
+        let context = RunContext::new(
+            Timestamps::new(time, time, time),
+            GitInfo {
+                commit: Some(commit.to_owned()),
+                short_commit: Some(commit.to_owned()),
+                branch: Some("main".to_owned()),
+                dirty: false,
+            },
+            CiInfo::default(),
+            ToolchainInfo::default(),
+            "0.0.1".to_owned(),
+        );
+        let case = |case: &str| {
+            ResultRecord::new(
+                BenchmarkId::new(
+                    Some("nm".to_owned()),
+                    "nm::observe".to_owned(),
+                    Some(case.to_owned()),
+                    None,
+                ),
+                vec![Metric::new(
+                    "Ir".to_owned(),
+                    MetricKind::InstructionCount,
+                    100.0,
+                    Some("count".to_owned()),
+                )],
+            )
+        };
+        ResultSet::new(context, vec![case("pull"), case("push")])
+    }
+
     /// A result set with one record carrying a single metric, so its partition
     /// reconstructs exactly one series.
     fn single_metric_set(effective: i64, commit: &str) -> ResultSet {
@@ -1437,6 +1472,69 @@ mod tests {
         assert!(report.contains("os=linux"), "{report}");
     }
 
+    #[test]
+    fn list_discriminants_markdown_renders_a_table() {
+        let storage = MemoryStorage::new();
+        store(&storage, &clean_key("c0"), &two_metric_set(0, "c0"));
+        let git = FakeGitHistory::new();
+        let opts = ListOptions {
+            subject: ListSubject::Discriminants,
+            format: Some("markdown".to_owned()),
+            ..options()
+        };
+        let report = list(&storage, &git, &opts);
+        assert!(report.contains("# Discriminant sets"), "{report}");
+        assert!(
+            report.contains("| Engine | OS | Architecture | Machine | Target triple |"),
+            "{report}"
+        );
+        assert!(report.contains("| callgrind | linux |"), "{report}");
+    }
+
+    #[test]
+    fn list_discriminants_markdown_empty_reports_none() {
+        let storage = MemoryStorage::new();
+        let git = FakeGitHistory::new();
+        let opts = ListOptions {
+            subject: ListSubject::Discriminants,
+            format: Some("markdown".to_owned()),
+            ..options()
+        };
+        let report = list(&storage, &git, &opts);
+        assert!(report.contains("# Discriminant sets"), "{report}");
+        assert!(report.contains("No discriminant sets found."), "{report}");
+        // The empty markdown body has no table.
+        assert!(!report.contains("| Engine |"), "{report}");
+    }
+
+    #[test]
+    fn list_discriminants_text_empty_reports_none() {
+        let storage = MemoryStorage::new();
+        let git = FakeGitHistory::new();
+        let opts = ListOptions {
+            subject: ListSubject::Discriminants,
+            ..options()
+        };
+        let report = list(&storage, &git, &opts);
+        assert_eq!(report, "No discriminant sets found.\n", "{report}");
+    }
+
+    #[test]
+    fn list_runs_markdown_empty_selection_reports_no_match() {
+        let storage = MemoryStorage::new();
+        let git = linear_git();
+        let opts = ListOptions {
+            format: Some("markdown".to_owned()),
+            ..options()
+        };
+        let report = list(&storage, &git, &opts);
+        assert!(report.contains("# Data set for folo"), "{report}");
+        assert!(
+            report.contains("No stored run matches the selection."),
+            "{report}"
+        );
+    }
+
     /// The blessing-sidecar key in the same partition as [`clean_key`].
     fn bless_key(commit: &str, issued_unix: i64) -> String {
         format!(
@@ -1498,6 +1596,114 @@ mod tests {
             report.contains("No blessings recorded at commit c3."),
             "{report}"
         );
+    }
+
+    #[test]
+    fn list_blessings_markdown_at_head_renders_the_sidecar() {
+        let storage = MemoryStorage::new();
+        store(&storage, &clean_key("c3"), &two_metric_set(3, "c3"));
+        let record = BlessingRecord::new(
+            "c3".to_owned(),
+            Timestamp::from_second(3).expect("seconds within range"),
+            Timestamp::from_second(100).expect("seconds within range"),
+            vec!["nm/nm::observe".to_owned()],
+            Some("intentional tradeoff".to_owned()),
+            "0.0.1".to_owned(),
+        );
+        store_bless(&storage, &bless_key("c3", 100), &record);
+        let git = linear_git();
+
+        let opts = ListOptions {
+            subject: ListSubject::Blessings,
+            format: Some("markdown".to_owned()),
+            ..options()
+        };
+        let report = list(&storage, &git, &opts);
+        assert!(report.contains("nm/nm::observe"), "{report}");
+        assert!(
+            report.contains('|'),
+            "a markdown table is rendered: {report}"
+        );
+    }
+
+    #[test]
+    fn list_blessings_markdown_reports_none_at_head_when_unblessed() {
+        let storage = MemoryStorage::new();
+        store(&storage, &clean_key("c3"), &two_metric_set(3, "c3"));
+        let git = linear_git();
+
+        let opts = ListOptions {
+            subject: ListSubject::Blessings,
+            format: Some("markdown".to_owned()),
+            ..options()
+        };
+        let report = list(&storage, &git, &opts);
+        assert!(
+            report.contains("No blessings recorded at this commit."),
+            "{report}"
+        );
+    }
+
+    /// Drives `list blessings` expecting the load to fail, returning the error.
+    fn list_blessings_error(storage: &MemoryStorage, git: &FakeGitHistory) -> RunError {
+        let opts = ListOptions {
+            subject: ListSubject::Blessings,
+            format: Some("json".to_owned()),
+            ..options()
+        };
+        block_on(list_with(
+            git,
+            storage,
+            "folo",
+            &config(),
+            &opts,
+            &auto(),
+            Timestamp::from_second(0).expect("epoch is valid"),
+            &RecordingReporter::new(),
+        ))
+        .unwrap_err()
+    }
+
+    #[test]
+    fn list_blessings_requires_a_repository() {
+        let storage = MemoryStorage::new();
+        // No commits: HEAD does not resolve.
+        let error = list_blessings_error(&storage, &FakeGitHistory::new());
+        match error {
+            RunError::Analyze { message } => {
+                assert!(message.contains("could not resolve HEAD"), "{message}");
+            }
+            other => panic!("expected an analyze error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn list_blessings_rejects_a_non_utf8_sidecar_at_head() {
+        let storage = MemoryStorage::new();
+        // HEAD is c3 in `linear_git`; a sidecar there with corrupt bytes.
+        block_on(storage.put(&bless_key("c3", 100), &[0xff, 0xfe, 0x00]))
+            .expect("seed corrupt bytes");
+        let error = list_blessings_error(&storage, &linear_git());
+        match error {
+            RunError::Analyze { message } => {
+                assert!(message.contains("is not valid UTF-8"), "{message}");
+            }
+            other => panic!("expected an analyze error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn list_blessings_rejects_an_invalid_sidecar_at_head() {
+        let storage = MemoryStorage::new();
+        block_on(storage.put(&bless_key("c3", 100), b"{ not a blessing record"))
+            .expect("seed invalid json");
+        let error = list_blessings_error(&storage, &linear_git());
+        match error {
+            RunError::Analyze { message } => {
+                assert!(message.contains("is not a valid blessing"), "{message}");
+            }
+            other => panic!("expected an analyze error, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1578,5 +1784,71 @@ mod tests {
         assert_eq!(blessings.len(), 1, "{report}");
         assert_eq!(blessings[0]["benchmark"], "nm/nm::observe/pull");
         assert_eq!(blessings[0]["commit"], "c2");
+    }
+
+    #[test]
+    fn list_blessings_all_reports_an_empty_window_in_text() {
+        // The window roll-up over clean runs with no blessing records skips every
+        // series and renders the empty-window message in text form.
+        let storage = MemoryStorage::new();
+        for index in 0..3 {
+            let commit = format!("c{index}");
+            store(
+                &storage,
+                &clean_key(&commit),
+                &two_metric_set(index, &commit),
+            );
+        }
+        let git = linear_git();
+
+        let opts = ListOptions {
+            subject: ListSubject::Blessings,
+            all: true,
+            format: Some("text".to_owned()),
+            ..options()
+        };
+        let report = list(&storage, &git, &opts);
+        assert!(
+            report.contains("No blessings in the analysis window."),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn list_blessings_all_sorts_multiple_benchmark_entries() {
+        // Two distinct benchmarks blessed in the same window roll up to two entries,
+        // exercising the stable (set, benchmark, commit) ordering.
+        let storage = MemoryStorage::new();
+        for index in 0..3 {
+            let commit = format!("c{index}");
+            store(
+                &storage,
+                &clean_key(&commit),
+                &two_benchmark_set(index, &commit),
+            );
+        }
+        let record = BlessingRecord::new(
+            "c1".to_owned(),
+            Timestamp::from_second(1).expect("seconds within range"),
+            Timestamp::from_second(100).expect("seconds within range"),
+            vec!["nm/nm::observe".to_owned()],
+            None,
+            "0.0.1".to_owned(),
+        );
+        store_bless(&storage, &bless_key("c1", 100), &record);
+        let git = linear_git();
+
+        let opts = ListOptions {
+            subject: ListSubject::Blessings,
+            all: true,
+            format: Some("json".to_owned()),
+            ..options()
+        };
+        let report = list(&storage, &git, &opts);
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let blessings = parsed["blessings"].as_array().unwrap();
+        assert_eq!(blessings.len(), 2, "{report}");
+        assert_eq!(blessings[0]["benchmark"], "nm/nm::observe/pull");
+        assert_eq!(blessings[1]["benchmark"], "nm/nm::observe/push");
     }
 }

@@ -720,6 +720,36 @@ mod tests {
     }
 
     #[test]
+    fn text_report_marks_an_inactive_recovered_finding() {
+        let set = discriminant_set();
+        let mut recovered = regression();
+        recovered.active = false;
+        recovered.flipped_at = Some("c4".to_owned());
+        let findings = vec![recovered];
+        let mut summaries = Vec::new();
+        let input = single_set_input("folo", &set, &findings, &mut summaries);
+        let report = render(&input, ReportFormat::Text, false);
+        assert!(report.contains("(recovered)"), "{report}");
+        assert!(report.contains("recovers at c4"), "{report}");
+    }
+
+    #[test]
+    fn text_report_annotates_a_blessed_finding() {
+        let set = discriminant_set();
+        let mut blessed = regression();
+        blessed.blessed_at = Some("c3".to_owned());
+        blessed.blessed_effective = Some("2024-01-01T00:00:00Z".to_owned());
+        let findings = vec![blessed];
+        let mut summaries = Vec::new();
+        let input = single_set_input("folo", &set, &findings, &mut summaries);
+        let report = render(&input, ReportFormat::Text, false);
+        assert!(
+            report.contains("blessed at c3 (2024-01-01T00:00:00Z)"),
+            "{report}"
+        );
+    }
+
+    #[test]
     fn json_per_set_tally_counts_each_direction_independently() {
         // Two regressions and no improvements in one set: the per-set JSON tally
         // must report the real counts, not a constant.
@@ -1067,5 +1097,98 @@ mod tests {
         // the exponent stays at its -12 floor, yielding 15 decimal places. This
         // pins the sign of the `-12` initializer.
         assert_eq!(significant_decimals(1e-13), 15);
+    }
+
+    fn drift() -> Finding {
+        Finding {
+            method: FindingMethod::Drift,
+            ..regression()
+        }
+    }
+
+    fn darwin_set() -> DiscriminantSet {
+        DiscriminantSet {
+            engine: "callgrind".to_owned(),
+            target_triple: "aarch64-apple-darwin".to_owned(),
+            machine: "synthetic".to_owned(),
+        }
+    }
+
+    #[test]
+    fn text_report_labels_a_drift_finding_and_skips_an_empty_set() {
+        let set_a = discriminant_set();
+        let set_b = darwin_set();
+        let findings = [drift()];
+        let summaries = vec![
+            SetSummary {
+                set: &set_a,
+                runs: 6,
+                series: 1,
+                findings: vec![&findings[0]],
+            },
+            SetSummary {
+                set: &set_b,
+                runs: 4,
+                series: 1,
+                findings: Vec::new(),
+            },
+        ];
+        let input = ReportInput {
+            project: "folo",
+            mode: "history",
+            notable: true,
+            runs: 10,
+            series: 2,
+            findings: &findings,
+            sets: &summaries,
+            hint: None,
+            warning: None,
+        };
+        let report = render(&input, ReportFormat::Text, false);
+        assert!(report.contains("drift"), "{report}");
+        assert!(report.contains("x86_64-unknown-linux-gnu"), "{report}");
+        assert!(
+            !report.contains("aarch64-apple-darwin"),
+            "the empty set is skipped: {report}"
+        );
+    }
+
+    #[test]
+    fn markdown_report_labels_a_drift_finding_and_skips_an_empty_set() {
+        let set_a = discriminant_set();
+        let set_b = darwin_set();
+        let findings = [drift()];
+        let summaries = vec![
+            SetSummary {
+                set: &set_a,
+                runs: 6,
+                series: 1,
+                findings: vec![&findings[0]],
+            },
+            SetSummary {
+                set: &set_b,
+                runs: 4,
+                series: 1,
+                findings: Vec::new(),
+            },
+        ];
+        let input = ReportInput {
+            project: "folo",
+            mode: "history",
+            notable: true,
+            runs: 10,
+            series: 2,
+            findings: &findings,
+            sets: &summaries,
+            hint: None,
+            warning: None,
+        };
+        let report = render(&input, ReportFormat::Markdown, false);
+        assert!(report.contains("drift"), "{report}");
+        assert!(report.contains("x86_64-unknown-linux-gnu"), "{report}");
+        assert!(
+            !report.contains("aarch64-apple-darwin"),
+            "the empty set is skipped: {report}"
+        );
     }
 }

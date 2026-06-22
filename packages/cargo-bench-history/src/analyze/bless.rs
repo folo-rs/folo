@@ -575,4 +575,73 @@ mod tests {
         };
         assert!(message.contains("No blessings"), "{message}");
     }
+
+    #[test]
+    fn bless_without_a_repository_is_an_error() {
+        let storage = MemoryStorage::new();
+        // No commits: HEAD does not resolve.
+        let git = FakeGitHistory::new();
+        let error =
+            drive_bless(&storage, &git, &bless_options(&["all_the_time/read_cell"])).unwrap_err();
+        match error {
+            RunError::Bless { message } => {
+                assert!(message.contains("could not resolve HEAD"), "{message}");
+            }
+            other => panic!("expected a bless error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bless_without_a_resolvable_base_branch_is_an_error() {
+        let storage = MemoryStorage::new();
+        block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes()))
+            .expect("seed clean run");
+        // HEAD resolves, but no advertised default branch and no --base / config
+        // default, so the base branch cannot be determined.
+        let mut git = FakeGitHistory::new();
+        git.commit("c0", None)
+            .commit("c1", Some("c0"))
+            .commit("c2", Some("c1"))
+            .branch("master", "c2")
+            .head("master"); // No `.mark_default(...)`.
+        let error =
+            drive_bless(&storage, &git, &bless_options(&["all_the_time/read_cell"])).unwrap_err();
+        match error {
+            RunError::Bless { message } => {
+                assert!(
+                    message.contains("could not determine the base branch"),
+                    "{message}"
+                );
+                assert!(message.contains("--base"), "{message}");
+            }
+            other => panic!("expected a bless error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_effective_rejects_a_non_utf8_object() {
+        let storage = MemoryStorage::new();
+        block_on(storage.put(&clean_key("c2"), &[0xff, 0xfe, 0x00])).expect("seed corrupt bytes");
+        let error = block_on(load_effective(&storage, &clean_key("c2"))).unwrap_err();
+        match error {
+            RunError::Bless { message } => {
+                assert!(message.contains("is not valid UTF-8"), "{message}");
+            }
+            other => panic!("expected a bless error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_effective_rejects_an_invalid_result_set() {
+        let storage = MemoryStorage::new();
+        block_on(storage.put(&clean_key("c2"), b"{ not a valid result set"))
+            .expect("seed invalid json");
+        let error = block_on(load_effective(&storage, &clean_key("c2"))).unwrap_err();
+        match error {
+            RunError::Bless { message } => {
+                assert!(message.contains("is not a valid result set"), "{message}");
+            }
+            other => panic!("expected a bless error, got {other:?}"),
+        }
+    }
 }

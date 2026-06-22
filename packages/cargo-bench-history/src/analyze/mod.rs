@@ -1503,6 +1503,7 @@ mod tests {
         assert!(hint.contains("dirty (uncommitted-tree)"), "{hint}");
         assert!(!hint.contains("outside"), "{hint}");
         assert!(!hint.contains("--since cutoff"), "{hint}");
+        assert!(!hint.contains("--until cutoff"), "{hint}");
 
         // Only the outside-history reason is present here (dirty omitted).
         let outside_only = ExclusionTally {
@@ -1552,6 +1553,45 @@ mod tests {
         assert!(
             error.to_string().contains("unknown analysis mode"),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn parse_engine_resolves_none_known_and_rejects_unknown() {
+        assert!(parse_engine(None).expect("none parses").is_none());
+        assert!(
+            parse_engine(Some("callgrind"))
+                .expect("known engine parses")
+                .is_some()
+        );
+        let error = parse_engine(Some("nonsuch")).unwrap_err();
+        assert!(error.to_string().contains("unknown"), "{error}");
+    }
+
+    #[test]
+    fn facet_filter_skips_an_unrecognized_v2_key() {
+        let storage = MemoryStorage::new();
+        seed_linear_step(&storage);
+        // A `.json` object under the project prefix whose key is not a valid
+        // seven-segment v2 storage key is noted and skipped, not parsed as data.
+        block_on(storage.put("v2/folo/bogus.json", b"{}")).expect("seed a bogus key");
+        let reporter = RecordingReporter::new();
+        block_on(analyze_with(
+            &linear6_git(),
+            &storage,
+            "folo",
+            &config(),
+            &options(),
+            &auto(),
+            now_anchor(),
+            &reporter,
+            false,
+        ))
+        .expect("analysis runs");
+        assert!(
+            reporter.contains("not a recognized v2 storage key"),
+            "{:?}",
+            reporter.notes()
         );
     }
 
@@ -1743,6 +1783,97 @@ mod tests {
         .expect("analysis runs");
         assert!(
             !reporter.contains("are blessing sidecars"),
+            "{:?}",
+            reporter.notes()
+        );
+    }
+
+    /// Drives history-mode analyze expecting the blessing load to fail.
+    fn analyze_blessing_error(storage: &MemoryStorage) -> RunError {
+        block_on(analyze_with(
+            &linear6_git(),
+            storage,
+            "folo",
+            &config(),
+            &options(),
+            &auto(),
+            now_anchor(),
+            &RecordingReporter::new(),
+            false,
+        ))
+        .unwrap_err()
+    }
+
+    #[test]
+    fn history_mode_rejects_a_non_utf8_blessing_on_the_analyzed_history() {
+        let storage = MemoryStorage::new();
+        seed_linear_step(&storage);
+        // c3 is on the linear6 history, so history mode loads its sidecar.
+        let bless_key =
+            "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/c3/bless-3.json".to_owned();
+        block_on(storage.put(&bless_key, &[0xff, 0xfe, 0x00])).expect("seed corrupt bytes");
+        let error = analyze_blessing_error(&storage);
+        match error {
+            RunError::Analyze { message } => {
+                assert!(message.contains("is not valid UTF-8"), "{message}");
+            }
+            other => panic!("expected an analyze error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn history_mode_rejects_an_invalid_blessing_on_the_analyzed_history() {
+        let storage = MemoryStorage::new();
+        seed_linear_step(&storage);
+        let bless_key =
+            "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/c3/bless-3.json".to_owned();
+        block_on(storage.put(&bless_key, b"{ not a blessing record")).expect("seed invalid json");
+        let error = analyze_blessing_error(&storage);
+        match error {
+            RunError::Analyze { message } => {
+                assert!(
+                    message.contains("is not a valid blessing record"),
+                    "{message}"
+                );
+            }
+            other => panic!("expected an analyze error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn history_mode_skips_a_blessing_off_the_analyzed_history() {
+        let storage = MemoryStorage::new();
+        seed_linear_step(&storage);
+        // A blessing on a commit that is not on the analyzed history is noted and
+        // skipped rather than applied.
+        let record = BlessingRecord::new(
+            "z9".to_owned(),
+            ts(3),
+            ts(3),
+            vec!["nm".to_owned()],
+            None,
+            "0.0.1".to_owned(),
+        );
+        let bless_key =
+            "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/z9/bless-3.json".to_owned();
+        block_on(storage.put(&bless_key, record.to_json().expect("serializes").as_bytes()))
+            .expect("store succeeds");
+
+        let reporter = RecordingReporter::new();
+        block_on(analyze_with(
+            &linear6_git(),
+            &storage,
+            "folo",
+            &config(),
+            &options(),
+            &auto(),
+            now_anchor(),
+            &reporter,
+            false,
+        ))
+        .expect("analysis runs");
+        assert!(
+            reporter.contains("is not on HEAD's analyzed history"),
             "{:?}",
             reporter.notes()
         );
@@ -2402,6 +2533,60 @@ mod tests {
         let (report, _) = analyze(&git, &storage, "folo", &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 2, "only c2 and c3 are within the window");
+    }
+
+    #[test]
+    fn until_window_excludes_later_runs() {
+        let storage = MemoryStorage::new();
+        // c0..c3 at epoch seconds 0..3. `--until` epoch 1 keeps only c0 and c1.
+        for (index, value) in [100.0, 100.0, 130.0, 130.0].into_iter().enumerate() {
+            let commit = format!("c{index}");
+            let second = i64::try_from(index).unwrap();
+            store(
+                &storage,
+                &clean_key(&commit),
+                &ir_set(second, &commit, value),
+            );
+        }
+        let git = linear_git();
+
+        let opts = AnalyzeOptions {
+            until: Some("1970-01-01T00:00:01Z".to_owned()),
+            format: Some("json".to_owned()),
+            ..options()
+        };
+        let (report, _) = analyze(&git, &storage, "folo", &opts);
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(parsed["runs"], 2, "only c0 and c1 are within the window");
+    }
+
+    #[test]
+    fn analyze_without_a_resolvable_base_branch_loads_the_whole_history() {
+        let storage = MemoryStorage::new();
+        seed_linear_step(&storage);
+        // HEAD resolves, but there is no advertised default branch and no --base /
+        // config default, so resolve_base_ref yields None and there is no
+        // merge-base to split the timeline on. The analysis still loads the
+        // history rather than erroring.
+        let mut git = FakeGitHistory::new();
+        git.commit("c0", None)
+            .commit("c1", Some("c0"))
+            .commit("c2", Some("c1"))
+            .commit("c3", Some("c2"))
+            .commit("c4", Some("c3"))
+            .commit("c5", Some("c4"))
+            .branch("master", "c5")
+            .head("master"); // No `.mark_default(...)`.
+        let opts = AnalyzeOptions {
+            format: Some("json".to_owned()),
+            ..options()
+        };
+        let (report, _) = analyze(&git, &storage, "folo", &opts);
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(
+            parsed["runs"], 6,
+            "the full history loads without a merge-base: {report}"
+        );
     }
 
     #[test]

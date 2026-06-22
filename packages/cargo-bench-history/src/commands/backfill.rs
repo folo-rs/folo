@@ -407,10 +407,12 @@ impl SystemBackfillGit {
 }
 
 impl BackfillGit for SystemBackfillGit {
+    #[cfg_attr(test, mutants::skip)] // Delegates to the git-shelling history port; no pure logic to assert.
     async fn resolve(&self, reference: &str) -> io::Result<Option<String>> {
         self.history.resolve(reference).await
     }
 
+    #[cfg_attr(test, mutants::skip)] // Delegates to the git-shelling history port; no pure logic to assert.
     async fn first_parent(&self, reference: &str) -> io::Result<Vec<String>> {
         self.history.first_parent(reference).await
     }

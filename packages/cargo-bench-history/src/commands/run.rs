@@ -699,6 +699,62 @@ mod tests {
         assert!(described.contains("bench"), "{described}");
     }
 
+    #[test]
+    fn default_bench_command_is_cargo_bench() {
+        assert_eq!(
+            default_bench_command(),
+            vec!["cargo".to_owned(), "bench".to_owned()]
+        );
+    }
+
+    /// A storage double whose `put` always fails with an I/O error, used to prove a
+    /// backend failure during a normal run propagates rather than being swallowed.
+    #[derive(Debug)]
+    struct FailingStorage;
+
+    impl Storage for FailingStorage {
+        async fn put(&self, _key: &str, _bytes: &[u8]) -> Result<(), StorageError> {
+            Err(StorageError::Io(io::Error::other("disk full")))
+        }
+
+        async fn put_overwrite(&self, _key: &str, _bytes: &[u8]) -> Result<(), StorageError> {
+            Err(StorageError::Io(io::Error::other("disk full")))
+        }
+
+        async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError> {
+            Err(StorageError::NotFound {
+                key: key.to_owned(),
+            })
+        }
+
+        async fn list(&self, _prefix: &str) -> Result<Vec<String>, StorageError> {
+            Ok(Vec::new())
+        }
+
+        async fn delete(&self, key: &str) -> Result<(), StorageError> {
+            Err(StorageError::NotFound {
+                key: key.to_owned(),
+            })
+        }
+    }
+
+    #[test]
+    fn store_result_propagates_a_non_collision_storage_error() {
+        // A backend I/O failure (anything other than AlreadyExists) surfaces as a
+        // storage error, not as a Duplicate.
+        let error = block_on(store_result(
+            &FailingStorage,
+            "v2/p/e/t/m/c/clean.json",
+            b"{}",
+            false,
+        ))
+        .expect_err("a failing put surfaces an error");
+        assert!(
+            matches!(error, RunError::Storage(_)),
+            "expected a storage error, got {error:?}"
+        );
+    }
+
     fn frozen_time() -> SystemTime {
         SystemTime::UNIX_EPOCH
             .checked_add(Duration::from_secs(FROZEN_UNIX))
@@ -987,6 +1043,26 @@ mod tests {
                 time: vec![RawOperationFile {
                     path: PathBuf::from("all_the_time/read_cell.json"),
                     content: ALL_THE_TIME_FIXTURE.to_owned(),
+                }],
+                ..Self::default()
+            }
+        }
+
+        fn with_malformed_alloc_tracker_operation() -> Self {
+            Self {
+                alloc: vec![RawOperationFile {
+                    path: PathBuf::from("alloc_tracker/allocate_vec.json"),
+                    content: "{ not valid json".to_owned(),
+                }],
+                ..Self::default()
+            }
+        }
+
+        fn with_malformed_all_the_time_operation() -> Self {
+            Self {
+                time: vec![RawOperationFile {
+                    path: PathBuf::from("all_the_time/read_cell.json"),
+                    content: "{ not valid json".to_owned(),
                 }],
                 ..Self::default()
             }
@@ -1658,6 +1734,49 @@ mod tests {
                 assert!(message.contains("Criterion"), "{message}");
                 // The offending case directory is named so failures are actionable.
                 assert!(message.contains("new"), "{message}");
+            }
+            other => panic!("expected parse error, got {other:?}"),
+        }
+        assert!(storage.keys().is_empty());
+    }
+
+    #[test]
+    fn malformed_alloc_tracker_operation_is_a_parse_error() {
+        let storage = MemoryStorage::new();
+        let error = drive(
+            &RunOptions::default(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            &FakeOutput::with_malformed_alloc_tracker_operation(),
+            &storage,
+        )
+        .unwrap_err();
+
+        match error {
+            RunError::Parse { message } => {
+                // The offending operation file is named so failures are actionable.
+                assert!(message.contains("allocate_vec.json"), "{message}");
+            }
+            other => panic!("expected parse error, got {other:?}"),
+        }
+        assert!(storage.keys().is_empty());
+    }
+
+    #[test]
+    fn malformed_all_the_time_operation_is_a_parse_error() {
+        let storage = MemoryStorage::new();
+        let error = drive(
+            &RunOptions::default(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            &FakeOutput::with_malformed_all_the_time_operation(),
+            &storage,
+        )
+        .unwrap_err();
+
+        match error {
+            RunError::Parse { message } => {
+                assert!(message.contains("read_cell.json"), "{message}");
             }
             other => panic!("expected parse error, got {other:?}"),
         }

@@ -421,6 +421,14 @@ mod tests {
     }
 
     #[test]
+    fn short_keeps_the_whole_group_when_it_ends_in_a_separator() {
+        // `rsplit("::")` yields an empty trailing segment for "a::"; the
+        // `filter(!is_empty)` fallback must return the whole group, not "".
+        let id = BenchmarkId::new(None, "a::".to_owned(), None, None);
+        assert_eq!(id.short(), "a::");
+    }
+
+    #[test]
     fn deserializes_legacy_id_without_package() {
         let id: BenchmarkId =
             serde_json::from_str(r#"{"group":"a::group","case":"capture","value":null}"#).unwrap();

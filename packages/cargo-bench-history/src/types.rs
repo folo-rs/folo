@@ -403,6 +403,9 @@ impl RunOutcome {
     /// non-zero exit code. Downstream automation reads notable findings from the
     /// report JSON rather than from the exit status.
     #[must_use]
+    // Every outcome is successful, so this is effectively a constant `true`; a
+    // `false` mutant is unkillable because no failing outcome exists to assert
+    // against. The constant is the deliberate contract, not a coverage gap.
     #[cfg_attr(test, mutants::skip)]
     pub fn is_success(&self) -> bool {
         match self {

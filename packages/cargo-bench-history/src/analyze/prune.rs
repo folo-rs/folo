@@ -806,6 +806,31 @@ mod tests {
     }
 
     #[test]
+    fn prune_skips_a_run_whose_commit_is_off_history() {
+        let storage = MemoryStorage::new();
+        // A dirty run on a commit that is not on the analyzed (HEAD) history.
+        store(&storage, &dirty_key("z9", 100), &set(100, "z9"));
+        let reporter = RecordingReporter::new();
+        block_on(prune_with(
+            &linear_git(),
+            &storage,
+            "folo",
+            &config(),
+            &dirty_options(),
+            &auto(),
+            &reporter,
+        ))
+        .expect("prune runs");
+        assert!(
+            reporter.contains("is not on HEAD's history"),
+            "{:?}",
+            reporter.notes()
+        );
+        // The off-history run is left in place.
+        assert!(keys(&storage).contains(&dirty_key("z9", 100)), "kept");
+    }
+
+    #[test]
     fn dirty_scope_removes_target_side_dirty_runs_on_a_feature_branch() {
         let storage = MemoryStorage::new();
         // Clean runs across the whole history.
@@ -935,6 +960,27 @@ mod tests {
         assert!(
             remaining.contains(&dirty_key("f1", 200)),
             "--clean leaves dirty runs"
+        );
+    }
+
+    #[test]
+    fn prune_leaves_a_blessing_whose_commit_is_off_history() {
+        let storage = MemoryStorage::new();
+        store(&storage, &clean_key("f1"), &set(0, "f1"));
+        // A blessing sidecar on a commit that is not on the analyzed history; the
+        // clean-touching second pass skips it instead of removing it.
+        store_bless(&storage, &bless_key("z9", 70));
+        let git = feature_git();
+
+        let opts = PruneOptions {
+            commit: vec!["f1".to_owned()],
+            ..PruneOptions::default()
+        };
+        prune(&storage, &git, &opts);
+
+        assert!(
+            keys(&storage).contains(&bless_key("z9", 70)),
+            "off-history blessing kept"
         );
     }
 
@@ -1240,6 +1286,23 @@ mod tests {
     }
 
     #[test]
+    fn markdown_format_reports_no_match_for_an_empty_plan() {
+        let storage = MemoryStorage::new();
+        for commit in ["c0", "c1", "f1", "f2"] {
+            store(&storage, &clean_key(commit), &set(0, commit));
+        }
+        let git = feature_git();
+
+        let opts = PruneOptions {
+            format: Some("markdown".to_owned()),
+            ..dirty_options()
+        };
+        let report = prune(&storage, &git, &opts);
+        assert!(report.contains("# Prune plan for"), "{report}");
+        assert!(report.contains("No run matches the selection."), "{report}");
+    }
+
+    #[test]
     fn is_narrowed_accepts_any_single_narrowing_predicate() {
         // A facet alone narrows the range.
         assert!(is_narrowed(
@@ -1347,5 +1410,32 @@ mod tests {
         assert_eq!(commits[1].commit, "c1");
         assert_eq!(commits[1].runs, 1);
         assert_eq!(commits[1].blessings, 0, "c1 has no blessing");
+    }
+
+    #[test]
+    fn load_effective_rejects_a_non_utf8_object() {
+        let storage = MemoryStorage::new();
+        block_on(storage.put(&clean_key("c2"), &[0xff, 0xfe, 0x00])).expect("seed corrupt bytes");
+        let error = block_on(load_effective(&storage, &clean_key("c2"))).unwrap_err();
+        match error {
+            RunError::Analyze { message } => {
+                assert!(message.contains("is not valid UTF-8"), "{message}");
+            }
+            other => panic!("expected an analyze error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_effective_rejects_an_invalid_result_set() {
+        let storage = MemoryStorage::new();
+        block_on(storage.put(&clean_key("c2"), b"{ not a valid result set"))
+            .expect("seed invalid json");
+        let error = block_on(load_effective(&storage, &clean_key("c2"))).unwrap_err();
+        match error {
+            RunError::Analyze { message } => {
+                assert!(message.contains("is not a valid result set"), "{message}");
+            }
+            other => panic!("expected an analyze error, got {other:?}"),
+        }
     }
 }
