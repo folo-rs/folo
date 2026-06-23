@@ -25,14 +25,17 @@
 //!
 //! ```text
 //! cargo bench-history install   # write a starter .cargo/bench_history.toml
-//! cargo bench-history run       # bench the workspace and store the results
-//! cargo bench-history analyze   # report regressions and drift over history
+//! cargo bench-history run        # bench the current commit and store the results
+//! cargo bench-history backfill <from> <to>   # bootstrap history from past commits
+//! cargo bench-history analyze    # report regressions and drift over history
 //! ```
 //!
 //! `install` writes a configuration file you point at a storage location; `run`
-//! benches the current commit and stores the results there; `analyze` reads the
-//! accumulated history back and reports what changed. Run these from the
-//! repository whose benchmarks you are tracking.
+//! benches the current commit and stores the results there; `backfill` benches a
+//! range of past commits so there is a trend to analyze (a single `run` on its own
+//! has nothing to compare against); `analyze` reads the accumulated history back
+//! and reports what changed. Run these from the repository whose benchmarks you are
+//! tracking.
 //!
 //! # How results are stored
 //!
@@ -233,12 +236,9 @@ pub use command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, Command, InstallOptions, ListOptions,
     ListSubject, PruneOptions, RunOptions, UnblessOptions,
 };
-pub use comparability::{ComparabilityKey, EngineSystem, resolve_target_triple};
-pub use config::{
-    Config, ConfigError, ProjectConfig, StorageConfig, default_template, parse_config,
-};
-pub use context::{CiInfo, CiProvider, GitInfo, RunContext, Timestamps, ToolchainInfo, detect_ci};
+pub use config::{ConfigError, default_template};
+pub use context::{CiInfo, CiProvider, GitInfo, RunContext, Timestamps, ToolchainInfo};
 pub use dispatch::{Overrides, run, run_with_overrides};
 pub use model::{BenchmarkId, Metric, MetricKind, ResultRecord, ResultSet, SCHEMA_VERSION};
 pub use outcome::{RunError, RunOutcome};
-pub use storage::{LocalStorage, Storage, StorageError};
+pub use storage::StorageError;

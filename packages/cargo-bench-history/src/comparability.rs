@@ -11,7 +11,7 @@ use std::fmt;
 
 /// A benchmark engine, distinguished by whether its results depend on hardware.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum EngineSystem {
+pub(crate) enum EngineSystem {
     /// Criterion wall-clock benchmarks: hardware-dependent and noisy.
     Criterion,
     /// Callgrind (via Gungraun) instruction counts: simulated, hardware-independent.
@@ -27,7 +27,7 @@ impl EngineSystem {
     /// Every supported engine, in a stable order used to inject the combined
     /// benchmark environment and to harvest each engine's output tree after the
     /// single `cargo bench` invocation.
-    pub const ALL: [Self; 4] = [
+    pub(crate) const ALL: [Self; 4] = [
         Self::Callgrind,
         Self::Criterion,
         Self::AllocTracker,
@@ -36,7 +36,7 @@ impl EngineSystem {
 
     /// The stable lowercase identifier used in storage paths and config keys.
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Criterion => "criterion",
             Self::Callgrind => "callgrind",
@@ -47,7 +47,7 @@ impl EngineSystem {
 
     /// Parses a [`EngineSystem`] from its stable lowercase identifier.
     #[must_use]
-    pub fn from_name(name: &str) -> Option<Self> {
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
         match name {
             "criterion" => Some(Self::Criterion),
             "callgrind" => Some(Self::Callgrind),
@@ -64,7 +64,7 @@ impl EngineSystem {
     /// counts and bytes are a property of the code, not the machine, so
     /// `alloc_tracker` is hardware-independent; processor time obviously is not.
     #[must_use]
-    pub fn is_hardware_dependent(self) -> bool {
+    pub(crate) fn is_hardware_dependent(self) -> bool {
         match self {
             Self::Criterion | Self::AllTheTime => true,
             Self::Callgrind | Self::AllocTracker => false,
@@ -92,7 +92,7 @@ impl fmt::Display for EngineSystem {
 /// The triple is **always auto-detected**: there is no `--target-triple` override
 /// on `run`/`backfill` (a misdeclared triple would silently misfile data).
 #[must_use]
-pub fn resolve_target_triple(engine: EngineSystem, host_triple: &str) -> String {
+pub(crate) fn resolve_target_triple(engine: EngineSystem, host_triple: &str) -> String {
     match engine {
         EngineSystem::Callgrind => normalize_os_to_linux(host_triple),
         EngineSystem::Criterion | EngineSystem::AllocTracker | EngineSystem::AllTheTime => {
@@ -117,7 +117,7 @@ fn normalize_os_to_linux(host_triple: &str) -> String {
 /// The set of factors that must match for two runs to share a series, and which
 /// therefore form the storage partition.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct ComparabilityKey {
+pub(crate) struct ComparabilityKey {
     /// Workspace/project identity.
     pub project: String,
     /// The benchmark engine system.
@@ -140,7 +140,7 @@ impl ComparabilityKey {
     /// which `analyze` would then fail to attribute — by mangling the value rather
     /// than rejecting the run.
     #[must_use]
-    pub fn new(
+    pub(crate) fn new(
         project: &str,
         system: EngineSystem,
         target_triple: &str,
@@ -163,7 +163,7 @@ impl ComparabilityKey {
     /// [`clean_key`]: Self::clean_key
     /// [`dirty_key`]: Self::dirty_key
     #[must_use]
-    pub fn partition_prefix(&self) -> String {
+    pub(crate) fn partition_prefix(&self) -> String {
         let project = &self.project;
         let system = self.system.as_str();
         let triple = &self.target_triple;
@@ -181,7 +181,7 @@ impl ComparabilityKey {
     /// `commit` is sanitized the same way as the partition components so the
     /// directory name always forms a single key segment.
     #[must_use]
-    pub fn clean_key(&self, commit: &str) -> String {
+    pub(crate) fn clean_key(&self, commit: &str) -> String {
         let prefix = self.partition_prefix();
         let commit = sanitize_segment(commit);
         format!("{prefix}/{commit}/clean.json")
@@ -199,25 +199,10 @@ impl ComparabilityKey {
     /// `commit` is sanitized the same way as the partition components so the
     /// directory name always forms a single key segment.
     #[must_use]
-    pub fn dirty_key(&self, commit: &str, observation_unix: i64) -> String {
+    pub(crate) fn dirty_key(&self, commit: &str, observation_unix: i64) -> String {
         let prefix = self.partition_prefix();
         let commit = sanitize_segment(commit);
         format!("{prefix}/{commit}/dirty-{observation_unix}.json")
-    }
-
-    /// The object key for a blessing sidecar at `commit`, issued at `issued_unix`.
-    ///
-    /// Layout: `{prefix}/{commit}/bless-{issued_unix}.json`. Blessings are
-    /// append-only sidecars distinguished by their issue time, so several coexist
-    /// on one commit and are unioned at query time.
-    ///
-    /// `commit` is sanitized the same way as the partition components so the
-    /// directory name always forms a single key segment.
-    #[must_use]
-    pub fn bless_key(&self, commit: &str, issued_unix: i64) -> String {
-        let prefix = self.partition_prefix();
-        let commit = sanitize_segment(commit);
-        format!("{prefix}/{commit}/bless-{issued_unix}.json")
     }
 
     /// The storage prefix shared by every object recorded at `commit` in this
@@ -226,7 +211,7 @@ impl ComparabilityKey {
     /// `commit` is sanitized the same way as the partition components so the
     /// directory name always forms a single key segment.
     #[must_use]
-    pub fn commit_prefix(&self, commit: &str) -> String {
+    pub(crate) fn commit_prefix(&self, commit: &str) -> String {
         let prefix = self.partition_prefix();
         let commit = sanitize_segment(commit);
         format!("{prefix}/{commit}/")
@@ -389,21 +374,6 @@ mod tests {
             key.dirty_key("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", 1_700_000_000),
             "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/\
              deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/dirty-1700000000.json"
-        );
-    }
-
-    #[test]
-    fn bless_key_is_named_by_commit_and_issue_time() {
-        let key = ComparabilityKey::new(
-            "folo",
-            EngineSystem::Callgrind,
-            "x86_64-unknown-linux-gnu",
-            None,
-        );
-        assert_eq!(
-            key.bless_key("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", 1_700_000_000),
-            "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/\
-             deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/bless-1700000000.json"
         );
     }
 

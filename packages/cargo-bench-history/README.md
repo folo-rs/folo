@@ -16,8 +16,12 @@ commit order, so historical trends become analyzable.
 # Write a starter .cargo/bench_history.toml.
 cargo bench-history install
 
-# Run the workspace benchmarks and store the results.
+# Run the workspace benchmarks for the current commit and store the results.
 cargo bench-history run
+
+# Bootstrap history by benching a range of past commits, so analysis has a
+# trend to work with (a single run on its own has nothing to compare against).
+cargo bench-history backfill <from-commit> <to-commit>
 
 # Analyze the recorded history for regressions and drift.
 cargo bench-history analyze

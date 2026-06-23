@@ -10,7 +10,6 @@ mod local;
 mod sas;
 
 pub(crate) use facade::build_storage;
-pub use local::LocalStorage;
 
 use std::error::Error;
 use std::fmt;
@@ -23,7 +22,7 @@ use std::path::{Component, Path};
 /// The model — flat string keys, write-once objects, and list-by-prefix — is the
 /// lowest common denominator of a filesystem and a blob container, so every
 /// backend implements this trait with no special-casing by callers.
-pub trait Storage: fmt::Debug + Send + Sync {
+pub(crate) trait Storage: fmt::Debug + Send + Sync {
     /// Writes `bytes` at `key`, creating any intermediate structure as needed.
     ///
     /// Storage is write-once: an existing object is never overwritten.
@@ -78,7 +77,7 @@ pub trait Storage: fmt::Debug + Send + Sync {
     fn delete(&self, key: &str) -> impl Future<Output = Result<(), StorageError>>;
 }
 
-/// An error from a [`Storage`] operation.
+/// An error from a storage operation.
 #[derive(Debug)]
 pub enum StorageError {
     /// No object exists at the requested key.
@@ -145,7 +144,8 @@ pub(crate) fn is_plain_segment(segment: &str) -> bool {
 /// segments, which could otherwise escape or rebind a filesystem storage root.
 ///
 /// Both backends share this so the in-memory fake rejects exactly the keys the
-/// real [`LocalStorage`] would, keeping fake-driven tests honest.
+/// real [`LocalStorage`](local::LocalStorage) would, keeping fake-driven tests
+/// honest.
 ///
 /// # Errors
 ///

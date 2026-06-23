@@ -122,7 +122,7 @@ pub struct ToolchainInfo {
 /// `get` resolves an environment-variable name to its value, allowing the
 /// detection to be unit-tested without touching the real process environment.
 #[must_use]
-pub fn detect_ci(get: impl Fn(&str) -> Option<String>) -> CiInfo {
+pub(crate) fn detect_ci(get: impl Fn(&str) -> Option<String>) -> CiInfo {
     if get("GITHUB_ACTIONS").as_deref() == Some("true") {
         return CiInfo {
             provider: CiProvider::GitHubActions,

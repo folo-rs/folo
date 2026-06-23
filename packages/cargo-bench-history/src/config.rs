@@ -41,7 +41,7 @@ path = \"./bench-history\"
 
 /// The parsed configuration file.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct Config {
+pub(crate) struct Config {
     /// Project identity (defaults applied during resolution, not here).
     #[serde(default)]
     pub project: ProjectConfig,
@@ -51,7 +51,7 @@ pub struct Config {
 
 /// Project identity section.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
-pub struct ProjectConfig {
+pub(crate) struct ProjectConfig {
     /// Explicit project id; when absent the workspace directory name is used.
     pub id: Option<String>,
     /// The repository's default (integration) branch, used by `analyze` as the
@@ -65,7 +65,7 @@ pub struct ProjectConfig {
 /// `path` key, so adding future backends is a new variant with its own table.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "kebab-case")]
-pub enum StorageConfig {
+pub(crate) enum StorageConfig {
     /// Store result sets under a local filesystem path.
     Local {
         /// Root directory for the stored partitions.
@@ -105,7 +105,7 @@ pub enum StorageConfig {
 ///
 /// Returns [`ConfigError::Parse`] if the text is not valid TOML or does not match
 /// the configuration schema.
-pub fn parse_config(text: &str) -> Result<Config, ConfigError> {
+pub(crate) fn parse_config(text: &str) -> Result<Config, ConfigError> {
     toml::from_str(text).map_err(|error| ConfigError::Parse(error.to_string()))
 }
 

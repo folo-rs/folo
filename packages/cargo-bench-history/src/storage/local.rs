@@ -24,14 +24,14 @@ static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// A [`Storage`] that persists objects as files under a root directory.
 #[derive(Clone, Debug)]
-pub struct LocalStorage {
+pub(crate) struct LocalStorage {
     root: PathBuf,
 }
 
 impl LocalStorage {
     /// Creates a local storage rooted at `root`.
     #[must_use]
-    pub fn new(root: impl Into<PathBuf>) -> Self {
+    pub(crate) fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
     }
 
