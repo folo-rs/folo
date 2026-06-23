@@ -14,14 +14,6 @@ rust-version.workspace = true
 [package.metadata.docs.rs]
 all-features = true
 
-# A minimal stand-in for a benchmark engine, used by integration tests to drive
-# `run` end to end: it writes Gungraun summary fixtures into the target tree and
-# exits with a configurable code, exercising the real harvest and exit-code
-# paths without invoking a real (and slow) benchmark engine.
-[[bin]]
-name = "cargo-bench-history-mock-engine"
-path = "tests/support/mock_engine.rs"
-
 [features]
 # Azure Blob Storage backend. Off by default so the common build stays light;
 # enabling it pulls in the Azure SDK and the crypto crates used to self-sign SAS
@@ -47,12 +39,12 @@ azure_core = { workspace = true, optional = true }
 # defaults are scoped to this package alone.
 azure_identity = { workspace = true, optional = true, features = ["default"] }
 azure_storage_blob = { workspace = true, optional = true, features = ["default"] }
-base64 = { workspace = true, optional = true, features = ["std"] }
+base64 = { workspace = true, optional = true }
 clap = { workspace = true, features = ["derive"] }
 colored = { workspace = true }
 futures = { workspace = true, optional = true }
 hmac = { workspace = true, optional = true }
-jiff = { workspace = true, features = ["serde", "std"] }
+jiff = { workspace = true, features = ["serde"] }
 many_cpus = { workspace = true }
 rasciigraph = { workspace = true, features = ["color"] }
 serde = { workspace = true, features = ["derive"] }
@@ -67,6 +59,7 @@ futures = { workspace = true, features = ["executor"] }
 mutants = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
+testing = { path = "../testing" }
 tick = { workspace = true, features = ["test-util"] }
 
 [lints]

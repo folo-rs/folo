@@ -19,7 +19,7 @@ use azure_core::http::Url;
 use cargo_bench_history::{Cli, Command, Overrides, RunError, RunOutcome, run_with_overrides};
 use serial_test::serial;
 
-/// The mock engine binary path, provided by Cargo for the `[[bin]]` target.
+/// The mock engine binary path, provided by Cargo for the auto-discovered binary target.
 const MOCK_ENGINE: &str = env!("CARGO_BIN_EXE_cargo-bench-history-mock-engine");
 
 /// The well-known Azurite development account key (public, fixed, not secret).

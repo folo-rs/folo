@@ -68,9 +68,10 @@ use std::process::ExitCode;
 
 /// A committed Gungraun summary with no `id` (unparametrized), `Ir` = 36.
 const SINGLE_SUMMARY: &str =
-    include_str!("../fixtures/callgrind/single_unparametrized.summary.json");
+    include_str!("../../tests/fixtures/callgrind/single_unparametrized.summary.json");
 /// A committed Gungraun summary with `id` = `two_instants`, `Ir` = 87.
-const PARAMETRIZED_SUMMARY: &str = include_str!("../fixtures/callgrind/parametrized.summary.json");
+const PARAMETRIZED_SUMMARY: &str =
+    include_str!("../../tests/fixtures/callgrind/parametrized.summary.json");
 
 /// The `package_dir` value of the committed single summary.
 const SINGLE_PACKAGE_DIR: &str = "\"/mnt/c/Source/folo/packages/fast_time\"";

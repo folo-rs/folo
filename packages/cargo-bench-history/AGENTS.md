@@ -569,7 +569,7 @@ never insert real-time delays in tests.
 
 The integration tests drive `run` against the **real** process/filesystem/storage
 adapters, so they need a real program to launch as the "engine". That program is
-`tests/support/mock_engine.rs`, declared as a `[[bin]]`
+`src/bin/cargo-bench-history-mock-engine.rs`, an auto-discovered binary target
 (`cargo-bench-history-mock-engine`); tests reference it via
 `env!("CARGO_BIN_EXE_cargo-bench-history-mock-engine")`. It writes the committed
 Gungraun summary fixtures into `<target-root>/gungraun/GROUP/summary.json` (so the

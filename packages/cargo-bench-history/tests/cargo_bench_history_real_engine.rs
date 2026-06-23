@@ -28,10 +28,7 @@ use std::path::{Path, PathBuf};
 
 use cargo_bench_history::{Cli, Command, MetricKind, ResultSet, RunOutcome, run};
 use serial_test::serial;
-
-#[path = "support/cwd_guard.rs"]
-mod cwd_guard;
-use cwd_guard::CwdGuard;
+use testing::CwdGuard;
 
 /// Parses CLI arguments into the typed [`Command`], exactly as the binary does.
 fn command_from(args: &[&str]) -> Command {

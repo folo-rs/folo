@@ -19,7 +19,7 @@ axum = { version = "0.8.0", default-features = false }
 azure_core = { version = "1.0.0", default-features = false }
 azure_identity = { version = "1.0.0", default-features = false }
 azure_storage_blob = { version = "1.0.0", default-features = false }
-base64 = { version = "0.22.1", default-features = false }
+base64 = { version = "0.22.1", default-features = false, features = ["std"] }
 cargo-freeze-deps = { version = "0.1.1", path = "packages/cargo-freeze-deps", default-features = false }
 clap = { version = "4.6.1", default-features = false, features = ["default"] }
 colored = { version = "2.2.0", default-features = false }
@@ -60,7 +60,7 @@ infinity_pool = { version = "0.8.19", path = "packages/infinity_pool", default-f
 itertools = { version = "0.15.0", default-features = false, features = [
     "use_std",
 ] }
-jiff = { version = "0.2.28", default-features = false }
+jiff = { version = "0.2.28", default-features = false, features = ["std"] }
 libc = { version = "0.2.172", default-features = false }
 linked = { version = "1.0.14", path = "packages/linked", default-features = false }
 linked_macros = { version = "1.0.14", path = "packages/linked_macros", default-features = false }

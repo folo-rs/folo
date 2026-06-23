@@ -18,14 +18,11 @@ use cargo_bench_history::{
 };
 use jiff::Timestamp;
 use serial_test::serial;
+use testing::CwdGuard;
 
-#[path = "support/cwd_guard.rs"]
-mod cwd_guard;
-use cwd_guard::CwdGuard;
-
-/// The mock engine binary path, provided by Cargo for the `[[bin]]` target. It
-/// writes Gungraun summary fixtures into the target tree and exits with a chosen
-/// code, standing in for a real benchmark engine.
+/// The mock engine binary path, provided by Cargo for the auto-discovered binary
+/// target. It writes Gungraun summary fixtures into the target tree and exits with
+/// a chosen code, standing in for a real benchmark engine.
 const MOCK_ENGINE: &str = env!("CARGO_BIN_EXE_cargo-bench-history-mock-engine");
 
 /// The tool version recorded with each run. The integration test compiles within
@@ -4770,15 +4767,23 @@ impl Workspace {
     }
 }
 
+/// Builds a [`GitInfo`] for a committed run: the full hash is `<commit>full`, the
+/// short hash is `commit`, and the branch is `main` (clean working tree).
+fn git_info(commit: &str) -> GitInfo {
+    GitInfo {
+        commit: Some(format!("{commit}full")),
+        short_commit: Some(commit.to_owned()),
+        branch: Some("main".to_owned()),
+        dirty: false,
+    }
+}
+
 /// Builds a Callgrind result set with two records — `alpha::bench/wide` and
 /// `beta::bench/narrow` — each carrying a single `Ir` metric, stamped with the
 /// effective second and abbreviated `commit`.
 fn two_benchmark_result_set(effective: i64, commit: &str, alpha: f64, beta: f64) -> ResultSet {
     let time = Timestamp::from_second(effective).expect("seconds within range");
-    let mut git = GitInfo::default();
-    git.commit = Some(format!("{commit}full"));
-    git.short_commit = Some(commit.to_owned());
-    git.branch = Some("main".to_owned());
+    let git = git_info(commit);
     let context = RunContext::new(
         Timestamps::new(time, time),
         git,
@@ -4822,10 +4827,7 @@ fn two_benchmark_result_set(effective: i64, commit: &str, alpha: f64, beta: f64)
 /// effective second and abbreviated `commit`.
 fn criterion_result_set(effective: i64, commit: &str, value: f64) -> ResultSet {
     let time = Timestamp::from_second(effective).expect("seconds within range");
-    let mut git = GitInfo::default();
-    git.commit = Some(format!("{commit}full"));
-    git.short_commit = Some(commit.to_owned());
-    git.branch = Some("main".to_owned());
+    let git = git_info(commit);
     let context = RunContext::new(
         Timestamps::new(time, time),
         git,
@@ -4861,10 +4863,7 @@ fn alloc_result_set(
     allocs: f64,
 ) -> ResultSet {
     let time = Timestamp::from_second(effective).expect("seconds within range");
-    let mut git = GitInfo::default();
-    git.commit = Some(format!("{commit}full"));
-    git.short_commit = Some(commit.to_owned());
-    git.branch = Some("main".to_owned());
+    let git = git_info(commit);
     let context = RunContext::new(
         Timestamps::new(time, time),
         git,
@@ -4897,10 +4896,7 @@ fn alloc_result_set(
 /// second and abbreviated `commit`.
 fn time_result_set(effective: i64, commit: &str, operation: &str, value: f64) -> ResultSet {
     let time = Timestamp::from_second(effective).expect("seconds within range");
-    let mut git = GitInfo::default();
-    git.commit = Some(format!("{commit}full"));
-    git.short_commit = Some(commit.to_owned());
-    git.branch = Some("main".to_owned());
+    let git = git_info(commit);
     let context = RunContext::new(
         Timestamps::new(time, time),
         git,
@@ -4933,10 +4929,7 @@ fn time_result_set_with_dispersion(
     half_width: f64,
 ) -> ResultSet {
     let time = Timestamp::from_second(effective).expect("seconds within range");
-    let mut git = GitInfo::default();
-    git.commit = Some(format!("{commit}full"));
-    git.short_commit = Some(commit.to_owned());
-    git.branch = Some("main".to_owned());
+    let git = git_info(commit);
     let context = RunContext::new(
         Timestamps::new(time, time),
         git,
@@ -5000,10 +4993,7 @@ fn storage_only_config() -> String {
 /// given `metrics`, stamped with the effective second and abbreviated `commit`.
 fn result_set_with(effective: i64, commit: &str, metrics: Vec<Metric>) -> ResultSet {
     let time = Timestamp::from_second(effective).expect("seconds within range");
-    let mut git = GitInfo::default();
-    git.commit = Some(format!("{commit}full"));
-    git.short_commit = Some(commit.to_owned());
-    git.branch = Some("main".to_owned());
+    let git = git_info(commit);
     let context = RunContext::new(
         Timestamps::new(time, time),
         git,

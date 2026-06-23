@@ -9,13 +9,15 @@ use std::path::{Path, PathBuf};
 
 /// Switches the process current directory to `dir`, restoring the previous
 /// directory when dropped.
-pub(crate) struct CwdGuard {
+#[derive(Debug)]
+pub struct CwdGuard {
     original: PathBuf,
 }
 
 impl CwdGuard {
     /// Enters `dir`, remembering the current directory to restore on drop.
-    pub(crate) fn enter(dir: &Path) -> Self {
+    #[must_use]
+    pub fn enter(dir: &Path) -> Self {
         let original = std::env::current_dir().expect("current dir should be readable");
         std::env::set_current_dir(dir).expect("current dir should be set");
         Self { original }
