@@ -14,8 +14,9 @@
 //! under coverage (`cargo llvm-cov` shares one instrumented target directory and
 //! the extra build cost is not worth instrumenting). The benchmark itself is
 //! shrunk to the smallest Criterion permits — a 10-sample run with sub-second
-//! warm-up and measurement windows — and Criterion is taken with
-//! `default-features = false` (dropping plotters and rayon) so the build stays
+//! warm-up and measurement windows, reduced bootstrap resampling, and Criterion
+//! taken with `default-features = false` (dropping plotters and rayon) — and the
+//! fixture builds unoptimized (see [`FIXTURE_CARGO_TOML`]) so the build stays
 //! quick.
 #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 #![allow(
@@ -58,6 +59,16 @@ fn collect_json_files(dir: &Path, out: &mut Vec<PathBuf>) {
 /// `[workspace]` table stops cargo from walking up into the folo workspace, and
 /// `default-features = false` keeps the Criterion build fast while retaining the
 /// `cargo_bench_support` feature `cargo bench` requires.
+///
+/// The `[profile.bench]` override builds Criterion and its dependency graph
+/// unoptimized, since this fixture is its own workspace with its own `target/`
+/// and shares no artifacts with folo. The build is the dominant cost, and the
+/// test only checks that a positive wall time is harvested, never the magnitude
+/// of the measurement — so optimization buys nothing here. `codegen-units` is
+/// left at the default; raising it multiplies object files and slows linking
+/// (especially under Windows real-time antivirus). The unoptimized build makes
+/// Criterion's bootstrap analysis slow in turn, which the reduced `nresamples`
+/// in the benchmark below compensates for.
 const FIXTURE_CARGO_TOML: &str = r#"[package]
 name = "bench_history_e2e_fixture"
 version = "0.0.0"
@@ -72,10 +83,17 @@ criterion = { version = "0.8.2", default-features = false, features = ["cargo_be
 [[bench]]
 name = "tiny"
 harness = false
+
+[profile.bench]
+opt-level = 0
+debug = false
 "#;
 
 /// The benchmark itself: one case, `e2e/add`, with the smallest run Criterion
-/// permits so the measurement completes in well under a second.
+/// permits so the measurement completes in well under a second. `nresamples` is
+/// cut far below Criterion's 100,000 default so the bootstrap analysis stays fast
+/// even though the fixture builds unoptimized (see [`FIXTURE_CARGO_TOML`]); the
+/// harvested wall-time point estimate does not depend on the resample count.
 const FIXTURE_BENCH: &str = r#"use std::hint::black_box;
 use std::time::Duration;
 
@@ -91,7 +109,11 @@ fn tiny(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, tiny);
+criterion_group! {
+    name = benches;
+    config = Criterion::default().nresamples(1000);
+    targets = tiny
+}
 criterion_main!(benches);
 "#;
 
