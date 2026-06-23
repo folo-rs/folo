@@ -450,7 +450,7 @@ mod tests {
     #[cfg_attr(miri, ignore = "reads the wall clock to compute the SAS expiry")]
     fn account_sas_expiry_is_a_future_fixed_width_utc_timestamp() {
         let expiry = account_sas_expiry();
-        let parsed: Timestamp = expiry.parse().expect("expiry is a valid RFC3339 timestamp");
+        let parsed: Timestamp = expiry.parse().unwrap();
         assert!(
             parsed > Timestamp::now(),
             "expiry {expiry} should be in the future"
@@ -473,10 +473,7 @@ mod tests {
         .unwrap();
 
         assert!(storage.credential.is_none());
-        let query = storage
-            .container_endpoint
-            .query()
-            .expect("SAS query present");
+        let query = storage.container_endpoint.query().unwrap();
         assert!(query.contains("sig="), "{query}");
         assert!(query.contains("spr=https%2Chttp"), "{query}");
         assert_eq!(
@@ -747,7 +744,7 @@ mod tests {
             Some(AZURITE_KEY.to_owned()),
             None,
         )
-        .expect("Azurite storage should build");
+        .unwrap();
         Some(storage)
     }
 

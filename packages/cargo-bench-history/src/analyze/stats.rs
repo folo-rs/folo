@@ -401,7 +401,7 @@ mod tests {
     #[test]
     fn pettitt_locates_a_clean_step() {
         // A clean step from 1 to 5 after three points: K = 9 at index 3.
-        let change = pettitt(&[1.0, 1.0, 1.0, 5.0, 5.0, 5.0]).expect("a change point");
+        let change = pettitt(&[1.0, 1.0, 1.0, 5.0, 5.0, 5.0]).unwrap();
         assert_eq!(change.index, 3);
         assert_eq!(change.k_statistic, 9.0);
         // p ≈ 2·exp(−6·81/252) ≈ 0.291 — deliberately not tiny, which is why
@@ -412,13 +412,13 @@ mod tests {
     #[test]
     fn pettitt_step_is_at_the_boundary_for_an_asymmetric_split() {
         // Step after the second point: before [10,10], after [40,40,40,40].
-        let change = pettitt(&[10.0, 10.0, 40.0, 40.0, 40.0, 40.0]).expect("a change point");
+        let change = pettitt(&[10.0, 10.0, 40.0, 40.0, 40.0, 40.0]).unwrap();
         assert_eq!(change.index, 2);
     }
 
     #[test]
     fn pettitt_flat_series_degenerates_at_index_one() {
-        let change = pettitt(&[5.0, 5.0, 5.0, 5.0]).expect("a degenerate split");
+        let change = pettitt(&[5.0, 5.0, 5.0, 5.0]).unwrap();
         assert_eq!(change.index, 1);
         assert_eq!(change.k_statistic, 0.0);
         assert_eq!(change.p_value, 1.0);
@@ -435,7 +435,7 @@ mod tests {
         // Two ascending points are the smallest series Pettitt accepts: the only
         // split is at index 1 with U_1 = 2·1 − 1·3 = −1, so K = 1 (and p clamps to
         // 1.0). This pins both the `n < 2` lower bound and the `best_abs` seed.
-        let change = pettitt(&[1.0, 2.0]).expect("a change point");
+        let change = pettitt(&[1.0, 2.0]).unwrap();
         assert_eq!(change.index, 1);
         assert_eq!(change.k_statistic, 1.0);
         assert_eq!(change.p_value, 1.0);
@@ -548,7 +548,7 @@ mod tests {
     #[test]
     fn theil_sen_resists_a_single_outlier() {
         // One wild point cannot drag the median-of-slopes off the true unit slope.
-        let (slope, _intercept) = theil_sen_line(&[1.0, 2.0, 3.0, 999.0, 5.0]).expect("a line");
+        let (slope, _intercept) = theil_sen_line(&[1.0, 2.0, 3.0, 999.0, 5.0]).unwrap();
         assert_eq!(slope, 1.0);
     }
 

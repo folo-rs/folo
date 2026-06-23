@@ -120,7 +120,7 @@ mod tests {
     use super::*;
 
     fn config_with_storage(storage: &str) -> Config {
-        parse_config(storage).expect("test configuration should parse")
+        parse_config(storage).unwrap()
     }
 
     #[tokio::test]
@@ -155,8 +155,7 @@ mod tests {
     #[test]
     fn build_storage_for_local_yields_a_local_backend() {
         let config = config_with_storage("[storage.local]\npath = \"./data\"\n");
-        let storage =
-            build_storage(&config, Path::new("/work")).expect("local storage always builds");
+        let storage = build_storage(&config, Path::new("/work")).unwrap();
         assert!(matches!(storage, StorageFacade::Local(_)));
         assert!(format!("{storage:?}").contains("data"), "{storage:?}");
     }
@@ -165,8 +164,7 @@ mod tests {
     #[test]
     fn build_storage_for_azure_without_feature_is_a_config_error() {
         let config = config_with_storage("[storage.azure]\naccount = \"a\"\ncontainer = \"c\"\n");
-        let error =
-            build_storage(&config, Path::new("/work")).expect_err("azure needs the feature");
+        let error = build_storage(&config, Path::new("/work")).unwrap_err();
         match error {
             StorageError::Config { message } => {
                 assert!(message.contains("azure"), "{message}");
@@ -184,7 +182,7 @@ mod tests {
              endpoint = \"http://127.0.0.1:10000/devstoreaccount1\"\n\
              account_key = \"Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==\"\n",
         );
-        let storage = build_storage(&config, Path::new("/work")).expect("azure storage builds");
+        let storage = build_storage(&config, Path::new("/work")).unwrap();
         assert!(matches!(storage, StorageFacade::Azure(_)));
     }
 
@@ -195,7 +193,7 @@ mod tests {
             "[storage.azure]\naccount = \"a\"\ncontainer = \"c\"\n\
              account_key = \"a2V5\"\nsas_token = \"sig=x\"\n",
         );
-        let error = build_storage(&config, Path::new("/work")).expect_err("conflicting auth");
+        let error = build_storage(&config, Path::new("/work")).unwrap_err();
         assert!(matches!(error, StorageError::Config { .. }), "{error:?}");
     }
 }

@@ -1,8 +1,9 @@
 //! The blessing data model: a manual acceptance of a benchmark's current level on
 //! the base branch, so history analysis stops re-flagging an intentional change.
 //!
-//! A blessing is an append-only sidecar (`bless-<issued_unix>.json`, see DESIGN
-//! §8.8) stored in the same commit directory as the run it accepts. It names one
+//! A blessing is an append-only sidecar (`bless-<issued_unix>.json`, described by
+//! the `bless` / `unbless` command in `DESIGN.md`) stored in the same commit
+//! directory as the run it accepts. It names one
 //! or more benchmark-id prefixes; a series whose qualified id starts with any of
 //! them is re-baselined to the blessed commit, so the accepted step stops being
 //! reported as a regression while its pre-blessing history is still retained for
@@ -97,7 +98,7 @@ mod tests {
     use super::*;
 
     fn ts(seconds: i64) -> Timestamp {
-        Timestamp::from_second(seconds).expect("seconds within range")
+        Timestamp::from_second(seconds).unwrap()
     }
 
     fn id(
@@ -133,8 +134,8 @@ mod tests {
             vec!["all_the_time/read_cell".to_owned()],
             "1.2.3".to_owned(),
         );
-        let json = original.to_json().expect("serializes");
-        let parsed = BlessingRecord::from_json(&json).expect("deserializes");
+        let json = original.to_json().unwrap();
+        let parsed = BlessingRecord::from_json(&json).unwrap();
         assert_eq!(parsed, original);
     }
 

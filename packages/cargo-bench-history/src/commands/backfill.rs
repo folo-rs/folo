@@ -5,7 +5,7 @@
 //! checks out each commit of a range in a dedicated git **worktree** (never the
 //! primary checkout) and runs the configured engines there exactly as the `run`
 //! command does, recording each commit's committer date as the commit timestamp
-//! (see DESIGN §8.5).
+//! (see the `backfill` command in `DESIGN.md`).
 //!
 //! Like `run`, the orchestration is generic over small ports so the loop logic is
 //! exercised with in-memory fakes (Miri-safe): a [`BackfillGit`] port for the git
@@ -693,7 +693,7 @@ mod tests {
     #[test]
     fn plan_enumerates_inclusive_first_parent_range_oldest_first() {
         let git = FakeBackfillGit::new(fixture());
-        let commits = block_on(plan_commits(&options("c1", "f2"), &git)).expect("range plans");
+        let commits = block_on(plan_commits(&options("c1", "f2"), &git)).unwrap();
         assert!(
             commits.iter().eq(["c1", "f1", "f2"].iter()),
             "inclusive of both endpoints, oldest first: {commits:?}"
@@ -703,14 +703,14 @@ mod tests {
     #[test]
     fn plan_includes_a_single_commit_range() {
         let git = FakeBackfillGit::new(fixture());
-        let commits = block_on(plan_commits(&options("f2", "f2"), &git)).expect("range plans");
+        let commits = block_on(plan_commits(&options("f2", "f2"), &git)).unwrap();
         assert!(commits.iter().eq(std::iter::once(&"f2")), "{commits:?}");
     }
 
     #[test]
     fn plan_rejects_an_unresolvable_endpoint() {
         let git = FakeBackfillGit::new(fixture());
-        let error = block_on(plan_commits(&options("absent", "f2"), &git)).expect_err("refuse");
+        let error = block_on(plan_commits(&options("absent", "f2"), &git)).unwrap_err();
         let RunError::Backfill { message } = error else {
             panic!("expected a backfill error, got {error:?}");
         };
@@ -721,7 +721,7 @@ mod tests {
     fn plan_rejects_a_from_that_is_not_an_ancestor_of_to() {
         // f1 is on the feature side, not in master's first-parent ancestry.
         let git = FakeBackfillGit::new(fixture());
-        let error = block_on(plan_commits(&options("f1", "c3"), &git)).expect_err("refuse");
+        let error = block_on(plan_commits(&options("f1", "c3"), &git)).unwrap_err();
         let RunError::Backfill { message } = error else {
             panic!("expected a backfill error, got {error:?}");
         };
@@ -733,7 +733,7 @@ mod tests {
         // HEAD is at feature; c3 (master tip) is not part of feature's history,
         // yet a range built purely from --to's first-parent ancestry still plans.
         let git = FakeBackfillGit::new(fixture());
-        let commits = block_on(plan_commits(&options("c0", "c3"), &git)).expect("range plans");
+        let commits = block_on(plan_commits(&options("c0", "c3"), &git)).unwrap();
         assert!(
             commits.iter().eq(["c0", "c1", "c2", "c3"].iter()),
             "the range is derived from --to, independent of the checkout: {commits:?}"
@@ -762,7 +762,7 @@ mod tests {
             &worktree(),
             &commits,
         ))
-        .expect("loop completes");
+        .unwrap();
 
         assert!(
             report
@@ -802,7 +802,7 @@ mod tests {
             &worktree(),
             &commits,
         ))
-        .expect("loop returns a partial report");
+        .unwrap();
 
         assert!(
             report
@@ -829,8 +829,7 @@ mod tests {
         let mut opts = options("c0", "f1");
         opts.ignore_errors = true;
 
-        let report =
-            block_on(run_commits(&opts, &git, &runner, &worktree(), &commits)).expect("completes");
+        let report = block_on(run_commits(&opts, &git, &runner, &worktree(), &commits)).unwrap();
 
         assert!(
             report
@@ -856,8 +855,7 @@ mod tests {
         let mut opts = options("c0", "f1");
         opts.ignore_errors = true;
 
-        let error = block_on(run_commits(&opts, &git, &runner, &worktree(), &commits))
-            .expect_err("infra error aborts");
+        let error = block_on(run_commits(&opts, &git, &runner, &worktree(), &commits)).unwrap_err();
         assert!(matches!(error, RunError::Io(_)), "{error:?}");
         // The loop stopped at the failing commit; f1 was never reached.
         assert!(runner.ran.borrow().iter().eq(["c0", "c1"].iter()));
@@ -906,7 +904,7 @@ mod tests {
             &worktree(),
             &commits,
         ))
-        .expect("loop completes");
+        .unwrap();
 
         // c1 was recognized as already recorded and reported as skipped-existing.
         assert!(report.skipped_existing.iter().eq(std::iter::once(&"c1")));
@@ -938,8 +936,7 @@ mod tests {
         let mut opts = options("c0", "f1");
         opts.overwrite = true;
 
-        let report =
-            block_on(run_commits(&opts, &git, &runner, &worktree(), &commits)).expect("completes");
+        let report = block_on(run_commits(&opts, &git, &runner, &worktree(), &commits)).unwrap();
 
         // With --overwrite the pre-check is bypassed: every commit, including the
         // already-recorded c1, is reset and run.
@@ -967,24 +964,24 @@ mod tests {
             "v2/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/c0/clean.json",
             b"{}",
         ))
-        .expect("seed callgrind c0");
+        .unwrap();
         block_on(storage.put(
             "v2/proj/criterion/x86_64-unknown-linux-gnu/mk/c0/clean.json",
             b"{}",
         ))
-        .expect("seed criterion c0");
+        .unwrap();
         block_on(storage.put(
             "v2/proj/criterion/x86_64-unknown-linux-gnu/mk/c1/dirty-7.json",
             b"{}",
         ))
-        .expect("seed dirty c1");
+        .unwrap();
         block_on(storage.put(
             "v2/other/callgrind/x86_64-unknown-linux-gnu/synthetic/c9/clean.json",
             b"{}",
         ))
-        .expect("seed other project");
+        .unwrap();
 
-        let recorded = block_on(runner.recorded_commits()).expect("query succeeds");
+        let recorded = block_on(runner.recorded_commits()).unwrap();
 
         // Only c0 has a clean result under this project: a dirty-only commit and
         // another project's commit are excluded.
@@ -999,7 +996,7 @@ mod tests {
         let opts = BackfillOptions::default();
         let runner = system_runner(&storage, &opts);
 
-        let recorded = block_on(runner.recorded_commits()).expect("query succeeds");
+        let recorded = block_on(runner.recorded_commits()).unwrap();
         assert!(recorded.is_empty());
     }
 
@@ -1038,7 +1035,7 @@ mod tests {
             &runner,
             &worktree(),
         ))
-        .expect("backfill completes");
+        .unwrap();
 
         let RunOutcome::Completed { message } = outcome else {
             panic!("expected a completed outcome");
@@ -1064,7 +1061,7 @@ mod tests {
             &runner,
             &worktree(),
         ))
-        .expect_err("a stop is an error exit");
+        .unwrap_err();
 
         let RunError::Backfill { message } = error else {
             panic!("expected a backfill error, got {error:?}");
@@ -1084,7 +1081,7 @@ mod tests {
             &runner,
             &worktree(),
         ))
-        .expect_err("infra error aborts");
+        .unwrap_err();
 
         assert!(matches!(error, RunError::Io(_)), "{error:?}");
         assert!(git.removed.borrow().iter().eq(std::iter::once(&worktree())));
@@ -1097,7 +1094,7 @@ mod tests {
             harvested: 7,
             labels: Vec::new(),
         }))
-        .expect("stored is success");
+        .unwrap();
         assert_eq!(stored, CommitOutcome::Stored { cases: 7 });
 
         let empty = map_run_result(Ok(RunSummary {
@@ -1105,20 +1102,20 @@ mod tests {
             harvested: 0,
             labels: Vec::new(),
         }))
-        .expect("empty harvest is a skip");
+        .unwrap();
         assert_eq!(empty, CommitOutcome::SkippedEmpty);
 
         let duplicate = map_run_result(Err(RunError::Duplicate {
             key: "v2/p/callgrind/t/synthetic/abc/clean.json".to_owned(),
         }))
-        .expect("duplicate is a skip");
+        .unwrap();
         assert_eq!(duplicate, CommitOutcome::SkippedExisting);
 
         let failed = map_run_result(Err(RunError::Engine {
             engine: "callgrind".to_owned(),
             code: Some(101),
         }))
-        .expect("engine failure is recoverable");
+        .unwrap();
         let CommitOutcome::BenchFailed { reason } = failed else {
             panic!("expected a bench failure");
         };
@@ -1148,7 +1145,7 @@ mod tests {
         let name = path
             .file_name()
             .and_then(|component| component.to_str())
-            .expect("worktree path should have a UTF-8 file name");
+            .unwrap();
         assert!(
             name.starts_with("cargo-bench-history-worktree-"),
             "unexpected worktree name: {name}"

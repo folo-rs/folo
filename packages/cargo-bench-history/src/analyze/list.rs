@@ -12,7 +12,7 @@
 //! `list discriminants` lists the distinct discriminant sets present in storage
 //! and, like that listing, needs no repository.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde::Serialize;
@@ -670,8 +670,7 @@ where
 
     // A benchmark's metrics each form their own series but share a blessing, so the
     // same `(set, benchmark, commit)` is reported once.
-    let mut seen: std::collections::BTreeSet<(DiscriminantSet, String, String)> =
-        std::collections::BTreeSet::new();
+    let mut seen: BTreeSet<(DiscriminantSet, String, String)> = BTreeSet::new();
     let mut entries = Vec::new();
     for one in &series {
         let Some(blessing) = &one.blessing else {
@@ -907,7 +906,7 @@ mod tests {
     use super::*;
 
     fn config() -> Config {
-        parse_config("[storage.local]\npath = \"./data\"\n").expect("config parses")
+        parse_config("[storage.local]\npath = \"./data\"\n").unwrap()
     }
 
     /// The auto-detected facets for the default synthetic partition the tests seed.
@@ -925,7 +924,7 @@ mod tests {
     /// A result set with one record carrying two metrics, so its partition
     /// reconstructs two distinct series.
     fn two_metric_set(effective: i64, commit: &str) -> ResultSet {
-        let time = Timestamp::from_second(effective).expect("seconds within range");
+        let time = Timestamp::from_second(effective).unwrap();
         let context = RunContext::new(
             Timestamps::new(time, time),
             GitInfo {
@@ -966,7 +965,7 @@ mod tests {
     /// A result set with two single-metric benchmarks that share a group but differ
     /// by case, so its partition reconstructs two distinct series.
     fn two_benchmark_set(effective: i64, commit: &str) -> ResultSet {
-        let time = Timestamp::from_second(effective).expect("seconds within range");
+        let time = Timestamp::from_second(effective).unwrap();
         let context = RunContext::new(
             Timestamps::new(time, time),
             GitInfo {
@@ -1001,7 +1000,7 @@ mod tests {
     /// A result set with one record carrying a single metric, so its partition
     /// reconstructs exactly one series.
     fn single_metric_set(effective: i64, commit: &str) -> ResultSet {
-        let time = Timestamp::from_second(effective).expect("seconds within range");
+        let time = Timestamp::from_second(effective).unwrap();
         let context = RunContext::new(
             Timestamps::new(time, time),
             GitInfo {
@@ -1036,8 +1035,8 @@ mod tests {
     }
 
     fn store(storage: &MemoryStorage, key: &str, set: &ResultSet) {
-        let json = set.to_json().expect("result set serializes");
-        block_on(storage.put(key, json.as_bytes())).expect("store succeeds");
+        let json = set.to_json().unwrap();
+        block_on(storage.put(key, json.as_bytes())).unwrap();
     }
 
     fn linux_set() -> DiscriminantSet {
@@ -1049,7 +1048,7 @@ mod tests {
     }
 
     fn bts(seconds: i64) -> Timestamp {
-        Timestamp::from_second(seconds).expect("seconds within range")
+        Timestamp::from_second(seconds).unwrap()
     }
 
     /// A discriminant set distinct from [`linux_set`], for grouping tests.
@@ -1209,10 +1208,10 @@ mod tests {
             &config(),
             options,
             &auto(),
-            Timestamp::from_second(0).expect("epoch is valid"),
+            Timestamp::from_second(0).unwrap(),
             &RecordingReporter::new(),
         ))
-        .expect("listing runs");
+        .unwrap();
         match outcome {
             RunOutcome::Completed { message } => message,
             RunOutcome::Analyzed { .. } => panic!("list returns a Completed outcome"),
@@ -1307,7 +1306,7 @@ mod tests {
             &config(),
             &options(),
             &auto(),
-            Timestamp::from_second(0).expect("epoch is valid"),
+            Timestamp::from_second(0).unwrap(),
             &RecordingReporter::new(),
         ))
         .unwrap_err();
@@ -1370,7 +1369,7 @@ mod tests {
         };
         let report = list(&storage, &git, &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-        let sets = parsed.as_array().expect("a JSON array of sets");
+        let sets = parsed.as_array().unwrap();
         assert_eq!(
             sets.len(),
             2,
@@ -1394,7 +1393,7 @@ mod tests {
         };
         let report = list(&storage, &git, &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-        let sets = parsed.as_array().expect("a JSON array of sets");
+        let sets = parsed.as_array().unwrap();
         assert_eq!(
             sets.len(),
             1,
@@ -1419,10 +1418,10 @@ mod tests {
             &config(),
             &opts,
             &auto(),
-            Timestamp::from_second(0).expect("epoch is valid"),
+            Timestamp::from_second(0).unwrap(),
             &RecordingReporter::new(),
         ))
-        .expect_err("--all is rejected for the runs subject");
+        .unwrap_err();
         match error {
             RunError::Analyze { message } => {
                 assert!(message.contains("--all"), "{message}");
@@ -1517,8 +1516,8 @@ mod tests {
     }
 
     fn store_bless(storage: &MemoryStorage, key: &str, record: &BlessingRecord) {
-        let json = record.to_json().expect("blessing serializes");
-        block_on(storage.put(key, json.as_bytes())).expect("store succeeds");
+        let json = record.to_json().unwrap();
+        block_on(storage.put(key, json.as_bytes())).unwrap();
     }
 
     #[test]
@@ -1528,8 +1527,8 @@ mod tests {
         store(&storage, &clean_key("c3"), &two_metric_set(3, "c3"));
         let record = BlessingRecord::new(
             "c3".to_owned(),
-            Timestamp::from_second(3).expect("seconds within range"),
-            Timestamp::from_second(100).expect("seconds within range"),
+            Timestamp::from_second(3).unwrap(),
+            Timestamp::from_second(100).unwrap(),
             vec!["nm/nm::observe".to_owned()],
             "0.0.1".to_owned(),
         );
@@ -1576,8 +1575,8 @@ mod tests {
         store(&storage, &clean_key("c3"), &two_metric_set(3, "c3"));
         let record = BlessingRecord::new(
             "c3".to_owned(),
-            Timestamp::from_second(3).expect("seconds within range"),
-            Timestamp::from_second(100).expect("seconds within range"),
+            Timestamp::from_second(3).unwrap(),
+            Timestamp::from_second(100).unwrap(),
             vec!["nm/nm::observe".to_owned()],
             "0.0.1".to_owned(),
         );
@@ -1629,7 +1628,7 @@ mod tests {
             &config(),
             &opts,
             &auto(),
-            Timestamp::from_second(0).expect("epoch is valid"),
+            Timestamp::from_second(0).unwrap(),
             &RecordingReporter::new(),
         ))
         .unwrap_err()
@@ -1652,8 +1651,7 @@ mod tests {
     fn list_blessings_rejects_a_non_utf8_sidecar_at_head() {
         let storage = MemoryStorage::new();
         // HEAD is c3 in `linear_git`; a sidecar there with corrupt bytes.
-        block_on(storage.put(&bless_key("c3", 100), &[0xff, 0xfe, 0x00]))
-            .expect("seed corrupt bytes");
+        block_on(storage.put(&bless_key("c3", 100), &[0xff, 0xfe, 0x00])).unwrap();
         let error = list_blessings_error(&storage, &linear_git());
         match error {
             RunError::Analyze { message } => {
@@ -1666,8 +1664,7 @@ mod tests {
     #[test]
     fn list_blessings_rejects_an_invalid_sidecar_at_head() {
         let storage = MemoryStorage::new();
-        block_on(storage.put(&bless_key("c3", 100), b"{ not a blessing record"))
-            .expect("seed invalid json");
+        block_on(storage.put(&bless_key("c3", 100), b"{ not a blessing record")).unwrap();
         let error = list_blessings_error(&storage, &linear_git());
         match error {
             RunError::Analyze { message } => {
@@ -1691,8 +1688,8 @@ mod tests {
         // A blessing at c2 (mid-history) accepting the benchmark family.
         let record = BlessingRecord::new(
             "c2".to_owned(),
-            Timestamp::from_second(2).expect("seconds within range"),
-            Timestamp::from_second(100).expect("seconds within range"),
+            Timestamp::from_second(2).unwrap(),
+            Timestamp::from_second(100).unwrap(),
             vec!["nm/nm::observe".to_owned()],
             "0.0.1".to_owned(),
         );
@@ -1733,8 +1730,8 @@ mod tests {
         }
         let record = BlessingRecord::new(
             "c2".to_owned(),
-            Timestamp::from_second(2).expect("seconds within range"),
-            Timestamp::from_second(100).expect("seconds within range"),
+            Timestamp::from_second(2).unwrap(),
+            Timestamp::from_second(100).unwrap(),
             vec!["nm/nm::observe".to_owned()],
             "0.0.1".to_owned(),
         );
@@ -1798,8 +1795,8 @@ mod tests {
         }
         let record = BlessingRecord::new(
             "c1".to_owned(),
-            Timestamp::from_second(1).expect("seconds within range"),
-            Timestamp::from_second(100).expect("seconds within range"),
+            Timestamp::from_second(1).unwrap(),
+            Timestamp::from_second(100).unwrap(),
             vec!["nm/nm::observe".to_owned()],
             "0.0.1".to_owned(),
         );

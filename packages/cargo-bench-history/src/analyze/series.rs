@@ -44,7 +44,8 @@ pub(crate) struct SeriesPoint {
 /// In history analysis a series with a matching blessing is *re-baselined* to the
 /// blessed commit — the detector treats the blessed level as the new baseline and
 /// only sees points from that commit onward, while the pre-blessing points are
-/// retained for charting (drawn greyed). See DESIGN §8.8.
+/// retained for charting (drawn greyed). See the *Re-baselining* analysis
+/// section of `DESIGN.md`.
 #[derive(Clone, Debug)]
 pub(crate) struct Blessing {
     /// Full commit SHA the blessing was issued at (the report anchor).
@@ -240,7 +241,7 @@ mod tests {
     use super::*;
 
     fn ts(seconds: i64) -> Timestamp {
-        Timestamp::from_second(seconds).expect("seconds within range")
+        Timestamp::from_second(seconds).unwrap()
     }
 
     /// Builds a stored result set with one record carrying one `Ir` metric.
@@ -290,7 +291,7 @@ mod tests {
         let object_key =
             format!("v2/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json");
         LoadedObject {
-            key: parse_key(&object_key).expect("clean key parses"),
+            key: parse_key(&object_key).unwrap(),
             object_key,
             result: result_set(ts(effective), commit, value),
         }
@@ -302,7 +303,7 @@ mod tests {
             "v2/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/dirty-{unix}.json"
         );
         LoadedObject {
-            key: parse_key(&object_key).expect("dirty key parses"),
+            key: parse_key(&object_key).unwrap(),
             object_key,
             result: result_set(ts(unix), commit, value),
         }
@@ -368,7 +369,7 @@ mod tests {
         let other_key =
             "v2/proj/callgrind/aarch64-unknown-linux-gnu/synthetic/c0/clean.json".to_owned();
         let other = LoadedObject {
-            key: parse_key(&other_key).expect("key parses"),
+            key: parse_key(&other_key).unwrap(),
             object_key: other_key,
             result: result_set(ts(200), "c0", 20.0),
         };
@@ -387,12 +388,12 @@ mod tests {
             "v2/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/c1/clean.json".to_owned();
         let objects = vec![
             LoadedObject {
-                key: parse_key(&foo_key).expect("key parses"),
+                key: parse_key(&foo_key).unwrap(),
                 object_key: foo_key,
                 result: result_set_for_package(ts(100), "c0", 10.0, Some("foo")),
             },
             LoadedObject {
-                key: parse_key(&bar_key).expect("key parses"),
+                key: parse_key(&bar_key).unwrap(),
                 object_key: bar_key,
                 result: result_set_for_package(ts(200), "c1", 20.0, Some("bar")),
             },
@@ -410,12 +411,12 @@ mod tests {
             "v2/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/c1/clean.json".to_owned();
         let objects = vec![
             LoadedObject {
-                key: parse_key(&foo_key).expect("key parses"),
+                key: parse_key(&foo_key).unwrap(),
                 object_key: foo_key,
                 result: result_set_for_package(ts(100), "c0", 10.0, Some("foo")),
             },
             LoadedObject {
-                key: parse_key(&bar_key).expect("key parses"),
+                key: parse_key(&bar_key).unwrap(),
                 object_key: bar_key,
                 result: result_set_for_package(ts(200), "c1", 20.0, Some("bar")),
             },
@@ -467,7 +468,7 @@ mod tests {
         // The active window begins at the first point on or after c2, so the c0/c1
         // points are excluded from detection while retained for charts.
         assert_eq!(series[0].active_start, 2);
-        let recorded = series[0].blessing.as_ref().expect("blessing recorded");
+        let recorded = series[0].blessing.as_ref().unwrap();
         assert_eq!(recorded.commit, "c2full");
     }
 
@@ -502,13 +503,6 @@ mod tests {
         apply_blessings(&mut series, &map);
 
         assert_eq!(series[0].active_start, 3);
-        assert_eq!(
-            series[0]
-                .blessing
-                .as_ref()
-                .expect("blessing recorded")
-                .commit,
-            "c3full"
-        );
+        assert_eq!(series[0].blessing.as_ref().unwrap().commit, "c3full");
     }
 }

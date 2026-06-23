@@ -695,14 +695,13 @@ mod tests {
 
     fn parse(args: &[&str]) -> Command {
         Cli::from_args(&["cargo-bench-history"], args)
-            .expect("arguments should parse")
+            .unwrap()
             .into_command()
     }
 
     #[test]
     fn cli_is_debug_formatted() {
-        let cli =
-            Cli::from_args(&["cargo-bench-history"], &["run"]).expect("arguments should parse");
+        let cli = Cli::from_args(&["cargo-bench-history"], &["run"]).unwrap();
         assert!(format!("{cli:?}").contains("Run"), "{cli:?}");
     }
 
@@ -748,7 +747,7 @@ mod tests {
             &["cargo-bench-history"],
             &["run", "--workspace", "-p", "nm"],
         )
-        .expect_err("--workspace with --package should be rejected");
+        .unwrap_err();
         assert_eq!(error.status, Err(()));
         assert!(
             error.output.contains("cannot be used with"),
@@ -763,7 +762,7 @@ mod tests {
             &["cargo-bench-history"],
             &["backfill", "abc", "def", "--workspace", "-p", "nm"],
         )
-        .expect_err("--workspace with --package should be rejected");
+        .unwrap_err();
         assert_eq!(error.status, Err(()));
         assert!(
             error.output.contains("cannot be used with"),
@@ -931,7 +930,7 @@ mod tests {
     #[test]
     fn list_requires_a_subject() {
         let parsed = Cli::from_args(&["cargo-bench-history"], &["list"]);
-        let early = parsed.expect_err("bare list must error");
+        let early = parsed.unwrap_err();
         assert!(early.status.is_err(), "a missing subject is a parse error");
         for subject in ["runs", "discriminants", "blessings"] {
             assert!(
@@ -1041,8 +1040,8 @@ mod tests {
 
     #[test]
     fn bless_all_conflicts_with_prefixes() {
-        let error = Cli::from_args(&["cargo-bench-history"], &["bless", "--all", "foo/bar"])
-            .expect_err("--all with a prefix should be rejected");
+        let error =
+            Cli::from_args(&["cargo-bench-history"], &["bless", "--all", "foo/bar"]).unwrap_err();
         assert_eq!(error.status, Err(()));
         assert!(
             error.output.contains("cannot be used with"),

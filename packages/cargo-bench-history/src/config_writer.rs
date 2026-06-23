@@ -76,27 +76,20 @@ mod fake {
             writer
                 .files
                 .lock()
-                .expect("the fake writer mutex is never poisoned")
+                .unwrap()
                 .insert(path.to_path_buf(), contents.to_owned());
             writer
         }
 
         /// The contents recorded for `path`, if any.
         pub(crate) fn written(&self, path: &Path) -> Option<String> {
-            self.files
-                .lock()
-                .expect("the fake writer mutex is never poisoned")
-                .get(path)
-                .cloned()
+            self.files.lock().unwrap().get(path).cloned()
         }
     }
 
     impl ConfigWriter for MemoryConfigWriter {
         async fn write_new(&self, path: &Path, contents: &str) -> io::Result<bool> {
-            let mut files = self
-                .files
-                .lock()
-                .expect("the fake writer mutex is never poisoned");
+            let mut files = self.files.lock().unwrap();
             if files.contains_key(path) {
                 return Ok(false);
             }

@@ -1,7 +1,8 @@
 //! The query model: resolving *which* commits make up a series and in what order.
 //!
 //! `analyze` reconstructs a timeline from git topology rather than from stored
-//! timestamps (see DESIGN §8.4). Given the target ref's first-parent ancestry and
+//! timestamps (see the `analyze` command in `DESIGN.md`). Given the target ref's
+//! first-parent ancestry and
 //! its merge-base with the base ref, this pure logic decides, for each commit in
 //! topological order, whether it is *base-side* (only clean runs count) or
 //! *target-side* (clean and dirty runs count). The async git calls live in
@@ -18,7 +19,7 @@ pub(crate) struct SelectedCommit {
     /// Whether `admit_dirty` is granted *only* by the base-branch dirty-tree
     /// exception (a base-side tip whose dirty runs are the user's current work).
     /// When such a run is actually included, `analyze` warns that it is
-    /// ephemeral (see DESIGN §8.4).
+    /// ephemeral (see the `analyze` command in `DESIGN.md`).
     pub(crate) dirty_base_exception: bool,
 }
 

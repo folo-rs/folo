@@ -3,7 +3,8 @@
 //! changes.
 //!
 //! Unlike a snapshot tool, `analyze` orders a series by *git history* rather than
-//! by ingest time (see DESIGN §8.4): it resolves the target ref's first-parent
+//! by ingest time (see the `analyze` command in `DESIGN.md`): it resolves the
+//! target ref's first-parent
 //! ancestry, splits it at the merge-base with a base branch, and admits dirty
 //! (uncommitted-tree) snapshots only on the target side of that split. The pure
 //! logic (selection, series reconstruction, finding detection, report rendering)
@@ -335,7 +336,8 @@ impl<'a> Selection<'a> {
 }
 
 /// The current machine's auto-detected facet values, used as the default when a
-/// query facet is omitted (see DESIGN §4.3).
+/// query facet is omitted (see the *Discriminant set & query facets* section of
+/// `DESIGN.md`).
 ///
 /// Production probes these once (host triple from `rustc -vV`, machine key from
 /// the hardware fingerprint); tests pass deterministic literals. There is no auto
@@ -1207,12 +1209,12 @@ mod tests {
     use super::*;
 
     fn ts(seconds: i64) -> Timestamp {
-        Timestamp::from_second(seconds).expect("seconds within range")
+        Timestamp::from_second(seconds).unwrap()
     }
 
     /// A minimal configuration; `analyze_with` only reads `project.default_branch`.
     fn config() -> Config {
-        parse_config("[storage.local]\npath = \"./data\"\n").expect("config parses")
+        parse_config("[storage.local]\npath = \"./data\"\n").unwrap()
     }
 
     /// Builds a stored result set carrying one record with one `Ir` metric.
@@ -1305,8 +1307,8 @@ mod tests {
 
     /// Stores a value at `key` in `storage`, panicking on failure (test helper).
     fn store(storage: &MemoryStorage, key: &str, set: &ResultSet) {
-        let json = set.to_json().expect("result set serializes");
-        block_on(storage.put(key, json.as_bytes())).expect("store succeeds");
+        let json = set.to_json().unwrap();
+        block_on(storage.put(key, json.as_bytes())).unwrap();
     }
 
     /// A linear master history `c0 - c1 - c2 - c3`, HEAD at the tip.
@@ -1409,7 +1411,7 @@ mod tests {
     /// keeps the default six-month look-back well before it, so the default window
     /// never drops a seeded point.
     fn now_anchor() -> Timestamp {
-        Timestamp::from_second(0).expect("epoch is a valid timestamp")
+        Timestamp::from_second(0).unwrap()
     }
 
     /// The auto-detected facets for the default synthetic partition the unit-test
@@ -1501,7 +1503,7 @@ mod tests {
             since: 4,
             until: 0,
         };
-        let hint = empty_history_hint(true, 7, "master", tally).expect("a hint");
+        let hint = empty_history_hint(true, 7, "master", tally).unwrap();
         assert!(hint.contains("7 stored runs"), "{hint}");
         assert!(
             hint.contains("1 dirty (uncommitted-tree) snapshot"),
@@ -1522,7 +1524,7 @@ mod tests {
             since: 0,
             until: 0,
         };
-        let hint = empty_history_hint(true, 3, "master", dirty_only).expect("a hint");
+        let hint = empty_history_hint(true, 3, "master", dirty_only).unwrap();
         assert!(hint.contains("dirty (uncommitted-tree)"), "{hint}");
         assert!(!hint.contains("outside"), "{hint}");
         assert!(!hint.contains("--since cutoff"), "{hint}");
@@ -1535,7 +1537,7 @@ mod tests {
             since: 0,
             until: 0,
         };
-        let hint = empty_history_hint(true, 2, "master", outside_only).expect("a hint");
+        let hint = empty_history_hint(true, 2, "master", outside_only).unwrap();
         assert!(hint.contains("outside master"), "{hint}");
         assert!(!hint.contains("dirty (uncommitted-tree)"), "{hint}");
         assert!(!hint.contains("--since cutoff"), "{hint}");
@@ -1547,7 +1549,7 @@ mod tests {
             since: 0,
             until: 5,
         };
-        let hint = empty_history_hint(true, 5, "master", until_only).expect("a hint");
+        let hint = empty_history_hint(true, 5, "master", until_only).unwrap();
         assert!(
             hint.contains("5 runs newer than the --until cutoff"),
             "{hint}"
@@ -1558,20 +1560,17 @@ mod tests {
 
     #[test]
     fn parse_mode_resolves_auto_to_none_and_rejects_unknown() {
-        assert_eq!(parse_mode(None).expect("none parses"), None);
-        assert_eq!(parse_mode(Some("auto")).expect("auto parses"), None);
+        assert_eq!(parse_mode(None).unwrap(), None);
+        assert_eq!(parse_mode(Some("auto")).unwrap(), None);
         assert_eq!(
-            parse_mode(Some("history")).expect("history parses"),
+            parse_mode(Some("history")).unwrap(),
             Some(AnalysisMode::History)
         );
         assert_eq!(
-            parse_mode(Some("branch")).expect("branch parses"),
+            parse_mode(Some("branch")).unwrap(),
             Some(AnalysisMode::Branch)
         );
-        assert_eq!(
-            parse_mode(Some("tip")).expect("tip parses"),
-            Some(AnalysisMode::Tip)
-        );
+        assert_eq!(parse_mode(Some("tip")).unwrap(), Some(AnalysisMode::Tip));
         let error = parse_mode(Some("weekly")).unwrap_err();
         assert!(
             error.to_string().contains("unknown analysis mode"),
@@ -1581,12 +1580,8 @@ mod tests {
 
     #[test]
     fn parse_engine_resolves_none_known_and_rejects_unknown() {
-        assert!(parse_engine(None).expect("none parses").is_none());
-        assert!(
-            parse_engine(Some("callgrind"))
-                .expect("known engine parses")
-                .is_some()
-        );
+        assert!(parse_engine(None).unwrap().is_none());
+        assert!(parse_engine(Some("callgrind")).unwrap().is_some());
         let error = parse_engine(Some("nonsuch")).unwrap_err();
         assert!(error.to_string().contains("unknown"), "{error}");
     }
@@ -1597,7 +1592,7 @@ mod tests {
         seed_linear_step(&storage);
         // A `.json` object under the project prefix whose key is not a valid
         // seven-segment v2 storage key is noted and skipped, not parsed as data.
-        block_on(storage.put("v2/folo/bogus.json", b"{}")).expect("seed a bogus key");
+        block_on(storage.put("v2/folo/bogus.json", b"{}")).unwrap();
         let reporter = RecordingReporter::new();
         block_on(analyze_with(
             &linear6_git(),
@@ -1610,7 +1605,7 @@ mod tests {
             &reporter,
             false,
         ))
-        .expect("analysis runs");
+        .unwrap();
         assert!(
             reporter.contains("not a recognized v2 storage key"),
             "{:?}",
@@ -1623,25 +1618,22 @@ mod tests {
         let now = "2024-06-01T00:00:00Z".parse::<Timestamp>().unwrap();
         // History mode without an explicit value falls back to the six-month window.
         let history = resolve_since(None, AnalysisMode::History, now)
-            .expect("default resolves")
-            .expect("history has a default cutoff");
+            .unwrap()
+            .unwrap();
         assert_eq!(
             history,
             "2023-12-01T00:00:00Z".parse::<Timestamp>().unwrap()
         );
         // Branch and tip modes have no default cutoff.
         assert_eq!(
-            resolve_since(None, AnalysisMode::Branch, now).expect("resolves"),
+            resolve_since(None, AnalysisMode::Branch, now).unwrap(),
             None
         );
-        assert_eq!(
-            resolve_since(None, AnalysisMode::Tip, now).expect("resolves"),
-            None
-        );
+        assert_eq!(resolve_since(None, AnalysisMode::Tip, now).unwrap(), None);
         // An explicit value always wins, even in branch mode.
         let explicit = resolve_since(Some("2024-01-01"), AnalysisMode::Branch, now)
-            .expect("explicit parses")
-            .expect("explicit produces a cutoff");
+            .unwrap()
+            .unwrap();
         assert_eq!(
             explicit,
             "2024-01-01T00:00:00Z".parse::<Timestamp>().unwrap()
@@ -1653,7 +1645,7 @@ mod tests {
         let now = "2024-03-31T00:00:00Z".parse::<Timestamp>().unwrap();
         // Calendar arithmetic, not a fixed number of days: six months before
         // 2024-03-31 is 2023-09-30 (September has 30 days).
-        let cutoff = default_history_since(now).expect("resolves");
+        let cutoff = default_history_since(now).unwrap();
         assert_eq!(cutoff, "2023-09-30T00:00:00Z".parse::<Timestamp>().unwrap());
     }
 
@@ -1676,7 +1668,7 @@ mod tests {
             &reporter,
             false,
         ))
-        .expect("analysis runs");
+        .unwrap();
         match outcome {
             RunOutcome::Analyzed {
                 report,
@@ -1765,8 +1757,7 @@ mod tests {
         );
         let bless_key =
             "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/c3/bless-3.json".to_owned();
-        block_on(storage.put(&bless_key, record.to_json().expect("serializes").as_bytes()))
-            .expect("store succeeds");
+        block_on(storage.put(&bless_key, record.to_json().unwrap().as_bytes())).unwrap();
 
         let reporter = RecordingReporter::new();
         block_on(analyze_with(
@@ -1780,7 +1771,7 @@ mod tests {
             &reporter,
             false,
         ))
-        .expect("analysis runs");
+        .unwrap();
         assert!(
             reporter.contains("are blessing sidecars"),
             "{:?}",
@@ -1802,7 +1793,7 @@ mod tests {
             &reporter,
             false,
         ))
-        .expect("analysis runs");
+        .unwrap();
         assert!(
             !reporter.contains("are blessing sidecars"),
             "{:?}",
@@ -1833,7 +1824,7 @@ mod tests {
         // c3 is on the linear6 history, so history mode loads its sidecar.
         let bless_key =
             "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/c3/bless-3.json".to_owned();
-        block_on(storage.put(&bless_key, &[0xff, 0xfe, 0x00])).expect("seed corrupt bytes");
+        block_on(storage.put(&bless_key, &[0xff, 0xfe, 0x00])).unwrap();
         let error = analyze_blessing_error(&storage);
         match error {
             RunError::Analyze { message } => {
@@ -1849,7 +1840,7 @@ mod tests {
         seed_linear_step(&storage);
         let bless_key =
             "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/c3/bless-3.json".to_owned();
-        block_on(storage.put(&bless_key, b"{ not a blessing record")).expect("seed invalid json");
+        block_on(storage.put(&bless_key, b"{ not a blessing record")).unwrap();
         let error = analyze_blessing_error(&storage);
         match error {
             RunError::Analyze { message } => {
@@ -1877,8 +1868,7 @@ mod tests {
         );
         let bless_key =
             "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/z9/bless-3.json".to_owned();
-        block_on(storage.put(&bless_key, record.to_json().expect("serializes").as_bytes()))
-            .expect("store succeeds");
+        block_on(storage.put(&bless_key, record.to_json().unwrap().as_bytes())).unwrap();
 
         let reporter = RecordingReporter::new();
         block_on(analyze_with(
@@ -1892,7 +1882,7 @@ mod tests {
             &reporter,
             false,
         ))
-        .expect("analysis runs");
+        .unwrap();
         assert!(
             reporter.contains("is not on HEAD's analyzed history"),
             "{:?}",
@@ -1932,20 +1922,20 @@ mod tests {
         options.format = Some("json".to_owned());
         let (report, _) = analyze(&git, &storage, "folo", &options);
 
-        let parsed: serde_json::Value = serde_json::from_str(&report).expect("report is JSON");
-        let sets = parsed["sets"].as_array().expect("sets array present");
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let sets = parsed["sets"].as_array().unwrap();
 
         let set_a = sets
             .iter()
             .find(|set| set["target_triple"] == "x86_64-unknown-linux-gnu")
-            .expect("linux set present");
+            .unwrap();
         assert_eq!(set_a["runs"], 3, "{report}");
         assert_eq!(set_a["series"], 2, "{report}");
 
         let set_b = sets
             .iter()
             .find(|set| set["target_triple"] == "aarch64-apple-darwin")
-            .expect("darwin set present");
+            .unwrap();
         assert_eq!(set_b["runs"], 2, "{report}");
         assert_eq!(set_b["series"], 1, "{report}");
     }
@@ -2092,7 +2082,7 @@ mod tests {
             &reporter,
             false,
         ))
-        .expect("analysis runs");
+        .unwrap();
         let RunOutcome::Analyzed { report, .. } = outcome else {
             panic!("expected an analysis outcome");
         };
@@ -2102,9 +2092,7 @@ mod tests {
             parsed["runs"], 0,
             "every dirty-on-base snapshot is excluded"
         );
-        let hint = parsed["hint"]
-            .as_str()
-            .expect("a diagnostic hint is present");
+        let hint = parsed["hint"].as_str().unwrap();
         assert!(
             hint.contains("Found 2 stored runs"),
             "the hint should count the stored runs: {hint}"
@@ -2158,7 +2146,7 @@ mod tests {
             &reporter,
             false,
         ))
-        .expect("analysis runs");
+        .unwrap();
         let RunOutcome::Analyzed {
             report,
             regressions,
@@ -2171,9 +2159,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 5, "both dirty tip snapshots are admitted");
         assert_eq!(regressions, 1, "the dirty tip snapshots complete the step");
-        let warning = parsed["warning"]
-            .as_str()
-            .expect("the ephemeral-data warning is present");
+        let warning = parsed["warning"].as_str().unwrap();
         assert!(
             warning.contains("dirty runs") && warning.contains("Switch to a new branch"),
             "{warning}"
@@ -2244,7 +2230,7 @@ mod tests {
             &reporter,
             false,
         ))
-        .expect("analysis runs");
+        .unwrap();
         let RunOutcome::Analyzed {
             report,
             regressions,
@@ -2340,7 +2326,7 @@ mod tests {
             &reporter,
             false,
         ))
-        .expect("analysis runs");
+        .unwrap();
         let RunOutcome::Analyzed { report, .. } = outcome else {
             panic!("expected an analysis outcome");
         };
@@ -2657,7 +2643,7 @@ mod tests {
             &RecordingReporter::new(),
             false,
         ))
-        .expect("analysis runs");
+        .unwrap();
         assert!(outcome.is_success(), "findings must never fail the build");
     }
 
@@ -2672,7 +2658,7 @@ mod tests {
             ..options()
         };
         let (report, _) = analyze(&git, &storage, "folo", &opts);
-        let parsed: serde_json::Value = serde_json::from_str(&report).expect("valid JSON");
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["project"], "folo");
         assert_eq!(parsed["runs"], 1);
     }
@@ -2840,7 +2826,7 @@ mod tests {
             &RecordingReporter::new(),
             false,
         ))
-        .expect("analysis runs");
+        .unwrap();
         let RunOutcome::Analyzed { report, .. } = outcome else {
             panic!("expected an analyzed outcome");
         };
@@ -2872,10 +2858,8 @@ mod tests {
         // suffix (which jiff parses as a negative span) means the same look-back
         // rather than flipping into the future.
         let now = Timestamp::now();
-        let plain = parse_since(Some("5 months")).unwrap().expect("a cutoff");
-        let with_ago = parse_since(Some("5 months ago"))
-            .unwrap()
-            .expect("a cutoff");
+        let plain = parse_since(Some("5 months")).unwrap().unwrap();
+        let with_ago = parse_since(Some("5 months ago")).unwrap().unwrap();
         assert!(plain < now, "a look-back must be in the past");
         assert!(with_ago < now, "the `ago` suffix must still look back");
         // The cutoff is `now - 5 months`, NOT the 1970 epoch: a constant default
@@ -2896,7 +2880,7 @@ mod tests {
     fn since_accepts_iso_and_week_durations() {
         let now = Timestamp::now();
         for input in ["P6M", "2w", "30 days", "-P1Y"] {
-            let cutoff = parse_since(Some(input)).unwrap().expect("a cutoff");
+            let cutoff = parse_since(Some(input)).unwrap().unwrap();
             assert!(cutoff < now, "{input:?} must resolve to the past");
         }
     }

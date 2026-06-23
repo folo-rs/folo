@@ -1,8 +1,9 @@
 //! Comparability: deciding which runs may be compared to each other, and how
 //! the storage is partitioned so that only comparable runs share a series.
 //!
-//! The guiding rule (see DESIGN §4) is to partition only by what makes results
-//! *fundamentally* incomparable — project, engine system, target triple, and (for
+//! The guiding rule (see the *Comparability & storage partitioning* section of
+//! `DESIGN.md`) is to partition only by what makes results *fundamentally*
+//! incomparable — project, engine system, target triple, and (for
 //! hardware-dependent engines) a machine key — and to record everything else as
 //! metadata so its effect stays visible in the timeline.
 
@@ -77,7 +78,8 @@ impl fmt::Display for EngineSystem {
     }
 }
 
-/// Resolves the target triple to record for a run (see DESIGN §4.1).
+/// Resolves the target triple to record for a run (see the *Target triple &
+/// cross-OS (WSL) execution* section of `DESIGN.md`).
 ///
 /// Resolution order (first match wins):
 ///

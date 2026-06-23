@@ -743,7 +743,7 @@ mod tests {
             b"{}",
             false,
         ))
-        .expect_err("a failing put surfaces an error");
+        .unwrap_err();
         assert!(
             matches!(error, RunError::Storage(_)),
             "expected a storage error, got {error:?}"
@@ -753,7 +753,7 @@ mod tests {
     fn frozen_time() -> SystemTime {
         SystemTime::UNIX_EPOCH
             .checked_add(Duration::from_secs(FROZEN_UNIX))
-            .expect("frozen instant is within range")
+            .unwrap()
     }
 
     #[test]
@@ -800,7 +800,7 @@ mod tests {
         // Resolving never panics, yields an absolute path, and agrees with
         // `target_root_from` for whatever `CARGO_TARGET_DIR` happens to be set
         // (or unset) in this process.
-        let base = std::env::current_dir().expect("current directory is available");
+        let base = std::env::current_dir().unwrap();
         let resolved = resolve_target_root_in(&base);
         assert_eq!(
             resolved,
@@ -1119,7 +1119,7 @@ mod tests {
     ) -> Result<RunOutcome, RunError> {
         let now = SystemTime::UNIX_EPOCH
             .checked_add(Duration::from_secs(now_unix))
-            .expect("frozen instant is within range");
+            .unwrap();
         let clock = Clock::new_frozen_at(now);
         let env = |_name: &str| None::<String>;
         let bench_command = mock_bench_command();
@@ -1328,8 +1328,8 @@ mod tests {
         let bless_key = format!("{commit_dir}/bless-100.json");
         let record = BlessingRecord::new(
             "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_owned(),
-            Timestamp::from_second(1).expect("seconds within range"),
-            Timestamp::from_second(100).expect("seconds within range"),
+            Timestamp::from_second(1).unwrap(),
+            Timestamp::from_second(100).unwrap(),
             vec!["group".to_owned()],
             "0.0.1".to_owned(),
         );
@@ -1395,8 +1395,8 @@ mod tests {
         let bless_key = format!("{commit_dir}/bless-100.json");
         let record = BlessingRecord::new(
             "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_owned(),
-            Timestamp::from_second(1).expect("seconds within range"),
-            Timestamp::from_second(100).expect("seconds within range"),
+            Timestamp::from_second(1).unwrap(),
+            Timestamp::from_second(100).unwrap(),
             vec!["group".to_owned()],
             "0.0.1".to_owned(),
         );
@@ -1846,9 +1846,7 @@ mod tests {
         // scope, then a single re-inserted `--` separator followed by the
         // passthrough forwarded verbatim to the benchmark harness.
         assert_eq!(
-            runner
-                .last_command()
-                .expect("a command should have been recorded"),
+            runner.last_command().unwrap(),
             ["mock", "--workspace", "--", "--quiet"]
         );
     }
@@ -1866,9 +1864,7 @@ mod tests {
         )
         .unwrap();
 
-        let env = runner
-            .last_env()
-            .expect("an environment should have been recorded");
+        let env = runner.last_env().unwrap();
         // The benchmark command receives the combined engine environment (the
         // Callgrind summary flag) plus the resolved target directory, so output
         // lands exactly where the harvest scans.

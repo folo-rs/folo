@@ -713,7 +713,7 @@ mod tests {
         // The per-set JSON tallies count each direction independently: this set
         // holds one regression and one improvement.
         let json = render(&input, ReportFormat::Json, false);
-        let parsed: serde_json::Value = serde_json::from_str(&json).expect("report is JSON");
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         let set_json = &parsed["sets"][0];
         assert_eq!(set_json["regressions"], 1, "{json}");
         assert_eq!(set_json["improvements"], 1, "{json}");
@@ -765,7 +765,7 @@ mod tests {
         let mut summaries = Vec::new();
         let input = single_set_input("folo", &set, &findings, &mut summaries);
         let json = render(&input, ReportFormat::Json, false);
-        let parsed: serde_json::Value = serde_json::from_str(&json).expect("report is JSON");
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         let set_json = &parsed["sets"][0];
         assert_eq!(set_json["regressions"], 2, "{json}");
         assert_eq!(set_json["improvements"], 0, "{json}");
@@ -824,7 +824,7 @@ mod tests {
             warning: None,
         };
         let report = render(&input, ReportFormat::Json, false);
-        let parsed: serde_json::Value = serde_json::from_str(&report).expect("report is JSON");
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(
             parsed["hint"], "dirty snapshots on base-branch commits",
             "{report}"
@@ -846,7 +846,7 @@ mod tests {
         assert!(markdown.trim_end().ends_with("(ephemeral)."), "{markdown}");
 
         let json = render(&input, ReportFormat::Json, false);
-        let parsed: serde_json::Value = serde_json::from_str(&json).expect("report is JSON");
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(
             parsed["warning"], "Warning: analysis included dirty runs (ephemeral).",
             "{json}"
@@ -888,7 +888,7 @@ mod tests {
             warning: None,
         };
         let report = render(&input, ReportFormat::Json, false);
-        let parsed: serde_json::Value = serde_json::from_str(&report).expect("report is JSON");
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert!(parsed.get("warning").is_none(), "{report}");
     }
 

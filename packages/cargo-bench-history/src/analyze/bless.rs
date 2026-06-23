@@ -7,8 +7,9 @@
 //! the context commit (`HEAD` by default, or `--context <ref>`). It is
 //! base-branch-only with no escape hatch: a context commit that is not on the base
 //! branch, or the absence of a stored result there, are hard errors, because a
-//! blessing on anything else would not survive a history analysis (see DESIGN
-//! §8.8). When blessing `HEAD`, a dirty working tree is allowed — the blessing
+//! blessing on anything else would not survive a history analysis (see the
+//! `bless` / `unbless` command in `DESIGN.md`). When blessing `HEAD`, a dirty
+//! working tree is allowed — the blessing
 //! applies to the committed `clean.json` recorded at `HEAD`, which the local edits
 //! do not change — but it emits a warning. `unbless` deletes every blessing
 //! recorded at the context commit in the selected sets; sidecars are immutable, so
@@ -337,7 +338,7 @@ mod tests {
     use super::*;
 
     fn config() -> Config {
-        crate::config::parse_config("[storage.local]\npath = \"./data\"\n").expect("config parses")
+        crate::config::parse_config("[storage.local]\npath = \"./data\"\n").unwrap()
     }
 
     /// The auto-detected facets for the default synthetic partition the tests seed.
@@ -349,7 +350,7 @@ mod tests {
     }
 
     fn ts(seconds: i64) -> Timestamp {
-        Timestamp::from_second(seconds).expect("seconds within range")
+        Timestamp::from_second(seconds).unwrap()
     }
 
     /// A serialized clean result set at `commit`, ready to seed storage.
@@ -381,9 +382,7 @@ mod tests {
                 Some("count".to_owned()),
             )],
         );
-        ResultSet::new(context, vec![record])
-            .to_json()
-            .expect("result set serializes")
+        ResultSet::new(context, vec![record]).to_json().unwrap()
     }
 
     fn clean_key(commit: &str) -> String {
@@ -411,7 +410,7 @@ mod tests {
 
     /// All blessing sidecar keys stored under the project partition.
     fn stored_blessings(storage: &MemoryStorage) -> Vec<String> {
-        let mut keys = block_on(storage.list("v2/folo/")).expect("list succeeds");
+        let mut keys = block_on(storage.list("v2/folo/")).unwrap();
         keys.retain(|key| {
             key.rsplit('/')
                 .next()
@@ -446,12 +445,11 @@ mod tests {
     #[test]
     fn bless_writes_a_sidecar_into_the_set_with_a_clean_run_at_head() {
         let storage = MemoryStorage::new();
-        block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes()))
-            .expect("seed clean run");
+        block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes())).unwrap();
         let git = master_git();
 
-        let message = drive_bless(&storage, &git, &bless_options(&["all_the_time/read_cell"]))
-            .expect("blesses");
+        let message =
+            drive_bless(&storage, &git, &bless_options(&["all_the_time/read_cell"])).unwrap();
         assert!(message.contains("Blessed"), "{message}");
 
         let blessings = stored_blessings(&storage);
@@ -465,9 +463,8 @@ mod tests {
 
         // The record carries the requested prefix, blessed commit, and commit time
         // read from the run it accepts.
-        let bytes = block_on(storage.get(&blessings[0])).expect("read sidecar");
-        let record = BlessingRecord::from_json(&String::from_utf8(bytes).expect("utf-8"))
-            .expect("valid blessing");
+        let bytes = block_on(storage.get(&blessings[0])).unwrap();
+        let record = BlessingRecord::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
         assert_eq!(record.prefixes, vec!["all_the_time/read_cell".to_owned()]);
         assert_eq!(record.commit, "c2");
         assert_eq!(record.commit_time, ts(1000));
@@ -476,10 +473,8 @@ mod tests {
     #[test]
     fn bless_requires_at_least_one_prefix() {
         let storage = MemoryStorage::new();
-        block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes()))
-            .expect("seed clean run");
-        let error = drive_bless(&storage, &master_git(), &bless_options(&[]))
-            .expect_err("no prefix errors");
+        block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes())).unwrap();
+        let error = drive_bless(&storage, &master_git(), &bless_options(&[])).unwrap_err();
         assert!(matches!(error, RunError::Bless { .. }), "{error:?}");
         assert!(error.to_string().contains("prefix"), "{error}");
     }
@@ -487,8 +482,7 @@ mod tests {
     #[test]
     fn bless_off_the_base_branch_is_an_error() {
         let storage = MemoryStorage::new();
-        block_on(storage.put(&clean_key("f1"), clean_run_json("f1", 1000).as_bytes()))
-            .expect("seed clean run");
+        block_on(storage.put(&clean_key("f1"), clean_run_json("f1", 1000).as_bytes())).unwrap();
         // A feature commit on top of master: HEAD is not on the base branch.
         let mut git = FakeGitHistory::new();
         git.commit("c0", None)
@@ -500,8 +494,7 @@ mod tests {
             .head("feature")
             .mark_default("master");
 
-        let error = drive_bless(&storage, &git, &bless_options(&["all_the_time"]))
-            .expect_err("off-base errors");
+        let error = drive_bless(&storage, &git, &bless_options(&["all_the_time"])).unwrap_err();
         assert!(matches!(error, RunError::Bless { .. }), "{error:?}");
         assert!(error.to_string().contains("base branch"), "{error}");
         // The message names both the current commit and the base ref via
@@ -514,13 +507,11 @@ mod tests {
     #[test]
     fn bless_a_dirty_tree_warns_but_still_blesses() {
         let storage = MemoryStorage::new();
-        block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes()))
-            .expect("seed clean run");
+        block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes())).unwrap();
         let mut git = master_git();
         git.mark_dirty();
 
-        let message = drive_bless(&storage, &git, &bless_options(&["all_the_time"]))
-            .expect("a dirty tree warns rather than erroring");
+        let message = drive_bless(&storage, &git, &bless_options(&["all_the_time"])).unwrap();
         assert!(
             message.contains("Warning: uncommitted changes present"),
             "{message}"
@@ -537,14 +528,13 @@ mod tests {
     fn bless_with_a_context_targets_an_earlier_commit() {
         let storage = MemoryStorage::new();
         // A clean run exists at c1, an earlier commit than HEAD (c2).
-        block_on(storage.put(&clean_key("c1"), clean_run_json("c1", 1000).as_bytes()))
-            .expect("seed clean run");
+        block_on(storage.put(&clean_key("c1"), clean_run_json("c1", 1000).as_bytes())).unwrap();
         let options = BlessOptions {
             context: Some("c1".to_owned()),
             ..bless_options(&["all_the_time/read_cell"])
         };
 
-        let message = drive_bless(&storage, &master_git(), &options).expect("blesses c1");
+        let message = drive_bless(&storage, &master_git(), &options).unwrap();
         assert!(message.contains("at commit c1"), "{message}");
 
         let blessings = stored_blessings(&storage);
@@ -559,8 +549,7 @@ mod tests {
     #[test]
     fn bless_with_an_explicit_context_does_not_warn_about_a_dirty_tree() {
         let storage = MemoryStorage::new();
-        block_on(storage.put(&clean_key("c1"), clean_run_json("c1", 1000).as_bytes()))
-            .expect("seed clean run");
+        block_on(storage.put(&clean_key("c1"), clean_run_json("c1", 1000).as_bytes())).unwrap();
         let mut git = master_git();
         git.mark_dirty();
         let options = BlessOptions {
@@ -568,7 +557,7 @@ mod tests {
             ..bless_options(&["all_the_time/read_cell"])
         };
 
-        let message = drive_bless(&storage, &git, &options).expect("blesses c1");
+        let message = drive_bless(&storage, &git, &options).unwrap();
         assert!(
             !message.contains("Warning"),
             "an explicit context ignores the working tree: {message}"
@@ -578,21 +567,19 @@ mod tests {
     #[test]
     fn bless_all_writes_an_empty_prefix_accepting_every_benchmark() {
         let storage = MemoryStorage::new();
-        block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes()))
-            .expect("seed clean run");
+        block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes())).unwrap();
         let options = BlessOptions {
             all: true,
             ..BlessOptions::default()
         };
 
-        let message = drive_bless(&storage, &master_git(), &options).expect("blesses everything");
+        let message = drive_bless(&storage, &master_git(), &options).unwrap();
         assert!(message.contains("all benchmarks"), "{message}");
 
         let blessings = stored_blessings(&storage);
         assert_eq!(blessings.len(), 1, "one sidecar written: {blessings:?}");
-        let bytes = block_on(storage.get(&blessings[0])).expect("read sidecar");
-        let record = BlessingRecord::from_json(&String::from_utf8(bytes).expect("utf-8"))
-            .expect("valid blessing");
+        let bytes = block_on(storage.get(&blessings[0])).unwrap();
+        let record = BlessingRecord::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
         // An empty prefix matches every qualified id.
         assert_eq!(record.prefixes, vec![String::new()]);
     }
@@ -600,14 +587,13 @@ mod tests {
     #[test]
     fn unbless_with_a_context_removes_blessings_at_an_earlier_commit() {
         let storage = MemoryStorage::new();
-        block_on(storage.put(&clean_key("c1"), clean_run_json("c1", 1000).as_bytes()))
-            .expect("seed clean run");
+        block_on(storage.put(&clean_key("c1"), clean_run_json("c1", 1000).as_bytes())).unwrap();
         let git = master_git();
         let bless = BlessOptions {
             context: Some("c1".to_owned()),
             ..bless_options(&["all_the_time/read_cell"])
         };
-        drive_bless(&storage, &git, &bless).expect("blesses c1");
+        drive_bless(&storage, &git, &bless).unwrap();
         assert_eq!(stored_blessings(&storage).len(), 1, "blessed once");
 
         let unbless = UnblessOptions {
@@ -623,7 +609,7 @@ mod tests {
             &auto(),
             &RecordingReporter::new(),
         ))
-        .expect("unblesses c1");
+        .unwrap();
         let message = match outcome {
             RunOutcome::Completed { message } => message,
             RunOutcome::Analyzed { .. } => panic!("unbless returns a Completed outcome"),
@@ -636,10 +622,9 @@ mod tests {
     fn bless_without_a_run_at_head_is_an_error() {
         let storage = MemoryStorage::new();
         // A clean run exists, but on an earlier commit, not HEAD.
-        block_on(storage.put(&clean_key("c1"), clean_run_json("c1", 1000).as_bytes()))
-            .expect("seed clean run");
-        let error = drive_bless(&storage, &master_git(), &bless_options(&["all_the_time"]))
-            .expect_err("no run at head errors");
+        block_on(storage.put(&clean_key("c1"), clean_run_json("c1", 1000).as_bytes())).unwrap();
+        let error =
+            drive_bless(&storage, &master_git(), &bless_options(&["all_the_time"])).unwrap_err();
         assert!(matches!(error, RunError::Bless { .. }), "{error:?}");
         assert!(error.to_string().contains("no stored result"), "{error}");
     }
@@ -647,10 +632,9 @@ mod tests {
     #[test]
     fn unbless_removes_every_blessing_at_head() {
         let storage = MemoryStorage::new();
-        block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes()))
-            .expect("seed clean run");
+        block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes())).unwrap();
         let git = master_git();
-        drive_bless(&storage, &git, &bless_options(&["all_the_time/read_cell"])).expect("blesses");
+        drive_bless(&storage, &git, &bless_options(&["all_the_time/read_cell"])).unwrap();
         assert_eq!(stored_blessings(&storage).len(), 1, "blessed once");
 
         let outcome = block_on(unbless_with(
@@ -662,7 +646,7 @@ mod tests {
             &auto(),
             &RecordingReporter::new(),
         ))
-        .expect("unblesses");
+        .unwrap();
         let message = match outcome {
             RunOutcome::Completed { message } => message,
             RunOutcome::Analyzed { .. } => panic!("unbless returns a Completed outcome"),
@@ -674,8 +658,7 @@ mod tests {
     #[test]
     fn unbless_reports_when_there_is_nothing_to_remove() {
         let storage = MemoryStorage::new();
-        block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes()))
-            .expect("seed clean run");
+        block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes())).unwrap();
         let outcome = block_on(unbless_with(
             &master_git(),
             &storage,
@@ -685,7 +668,7 @@ mod tests {
             &auto(),
             &RecordingReporter::new(),
         ))
-        .expect("unbless runs");
+        .unwrap();
         let message = match outcome {
             RunOutcome::Completed { message } => message,
             RunOutcome::Analyzed { .. } => panic!("unbless returns a Completed outcome"),
@@ -711,8 +694,7 @@ mod tests {
     #[test]
     fn bless_without_a_resolvable_base_branch_is_an_error() {
         let storage = MemoryStorage::new();
-        block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes()))
-            .expect("seed clean run");
+        block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes())).unwrap();
         // HEAD resolves, but no advertised default branch and no --base / config
         // default, so the base branch cannot be determined.
         let mut git = FakeGitHistory::new();
@@ -738,7 +720,7 @@ mod tests {
     #[test]
     fn load_commit_time_rejects_a_non_utf8_object() {
         let storage = MemoryStorage::new();
-        block_on(storage.put(&clean_key("c2"), &[0xff, 0xfe, 0x00])).expect("seed corrupt bytes");
+        block_on(storage.put(&clean_key("c2"), &[0xff, 0xfe, 0x00])).unwrap();
         let error = block_on(load_commit_time(&storage, &clean_key("c2"))).unwrap_err();
         match error {
             RunError::Bless { message } => {
@@ -751,8 +733,7 @@ mod tests {
     #[test]
     fn load_commit_time_rejects_an_invalid_result_set() {
         let storage = MemoryStorage::new();
-        block_on(storage.put(&clean_key("c2"), b"{ not a valid result set"))
-            .expect("seed invalid json");
+        block_on(storage.put(&clean_key("c2"), b"{ not a valid result set")).unwrap();
         let error = block_on(load_commit_time(&storage, &clean_key("c2"))).unwrap_err();
         match error {
             RunError::Bless { message } => {

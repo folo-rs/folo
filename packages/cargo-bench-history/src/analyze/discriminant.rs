@@ -2,7 +2,8 @@
 //!
 //! A *discriminant set* is the `engine / target_triple / machine` triple (within
 //! one project) that makes two runs comparable — the segment of a storage key
-//! above the commit directory (see DESIGN §4.3). Operating system and CPU
+//! above the commit directory (see the *Discriminant set & query facets* section
+//! of `DESIGN.md`). Operating system and CPU
 //! architecture are *derived facets* parsed from the target triple, kept only for
 //! display in reports and listings (they are no longer selectable filters).
 
@@ -253,7 +254,7 @@ mod tests {
     fn parse_key_decomposes_a_clean_key() {
         let parsed =
             parse_key("v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/clean.json")
-                .expect("a well-formed key parses");
+                .unwrap();
         assert_eq!(parsed.project, "folo");
         assert_eq!(parsed.set.engine, "callgrind");
         assert_eq!(parsed.set.target_triple, "x86_64-unknown-linux-gnu");
@@ -267,7 +268,7 @@ mod tests {
     fn parse_key_recognizes_a_dirty_snapshot() {
         let parsed =
             parse_key("v2/folo/criterion/x86_64-pc-windows-msvc/m1/abc123/dirty-1700000000.json")
-                .expect("a well-formed dirty key parses");
+                .unwrap();
         assert!(parsed.is_dirty());
         assert_eq!(parsed.set.os(), "windows");
         assert_eq!(parsed.set.machine, "m1");
@@ -278,7 +279,7 @@ mod tests {
         let parsed = parse_key(
             "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/bless-1700000000.json",
         )
-        .expect("a well-formed bless key parses");
+        .unwrap();
         assert!(parsed.is_bless());
         assert!(!parsed.is_dirty());
         assert_eq!(parsed.commit, "abc123");
@@ -288,7 +289,7 @@ mod tests {
     fn bless_key_targets_the_sets_commit_directory() {
         let parsed =
             parse_key("v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/clean.json")
-                .expect("a well-formed key parses");
+                .unwrap();
         assert_eq!(
             parsed.bless_key(1_700_000_000),
             "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/bless-1700000000.json"

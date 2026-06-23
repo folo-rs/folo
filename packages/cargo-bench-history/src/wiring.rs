@@ -63,7 +63,7 @@ mod tests {
 
     fn config_with(extra: &str) -> Config {
         let text = format!("[storage.local]\npath = \"./data\"\n\n{extra}");
-        parse_config(&text).expect("test configuration should parse")
+        parse_config(&text).unwrap()
     }
 
     #[test]

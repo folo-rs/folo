@@ -210,9 +210,7 @@ mod tests {
             ..golden_params()
         })
         .unwrap_err();
-        let source = error
-            .source()
-            .expect("InvalidAccountKey wraps the underlying base64 decode error");
+        let source = error.source().unwrap();
         assert!(source.downcast_ref::<base64::DecodeError>().is_some());
     }
 }

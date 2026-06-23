@@ -1094,8 +1094,7 @@ mod tests {
                 SeriesPoint {
                     topo_index: index,
                     dirty: false,
-                    commit_time: Timestamp::from_second(i64::try_from(index).unwrap())
-                        .expect("seconds within range"),
+                    commit_time: Timestamp::from_second(i64::try_from(index).unwrap()).unwrap(),
                     object_key: format!("v2/p/engine/t/synthetic/commit{index}/clean.json"),
                     commit: Some(format!("commit{index}")),
                     value,
@@ -1128,7 +1127,7 @@ mod tests {
 
     fn only(findings: Vec<Finding>) -> Finding {
         assert_eq!(findings.len(), 1, "expected exactly one finding");
-        findings.into_iter().next().expect("one finding")
+        findings.into_iter().next().unwrap()
     }
 
     /// Builds a minimal [`Candidate`] carrying only the fields [`arbitrate`]
@@ -1342,7 +1341,7 @@ mod tests {
         let values = [0.0, 0.0, 0.0, 0.0];
         let change = candidate(FindingMethod::ChangePoint, Some(2), None);
         let drift = candidate(FindingMethod::Drift, None, Some((0.0, 0.0)));
-        let chosen = arbitrate(&values, Some(change), Some(drift)).expect("a candidate");
+        let chosen = arbitrate(&values, Some(change), Some(drift)).unwrap();
         assert_eq!(chosen.finding.method, FindingMethod::ChangePoint);
     }
 
@@ -1353,7 +1352,7 @@ mod tests {
         let values = [0.0, 1.0, 2.0, 3.0];
         let change = candidate(FindingMethod::ChangePoint, Some(2), None);
         let drift = candidate(FindingMethod::Drift, None, Some((1.0, 0.0)));
-        let chosen = arbitrate(&values, Some(change), Some(drift)).expect("a candidate");
+        let chosen = arbitrate(&values, Some(change), Some(drift)).unwrap();
         assert_eq!(chosen.finding.method, FindingMethod::Drift);
     }
 
@@ -1361,11 +1360,11 @@ mod tests {
     fn arbitrate_keeps_the_sole_candidate_that_fires() {
         let values = [0.0, 0.0, 5.0, 5.0];
         let change = candidate(FindingMethod::ChangePoint, Some(2), None);
-        let only_change = arbitrate(&values, Some(change), None).expect("a candidate");
+        let only_change = arbitrate(&values, Some(change), None).unwrap();
         assert_eq!(only_change.finding.method, FindingMethod::ChangePoint);
 
         let drift = candidate(FindingMethod::Drift, None, Some((1.0, 0.0)));
-        let only_drift = arbitrate(&values, None, Some(drift)).expect("a candidate");
+        let only_drift = arbitrate(&values, None, Some(drift)).unwrap();
         assert_eq!(only_drift.finding.method, FindingMethod::Drift);
 
         assert!(arbitrate(&values, None, None).is_none());
@@ -1528,8 +1527,7 @@ mod tests {
             practical_relative: 30.0_f64 / 100.0,
             ..AnalysisConfig::default()
         };
-        let candidate = evaluate_change_point(&series, &config)
-            .expect("a step equal to the practical floor must be reported");
+        let candidate = evaluate_change_point(&series, &config).unwrap();
         assert_eq!(candidate.finding.baseline, 100.0);
         assert_eq!(candidate.finding.latest, 130.0);
         assert_eq!(candidate.finding.relative_delta, config.practical_relative);
@@ -1663,8 +1661,7 @@ mod tests {
             .map(|&(topo_index, value, dirty)| SeriesPoint {
                 topo_index,
                 dirty,
-                commit_time: Timestamp::from_second(i64::try_from(topo_index).unwrap())
-                    .expect("seconds within range"),
+                commit_time: Timestamp::from_second(i64::try_from(topo_index).unwrap()).unwrap(),
                 object_key: format!("v2/p/engine/t/synthetic/commit{topo_index}/clean.json"),
                 commit: Some(format!("commit{topo_index}")),
                 value,
@@ -1872,7 +1869,7 @@ mod tests {
         blessed.active_start = 3;
         blessed.blessing = Some(Blessing {
             commit: "abcdef0123456789".to_owned(),
-            commit_time: Timestamp::from_second(3).expect("seconds within range"),
+            commit_time: Timestamp::from_second(3).unwrap(),
         });
         assert!(changes(&[blessed]).is_empty());
     }
@@ -1890,7 +1887,7 @@ mod tests {
         series.active_start = 3;
         series.blessing = Some(Blessing {
             commit: "abcdef0123456789cafe".to_owned(),
-            commit_time: Timestamp::from_second(3).expect("seconds within range"),
+            commit_time: Timestamp::from_second(3).unwrap(),
         });
         let finding = only(changes(&[series]));
         assert!(finding.active);
@@ -1907,13 +1904,13 @@ mod tests {
         );
         // A non-zero active window survives serialization (the `is_zero` skip
         // predicate must keep it); an unblessed finding omits the field.
-        let json = serde_json::to_string(&finding).expect("finding serializes");
+        let json = serde_json::to_string(&finding).unwrap();
         assert!(json.contains("\"active_from\":3"), "{json}");
         let unblessed = only(changes(&[series_of(&[
             10.0, 10.0, 10.0, 10.0, 20.0, 20.0, 20.0, 20.0,
         ])]));
         assert_eq!(unblessed.active_from, 0);
-        let json = serde_json::to_string(&unblessed).expect("finding serializes");
+        let json = serde_json::to_string(&unblessed).unwrap();
         assert!(!json.contains("active_from"), "{json}");
     }
 
@@ -1922,8 +1919,7 @@ mod tests {
         // A sustained interior plateau (20) between baseline regimes (10) that has
         // since recovered: a deterministic engine accepts any non-zero plateau.
         let spike = series_of(&[10.0, 10.0, 10.0, 10.0, 20.0, 20.0, 10.0, 10.0, 10.0, 10.0]);
-        let candidate = evaluate_resolved_spike(&spike, &AnalysisConfig::default())
-            .expect("a recovered spike is detected");
+        let candidate = evaluate_resolved_spike(&spike, &AnalysisConfig::default()).unwrap();
         assert!(!candidate.finding.active);
         assert_eq!(candidate.finding.baseline, 10.0);
         assert_eq!(candidate.finding.latest, 20.0);
@@ -1961,8 +1957,7 @@ mod tests {
             .map(|(index, &(value, half))| SeriesPoint {
                 topo_index: index,
                 dirty: false,
-                commit_time: Timestamp::from_second(i64::try_from(index).unwrap())
-                    .expect("seconds within range"),
+                commit_time: Timestamp::from_second(i64::try_from(index).unwrap()).unwrap(),
                 object_key: format!("v2/p/engine/t/synthetic/commit{index}/clean.json"),
                 commit: Some(format!("commit{index}")),
                 value,
@@ -2028,7 +2023,7 @@ mod tests {
         // a `>`->`<` floor comparison would instead suppress it.
         let before = pts(&[(100.0, 0.5)]);
         let after = pts(&[(130.0, 0.5)]);
-        let candidate = compare(&before, &after, 0.05).expect("a clear move is flagged");
+        let candidate = compare(&before, &after, 0.05).unwrap();
         assert!(candidate.finding.confidence < 1.0);
     }
 
@@ -2047,8 +2042,7 @@ mod tests {
         // Two points is the minimum for a tip comparison; `n < 2` must be a strict
         // `<` (a `<=`/`==` mutant would bail on the two-point case).
         let series = series_of(&[100.0, 130.0]);
-        let candidate =
-            evaluate_tip(&series, &AnalysisConfig::default()).expect("two points compare");
+        let candidate = evaluate_tip(&series, &AnalysisConfig::default()).unwrap();
         assert_eq!(candidate.finding.direction, Direction::Regression);
     }
 
@@ -2089,7 +2083,7 @@ mod tests {
             practical_relative: 20.0 / 100.0,
             ..AnalysisConfig::default()
         };
-        let candidate = evaluate_drift(&series, &config).expect("a drift at the floor is flagged");
+        let candidate = evaluate_drift(&series, &config).unwrap();
         assert_eq!(candidate.finding.method, FindingMethod::Drift);
         assert!(candidate.finding.confidence < 1.0);
     }
@@ -2111,8 +2105,7 @@ mod tests {
         // baseline (10) by 10 -- the `level - baseline` difference, not a sum or
         // quotient.
         let series = series_of(&[10.0, 10.0, 20.0, 20.0, 10.0, 10.0]);
-        let candidate = evaluate_resolved_spike(&series, &AnalysisConfig::default())
-            .expect("a six-point recovered spike is detected");
+        let candidate = evaluate_resolved_spike(&series, &AnalysisConfig::default()).unwrap();
         assert_eq!(candidate.finding.delta, 10.0);
     }
 
@@ -2126,7 +2119,7 @@ mod tests {
         // still analyses: the `n > RESOLVED_SPIKE_MAX_POINTS` guard must be a strict
         // `>`.
         let mut values = vec![10.0_f64; RESOLVED_SPIKE_MAX_POINTS];
-        for value in values.get_mut(90..110).expect("range within bounds") {
+        for value in values.get_mut(90..110).unwrap() {
             *value = 20.0;
         }
         let series = series_with(&values, MetricKind::InstructionCount, &[]);
@@ -2142,7 +2135,7 @@ mod tests {
         // One point past the inclusive search ceiling is rejected outright: the
         // `n > RESOLVED_SPIKE_MAX_POINTS` guard caps the quadratic plateau search.
         let mut values = vec![10.0_f64; RESOLVED_SPIKE_MAX_POINTS + 1];
-        for value in values.get_mut(90..110).expect("range within bounds") {
+        for value in values.get_mut(90..110).unwrap() {
             *value = 20.0;
         }
         let series = series_with(&values, MetricKind::InstructionCount, &[]);
@@ -2181,8 +2174,7 @@ mod tests {
             .chain(std::iter::repeat_n(100.0, 8))
             .collect();
         let series = wall_series(&values, 1.0);
-        let candidate = evaluate_resolved_spike(&series, &AnalysisConfig::default())
-            .expect("both gates are significant");
+        let candidate = evaluate_resolved_spike(&series, &AnalysisConfig::default()).unwrap();
         assert!(candidate.finding.confidence < 1.0);
     }
 

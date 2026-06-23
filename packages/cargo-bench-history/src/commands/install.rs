@@ -98,7 +98,7 @@ mod tests {
             &writer,
             &reporter,
         ))
-        .expect("install should succeed");
+        .unwrap();
 
         let RunOutcome::Completed { message } = outcome else {
             panic!("install should complete: {outcome:?}");
@@ -136,7 +136,7 @@ mod tests {
             &writer,
             &reporter,
         ))
-        .expect("install should succeed");
+        .unwrap();
 
         assert_eq!(writer.written(&path).as_deref(), Some(default_template()));
     }
@@ -154,7 +154,7 @@ mod tests {
             &writer,
             &reporter,
         ))
-        .expect("install should succeed");
+        .unwrap();
 
         let RunOutcome::Completed { message } = outcome else {
             panic!("install should complete: {outcome:?}");

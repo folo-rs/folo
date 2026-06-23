@@ -687,7 +687,7 @@ mod tests {
     use super::*;
 
     fn config() -> Config {
-        parse_config("[storage.local]\npath = \"./data\"\n").expect("config parses")
+        parse_config("[storage.local]\npath = \"./data\"\n").unwrap()
     }
 
     /// The auto-detected facets for the default synthetic partition the tests seed.
@@ -711,7 +711,7 @@ mod tests {
 
     /// A minimal result set with the given commit time (seconds) and commit.
     fn set(commit_second: i64, commit: &str) -> ResultSet {
-        let time = Timestamp::from_second(commit_second).expect("seconds within range");
+        let time = Timestamp::from_second(commit_second).unwrap();
         let context = RunContext::new(
             Timestamps::new(time, time),
             GitInfo {
@@ -754,18 +754,18 @@ mod tests {
     }
 
     fn store(storage: &MemoryStorage, key: &str, value: &ResultSet) {
-        let json = value.to_json().expect("result set serializes");
-        block_on(storage.put(key, json.as_bytes())).expect("store succeeds");
+        let json = value.to_json().unwrap();
+        block_on(storage.put(key, json.as_bytes())).unwrap();
     }
 
     /// Stores a blessing sidecar. `prune` never parses these (it only deletes
     /// them), so any well-formed bytes under a `bless-` key suffice.
     fn store_bless(storage: &MemoryStorage, key: &str) {
-        block_on(storage.put(key, b"{}")).expect("store succeeds");
+        block_on(storage.put(key, b"{}")).unwrap();
     }
 
     fn keys(storage: &MemoryStorage) -> Vec<String> {
-        let mut keys = block_on(storage.list("v2/")).expect("list succeeds");
+        let mut keys = block_on(storage.list("v2/")).unwrap();
         keys.sort();
         keys
     }
@@ -816,7 +816,7 @@ mod tests {
             &auto(),
             &RecordingReporter::new(),
         ))
-        .expect("prune runs");
+        .unwrap();
         match outcome {
             RunOutcome::Completed { message } => message,
             RunOutcome::Analyzed { .. } => panic!("prune returns a Completed outcome"),
@@ -838,7 +838,7 @@ mod tests {
             &auto(),
             &reporter,
         ))
-        .expect("prune runs");
+        .unwrap();
         assert!(
             reporter.contains("is not on HEAD's history"),
             "{:?}",
@@ -1448,7 +1448,7 @@ mod tests {
     #[test]
     fn load_commit_timestamp_rejects_a_non_utf8_object() {
         let storage = MemoryStorage::new();
-        block_on(storage.put(&clean_key("c2"), &[0xff, 0xfe, 0x00])).expect("seed corrupt bytes");
+        block_on(storage.put(&clean_key("c2"), &[0xff, 0xfe, 0x00])).unwrap();
         let error = block_on(load_commit_timestamp(&storage, &clean_key("c2"))).unwrap_err();
         match error {
             RunError::Analyze { message } => {
@@ -1461,8 +1461,7 @@ mod tests {
     #[test]
     fn load_commit_timestamp_rejects_an_invalid_result_set() {
         let storage = MemoryStorage::new();
-        block_on(storage.put(&clean_key("c2"), b"{ not a valid result set"))
-            .expect("seed invalid json");
+        block_on(storage.put(&clean_key("c2"), b"{ not a valid result set")).unwrap();
         let error = block_on(load_commit_timestamp(&storage, &clean_key("c2"))).unwrap_err();
         match error {
             RunError::Analyze { message } => {

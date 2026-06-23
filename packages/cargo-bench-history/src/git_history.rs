@@ -1,8 +1,9 @@
 //! The git-history port: read-only access to a repository's commit topology.
 //!
 //! `analyze` no longer orders a series by timestamp; it resolves *which* commits
-//! belong to a series, and in *what order*, from live git history (see DESIGN
-//! §8.4). This module defines the [`GitHistory`] port for that — a real adapter
+//! belong to a series, and in *what order*, from live git history (see the
+//! `analyze` command in `DESIGN.md`). This module defines the [`GitHistory`] port
+//! for that — a real adapter
 //! that shells out to `git` (with the command output parsed by pure, unit-tested
 //! helpers) and an in-memory fake (in `#[cfg(test)]`) that models a canned commit
 //! graph so the query logic is testable without a real repository.
@@ -47,7 +48,7 @@ pub(crate) trait GitHistory {
     ///
     /// `analyze` uses this to decide whether dirty snapshots on the base
     /// branch's tip are the user's current work — admitted, with a warning — or
-    /// stale leftovers to be excluded (see DESIGN §8.4).
+    /// stale leftovers to be excluded (see the `analyze` command in `DESIGN.md`).
     fn is_dirty(&self) -> impl Future<Output = io::Result<bool>>;
 }
 
@@ -236,9 +237,7 @@ mod fake {
 
         /// Points `HEAD` at the commit a ref or SHA resolves to.
         pub(crate) fn head(&mut self, reference: &str) -> &mut Self {
-            let sha = self
-                .resolve_sync(reference)
-                .expect("HEAD must point at a known ref or commit");
+            let sha = self.resolve_sync(reference).unwrap();
             self.refs.insert("HEAD".to_owned(), sha);
             self
         }
