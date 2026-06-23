@@ -19,10 +19,6 @@ use crate::{Command, RunError, RunOutcome};
 /// `chdir`, so the test suite is not forced serial.
 #[doc(hidden)]
 #[derive(Debug, Default)]
-#[expect(
-    clippy::exhaustive_structs,
-    reason = "constructed by the integration and Azure test harnesses by struct literal"
-)]
 pub struct Overrides {
     /// The workspace directory the command operates on. `None` resolves it from
     /// the process working directory. Relative `--config`/`--repo`/local-storage

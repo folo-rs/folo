@@ -9,7 +9,6 @@
 use std::fmt;
 
 /// A benchmark engine, distinguished by whether its results depend on hardware.
-#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum EngineSystem {
     /// Criterion wall-clock benchmarks: hardware-dependent and noisy.
@@ -115,7 +114,6 @@ fn normalize_os_to_linux(host_triple: &str) -> String {
 
 /// The set of factors that must match for two runs to share a series, and which
 /// therefore form the storage partition.
-#[non_exhaustive]
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ComparabilityKey {
     /// Workspace/project identity.

@@ -79,7 +79,6 @@ pub trait Storage: fmt::Debug + Send + Sync {
 }
 
 /// An error from a [`Storage`] operation.
-#[non_exhaustive]
 #[derive(Debug)]
 pub enum StorageError {
     /// No object exists at the requested key.

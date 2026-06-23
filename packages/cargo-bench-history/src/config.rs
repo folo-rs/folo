@@ -40,8 +40,7 @@ path = \"./bench-history\"
 ";
 
 /// The parsed configuration file.
-#[non_exhaustive]
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct Config {
     /// Project identity (defaults applied during resolution, not here).
     #[serde(default)]
@@ -51,8 +50,7 @@ pub struct Config {
 }
 
 /// Project identity section.
-#[non_exhaustive]
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
 pub struct ProjectConfig {
     /// Explicit project id; when absent the workspace directory name is used.
     pub id: Option<String>,
@@ -65,8 +63,7 @@ pub struct ProjectConfig {
 ///
 /// Serialized as an externally-tagged TOML table, e.g. `[storage.local]` with a
 /// `path` key, so adding future backends is a new variant with its own table.
-#[non_exhaustive]
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum StorageConfig {
     /// Store result sets under a local filesystem path.
@@ -136,7 +133,6 @@ pub fn default_template() -> &'static str {
 }
 
 /// An error encountered while loading configuration.
-#[non_exhaustive]
 #[derive(Debug)]
 pub enum ConfigError {
     /// The configuration file could not be read.

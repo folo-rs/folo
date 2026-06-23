@@ -44,7 +44,6 @@ pub struct Cli {
 /// error (failure, printed to stderr). Mirrors the shape the binary entry point
 /// consumes.
 #[derive(Debug)]
-#[non_exhaustive]
 pub struct EarlyExit {
     /// The rendered message (help text or error) to print.
     pub output: String,

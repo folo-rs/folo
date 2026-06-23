@@ -1,5 +1,13 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![allow(
+    clippy::exhaustive_enums,
+    clippy::exhaustive_structs,
+    reason = "this crate is publish = false; its `pub` items form a handoff boundary \
+              between lib.rs and the in-crate binary plus integration tests, not a \
+              stable public API, so exhaustive construction and matching by those \
+              in-workspace consumers is intended"
+)]
 
 //! Maintain a long-lived history of benchmark results and analyze it for trends
 //! that snapshot-only tooling cannot see.
@@ -200,6 +208,7 @@ mod bench;
 mod bench_output;
 mod bless;
 mod cli;
+mod command;
 mod commands;
 mod comparability;
 mod config;
@@ -211,15 +220,19 @@ mod git_history;
 mod host;
 mod machine;
 mod model;
+mod outcome;
 mod probe;
 mod process;
 mod report;
 mod storage;
 mod text;
-mod types;
 mod wiring;
 
 pub use cli::{Cli, EarlyExit};
+pub use command::{
+    AnalyzeOptions, BackfillOptions, BlessOptions, Command, InstallOptions, ListOptions,
+    ListSubject, PruneOptions, RunOptions, UnblessOptions,
+};
 pub use comparability::{ComparabilityKey, EngineSystem, resolve_target_triple};
 pub use config::{
     Config, ConfigError, ProjectConfig, StorageConfig, default_template, parse_config,
@@ -227,8 +240,5 @@ pub use config::{
 pub use context::{CiInfo, CiProvider, GitInfo, RunContext, Timestamps, ToolchainInfo, detect_ci};
 pub use dispatch::{Overrides, run, run_with_overrides};
 pub use model::{BenchmarkId, Metric, MetricKind, ResultRecord, ResultSet, SCHEMA_VERSION};
+pub use outcome::{RunError, RunOutcome};
 pub use storage::{LocalStorage, Storage, StorageError};
-pub use types::{
-    AnalyzeOptions, BackfillOptions, BlessOptions, Command, InstallOptions, ListOptions,
-    ListSubject, PruneOptions, RunError, RunOptions, RunOutcome, UnblessOptions,
-};

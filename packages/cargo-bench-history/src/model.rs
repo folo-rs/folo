@@ -14,7 +14,6 @@ use crate::RunContext;
 pub const SCHEMA_VERSION: u32 = 1;
 
 /// A complete benchmark run: the unit of storage (one immutable file per run).
-#[non_exhaustive]
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ResultSet {
     /// Schema version of this record (see [`SCHEMA_VERSION`]).
@@ -56,7 +55,6 @@ impl ResultSet {
 }
 
 /// A single benchmark case: a stable identity plus its measured metrics.
-#[non_exhaustive]
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ResultRecord {
     /// Stable identity of the benchmark case (its series key).
@@ -77,39 +75,50 @@ impl ResultRecord {
 ///
 /// Two runs contribute to the same series if and only if their `BenchmarkId`
 /// values are equal, so the components must be reproducible across runs *and*
-/// uniquely identify the benchmark within its project.
+/// uniquely identify the benchmark within its project. A `None` component is a
+/// distinguishing value in its own right, never a wildcard: a non-parametrized
+/// case (`value: None`) never shares a series with a parametrized one.
 ///
-/// The components are kept as separate fields (rather than a single opaque
-/// string) so that callers can render the identity at whatever granularity suits
-/// them — the full [`qualified`](Self::qualified) form for disambiguation, or the
-/// compact [`short`](Self::short) tail for dense listings.
+/// The identity is the *union* of the components the supported engines emit, and
+/// each engine fills only the subset it actually produces. `group` is the one
+/// component every engine always emits — the minimal identity floor — so it is
+/// required; the finer-grained components are optional because not every engine
+/// (nor every benchmark shape) has them:
 ///
-/// `package` scopes the identity to the workspace package the benchmark belongs
-/// to. Without it, two equally named bench targets in different packages (for
-/// example `foo/benches/a.rs` and `bar/benches/a.rs`, each defining the same
-/// function) would share a `module_path` and silently merge into one series.
-/// For Callgrind it is the final component of the Gungraun `package_dir`; for
-/// Criterion it is the package the benchmark binary belongs to. It is optional so
-/// that summaries lacking the information degrade gracefully rather than fail.
+/// * **Callgrind** (via Gungraun) emits all four: `package` (final segment of
+///   `package_dir`), `group` (`module_path`), `case` (`function_name`), and an
+///   optional `value` (`id`).
+/// * **Criterion** emits `group` (`group_id`), an optional `case`
+///   (`function_id`), and an optional `value` (`value_str`), but no `package` —
+///   its machine-readable output does not record which workspace package the
+///   benchmark binary belongs to.
+/// * **`alloc_tracker`** and **`all_the_time`** emit only a flat operation name
+///   as `group`; `package`, `case`, and `value` are always `None`.
 ///
-/// The remaining components are, for Callgrind, the Gungraun `module_path`,
-/// `function_name`, and optional `id`; for Criterion they are the `group_id`,
-/// `function_id`, and `value_str`.
-#[non_exhaustive]
+/// The components are kept as separate fields (rather than one opaque string) so
+/// callers can render the identity at whatever granularity suits them — the full
+/// [`qualified`](Self::qualified) form for disambiguation, or the compact
+/// [`short`](Self::short) tail for dense listings.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct BenchmarkId {
     /// Workspace package the benchmark belongs to, scoping the identity so that
-    /// equally named bench targets in different packages stay distinct.
+    /// equally named bench targets in different packages stay distinct (without
+    /// it, two `module_path`-equal Callgrind benches in different packages would
+    /// silently merge into one series). `Some` only for engines whose output
+    /// records it (Callgrind/Gungraun); `None` for Criterion, `alloc_tracker`,
+    /// and `all_the_time`.
     #[serde(default)]
     pub package: Option<String>,
-    /// Primary grouping component (Callgrind Gungraun `module_path`; Criterion
-    /// `group_id`).
+    /// Primary grouping component and the minimal identity every engine emits
+    /// (Callgrind Gungraun `module_path`; Criterion `group_id`; the operation
+    /// name for `alloc_tracker` and `all_the_time`). Always present.
     pub group: String,
-    /// Finer-grained component (Callgrind Gungraun `function_name`; Criterion
-    /// `function_id`).
+    /// Finer-grained component naming the case within the group (Callgrind
+    /// Gungraun `function_name`; Criterion `function_id`). `None` for engines
+    /// that emit only a flat operation name (`alloc_tracker`, `all_the_time`).
     pub case: Option<String>,
-    /// Optional parameter/value component (Callgrind Gungraun `id`; Criterion
-    /// `value_str`).
+    /// Parameter of a parametrized benchmark (Callgrind Gungraun `id`; Criterion
+    /// `value_str`). `None` for non-parametrized benchmarks.
     pub value: Option<String>,
 }
 
@@ -178,7 +187,6 @@ impl fmt::Display for BenchmarkId {
 }
 
 /// A single measured quantity.
-#[non_exhaustive]
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Metric {
     /// Engine-specific metric name (e.g. `instructions`, `wall_time`).
@@ -233,7 +241,6 @@ impl Metric {
 }
 
 /// The category of a [`Metric`], which determines how it is compared over time.
-#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MetricKind {

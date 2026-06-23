@@ -9,8 +9,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 /// Metadata attached to every stored run.
-#[non_exhaustive]
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RunContext {
     /// The timestamps describing this run (see [`Timestamps`]).
     pub timestamps: Timestamps,
@@ -49,7 +48,6 @@ impl RunContext {
 /// `commit` is the run's position on the timeline; `observation` is provenance
 /// metadata and is never used for ordering. `commit` is the committer date of
 /// the benchmarked commit (for a dirty snapshot, the commit it is based on).
-#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Timestamps {
     /// Committer date of the benchmarked commit; the run's timeline position. For
@@ -72,8 +70,7 @@ impl Timestamps {
 }
 
 /// Identification of the git commit a run was measured against.
-#[non_exhaustive]
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct GitInfo {
     /// Full commit hash, if known.
     pub commit: Option<String>,
@@ -86,8 +83,7 @@ pub struct GitInfo {
 }
 
 /// Information about the continuous-integration environment a run executed in.
-#[non_exhaustive]
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CiInfo {
     /// Which CI provider was detected.
     pub provider: CiProvider,
@@ -98,7 +94,6 @@ pub struct CiInfo {
 }
 
 /// The continuous-integration provider a run executed under.
-#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CiProvider {
@@ -112,8 +107,7 @@ pub enum CiProvider {
 }
 
 /// Toolchain and platform identification for a run.
-#[non_exhaustive]
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ToolchainInfo {
     /// Resolved target triple where the benchmark binary actually ran.
     pub target_triple: String,
