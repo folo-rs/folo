@@ -33,7 +33,7 @@ use testing::CwdGuard;
 /// Parses CLI arguments into the typed [`Command`], exactly as the binary does.
 fn command_from(args: &[&str]) -> Command {
     Cli::from_args(&["cargo-bench-history"], args)
-        .expect("arguments should parse")
+        .unwrap()
         .into_command()
 }
 
@@ -125,7 +125,7 @@ const FIXTURE_CONFIG: &str = "[project]\nid = \"e2e\"\n\n[storage.local]\npath =
 #[cfg_attr(miri, ignore)] // Spawns a real `cargo bench`, which Miri cannot run.
 #[cfg_attr(coverage_nightly, ignore)] // Heavy real build; llvm-cov shares one target dir.
 async fn run_against_real_criterion_bench_stores_wall_time() {
-    let fixture = tempfile::tempdir().expect("temp dir should be created");
+    let fixture = tempfile::tempdir().unwrap();
     let root = fixture.path();
 
     std::fs::write(root.join("Cargo.toml"), FIXTURE_CARGO_TOML).unwrap();
@@ -146,9 +146,7 @@ async fn run_against_real_criterion_bench_stores_wall_time() {
     // assertions and before the tempdir is dropped (required on Windows).
     let outcome = {
         let _cwd = CwdGuard::enter(root);
-        run(&command_from(&["run"]))
-            .await
-            .expect("run should succeed")
+        run(&command_from(&["run"])).await.unwrap()
     };
 
     let RunOutcome::Completed { message } = outcome else {
@@ -167,8 +165,7 @@ async fn run_against_real_criterion_bench_stores_wall_time() {
         "expected exactly one stored object, found {files:?}"
     );
 
-    let set = ResultSet::from_json(&std::fs::read_to_string(&files[0]).unwrap())
-        .expect("stored object should parse");
+    let set = ResultSet::from_json(&std::fs::read_to_string(&files[0]).unwrap()).unwrap();
     assert_eq!(set.results.len(), 1, "one harvested benchmark case");
     let record = &set.results[0];
     assert_eq!(record.id.group, "e2e");
@@ -178,7 +175,7 @@ async fn run_against_real_criterion_bench_stores_wall_time() {
         .metrics
         .iter()
         .find(|metric| metric.kind == MetricKind::WallTime)
-        .expect("a wall-time metric should be harvested from the Criterion estimates");
+        .unwrap();
     assert!(
         metric.value > 0.0,
         "a real measurement must be positive, got {}",

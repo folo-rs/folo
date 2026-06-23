@@ -1196,4 +1196,57 @@ mod tests {
         };
         assert!(!options.verbose);
     }
+
+    #[test]
+    fn unknown_subcommand_is_rejected() {
+        Cli::from_args(&["cargo-bench-history"], &["frobnicate"]).unwrap_err();
+    }
+
+    #[test]
+    fn run_rejects_unknown_flag() {
+        Cli::from_args(&["cargo-bench-history"], &["run", "--frobnicate"]).unwrap_err();
+    }
+
+    #[test]
+    fn help_request_lists_subcommands() {
+        let early_exit = Cli::from_args(&["cargo-bench-history"], &["--help"]).unwrap_err();
+        assert!(
+            early_exit.output.contains("run"),
+            "help should list subcommands: {}",
+            early_exit.output
+        );
+        assert!(
+            early_exit.output.contains("install"),
+            "{}",
+            early_exit.output
+        );
+    }
+
+    #[test]
+    fn help_text_describes_each_command_in_alphabetical_order() {
+        let help = Cli::help("cargo-bench-history");
+
+        // Each command is accompanied by its description, not just its bare name.
+        assert!(
+            help.contains("Analyze stored history"),
+            "help should describe `analyze`: {help}"
+        );
+        assert!(
+            help.contains("Replay `run` across a range"),
+            "help should describe `backfill`: {help}"
+        );
+
+        // The commands appear in alphabetical order. Each marker is a distinct,
+        // non-overlapping substring, so the offsets are strictly increasing
+        // exactly when they are sorted.
+        let order = ["analyze", "backfill", "install", "list", "prune", "run"];
+        let positions: Vec<usize> = order
+            .iter()
+            .map(|name| help.find(&format!("\n  {name} ")).unwrap())
+            .collect();
+        assert!(
+            positions.is_sorted(),
+            "commands should be listed alphabetically: {help}"
+        );
+    }
 }

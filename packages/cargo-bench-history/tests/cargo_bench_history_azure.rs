@@ -28,7 +28,7 @@ const AZURITE_KEY: &str =
 
 fn command_from(args: &[&str]) -> Command {
     Cli::from_args(&["cargo-bench-history"], args)
-        .expect("arguments should parse")
+        .unwrap()
         .into_command()
 }
 
@@ -113,7 +113,7 @@ struct AzureWorkspace {
 impl AzureWorkspace {
     fn new(config: &str) -> Self {
         let workspace = Self {
-            dir: tempfile::tempdir().expect("temp dir should be created"),
+            dir: tempfile::tempdir().unwrap(),
             bench: Vec::new(),
         };
         let cargo_dir = workspace.dir.path().join(".cargo");
@@ -165,7 +165,7 @@ impl AzureWorkspace {
         let output = std::process::Command::new("git")
             .args(&full)
             .output()
-            .expect("git should be available");
+            .unwrap();
         assert!(
             output.status.success(),
             "git {:?} failed: {}",
@@ -225,10 +225,7 @@ async fn run_stores_results_in_azurite() {
     }
     let workspace = AzureWorkspace::new(&azure_config()).with_bench(&["--summary", "grp=single"]);
 
-    let outcome = workspace
-        .drive(&["run"])
-        .await
-        .expect("run should store to Azurite");
+    let outcome = workspace.drive(&["run"]).await.unwrap();
     let RunOutcome::Completed { message } = outcome else {
         panic!("expected completion, got {outcome:?}");
     };
@@ -246,22 +243,16 @@ async fn run_then_analyze_round_trips_through_azurite() {
     }
     let workspace = AzureWorkspace::new(&azure_config()).with_bench(&["--summary", "grp=single"]);
 
-    workspace
-        .drive(&["run"])
-        .await
-        .expect("first run should store to Azurite");
+    workspace.drive(&["run"]).await.unwrap();
     // A clean run is keyed by its commit, so the second point needs its own
     // commit; otherwise it would collide with the first on the same clean key.
     workspace.commit("second");
-    workspace
-        .drive(&["run"])
-        .await
-        .expect("second run should store to Azurite");
+    workspace.drive(&["run"]).await.unwrap();
 
     let outcome = workspace
         .drive(&["analyze", "--format", "json"])
         .await
-        .expect("analyze should read the history back from Azurite");
+        .unwrap();
     let RunOutcome::Analyzed {
         report,
         regressions,
@@ -272,8 +263,7 @@ async fn run_then_analyze_round_trips_through_azurite() {
     };
 
     // The report parsing proves `analyze` listed and fetched both stored objects.
-    let parsed: serde_json::Value =
-        serde_json::from_str(&report).expect("the json report should parse");
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["project"], "azureproj");
     // A flat two-point series is not a regression.
     assert_eq!(regressions, 0);
@@ -295,40 +285,27 @@ async fn analyze_feature_and_dirty_round_trip_through_azurite() {
     let workspace = AzureWorkspace::new(&azure_config()).with_bench(&["--summary", "grp=single"]);
 
     // master: root - c2   (two clean points on the official line).
-    workspace
-        .drive(&["run"])
-        .await
-        .expect("clean run on root should store");
+    workspace.drive(&["run"]).await.unwrap();
     workspace.commit("c2");
-    workspace
-        .drive(&["run"])
-        .await
-        .expect("clean run on c2 should store");
+    workspace.drive(&["run"]).await.unwrap();
 
     // feature off c2: one clean point plus a dirty snapshot on the same commit.
     workspace.checkout_new_branch("feature");
     workspace.commit("f1");
-    workspace
-        .drive(&["run"])
-        .await
-        .expect("clean run on f1 should store");
+    workspace.drive(&["run"]).await.unwrap();
     workspace.make_dirty("uncommitted.txt");
-    workspace
-        .drive(&["run"])
-        .await
-        .expect("dirty run on f1 should store");
+    workspace.drive(&["run"]).await.unwrap();
 
     // The feature view admits the dirty snapshot on the target-side commit, so all
     // four stored objects are loaded from Azurite.
     let RunOutcome::Analyzed { report, .. } = workspace
         .drive(&["analyze", "--format", "json"])
         .await
-        .expect("feature analyze should read the history back from Azurite")
+        .unwrap()
     else {
         panic!("expected an analyzed outcome");
     };
-    let parsed: serde_json::Value =
-        serde_json::from_str(&report).expect("the json report should parse");
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
         parsed["runs"], 4,
         "the feature view loads both master points plus the clean and dirty feature \
@@ -354,12 +331,11 @@ async fn analyze_feature_and_dirty_round_trip_through_azurite() {
             "json",
         ])
         .await
-        .expect("official analyze should read the history back from Azurite")
+        .unwrap()
     else {
         panic!("expected an analyzed outcome");
     };
-    let parsed: serde_json::Value =
-        serde_json::from_str(&report).expect("the json report should parse");
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
         parsed["mode"], "history",
         "an all-clean master data set is the history view despite the dirty tree: {report}"
