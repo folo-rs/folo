@@ -9,7 +9,7 @@
 //! reported as a regression while its pre-blessing history is still retained for
 //! charts and longer-range analysis. Sidecars are never mutated: multiple
 //! blessings on one commit coexist and are unioned at query time, and editing a
-//! blessing means [`unbless`](crate::Command::Unbless)-ing and re-blessing.
+//! blessing means `unbless`-ing and re-blessing.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -20,32 +20,33 @@ use crate::model::BenchmarkId;
 ///
 /// Bumped whenever the on-disk representation changes in a backward-incompatible
 /// way so that `analyze` can refuse or migrate older data.
-pub(crate) const BLESS_SCHEMA_VERSION: u32 = 1;
+pub const BLESS_SCHEMA_VERSION: u32 = 1;
 
 /// A single blessing: which benchmarks were accepted, at which commit, and when.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub(crate) struct BlessingRecord {
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BlessingRecord {
     /// Schema version of this record (see [`BLESS_SCHEMA_VERSION`]).
-    pub(crate) schema_version: u32,
+    pub schema_version: u32,
     /// Full commit SHA the blessing was issued at (the blessed data point).
-    pub(crate) commit: String,
+    pub commit: String,
     /// Committer date of the blessed commit, used to label and anchor the
     /// blessing in reports and charts.
-    pub(crate) commit_time: Timestamp,
+    pub commit_time: Timestamp,
     /// Wall-clock time at which the blessing was issued (provenance).
-    pub(crate) issued_at: Timestamp,
+    pub issued_at: Timestamp,
     /// Benchmark-id prefixes this blessing accepts, matched against
     /// [`BenchmarkId::qualified`]. A prefix is a raw `starts_with` test, so
     /// `foo/bar` accepts `foo/bar` and `foo/bar/baz`; append a trailing `/` to
     /// require a whole-segment boundary.
-    pub(crate) prefixes: Vec<String>,
+    pub prefixes: Vec<String>,
     /// Version of the tool that issued the blessing.
-    pub(crate) tool_version: String,
+    pub tool_version: String,
 }
 
 impl BlessingRecord {
     /// Creates a blessing record stamped with the current schema version.
-    pub(crate) fn new(
+    #[must_use]
+    pub fn new(
         commit: String,
         commit_time: Timestamp,
         issued_at: Timestamp,
@@ -67,7 +68,7 @@ impl BlessingRecord {
     /// # Errors
     ///
     /// Returns an error if serialization fails.
-    pub(crate) fn to_json(&self) -> Result<String, serde_json::Error> {
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(self)
     }
 
@@ -76,7 +77,7 @@ impl BlessingRecord {
     /// # Errors
     ///
     /// Returns an error if `json` is not a valid serialized blessing.
-    pub(crate) fn from_json(json: &str) -> Result<Self, serde_json::Error> {
+    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(json)
     }
 
@@ -84,7 +85,8 @@ impl BlessingRecord {
     ///
     /// The match is a raw `starts_with` against the benchmark's qualified
     /// identity, so a prefix may select a whole family of benchmarks at once.
-    pub(crate) fn matches(&self, id: &BenchmarkId) -> bool {
+    #[must_use]
+    pub fn matches(&self, id: &BenchmarkId) -> bool {
         let qualified = id.qualified();
         self.prefixes
             .iter()

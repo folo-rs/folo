@@ -209,20 +209,16 @@
 mod analyze;
 mod bench;
 mod bench_output;
-mod bless;
 mod cli;
 mod command;
 mod commands;
-mod comparability;
 mod config;
 mod config_writer;
-mod context;
 mod dispatch;
 mod git;
 mod git_history;
 mod host;
 mod machine;
-mod model;
 mod outcome;
 mod probe;
 mod process;
@@ -230,6 +226,8 @@ mod report;
 mod storage;
 mod text;
 mod wiring;
+
+pub(crate) use cargo_bench_history_core::{bless, comparability, context, metric_events, model};
 
 pub use cli::{Cli, EarlyExit};
 pub use command::{

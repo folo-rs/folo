@@ -446,14 +446,13 @@ dependencies = [
  "azure_identity",
  "azure_storage_blob",
  "base64",
+ "cargo-bench-history-core",
  "clap",
- "colored",
  "futures",
  "hmac",
  "jiff",
  "many_cpus",
  "mutants",
- "rasciigraph",
  "serde",
  "serde_json",
  "serial_test",
@@ -463,6 +462,18 @@ dependencies = [
  "tick",
  "tokio",
  "toml",
+]
+
+[[package]]
+name = "cargo-bench-history-core"
+version = "0.0.1"
+dependencies = [
+ "colored",
+ "jiff",
+ "mutants",
+ "rasciigraph",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

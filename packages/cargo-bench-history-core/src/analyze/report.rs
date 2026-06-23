@@ -24,7 +24,7 @@ const CHART_WIDTH: u32 = 48;
 
 /// The selectable output format of an analysis report.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ReportFormat {
+pub enum ReportFormat {
     /// A compact, human-readable plain-text summary.
     Text,
     /// A machine-readable JSON document.
@@ -35,7 +35,8 @@ pub(crate) enum ReportFormat {
 
 impl ReportFormat {
     /// Parses a format from its command-line name, if recognized.
-    pub(crate) fn from_name(name: &str) -> Option<Self> {
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "text" => Some(Self::Text),
             "json" => Some(Self::Json),
@@ -47,41 +48,41 @@ impl ReportFormat {
 
 /// One discriminant set's slice of the report.
 #[derive(Clone, Debug)]
-pub(crate) struct SetSummary<'a> {
+pub struct SetSummary<'a> {
     /// The comparable partition this slice covers.
-    pub(crate) set: &'a DiscriminantSet,
+    pub set: &'a DiscriminantSet,
     /// Number of stored runs loaded for this set.
-    pub(crate) runs: usize,
+    pub runs: usize,
     /// Number of distinct series compared in this set.
-    pub(crate) series: usize,
+    pub series: usize,
     /// The set's findings, in the same global ranking as the top level.
-    pub(crate) findings: Vec<&'a Finding>,
+    pub findings: Vec<&'a Finding>,
 }
 
 /// The inputs a report is rendered from.
 #[derive(Clone, Debug)]
-pub(crate) struct ReportInput<'a> {
+pub struct ReportInput<'a> {
     /// The project the history belongs to.
-    pub(crate) project: &'a str,
+    pub project: &'a str,
     /// The analysis mode the report was produced in (`history`/`branch`/`tip`).
-    pub(crate) mode: &'a str,
+    pub mode: &'a str,
     /// Whether any finding survived — the at-a-glance signal a downstream
     /// automation reads to decide whether the report is worth surfacing.
-    pub(crate) notable: bool,
+    pub notable: bool,
     /// Total stored runs loaded across every set.
-    pub(crate) runs: usize,
+    pub runs: usize,
     /// Total distinct series compared across every set.
-    pub(crate) series: usize,
+    pub series: usize,
     /// Every set's findings, globally ranked most-notable first.
-    pub(crate) findings: &'a [Finding],
+    pub findings: &'a [Finding],
     /// The per-set breakdown, one entry per set that contributed data.
-    pub(crate) sets: &'a [SetSummary<'a>],
+    pub sets: &'a [SetSummary<'a>],
     /// A diagnostic hint shown when stored runs existed but none were analyzed,
     /// explaining why the outcome is empty. Absent in the normal case.
-    pub(crate) hint: Option<&'a str>,
+    pub hint: Option<&'a str>,
     /// A warning shown when the analysis admitted dirty runs on the base branch's
     /// tip (the working-tree-dirty exception). Absent in the normal case.
-    pub(crate) warning: Option<&'a str>,
+    pub warning: Option<&'a str>,
 }
 
 /// The JSON shape of a per-set slice.
@@ -143,7 +144,8 @@ struct JsonReport<'a> {
 /// `color` enables ANSI styling in the text format (the headline percentage and
 /// the per-finding chart). The caller decides it from the output terminal so tests
 /// and pipes stay plain; `markdown` and `json` ignore it.
-pub(crate) fn render(input: &ReportInput<'_>, format: ReportFormat, color: bool) -> String {
+#[must_use]
+pub fn render(input: &ReportInput<'_>, format: ReportFormat, color: bool) -> String {
     match format {
         ReportFormat::Text => render_text(input, color),
         ReportFormat::Markdown => render_markdown(input),

@@ -10,17 +10,17 @@
 
 /// One commit selected for analysis, in oldest-first topological position.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct SelectedCommit {
+pub struct SelectedCommit {
     /// The commit SHA (the storage commit-directory segment).
-    pub(crate) commit: String,
+    pub commit: String,
     /// Whether dirty snapshots on this commit are admitted (target-side, or the
     /// base-side tip under the dirty-working-tree exception).
-    pub(crate) admit_dirty: bool,
+    pub admit_dirty: bool,
     /// Whether `admit_dirty` is granted *only* by the base-branch dirty-tree
     /// exception (a base-side tip whose dirty runs are the user's current work).
     /// When such a run is actually included, `analyze` warns that it is
     /// ephemeral (see the `analyze` command in `DESIGN.md`).
-    pub(crate) dirty_base_exception: bool,
+    pub dirty_base_exception: bool,
 }
 
 /// Splits the target's first-parent `ancestry` (oldest-first) at the `merge_base`
@@ -40,7 +40,8 @@ pub(crate) struct SelectedCommit {
 /// admitted (flagged via [`SelectedCommit::dirty_base_exception`] so the caller can
 /// warn). Earlier base-side commits are unaffected — only the tip. `allow_dirty`
 /// still gates it, so `--no-dirty` overrides the exception.
-pub(crate) fn select_commits(
+#[must_use]
+pub fn select_commits(
     ancestry: &[String],
     merge_base: Option<&str>,
     allow_dirty: bool,

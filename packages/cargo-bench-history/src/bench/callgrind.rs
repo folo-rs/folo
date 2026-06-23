@@ -12,6 +12,7 @@ use std::fmt;
 
 use serde::Deserialize;
 
+use crate::metric_events::{L1_HITS_EVENT, LL_HITS_EVENT, RAM_HITS_EVENT};
 use crate::model::{BenchmarkId, Metric, MetricKind, ResultRecord};
 
 /// The Gungraun summary schema version this parser understands.
@@ -122,14 +123,6 @@ fn package_name_from_dir(package_dir: &str) -> Option<String> {
         .find(|segment| !segment.is_empty())
         .map(ToOwned::to_owned)
 }
-
-/// Gungraun cache event-kind names. Only L1 hits are higher-is-better: an access
-/// served by L1 is the cheap outcome. Last-level and RAM hits are the expensive
-/// tiers — an access that falls through to them is a cache miss escalating to
-/// slower memory, so more of them is worse.
-pub(crate) const L1_HITS_EVENT: &str = "L1hits";
-pub(crate) const LL_HITS_EVENT: &str = "LLhits";
-pub(crate) const RAM_HITS_EVENT: &str = "RamHits";
 
 /// Maps a Callgrind event-kind name to the metric category the tool tracks.
 ///

@@ -26,6 +26,7 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tick::Clock;
@@ -322,11 +323,18 @@ fn short(sha: &str) -> &str {
 
 /// A unique scratch path for the backfill worktree, under the system temp dir.
 fn worktree_path() -> PathBuf {
+    /// Distinguishes worktree paths created within the same process at the same
+    /// clock tick. The wall clock alone is not enough: several backfills (or
+    /// parallel tests) in one process can request a worktree on the same coarse
+    /// timestamp and would otherwise collide on the path.
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_nanos());
+    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!(
-        "cargo-bench-history-worktree-{}-{nanos}",
+        "cargo-bench-history-worktree-{}-{nanos}-{unique}",
         std::process::id()
     ))
 }

@@ -13,14 +13,12 @@
 //! storage- and git-generic orchestrator the in-memory tests drive.
 
 pub(crate) mod bless;
-mod discriminant;
-mod findings;
 pub(crate) mod list;
 pub(crate) mod prune;
-mod report;
-mod selection;
-mod series;
-mod stats;
+
+pub(crate) use cargo_bench_history_core::analyze::{
+    discriminant, findings, report, selection, series,
+};
 
 use std::collections::HashMap;
 use std::io::IsTerminal;

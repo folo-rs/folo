@@ -11,7 +11,7 @@ use std::fmt;
 
 /// A benchmark engine, distinguished by whether its results depend on hardware.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum EngineSystem {
+pub enum EngineSystem {
     /// Criterion wall-clock benchmarks: hardware-dependent and noisy.
     Criterion,
     /// Callgrind (via Gungraun) instruction counts: simulated, hardware-independent.
@@ -27,7 +27,7 @@ impl EngineSystem {
     /// Every supported engine, in a stable order used to inject the combined
     /// benchmark environment and to harvest each engine's output tree after the
     /// single `cargo bench` invocation.
-    pub(crate) const ALL: [Self; 4] = [
+    pub const ALL: [Self; 4] = [
         Self::Callgrind,
         Self::Criterion,
         Self::AllocTracker,
@@ -36,7 +36,7 @@ impl EngineSystem {
 
     /// The stable lowercase identifier used in storage paths and config keys.
     #[must_use]
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Criterion => "criterion",
             Self::Callgrind => "callgrind",
@@ -47,7 +47,7 @@ impl EngineSystem {
 
     /// Parses a [`EngineSystem`] from its stable lowercase identifier.
     #[must_use]
-    pub(crate) fn from_name(name: &str) -> Option<Self> {
+    pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "criterion" => Some(Self::Criterion),
             "callgrind" => Some(Self::Callgrind),
@@ -64,7 +64,7 @@ impl EngineSystem {
     /// counts and bytes are a property of the code, not the machine, so
     /// `alloc_tracker` is hardware-independent; processor time obviously is not.
     #[must_use]
-    pub(crate) fn is_hardware_dependent(self) -> bool {
+    pub fn is_hardware_dependent(self) -> bool {
         match self {
             Self::Criterion | Self::AllTheTime => true,
             Self::Callgrind | Self::AllocTracker => false,
@@ -92,7 +92,7 @@ impl fmt::Display for EngineSystem {
 /// The triple is **always auto-detected**: there is no `--target-triple` override
 /// on `run`/`backfill` (a misdeclared triple would silently misfile data).
 #[must_use]
-pub(crate) fn resolve_target_triple(engine: EngineSystem, host_triple: &str) -> String {
+pub fn resolve_target_triple(engine: EngineSystem, host_triple: &str) -> String {
     match engine {
         EngineSystem::Callgrind => normalize_os_to_linux(host_triple),
         EngineSystem::Criterion | EngineSystem::AllocTracker | EngineSystem::AllTheTime => {
@@ -117,7 +117,7 @@ fn normalize_os_to_linux(host_triple: &str) -> String {
 /// The set of factors that must match for two runs to share a series, and which
 /// therefore form the storage partition.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct ComparabilityKey {
+pub struct ComparabilityKey {
     /// Workspace/project identity.
     pub project: String,
     /// The benchmark engine system.
@@ -140,7 +140,7 @@ impl ComparabilityKey {
     /// which `analyze` would then fail to attribute — by mangling the value rather
     /// than rejecting the run.
     #[must_use]
-    pub(crate) fn new(
+    pub fn new(
         project: &str,
         system: EngineSystem,
         target_triple: &str,
@@ -163,7 +163,7 @@ impl ComparabilityKey {
     /// [`clean_key`]: Self::clean_key
     /// [`dirty_key`]: Self::dirty_key
     #[must_use]
-    pub(crate) fn partition_prefix(&self) -> String {
+    pub fn partition_prefix(&self) -> String {
         let project = &self.project;
         let system = self.system.as_str();
         let triple = &self.target_triple;
@@ -181,7 +181,7 @@ impl ComparabilityKey {
     /// `commit` is sanitized the same way as the partition components so the
     /// directory name always forms a single key segment.
     #[must_use]
-    pub(crate) fn clean_key(&self, commit: &str) -> String {
+    pub fn clean_key(&self, commit: &str) -> String {
         let prefix = self.partition_prefix();
         let commit = sanitize_segment(commit);
         format!("{prefix}/{commit}/clean.json")
@@ -199,7 +199,7 @@ impl ComparabilityKey {
     /// `commit` is sanitized the same way as the partition components so the
     /// directory name always forms a single key segment.
     #[must_use]
-    pub(crate) fn dirty_key(&self, commit: &str, observation_unix: i64) -> String {
+    pub fn dirty_key(&self, commit: &str, observation_unix: i64) -> String {
         let prefix = self.partition_prefix();
         let commit = sanitize_segment(commit);
         format!("{prefix}/{commit}/dirty-{observation_unix}.json")
@@ -211,7 +211,7 @@ impl ComparabilityKey {
     /// `commit` is sanitized the same way as the partition components so the
     /// directory name always forms a single key segment.
     #[must_use]
-    pub(crate) fn commit_prefix(&self, commit: &str) -> String {
+    pub fn commit_prefix(&self, commit: &str) -> String {
         let prefix = self.partition_prefix();
         let commit = sanitize_segment(commit);
         format!("{prefix}/{commit}/")
@@ -226,7 +226,7 @@ impl ComparabilityKey {
 /// Mangling rather than rejecting means the tool never refuses a run merely
 /// because its project, triple, or machine key contains an awkward character.
 #[must_use]
-pub(crate) fn sanitize_segment(raw: &str) -> String {
+pub fn sanitize_segment(raw: &str) -> String {
     let mangled: String = raw
         .chars()
         .map(|c| {

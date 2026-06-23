@@ -15,23 +15,25 @@ use std::fmt;
 /// runs in different sets (a different engine, target triple, or machine key)
 /// never share a series.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, serde::Serialize)]
-pub(crate) struct DiscriminantSet {
+pub struct DiscriminantSet {
     /// Engine identifier (for example, `callgrind`).
-    pub(crate) engine: String,
+    pub engine: String,
     /// Resolved target triple the run was recorded under.
-    pub(crate) target_triple: String,
+    pub target_triple: String,
     /// Machine partition (`synthetic` for hardware-independent engines).
-    pub(crate) machine: String,
+    pub machine: String,
 }
 
 impl DiscriminantSet {
     /// The operating-system facet derived from the target triple.
-    pub(crate) fn os(&self) -> &'static str {
+    #[must_use]
+    pub fn os(&self) -> &'static str {
         os_from_triple(&self.target_triple)
     }
 
     /// The CPU-architecture facet derived from the target triple.
-    pub(crate) fn architecture(&self) -> &str {
+    #[must_use]
+    pub fn architecture(&self) -> &str {
         arch_from_triple(&self.target_triple)
     }
 
@@ -43,7 +45,8 @@ impl DiscriminantSet {
     /// (the recorded triple is an artifact, e.g. Callgrind pins Linux). An
     /// explicit `--target-triple` still filters them, as the user asked for that
     /// precise slice.
-    pub(crate) fn matches(&self, facets: &Facets) -> bool {
+    #[must_use]
+    pub fn matches(&self, facets: &Facets) -> bool {
         let synthetic = self.machine == "synthetic";
         facets.engine.passes(&self.engine, false, false)
             && facets
@@ -59,7 +62,7 @@ impl DiscriminantSet {
 /// The variant records how the value was supplied so [`DiscriminantSet::matches`]
 /// can apply the hardware-independent exemption only where intended.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) enum FacetFilter {
+pub enum FacetFilter {
     /// Unconstrained: every set passes. Produced by the `all` keyword, and by
     /// `--engine`'s omitted default (there is no host engine to auto-detect to).
     #[default]
@@ -99,37 +102,39 @@ impl FacetFilter {
 /// `target_triple` matches the whole partition value directly; the derived `os`
 /// and `architecture` facets were removed (filter on the triple directly).
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Facets {
+pub struct Facets {
     /// Restrict to one or more engines (for example, `callgrind`).
-    pub(crate) engine: FacetFilter,
+    pub engine: FacetFilter,
     /// Restrict to one or more full target triples (for example,
     /// `x86_64-unknown-linux-gnu`).
-    pub(crate) target_triple: FacetFilter,
+    pub target_triple: FacetFilter,
     /// Restrict to one or more machine partitions.
-    pub(crate) machine_key: FacetFilter,
+    pub machine_key: FacetFilter,
 }
 
 /// The components a storage key decomposes into.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ParsedKey {
+pub struct ParsedKey {
     /// The (sanitized) project segment.
-    pub(crate) project: String,
+    pub project: String,
     /// The discriminant set the key belongs to.
-    pub(crate) set: DiscriminantSet,
+    pub set: DiscriminantSet,
     /// The commit directory segment (full SHA, or `unknown`).
-    pub(crate) commit: String,
+    pub commit: String,
     /// The file segment (`clean.json` or `dirty-<unix>.json`).
-    pub(crate) file: String,
+    pub file: String,
 }
 
 impl ParsedKey {
     /// Whether the key names a dirty (uncommitted-tree) snapshot.
-    pub(crate) fn is_dirty(&self) -> bool {
+    #[must_use]
+    pub fn is_dirty(&self) -> bool {
         self.file.starts_with("dirty-")
     }
 
     /// Whether the key names a blessing sidecar rather than a stored run.
-    pub(crate) fn is_bless(&self) -> bool {
+    #[must_use]
+    pub fn is_bless(&self) -> bool {
         self.file.starts_with("bless-")
     }
 
@@ -139,7 +144,8 @@ impl ParsedKey {
     /// Layout: `v2/{project}/{engine}/{triple}/{machine}/{commit}/bless-{unix}.json`.
     /// The components are already sanitized (they came from a parsed storage key),
     /// so the result is a well-formed seven-segment key.
-    pub(crate) fn bless_key(&self, issued_unix: i64) -> String {
+    #[must_use]
+    pub fn bless_key(&self, issued_unix: i64) -> String {
         format!(
             "v2/{}/{}/{}/{}/{}/bless-{issued_unix}.json",
             self.project, self.set.engine, self.set.target_triple, self.set.machine, self.commit,
@@ -153,7 +159,8 @@ impl ParsedKey {
 /// exactly seven non-empty segments. Any key that does not match that shape
 /// exactly (wrong version, too few or too many segments, or an empty segment) is
 /// ignored (returns `None`) rather than misattributed.
-pub(crate) fn parse_key(key: &str) -> Option<ParsedKey> {
+#[must_use]
+pub fn parse_key(key: &str) -> Option<ParsedKey> {
     let parts: Vec<&str> = key.split('/').collect();
     let [
         version,
@@ -262,6 +269,7 @@ mod tests {
         assert_eq!(parsed.commit, "abc123");
         assert_eq!(parsed.file, "clean.json");
         assert!(!parsed.is_dirty());
+        assert!(!parsed.is_bless());
     }
 
     #[test]

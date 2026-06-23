@@ -5,7 +5,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::RunContext;
+use crate::context::RunContext;
 
 /// Schema version of the stored [`ResultSet`] JSON.
 ///
@@ -265,7 +265,7 @@ pub enum MetricKind {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use crate::{CiInfo, GitInfo, Timestamps, ToolchainInfo};
+    use crate::context::{CiInfo, GitInfo, Timestamps, ToolchainInfo};
 
     use super::*;
 

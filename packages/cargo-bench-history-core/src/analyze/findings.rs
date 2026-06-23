@@ -30,40 +30,40 @@ use serde::Serialize;
 use crate::analyze::discriminant::DiscriminantSet;
 use crate::analyze::series::{Series, SeriesPoint};
 use crate::analyze::stats;
-use crate::bench::callgrind::L1_HITS_EVENT;
+use crate::metric_events::L1_HITS_EVENT;
 use crate::model::{BenchmarkId, MetricKind};
 
 /// Tunable parameters of the engine-aware analysis.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct AnalysisConfig {
+pub struct AnalysisConfig {
     /// Minimum points each side of a change must have for the step to be trusted
     /// (persistence): a one-off blip on the latest point cannot flag.
-    pub(crate) min_regime: usize,
+    pub min_regime: usize,
     /// Significance level a noisy change-point's Mann–Whitney rank test must clear
     /// (Pettitt only locates the split; its analytic p-value is too conservative on
     /// short series to gate significance).
-    pub(crate) change_alpha: f64,
+    pub change_alpha: f64,
     /// Target false-discovery rate for the Benjamini–Hochberg filter over noisy
     /// candidates.
-    pub(crate) fdr_q: f64,
+    pub fdr_q: f64,
     /// Minimum points a series needs before a slow-drift finding is considered.
-    pub(crate) drift_min_points: usize,
+    pub drift_min_points: usize,
     /// Significance level a noisy drift's Mann–Kendall trend must clear.
-    pub(crate) drift_alpha: f64,
+    pub drift_alpha: f64,
     /// Minimum relative magnitude (3%) a noisy move must reach to matter in
     /// practice, regardless of statistical significance.
-    pub(crate) practical_relative: f64,
+    pub practical_relative: f64,
     /// How many recent base-side points form the level a branch's latest state is
     /// compared against (branch mode), and the recent base-branch window the newest
     /// point is compared against (tip mode).
-    pub(crate) compare_window: usize,
+    pub compare_window: usize,
     /// Minimum relative magnitude a noisy *branch* move must reach. Raised above the
     /// history floor: a feature-branch signal must be high-confidence, since we
     /// would rather miss a small move than cry wolf on a pull request.
-    pub(crate) branch_practical_relative: f64,
+    pub branch_practical_relative: f64,
     /// Multiple of the per-measurement noise floor a noisy branch/tip move with too
     /// few points to rank-test must exceed before it is trusted.
-    pub(crate) branch_noise_multiple: f64,
+    pub branch_noise_multiple: f64,
 }
 
 impl Default for AnalysisConfig {
@@ -93,7 +93,7 @@ impl Default for AnalysisConfig {
 /// guard mode.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum AnalysisMode {
+pub enum AnalysisMode {
     /// Long-range trend and change-point analysis over a base branch's history.
     History,
     /// Latest-state comparison of a feature branch against its base, ignoring the
@@ -105,7 +105,8 @@ pub(crate) enum AnalysisMode {
 
 impl AnalysisMode {
     /// The lowercase wire name of the mode.
-    pub(crate) fn as_str(self) -> &'static str {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::History => "history",
             Self::Branch => "branch",
@@ -115,7 +116,8 @@ impl AnalysisMode {
 
     /// Parses an explicit `--mode` name, if recognized (`auto` is resolved by the
     /// caller and is not a mode of its own).
-    pub(crate) fn from_name(name: &str) -> Option<Self> {
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "history" => Some(Self::History),
             "branch" => Some(Self::Branch),
@@ -125,27 +127,30 @@ impl AnalysisMode {
     }
 }
 
-/// The context a [`find_changes`] pass runs in: which analysis to perform, the
-/// tuned parameters, where the branch forks from its base (branch mode only), and
-/// whether improvements are reported alongside regressions.
-pub(crate) struct AnalysisContext {
+/// The context a [`find_changes`] pass runs in.
+///
+/// Carries which analysis to perform, the tuned parameters, where the branch forks
+/// from its base (branch mode only), and whether improvements are reported
+/// alongside regressions.
+#[derive(Debug)]
+pub struct AnalysisContext {
     /// The analysis to perform.
-    pub(crate) mode: AnalysisMode,
+    pub mode: AnalysisMode,
     /// The tuned analysis parameters.
-    pub(crate) config: AnalysisConfig,
+    pub config: AnalysisConfig,
     /// First-parent topological index of the merge-base commit, splitting base-side
     /// history from the branch. `None` means no split is known (every point is
     /// treated as branch-side). Consulted only in [`AnalysisMode::Branch`].
-    pub(crate) merge_base_index: Option<usize>,
+    pub merge_base_index: Option<usize>,
     /// Whether improvements are reported. History mode defaults to regressions only
     /// (scheduled drift watch); branch mode always reports both; tip mode reports
     /// regressions only.
-    pub(crate) include_improvements: bool,
+    pub include_improvements: bool,
     /// Whether *inactive* (recovered) findings are reported. History mode hides a
     /// change whose level has since returned to baseline unless this is set; branch
     /// and tip modes only ever look at the latest state, so they have no inactive
     /// findings.
-    pub(crate) include_inactive: bool,
+    pub include_inactive: bool,
 }
 
 impl AnalysisContext {
@@ -164,7 +169,7 @@ impl AnalysisContext {
 /// Which detector produced a finding.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum FindingMethod {
+pub enum FindingMethod {
     /// A sustained level shift located by the Pettitt change-point test.
     ChangePoint,
     /// A slow monotonic trend located by the Mann–Kendall / Theil–Sen pair.
@@ -174,83 +179,84 @@ pub(crate) enum FindingMethod {
 /// The direction of a flagged change relative to the baseline.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Direction {
+pub enum Direction {
     /// The latest value is worse than the baseline.
     Regression,
     /// The latest value is better than the baseline.
     Improvement,
 }
 
-/// One point of a finding's underlying series, exposed in the JSON output for
-/// charting and provenance: the commit it was measured against, the value, and
-/// whether it came from a dirty (uncommitted-tree) snapshot.
+/// One point of a finding's underlying series, exposed in the JSON output.
+///
+/// Carries, for charting and provenance, the commit it was measured against, the
+/// value, and whether it came from a dirty (uncommitted-tree) snapshot.
 #[derive(Clone, Debug, Serialize)]
-pub(crate) struct SeriesValue {
+pub struct SeriesValue {
     /// Abbreviated commit the point was measured against, if known.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) commit: Option<String>,
+    pub commit: Option<String>,
     /// The measured value.
-    pub(crate) value: f64,
+    pub value: f64,
     /// Whether the point is a dirty (uncommitted-tree) snapshot.
-    pub(crate) dirty: bool,
+    pub dirty: bool,
 }
 
 /// One flagged change: where it is, what moved, by how much, and how sure we are.
 #[derive(Clone, Debug, Serialize)]
-pub(crate) struct Finding {
+pub struct Finding {
     /// The comparable discriminant set the series belongs to.
     #[serde(flatten)]
-    pub(crate) set: DiscriminantSet,
+    pub set: DiscriminantSet,
     /// The benchmark identity.
     #[serde(flatten)]
-    pub(crate) id: BenchmarkId,
+    pub id: BenchmarkId,
     /// The metric that moved.
-    pub(crate) metric: String,
+    pub metric: String,
     /// The category of the metric that moved.
-    pub(crate) kind: MetricKind,
+    pub kind: MetricKind,
     /// Which detector produced this finding.
-    pub(crate) method: FindingMethod,
+    pub method: FindingMethod,
     /// Whether the move is a regression or an improvement.
-    pub(crate) direction: Direction,
+    pub direction: Direction,
     /// The before-regime representative value the after regime was compared to.
-    pub(crate) baseline: f64,
+    pub baseline: f64,
     /// The after-regime representative value.
-    pub(crate) latest: f64,
+    pub latest: f64,
     /// The absolute change (`latest - baseline`).
-    pub(crate) delta: f64,
+    pub delta: f64,
     /// The change relative to the baseline (`delta / baseline`).
-    pub(crate) relative_delta: f64,
+    pub relative_delta: f64,
     /// How confident the detector is (`1 - p_value`; `1.0` for an exact
     /// deterministic step).
-    pub(crate) confidence: f64,
+    pub confidence: f64,
     /// Abbreviated commit the change is attributed to, if known.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) commit: Option<String>,
+    pub commit: Option<String>,
     /// Where, within a feature branch, the latest regime began — set only in
     /// branch mode when a within-branch flip is located, naming the commit the
     /// move starts at, so a "got worse late in the branch" finding can point at it.
     /// In history mode, an inactive (recovered) finding sets this to the commit at
     /// which the level returned to baseline.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) flipped_at: Option<String>,
+    pub flipped_at: Option<String>,
     /// Whether the change is still reflected in the latest measured state. An active
     /// finding's current level still differs from baseline; an inactive one has
     /// since recovered (history mode only — branch and tip always look at the latest
     /// state, so their findings are always active).
-    pub(crate) active: bool,
+    pub active: bool,
     /// Index into `series` at which the active (post-blessing) window begins; points
     /// before it are pre-blessing history, retained for charting but excluded from
     /// detection. `0` when the series is unblessed.
     #[serde(skip_serializing_if = "is_zero")]
-    pub(crate) active_from: usize,
+    pub active_from: usize,
     /// Abbreviated commit of the blessing that re-baselined this series, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) blessed_at: Option<String>,
+    pub blessed_at: Option<String>,
     /// Effective (committer) time of the blessed commit, RFC 3339, if blessed.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) blessed_commit_time: Option<String>,
+    pub blessed_commit_time: Option<String>,
     /// The full underlying series, oldest-first, so a consumer can draw a chart.
-    pub(crate) series: Vec<SeriesValue>,
+    pub series: Vec<SeriesValue>,
 }
 
 /// Whether a count is zero, for `#[serde(skip_serializing_if)]`.
@@ -264,7 +270,8 @@ fn is_zero(value: &usize) -> bool {
 
 impl Finding {
     /// Whether this finding is a regression (as opposed to an improvement).
-    pub(crate) fn is_regression(&self) -> bool {
+    #[must_use]
+    pub fn is_regression(&self) -> bool {
         self.direction == Direction::Regression
     }
 }
@@ -991,7 +998,8 @@ fn evaluate_resolved_spike(series: &Series, config: &AnalysisConfig) -> Option<C
 /// `config.fdr_q`; deterministic candidates bypass it. Findings are then filtered
 /// to the directions the mode reports and ordered by descending relative move,
 /// then method, then a deterministic identity tie-break.
-pub(crate) fn find_changes(series: &[Series], context: &AnalysisContext) -> Vec<Finding> {
+#[must_use]
+pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Vec<Finding> {
     let config = &context.config;
     let mut candidates: Vec<Candidate> = Vec::new();
     for one in series {
@@ -1071,7 +1079,7 @@ mod tests {
 
     use crate::analyze::discriminant::DiscriminantSet;
     use crate::analyze::series::{Blessing, SeriesPoint};
-    use crate::bench::callgrind::{LL_HITS_EVENT, RAM_HITS_EVENT};
+    use crate::metric_events::{LL_HITS_EVENT, RAM_HITS_EVENT};
     use crate::model::MetricKind;
 
     use super::*;
@@ -1779,6 +1787,7 @@ mod tests {
         ]);
         let finding = only(branch_changes(&[series], Some(2)));
         assert_eq!(finding.direction, Direction::Improvement);
+        assert!(!finding.is_regression());
         assert_eq!(finding.latest, 70.0);
     }
 
@@ -2096,6 +2105,52 @@ mod tests {
         // the floor to 14 and would flag it).
         let series = wall_series(&[100.0, 104.0, 108.0, 112.0, 116.0, 120.0], 12.0);
         assert!(evaluate_drift(&series, &AnalysisConfig::default()).is_none());
+    }
+
+    #[test]
+    fn drift_needs_at_least_the_minimum_points() {
+        // The length gate is `n < drift_min_points`: a series one point short is
+        // rejected outright, while a longer series is still evaluated (so a gate
+        // mutated to reject the longer series instead is caught).
+        let config = AnalysisConfig {
+            practical_relative: 20.0 / 100.0,
+            ..AnalysisConfig::default()
+        };
+        let short = series_of(&[100.0, 104.0, 108.0, 112.0, 116.0]);
+        assert!(evaluate_drift(&short, &config).is_none());
+        let long = series_of(&[100.0, 104.0, 108.0, 112.0, 116.0, 120.0, 124.0]);
+        assert!(evaluate_drift(&long, &config).is_some());
+    }
+
+    #[test]
+    fn analysis_mode_names_round_trip() {
+        for mode in [
+            AnalysisMode::History,
+            AnalysisMode::Branch,
+            AnalysisMode::Tip,
+        ] {
+            assert_eq!(AnalysisMode::from_name(mode.as_str()), Some(mode));
+        }
+        assert_eq!(AnalysisMode::History.as_str(), "history");
+        assert_eq!(AnalysisMode::Branch.as_str(), "branch");
+        assert_eq!(AnalysisMode::Tip.as_str(), "tip");
+        assert_eq!(AnalysisMode::from_name("auto"), None);
+        assert_eq!(AnalysisMode::from_name("nonsense"), None);
+    }
+
+    #[test]
+    fn history_keeps_regressions_and_optionally_improvements() {
+        let context = |include_improvements| AnalysisContext {
+            mode: AnalysisMode::History,
+            config: AnalysisConfig::default(),
+            merge_base_index: None,
+            include_improvements,
+            include_inactive: false,
+        };
+        // Regressions are always reported; improvements only when opted in.
+        assert!(context(false).keeps(Direction::Regression));
+        assert!(!context(false).keeps(Direction::Improvement));
+        assert!(context(true).keeps(Direction::Improvement));
     }
 
     #[test]

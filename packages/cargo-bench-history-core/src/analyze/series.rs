@@ -10,6 +10,7 @@
 //! commit time and then the storage key for determinism.
 
 use std::collections::{BTreeMap, HashMap};
+use std::hash::BuildHasher;
 
 use jiff::Timestamp;
 
@@ -19,23 +20,23 @@ use crate::model::{BenchmarkId, MetricKind, ResultSet};
 
 /// A single observation in a series.
 #[derive(Clone, Debug)]
-pub(crate) struct SeriesPoint {
+pub struct SeriesPoint {
     /// First-parent topological position of the run's commit (oldest = 0).
-    pub(crate) topo_index: usize,
+    pub topo_index: usize,
     /// Whether the observation came from a dirty (uncommitted-tree) snapshot.
-    pub(crate) dirty: bool,
+    pub dirty: bool,
     /// Commit time of the run (a within-commit, within-cleanliness tie-break).
-    pub(crate) commit_time: Timestamp,
+    pub commit_time: Timestamp,
     /// Storage key the observation came from (final tie-break and provenance).
-    pub(crate) object_key: String,
+    pub object_key: String,
     /// Abbreviated commit the run was measured against, if known.
-    pub(crate) commit: Option<String>,
+    pub commit: Option<String>,
     /// The measured value.
-    pub(crate) value: f64,
+    pub value: f64,
     /// Lower confidence-interval bound, when the engine reports one (Criterion).
-    pub(crate) interval_low: Option<f64>,
+    pub interval_low: Option<f64>,
     /// Upper confidence-interval bound, when the engine reports one (Criterion).
-    pub(crate) interval_high: Option<f64>,
+    pub interval_high: Option<f64>,
 }
 
 /// A blessing that applies to a series: the commit it was issued at, that commit's
@@ -47,52 +48,52 @@ pub(crate) struct SeriesPoint {
 /// retained for charting (drawn greyed). See the *Re-baselining* analysis
 /// section of `DESIGN.md`.
 #[derive(Clone, Debug)]
-pub(crate) struct Blessing {
+pub struct Blessing {
     /// Full commit SHA the blessing was issued at (the report anchor).
-    pub(crate) commit: String,
+    pub commit: String,
     /// Committer date of the blessed commit, for the report anchor.
-    pub(crate) commit_time: Timestamp,
+    pub commit_time: Timestamp,
 }
 
 /// A per-`(set, benchmark, metric)` time series ordered by git topology.
 #[derive(Clone, Debug)]
-pub(crate) struct Series {
+pub struct Series {
     /// The comparable discriminant set all points share.
-    pub(crate) set: DiscriminantSet,
+    pub set: DiscriminantSet,
     /// The benchmark identity all points share.
-    pub(crate) id: BenchmarkId,
+    pub id: BenchmarkId,
     /// The metric name all points share.
-    pub(crate) metric: String,
+    pub metric: String,
     /// The metric category (governs comparison semantics).
-    pub(crate) kind: MetricKind,
+    pub kind: MetricKind,
     /// Observations ordered by `(topo_index, dirty, effective, object_key)`.
-    pub(crate) points: Vec<SeriesPoint>,
+    pub points: Vec<SeriesPoint>,
     /// Index into `points` where the active (post-blessing) window begins; `0`
     /// when the series is unblessed (every point is active). History-mode
     /// detection considers only `points[active_start..]`, while charts draw the
     /// whole series with the pre-`active_start` prefix greyed.
-    pub(crate) active_start: usize,
+    pub active_start: usize,
     /// The blessing that re-baselined this series, if any (the report anchor).
-    pub(crate) blessing: Option<Blessing>,
+    pub blessing: Option<Blessing>,
 }
 
 /// One stored object selected for analysis, ready to be folded into series.
 #[derive(Clone, Debug)]
-pub(crate) struct LoadedObject {
+pub struct LoadedObject {
     /// The parsed storage key (discriminant set, commit, and cleanliness).
-    pub(crate) key: ParsedKey,
+    pub key: ParsedKey,
     /// The full storage object key (provenance and final tie-break).
-    pub(crate) object_key: String,
+    pub object_key: String,
     /// The decoded result set.
-    pub(crate) result: ResultSet,
+    pub result: ResultSet,
 }
 
 /// Filters applied while building series from stored runs.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct SeriesFilter<'a> {
+pub struct SeriesFilter<'a> {
     /// Keep only series whose benchmark identity's qualified id starts with one of
     /// these prefixes. Empty keeps every series.
-    pub(crate) prefixes: &'a [String],
+    pub prefixes: &'a [String],
 }
 
 /// Whether `prefixes` accepts `id` (an empty prefix list accepts every id).
@@ -119,9 +120,10 @@ fn prefixes_accept(prefixes: &[String], id: &BenchmarkId) -> bool {
 /// `(topo_index, dirty, effective, object_key)` so a clean run precedes a dirty
 /// snapshot on the same commit and the timeline follows git history rather than
 /// storage-listing order.
-pub(crate) fn build_series(
+#[must_use]
+pub fn build_series<S: BuildHasher>(
     objects: &[LoadedObject],
-    order: &HashMap<String, usize>,
+    order: &HashMap<String, usize, S>,
     filter: &SeriesFilter<'_>,
 ) -> Vec<Series> {
     let mut groups: BTreeMap<
@@ -197,9 +199,9 @@ pub(crate) fn build_series(
 /// for charting. A series with no matching blessing is left untouched
 /// (`active_start = 0`). Branch and tip modes pass an empty map and so are
 /// unaffected.
-pub(crate) fn apply_blessings(
+pub fn apply_blessings<S: BuildHasher>(
     series: &mut [Series],
-    blessings: &HashMap<DiscriminantSet, Vec<(usize, BlessingRecord)>>,
+    blessings: &HashMap<DiscriminantSet, Vec<(usize, BlessingRecord)>, S>,
 ) {
     for one in series.iter_mut() {
         let Some(set_blessings) = blessings.get(&one.set) else {
