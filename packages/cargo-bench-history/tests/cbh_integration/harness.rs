@@ -1,6 +1,7 @@
 pub(crate) use std::cell::RefCell;
 pub(crate) use std::collections::HashMap;
 pub(crate) use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 pub(crate) use cargo_bench_history::{
     BenchmarkId, CiInfo, Cli, Command, GitInfo, Metric, MetricKind, Overrides, ResultRecord,
@@ -20,6 +21,110 @@ pub(crate) const MOCK_ENGINE: &str = env!("CARGO_BIN_EXE_cargo-bench-history-moc
 /// the package, so its `CARGO_PKG_VERSION` matches the version `run` records.
 pub(crate) const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// A process-global base repository template: a `master`-branch repo carrying the
+/// volatile-directory excludes and one empty `root` commit, built once via the real
+/// git commands and copied into each fresh workspace by [`Workspace::init_repo`].
+/// Copying the tiny pruned `.git` tree is far cheaper than re-spawning `git init` +
+/// `git commit` per repository, where process startup — compounded by real-time
+/// antivirus on Windows — dominates the integration suite. Built lazily on first use
+/// and kept alive for the whole test binary (its `TempDir` is never dropped, so the
+/// source `.git` outlives every copy).
+static BASE_TEMPLATE: LazyLock<tempfile::TempDir> = LazyLock::new(build_base_template);
+
+/// Runs `git -C <root> <args>`, returning its captured output and asserting success.
+///
+/// Every invocation injects the committer identity plus throughput-oriented config:
+/// `core.fsync=none`/`core.fsyncObjectFiles=false` skip the per-object disk flush (by
+/// far the largest per-commit cost on Windows, where real-time antivirus compounds it)
+/// and `gc.auto=0` keeps a background repack from firing mid-test. The identity is
+/// supplied here rather than via separate `git config` subprocesses so a fresh
+/// repository needs only `init`/`commit`, not extra process spawns. These settings are
+/// safe for throwaway test repositories and unknown keys are ignored by older git, so
+/// they are inert where unsupported. Shared by [`Workspace::git`] and the one-time
+/// [`build_base_template`] so both speak to git identically.
+fn run_git(root: &Path, args: &[&str]) -> std::process::Output {
+    let root = root.to_string_lossy().into_owned();
+    let mut full: Vec<&str> = vec![
+        "-c",
+        "user.email=test@example.invalid",
+        "-c",
+        "user.name=Bench History Test",
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "core.fsync=none",
+        "-c",
+        "core.fsyncObjectFiles=false",
+        "-c",
+        "gc.auto=0",
+        "-C",
+        root.as_str(),
+    ];
+    full.extend_from_slice(args);
+    let output = std::process::Command::new("git")
+        .args(&full)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
+/// Builds the shared base template (see [`BASE_TEMPLATE`]) in its own temporary
+/// directory using the same real git helpers a live repo uses, then prunes the
+/// per-init noise git writes that only inflates each copy: the `*.sample` hook scripts
+/// and the placeholder `description`.
+fn build_base_template() -> tempfile::TempDir {
+    let template = tempfile::tempdir().unwrap();
+    let root = template.path();
+    run_git(root, &["init", "-b", "master"]);
+    std::fs::write(
+        root.join(".git").join("info").join("exclude"),
+        "/.cargo/\n/store/\n/target/\n",
+    )
+    .unwrap();
+    run_git(root, &["commit", "--allow-empty", "-m", "root"]);
+    let git_dir = root.join(".git");
+    if let Ok(entries) = std::fs::read_dir(git_dir.join("hooks")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "sample") {
+                remove_best_effort(&path);
+            }
+        }
+    }
+    remove_best_effort(&git_dir.join("description"));
+    template
+}
+
+/// Removes `path`, ignoring failure. Pruning the template's per-init noise is purely
+/// an optimization: a file that cannot be removed (already absent on some git version,
+/// say) only leaves the copy marginally larger and is never an error.
+fn remove_best_effort(path: &Path) {
+    match std::fs::remove_file(path) {
+        Ok(()) | Err(_) => {}
+    }
+}
+
+/// Recursively copies the directory tree at `src` into `dst`, creating `dst` and any
+/// missing parents. Used to clone the base template's `.git` into a fresh workspace.
+fn copy_dir_all(src: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst).unwrap();
+    for entry in std::fs::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir_all(&from, &to);
+        } else {
+            std::fs::copy(&from, &to).unwrap();
+        }
+    }
+}
 /// A hermetic workspace for driving `run` against the real adapters.
 ///
 /// Writes a configuration and (optionally) fake engine output under a temporary
@@ -106,67 +211,37 @@ impl Workspace {
         self.dir.path()
     }
 
-    /// Runs `git -C <root> <args>`, returning its captured output. The repository
-    /// directory is addressed explicitly so commit creation never depends on the
-    /// process current directory.
-    ///
-    /// Every invocation injects the committer identity plus throughput-oriented
-    /// config: `core.fsync=none`/`core.fsyncObjectFiles=false` skip the per-object
-    /// disk flush (by far the largest per-commit cost on Windows, where real-time
-    /// antivirus compounds it) and `gc.auto=0` keeps a background repack from firing
-    /// mid-test. The identity is supplied here rather than via separate `git config`
-    /// subprocesses so a fresh repository needs only `init`/`add`/`commit`, not five
-    /// extra process spawns. These settings are safe for throwaway test repositories
-    /// and unknown keys are ignored by older git, so they are inert where unsupported.
+    /// Runs `git -C <root> <args>` against this workspace, returning its captured
+    /// output. Thin wrapper over [`run_git`]; the repository directory is addressed
+    /// explicitly so commit creation never depends on the process current directory.
     pub(crate) fn git(&self, args: &[&str]) -> std::process::Output {
-        let root = self.root().to_string_lossy().into_owned();
-        let mut full: Vec<&str> = vec![
-            "-c",
-            "user.email=test@example.invalid",
-            "-c",
-            "user.name=Bench History Test",
-            "-c",
-            "commit.gpgsign=false",
-            "-c",
-            "core.fsync=none",
-            "-c",
-            "core.fsyncObjectFiles=false",
-            "-c",
-            "gc.auto=0",
-            "-C",
-            root.as_str(),
-        ];
-        full.extend_from_slice(args);
-        let output = std::process::Command::new("git")
-            .args(&full)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "git {:?} failed: {}",
-            args,
-            String::from_utf8_lossy(&output.stderr)
-        );
-        output
+        run_git(self.root(), args)
     }
 
     /// Initializes a `master`-branch repository with one empty root commit so `HEAD`
-    /// always resolves. The volatile directories a run touches (`.cargo`, `store`,
-    /// `target`) are excluded via the repository-local `.git/info/exclude` file —
-    /// untracked, so the root commit can be empty and no `git add` spawn is needed —
-    /// leaving the working tree clean unless a test deliberately dirties it (via
-    /// [`make_dirty`]). A clean tree on the base branch is what makes `analyze` pick
-    /// `history` mode.
+    /// always resolves. Rather than re-spawning `git init` + `git commit` for every
+    /// repository (process startup, amplified by real-time antivirus, dominates these
+    /// tests on Windows), it copies the pre-built [`BASE_TEMPLATE`] `.git` tree, which
+    /// already carries the volatile-directory excludes (`.cargo`, `store`, `target`)
+    /// and the empty root commit. The excludes are untracked, so the working tree stays
+    /// clean unless a test deliberately dirties it (via [`make_dirty`]); a clean tree on
+    /// the base branch is what makes `analyze` pick `history` mode.
     ///
     /// [`make_dirty`]: Self::make_dirty
     pub(crate) fn init_repo(&self) {
-        self.git(&["init", "-b", "master"]);
-        std::fs::write(
-            self.root().join(".git").join("info").join("exclude"),
-            "/.cargo/\n/store/\n/target/\n",
-        )
-        .unwrap();
-        self.git(&["commit", "--allow-empty", "-m", "root"]);
+        copy_dir_all(
+            &BASE_TEMPLATE.path().join(".git"),
+            &self.root().join(".git"),
+        );
+        // Guard against a malformed template (for example a loose ref the copy
+        // dropped): resolving HEAD straight from the copied `.git` must yield a full
+        // SHA, so a broken copy fails loudly here instead of misbehaving in a later
+        // command. The read is cheap and never spawns git for a healthy template.
+        assert_eq!(
+            self.head_sha().len(),
+            40,
+            "copied base template did not yield a resolvable HEAD"
+        );
     }
 
     /// Reads `HEAD`'s commit SHA straight from the `.git` directory, avoiding a
