@@ -16,12 +16,11 @@ async fn run_callgrind_end_to_end_stores_results() {
     let (key, set) = workspace.single_object();
 
     // Synthetic partition (Callgrind is hardware-independent) under the resolved
-    // triple. `run` auto-detects the triple (Callgrind pins the OS to Linux), so
-    // derive it from the stored context to keep the assertion host-portable. The
-    // temp workspace is outside any git repository, so the commit resolves to the
-    // `unknown` fallback and the clean tree yields `clean.json`.
+    // triple. `run` auto-detects the host triple, so derive it from the stored
+    // context to keep the assertion host-portable. The temp workspace is outside
+    // any git repository, so the commit resolves to the `unknown` fallback and the
+    // clean tree yields `clean.json`.
     let triple = &set.context.toolchain.target_triple;
-    assert!(triple.ends_with("-unknown-linux-gnu"), "{triple}");
     assert_eq!(
         key,
         format!("v2/testproj/callgrind/{triple}/synthetic/unknown/clean.json")
@@ -31,21 +30,18 @@ async fn run_callgrind_end_to_end_stores_results() {
     assert_eq!(set.context.tool_version, TOOL_VERSION);
     // Outside a git repository there is no committer date, so the commit time
     // falls back to the observation time.
-    assert_eq!(
-        set.context.timestamps.commit,
-        set.context.timestamps.observation
-    );
+    assert_eq!(set.context.commit, set.context.observation);
 
     assert_eq!(set.results.len(), 1);
     let record = &set.results[0];
-    assert!(record.id.value.is_none());
+    // The unparametrized summary carries no parameter segment, so its identity
+    // ends at the function name.
+    assert_eq!(
+        record.id.segments.last().map(String::as_str),
+        Some("timestamp_capture_std_now")
+    );
     assert_eq!(ir_of(record), 36.0);
-    let ir = record
-        .metrics
-        .iter()
-        .find(|metric| metric.name == "Ir")
-        .unwrap();
-    assert_eq!(ir.kind, MetricKind::InstructionCount);
+    assert_eq!(metric_of(record, MetricKind::InstructionCount).value, 36.0);
 }
 
 /// Regression: a benchmark binary launched by `cargo bench --package X` runs with
@@ -106,14 +102,14 @@ async fn run_stores_a_record_per_summary() {
     let parametrized = set
         .results
         .iter()
-        .find(|record| record.id.value.as_deref() == Some("two_instants"))
+        .find(|record| record.id.segments.last().map(String::as_str) == Some("two_instants"))
         .unwrap();
     assert_eq!(ir_of(parametrized), 87.0);
 
     let unparametrized = set
         .results
         .iter()
-        .find(|record| record.id.value.is_none())
+        .find(|record| record.id.segments.last().map(String::as_str) != Some("two_instants"))
         .unwrap();
     assert_eq!(ir_of(unparametrized), 36.0);
 }
@@ -140,20 +136,20 @@ async fn run_distinguishes_same_module_path_across_packages() {
     let (_, set) = workspace.single_object();
     assert_eq!(set.results.len(), 2);
 
-    // Both records share group, case, and value; only the package differs.
-    let groups: Vec<&str> = set.results.iter().map(|r| r.id.group.as_str()).collect();
+    // Both records share module_path, function, and value; only the package (the
+    // leading segment) differs.
     assert_eq!(
-        groups[0], groups[1],
+        set.results[0].id.segments[1], set.results[1].id.segments[1],
         "the colliding module_path is identical"
     );
 
-    let mut packages: Vec<Option<&str>> = set
+    let mut packages: Vec<&str> = set
         .results
         .iter()
-        .map(|r| r.id.package.as_deref())
+        .map(|r| r.id.segments[0].as_str())
         .collect();
     packages.sort_unstable();
-    assert_eq!(packages, vec![Some("fast_time"), Some("other_pkg")]);
+    assert_eq!(packages, vec!["fast_time", "other_pkg"]);
 
     // The identities differ, so analyze would build two series rather than one.
     assert_ne!(set.results[0].id, set.results[1].id);
@@ -188,14 +184,15 @@ async fn run_harvests_colliding_bench_binary_names_in_distinct_packages() {
         "both colliding-name summaries are harvested from their nested directories"
     );
 
-    // Same group/case, distinct package — exactly the cross-package collision shape.
-    let mut packages: Vec<Option<&str>> = set
+    // Same module_path/function, distinct package — exactly the cross-package
+    // collision shape.
+    let mut packages: Vec<&str> = set
         .results
         .iter()
-        .map(|r| r.id.package.as_deref())
+        .map(|r| r.id.segments[0].as_str())
         .collect();
     packages.sort_unstable();
-    assert_eq!(packages, vec![Some("fast_time"), Some("other_pkg")]);
+    assert_eq!(packages, vec!["fast_time", "other_pkg"]);
     assert_ne!(set.results[0].id, set.results[1].id);
 }
 
@@ -259,7 +256,7 @@ async fn run_criterion_stores_results() {
     let metric = &set.results[0].metrics[0];
     assert_eq!(metric.kind, MetricKind::WallTime);
     assert_eq!(metric.value, 26.9);
-    assert_eq!(metric.unit.as_deref(), Some("ns"));
+    assert_eq!(metric.kind.as_unit(), "ns");
     assert!(metric.std_dev.is_some(), "dispersion should be recorded");
 }
 
@@ -335,18 +332,16 @@ async fn run_alloc_tracker_stores_results() {
     assert!(key.contains("/synthetic/"), "{key}");
     assert_eq!(set.results.len(), 1);
     let record = &set.results[0];
-    assert_eq!(record.id.group, "allocate_vec");
+    assert_eq!(record.id.qualified(), "allocate_vec");
     assert_eq!(record.metrics.len(), 2, "{:?}", record.metrics);
 
-    let bytes = metric_named(record, "allocated_bytes");
-    assert_eq!(bytes.kind, MetricKind::AllocationBytes);
+    let bytes = metric_of(record, MetricKind::AllocationBytes);
     assert_eq!(bytes.value, 200.0);
-    assert_eq!(bytes.unit.as_deref(), Some("bytes"));
+    assert_eq!(bytes.kind.as_unit(), "bytes");
 
-    let count = metric_named(record, "allocations");
-    assert_eq!(count.kind, MetricKind::AllocationCount);
+    let count = metric_of(record, MetricKind::AllocationCount);
     assert_eq!(count.value, 2.0);
-    assert_eq!(count.unit.as_deref(), Some("count"));
+    assert_eq!(count.kind.as_unit(), "count");
 }
 
 /// An `all_the_time` run stores processor time in a machine-fingerprinted
@@ -372,11 +367,10 @@ async fn run_all_the_time_is_partitioned_by_machine_key() {
     assert!(!key.contains("/synthetic/"), "{key}");
     assert_eq!(set.results.len(), 1);
     let record = &set.results[0];
-    assert_eq!(record.id.group, "read_cell");
-    let processor_time = metric_named(record, "processor_time");
-    assert_eq!(processor_time.kind, MetricKind::ProcessorTime);
+    assert_eq!(record.id.qualified(), "read_cell");
+    let processor_time = metric_of(record, MetricKind::ProcessorTime);
     assert_eq!(processor_time.value, 20.0);
-    assert_eq!(processor_time.unit.as_deref(), Some("ns"));
+    assert_eq!(processor_time.kind.as_unit(), "ns");
 }
 
 /// An `all_the_time` run whose emitted output carries a bootstrap confidence
@@ -393,7 +387,7 @@ async fn run_all_the_time_records_dispersion() {
     workspace.drive(&["run"]).await.unwrap();
 
     let (_key, set) = workspace.single_object();
-    let processor_time = metric_named(&set.results[0], "processor_time");
+    let processor_time = metric_of(&set.results[0], MetricKind::ProcessorTime);
     assert_eq!(processor_time.value, 20.0);
     assert_eq!(processor_time.interval_low, Some(19.0));
     assert_eq!(processor_time.interval_high, Some(21.0));
@@ -442,31 +436,23 @@ async fn run_criterion_collects_distinct_cases_as_records() {
 
     let (_, set) = workspace.single_object();
     assert_eq!(set.results.len(), 3, "{:?}", set.results);
-    let mut ids: Vec<(String, Option<String>)> = set
+    // Criterion identities are `group/function[/value]`; the three cases stay
+    // distinct. Criterion output carries no package attribution, so no package
+    // segment appears.
+    let mut ids: Vec<String> = set
         .results
         .iter()
-        .map(|record| (record.id.group.clone(), record.id.case.clone()))
+        .map(|record| record.id.qualified())
         .collect();
     ids.sort();
     assert_eq!(
         ids,
         vec![
-            (
-                "timestamp/capture".to_owned(),
-                Some("fast_clock".to_owned())
-            ),
-            (
-                "timestamp/capture".to_owned(),
-                Some("std_instant".to_owned())
-            ),
-            (
-                "timestamp/elapsed".to_owned(),
-                Some("std_instant".to_owned())
-            ),
+            "timestamp/capture/fast_clock".to_owned(),
+            "timestamp/capture/std_instant/now".to_owned(),
+            "timestamp/elapsed/std_instant/now".to_owned(),
         ]
     );
-    // Every record carries no package (Criterion output is package-agnostic).
-    assert!(set.results.iter().all(|record| record.id.package.is_none()));
 }
 
 /// A project id containing characters that require sanitizing (a space and a `/`)
@@ -543,9 +529,7 @@ async fn run_then_analyze_preserves_unusual_identity_characters() {
     // The identity survives verbatim in the stored result set.
     assert_eq!(set.results.len(), 1, "{:?}", set.results);
     let id = &set.results[0].id;
-    assert_eq!(id.group, "time.capture");
-    assert_eq!(id.case.as_deref(), Some("mide tiempo"));
-    assert_eq!(id.value.as_deref(), Some("tamaño 4"));
+    assert_eq!(id.qualified(), "time.capture/mide tiempo/tamaño 4");
 
     // The reader reconstructs the series, proving the unusual identity is a stable
     // series key end to end.

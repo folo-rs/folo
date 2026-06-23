@@ -16,7 +16,7 @@ use crate::bench::{
     ALL_THE_TIME_DIR, ALLOC_TRACKER_DIR, CRITERION_BENCHMARK_FILE, CRITERION_DIR,
     CRITERION_ESTIMATES_FILE, CRITERION_NEW_DIR, GUNGRAUN_DIR, SUMMARY_FILE,
 };
-use crate::comparability::EngineSystem;
+use crate::comparability::Engine;
 use crate::report::Reporter;
 use crate::text::count_noun;
 
@@ -83,7 +83,7 @@ pub(crate) trait BenchOutputSource {
     /// Returns an error if the output tree cannot be read.
     fn collect(
         &self,
-        engine: EngineSystem,
+        engine: Engine,
         since: SystemTime,
         reporter: &dyn Reporter,
     ) -> impl Future<Output = io::Result<Harvest>>;
@@ -329,22 +329,22 @@ impl FsBenchOutputSource {
 impl BenchOutputSource for FsBenchOutputSource {
     async fn collect(
         &self,
-        engine: EngineSystem,
+        engine: Engine,
         since: SystemTime,
         reporter: &dyn Reporter,
     ) -> io::Result<Harvest> {
         match engine {
-            EngineSystem::Callgrind => Ok(Harvest::Callgrind(
+            Engine::Callgrind => Ok(Harvest::Callgrind(
                 self.collect_callgrind(since, reporter).await?,
             )),
-            EngineSystem::Criterion => Ok(Harvest::Criterion(
+            Engine::Criterion => Ok(Harvest::Criterion(
                 self.collect_criterion(since, reporter).await?,
             )),
-            EngineSystem::AllocTracker => Ok(Harvest::AllocTracker(
+            Engine::AllocTracker => Ok(Harvest::AllocTracker(
                 self.collect_flat(ALLOC_TRACKER_DIR, "alloc_tracker", since, reporter)
                     .await?,
             )),
-            EngineSystem::AllTheTime => Ok(Harvest::AllTheTime(
+            Engine::AllTheTime => Ok(Harvest::AllTheTime(
                 self.collect_flat(ALL_THE_TIME_DIR, "all_the_time", since, reporter)
                     .await?,
             )),
@@ -393,7 +393,7 @@ mod tests {
     /// the reporter; the verbose-output tests inspect its notes.
     async fn harvest_with(
         source: &FsBenchOutputSource,
-        engine: EngineSystem,
+        engine: Engine,
         since: SystemTime,
         reporter: &RecordingReporter,
     ) -> io::Result<Harvest> {
@@ -403,7 +403,7 @@ mod tests {
     /// Collects through the source, discarding the diagnostic notes.
     async fn harvest(
         source: &FsBenchOutputSource,
-        engine: EngineSystem,
+        engine: Engine,
         since: SystemTime,
     ) -> io::Result<Harvest> {
         harvest_with(source, engine, since, &RecordingReporter::new()).await
@@ -469,9 +469,7 @@ mod tests {
 
         let source = FsBenchOutputSource::new(dir.path());
         let since = SystemTime::now() - Duration::from_mins(1);
-        let harvest = harvest(&source, EngineSystem::Callgrind, since)
-            .await
-            .unwrap();
+        let harvest = harvest(&source, Engine::Callgrind, since).await.unwrap();
 
         let summaries = callgrind_summaries(harvest);
         let contents: Vec<&str> = summaries.iter().map(|s| s.content.as_str()).collect();
@@ -489,7 +487,7 @@ mod tests {
         set_mtime(&stale, long_ago);
 
         let source = FsBenchOutputSource::new(dir.path());
-        let harvest = harvest(&source, EngineSystem::Callgrind, SystemTime::now())
+        let harvest = harvest(&source, Engine::Callgrind, SystemTime::now())
             .await
             .unwrap();
 
@@ -515,9 +513,7 @@ mod tests {
         set_mtime(&outside, since - Duration::from_secs(3));
 
         let source = FsBenchOutputSource::new(dir.path());
-        let harvest = harvest(&source, EngineSystem::Callgrind, since)
-            .await
-            .unwrap();
+        let harvest = harvest(&source, Engine::Callgrind, since).await.unwrap();
 
         let summaries = callgrind_summaries(harvest);
         let contents: Vec<&str> = summaries.iter().map(|s| s.content.as_str()).collect();
@@ -530,7 +526,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let source = FsBenchOutputSource::new(dir.path());
 
-        let harvest = harvest(&source, EngineSystem::Callgrind, SystemTime::now())
+        let harvest = harvest(&source, Engine::Callgrind, SystemTime::now())
             .await
             .unwrap();
 
@@ -546,7 +542,7 @@ mod tests {
         std::fs::write(dir.path().join(GUNGRAUN_DIR), "not a directory").unwrap();
         let source = FsBenchOutputSource::new(dir.path());
 
-        let error = harvest(&source, EngineSystem::Callgrind, SystemTime::UNIX_EPOCH)
+        let error = harvest(&source, Engine::Callgrind, SystemTime::UNIX_EPOCH)
             .await
             .unwrap_err();
 
@@ -568,9 +564,7 @@ mod tests {
 
         let source = FsBenchOutputSource::new(dir.path());
         let since = SystemTime::now() - Duration::from_mins(1);
-        let harvest = harvest(&source, EngineSystem::Criterion, since)
-            .await
-            .unwrap();
+        let harvest = harvest(&source, Engine::Criterion, since).await.unwrap();
 
         let cases = criterion_cases(harvest);
         let pairs: Vec<(&str, &str)> = cases
@@ -603,9 +597,7 @@ mod tests {
         set_mtime(&stale_estimates, since - Duration::from_hours(1));
 
         let source = FsBenchOutputSource::new(dir.path());
-        let harvest = harvest(&source, EngineSystem::Criterion, since)
-            .await
-            .unwrap();
+        let harvest = harvest(&source, Engine::Criterion, since).await.unwrap();
 
         let cases = criterion_cases(harvest);
         let benchmarks: Vec<&str> = cases.iter().map(|case| case.benchmark.as_str()).collect();
@@ -618,7 +610,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let source = FsBenchOutputSource::new(dir.path());
 
-        let harvest = harvest(&source, EngineSystem::Criterion, SystemTime::UNIX_EPOCH)
+        let harvest = harvest(&source, Engine::Criterion, SystemTime::UNIX_EPOCH)
             .await
             .unwrap();
 
@@ -632,7 +624,7 @@ mod tests {
         std::fs::write(dir.path().join(CRITERION_DIR), "not a directory").unwrap();
         let source = FsBenchOutputSource::new(dir.path());
 
-        let error = harvest(&source, EngineSystem::Criterion, SystemTime::UNIX_EPOCH)
+        let error = harvest(&source, Engine::Criterion, SystemTime::UNIX_EPOCH)
             .await
             .unwrap_err();
 
@@ -659,9 +651,7 @@ mod tests {
 
         let source = FsBenchOutputSource::new(dir.path());
         let since = SystemTime::now() - Duration::from_mins(1);
-        let harvest = harvest(&source, EngineSystem::AllocTracker, since)
-            .await
-            .unwrap();
+        let harvest = harvest(&source, Engine::AllocTracker, since).await.unwrap();
 
         let files = operation_files(harvest);
         let contents: Vec<&str> = files.iter().map(|file| file.content.as_str()).collect();
@@ -684,9 +674,7 @@ mod tests {
         set_mtime(&stale, since - Duration::from_hours(1));
 
         let source = FsBenchOutputSource::new(dir.path());
-        let harvest = harvest(&source, EngineSystem::AllTheTime, since)
-            .await
-            .unwrap();
+        let harvest = harvest(&source, Engine::AllTheTime, since).await.unwrap();
 
         let files = operation_files(harvest);
         let contents: Vec<&str> = files.iter().map(|file| file.content.as_str()).collect();
@@ -699,7 +687,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let source = FsBenchOutputSource::new(dir.path());
 
-        let harvest = harvest(&source, EngineSystem::AllocTracker, SystemTime::UNIX_EPOCH)
+        let harvest = harvest(&source, Engine::AllocTracker, SystemTime::UNIX_EPOCH)
             .await
             .unwrap();
 
@@ -713,7 +701,7 @@ mod tests {
         std::fs::write(dir.path().join(ALLOC_TRACKER_DIR), "not a directory").unwrap();
         let source = FsBenchOutputSource::new(dir.path());
 
-        let error = harvest(&source, EngineSystem::AllocTracker, SystemTime::UNIX_EPOCH)
+        let error = harvest(&source, Engine::AllocTracker, SystemTime::UNIX_EPOCH)
             .await
             .unwrap_err();
 
@@ -727,14 +715,9 @@ mod tests {
         let source = FsBenchOutputSource::new(dir.path());
         let reporter = RecordingReporter::new();
 
-        harvest_with(
-            &source,
-            EngineSystem::Criterion,
-            SystemTime::now(),
-            &reporter,
-        )
-        .await
-        .unwrap();
+        harvest_with(&source, Engine::Criterion, SystemTime::now(), &reporter)
+            .await
+            .unwrap();
 
         assert!(
             reporter.contains("does not exist"),
@@ -759,7 +742,7 @@ mod tests {
 
         let source = FsBenchOutputSource::new(dir.path());
         let reporter = RecordingReporter::new();
-        harvest_with(&source, EngineSystem::Criterion, since, &reporter)
+        harvest_with(&source, Engine::Criterion, since, &reporter)
             .await
             .unwrap();
 
@@ -789,7 +772,7 @@ mod tests {
         let reporter = RecordingReporter::new();
         let harvest = harvest_with(
             &source,
-            EngineSystem::Criterion,
+            Engine::Criterion,
             SystemTime::UNIX_EPOCH,
             &reporter,
         )
@@ -816,7 +799,7 @@ mod tests {
         let source = FsBenchOutputSource::new(dir.path());
         let since = SystemTime::now() - Duration::from_mins(1);
         let reporter = RecordingReporter::new();
-        harvest_with(&source, EngineSystem::Callgrind, since, &reporter)
+        harvest_with(&source, Engine::Callgrind, since, &reporter)
             .await
             .unwrap();
 

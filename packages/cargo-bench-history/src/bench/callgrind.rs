@@ -1,5 +1,5 @@
 //! Parsing of Gungraun's Callgrind `summary.json` (schema version 6) into the
-//! engine-neutral [`ResultRecord`] model.
+//! engine-neutral [`BenchmarkResult`] model.
 //!
 //! Only the fields the tool needs are modelled; serde ignores the rest. The
 //! committed fixtures under `tests/fixtures/callgrind/` are real Gungraun output
@@ -12,14 +12,11 @@ use std::fmt;
 
 use serde::Deserialize;
 
-use crate::metric_events::{L1_HITS_EVENT, LL_HITS_EVENT, RAM_HITS_EVENT};
-use crate::model::{BenchmarkId, Metric, MetricKind, ResultRecord};
+use crate::constants::{L1_HITS_EVENT, LL_HITS_EVENT, RAM_HITS_EVENT};
+use crate::model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
 
 /// The Gungraun summary schema version this parser understands.
 const SUPPORTED_VERSION: &str = "6";
-
-/// The unit recorded for Callgrind event counts.
-const COUNT_UNIT: &str = "count";
 
 /// An error encountered while parsing a Callgrind `summary.json`.
 #[derive(Debug)]
@@ -52,13 +49,13 @@ impl Error for CallgrindParseError {
     }
 }
 
-/// Parses one Callgrind `summary.json` into a [`ResultRecord`].
+/// Parses one Callgrind `summary.json` into a [`BenchmarkResult`].
 ///
 /// # Errors
 ///
 /// Returns [`CallgrindParseError`] if the JSON is malformed or declares an
 /// unsupported schema version.
-pub(crate) fn parse_callgrind_summary(json: &str) -> Result<ResultRecord, CallgrindParseError> {
+pub(crate) fn parse_callgrind_summary(json: &str) -> Result<BenchmarkResult, CallgrindParseError> {
     let summary = parse_summary(json)?;
     Ok(summary_to_record(&summary))
 }
@@ -72,17 +69,22 @@ fn parse_summary(json: &str) -> Result<Summary, CallgrindParseError> {
     Ok(summary)
 }
 
-/// Maps a parsed summary to a [`ResultRecord`] (pure).
-fn summary_to_record(summary: &Summary) -> ResultRecord {
-    let id = BenchmarkId::new(
+/// Maps a parsed summary to a [`BenchmarkResult`] (pure).
+fn summary_to_record(summary: &Summary) -> BenchmarkResult {
+    let segments = [
         summary
             .package_dir
             .as_deref()
             .and_then(package_name_from_dir),
-        summary.module_path.clone(),
+        Some(summary.module_path.clone()),
         Some(summary.function_name.clone()),
         summary.id.clone(),
-    );
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|segment| !segment.is_empty())
+    .collect();
+    let id = BenchmarkId::new(segments);
 
     let mut metrics = Vec::new();
     for profile in &summary.profiles {
@@ -96,16 +98,11 @@ fn summary_to_record(summary: &Summary) -> ResultRecord {
             let Some(value) = entry.metrics.new_value() else {
                 continue;
             };
-            metrics.push(Metric::new(
-                event_kind.clone(),
-                kind,
-                value.as_f64(),
-                Some(COUNT_UNIT.to_owned()),
-            ));
+            metrics.push(Metric::new(kind, value.as_f64()));
         }
     }
 
-    ResultRecord::new(id, metrics)
+    BenchmarkResult::new(id, metrics)
 }
 
 /// Extracts the package name from a Gungraun `package_dir` path.
@@ -132,8 +129,13 @@ fn classify(event_kind: &str) -> Option<MetricKind> {
     match event_kind {
         "Ir" => Some(MetricKind::InstructionCount),
         "EstimatedCycles" => Some(MetricKind::EstimatedCycles),
-        L1_HITS_EVENT | LL_HITS_EVENT | RAM_HITS_EVENT => Some(MetricKind::CacheEvents),
-        "Bc" | "Bcm" | "Bi" | "Bim" => Some(MetricKind::Branches),
+        L1_HITS_EVENT => Some(MetricKind::L1CacheHits),
+        LL_HITS_EVENT => Some(MetricKind::LastLevelCacheHits),
+        RAM_HITS_EVENT => Some(MetricKind::RamHits),
+        "Bc" => Some(MetricKind::ConditionalBranches),
+        "Bcm" => Some(MetricKind::ConditionalBranchMisses),
+        "Bi" => Some(MetricKind::IndirectBranches),
+        "Bim" => Some(MetricKind::IndirectBranchMisses),
         _ => None,
     }
 }
@@ -236,12 +238,12 @@ mod tests {
     const PARAMETRIZED_FIXTURE: &str =
         include_str!("../../tests/fixtures/callgrind/parametrized.summary.json");
 
-    fn metric<'a>(record: &'a ResultRecord, name: &str) -> &'a Metric {
+    fn metric(record: &BenchmarkResult, kind: MetricKind) -> &Metric {
         record
             .metrics
             .iter()
-            .find(|metric| metric.name == name)
-            .unwrap_or_else(|| panic!("metric {name:?} should be present"))
+            .find(|metric| metric.kind == kind)
+            .unwrap_or_else(|| panic!("metric {kind:?} should be present"))
     }
 
     #[test]
@@ -249,29 +251,39 @@ mod tests {
         let record = parse_callgrind_summary(SINGLE_FIXTURE).unwrap();
         assert_eq!(
             record.id,
-            BenchmarkId::new(
-                Some("fast_time".to_owned()),
+            BenchmarkId::new(vec![
+                "fast_time".to_owned(),
                 "fast_time_timestamp_performance_cg::timestamp_capture::timestamp_capture_std_now"
                     .to_owned(),
-                Some("timestamp_capture_std_now".to_owned()),
-                None,
-            )
+                "timestamp_capture_std_now".to_owned(),
+            ])
         );
     }
 
     #[test]
     fn parses_package_from_package_dir() {
         let record = parse_callgrind_summary(SINGLE_FIXTURE).unwrap();
-        assert_eq!(record.id.package.as_deref(), Some("fast_time"));
+        assert_eq!(
+            record.id.segments.first().map(String::as_str),
+            Some("fast_time")
+        );
     }
 
     #[test]
     fn parses_parametrized_identity_with_value() {
         let record = parse_callgrind_summary(PARAMETRIZED_FIXTURE).unwrap();
-        assert_eq!(record.id.value.as_deref(), Some("two_instants"));
+        // The value is the final segment; the function name precedes it.
         assert_eq!(
-            record.id.case.as_deref(),
-            Some("timestamp_capture_instant_saturating_duration_since")
+            record.id.segments.last().map(String::as_str),
+            Some("two_instants")
+        );
+        assert!(
+            record
+                .id
+                .segments
+                .contains(&"timestamp_capture_instant_saturating_duration_since".to_owned()),
+            "{:?}",
+            record.id.segments
         );
     }
 
@@ -279,55 +291,42 @@ mod tests {
     fn maps_the_tracked_metric_kinds() {
         let record = parse_callgrind_summary(SINGLE_FIXTURE).unwrap();
 
-        assert_eq!(metric(&record, "Ir").kind, MetricKind::InstructionCount);
-        assert_eq!(metric(&record, "Ir").value, 36.0);
-        assert_eq!(
-            metric(&record, "EstimatedCycles").kind,
-            MetricKind::EstimatedCycles
-        );
-        assert_eq!(metric(&record, "EstimatedCycles").value, 193.0);
-        assert_eq!(metric(&record, "L1hits").kind, MetricKind::CacheEvents);
-        assert_eq!(metric(&record, "RamHits").kind, MetricKind::CacheEvents);
-        assert_eq!(metric(&record, "Bc").kind, MetricKind::Branches);
-        assert_eq!(metric(&record, "Bim").kind, MetricKind::Branches);
+        assert_eq!(metric(&record, MetricKind::InstructionCount).value, 36.0);
+        assert_eq!(metric(&record, MetricKind::EstimatedCycles).value, 193.0);
+        // Cache tiers and branch kinds each map to a distinct kind.
+        let _ = metric(&record, MetricKind::L1CacheHits);
+        let _ = metric(&record, MetricKind::RamHits);
+        let _ = metric(&record, MetricKind::ConditionalBranches);
+        let _ = metric(&record, MetricKind::IndirectBranchMisses);
     }
 
     #[test]
     fn skips_untracked_events() {
         let record = parse_callgrind_summary(SINGLE_FIXTURE).unwrap();
-        let names: Vec<&str> = record.metrics.iter().map(|m| m.name.as_str()).collect();
-
-        assert!(!names.contains(&"Dr"), "raw cache reads should be skipped");
-        assert!(
-            !names.contains(&"L1HitRate"),
-            "derived rates should be skipped"
-        );
-        assert!(
-            !names.contains(&"TotalRW"),
-            "totals should be skipped: {names:?}"
-        );
+        // Only the nine canonical tracked events survive; derived rates (`L1HitRate`),
+        // raw cache reads (`Dr`), and totals (`TotalRW`) are dropped.
+        assert_eq!(record.metrics.len(), 9, "{:?}", record.metrics);
     }
 
     #[test]
     fn tracks_exactly_the_canonical_event_set() {
         let record = parse_callgrind_summary(SINGLE_FIXTURE).unwrap();
-        let mut names: Vec<&str> = record.metrics.iter().map(|m| m.name.as_str()).collect();
-        names.sort_unstable();
+        let mut kinds: Vec<MetricKind> = record.metrics.iter().map(|m| m.kind).collect();
+        kinds.sort_unstable();
 
-        assert_eq!(
-            names,
-            vec![
-                "Bc",
-                "Bcm",
-                "Bi",
-                "Bim",
-                "EstimatedCycles",
-                "Ir",
-                "L1hits",
-                "LLhits",
-                "RamHits",
-            ]
-        );
+        let mut expected = vec![
+            MetricKind::InstructionCount,
+            MetricKind::EstimatedCycles,
+            MetricKind::L1CacheHits,
+            MetricKind::LastLevelCacheHits,
+            MetricKind::RamHits,
+            MetricKind::ConditionalBranches,
+            MetricKind::ConditionalBranchMisses,
+            MetricKind::IndirectBranches,
+            MetricKind::IndirectBranchMisses,
+        ];
+        expected.sort_unstable();
+        assert_eq!(kinds, expected);
     }
 
     #[test]
@@ -395,7 +394,7 @@ mod tests {
     #[test]
     fn summary_without_package_dir_has_no_package() {
         let record = parse_callgrind_summary(&summary_json("{}")).unwrap();
-        assert_eq!(record.id.package, None);
+        assert_eq!(record.id.segments, vec!["m".to_owned(), "f".to_owned()]);
     }
 
     #[test]
@@ -403,11 +402,13 @@ mod tests {
         let foo = parse_callgrind_summary(&summary_with_package_dir("/work/packages/foo")).unwrap();
         let bar = parse_callgrind_summary(&summary_with_package_dir("/work/packages/bar")).unwrap();
 
-        assert_eq!(foo.id.group, bar.id.group);
-        assert_eq!(foo.id.case, bar.id.case);
+        // The module-path and function segments match; only the leading package
+        // segment differs, so the identities stay distinct.
+        assert_eq!(foo.id.segments.get(1), bar.id.segments.get(1));
+        assert_eq!(foo.id.segments.get(2), bar.id.segments.get(2));
         assert_ne!(foo.id, bar.id);
-        assert_eq!(foo.id.package.as_deref(), Some("foo"));
-        assert_eq!(bar.id.package.as_deref(), Some("bar"));
+        assert_eq!(foo.id.segments.first().map(String::as_str), Some("foo"));
+        assert_eq!(bar.id.segments.first().map(String::as_str), Some("bar"));
     }
 
     #[test]
@@ -427,13 +428,13 @@ mod tests {
     fn reads_new_value_from_both_pair() {
         let body = "{\"Callgrind\":{\"Ir\":{\"metrics\":{\"Both\":[{\"Int\":10},{\"Int\":9}]}}}}";
         let record = parse_callgrind_summary(&summary_json(body)).unwrap();
-        assert_eq!(metric(&record, "Ir").value, 10.0);
+        assert_eq!(metric(&record, MetricKind::InstructionCount).value, 10.0);
     }
 
     #[test]
     fn reads_float_metric_value() {
         let body = "{\"Callgrind\":{\"Ir\":{\"metrics\":{\"Left\":{\"Float\":1.5}}}}}";
         let record = parse_callgrind_summary(&summary_json(body)).unwrap();
-        assert_eq!(metric(&record, "Ir").value, 1.5);
+        assert_eq!(metric(&record, MetricKind::InstructionCount).value, 1.5);
     }
 }

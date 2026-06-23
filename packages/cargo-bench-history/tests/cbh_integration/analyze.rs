@@ -38,7 +38,7 @@ async fn analyze_detects_regression_in_seeded_history() {
     assert_eq!(regressions, 1);
     assert!(report.contains("regression"), "{report}");
     assert!(report.contains("nm::observe/pull"), "{report}");
-    assert!(report.contains("Ir"), "{report}");
+    assert!(report.contains("instruction_count"), "{report}");
 }
 
 /// A rising Criterion `wall_time` history is flagged as a regression, proving the
@@ -248,12 +248,7 @@ async fn analyze_falling_cache_hits_is_a_regression() {
         workspace.seed_metrics(
             date,
             commit,
-            vec![Metric::new(
-                "L1hits".to_owned(),
-                MetricKind::CacheEvents,
-                hits,
-                Some("count".to_owned()),
-            )],
+            vec![Metric::new(MetricKind::L1CacheHits, hits)],
         );
     }
 
@@ -271,7 +266,7 @@ async fn analyze_falling_cache_hits_is_a_regression() {
     assert_eq!(regressions, 1, "fewer cache hits is a regression: {report}");
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["findings"][0]["direction"], "regression");
-    assert_eq!(parsed["findings"][0]["kind"], "cache_events");
+    assert_eq!(parsed["findings"][0]["kind"], "l1_cache_hits");
 }
 
 /// Conversely, a rise in L1 cache hits is an improvement, not a regression.
@@ -290,12 +285,7 @@ async fn analyze_rising_l1_cache_hits_is_an_improvement() {
         workspace.seed_metrics(
             date,
             commit,
-            vec![Metric::new(
-                "L1hits".to_owned(),
-                MetricKind::CacheEvents,
-                hits,
-                Some("count".to_owned()),
-            )],
+            vec![Metric::new(MetricKind::L1CacheHits, hits)],
         );
     }
 
@@ -333,16 +323,7 @@ async fn analyze_rising_ram_hits_is_a_regression() {
         ("2024-01-05", "c5", 1000.0),
         ("2024-01-06", "c6", 1000.0),
     ] {
-        workspace.seed_metrics(
-            date,
-            commit,
-            vec![Metric::new(
-                "RamHits".to_owned(),
-                MetricKind::CacheEvents,
-                hits,
-                Some("count".to_owned()),
-            )],
-        );
+        workspace.seed_metrics(date, commit, vec![Metric::new(MetricKind::RamHits, hits)]);
     }
 
     let RunOutcome::Analyzed {
@@ -359,7 +340,7 @@ async fn analyze_rising_ram_hits_is_a_regression() {
     assert_eq!(regressions, 1, "more RAM hits is a regression: {report}");
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["findings"][0]["direction"], "regression");
-    assert_eq!(parsed["findings"][0]["kind"], "cache_events");
+    assert_eq!(parsed["findings"][0]["kind"], "ram_hits");
 }
 
 /// Two benchmarks regressing by different magnitudes produce two findings that the
@@ -394,9 +375,9 @@ async fn analyze_ranks_findings_by_relative_move_across_benchmarks() {
     let findings = parsed["findings"].as_array().unwrap();
     assert_eq!(findings.len(), 2, "{report}");
     // The larger relative move (alpha, +100%) ranks ahead of the smaller (beta, +2%).
-    assert_eq!(findings[0]["package"], "alpha", "{report}");
-    assert_eq!(findings[0]["group"], "alpha::bench", "{report}");
-    assert_eq!(findings[1]["package"], "beta", "{report}");
+    assert_eq!(findings[0]["segments"][0], "alpha", "{report}");
+    assert_eq!(findings[0]["segments"][1], "alpha::bench", "{report}");
+    assert_eq!(findings[1]["segments"][0], "beta", "{report}");
 
     // The Markdown rendering preserves the same ranked order in its table rows.
     let RunOutcome::Analyzed {
@@ -619,7 +600,7 @@ async fn analyze_alloc_tracker_step_is_flagged_as_change_point() {
     assert_eq!(parsed["findings"][0]["method"], "change_point", "{report}");
     assert_eq!(parsed["findings"][0]["direction"], "regression", "{report}");
     assert_eq!(
-        parsed["findings"][0]["metric"], "allocated_bytes",
+        parsed["findings"][0]["kind"], "allocation_bytes",
         "{report}"
     );
     assert!(report.contains("allocate_vec"), "{report}");
@@ -715,10 +696,7 @@ async fn analyze_all_the_time_slow_drift_is_flagged_as_drift() {
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["findings"][0]["method"], "drift", "{report}");
     assert_eq!(parsed["findings"][0]["direction"], "regression", "{report}");
-    assert_eq!(
-        parsed["findings"][0]["metric"], "processor_time",
-        "{report}"
-    );
+    assert_eq!(parsed["findings"][0]["kind"], "processor_time", "{report}");
 }
 
 /// Per-point noise in an `all_the_time` processor-time series never manufactures a
@@ -824,10 +802,7 @@ async fn analyze_all_the_time_step_with_disjoint_intervals_is_a_regression() {
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["findings"][0]["method"], "change_point", "{report}");
     assert_eq!(parsed["findings"][0]["direction"], "regression", "{report}");
-    assert_eq!(
-        parsed["findings"][0]["metric"], "processor_time",
-        "{report}"
-    );
+    assert_eq!(parsed["findings"][0]["kind"], "processor_time", "{report}");
 }
 
 /// The same processor-time step values, but with confidence intervals so wide

@@ -4,12 +4,13 @@
     clippy::exhaustive_enums,
     clippy::exhaustive_structs,
     clippy::module_name_repetitions,
-    reason = "this crate is publish = false; its `pub` items form a handoff boundary \
-              to the cargo-bench-history shell crate (and that crate's tests), not a \
-              stable public API. Exhaustive construction and matching by those \
-              in-workspace consumers is intended, and the deliberately descriptive \
-              type names (DiscriminantSet, ReportFormat, RunContext, ...) read best \
-              at the shell's use sites even though they restate their module name"
+    reason = "this crate's `pub` items form a handoff boundary to the \
+              cargo-bench-history shell crate (and that crate's tests), used only \
+              inside this workspace rather than as a stable public API. Exhaustive \
+              construction and matching by those in-workspace consumers is intended, \
+              and the deliberately descriptive type names (DiscriminantSet, \
+              ReportFormat, RunContext, ...) read best at the shell's use sites even \
+              though they restate their module name"
 )]
 
 //! Pure internals of [`cargo-bench-history`]: the stored data model, the
@@ -30,6 +31,6 @@
 pub mod analyze;
 pub mod bless;
 pub mod comparability;
+pub mod constants;
 pub mod context;
-pub mod metric_events;
 pub mod model;

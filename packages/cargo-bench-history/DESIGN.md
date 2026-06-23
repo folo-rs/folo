@@ -160,45 +160,52 @@ flowchart LR
     C[Criterion files] --> A1[Criterion adapter]
     G[Gungraun summary.json] --> A2[Callgrind adapter]
   end
-  A1 --> RR[ResultRecord*]
+  A1 --> RR[BenchmarkResult*]
   A2 --> RR
-  CTX[RunContext: git + CI + toolchain + machine] --> RS[ResultSet]
+  CTX[RunContext: git + env + toolchain + machine] --> RS[Run]
   RR --> RS
   RS -->|run stores| ST[(Storage: local / Azure)]
   ST -->|analyze| SE[Series engine] --> F[Findings report]
 ```
 
-* **BenchmarkId** — stable identity of a series, scoped by the workspace
-  `package` where it is recoverable, so that equally named bench targets in
-  different packages (for example `foo/benches/a.rs` and `bar/benches/a.rs`)
-  never collide into one series. Callgrind: `package` (Gungraun `package_dir`
-  basename) + `module_path` + `function_name` (+ `id`). Criterion: `package` is
-  **`None`** — Criterion's on-disk files carry no package and `target/criterion/`
-  is flat, so the package is unrecoverable; the series identity is `group_id` /
-  `function_id` / `value_str`. This is safe here because the workspace
-  crate-prefixes its Criterion group ids (`<crate>_<group>`), so collisions
-  between equally named cases in different packages do not occur. Components are
-  kept separate so reports can render the full `qualified()` form or a compact
-  `short()` tail. Renaming a benchmark starts a new series (documented caveat;
-  see §13).
-* **Metric** — `{ name, unit, value: f64, kind }` where `kind ∈ {WallTime,
-  InstructionCount, CacheEvents, EstimatedCycles, Branches, AllocationBytes,
-  AllocationCount, ProcessorTime, …}`. Noisy engines (Criterion, `all_the_time`)
-  also carry the confidence interval and std-dev where available so analysis can be
-  noise-aware.
-* **ResultRecord** — one `BenchmarkId` + its metrics from a single run.
-* **Timestamps** — every run carries two distinct times (§6): the **commit
+* **BenchmarkId** — stable identity of a series, modeled as an ordered
+  `segments: Vec<String>`. The engine-specific adapter decides what the segments
+  are, so the general-purpose type carries no engine-specific assumptions about
+  which component is the "group" or "case". Callgrind composes `[package?,
+  module_path, function_name, value?]` (the workspace `package` — the Gungraun
+  `package_dir` basename — keeps equally named bench targets in different packages,
+  e.g. `foo/benches/a.rs` and `bar/benches/a.rs`, from colliding into one series).
+  Criterion composes `[group_id, function_id, value_str?]`; it carries no package
+  because `target/criterion/` is flat and package-agnostic, which is safe because
+  the workspace crate-prefixes its Criterion group ids (`<crate>_<group>`). The
+  workspace measurement crates (`alloc_tracker`, `all_the_time`) compose a single
+  `[operation]` segment. Empty/absent components are dropped. Reports render the
+  full `qualified()` form (segments joined by `/`). Renaming a benchmark starts a
+  new series (documented caveat; see §13).
+* **Metric** — `{ kind, value: f64 }` plus optional dispersion (`std_dev`,
+  `interval_low`, `interval_high`) where the engine reports it. `kind ∈ {WallTime,
+  ProcessorTime, InstructionCount, EstimatedCycles, L1CacheHits,
+  LastLevelCacheHits, RamHits, ConditionalBranches, ConditionalBranchMisses,
+  IndirectBranches, IndirectBranchMisses, AllocationBytes, AllocationCount}`. There
+  is no separate `name` or `unit` field: each kind has exactly one unit, obtained
+  via `kind.as_unit()` (`ns` / `bytes` / `count`), and the kind *is* the display
+  name (`kind.as_str()`, a stable `snake_case` label). `value` is the point
+  estimate — for noisy engines this is the regression-line `slope` where available,
+  otherwise the `mean`. Noisy engines (Criterion, `all_the_time`) also carry the
+  confidence interval and std-dev so analysis can be noise-aware.
+* **BenchmarkResult** — one `BenchmarkId` + its metrics from a single run.
+* **Run timestamps** — every run carries two distinct times (§6): the **commit
   timestamp** (the benchmarked commit's committer date — for a dirty snapshot, the
   commit it is based on) and the **observation timestamp** (wall clock when the
   benches ran and were stored). The series is ordered by git topology (§8.3) using
   the commit timestamp only as a within-commit tiebreak; the observation timestamp is
   provenance only and never orders anything. There is no "effective timestamp"
-  concept and no `--timestamp` override.
+  concept and no `--timestamp` override. The two times live directly on `RunContext`.
 * **RunContext** — metadata attached to every stored run (see §6).
-* **ResultSet** — `{ schema_version, context, results: [ResultRecord] }`; the
+* **Run** — `{ schema_version, context, results: [BenchmarkResult] }`; the
   unit of storage (one immutable file per run).
-* **ComparabilityKey** — the partition under which a series accumulates. Two
-  records are comparable iff their keys match (§4).
+* **DiscriminantSet** — the partition under which a series accumulates. Two
+  results are comparable iff their discriminant sets match (§4).
 * **MachineKey** — a stable hardware fingerprint for hardware-dependent systems
   (§5).
 
@@ -208,45 +215,40 @@ The central insight: **partition only by what makes results fundamentally
 incomparable; record everything else as metadata so the analysis can see its
 effect over time.**
 
-ComparabilityKey =
-`{ project, system, target_triple, machine_key? }`
+DiscriminantSet =
+`{ project, engine, target_triple, machine_key? }`
 
 * `project` — workspace identity (config `project.id`, default = repo/workspace
   dir name).
-* `system` — `criterion` | `callgrind` | `alloc_tracker` | `all_the_time`
+* `engine` — `criterion` | `callgrind` | `alloc_tracker` | `all_the_time`
   (different units & semantics).
 * `target_triple` — `x86_64-unknown-linux-gnu` etc. Even hardware-independent
   counts (Callgrind, `alloc_tracker`) are not comparable across architectures.
-* `machine_key` — **only for hardware-dependent systems** (Criterion,
+* `machine_key` — **only for hardware-dependent engines** (Criterion,
   `all_the_time`). Omitted (literal `synthetic`) for Callgrind and `alloc_tracker`.
 
 Deliberately **metadata, not partition** (so a change is *visible* as a timeline
 step, which is the whole point of the tool): rustc/cargo version, OS/libc,
-commit, branch, CI provider. **Decided:** toolchain is recorded as metadata and
-the timeline stays continuous; `analyze` annotates/segments by toolchain so a
-bump shows up as a step rather than forking history.
+commit, branch, environment provider. **Decided:** toolchain is recorded as
+metadata and the timeline stays continuous; `analyze` annotates/segments by
+toolchain so a bump shows up as a step rather than forking history.
 
 ### 4.1 Target triple & cross-OS (WSL) execution
 
-`target_triple` describes **where the benchmark binary actually ran**. It is
-**always auto-detected** in the environment that executes the benchmark — there
-is no manual override. A benchmark run under WSL is a Linux benchmark: the tool
-process runs inside WSL, the measured binary is `x86_64-unknown-linux-gnu`, and
-the detected triple is the Linux one. The recorded triple therefore reflects the
-real execution environment with no special-casing.
+`target_triple` describes **where the benchmark binary actually ran**, and is
+**always** the target triple of the host the tool runs on — there is no manual
+override and no per-engine special-casing. The tool and the benchmarks it launches
+always run in the same environment (you do not benchmark a system other than the
+one you run the tool on), so the host's triple is the execution triple. A benchmark
+run under WSL is a Linux benchmark: the tool process runs inside WSL, the measured
+binary is `x86_64-unknown-linux-gnu`, and the detected triple is the Linux one.
 
-Auto-detection (no override):
-
-1. **Engine-declared constraint.** The Callgrind engine only runs under
-   Linux/Valgrind, so its adapter pins the OS component to `linux`
-   unconditionally. This is a property of the engine, not a workaround: Callgrind
-   results are the same regardless of which host drove the simulation.
-2. **Host detection** for natively-run engines (Criterion, `all_the_time`,
-   `alloc_tracker`): the host triple reported by `rustc -vV`, which is the triple
-   of the environment the tool (and therefore the benchmark) runs in.
-
-The tool's own host triple is additionally recorded as **metadata**
-(`host_triple`) for auditing.
+The triple is composed from `std::env::consts::ARCH` + `std::env::consts::OS` of
+the running tool. This holds uniformly for every engine — including Callgrind,
+which is not pinned to Linux in the data model: Callgrind benches simply compile to
+no-ops off Linux (so nothing is harvested there), and where they *do* run, the host
+is Linux and the triple is the Linux one anyway. There is no separate "host triple"
+metadata; only the single execution `target_triple` exists.
 
 **Golden rule:** run `cargo bench-history` in the same OS context as the benches
 (e.g. invoke the whole tool inside WSL, not from the Windows side). Because the
@@ -378,7 +380,7 @@ the computed fingerprint.
 
 ## 6. Run context (environment detection)
 
-Captured once per stored run and attached to the `ResultSet`:
+Captured once per stored run and attached to the `Run`:
 
 * **Commit timestamp** — the benchmarked commit's committer date (for a **dirty**
   run, the committer date of the commit it is based on). This is the run's position
@@ -393,15 +395,17 @@ Captured once per stored run and attached to the `ResultSet`:
   Branch is metadata only — query-time topology, not this field, decides series
   membership (§8.3). Parent lineage is **not** recorded: `analyze` resolves topology
   from a live repo (§8.3), so storage never needs to reconstruct the commit graph.
-* **CI:** provider + run id + PR number, detected from env:
+* **Environment (`EnvironmentInfo`):** provider + run id + PR number, detected
+  from env. "Environment" rather than "CI" because `Local` is a first-class
+  provider and the automated providers are not always doing continuous integration:
   * GitHub Actions: `GITHUB_ACTIONS`, `GITHUB_SHA`, `GITHUB_REF_NAME`,
     `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT`.
   * ADO: `TF_BUILD`, `BUILD_SOURCEVERSION`, `BUILD_SOURCEBRANCH`,
     `BUILD_BUILDID`, `SYSTEM_PULLREQUEST_PULLREQUESTID`.
   * else `Local`.
-* **Toolchain/host:** rustc + cargo version, OS + libc hint, the resolved
-  execution `target_triple` (§4.1) **and** the tool's own `host_triple` (these
-  differ under WSL).
+* **Toolchain (`ToolchainInfo`):** rustc + cargo version and the resolved
+  execution `target_triple` (§4.1). There is no separate host triple — the tool
+  always runs where it benchmarks.
 * **Provenance:** cargo-bench-history version + schema version + machine_key.
 
 `jiff` parses `--since`/`--until` and formats stored times as RFC 3339 (UTC). Git
@@ -509,7 +513,7 @@ simply produce no output — no OS logic is needed in the tool.
    appended args). Env is robust regardless of how the benches launch. Callgrind
    needs `GUNGRAUN_SAVE_SUMMARY=pretty-json`; Criterion, `alloc_tracker` and
    `all_the_time` need nothing (they auto-emit JSON on drop). The union of
-   every supported engine's env (`injected_bench_env`, iterating `EngineSystem::ALL`)
+   every supported engine's env (`injected_bench_env`, iterating `Engine::ALL`)
    is set unconditionally — an engine that did not run merely ignores its variable.
    * **Target directory pinning:** the tool also injects `CARGO_TARGET_DIR` set
      to the *absolute* target root it will harvest, so the benches' output always
@@ -530,7 +534,7 @@ simply produce no output — no OS logic is needed in the tool.
    `mtime ≥ run-start` so stale cases from earlier runs are not re-ingested. Each
    tree is attributed to its engine; an engine whose tree produced no cases is
    silently skipped.
-4. Builds a `ResultSet` per engine (with the resolved RunContext) and **stores it
+4. Builds a `Run` per engine (with the resolved RunContext) and **stores it
    immediately** — `run` always persists; there is no separate publish step
    (`--no-store` produces results without writing, for dry runs). A **clean** point
    writes the deterministic key `…/<commit>/clean.json`; an existing one is refused
@@ -1085,7 +1089,11 @@ and reports regressions only.
   "regressions": 1, "improvements": 0,
   "findings": [
     {
-      "metric": "Ir", "kind": "InstructionCount",
+      "engine": "callgrind",
+      "target_triple": "x86_64-unknown-linux-gnu",
+      "machine": "synthetic",
+      "segments": ["mypkg", "module::path", "case"],
+      "kind": "instruction_count",
       "method": "change_point", "direction": "regression",
       "baseline": 100.0, "latest": 130.0,
       "delta": 30.0, "relative_delta": 0.30, "confidence": 1.0,
@@ -1093,7 +1101,7 @@ and reports regressions only.
                                  // history+inactive: where the level recovered
       "active": true,            // false for a resolved/blessed finding (§9.7)
       "blessed_at": "9f8e7d6",   // history only: the blessing that re-baselined this series
-      "blessed_effective": "2024-03-01T00:00:00Z",
+      "blessed_commit_time": "2024-03-01T00:00:00Z",
       "series": [ { "commit": "…", "value": 100.0, "dirty": false }, … ]
     }
   ],
@@ -1103,7 +1111,7 @@ and reports regressions only.
 
 A consumer keys off `notable` (post or stay silent), reads each finding's
 `direction`/`relative_delta`/`flipped_at`/`active`, and can render the embedded
-`series` as a chart. `blessed_at`/`blessed_effective` are present only when the
+`series` as a chart. `blessed_at`/`blessed_commit_time` are present only when the
 series was re-baselined by a blessing (§9.7); `active_from` (omitted when zero) marks
 where the active window begins. JSON values keep full `f64` precision; only the
 human-readable text and Markdown reports round to four significant figures.
@@ -1146,7 +1154,7 @@ fully blessed by construction, so they ignore blessings entirely. The pre-blessi
 points still feed the chart and any long-range technique that needs context outside
 the active window; they are *excluded from detection*, not discarded. A finding whose
 series was re-baselined records `blessed_at` (the blessing's abbreviated commit) and
-`blessed_effective` (its committer time) for provenance.
+`blessed_commit_time` (its committer time) for provenance.
 
 Blessings load only for commits inside the analysis window (the same topological
 selection as the rest of `analyze`); a blessing on a commit outside the window is not
@@ -1173,8 +1181,8 @@ src/
   wiring.rs               # locate config + project id, build the StorageFacade
   config.rs               # load + generate .cargo/bench_history.toml (toml)
   config_writer.rs        # ConfigWriter port (tokio adapter + fake) for `install`
-  model.rs                # ResultSet/Record/Metric/BenchmarkId/Context (serde)
-  comparability.rs        # ComparabilityKey + commit-centric partition path
+  model.rs                # Run/BenchmarkResult/Metric/BenchmarkId/Context (serde)
+  comparability.rs        # DiscriminantSet + commit-centric partition path
   bless.rs                # BlessingRecord data model + append-only sidecar
   context.rs              # RunContext (CI/git/toolchain + commit/observation times)
   process.rs              # ProcessRunner port (async) + tokio adapter + fake
@@ -1200,7 +1208,7 @@ src/
     sas.rs                # self-signed account-SAS signer [feature = "azure"]
   analyze/
     mod.rs                # query orchestration (shared selection pipeline)
-    discriminant.rs       # parse v2 keys; DiscriminantSet/Facets
+    discriminant.rs       # parse v2 keys; DiscriminantSet/DiscriminantSetQuery
     selection.rs          # split the target ancestry at the merge-base
     series.rs             # per-(BenchmarkId, metric) series in topology order
     stats.rs              # pure statistical primitives (Pettitt, Mann-Kendall, ...)
@@ -1299,7 +1307,7 @@ adds macOS; mapped to the original request's numbering:
 
 1. ✅ **`run` for Callgrind, end-to-end with local storage** (your 1 + 2) — adapter
    injects `GUNGRAUN_SAVE_SUMMARY`, invokes the benches, `mtime`-scoped
-   harvest of `summary.json`, builds the ResultSet, and writes it via
+   harvest of `summary.json`, builds the Run, and writes it via
    `LocalStorage` to the partition. `run` persists by itself; no separate
    `upload`. (Confirms the “special need” is just the summary flag — kept.)
 2. ✅ **`analyze` (useful finding)** (your 3) — series engine + rolling-baseline
@@ -1362,7 +1370,7 @@ adds macOS; mapped to the original request's numbering:
   (recorded side by side with `WallTime`, e.g. allocation counts / bytes), so a single
   `run` captures wall time *and* allocation behaviour for a benchmark and `analyze`
   can flag a regression in either. This is purely additive to the harvest + model
-  (more `Metric` kinds on the existing Criterion `ResultRecord`s); the partition,
+  (more `Metric` kinds on the existing Criterion `BenchmarkResult`s); the partition,
   series, and analysis machinery are unchanged.
 
 Each iteration ships with tests and docs and leaves the tool runnable.
@@ -1416,11 +1424,16 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     data (decision 22). *(Superseded: the earlier filter-agnostic passthrough-only
     model with `--engine`-scoped engine selection.)*
 11. **Target triple & WSL** — *Decided:* the partition triple is where the bench
-    *ran*. Resolution: `--target-triple` > engine constraint (Callgrind pins
-    OS=`linux`) > host detection. Callgrind data is collected by running the tool
-    natively on Linux/WSL, so there is no Windows-trigger/Linux-exec boundary to
-    reconcile; the tool's `host_triple` is stored as metadata to keep any mismatch
-    auditable. Golden rule: run the tool in the same OS as the benches.
+    *ran*, and is always the host triple of the running tool (composed from
+    `std::env::consts::ARCH` + `OS`). There is no `run` override and no per-engine
+    constraint: the tool always runs where it benchmarks, so the host triple *is*
+    the execution triple. Callgrind data is collected by running the tool natively
+    on Linux/WSL (its benches no-op off Linux), so there is no Windows-trigger/
+    Linux-exec boundary to reconcile and no separate "host triple" metadata. Golden
+    rule: run the tool in the same OS as the benches. *(Superseded: an earlier model
+    resolved `--target-triple` > a Callgrind OS=`linux` pin > host detection and
+    stored the tool's `host_triple` as metadata; `--target-triple` is now only an
+    `analyze` facet, decision 22.)*
 12. **macOS** — *Decided:* first-class for `install` / `analyze` / Criterion /
     Azure and the harvest-store half of `run`; only Callgrind execution is
     unavailable (no Valgrind), and its benches simply produce no output there.

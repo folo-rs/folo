@@ -30,11 +30,11 @@ use jiff::tz::TimeZone;
 use jiff::{Span, Timestamp};
 
 use crate::bless::BlessingRecord;
-use crate::comparability::{EngineSystem, sanitize_segment};
+use crate::comparability::{DiscriminantSet, Engine, sanitize_segment};
 use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
 use crate::machine::resolve_machine_key;
-use crate::model::ResultSet;
+use crate::model::Run;
 use crate::probe::{EnvironmentProbe, SystemProbe};
 use crate::report::{Reporter, StderrReporter};
 use crate::storage::{Storage, build_storage};
@@ -44,7 +44,7 @@ use crate::{
     AnalyzeOptions, BlessOptions, ListOptions, PruneOptions, RunError, RunOutcome, UnblessOptions,
 };
 
-use discriminant::{DiscriminantSet, FacetFilter, Facets, ParsedKey, parse_key};
+use discriminant::{DiscriminantSetQuery, FacetFilter, StorageKey, parse_key};
 use findings::{AnalysisConfig, AnalysisContext, AnalysisMode, find_changes};
 use report::{ReportFormat, ReportInput, SetSummary, render};
 use selection::select_commits;
@@ -394,7 +394,7 @@ fn resolve_facet(values: &[String], auto: Option<&str>) -> FacetFilter {
     FacetFilter::Explicit(values.to_vec())
 }
 
-/// Resolves every command-line facet into a [`Facets`] filter, validating that any
+/// Resolves every command-line facet into a [`DiscriminantSetQuery`] filter, validating that any
 /// explicit `--engine` values name a known engine.
 ///
 /// `auto` supplies the current-machine defaults for the triple and machine-key
@@ -404,14 +404,14 @@ fn resolve_facet(values: &[String], auto: Option<&str>) -> FacetFilter {
 fn resolve_facets(
     selection: &Selection<'_>,
     auto: Option<&AutoFacets>,
-) -> Result<Facets, RunError> {
+) -> Result<DiscriminantSetQuery, RunError> {
     let engine = resolve_facet(selection.engine, None);
     if let FacetFilter::Explicit(values) = &engine {
         for value in values {
             parse_engine(Some(value))?;
         }
     }
-    Ok(Facets {
+    Ok(DiscriminantSetQuery {
         engine,
         target_triple: resolve_facet(selection.target_triple, auto.map(|a| a.triple.as_str())),
         machine_key: resolve_facet(selection.machine_key, auto.map(|a| a.machine_key.as_str())),
@@ -424,11 +424,11 @@ fn resolve_facets(
 async fn facet_filtered_candidates<S: Storage>(
     storage: &S,
     project_id: &str,
-    facets: &Facets,
+    facets: &DiscriminantSetQuery,
     reporter: &dyn Reporter,
-) -> Result<Vec<(String, ParsedKey)>, RunError> {
+) -> Result<Vec<(String, StorageKey)>, RunError> {
     // The listing prefix must use the same sanitized project segment that
-    // `ComparabilityKey` writes its storage keys under. A project id containing a
+    // `DiscriminantSet` writes its storage keys under. A project id containing a
     // character that sanitizes (a space, `/`, a non-ASCII letter, ...) is stored
     // mangled, so listing under the raw id would silently find an empty history.
     let project = sanitize_segment(project_id);
@@ -448,7 +448,7 @@ async fn facet_filtered_candidates<S: Storage>(
         count_noun(keys.len(), "object key")
     ));
 
-    let mut candidates: Vec<(String, ParsedKey)> = Vec::new();
+    let mut candidates: Vec<(String, StorageKey)> = Vec::new();
     for key in keys {
         if !key.ends_with(".json") {
             reporter.note(&format!("skipping {key}: not a .json object"));
@@ -458,7 +458,7 @@ async fn facet_filtered_candidates<S: Storage>(
             reporter.note(&format!("skipping {key}: not a recognized v2 storage key"));
             continue;
         };
-        if !parsed.set.matches(facets) {
+        if !facets.matches(&parsed.set) {
             reporter.note(&format!(
                 "skipping {key}: discriminant {} does not match the facet filters",
                 parsed.set
@@ -623,17 +623,17 @@ where
         let text = String::from_utf8(bytes).map_err(|error| RunError::Analyze {
             message: format!("stored object {key} is not valid UTF-8: {error}"),
         })?;
-        let result = ResultSet::from_json(&text).map_err(|error| RunError::Analyze {
+        let result = Run::from_json(&text).map_err(|error| RunError::Analyze {
             message: format!("stored object {key} is not a valid result set: {error}"),
         })?;
-        if since.is_some_and(|since| result.context.timestamps.commit < since) {
+        if since.is_some_and(|since| result.context.commit < since) {
             excluded_since = excluded_since.saturating_add(1);
             reporter.note(&format!(
                 "excluding {key}: commit time is before the --since cutoff"
             ));
             continue;
         }
-        if until.is_some_and(|until| result.context.timestamps.commit > until) {
+        if until.is_some_and(|until| result.context.commit > until) {
             excluded_until = excluded_until.saturating_add(1);
             reporter.note(&format!(
                 "excluding {key}: commit time is after the --until cutoff"
@@ -1017,7 +1017,7 @@ fn parse_format(name: Option<&str>) -> Result<ReportFormat, RunError> {
 }
 
 /// A human-readable summary of the active facet filters, for `--verbose` notes.
-fn describe_facets(facets: &Facets) -> String {
+fn describe_facets(facets: &DiscriminantSetQuery) -> String {
     let parts = [
         ("engine", &facets.engine),
         ("target_triple", &facets.target_triple),
@@ -1105,11 +1105,11 @@ fn empty_history_hint(
     Some(lines.join("\n"))
 }
 
-/// Parses an `--engine` facet value into an [`EngineSystem`], if set.
-fn parse_engine(name: Option<&str>) -> Result<Option<EngineSystem>, RunError> {
+/// Parses an `--engine` facet value into an [`Engine`], if set.
+fn parse_engine(name: Option<&str>) -> Result<Option<Engine>, RunError> {
     match name {
         None => Ok(None),
-        Some(name) => EngineSystem::from_name(name)
+        Some(name) => Engine::from_name(name)
             .map(Some)
             .ok_or_else(|| RunError::Analyze {
                 message: format!(
@@ -1198,9 +1198,9 @@ mod tests {
     use jiff::Timestamp;
 
     use crate::config::{Config, parse_config};
-    use crate::context::{CiInfo, GitInfo, RunContext, Timestamps, ToolchainInfo};
+    use crate::context::{EnvironmentInfo, GitInfo, RunContext, ToolchainInfo};
     use crate::git_history::FakeGitHistory;
-    use crate::model::{BenchmarkId, Metric, MetricKind, ResultRecord};
+    use crate::model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
     use crate::report::RecordingReporter;
     use crate::storage::{MemoryStorage, Storage};
 
@@ -1216,35 +1216,30 @@ mod tests {
     }
 
     /// Builds a stored result set carrying one record with one `Ir` metric.
-    fn ir_set(effective: i64, commit: &str, value: f64) -> ResultSet {
+    fn ir_set(effective: i64, commit: &str, value: f64) -> Run {
         let time = ts(effective);
         let context = RunContext::new(
-            Timestamps::new(time, time),
+            time,
+            time,
             GitInfo {
                 commit: Some(commit.to_owned()),
                 short_commit: Some(commit.to_owned()),
                 branch: Some("main".to_owned()),
                 dirty: false,
             },
-            CiInfo::default(),
+            EnvironmentInfo::default(),
             ToolchainInfo::default(),
             "0.0.1".to_owned(),
         );
-        let record = ResultRecord::new(
-            BenchmarkId::new(
-                Some("nm".to_owned()),
+        let record = BenchmarkResult::new(
+            BenchmarkId::new(vec![
+                "nm".to_owned(),
                 "nm::observe".to_owned(),
-                Some("pull".to_owned()),
-                None,
-            ),
-            vec![Metric::new(
-                "Ir".to_owned(),
-                MetricKind::InstructionCount,
-                value,
-                Some("count".to_owned()),
-            )],
+                "pull".to_owned(),
+            ]),
+            vec![Metric::new(MetricKind::InstructionCount, value)],
         );
-        ResultSet::new(context, vec![record])
+        Run::new(context, vec![record])
     }
 
     /// The clean object key for `commit` in the callgrind/linux partition.
@@ -1259,43 +1254,33 @@ mod tests {
 
     /// A stored result set whose single record carries two metrics (`Ir` and
     /// `EstimatedCycles`), so its partition reconstructs two distinct series.
-    fn two_metric_set(effective: i64, commit: &str, ir: f64, cycles: f64) -> ResultSet {
+    fn two_metric_set(effective: i64, commit: &str, ir: f64, cycles: f64) -> Run {
         let time = ts(effective);
         let context = RunContext::new(
-            Timestamps::new(time, time),
+            time,
+            time,
             GitInfo {
                 commit: Some(commit.to_owned()),
                 short_commit: Some(commit.to_owned()),
                 branch: Some("main".to_owned()),
                 dirty: false,
             },
-            CiInfo::default(),
+            EnvironmentInfo::default(),
             ToolchainInfo::default(),
             "0.0.1".to_owned(),
         );
-        let record = ResultRecord::new(
-            BenchmarkId::new(
-                Some("nm".to_owned()),
+        let record = BenchmarkResult::new(
+            BenchmarkId::new(vec![
+                "nm".to_owned(),
                 "nm::observe".to_owned(),
-                Some("pull".to_owned()),
-                None,
-            ),
+                "pull".to_owned(),
+            ]),
             vec![
-                Metric::new(
-                    "Ir".to_owned(),
-                    MetricKind::InstructionCount,
-                    ir,
-                    Some("count".to_owned()),
-                ),
-                Metric::new(
-                    "EstimatedCycles".to_owned(),
-                    MetricKind::EstimatedCycles,
-                    cycles,
-                    Some("count".to_owned()),
-                ),
+                Metric::new(MetricKind::InstructionCount, ir),
+                Metric::new(MetricKind::EstimatedCycles, cycles),
             ],
         );
-        ResultSet::new(context, vec![record])
+        Run::new(context, vec![record])
     }
 
     /// A dirty snapshot key for `commit` taken at `unix`.
@@ -1304,7 +1289,7 @@ mod tests {
     }
 
     /// Stores a value at `key` in `storage`, panicking on failure (test helper).
-    fn store(storage: &MemoryStorage, key: &str, set: &ResultSet) {
+    fn store(storage: &MemoryStorage, key: &str, set: &Run) {
         let json = set.to_json().unwrap();
         block_on(storage.put(key, json.as_bytes())).unwrap();
     }
@@ -1463,14 +1448,14 @@ mod tests {
 
     #[test]
     fn describe_facets_joins_set_facets_and_reports_none_when_empty() {
-        let empty = Facets {
+        let empty = DiscriminantSetQuery {
             engine: FacetFilter::All,
             target_triple: FacetFilter::All,
             machine_key: FacetFilter::All,
         };
         assert_eq!(describe_facets(&empty), "none");
 
-        let full = Facets {
+        let full = DiscriminantSetQuery {
             engine: FacetFilter::Explicit(vec!["criterion".to_owned()]),
             target_triple: FacetFilter::Auto("x86_64-pc-windows-msvc".to_owned()),
             machine_key: FacetFilter::Explicit(vec!["abcd".to_owned()]),
@@ -1719,7 +1704,7 @@ mod tests {
         assert_eq!(regressions, 1);
         assert!(report.contains("regression"), "{report}");
         assert!(report.contains("nm/nm::observe/pull"), "{report}");
-        assert!(report.contains("Ir"), "{report}");
+        assert!(report.contains("instruction_count"), "{report}");
     }
 
     #[test]

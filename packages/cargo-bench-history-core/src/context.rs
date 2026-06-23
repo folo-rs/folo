@@ -1,6 +1,6 @@
-//! The run context: the metadata that situates a [`ResultSet`](crate::model::ResultSet)
-//! in time, in history (git), and in its execution environment (CI, toolchain,
-//! host).
+//! The run context: the metadata that situates a [`Run`](crate::model::Run) in
+//! time, in history (git), and in its execution environment (automation provider,
+//! toolchain, host).
 //!
 //! Only the *commit* timestamp orders a series; the observation timestamp is
 //! recorded for provenance and is never used for ordering.
@@ -9,15 +9,24 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 /// Metadata attached to every stored run.
+///
+/// `commit` is the run's position on the timeline; `observation` is provenance
+/// metadata and is never used for ordering. `commit` is the committer date of the
+/// benchmarked commit (for a dirty snapshot, the commit it is based on).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RunContext {
-    /// The timestamps describing this run (see [`Timestamps`]).
-    pub timestamps: Timestamps,
+    /// Committer date of the benchmarked commit; the run's timeline position. For
+    /// a dirty snapshot it is the committer date of the commit it is based on.
+    pub commit: Timestamp,
+    /// Wall-clock time at which the run was observed (benchmarks executed and
+    /// stored). Provenance only; never used to order a series.
+    pub observation: Timestamp,
     /// Information about the git commit the benchmarks were run against.
     pub git: GitInfo,
-    /// Information about the continuous-integration environment, if any.
-    pub ci: CiInfo,
-    /// Toolchain and host/target identification.
+    /// Information about the execution environment (developer machine or
+    /// automation provider).
+    pub env: EnvironmentInfo,
+    /// Toolchain and target identification.
     pub toolchain: ToolchainInfo,
     /// Version of the cargo-bench-history tool that produced this run.
     pub tool_version: String,
@@ -27,44 +36,20 @@ impl RunContext {
     /// Creates a run context from its components.
     #[must_use]
     pub fn new(
-        timestamps: Timestamps,
+        commit: Timestamp,
+        observation: Timestamp,
         git: GitInfo,
-        ci: CiInfo,
+        env: EnvironmentInfo,
         toolchain: ToolchainInfo,
         tool_version: String,
     ) -> Self {
         Self {
-            timestamps,
-            git,
-            ci,
-            toolchain,
-            tool_version,
-        }
-    }
-}
-
-/// The timestamps every run carries.
-///
-/// `commit` is the run's position on the timeline; `observation` is provenance
-/// metadata and is never used for ordering. `commit` is the committer date of
-/// the benchmarked commit (for a dirty snapshot, the commit it is based on).
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Timestamps {
-    /// Committer date of the benchmarked commit; the run's timeline position. For
-    /// a dirty snapshot it is the committer date of the commit it is based on.
-    pub commit: Timestamp,
-    /// Wall-clock time at which the run was observed (benchmarks executed and
-    /// stored). Provenance only; never used to order a series.
-    pub observation: Timestamp,
-}
-
-impl Timestamps {
-    /// Creates a timestamp pair.
-    #[must_use]
-    pub fn new(commit: Timestamp, observation: Timestamp) -> Self {
-        Self {
             commit,
             observation,
+            git,
+            env,
+            toolchain,
+            tool_version,
         }
     }
 }
@@ -82,22 +67,22 @@ pub struct GitInfo {
     pub dirty: bool,
 }
 
-/// Information about the continuous-integration environment a run executed in.
+/// Information about the environment a run executed in.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CiInfo {
-    /// Which CI provider was detected.
-    pub provider: CiProvider,
+pub struct EnvironmentInfo {
+    /// Which environment was detected.
+    pub provider: EnvironmentProvider,
     /// Provider-specific run identifier, if any.
     pub run_id: Option<String>,
     /// Pull-request identifier, if any.
     pub pull_request: Option<String>,
 }
 
-/// The continuous-integration provider a run executed under.
+/// The environment a run executed under.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CiProvider {
-    /// Not running in recognized CI (developer machine).
+pub enum EnvironmentProvider {
+    /// A developer machine, not a recognized automation provider.
     #[default]
     Local,
     /// GitHub Actions.
@@ -109,35 +94,36 @@ pub enum CiProvider {
 /// Toolchain and platform identification for a run.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ToolchainInfo {
-    /// Resolved target triple where the benchmark binary actually ran.
+    /// Target triple the benchmark binary ran on. The tool always runs on the
+    /// same OS it benchmarks (under WSL, the Linux side), so this is the host
+    /// triple `rustc` reports.
     pub target_triple: String,
-    /// Host triple of the tool process (differs from `target_triple` under WSL).
-    pub host_triple: String,
     /// `rustc` version string, if detected.
     pub rustc_version: Option<String>,
 }
 
-/// Detects the CI provider and run metadata from environment-variable lookups.
+/// Detects the execution environment and run metadata from environment-variable
+/// lookups.
 ///
 /// `get` resolves an environment-variable name to its value, allowing the
 /// detection to be unit-tested without touching the real process environment.
 #[must_use]
-pub fn detect_ci(get: impl Fn(&str) -> Option<String>) -> CiInfo {
+pub fn detect_environment(get: impl Fn(&str) -> Option<String>) -> EnvironmentInfo {
     if get("GITHUB_ACTIONS").as_deref() == Some("true") {
-        return CiInfo {
-            provider: CiProvider::GitHubActions,
+        return EnvironmentInfo {
+            provider: EnvironmentProvider::GitHubActions,
             run_id: get("GITHUB_RUN_ID"),
             pull_request: None,
         };
     }
     if get("TF_BUILD").is_some() {
-        return CiInfo {
-            provider: CiProvider::AzureDevOps,
+        return EnvironmentInfo {
+            provider: EnvironmentProvider::AzureDevOps,
             run_id: get("BUILD_BUILDID"),
             pull_request: get("SYSTEM_PULLREQUEST_PULLREQUESTID"),
         };
     }
-    CiInfo::default()
+    EnvironmentInfo::default()
 }
 
 #[cfg(test)]
@@ -156,29 +142,29 @@ mod tests {
     }
 
     #[test]
-    fn detect_ci_recognizes_github_actions() {
+    fn detect_environment_recognizes_github_actions() {
         let env = env_from(&[("GITHUB_ACTIONS", "true"), ("GITHUB_RUN_ID", "42")]);
-        let ci = detect_ci(env);
-        assert_eq!(ci.provider, CiProvider::GitHubActions);
-        assert_eq!(ci.run_id.as_deref(), Some("42"));
+        let detected = detect_environment(env);
+        assert_eq!(detected.provider, EnvironmentProvider::GitHubActions);
+        assert_eq!(detected.run_id.as_deref(), Some("42"));
     }
 
     #[test]
-    fn detect_ci_recognizes_azure_devops() {
+    fn detect_environment_recognizes_azure_devops() {
         let env = env_from(&[
             ("TF_BUILD", "True"),
             ("BUILD_BUILDID", "7"),
             ("SYSTEM_PULLREQUEST_PULLREQUESTID", "99"),
         ]);
-        let ci = detect_ci(env);
-        assert_eq!(ci.provider, CiProvider::AzureDevOps);
-        assert_eq!(ci.run_id.as_deref(), Some("7"));
-        assert_eq!(ci.pull_request.as_deref(), Some("99"));
+        let detected = detect_environment(env);
+        assert_eq!(detected.provider, EnvironmentProvider::AzureDevOps);
+        assert_eq!(detected.run_id.as_deref(), Some("7"));
+        assert_eq!(detected.pull_request.as_deref(), Some("99"));
     }
 
     #[test]
-    fn detect_ci_defaults_to_local() {
-        let ci = detect_ci(env_from(&[]));
-        assert_eq!(ci.provider, CiProvider::Local);
+    fn detect_environment_defaults_to_local() {
+        let detected = detect_environment(env_from(&[]));
+        assert_eq!(detected.provider, EnvironmentProvider::Local);
     }
 }

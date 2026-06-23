@@ -108,7 +108,7 @@ makes a `0 runs` result self-explanatory without needing `--verbose`.
 
 ## Storage model (commit-centric v2)
 
-`comparability::ComparabilityKey` builds object keys under the partition prefix
+`comparability::DiscriminantSet` builds object keys under the partition prefix
 `v2/<project>/<engine>/<triple>/<machine|synthetic>` and then keys each point by
 **commit**:
 
@@ -304,7 +304,7 @@ so history analysis re-baselines past it and stops re-flagging it. Blessings mat
   active segment, so a step that predates the blessing is no longer reported. Earlier
   (inactive) points stay in the series for charting (greyed) and for any long-range
   technique that needs more data. A `Finding` carries `active`, `blessed_at`, and
-  `blessed_effective` so a consumer can see what re-baselined it.
+  `blessed_commit_time` so a consumer can see what re-baselined it.
 * **Resolved spikes.** Independently of blessings, a spike that has since recovered
   to its prior level is **inactive by default** — its current state already matches
   the baseline, so re-flagging it is noise. `--include-inactive` surfaces such
@@ -489,12 +489,12 @@ marker stands in for one that fails to build. Helpers `commit_with_file` /
 
 Four benchmark engines are supported, each behind a pure parser in `bench/`:
 
-* `bench::callgrind` parses a Gungraun v6 `summary.json` into a `ResultRecord`
+* `bench::callgrind` parses a Gungraun v6 `summary.json` into a `BenchmarkResult`
   (instruction count, cache hits, estimated cycles, branches). `package` comes
   from the `package_dir` basename. Hardware-independent → stored under the
   `synthetic` partition segment, no machine key.
 * `bench::criterion` parses a `new/benchmark.json` + `new/estimates.json` pair
-  into a `WallTime` `ResultRecord`. The metric value is the `slope` point
+  into a `WallTime` `BenchmarkResult`. The metric value is the `slope` point
   estimate when present (linear `b.iter` sampling) else the `mean`; the std-dev
   and the chosen estimate's CI bounds are recorded on the `Metric` (dispersion
   fields) so later analysis can be noise-aware. The identity is
@@ -503,14 +503,14 @@ Four benchmark engines are supported, each behind a pure parser in `bench/`:
   the workspace's crate-prefixed group ids keep series distinct anyway. Criterion
   is hardware-dependent → partitioned by the host triple and a machine key.
 * `bench::alloc_tracker` parses a flat `target/alloc_tracker/<operation>.json`
-  file (one per operation, auto-emitted on `Session` drop) into a `ResultRecord`
+  file (one per operation, auto-emitted on `Session` drop) into a `BenchmarkResult`
   with an `AllocationBytes` (`allocated_bytes`) and an `AllocationCount`
   (`allocations`) metric, both from the `mean_*_per_iteration` fields. `package`
   is `None`; the operation name is the identity. Allocation behaviour is a
   deterministic property of the code → `synthetic` partition, no machine key, no
   dispersion (treated like Callgrind for change-point detection).
 * `bench::all_the_time` parses a flat `target/all_the_time/<operation>.json` file
-  into a `ResultRecord` with a single `ProcessorTime` (`processor_time`, unit
+  into a `BenchmarkResult` with a single `ProcessorTime` (`processor_time`, unit
   `ns`) metric. It prefers the through-origin `slope_processor_time_nanos` as the
   point estimate (falling back to `mean_processor_time_nanos`) and records the
   bootstrap confidence interval and standard deviation on the metric, mirroring
@@ -531,7 +531,7 @@ no-ops) is silently skipped. Scope a run with `--workspace` (the default),
 `--package`/`-p NAME` (repeatable), or `--bench NAME` (repeatable) — these
 translate to the matching `cargo bench` arguments. `--engine` is **not** a
 `run`/`backfill` flag; it is an `analyze` facet over already-stored data.
-`EngineSystem::ALL` enumerates the engines harvested per run.
+`Engine::ALL` enumerates the engines harvested per run.
 
 ## Machine key
 

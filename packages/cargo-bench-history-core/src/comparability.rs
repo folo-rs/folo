@@ -1,17 +1,19 @@
-//! Comparability: deciding which runs may be compared to each other, and how
-//! the storage is partitioned so that only comparable runs share a series.
+//! Comparability: deciding which runs may be compared to each other, and how the
+//! storage is partitioned so that only comparable runs share a series.
 //!
 //! The guiding rule (see the *Comparability & storage partitioning* section of
 //! `DESIGN.md`) is to partition only by what makes results *fundamentally*
-//! incomparable — project, engine system, target triple, and (for
-//! hardware-dependent engines) a machine key — and to record everything else as
-//! metadata so its effect stays visible in the timeline.
+//! incomparable — project, engine, target triple, and (for hardware-dependent
+//! engines) a machine key — and to record everything else as metadata so its
+//! effect stays visible in the timeline.
 
 use std::fmt;
 
+use serde::Serialize;
+
 /// A benchmark engine, distinguished by whether its results depend on hardware.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum EngineSystem {
+pub enum Engine {
     /// Criterion wall-clock benchmarks: hardware-dependent and noisy.
     Criterion,
     /// Callgrind (via Gungraun) instruction counts: simulated, hardware-independent.
@@ -23,7 +25,7 @@ pub enum EngineSystem {
     AllTheTime,
 }
 
-impl EngineSystem {
+impl Engine {
     /// Every supported engine, in a stable order used to inject the combined
     /// benchmark environment and to harvest each engine's output tree after the
     /// single `cargo bench` invocation.
@@ -45,7 +47,7 @@ impl EngineSystem {
         }
     }
 
-    /// Parses a [`EngineSystem`] from its stable lowercase identifier.
+    /// Parses an [`Engine`] from its stable lowercase identifier.
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
@@ -72,103 +74,69 @@ impl EngineSystem {
     }
 }
 
-impl fmt::Display for EngineSystem {
+impl fmt::Display for Engine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-/// Resolves the target triple to record for a run (see the *Target triple &
-/// cross-OS (WSL) execution* section of `DESIGN.md`).
+/// The set of factors that must match for two runs in a project to share a series.
 ///
-/// Resolution order (first match wins):
-///
-/// 1. For Callgrind, the OS component is pinned to `linux` because the engine only
-///    runs under Valgrind — this transparently handles the Windows→WSL case.
-/// 2. Otherwise (natively-run engines such as Criterion, `alloc_tracker`, and
-///    `all_the_time`) the tool's host triple, whose architecture a WSL guest
-///    shares.
-///
-/// The triple is **always auto-detected**: there is no `--target-triple` override
-/// on `run`/`backfill` (a misdeclared triple would silently misfile data).
-#[must_use]
-pub fn resolve_target_triple(engine: EngineSystem, host_triple: &str) -> String {
-    match engine {
-        EngineSystem::Callgrind => normalize_os_to_linux(host_triple),
-        EngineSystem::Criterion | EngineSystem::AllocTracker | EngineSystem::AllTheTime => {
-            host_triple.to_owned()
-        }
-    }
-}
-
-/// Pins the OS component of a triple to a Linux/GNU target.
-///
-/// If the triple already names Linux it is kept verbatim; otherwise only the
-/// architecture (the first component) is retained and recombined with
-/// `-unknown-linux-gnu`, reflecting that a WSL guest shares the host architecture.
-fn normalize_os_to_linux(host_triple: &str) -> String {
-    if host_triple.contains("linux") {
-        return host_triple.to_owned();
-    }
-    let arch = host_triple.split('-').next().unwrap_or(host_triple);
-    format!("{arch}-unknown-linux-gnu")
-}
-
-/// The set of factors that must match for two runs to share a series, and which
-/// therefore form the storage partition.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct ComparabilityKey {
-    /// Workspace/project identity.
-    pub project: String,
-    /// The benchmark engine system.
-    pub system: EngineSystem,
-    /// Resolved target triple (see [`resolve_target_triple`]).
+/// A discriminant set is `engine / target_triple / machine`. Within a single
+/// project all runs that share a discriminant set are comparable; runs in
+/// different sets (a different engine, target triple, or machine key) never share
+/// a series. It is both the value `run` writes under and the value `analyze` reads
+/// back (parsed from a storage key), so the same type drives both sides.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct DiscriminantSet {
+    /// Engine identifier (for example, `callgrind`).
+    pub engine: String,
+    /// Resolved target triple the run was recorded under.
     pub target_triple: String,
-    /// Machine fingerprint for hardware-dependent engines; `None` otherwise.
-    pub machine_key: Option<String>,
+    /// Machine partition (`synthetic` for hardware-independent engines).
+    pub machine: String,
 }
 
-impl ComparabilityKey {
-    /// Creates a comparability key.
+impl DiscriminantSet {
+    /// Creates a discriminant set, sanitizing the path-forming components.
     ///
-    /// The path-forming components (`project`, `target_triple`, `machine_key`) are
-    /// sanitized so that every segment is a single, well-formed path component:
-    /// any character that is not ASCII alphanumeric, `-`, `_`, or `.` is replaced
-    /// with `_`, and a segment that would otherwise be empty or consist only of
-    /// dots becomes `_`. This keeps a stray `/` (or other surprising input) from
-    /// silently splitting the storage key into the wrong number of segments —
-    /// which `analyze` would then fail to attribute — by mangling the value rather
-    /// than rejecting the run.
+    /// `target_triple` and `machine` are sanitized so that every segment is a
+    /// single, well-formed path component: any character that is not ASCII
+    /// alphanumeric, `-`, `_`, or `.` is replaced with `_`, and a segment that
+    /// would otherwise be empty or consist only of dots becomes `_`. This keeps a
+    /// stray `/` (or other surprising input) from silently splitting a storage key
+    /// into the wrong number of segments. A `None` machine becomes the literal
+    /// `synthetic`, used for hardware-independent engines.
     #[must_use]
-    pub fn new(
-        project: &str,
-        system: EngineSystem,
-        target_triple: &str,
-        machine_key: Option<&str>,
-    ) -> Self {
+    pub fn new(engine: Engine, target_triple: &str, machine: Option<&str>) -> Self {
         Self {
-            project: sanitize_segment(project),
-            system,
+            engine: engine.as_str().to_owned(),
             target_triple: sanitize_segment(target_triple),
-            machine_key: machine_key.map(sanitize_segment),
+            machine: machine.map_or_else(|| "synthetic".to_owned(), sanitize_segment),
         }
     }
 
-    /// The storage prefix that all runs in this series share.
+    /// Whether this is a hardware-independent (`synthetic`) set.
+    #[must_use]
+    pub fn is_synthetic(&self) -> bool {
+        self.machine == "synthetic"
+    }
+
+    /// The storage prefix that all runs in this series share, within `project`.
     ///
-    /// Layout: `v2/{project}/{system}/{target_triple}/{machine_key|synthetic}`.
-    /// Below this prefix the history is organized by commit (see [`clean_key`] and
+    /// Layout: `v2/{project}/{engine}/{target_triple}/{machine|synthetic}`. Below
+    /// this prefix the history is organized by commit (see [`clean_key`] and
     /// [`dirty_key`]) so `analyze` can resolve a series from git topology.
     ///
     /// [`clean_key`]: Self::clean_key
     /// [`dirty_key`]: Self::dirty_key
     #[must_use]
-    pub fn partition_prefix(&self) -> String {
-        let project = &self.project;
-        let system = self.system.as_str();
+    pub fn partition_prefix(&self, project: &str) -> String {
+        let project = sanitize_segment(project);
+        let engine = &self.engine;
         let triple = &self.target_triple;
-        let machine = self.machine_key.as_deref().unwrap_or("synthetic");
-        format!("v2/{project}/{system}/{triple}/{machine}")
+        let machine = &self.machine;
+        format!("v2/{project}/{engine}/{triple}/{machine}")
     }
 
     /// The object key for the canonical (clean working tree) result at `commit`.
@@ -178,11 +146,10 @@ impl ComparabilityKey {
     /// to the same key and collides, which the write-once storage detects so `run`
     /// can refuse the duplicate unless an overwrite is explicitly requested.
     ///
-    /// `commit` is sanitized the same way as the partition components so the
-    /// directory name always forms a single key segment.
+    /// `commit` is sanitized so the directory name always forms a single segment.
     #[must_use]
-    pub fn clean_key(&self, commit: &str) -> String {
-        let prefix = self.partition_prefix();
+    pub fn clean_key(&self, project: &str, commit: &str) -> String {
+        let prefix = self.partition_prefix(project);
         let commit = sanitize_segment(commit);
         format!("{prefix}/{commit}/clean.json")
     }
@@ -192,56 +159,78 @@ impl ComparabilityKey {
     ///
     /// Layout: `{prefix}/{commit}/dirty-{observation_unix}.json`. Because a dirty
     /// snapshot does not correspond to committed code, it is distinguished by its
-    /// observation time rather than by the commit alone, so multiple dirty snapshots
-    /// on the same base commit coexist; only two snapshots sharing an observation
-    /// second collide.
+    /// observation time rather than by the commit alone, so multiple dirty
+    /// snapshots on the same base commit coexist; only two snapshots sharing an
+    /// observation second collide.
     ///
-    /// `commit` is sanitized the same way as the partition components so the
-    /// directory name always forms a single key segment.
+    /// `commit` is sanitized so the directory name always forms a single segment.
     #[must_use]
-    pub fn dirty_key(&self, commit: &str, observation_unix: i64) -> String {
-        let prefix = self.partition_prefix();
+    pub fn dirty_key(&self, project: &str, commit: &str, observation_unix: i64) -> String {
+        let prefix = self.partition_prefix(project);
         let commit = sanitize_segment(commit);
         format!("{prefix}/{commit}/dirty-{observation_unix}.json")
+    }
+
+    /// The blessing sidecar key for this set's commit directory, issued at
+    /// `issued_unix`.
+    ///
+    /// Layout: `{prefix}/{commit}/bless-{issued_unix}.json`. `commit` is sanitized
+    /// so the directory name always forms a single segment.
+    #[must_use]
+    pub fn bless_key(&self, project: &str, commit: &str, issued_unix: i64) -> String {
+        let prefix = self.partition_prefix(project);
+        let commit = sanitize_segment(commit);
+        format!("{prefix}/{commit}/bless-{issued_unix}.json")
     }
 
     /// The storage prefix shared by every object recorded at `commit` in this
     /// partition (`{prefix}/{commit}/`), used to enumerate a commit directory.
     ///
-    /// `commit` is sanitized the same way as the partition components so the
-    /// directory name always forms a single key segment.
+    /// `commit` is sanitized so the directory name always forms a single segment.
     #[must_use]
-    pub fn commit_prefix(&self, commit: &str) -> String {
-        let prefix = self.partition_prefix();
+    pub fn commit_prefix(&self, project: &str, commit: &str) -> String {
+        let prefix = self.partition_prefix(project);
         let commit = sanitize_segment(commit);
         format!("{prefix}/{commit}/")
     }
 }
 
-/// Replaces every character that is not safe in a single path segment with `_`,
-/// mapping an otherwise-empty or all-dots result to `_`.
-///
-/// "Safe" is the conservative set `[A-Za-z0-9._-]`, which is valid both as a
-/// filesystem path component (for local storage) and as an Azure blob name part.
-/// Mangling rather than rejecting means the tool never refuses a run merely
-/// because its project, triple, or machine key contains an awkward character.
-#[must_use]
-pub fn sanitize_segment(raw: &str) -> String {
-    let mangled: String = raw
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if mangled.is_empty() || mangled.chars().all(|c| c == '.') {
-        return "_".to_owned();
+impl fmt::Display for DiscriminantSet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}/{}", self.engine, self.target_triple, self.machine)
     }
-    mangled
 }
+
+/// Path-segment sanitization shared by the comparability key builders.
+pub(crate) mod sanitize {
+    /// Replaces every character that is not safe in a single path segment with
+    /// `_`, mapping an otherwise-empty or all-dots result to `_`.
+    ///
+    /// "Safe" is the conservative set `[A-Za-z0-9._-]`, which is valid both as a
+    /// filesystem path component (for local storage) and as an Azure blob name
+    /// part. Mangling rather than rejecting means the tool never refuses a run
+    /// merely because its project, triple, or machine key contains an awkward
+    /// character.
+    #[must_use]
+    pub fn sanitize_segment(raw: &str) -> String {
+        let mangled: String = raw
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        if mangled.is_empty() || mangled.chars().all(|c| c == '.') {
+            return "_".to_owned();
+        }
+        mangled
+    }
+}
+
+pub use sanitize::sanitize_segment;
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -249,56 +238,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn callgrind_pins_windows_host_to_linux() {
-        let triple = resolve_target_triple(EngineSystem::Callgrind, "x86_64-pc-windows-msvc");
-        assert_eq!(triple, "x86_64-unknown-linux-gnu");
-    }
-
-    #[test]
-    fn callgrind_keeps_linux_host_verbatim() {
-        let triple = resolve_target_triple(EngineSystem::Callgrind, "aarch64-unknown-linux-gnu");
-        assert_eq!(triple, "aarch64-unknown-linux-gnu");
-    }
-
-    #[test]
-    fn criterion_uses_host_triple() {
-        let triple = resolve_target_triple(EngineSystem::Criterion, "x86_64-pc-windows-msvc");
-        assert_eq!(triple, "x86_64-pc-windows-msvc");
-    }
-
-    #[test]
-    fn native_engines_use_host_triple_verbatim() {
-        // The natively-run engines (unlike Callgrind) record the host triple as-is,
-        // so allocation and processor-time results on Windows and Linux stay in
-        // separate series rather than being conflated under a pinned triple.
-        for engine in [EngineSystem::AllocTracker, EngineSystem::AllTheTime] {
-            assert_eq!(
-                resolve_target_triple(engine, "x86_64-pc-windows-msvc"),
-                "x86_64-pc-windows-msvc"
-            );
-        }
-    }
-
-    #[test]
     fn hardware_dependence_matches_engine() {
-        assert!(EngineSystem::Criterion.is_hardware_dependent());
-        assert!(EngineSystem::AllTheTime.is_hardware_dependent());
-        assert!(!EngineSystem::Callgrind.is_hardware_dependent());
-        assert!(!EngineSystem::AllocTracker.is_hardware_dependent());
+        assert!(Engine::Criterion.is_hardware_dependent());
+        assert!(Engine::AllTheTime.is_hardware_dependent());
+        assert!(!Engine::Callgrind.is_hardware_dependent());
+        assert!(!Engine::AllocTracker.is_hardware_dependent());
     }
 
     #[test]
     fn alloc_tracker_uses_a_synthetic_partition() {
         // Allocation counts are a property of the code, not the machine, so
         // `alloc_tracker` carries no machine key.
-        let key = ComparabilityKey::new(
-            "folo",
-            EngineSystem::AllocTracker,
-            "x86_64-pc-windows-msvc",
-            None,
-        );
+        let set = DiscriminantSet::new(Engine::AllocTracker, "x86_64-pc-windows-msvc", None);
+        assert!(set.is_synthetic());
         assert_eq!(
-            key.partition_prefix(),
+            set.partition_prefix("folo"),
             "v2/folo/alloc_tracker/x86_64-pc-windows-msvc/synthetic"
         );
     }
@@ -307,56 +261,28 @@ mod tests {
     fn all_the_time_partitions_by_machine_key() {
         // Processor time depends on the machine, so `all_the_time` carries a
         // machine fingerprint.
-        let key = ComparabilityKey::new(
-            "folo",
-            EngineSystem::AllTheTime,
-            "x86_64-pc-windows-msvc",
-            Some("abc123"),
-        );
+        let set =
+            DiscriminantSet::new(Engine::AllTheTime, "x86_64-pc-windows-msvc", Some("abc123"));
         assert_eq!(
-            key.partition_prefix(),
+            set.partition_prefix("folo"),
             "v2/folo/all_the_time/x86_64-pc-windows-msvc/abc123"
         );
     }
 
     #[test]
-    fn synthetic_partition_for_hardware_independent_engine() {
-        let key = ComparabilityKey::new(
-            "folo",
-            EngineSystem::Callgrind,
-            "x86_64-unknown-linux-gnu",
-            None,
-        );
-        assert_eq!(
-            key.partition_prefix(),
-            "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic"
-        );
-    }
-
-    #[test]
     fn machine_key_appears_in_partition() {
-        let key = ComparabilityKey::new(
-            "folo",
-            EngineSystem::Criterion,
-            "x86_64-pc-windows-msvc",
-            Some("abc123"),
-        );
+        let set = DiscriminantSet::new(Engine::Criterion, "x86_64-pc-windows-msvc", Some("abc123"));
         assert_eq!(
-            key.partition_prefix(),
+            set.partition_prefix("folo"),
             "v2/folo/criterion/x86_64-pc-windows-msvc/abc123"
         );
     }
 
     #[test]
     fn clean_key_is_named_by_commit() {
-        let key = ComparabilityKey::new(
-            "folo",
-            EngineSystem::Callgrind,
-            "x86_64-unknown-linux-gnu",
-            None,
-        );
+        let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", None);
         assert_eq!(
-            key.clean_key("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
+            set.clean_key("folo", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
             "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/\
              deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/clean.json"
         );
@@ -364,47 +290,50 @@ mod tests {
 
     #[test]
     fn dirty_key_is_named_by_commit_and_observation_time() {
-        let key = ComparabilityKey::new(
-            "folo",
-            EngineSystem::Callgrind,
-            "x86_64-unknown-linux-gnu",
-            None,
-        );
+        let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", None);
         assert_eq!(
-            key.dirty_key("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", 1_700_000_000),
+            set.dirty_key(
+                "folo",
+                "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+                1_700_000_000
+            ),
             "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/\
              deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/dirty-1700000000.json"
         );
     }
 
     #[test]
-    fn commit_prefix_enumerates_one_commit_directory() {
-        let key = ComparabilityKey::new(
-            "folo",
-            EngineSystem::Callgrind,
-            "x86_64-unknown-linux-gnu",
-            None,
-        );
+    fn bless_key_targets_the_commit_directory() {
+        let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", None);
         assert_eq!(
-            key.commit_prefix("dead/beef"),
+            set.bless_key("folo", "abc123", 1_700_000_000),
+            "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/bless-1700000000.json"
+        );
+    }
+
+    #[test]
+    fn commit_prefix_enumerates_one_commit_directory() {
+        let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", None);
+        assert_eq!(
+            set.commit_prefix("folo", "dead/beef"),
             "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/dead_beef/"
         );
     }
 
     #[test]
-    fn engine_system_display_matches_as_str() {
-        assert_eq!(EngineSystem::Criterion.to_string(), "criterion");
-        assert_eq!(EngineSystem::Callgrind.to_string(), "callgrind");
-        assert_eq!(EngineSystem::AllocTracker.to_string(), "alloc_tracker");
-        assert_eq!(EngineSystem::AllTheTime.to_string(), "all_the_time");
+    fn engine_display_matches_as_str() {
+        assert_eq!(Engine::Criterion.to_string(), "criterion");
+        assert_eq!(Engine::Callgrind.to_string(), "callgrind");
+        assert_eq!(Engine::AllocTracker.to_string(), "alloc_tracker");
+        assert_eq!(Engine::AllTheTime.to_string(), "all_the_time");
     }
 
     #[test]
-    fn engine_system_from_name_roundtrips() {
-        for engine in EngineSystem::ALL {
-            assert_eq!(EngineSystem::from_name(engine.as_str()), Some(engine));
+    fn engine_from_name_roundtrips() {
+        for engine in Engine::ALL {
+            assert_eq!(Engine::from_name(engine.as_str()), Some(engine));
         }
-        assert_eq!(EngineSystem::from_name("dhat"), None);
+        assert_eq!(Engine::from_name("dhat"), None);
     }
 
     #[test]
@@ -434,29 +363,19 @@ mod tests {
 
     #[test]
     fn new_sanitizes_partition_components() {
-        let key = ComparabilityKey::new(
-            "team/app",
-            EngineSystem::Criterion,
-            "weird/triple",
-            Some("machine/one"),
-        );
+        let set = DiscriminantSet::new(Engine::Criterion, "weird/triple", Some("machine/one"));
         assert_eq!(
-            key.partition_prefix(),
+            set.partition_prefix("team/app"),
             "v2/team_app/criterion/weird_triple/machine_one"
         );
         // The partition prefix has exactly the five canonical segments.
-        assert_eq!(key.partition_prefix().split('/').count(), 5);
+        assert_eq!(set.partition_prefix("team/app").split('/').count(), 5);
     }
 
     #[test]
     fn clean_key_sanitizes_the_commit() {
-        let key = ComparabilityKey::new(
-            "folo",
-            EngineSystem::Callgrind,
-            "x86_64-unknown-linux-gnu",
-            None,
-        );
-        let object = key.clean_key("dead/beef");
+        let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", None);
+        let object = set.clean_key("folo", "dead/beef");
         assert_eq!(
             object,
             "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/dead_beef/clean.json"
@@ -467,13 +386,8 @@ mod tests {
 
     #[test]
     fn dirty_key_sanitizes_the_commit() {
-        let key = ComparabilityKey::new(
-            "folo",
-            EngineSystem::Callgrind,
-            "x86_64-unknown-linux-gnu",
-            None,
-        );
-        let object = key.dirty_key("dead/beef", 1_700_000_000);
+        let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", None);
+        let object = set.dirty_key("folo", "dead/beef", 1_700_000_000);
         assert_eq!(
             object,
             "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/dead_beef/dirty-1700000000.json"

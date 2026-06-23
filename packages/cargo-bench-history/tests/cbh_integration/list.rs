@@ -1,7 +1,7 @@
 use crate::harness::*;
 
 /// `list discriminants` enumerates exactly the comparable sets present in
-/// storage, deriving the os/architecture facets from each set's target triple.
+/// storage, reporting each set's engine, target triple, and machine key.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn list_discriminants_lists_present_sets() {
@@ -32,9 +32,12 @@ async fn list_discriminants_lists_present_sets() {
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     let sets = parsed.as_array().unwrap();
     assert_eq!(sets.len(), 2, "exactly the two present sets: {message}");
-    let oses: Vec<&str> = sets.iter().map(|set| set["os"].as_str().unwrap()).collect();
-    assert!(oses.contains(&"linux"), "{message}");
-    assert!(oses.contains(&"windows"), "{message}");
+    let triples: Vec<&str> = sets
+        .iter()
+        .map(|set| set["target_triple"].as_str().unwrap())
+        .collect();
+    assert!(triples.contains(&"x86_64-unknown-linux-gnu"), "{message}");
+    assert!(triples.contains(&"x86_64-pc-windows-msvc"), "{message}");
     assert!(
         sets.iter().all(|set| set["engine"] == "callgrind"),
         "{message}"
@@ -116,7 +119,10 @@ async fn list_facet_selection_mirrors_analyze() {
     };
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(parsed["totals"]["discriminant_sets"], 1, "{message}");
-    assert_eq!(parsed["sets"][0]["os"], "linux", "{message}");
+    assert_eq!(
+        parsed["sets"][0]["target_triple"], "x86_64-unknown-linux-gnu",
+        "{message}"
+    );
 }
 
 /// `list` admits and excludes dirty snapshots exactly as `analyze` does: on a

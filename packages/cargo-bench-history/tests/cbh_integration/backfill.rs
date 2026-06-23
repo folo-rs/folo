@@ -26,7 +26,6 @@ async fn backfill_stores_one_clean_object_per_commit_and_restores_checkout() {
     let objects = workspace.stored_objects();
     assert_eq!(objects.len(), 3, "{objects:?}");
     let triple = objects[0].1.context.toolchain.target_triple.clone();
-    assert!(triple.ends_with("-unknown-linux-gnu"), "{triple}");
     for sha in [&c1, &c2, &c3] {
         let expected = format!("v2/testproj/callgrind/{triple}/synthetic/{sha}/clean.json");
         assert!(

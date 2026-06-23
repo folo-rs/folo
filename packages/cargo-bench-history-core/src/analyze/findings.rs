@@ -6,31 +6,32 @@
 //! records:
 //!
 //! * **Deterministic** engines (Callgrind: instruction counts, estimated cycles,
-//!   cache events, branch counts) produce noise-free numbers. A real step is real
-//!   no matter how small, so a deterministic change is flagged on persistence
-//!   alone — no significance test, no false-discovery correction.
-//! * **Noisy** engines (Criterion wall time) jitter from run to run. A move is
-//!   flagged only when a Pettitt change-point locates a split that a Mann–Whitney
-//!   rank test then confirms, the confidence intervals of the two regimes do not
-//!   overlap, and the move clears a practical-magnitude floor — then the surviving
-//!   candidates pass a Benjamini–Hochberg false-discovery filter so a batch of
-//!   series does not manufacture spurious findings.
+//!   cache hits, branch counts; `alloc_tracker`: allocations) produce noise-free
+//!   numbers. A real step is real no matter how small, so a deterministic change
+//!   is flagged on persistence alone — no significance test, no false-discovery
+//!   correction.
+//! * **Noisy** engines (Criterion wall time, `all_the_time` processor time) jitter
+//!   from run to run. A move is flagged only when a Pettitt change-point locates a
+//!   split that a Mann–Whitney rank test then confirms, the confidence intervals of
+//!   the two regimes do not overlap, and the move clears a practical-magnitude
+//!   floor — then the surviving candidates pass a Benjamini–Hochberg false-discovery
+//!   filter so a batch of series does not manufacture spurious findings.
 //!
 //! A separate slow-[`Drift`](FindingMethod::Drift) finding is raised from a
 //! Mann–Kendall trend test plus a Theil–Sen slope, and is suppressed when a
 //! single step on the same series already explains at least as much movement.
 //!
 //! Polarity: most metrics are "lower is better" (instruction counts, cycle
-//! estimates, branch counts, wall time), so a rise is a [`Direction::Regression`]
-//! and a fall is a [`Direction::Improvement`]. Cache *hit* counts invert that —
-//! more hits means fewer misses.
+//! estimates, branch counts, allocations, wall time), so a rise is a
+//! [`Direction::Regression`] and a fall is a [`Direction::Improvement`]. L1 cache
+//! *hits* invert that — more hits means fewer, costlier misses (see
+//! [`MetricKind::higher_is_better`]).
 
 use serde::Serialize;
 
-use crate::analyze::discriminant::DiscriminantSet;
 use crate::analyze::series::{Series, SeriesPoint};
 use crate::analyze::stats;
-use crate::metric_events::L1_HITS_EVENT;
+use crate::comparability::DiscriminantSet;
 use crate::model::{BenchmarkId, MetricKind};
 
 /// Tunable parameters of the engine-aware analysis.
@@ -210,9 +211,7 @@ pub struct Finding {
     /// The benchmark identity.
     #[serde(flatten)]
     pub id: BenchmarkId,
-    /// The metric that moved.
-    pub metric: String,
-    /// The category of the metric that moved.
+    /// The category of the metric that moved (governs unit and polarity).
     pub kind: MetricKind,
     /// Which detector produced this finding.
     pub method: FindingMethod,
@@ -324,27 +323,16 @@ fn is_deterministic(kind: MetricKind) -> bool {
     !matches!(kind, MetricKind::WallTime | MetricKind::ProcessorTime)
 }
 
-/// Whether a larger value of a metric named `name` of `kind` indicates better
-/// performance.
-///
-/// Among the cache-event metrics only L1 hits are higher-is-better (an access
-/// served by L1 is the cheap outcome, so more of them is good). The last-level
-/// and RAM tiers are cache misses escalating to slower memory, so more of them is
-/// worse — like every other metric (wall time, instruction counts, estimated
-/// cycles, branch counts), which are all lower-is-better.
-fn higher_is_better(name: &str, kind: MetricKind) -> bool {
-    matches!(kind, MetricKind::CacheEvents) && name == L1_HITS_EVENT
-}
-
-/// The direction of a change, given the signed delta from the baseline, the
-/// metric's `kind`, and its `name` (which distinguishes the cache tiers).
+/// The direction of a change, given the signed delta from the baseline and the
+/// metric's `kind`.
 ///
 /// For a lower-is-better metric a positive delta is a regression; for a
-/// higher-is-better metric (L1 cache hits) the polarity is inverted. The caller
-/// only reaches this with a non-zero delta, so the exact zero case never arises in
-/// practice; it is defined as an improvement so the classification is total.
-fn direction_of(delta: f64, kind: MetricKind, name: &str) -> Direction {
-    let worse = if higher_is_better(name, kind) {
+/// higher-is-better metric (L1 cache hits) the polarity is inverted (see
+/// [`MetricKind::higher_is_better`]). The caller only reaches this with a non-zero
+/// delta, so the exact zero case never arises in practice; it is defined as an
+/// improvement so the classification is total.
+fn direction_of(delta: f64, kind: MetricKind) -> Direction {
+    let worse = if kind.higher_is_better() {
         delta < 0.0
     } else {
         delta > 0.0
@@ -521,10 +509,9 @@ fn evaluate_change_point(series: &Series, config: &AnalysisConfig) -> Option<Can
         finding: Finding {
             set: series.set.clone(),
             id: series.id.clone(),
-            metric: series.metric.clone(),
             kind: series.kind,
             method: FindingMethod::ChangePoint,
-            direction: direction_of(delta, series.kind, &series.metric),
+            direction: direction_of(delta, series.kind),
             baseline,
             latest,
             delta,
@@ -593,10 +580,9 @@ fn evaluate_drift(series: &Series, config: &AnalysisConfig) -> Option<Candidate>
         finding: Finding {
             set: series.set.clone(),
             id: series.id.clone(),
-            metric: series.metric.clone(),
             kind: series.kind,
             method: FindingMethod::Drift,
-            direction: direction_of(delta, series.kind, &series.metric),
+            direction: direction_of(delta, series.kind),
             baseline,
             latest,
             delta,
@@ -764,10 +750,9 @@ fn compare_samples(
         finding: Finding {
             set: series.set.clone(),
             id: series.id.clone(),
-            metric: series.metric.clone(),
             kind: series.kind,
             method: FindingMethod::ChangePoint,
-            direction: direction_of(delta, series.kind, &series.metric),
+            direction: direction_of(delta, series.kind),
             baseline,
             latest,
             delta,
@@ -857,7 +842,6 @@ fn active_view(series: &Series) -> Series {
     Series {
         set: series.set.clone(),
         id: series.id.clone(),
-        metric: series.metric.clone(),
         kind: series.kind,
         points,
         active_start: 0,
@@ -964,10 +948,9 @@ fn evaluate_resolved_spike(series: &Series, config: &AnalysisConfig) -> Option<C
         finding: Finding {
             set: series.set.clone(),
             id: series.id.clone(),
-            metric: series.metric.clone(),
             kind: series.kind,
             method: FindingMethod::ChangePoint,
-            direction: direction_of(deviation, series.kind, &series.metric),
+            direction: direction_of(deviation, series.kind),
             baseline,
             latest: level,
             delta: deviation,
@@ -1061,7 +1044,7 @@ pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Vec<Finding
             .then_with(|| left.method.cmp(&right.method))
             .then_with(|| left.set.cmp(&right.set))
             .then_with(|| left.id.cmp(&right.id))
-            .then_with(|| left.metric.cmp(&right.metric))
+            .then_with(|| left.kind.cmp(&right.kind))
     });
     findings
 }
@@ -1077,9 +1060,8 @@ mod tests {
 
     use jiff::Timestamp;
 
-    use crate::analyze::discriminant::DiscriminantSet;
     use crate::analyze::series::{Blessing, SeriesPoint};
-    use crate::metric_events::{LL_HITS_EVENT, RAM_HITS_EVENT};
+    use crate::comparability::DiscriminantSet;
     use crate::model::MetricKind;
 
     use super::*;
@@ -1117,8 +1099,7 @@ mod tests {
                 target_triple: "t".to_owned(),
                 machine: "synthetic".to_owned(),
             },
-            id: BenchmarkId::new(None, "group".to_owned(), Some("case".to_owned()), None),
-            metric: "metric".to_owned(),
+            id: BenchmarkId::new(vec!["group".to_owned(), "case".to_owned()]),
             kind,
             points,
             active_start: 0,
@@ -1152,8 +1133,7 @@ mod tests {
                     target_triple: "t".to_owned(),
                     machine: "synthetic".to_owned(),
                 },
-                id: BenchmarkId::new(None, "group".to_owned(), Some("case".to_owned()), None),
-                metric: "metric".to_owned(),
+                id: BenchmarkId::new(vec!["group".to_owned(), "case".to_owned()]),
                 kind: MetricKind::InstructionCount,
                 method,
                 direction: Direction::Regression,
@@ -1200,34 +1180,34 @@ mod tests {
     #[test]
     fn direction_of_respects_polarity() {
         assert_eq!(
-            direction_of(1.0, MetricKind::InstructionCount, "Ir"),
+            direction_of(1.0, MetricKind::InstructionCount),
             Direction::Regression
         );
         assert_eq!(
-            direction_of(-1.0, MetricKind::InstructionCount, "Ir"),
+            direction_of(-1.0, MetricKind::InstructionCount),
             Direction::Improvement
         );
         // L1 hits invert: more cheap L1 accesses improve, fewer regress.
         assert_eq!(
-            direction_of(1.0, MetricKind::CacheEvents, L1_HITS_EVENT),
+            direction_of(1.0, MetricKind::L1CacheHits),
             Direction::Improvement
         );
         assert_eq!(
-            direction_of(-1.0, MetricKind::CacheEvents, L1_HITS_EVENT),
+            direction_of(-1.0, MetricKind::L1CacheHits),
             Direction::Regression
         );
         // The slower cache tiers are expensive: more LL/RAM hits regress, like any
         // lower-is-better metric.
         assert_eq!(
-            direction_of(1.0, MetricKind::CacheEvents, LL_HITS_EVENT),
+            direction_of(1.0, MetricKind::LastLevelCacheHits),
             Direction::Regression
         );
         assert_eq!(
-            direction_of(1.0, MetricKind::CacheEvents, RAM_HITS_EVENT),
+            direction_of(1.0, MetricKind::RamHits),
             Direction::Regression
         );
         assert_eq!(
-            direction_of(-1.0, MetricKind::CacheEvents, RAM_HITS_EVENT),
+            direction_of(-1.0, MetricKind::RamHits),
             Direction::Improvement
         );
     }
@@ -1241,9 +1221,9 @@ mod tests {
             MetricKind::AllocationCount,
             MetricKind::ProcessorTime,
         ] {
-            assert!(!higher_is_better("whatever", kind));
-            assert_eq!(direction_of(1.0, kind, "whatever"), Direction::Regression);
-            assert_eq!(direction_of(-1.0, kind, "whatever"), Direction::Improvement);
+            assert!(!kind.higher_is_better());
+            assert_eq!(direction_of(1.0, kind), Direction::Regression);
+            assert_eq!(direction_of(-1.0, kind), Direction::Improvement);
         }
     }
 
@@ -1261,15 +1241,15 @@ mod tests {
         // The classification is total: a zero delta (never reached in practice) is
         // defined as an improvement for every polarity.
         assert_eq!(
-            direction_of(0.0, MetricKind::InstructionCount, "Ir"),
+            direction_of(0.0, MetricKind::InstructionCount),
             Direction::Improvement
         );
         assert_eq!(
-            direction_of(0.0, MetricKind::CacheEvents, L1_HITS_EVENT),
+            direction_of(0.0, MetricKind::L1CacheHits),
             Direction::Improvement
         );
         assert_eq!(
-            direction_of(0.0, MetricKind::CacheEvents, LL_HITS_EVENT),
+            direction_of(0.0, MetricKind::LastLevelCacheHits),
             Direction::Improvement
         );
     }
@@ -1430,12 +1410,11 @@ mod tests {
     fn deterministic_l1_hit_drop_is_a_regression() {
         // L1 hits are higher-is-better, so a drop in L1 hits is a regression
         // (the access shifted to a slower tier).
-        let mut series = series_with(
+        let series = series_with(
             &[100.0, 100.0, 100.0, 70.0, 70.0, 70.0],
-            MetricKind::CacheEvents,
+            MetricKind::L1CacheHits,
             &[],
         );
-        series.metric = L1_HITS_EVENT.to_owned();
         let finding = only(changes(&[series]));
         assert!(finding.is_regression());
         assert_eq!(finding.delta, -30.0);
@@ -1444,14 +1423,12 @@ mod tests {
     #[test]
     fn deterministic_ram_hit_rise_is_a_regression() {
         // RAM hits are the expensive tier (lower-is-better), so a rise in RAM
-        // hits is a regression, not the improvement the old whole-bucket polarity
-        // would have reported.
-        let mut series = series_with(
+        // hits is a regression.
+        let series = series_with(
             &[70.0, 70.0, 70.0, 100.0, 100.0, 100.0],
-            MetricKind::CacheEvents,
+            MetricKind::RamHits,
             &[],
         );
-        series.metric = RAM_HITS_EVENT.to_owned();
         let finding = only(changes(&[series]));
         assert!(finding.is_regression());
         assert_eq!(finding.delta, 30.0);
@@ -1650,7 +1627,7 @@ mod tests {
             &[],
         );
         // Distinguish the identity so both findings are retained.
-        smaller.id = BenchmarkId::new(None, "other".to_owned(), Some("case".to_owned()), None);
+        smaller.id = BenchmarkId::new(vec!["other".to_owned(), "case".to_owned()]);
         let findings = changes(&[smaller, larger]);
         assert_eq!(findings.len(), 2);
         assert!(findings[0].relative_delta.abs() > findings[1].relative_delta.abs());
@@ -1683,8 +1660,7 @@ mod tests {
                 target_triple: "t".to_owned(),
                 machine: "synthetic".to_owned(),
             },
-            id: BenchmarkId::new(None, "group".to_owned(), Some("case".to_owned()), None),
-            metric: "metric".to_owned(),
+            id: BenchmarkId::new(vec!["group".to_owned(), "case".to_owned()]),
             kind: MetricKind::InstructionCount,
             points,
             active_start: 0,

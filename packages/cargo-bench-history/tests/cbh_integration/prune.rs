@@ -235,7 +235,10 @@ async fn prune_dirty_scopes_by_target_triple_facet() {
     };
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(parsed["totals"]["runs"], 1, "{message}");
-    assert_eq!(parsed["sets"][0]["os"], "linux", "{message}");
+    assert_eq!(
+        parsed["sets"][0]["target_triple"], "x86_64-unknown-linux-gnu",
+        "{message}"
+    );
     assert_eq!(parsed["sets"][0]["engine"], "callgrind", "{message}");
 
     // The Windows (criterion) dirty run survives: a Windows-triple pass still finds
@@ -262,7 +265,10 @@ async fn prune_dirty_scopes_by_target_triple_facet() {
         parsed["totals"]["runs"], 1,
         "windows dirty survived: {message}"
     );
-    assert_eq!(parsed["sets"][0]["os"], "windows", "{message}");
+    assert_eq!(
+        parsed["sets"][0]["target_triple"], "x86_64-pc-windows-msvc",
+        "{message}"
+    );
 }
 
 /// `prune` spans every selected discriminant set in one pass: a dirty callgrind and

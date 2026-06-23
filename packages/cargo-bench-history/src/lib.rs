@@ -227,7 +227,7 @@ mod storage;
 mod text;
 mod wiring;
 
-pub(crate) use cargo_bench_history_core::{bless, comparability, context, metric_events, model};
+pub(crate) use cargo_bench_history_core::{bless, comparability, constants, context, model};
 
 pub use cli::{Cli, EarlyExit};
 pub use command::{
@@ -235,8 +235,8 @@ pub use command::{
     ListSubject, PruneOptions, RunOptions, UnblessOptions,
 };
 pub use config::{ConfigError, default_template};
-pub use context::{CiInfo, CiProvider, GitInfo, RunContext, Timestamps, ToolchainInfo};
+pub use context::{EnvironmentInfo, EnvironmentProvider, GitInfo, RunContext, ToolchainInfo};
 pub use dispatch::{Overrides, run, run_with_overrides};
-pub use model::{BenchmarkId, Metric, MetricKind, ResultRecord, ResultSet, SCHEMA_VERSION};
+pub use model::{BenchmarkId, BenchmarkResult, Metric, MetricKind, Run, SCHEMA_VERSION};
 pub use outcome::{RunError, RunOutcome};
 pub use storage::StorageError;

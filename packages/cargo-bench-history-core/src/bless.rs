@@ -109,12 +109,12 @@ mod tests {
         case: Option<&str>,
         value: Option<&str>,
     ) -> BenchmarkId {
-        BenchmarkId::new(
-            package.map(ToOwned::to_owned),
-            group.to_owned(),
-            case.map(ToOwned::to_owned),
-            value.map(ToOwned::to_owned),
-        )
+        let segments = [package, Some(group), case, value]
+            .into_iter()
+            .flatten()
+            .map(ToOwned::to_owned)
+            .collect();
+        BenchmarkId::new(segments)
     }
 
     fn record(prefixes: &[&str]) -> BlessingRecord {

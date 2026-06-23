@@ -13,8 +13,8 @@ use colored::{Color, Colorize};
 use rasciigraph::{Config, plot_colored, plot_many_colored};
 use serde::Serialize;
 
-use crate::analyze::discriminant::DiscriminantSet;
 use crate::analyze::findings::{Direction, Finding, FindingMethod, SeriesValue};
+use crate::comparability::DiscriminantSet;
 use crate::model::BenchmarkId;
 
 /// Height, in rows, of a history-mode finding chart.
@@ -92,10 +92,6 @@ struct JsonSet<'a> {
     engine: &'a str,
     /// Resolved target triple.
     target_triple: &'a str,
-    /// Operating-system facet derived from the triple.
-    os: &'a str,
-    /// CPU-architecture facet derived from the triple.
-    architecture: &'a str,
     /// Machine partition (`synthetic` for hardware-independent engines).
     machine: &'a str,
     /// Stored runs loaded for this set.
@@ -183,9 +179,9 @@ fn push_warning(lines: &mut Vec<String>, warning: Option<&str>) {
     }
 }
 
-/// A one-line label for a set, naming its partition and derived facets.
+/// A one-line label for a set, naming its `engine / triple / machine` partition.
 fn set_label(set: &DiscriminantSet) -> String {
-    format!("{set} (os={} arch={})", set.os(), set.architecture())
+    set.to_string()
 }
 
 fn render_text(input: &ReportInput<'_>, color: bool) -> String {
@@ -251,7 +247,7 @@ fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, chart_enabled:
     lines.push(format!(
         "{headline}  {} · {}{status}",
         describe_id(&finding.id).bold(),
-        finding.metric
+        finding.kind.as_str()
     ));
 
     let mut detail = format!(
@@ -400,12 +396,7 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
             continue;
         }
         lines.push(String::new());
-        lines.push(format!(
-            "## {} (os={}, arch={})",
-            summary.set,
-            summary.set.os(),
-            summary.set.architecture()
-        ));
+        lines.push(format!("## {}", summary.set));
         lines.push(String::new());
         lines.push(
             "| Change | Direction | Method | Confidence | Engine | Benchmark | Metric | Baseline | Latest |"
@@ -421,7 +412,7 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
                 format_confidence(finding.confidence),
                 finding.set.engine,
                 describe_id(&finding.id),
-                finding.metric,
+                finding.kind.as_str(),
                 format_value(finding.baseline),
                 format_value(finding.latest),
             ));
@@ -443,8 +434,6 @@ fn render_json(input: &ReportInput<'_>) -> String {
         .map(|summary| JsonSet {
             engine: &summary.set.engine,
             target_triple: &summary.set.target_triple,
-            os: summary.set.os(),
-            architecture: summary.set.architecture(),
             machine: &summary.set.machine,
             runs: summary.runs,
             series: summary.series,
@@ -574,13 +563,11 @@ mod tests {
     fn regression() -> Finding {
         Finding {
             set: discriminant_set(),
-            id: BenchmarkId::new(
-                Some("nm".to_owned()),
+            id: BenchmarkId::new(vec![
+                "nm".to_owned(),
                 "nm::observe".to_owned(),
-                Some("pull".to_owned()),
-                None,
-            ),
-            metric: "Ir".to_owned(),
+                "pull".to_owned(),
+            ]),
             kind: MetricKind::InstructionCount,
             method: FindingMethod::ChangePoint,
             direction: Direction::Regression,
@@ -686,7 +673,10 @@ mod tests {
         // The percentage leads the finding paragraph; severity is gone.
         assert!(report.contains("+30.00%"), "{report}");
         assert!(!report.contains("[major]"), "{report}");
-        assert!(report.contains("nm::observe/pull · Ir"), "{report}");
+        assert!(
+            report.contains("nm/nm::observe/pull · instruction_count"),
+            "{report}"
+        );
         assert!(
             report.contains("regression via change point · 100% confidence · 100 → 130"),
             "{report}"
@@ -757,12 +747,11 @@ mod tests {
         // must report the real counts, not a constant.
         let set = discriminant_set();
         let mut second = regression();
-        second.id = BenchmarkId::new(
-            Some("nm".to_owned()),
+        second.id = BenchmarkId::new(vec![
+            "nm".to_owned(),
             "nm::other".to_owned(),
-            Some("push".to_owned()),
-            None,
-        );
+            "push".to_owned(),
+        ]);
         let findings = vec![regression(), second];
         let mut summaries = Vec::new();
         let input = single_set_input("folo", &set, &findings, &mut summaries);
@@ -785,9 +774,7 @@ mod tests {
             "{report}"
         );
         assert!(
-            report.contains(
-                "## callgrind/x86_64-unknown-linux-gnu/synthetic (os=linux, arch=x86_64)"
-            ),
+            report.contains("## callgrind/x86_64-unknown-linux-gnu/synthetic"),
             "{report}"
         );
         assert!(report.contains("| Change | Direction |"), "{report}");
@@ -908,14 +895,13 @@ mod tests {
         let finding = &parsed["findings"][0];
         // Flattened DiscriminantSet and BenchmarkId fields appear inline.
         assert_eq!(finding["engine"], "callgrind");
-        assert_eq!(finding["package"], "nm");
-        assert_eq!(finding["group"], "nm::observe");
+        assert_eq!(finding["segments"][0], "nm");
+        assert_eq!(finding["segments"][1], "nm::observe");
         assert_eq!(finding["direction"], "regression");
-        // The per-set breakdown carries the derived facets.
+        // The per-set breakdown carries the partition triple.
         let set_json = &parsed["sets"][0];
         assert_eq!(set_json["engine"], "callgrind");
-        assert_eq!(set_json["os"], "linux");
-        assert_eq!(set_json["architecture"], "x86_64");
+        assert_eq!(set_json["target_triple"], "x86_64-unknown-linux-gnu");
         assert_eq!(set_json["regressions"], 1);
     }
 
@@ -993,14 +979,14 @@ mod tests {
 
     #[test]
     fn describe_id_joins_present_parts() {
-        let id = BenchmarkId::new(
-            Some("pkg".to_owned()),
+        let id = BenchmarkId::new(vec![
+            "pkg".to_owned(),
             "group".to_owned(),
-            Some("case".to_owned()),
-            Some("value".to_owned()),
-        );
+            "case".to_owned(),
+            "value".to_owned(),
+        ]);
         assert_eq!(describe_id(&id), "pkg/group/case/value");
-        let bare = BenchmarkId::new(None, "group".to_owned(), None, None);
+        let bare = BenchmarkId::new(vec!["group".to_owned()]);
         assert_eq!(describe_id(&bare), "group");
     }
 

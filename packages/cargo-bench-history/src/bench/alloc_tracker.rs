@@ -1,33 +1,21 @@
 //! Parsing of `alloc_tracker`'s per-operation JSON into the engine-neutral
-//! [`ResultRecord`] model.
+//! [`BenchmarkResult`] model.
 //!
 //! `alloc_tracker` writes one file per operation under `target/alloc_tracker/`,
 //! recording how many bytes and how many allocations a benchmark performs per
 //! iteration. Both quantities are a deterministic property of the code, so they
-//! are stored without a machine key (see [`EngineSystem::is_hardware_dependent`]).
+//! are stored without a machine key (see [`Engine::is_hardware_dependent`]).
 //! The committed fixtures under `tests/fixtures/alloc_tracker/` are real
 //! `alloc_tracker` output and act as a schema-drift canary.
 //!
-//! [`EngineSystem::is_hardware_dependent`]: crate::comparability::EngineSystem::is_hardware_dependent
+//! [`Engine::is_hardware_dependent`]: crate::comparability::Engine::is_hardware_dependent
 
 use std::error::Error;
 use std::fmt;
 
 use serde::Deserialize;
 
-use crate::model::{BenchmarkId, Metric, MetricKind, ResultRecord};
-
-/// The metric name recorded for the per-iteration allocated-bytes measurement.
-const BYTES_METRIC: &str = "allocated_bytes";
-
-/// The metric name recorded for the per-iteration allocation-count measurement.
-const COUNT_METRIC: &str = "allocations";
-
-/// The unit recorded for the allocated-bytes metric.
-const BYTES_UNIT: &str = "bytes";
-
-/// The unit recorded for the allocation-count metric.
-const COUNT_UNIT: &str = "count";
+use crate::model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
 
 /// An error encountered while parsing an `alloc_tracker` operation file.
 #[derive(Debug)]
@@ -45,7 +33,7 @@ impl Error for AllocTrackerParseError {
     }
 }
 
-/// Parses one `alloc_tracker` operation file into a [`ResultRecord`].
+/// Parses one `alloc_tracker` operation file into a [`BenchmarkResult`].
 ///
 /// # Errors
 ///
@@ -53,35 +41,31 @@ impl Error for AllocTrackerParseError {
 /// the expected shape.
 pub(crate) fn parse_alloc_tracker_operation(
     json: &str,
-) -> Result<ResultRecord, AllocTrackerParseError> {
+) -> Result<BenchmarkResult, AllocTrackerParseError> {
     let output: OperationOutput = serde_json::from_str(json).map_err(AllocTrackerParseError)?;
     Ok(output_to_record(&output))
 }
 
-/// Maps a parsed operation to a [`ResultRecord`] (pure).
+/// Maps a parsed operation to a [`BenchmarkResult`] (pure).
 ///
-/// The package is `None`: `alloc_tracker`'s flat `target/alloc_tracker/` tree
-/// carries no package attribution, so the operation name alone identifies the
-/// series (mirroring the Criterion adapter).
-fn output_to_record(output: &OperationOutput) -> ResultRecord {
-    let id = BenchmarkId::new(None, output.operation.clone(), None, None);
+/// `alloc_tracker`'s flat `target/alloc_tracker/` tree carries no package
+/// attribution, so the operation name alone identifies the series (mirroring the
+/// Criterion adapter).
+fn output_to_record(output: &OperationOutput) -> BenchmarkResult {
+    let id = BenchmarkId::new(vec![output.operation.clone()]);
 
     let metrics = vec![
         Metric::new(
-            BYTES_METRIC.to_owned(),
             MetricKind::AllocationBytes,
             as_f64(output.mean_bytes_per_iteration),
-            Some(BYTES_UNIT.to_owned()),
         ),
         Metric::new(
-            COUNT_METRIC.to_owned(),
             MetricKind::AllocationCount,
             as_f64(output.mean_allocations_per_iteration),
-            Some(COUNT_UNIT.to_owned()),
         ),
     ];
 
-    ResultRecord::new(id, metrics)
+    BenchmarkResult::new(id, metrics)
 }
 
 /// Casts an allocation statistic to `f64`, the model's storage type.
@@ -120,16 +104,13 @@ mod tests {
     #[test]
     fn parses_identity_from_operation_name() {
         let record = parse_alloc_tracker_operation(ALLOCATE_VEC_FIXTURE).unwrap();
-        assert_eq!(
-            record.id,
-            BenchmarkId::new(None, "allocate_vec".to_owned(), None, None)
-        );
+        assert_eq!(record.id, BenchmarkId::new(vec!["allocate_vec".to_owned()]));
     }
 
     #[test]
-    fn alloc_tracker_record_has_no_package() {
+    fn alloc_tracker_identity_is_the_operation_name_only() {
         let record = parse_alloc_tracker_operation(ALLOCATE_VEC_FIXTURE).unwrap();
-        assert_eq!(record.id.package, None);
+        assert_eq!(record.id.segments, vec!["allocate_vec".to_owned()]);
     }
 
     #[test]
@@ -137,14 +118,10 @@ mod tests {
         let record = parse_alloc_tracker_operation(ALLOCATE_VEC_FIXTURE).unwrap();
         assert_eq!(record.metrics.len(), 2);
 
-        let bytes = metric(&record, BYTES_METRIC);
-        assert_eq!(bytes.kind, MetricKind::AllocationBytes);
-        assert_eq!(bytes.unit.as_deref(), Some("bytes"));
+        let bytes = metric(&record, MetricKind::AllocationBytes);
         assert_eq!(bytes.value, 200.0);
 
-        let count = metric(&record, COUNT_METRIC);
-        assert_eq!(count.kind, MetricKind::AllocationCount);
-        assert_eq!(count.unit.as_deref(), Some("count"));
+        let count = metric(&record, MetricKind::AllocationCount);
         assert_eq!(count.value, 2.0);
     }
 
@@ -164,7 +141,7 @@ mod tests {
     fn preserves_the_original_operation_name() {
         let json = operation_json("group/case name", 4096, 7);
         let record = parse_alloc_tracker_operation(&json).unwrap();
-        assert_eq!(record.id.group, "group/case name");
+        assert_eq!(record.id.segments, vec!["group/case name".to_owned()]);
     }
 
     #[test]
@@ -177,12 +154,12 @@ mod tests {
         assert!(error.source().is_some());
     }
 
-    fn metric<'a>(record: &'a ResultRecord, name: &str) -> &'a Metric {
+    fn metric(record: &BenchmarkResult, kind: MetricKind) -> &Metric {
         record
             .metrics
             .iter()
-            .find(|metric| metric.name == name)
-            .unwrap_or_else(|| panic!("missing metric {name:?}"))
+            .find(|metric| metric.kind == kind)
+            .unwrap_or_else(|| panic!("missing metric {kind:?}"))
     }
 
     fn operation_json(operation: &str, bytes: u64, count: u64) -> String {

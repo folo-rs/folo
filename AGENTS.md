@@ -250,3 +250,15 @@ the logs, never just announcing the conclusion.
 
 **Open this when**: adding or editing verbose/diagnostic logging in a CLI tool or
 other standalone binary; deciding what a `--verbose` note should say.
+
+### [docs/feedback.md](docs/feedback.md)
+
+An index of the *kinds* of review feedback that recur in this workspace (naming and
+terminology consistency, justified `Option` fields, minimal public API surface,
+`use`-over-long-paths, `expect` discipline, desired-state comments, realistic
+READMEs, unit-vs-integration test placement, CLI conflict-is-an-error). Its job is
+to let a reviewer or self-reviewing author anticipate and pre-empt these objections.
+
+**Open this when**: reviewing a diff (your own or someone else's); about to request
+review; deciding whether a naming, data-model, API-surface, or CLI choice will draw
+the objections we keep making.

@@ -1,28 +1,22 @@
 //! Parsing of `all_the_time`'s per-operation JSON into the engine-neutral
-//! [`ResultRecord`] model.
+//! [`BenchmarkResult`] model.
 //!
 //! `all_the_time` writes one file per operation under `target/all_the_time/`,
 //! recording the per-iteration processor time a benchmark spends together with
 //! bootstrap dispersion statistics over the operation's measured spans. Processor
 //! time depends on the host hardware, so this engine partitions its history by a
-//! machine key (see [`EngineSystem::is_hardware_dependent`]). The committed
+//! machine key (see [`Engine::is_hardware_dependent`]). The committed
 //! fixtures under `tests/fixtures/all_the_time/` are real `all_the_time` output
 //! and act as a schema-drift canary.
 //!
-//! [`EngineSystem::is_hardware_dependent`]: crate::comparability::EngineSystem::is_hardware_dependent
+//! [`Engine::is_hardware_dependent`]: crate::comparability::Engine::is_hardware_dependent
 
 use std::error::Error;
 use std::fmt;
 
 use serde::Deserialize;
 
-use crate::model::{BenchmarkId, Metric, MetricKind, ResultRecord};
-
-/// The metric name recorded for the per-iteration processor-time measurement.
-const PROCESSOR_TIME_METRIC: &str = "processor_time";
-
-/// The unit `all_the_time` reports its timings in (nanoseconds per iteration).
-const TIME_UNIT: &str = "ns";
+use crate::model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
 
 /// An error encountered while parsing an `all_the_time` operation file.
 #[derive(Debug)]
@@ -40,7 +34,7 @@ impl Error for AllTheTimeParseError {
     }
 }
 
-/// Parses one `all_the_time` operation file into a [`ResultRecord`].
+/// Parses one `all_the_time` operation file into a [`BenchmarkResult`].
 ///
 /// # Errors
 ///
@@ -48,42 +42,36 @@ impl Error for AllTheTimeParseError {
 /// the expected shape.
 pub(crate) fn parse_all_the_time_operation(
     json: &str,
-) -> Result<ResultRecord, AllTheTimeParseError> {
+) -> Result<BenchmarkResult, AllTheTimeParseError> {
     let output: OperationOutput = serde_json::from_str(json).map_err(AllTheTimeParseError)?;
     Ok(output_to_record(&output))
 }
 
-/// Maps a parsed operation to a [`ResultRecord`] (pure).
+/// Maps a parsed operation to a [`BenchmarkResult`] (pure).
 ///
-/// The package is `None`: `all_the_time`'s flat `target/all_the_time/` tree
-/// carries no package attribution, so the operation name alone identifies the
-/// series (mirroring the Criterion adapter).
+/// `all_the_time`'s flat `target/all_the_time/` tree carries no package
+/// attribution, so the operation name alone identifies the series (mirroring the
+/// Criterion adapter).
 ///
 /// The through-origin slope is preferred as the per-iteration point estimate,
 /// matching the Criterion adapter; output that records no slope falls back to the
 /// mean. When the bootstrap confidence interval is present it is recorded on the
 /// metric, so analysis can apply its interval-overlap gate to processor time the
 /// same way it does for Criterion wall time.
-fn output_to_record(output: &OperationOutput) -> ResultRecord {
-    let id = BenchmarkId::new(None, output.operation.clone(), None, None);
+fn output_to_record(output: &OperationOutput) -> BenchmarkResult {
+    let id = BenchmarkId::new(vec![output.operation.clone()]);
 
     let value = output
         .slope_processor_time_nanos
         .unwrap_or_else(|| as_f64(output.mean_processor_time_nanos));
 
-    let metric = Metric::new(
-        PROCESSOR_TIME_METRIC.to_owned(),
-        MetricKind::ProcessorTime,
-        value,
-        Some(TIME_UNIT.to_owned()),
-    )
-    .with_dispersion(
+    let metric = Metric::new(MetricKind::ProcessorTime, value).with_dispersion(
         output.std_dev_processor_time_nanos,
         output.interval_low_processor_time_nanos,
         output.interval_high_processor_time_nanos,
     );
 
-    ResultRecord::new(id, vec![metric])
+    BenchmarkResult::new(id, vec![metric])
 }
 
 /// Casts a nanosecond count to `f64`, the model's storage type.
@@ -133,16 +121,13 @@ mod tests {
     #[test]
     fn parses_identity_from_operation_name() {
         let record = parse_all_the_time_operation(READ_CELL_FIXTURE).unwrap();
-        assert_eq!(
-            record.id,
-            BenchmarkId::new(None, "read_cell".to_owned(), None, None)
-        );
+        assert_eq!(record.id, BenchmarkId::new(vec!["read_cell".to_owned()]));
     }
 
     #[test]
-    fn all_the_time_record_has_no_package() {
+    fn all_the_time_identity_is_the_operation_name_only() {
         let record = parse_all_the_time_operation(READ_CELL_FIXTURE).unwrap();
-        assert_eq!(record.id.package, None);
+        assert_eq!(record.id.segments, vec!["read_cell".to_owned()]);
     }
 
     #[test]
@@ -151,9 +136,7 @@ mod tests {
         assert_eq!(record.metrics.len(), 1);
 
         let metric = &record.metrics[0];
-        assert_eq!(metric.name, PROCESSOR_TIME_METRIC);
         assert_eq!(metric.kind, MetricKind::ProcessorTime);
-        assert_eq!(metric.unit.as_deref(), Some("ns"));
         assert_eq!(metric.value, 20_000_000.0);
     }
 
@@ -200,7 +183,7 @@ mod tests {
     fn preserves_the_original_operation_name() {
         let json = operation_json("group/case name", 1234);
         let record = parse_all_the_time_operation(&json).unwrap();
-        assert_eq!(record.id.group, "group/case name");
+        assert_eq!(record.id.segments, vec!["group/case name".to_owned()]);
     }
 
     #[test]

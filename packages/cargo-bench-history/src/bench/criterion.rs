@@ -1,5 +1,5 @@
 //! Parsing of Criterion's `new/benchmark.json` + `new/estimates.json` pair into
-//! the engine-neutral [`ResultRecord`] model.
+//! the engine-neutral [`BenchmarkResult`] model.
 //!
 //! Criterion measures wall-clock time per iteration (nanoseconds) and reports a
 //! statistical estimate with a confidence interval and standard deviation, all of
@@ -13,13 +13,7 @@ use std::fmt;
 
 use serde::Deserialize;
 
-use crate::model::{BenchmarkId, Metric, MetricKind, ResultRecord};
-
-/// The metric name recorded for a Criterion wall-clock measurement.
-const WALL_TIME_METRIC: &str = "wall_time";
-
-/// The unit Criterion reports its timings in (nanoseconds per iteration).
-const TIME_UNIT: &str = "ns";
+use crate::model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
 
 /// An error encountered while parsing a Criterion result case.
 #[derive(Debug)]
@@ -52,7 +46,7 @@ impl Error for CriterionParseError {
 }
 
 /// Parses one Criterion result case (its `benchmark.json` and `estimates.json`)
-/// into a [`ResultRecord`].
+/// into a [`BenchmarkResult`].
 ///
 /// # Errors
 ///
@@ -60,7 +54,7 @@ impl Error for CriterionParseError {
 pub(crate) fn parse_criterion_case(
     benchmark_json: &str,
     estimates_json: &str,
-) -> Result<ResultRecord, CriterionParseError> {
+) -> Result<BenchmarkResult, CriterionParseError> {
     let benchmark: Benchmark =
         serde_json::from_str(benchmark_json).map_err(CriterionParseError::Benchmark)?;
     let estimates: Estimates =
@@ -68,19 +62,23 @@ pub(crate) fn parse_criterion_case(
     Ok(case_to_record(&benchmark, &estimates))
 }
 
-/// Maps a parsed Criterion case to a [`ResultRecord`] (pure).
+/// Maps a parsed Criterion case to a [`BenchmarkResult`] (pure).
 ///
-/// The package is `None`: Criterion's files carry no package attribution and the
-/// `target/criterion/` tree is flat, so a benchmark's owning crate cannot be
-/// recovered. This workspace crate-prefixes its Criterion group ids, so the
-/// `group_id` already disambiguates equally named benches across packages.
-fn case_to_record(benchmark: &Benchmark, estimates: &Estimates) -> ResultRecord {
-    let id = BenchmarkId::new(
-        None,
-        benchmark.group_id.clone(),
+/// Criterion's files carry no package attribution and the `target/criterion/`
+/// tree is flat, so a benchmark's owning crate cannot be recovered. This
+/// workspace crate-prefixes its Criterion group ids, so the `group_id` already
+/// disambiguates equally named benches across packages.
+fn case_to_record(benchmark: &Benchmark, estimates: &Estimates) -> BenchmarkResult {
+    let segments = [
+        Some(benchmark.group_id.clone()),
         Some(benchmark.function_id.clone()),
         non_empty(benchmark.value_str.as_deref()),
-    );
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|segment| !segment.is_empty())
+    .collect();
+    let id = BenchmarkId::new(segments);
 
     // Criterion fits a line through the per-sample timings when it uses linear
     // sampling (`Bencher::iter`), giving a slope estimate that is more robust to
@@ -92,19 +90,13 @@ fn case_to_record(benchmark: &Benchmark, estimates: &Estimates) -> ResultRecord 
         .as_ref()
         .map(|estimate| estimate.point_estimate);
 
-    let metric = Metric::new(
-        WALL_TIME_METRIC.to_owned(),
-        MetricKind::WallTime,
-        estimate.point_estimate,
-        Some(TIME_UNIT.to_owned()),
-    )
-    .with_dispersion(
+    let metric = Metric::new(MetricKind::WallTime, estimate.point_estimate).with_dispersion(
         std_dev,
         Some(estimate.confidence_interval.lower_bound),
         Some(estimate.confidence_interval.upper_bound),
     );
 
-    ResultRecord::new(id, vec![metric])
+    BenchmarkResult::new(id, vec![metric])
 }
 
 /// Returns the trimmed value as `Some` unless it is empty after trimming.
@@ -173,19 +165,23 @@ mod tests {
         let record = parse_criterion_case(STD_INSTANT_BENCHMARK, STD_INSTANT_ESTIMATES).unwrap();
         assert_eq!(
             record.id,
-            BenchmarkId::new(
-                None,
+            BenchmarkId::new(vec![
                 "fast_time_timestamp_performance/timestamp_capture".to_owned(),
-                Some("std_instant".to_owned()),
-                Some("now".to_owned()),
-            )
+                "std_instant".to_owned(),
+                "now".to_owned(),
+            ])
         );
     }
 
     #[test]
-    fn criterion_record_has_no_package() {
+    fn criterion_id_leads_with_the_group() {
+        // Criterion attributes no package, so the identity starts at the group id
+        // rather than a package segment.
         let record = parse_criterion_case(STD_INSTANT_BENCHMARK, STD_INSTANT_ESTIMATES).unwrap();
-        assert_eq!(record.id.package, None);
+        assert_eq!(
+            record.id.segments.first().map(String::as_str),
+            Some("fast_time_timestamp_performance/timestamp_capture")
+        );
     }
 
     #[test]
@@ -193,7 +189,7 @@ mod tests {
         // Criterion attributes no package, so two benchmarks that share a group,
         // function, and value but live in different crates parse to the SAME
         // `BenchmarkId`. They therefore merge into a single analysis series. This
-        // is the deliberate consequence of `package = None` and the reason this
+        // is the deliberate consequence of the flat tree and the reason this
         // workspace crate-prefixes its Criterion group ids: prefixed group ids keep
         // the identities distinct, and this test locks that contract in so a future
         // change that drops the prefixing convention is caught here.
@@ -209,10 +205,10 @@ mod tests {
             parse_criterion_case(&benchmark_json("convert", "encode", "4096"), &estimates).unwrap();
 
         assert_eq!(from_crate_a.id, from_crate_b.id);
-        assert_eq!(from_crate_a.id.package, None);
-        assert_eq!(from_crate_a.id.group, "convert");
-        assert_eq!(from_crate_a.id.case.as_deref(), Some("encode"));
-        assert_eq!(from_crate_a.id.value.as_deref(), Some("4096"));
+        assert_eq!(
+            from_crate_a.id.segments,
+            vec!["convert".to_owned(), "encode".to_owned(), "4096".to_owned()]
+        );
     }
 
     #[test]
@@ -246,9 +242,7 @@ mod tests {
         assert_eq!(record.metrics.len(), 1);
 
         let metric = &record.metrics[0];
-        assert_eq!(metric.name, WALL_TIME_METRIC);
         assert_eq!(metric.kind, MetricKind::WallTime);
-        assert_eq!(metric.unit.as_deref(), Some("ns"));
         // Slope is present, so its point estimate and confidence interval win.
         assert_eq!(metric.value, 26.929_980_671_639_95);
         assert_eq!(metric.interval_low, Some(26.672_074_791_998_387));
@@ -259,7 +253,11 @@ mod tests {
     #[test]
     fn parses_second_fixture_case() {
         let record = parse_criterion_case(FAST_TIME_BENCHMARK, FAST_TIME_ESTIMATES).unwrap();
-        assert_eq!(record.id.case.as_deref(), Some("fast_time_clock"));
+        assert!(
+            record.id.segments.contains(&"fast_time_clock".to_owned()),
+            "{:?}",
+            record.id.segments
+        );
         assert_eq!(record.metrics[0].value, 1.635_849_872_126_785);
     }
 
@@ -307,7 +305,7 @@ mod tests {
             estimate_json(1.0, 0.5, 1.5),
         );
         let record = parse_criterion_case(&benchmark_json("grp", "fun", ""), &estimates).unwrap();
-        assert_eq!(record.id.value, None);
+        assert_eq!(record.id.segments, vec!["grp".to_owned(), "fun".to_owned()]);
         // With no slope and no std_dev, only the mean drives the metric.
         assert_eq!(record.metrics[0].std_dev, None);
     }
@@ -323,10 +321,10 @@ mod tests {
         // A whitespace-only value carries no identity and must not become a series
         // component; a padded value is trimmed to its meaningful content.
         let blank = parse_criterion_case(&benchmark_json("grp", "fun", "  "), &estimates).unwrap();
-        assert_eq!(blank.id.value, None);
+        assert_eq!(blank.id.segments, vec!["grp".to_owned(), "fun".to_owned()]);
         let padded =
             parse_criterion_case(&benchmark_json("grp", "fun", "  4096  "), &estimates).unwrap();
-        assert_eq!(padded.id.value.as_deref(), Some("4096"));
+        assert_eq!(padded.id.segments.last().map(String::as_str), Some("4096"));
     }
 
     #[test]

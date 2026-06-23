@@ -25,20 +25,20 @@ use serde::Serialize;
 
 use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
-use crate::model::ResultSet;
+use crate::model::Run;
 use crate::report::{Reporter, StderrReporter};
 use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
 use crate::wiring::{resolve_config_path, resolve_project_id, resolve_repo};
 use crate::{PruneOptions, RunError, RunOutcome};
 
-use super::discriminant::DiscriminantSet;
 use super::report::ReportFormat;
 use super::{
     AutoFacets, DirtyTipPolicy, ResolvedHistory, Selection, detect_auto_facets,
     facet_filtered_candidates, parse_format, parse_since, parse_until, resolve_base_name,
     resolve_facets, resolve_history,
 };
+use crate::comparability::DiscriminantSet;
 
 /// Which objects a prune pass deletes.
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -357,10 +357,10 @@ async fn load_commit_timestamp<S: Storage>(
     let text = String::from_utf8(bytes).map_err(|error| RunError::Analyze {
         message: format!("stored object {key} is not valid UTF-8: {error}"),
     })?;
-    let result = ResultSet::from_json(&text).map_err(|error| RunError::Analyze {
+    let result = Run::from_json(&text).map_err(|error| RunError::Analyze {
         message: format!("stored object {key} is not a valid result set: {error}"),
     })?;
-    Ok(result.context.timestamps.commit)
+    Ok(result.context.commit)
 }
 
 /// Which kind of object a removal item names.
@@ -518,12 +518,7 @@ fn render_plan_text(plan: &Plan, dry_run: bool) -> String {
     } else {
         for set in &plan.sets {
             lines.push(String::new());
-            lines.push(format!(
-                "{} (os={} arch={})",
-                set.set,
-                set.set.os(),
-                set.set.architecture()
-            ));
+            lines.push(set.set.to_string());
             lines.push(format!(
                 "  {}{} across {}",
                 count_noun(set.runs, "run"),
@@ -562,12 +557,7 @@ fn render_plan_markdown(plan: &Plan, dry_run: bool) -> String {
     } else {
         for set in &plan.sets {
             lines.push(String::new());
-            lines.push(format!(
-                "## {} (os={} arch={})",
-                set.set,
-                set.set.os(),
-                set.set.architecture()
-            ));
+            lines.push(format!("## {}", set.set));
             lines.push(String::new());
             lines.push(format!(
                 "{}{} across {}",
@@ -609,8 +599,6 @@ fn render_plan_json(plan: &Plan, dry_run: bool) -> String {
     struct JsonSet<'a> {
         engine: &'a str,
         target_triple: &'a str,
-        os: &'a str,
-        architecture: &'a str,
         machine: &'a str,
         runs: usize,
         blessings: usize,
@@ -637,8 +625,6 @@ fn render_plan_json(plan: &Plan, dry_run: bool) -> String {
         .map(|set| JsonSet {
             engine: &set.set.engine,
             target_triple: &set.set.target_triple,
-            os: set.set.os(),
-            architecture: set.set.architecture(),
             machine: &set.set.machine,
             runs: set.runs,
             blessings: set.blessings,
@@ -678,9 +664,9 @@ mod tests {
     use jiff::Timestamp;
 
     use crate::config::{Config, parse_config};
-    use crate::context::{CiInfo, GitInfo, RunContext, Timestamps, ToolchainInfo};
+    use crate::context::{EnvironmentInfo, GitInfo, RunContext, ToolchainInfo};
     use crate::git_history::FakeGitHistory;
-    use crate::model::{BenchmarkId, Metric, MetricKind, ResultRecord, ResultSet};
+    use crate::model::{BenchmarkId, BenchmarkResult, Metric, MetricKind, Run};
     use crate::report::RecordingReporter;
     use crate::storage::{MemoryStorage, Storage};
 
@@ -710,35 +696,30 @@ mod tests {
     }
 
     /// A minimal result set with the given commit time (seconds) and commit.
-    fn set(commit_second: i64, commit: &str) -> ResultSet {
+    fn set(commit_second: i64, commit: &str) -> Run {
         let time = Timestamp::from_second(commit_second).unwrap();
         let context = RunContext::new(
-            Timestamps::new(time, time),
+            time,
+            time,
             GitInfo {
                 commit: Some(commit.to_owned()),
                 short_commit: Some(commit.to_owned()),
                 branch: Some("main".to_owned()),
                 dirty: false,
             },
-            CiInfo::default(),
+            EnvironmentInfo::default(),
             ToolchainInfo::default(),
             "0.0.1".to_owned(),
         );
-        let record = ResultRecord::new(
-            BenchmarkId::new(
-                Some("nm".to_owned()),
+        let record = BenchmarkResult::new(
+            BenchmarkId::new(vec![
+                "nm".to_owned(),
                 "nm::observe".to_owned(),
-                Some("pull".to_owned()),
-                None,
-            ),
-            vec![Metric::new(
-                "Ir".to_owned(),
-                MetricKind::InstructionCount,
-                100.0,
-                Some("count".to_owned()),
-            )],
+                "pull".to_owned(),
+            ]),
+            vec![Metric::new(MetricKind::InstructionCount, 100.0)],
         );
-        ResultSet::new(context, vec![record])
+        Run::new(context, vec![record])
     }
 
     fn clean_key(commit: &str) -> String {
@@ -753,7 +734,7 @@ mod tests {
         format!("v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/bless-{unix}.json")
     }
 
-    fn store(storage: &MemoryStorage, key: &str, value: &ResultSet) {
+    fn store(storage: &MemoryStorage, key: &str, value: &Run) {
         let json = value.to_json().unwrap();
         block_on(storage.put(key, json.as_bytes())).unwrap();
     }

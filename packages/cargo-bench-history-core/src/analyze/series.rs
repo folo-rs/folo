@@ -1,9 +1,9 @@
 //! The series engine: reconstruct per-benchmark, per-metric time series from the
-//! stored result sets so the finding algorithms can reason over them.
+//! stored runs so the finding algorithms can reason over them.
 //!
 //! A series is identified by the comparable [`DiscriminantSet`] its runs share
 //! (parsed from the storage key) together with the [`BenchmarkId`] and metric
-//! name. Its points are ordered by *git topology* — the first-parent position of
+//! kind. Its points are ordered by *git topology* — the first-parent position of
 //! their commit, supplied as a `commit -> index` map — so the timeline reflects
 //! the history the runs were measured against rather than when they were ingested.
 //! Within a single commit, clean runs precede dirty snapshots, and ties break by
@@ -14,9 +14,10 @@ use std::hash::BuildHasher;
 
 use jiff::Timestamp;
 
-use crate::analyze::discriminant::{DiscriminantSet, ParsedKey};
+use crate::analyze::discriminant::StorageKey;
 use crate::bless::BlessingRecord;
-use crate::model::{BenchmarkId, MetricKind, ResultSet};
+use crate::comparability::DiscriminantSet;
+use crate::model::{BenchmarkId, MetricKind, Run};
 
 /// A single observation in a series.
 #[derive(Clone, Debug)]
@@ -55,18 +56,16 @@ pub struct Blessing {
     pub commit_time: Timestamp,
 }
 
-/// A per-`(set, benchmark, metric)` time series ordered by git topology.
+/// A per-`(set, benchmark, metric kind)` time series ordered by git topology.
 #[derive(Clone, Debug)]
 pub struct Series {
     /// The comparable discriminant set all points share.
     pub set: DiscriminantSet,
     /// The benchmark identity all points share.
     pub id: BenchmarkId,
-    /// The metric name all points share.
-    pub metric: String,
-    /// The metric category (governs comparison semantics).
+    /// The metric kind all points share (governs unit and comparison semantics).
     pub kind: MetricKind,
-    /// Observations ordered by `(topo_index, dirty, effective, object_key)`.
+    /// Observations ordered by `(topo_index, dirty, commit_time, object_key)`.
     pub points: Vec<SeriesPoint>,
     /// Index into `points` where the active (post-blessing) window begins; `0`
     /// when the series is unblessed (every point is active). History-mode
@@ -81,11 +80,11 @@ pub struct Series {
 #[derive(Clone, Debug)]
 pub struct LoadedObject {
     /// The parsed storage key (discriminant set, commit, and cleanliness).
-    pub key: ParsedKey,
+    pub key: StorageKey,
     /// The full storage object key (provenance and final tie-break).
     pub object_key: String,
-    /// The decoded result set.
-    pub result: ResultSet,
+    /// The decoded run.
+    pub result: Run,
 }
 
 /// Filters applied while building series from stored runs.
@@ -113,30 +112,29 @@ fn prefixes_accept(prefixes: &[String], id: &BenchmarkId) -> bool {
 
 /// Reconstructs every series from the selected `objects`.
 ///
-/// Each metric of each record becomes one point in the series for its
-/// `(discriminant set, benchmark id, metric name)`. The `order` map gives each
-/// commit its first-parent topological index; an object whose commit is not in
-/// `order` is outside the analyzed selection and is skipped. Points are sorted by
-/// `(topo_index, dirty, effective, object_key)` so a clean run precedes a dirty
-/// snapshot on the same commit and the timeline follows git history rather than
-/// storage-listing order.
+/// Each metric of each result becomes one point in the series for its
+/// `(discriminant set, benchmark id, metric kind)`. A result carries at most one
+/// metric of each kind, so the kind alone keys the series unambiguously. The
+/// `order` map gives each commit its first-parent topological index; an object
+/// whose commit is not in `order` is outside the analyzed selection and is
+/// skipped. Points are sorted by `(topo_index, dirty, commit_time, object_key)`
+/// so a clean run precedes a dirty snapshot on the same commit and the timeline
+/// follows git history rather than storage-listing order.
 #[must_use]
 pub fn build_series<S: BuildHasher>(
     objects: &[LoadedObject],
     order: &HashMap<String, usize, S>,
     filter: &SeriesFilter<'_>,
 ) -> Vec<Series> {
-    let mut groups: BTreeMap<
-        (DiscriminantSet, BenchmarkId, String),
-        (MetricKind, Vec<SeriesPoint>),
-    > = BTreeMap::new();
+    let mut groups: BTreeMap<(DiscriminantSet, BenchmarkId, MetricKind), Vec<SeriesPoint>> =
+        BTreeMap::new();
 
     for object in objects {
         let Some(&topo_index) = order.get(&object.key.commit) else {
             continue;
         };
         let dirty = object.key.is_dirty();
-        let commit_time = object.result.context.timestamps.commit;
+        let commit_time = object.result.context.commit;
         let commit = object.result.context.git.short_commit.clone();
 
         for record in &object.result.results {
@@ -155,13 +153,8 @@ pub fn build_series<S: BuildHasher>(
                     interval_high: metric.interval_high,
                 };
                 groups
-                    .entry((
-                        object.key.set.clone(),
-                        record.id.clone(),
-                        metric.name.clone(),
-                    ))
-                    .or_insert_with(|| (metric.kind, Vec::new()))
-                    .1
+                    .entry((object.key.set.clone(), record.id.clone(), metric.kind))
+                    .or_default()
                     .push(point);
             }
         }
@@ -169,7 +162,7 @@ pub fn build_series<S: BuildHasher>(
 
     groups
         .into_iter()
-        .map(|((set, id, metric), (kind, mut points))| {
+        .map(|((set, id, kind), mut points)| {
             points.sort_by(|left, right| {
                 left.topo_index
                     .cmp(&right.topo_index)
@@ -180,7 +173,6 @@ pub fn build_series<S: BuildHasher>(
             Series {
                 set,
                 id,
-                metric,
                 kind,
                 points,
                 active_start: 0,
@@ -237,8 +229,8 @@ mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
     use crate::analyze::discriminant::parse_key;
-    use crate::context::{CiInfo, GitInfo, RunContext, Timestamps, ToolchainInfo};
-    use crate::model::{Metric, ResultRecord};
+    use crate::context::{EnvironmentInfo, GitInfo, RunContext, ToolchainInfo};
+    use crate::model::{BenchmarkResult, Metric};
 
     use super::*;
 
@@ -246,56 +238,53 @@ mod tests {
         Timestamp::from_second(seconds).unwrap()
     }
 
-    /// Builds a stored result set with one record carrying one `Ir` metric.
-    fn result_set(effective: Timestamp, commit: &str, value: f64) -> ResultSet {
-        result_set_for_package(effective, commit, value, None)
+    /// Builds a stored run with one result carrying one instruction-count metric.
+    fn run(commit_time: Timestamp, commit: &str, value: f64) -> Run {
+        run_for_package(commit_time, commit, value, None)
     }
 
-    /// Builds a stored result set whose single record is scoped to `package`,
-    /// keeping every other identity component fixed.
-    fn result_set_for_package(
-        effective: Timestamp,
+    /// Builds a stored run whose single result is scoped to `package`, keeping
+    /// every other identity segment fixed.
+    fn run_for_package(
+        commit_time: Timestamp,
         commit: &str,
         value: f64,
         package: Option<&str>,
-    ) -> ResultSet {
+    ) -> Run {
         let context = RunContext::new(
-            Timestamps::new(effective, effective),
+            commit_time,
+            commit_time,
             GitInfo {
                 commit: Some(format!("{commit}full")),
                 short_commit: Some(commit.to_owned()),
                 branch: Some("main".to_owned()),
                 dirty: false,
             },
-            CiInfo::default(),
+            EnvironmentInfo::default(),
             ToolchainInfo::default(),
             "0.0.1".to_owned(),
         );
-        let record = ResultRecord::new(
-            BenchmarkId::new(
-                package.map(ToOwned::to_owned),
-                "group".to_owned(),
-                Some("case".to_owned()),
-                None,
-            ),
-            vec![Metric::new(
-                "Ir".to_owned(),
-                MetricKind::InstructionCount,
-                value,
-                Some("count".to_owned()),
-            )],
+        let mut segments = Vec::new();
+        if let Some(package) = package {
+            segments.push(package.to_owned());
+        }
+        segments.push("group".to_owned());
+        segments.push("case".to_owned());
+        let record = BenchmarkResult::new(
+            BenchmarkId::new(segments),
+            vec![Metric::new(MetricKind::InstructionCount, value)],
         );
-        ResultSet::new(context, vec![record])
+        Run::new(context, vec![record])
     }
 
-    /// A clean object at `commit` carrying the given `Ir` value.
-    fn clean_object(commit: &str, effective: i64, value: f64) -> LoadedObject {
+    /// A clean object at `commit` carrying the given instruction-count value.
+    fn clean_object(commit: &str, commit_time: i64, value: f64) -> LoadedObject {
         let object_key =
             format!("v2/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json");
         LoadedObject {
             key: parse_key(&object_key).unwrap(),
             object_key,
-            result: result_set(ts(effective), commit, value),
+            result: run(ts(commit_time), commit, value),
         }
     }
 
@@ -307,7 +296,7 @@ mod tests {
         LoadedObject {
             key: parse_key(&object_key).unwrap(),
             object_key,
-            result: result_set(ts(unix), commit, value),
+            result: run(ts(unix), commit, value),
         }
     }
 
@@ -373,7 +362,7 @@ mod tests {
         let other = LoadedObject {
             key: parse_key(&other_key).unwrap(),
             object_key: other_key,
-            result: result_set(ts(200), "c0", 20.0),
+            result: run(ts(200), "c0", 20.0),
         };
         let objects = vec![clean_object("c0", 100, 10.0), other];
         let series = build_series(&objects, &order(&["c0"]), &SeriesFilter::default());
@@ -382,7 +371,7 @@ mod tests {
 
     #[test]
     fn build_series_separates_packages() {
-        // Two records share group/case/metric and set but belong to different
+        // Two results share group/case/kind and set but belong to different
         // packages, so they must form two series rather than silently merging.
         let foo_key =
             "v2/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/c0/clean.json".to_owned();
@@ -392,12 +381,12 @@ mod tests {
             LoadedObject {
                 key: parse_key(&foo_key).unwrap(),
                 object_key: foo_key,
-                result: result_set_for_package(ts(100), "c0", 10.0, Some("foo")),
+                result: run_for_package(ts(100), "c0", 10.0, Some("foo")),
             },
             LoadedObject {
                 key: parse_key(&bar_key).unwrap(),
                 object_key: bar_key,
-                result: result_set_for_package(ts(200), "c1", 20.0, Some("bar")),
+                result: run_for_package(ts(200), "c1", 20.0, Some("bar")),
             },
         ];
         let series = build_series(&objects, &order(&["c0", "c1"]), &SeriesFilter::default());
@@ -415,12 +404,12 @@ mod tests {
             LoadedObject {
                 key: parse_key(&foo_key).unwrap(),
                 object_key: foo_key,
-                result: result_set_for_package(ts(100), "c0", 10.0, Some("foo")),
+                result: run_for_package(ts(100), "c0", 10.0, Some("foo")),
             },
             LoadedObject {
                 key: parse_key(&bar_key).unwrap(),
                 object_key: bar_key,
-                result: result_set_for_package(ts(200), "c1", 20.0, Some("bar")),
+                result: run_for_package(ts(200), "c1", 20.0, Some("bar")),
             },
         ];
         let prefixes = vec!["foo/".to_owned()];
@@ -432,11 +421,11 @@ mod tests {
         assert_eq!(series[0].id.qualified(), "foo/group/case");
     }
 
-    fn blessing(prefixes: &[&str], commit: &str, effective: i64) -> BlessingRecord {
+    fn blessing(prefixes: &[&str], commit: &str, commit_time: i64) -> BlessingRecord {
         BlessingRecord::new(
             commit.to_owned(),
-            ts(effective),
-            ts(effective.saturating_add(1)),
+            ts(commit_time),
+            ts(commit_time.saturating_add(1)),
             prefixes.iter().map(|prefix| (*prefix).to_owned()).collect(),
             "0.0.1".to_owned(),
         )

@@ -24,14 +24,14 @@ use jiff::Timestamp;
 use crate::bless::BlessingRecord;
 use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
-use crate::model::ResultSet;
+use crate::model::Run;
 use crate::report::{Reporter, StderrReporter};
 use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
 use crate::wiring::{resolve_config_path, resolve_project_id, resolve_repo};
 use crate::{BlessOptions, RunError, RunOutcome, UnblessOptions};
 
-use super::discriminant::ParsedKey;
+use super::discriminant::StorageKey;
 use super::{
     AutoFacets, Selection, detect_auto_facets, facet_filtered_candidates, resolve_base_ref,
     resolve_facets,
@@ -186,7 +186,7 @@ where
     let selection = Selection::from_bless(options);
     let facets = resolve_facets(&selection, Some(auto))?;
     let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
-    let clean_at_head: Vec<(String, ParsedKey)> = candidates
+    let clean_at_head: Vec<(String, StorageKey)> = candidates
         .into_iter()
         .filter(|(_, parsed)| parsed.commit == head && parsed.file == "clean.json")
         .collect();
@@ -312,10 +312,10 @@ async fn load_commit_time<S: Storage>(storage: &S, key: &str) -> Result<Timestam
     let text = String::from_utf8(bytes).map_err(|error| RunError::Bless {
         message: format!("stored object {key} is not valid UTF-8: {error}"),
     })?;
-    let result = ResultSet::from_json(&text).map_err(|error| RunError::Bless {
+    let result = Run::from_json(&text).map_err(|error| RunError::Bless {
         message: format!("stored object {key} is not a valid result set: {error}"),
     })?;
-    Ok(result.context.timestamps.commit)
+    Ok(result.context.commit)
 }
 
 /// The first twelve characters of a SHA (all of it when shorter), for messages.
@@ -329,9 +329,9 @@ mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
     use futures::executor::block_on;
 
-    use crate::context::{CiInfo, GitInfo, RunContext, Timestamps, ToolchainInfo};
+    use crate::context::{EnvironmentInfo, GitInfo, RunContext, ToolchainInfo};
     use crate::git_history::FakeGitHistory;
-    use crate::model::{BenchmarkId, Metric, MetricKind, ResultRecord, ResultSet};
+    use crate::model::{BenchmarkId, BenchmarkResult, Metric, MetricKind, Run};
     use crate::report::RecordingReporter;
     use crate::storage::MemoryStorage;
 
@@ -357,32 +357,23 @@ mod tests {
     fn clean_run_json(commit: &str, effective: i64) -> String {
         let time = ts(effective);
         let context = RunContext::new(
-            Timestamps::new(time, time),
+            time,
+            time,
             GitInfo {
                 commit: Some(commit.to_owned()),
                 short_commit: Some(commit.to_owned()),
                 branch: Some("master".to_owned()),
                 dirty: false,
             },
-            CiInfo::default(),
+            EnvironmentInfo::default(),
             ToolchainInfo::default(),
             "0.0.1".to_owned(),
         );
-        let record = ResultRecord::new(
-            BenchmarkId::new(
-                Some("all_the_time".to_owned()),
-                "read_cell".to_owned(),
-                None,
-                None,
-            ),
-            vec![Metric::new(
-                "Ir".to_owned(),
-                MetricKind::InstructionCount,
-                100.0,
-                Some("count".to_owned()),
-            )],
+        let record = BenchmarkResult::new(
+            BenchmarkId::new(vec!["all_the_time".to_owned(), "read_cell".to_owned()]),
+            vec![Metric::new(MetricKind::InstructionCount, 100.0)],
         );
-        ResultSet::new(context, vec![record]).to_json().unwrap()
+        Run::new(context, vec![record]).to_json().unwrap()
     }
 
     fn clean_key(commit: &str) -> String {

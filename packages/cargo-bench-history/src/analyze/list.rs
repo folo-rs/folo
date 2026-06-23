@@ -27,7 +27,6 @@ use crate::{ListOptions, ListSubject, RunError, RunOutcome};
 
 use jiff::Timestamp;
 
-use super::discriminant::DiscriminantSet;
 use super::report::ReportFormat;
 use super::series::{LoadedObject, Series, SeriesFilter, apply_blessings, build_series};
 use super::{
@@ -35,6 +34,7 @@ use super::{
     empty_history_hint, facet_filtered_candidates, parse_format, resolve_facets, select_dataset,
 };
 use crate::bless::BlessingRecord;
+use crate::comparability::DiscriminantSet;
 
 /// The real `list`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
@@ -292,12 +292,7 @@ fn render_listing_text(listing: &Listing, hint: Option<&str>, warning: Option<&s
     } else {
         for set in &listing.sets {
             lines.push(String::new());
-            lines.push(format!(
-                "{} (os={} arch={})",
-                set.set,
-                set.set.os(),
-                set.set.architecture()
-            ));
+            lines.push(set.set.to_string());
             lines.push(format!(
                 "  {}, {} across {}",
                 count_noun(set.runs, "run"),
@@ -334,12 +329,7 @@ fn render_listing_markdown(listing: &Listing, hint: Option<&str>, warning: Optio
     } else {
         for set in &listing.sets {
             lines.push(String::new());
-            lines.push(format!(
-                "## {} (os={} arch={})",
-                set.set,
-                set.set.os(),
-                set.set.architecture()
-            ));
+            lines.push(format!("## {}", set.set));
             lines.push(String::new());
             lines.push(format!(
                 "{}, {} across {}",
@@ -381,8 +371,6 @@ fn render_listing_json(listing: &Listing, hint: Option<&str>, warning: Option<&s
     struct JsonSet<'a> {
         engine: &'a str,
         target_triple: &'a str,
-        os: &'a str,
-        architecture: &'a str,
         machine: &'a str,
         runs: usize,
         series: usize,
@@ -411,8 +399,6 @@ fn render_listing_json(listing: &Listing, hint: Option<&str>, warning: Option<&s
         .map(|set| JsonSet {
             engine: &set.set.engine,
             target_triple: &set.set.target_triple,
-            os: set.set.os(),
-            architecture: set.set.architecture(),
             machine: &set.set.machine,
             runs: set.runs,
             series: set.series,
@@ -465,8 +451,6 @@ fn render_discriminants(sets: &[DiscriminantSet], format: ReportFormat) -> Strin
             struct JsonDiscriminant<'a> {
                 engine: &'a str,
                 target_triple: &'a str,
-                os: &'a str,
-                architecture: &'a str,
                 machine: &'a str,
             }
             let list: Vec<JsonDiscriminant<'_>> = sets
@@ -474,8 +458,6 @@ fn render_discriminants(sets: &[DiscriminantSet], format: ReportFormat) -> Strin
                 .map(|set| JsonDiscriminant {
                     engine: &set.engine,
                     target_triple: &set.target_triple,
-                    os: set.os(),
-                    architecture: set.architecture(),
                     machine: &set.machine,
                 })
                 .collect();
@@ -487,16 +469,12 @@ fn render_discriminants(sets: &[DiscriminantSet], format: ReportFormat) -> Strin
                 lines.push("No discriminant sets found.".to_owned());
                 return format!("{}\n", lines.join("\n"));
             }
-            lines.push("| Engine | OS | Architecture | Machine | Target triple |".to_owned());
-            lines.push("| --- | --- | --- | --- | --- |".to_owned());
+            lines.push("| Engine | Target triple | Machine |".to_owned());
+            lines.push("| --- | --- | --- |".to_owned());
             for set in sets {
                 lines.push(format!(
-                    "| {} | {} | {} | {} | {} |",
-                    set.engine,
-                    set.os(),
-                    set.architecture(),
-                    set.machine,
-                    set.target_triple
+                    "| {} | {} | {} |",
+                    set.engine, set.target_triple, set.machine
                 ));
             }
             format!("{}\n", lines.join("\n"))
@@ -507,12 +485,7 @@ fn render_discriminants(sets: &[DiscriminantSet], format: ReportFormat) -> Strin
             }
             let mut lines = vec!["Discriminant sets:".to_owned()];
             for set in sets {
-                lines.push(format!(
-                    "  - {set} (os={} arch={} machine={})",
-                    set.os(),
-                    set.architecture(),
-                    set.machine
-                ));
+                lines.push(format!("  - {set}"));
             }
             format!("{}\n", lines.join("\n"))
         }
@@ -749,11 +722,7 @@ fn render_blessings_text(
     }
     for (set, rows) in group_by_set(entries) {
         lines.push(String::new());
-        lines.push(format!(
-            "{set} (os={} arch={})",
-            set.os(),
-            set.architecture()
-        ));
+        lines.push(set.to_string());
         for row in rows {
             if let Some(benchmark) = &row.benchmark {
                 lines.push(format!(
@@ -797,11 +766,7 @@ fn render_blessings_markdown(
     }
     for (set, rows) in group_by_set(entries) {
         lines.push(String::new());
-        lines.push(format!(
-            "## {set} (os={} arch={})",
-            set.os(),
-            set.architecture()
-        ));
+        lines.push(format!("## {set}"));
         lines.push(String::new());
         if all {
             lines.push("| Benchmark | Blessed at | Commit time |".to_owned());
@@ -843,8 +808,6 @@ fn render_blessings_json(
     struct JsonBlessing<'a> {
         engine: &'a str,
         target_triple: &'a str,
-        os: &'a str,
-        architecture: &'a str,
         machine: &'a str,
         #[serde(skip_serializing_if = "Option::is_none")]
         benchmark: Option<&'a str>,
@@ -869,8 +832,6 @@ fn render_blessings_json(
         .map(|entry| JsonBlessing {
             engine: &entry.set.engine,
             target_triple: &entry.set.target_triple,
-            os: entry.set.os(),
-            architecture: entry.set.architecture(),
             machine: &entry.set.machine,
             benchmark: entry.benchmark.as_deref(),
             commit: &entry.commit,
@@ -897,9 +858,9 @@ mod tests {
     use jiff::Timestamp;
 
     use crate::config::{Config, parse_config};
-    use crate::context::{CiInfo, GitInfo, RunContext, Timestamps, ToolchainInfo};
+    use crate::context::{EnvironmentInfo, GitInfo, RunContext, ToolchainInfo};
     use crate::git_history::FakeGitHistory;
-    use crate::model::{BenchmarkId, Metric, MetricKind, ResultRecord, ResultSet};
+    use crate::model::{BenchmarkId, BenchmarkResult, Metric, MetricKind, Run};
     use crate::report::RecordingReporter;
     use crate::storage::{MemoryStorage, Storage};
 
@@ -923,118 +884,98 @@ mod tests {
 
     /// A result set with one record carrying two metrics, so its partition
     /// reconstructs two distinct series.
-    fn two_metric_set(effective: i64, commit: &str) -> ResultSet {
+    fn two_metric_set(effective: i64, commit: &str) -> Run {
         let time = Timestamp::from_second(effective).unwrap();
         let context = RunContext::new(
-            Timestamps::new(time, time),
+            time,
+            time,
             GitInfo {
                 commit: Some(commit.to_owned()),
                 short_commit: Some(commit.to_owned()),
                 branch: Some("main".to_owned()),
                 dirty: false,
             },
-            CiInfo::default(),
+            EnvironmentInfo::default(),
             ToolchainInfo::default(),
             "0.0.1".to_owned(),
         );
-        let record = ResultRecord::new(
-            BenchmarkId::new(
-                Some("nm".to_owned()),
+        let record = BenchmarkResult::new(
+            BenchmarkId::new(vec![
+                "nm".to_owned(),
                 "nm::observe".to_owned(),
-                Some("pull".to_owned()),
-                None,
-            ),
+                "pull".to_owned(),
+            ]),
             vec![
-                Metric::new(
-                    "Ir".to_owned(),
-                    MetricKind::InstructionCount,
-                    100.0,
-                    Some("count".to_owned()),
-                ),
-                Metric::new(
-                    "EstimatedCycles".to_owned(),
-                    MetricKind::EstimatedCycles,
-                    100.0,
-                    Some("count".to_owned()),
-                ),
+                Metric::new(MetricKind::InstructionCount, 100.0),
+                Metric::new(MetricKind::EstimatedCycles, 100.0),
             ],
         );
-        ResultSet::new(context, vec![record])
+        Run::new(context, vec![record])
     }
 
     /// A result set with two single-metric benchmarks that share a group but differ
     /// by case, so its partition reconstructs two distinct series.
-    fn two_benchmark_set(effective: i64, commit: &str) -> ResultSet {
+    fn two_benchmark_set(effective: i64, commit: &str) -> Run {
         let time = Timestamp::from_second(effective).unwrap();
         let context = RunContext::new(
-            Timestamps::new(time, time),
+            time,
+            time,
             GitInfo {
                 commit: Some(commit.to_owned()),
                 short_commit: Some(commit.to_owned()),
                 branch: Some("main".to_owned()),
                 dirty: false,
             },
-            CiInfo::default(),
+            EnvironmentInfo::default(),
             ToolchainInfo::default(),
             "0.0.1".to_owned(),
         );
         let case = |case: &str| {
-            ResultRecord::new(
-                BenchmarkId::new(
-                    Some("nm".to_owned()),
+            BenchmarkResult::new(
+                BenchmarkId::new(vec![
+                    "nm".to_owned(),
                     "nm::observe".to_owned(),
-                    Some(case.to_owned()),
-                    None,
-                ),
-                vec![Metric::new(
-                    "Ir".to_owned(),
-                    MetricKind::InstructionCount,
-                    100.0,
-                    Some("count".to_owned()),
-                )],
+                    case.to_owned(),
+                ]),
+                vec![Metric::new(MetricKind::InstructionCount, 100.0)],
             )
         };
-        ResultSet::new(context, vec![case("pull"), case("push")])
+        Run::new(context, vec![case("pull"), case("push")])
     }
 
     /// A result set with one record carrying a single metric, so its partition
     /// reconstructs exactly one series.
-    fn single_metric_set(effective: i64, commit: &str) -> ResultSet {
+    fn single_metric_set(effective: i64, commit: &str) -> Run {
         let time = Timestamp::from_second(effective).unwrap();
         let context = RunContext::new(
-            Timestamps::new(time, time),
+            time,
+            time,
             GitInfo {
                 commit: Some(commit.to_owned()),
                 short_commit: Some(commit.to_owned()),
                 branch: Some("main".to_owned()),
                 dirty: false,
             },
-            CiInfo::default(),
+            EnvironmentInfo::default(),
             ToolchainInfo::default(),
             "0.0.1".to_owned(),
         );
-        let record = ResultRecord::new(
-            BenchmarkId::new(
-                Some("nm".to_owned()),
+        let record = BenchmarkResult::new(
+            BenchmarkId::new(vec![
+                "nm".to_owned(),
                 "nm::observe".to_owned(),
-                Some("pull".to_owned()),
-                None,
-            ),
-            vec![Metric::new(
-                "Ir".to_owned(),
-                MetricKind::InstructionCount,
-                100.0,
-                Some("count".to_owned()),
-            )],
+                "pull".to_owned(),
+            ]),
+            vec![Metric::new(MetricKind::InstructionCount, 100.0)],
         );
-        ResultSet::new(context, vec![record])
+        Run::new(context, vec![record])
     }
 
     fn clean_key(commit: &str) -> String {
         format!("v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
     }
 
-    fn store(storage: &MemoryStorage, key: &str, set: &ResultSet) {
+    fn store(storage: &MemoryStorage, key: &str, set: &Run) {
         let json = set.to_json().unwrap();
         block_on(storage.put(key, json.as_bytes())).unwrap();
     }
@@ -1120,7 +1061,10 @@ mod tests {
             text.contains("Blessings for project folo at commit abc123"),
             "{text}"
         );
-        assert!(text.contains("os=linux arch=x86_64"), "{text}");
+        assert!(
+            text.contains("callgrind/x86_64-unknown-linux-gnu/synthetic"),
+            "{text}"
+        );
         assert!(
             text.contains("abc123 accepts nm/observe, nm/record"),
             "{text}"
@@ -1442,7 +1386,10 @@ mod tests {
         };
         let report = list(&storage, &git, &opts);
         assert!(report.contains("Discriminant sets:"), "{report}");
-        assert!(report.contains("os=linux"), "{report}");
+        assert!(
+            report.contains("callgrind/x86_64-unknown-linux-gnu/synthetic"),
+            "{report}"
+        );
     }
 
     #[test]
@@ -1458,10 +1405,13 @@ mod tests {
         let report = list(&storage, &git, &opts);
         assert!(report.contains("# Discriminant sets"), "{report}");
         assert!(
-            report.contains("| Engine | OS | Architecture | Machine | Target triple |"),
+            report.contains("| Engine | Target triple | Machine |"),
             "{report}"
         );
-        assert!(report.contains("| callgrind | linux |"), "{report}");
+        assert!(
+            report.contains("| callgrind | x86_64-unknown-linux-gnu | synthetic |"),
+            "{report}"
+        );
     }
 
     #[test]

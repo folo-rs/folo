@@ -4,8 +4,8 @@ pub(crate) use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 pub(crate) use cargo_bench_history::{
-    BenchmarkId, CiInfo, Cli, Command, GitInfo, Metric, MetricKind, Overrides, ResultRecord,
-    ResultSet, RunContext, RunError, RunOutcome, SCHEMA_VERSION, Timestamps, ToolchainInfo,
+    BenchmarkId, BenchmarkResult, Cli, Command, EnvironmentInfo, GitInfo, Metric, MetricKind,
+    Overrides, Run, RunContext, RunError, RunOutcome, SCHEMA_VERSION, ToolchainInfo,
     default_template, run, run_with_overrides,
 };
 pub(crate) use jiff::Timestamp;
@@ -427,12 +427,12 @@ impl Workspace {
     }
 
     /// All stored objects as `(object key, parsed result set)` pairs, sorted by key.
-    pub(crate) fn stored_objects(&self) -> Vec<(String, ResultSet)> {
+    pub(crate) fn stored_objects(&self) -> Vec<(String, Run)> {
         let store = self.root().join("store");
         let mut files = Vec::new();
         collect_json_files(&store, &mut files);
 
-        let mut objects: Vec<(String, ResultSet)> = files
+        let mut objects: Vec<(String, Run)> = files
             .into_iter()
             .map(|path| {
                 let key = path
@@ -442,7 +442,7 @@ impl Workspace {
                     .map(|component| component.as_os_str().to_string_lossy().into_owned())
                     .collect::<Vec<_>>()
                     .join("/");
-                let set = ResultSet::from_json(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                let set = Run::from_json(&std::fs::read_to_string(&path).unwrap()).unwrap();
                 (key, set)
             })
             .collect();
@@ -451,7 +451,7 @@ impl Workspace {
     }
 
     /// Returns the single stored object, failing if there is not exactly one.
-    pub(crate) fn single_object(&self) -> (String, ResultSet) {
+    pub(crate) fn single_object(&self) -> (String, Run) {
         let mut objects = self.stored_objects();
         assert_eq!(
             objects.len(),
@@ -464,7 +464,7 @@ impl Workspace {
 
     /// Writes `set` to `key` (a `/`-separated object key) under the local store,
     /// mirroring the layout `run` produces.
-    pub(crate) fn seed(&self, key: &str, set: &ResultSet) {
+    pub(crate) fn seed(&self, key: &str, set: &Run) {
         let mut path = self.root().join("store");
         for part in key.split('/') {
             path.push(part);
@@ -692,80 +692,58 @@ pub(crate) fn git_info(commit: &str) -> GitInfo {
 /// Builds a Callgrind result set with two records — `alpha::bench/wide` and
 /// `beta::bench/narrow` — each carrying a single `Ir` metric, stamped with the
 /// effective second and abbreviated `commit`.
-pub(crate) fn two_benchmark_result_set(
-    effective: i64,
-    commit: &str,
-    alpha: f64,
-    beta: f64,
-) -> ResultSet {
+pub(crate) fn two_benchmark_result_set(effective: i64, commit: &str, alpha: f64, beta: f64) -> Run {
     let time = Timestamp::from_second(effective).unwrap();
     let git = git_info(commit);
     let context = RunContext::new(
-        Timestamps::new(time, time),
+        time,
+        time,
         git,
-        CiInfo::default(),
+        EnvironmentInfo::default(),
         ToolchainInfo::default(),
         TOOL_VERSION.to_owned(),
     );
-    let ir = |value: f64| {
-        vec![Metric::new(
-            "Ir".to_owned(),
-            MetricKind::InstructionCount,
-            value,
-            Some("count".to_owned()),
-        )]
-    };
+    let ir = |value: f64| vec![Metric::new(MetricKind::InstructionCount, value)];
     let records = vec![
-        ResultRecord::new(
-            BenchmarkId::new(
-                Some("alpha".to_owned()),
+        BenchmarkResult::new(
+            BenchmarkId::new(vec![
+                "alpha".to_owned(),
                 "alpha::bench".to_owned(),
-                Some("wide".to_owned()),
-                None,
-            ),
+                "wide".to_owned(),
+            ]),
             ir(alpha),
         ),
-        ResultRecord::new(
-            BenchmarkId::new(
-                Some("beta".to_owned()),
+        BenchmarkResult::new(
+            BenchmarkId::new(vec![
+                "beta".to_owned(),
                 "beta::bench".to_owned(),
-                Some("narrow".to_owned()),
-                None,
-            ),
+                "narrow".to_owned(),
+            ]),
             ir(beta),
         ),
     ];
-    ResultSet::new(context, records)
+    Run::new(context, records)
 }
 
 /// Builds a Criterion result set for benchmark `time/capture/std_instant`
 /// carrying a single `wall_time` metric at `value` nanoseconds, stamped with the
 /// effective second and abbreviated `commit`.
-pub(crate) fn criterion_result_set(effective: i64, commit: &str, value: f64) -> ResultSet {
+pub(crate) fn criterion_result_set(effective: i64, commit: &str, value: f64) -> Run {
     let time = Timestamp::from_second(effective).unwrap();
     let git = git_info(commit);
     let context = RunContext::new(
-        Timestamps::new(time, time),
+        time,
+        time,
         git,
-        CiInfo::default(),
+        EnvironmentInfo::default(),
         ToolchainInfo::default(),
         TOOL_VERSION.to_owned(),
     );
-    let record = ResultRecord::new(
-        BenchmarkId::new(
-            None,
-            "time/capture".to_owned(),
-            Some("std_instant".to_owned()),
-            None,
-        ),
-        vec![Metric::new(
-            "wall_time".to_owned(),
-            MetricKind::WallTime,
-            value,
-            Some("ns".to_owned()),
-        )],
+    let record = BenchmarkResult::new(
+        BenchmarkId::new(vec!["time/capture".to_owned(), "std_instant".to_owned()]),
+        vec![Metric::new(MetricKind::WallTime, value)],
     );
-    ResultSet::new(context, vec![record])
+    Run::new(context, vec![record])
 }
 
 /// Builds an `alloc_tracker` result set for `operation` carrying an
@@ -777,64 +755,46 @@ pub(crate) fn alloc_result_set(
     operation: &str,
     bytes: f64,
     allocs: f64,
-) -> ResultSet {
+) -> Run {
     let time = Timestamp::from_second(effective).unwrap();
     let git = git_info(commit);
     let context = RunContext::new(
-        Timestamps::new(time, time),
+        time,
+        time,
         git,
-        CiInfo::default(),
+        EnvironmentInfo::default(),
         ToolchainInfo::default(),
         TOOL_VERSION.to_owned(),
     );
-    let record = ResultRecord::new(
-        BenchmarkId::new(None, operation.to_owned(), None, None),
+    let record = BenchmarkResult::new(
+        BenchmarkId::new(vec![operation.to_owned()]),
         vec![
-            Metric::new(
-                "allocated_bytes".to_owned(),
-                MetricKind::AllocationBytes,
-                bytes,
-                Some("bytes".to_owned()),
-            ),
-            Metric::new(
-                "allocations".to_owned(),
-                MetricKind::AllocationCount,
-                allocs,
-                Some("count".to_owned()),
-            ),
+            Metric::new(MetricKind::AllocationBytes, bytes),
+            Metric::new(MetricKind::AllocationCount, allocs),
         ],
     );
-    ResultSet::new(context, vec![record])
+    Run::new(context, vec![record])
 }
 
 /// Builds an `all_the_time` result set for `operation` carrying a single
 /// `processor_time` metric at `value` nanoseconds, stamped with the effective
 /// second and abbreviated `commit`.
-pub(crate) fn time_result_set(
-    effective: i64,
-    commit: &str,
-    operation: &str,
-    value: f64,
-) -> ResultSet {
+pub(crate) fn time_result_set(effective: i64, commit: &str, operation: &str, value: f64) -> Run {
     let time = Timestamp::from_second(effective).unwrap();
     let git = git_info(commit);
     let context = RunContext::new(
-        Timestamps::new(time, time),
+        time,
+        time,
         git,
-        CiInfo::default(),
+        EnvironmentInfo::default(),
         ToolchainInfo::default(),
         TOOL_VERSION.to_owned(),
     );
-    let record = ResultRecord::new(
-        BenchmarkId::new(None, operation.to_owned(), None, None),
-        vec![Metric::new(
-            "processor_time".to_owned(),
-            MetricKind::ProcessorTime,
-            value,
-            Some("ns".to_owned()),
-        )],
+    let record = BenchmarkResult::new(
+        BenchmarkId::new(vec![operation.to_owned()]),
+        vec![Metric::new(MetricKind::ProcessorTime, value)],
     );
-    ResultSet::new(context, vec![record])
+    Run::new(context, vec![record])
 }
 
 /// Builds an `all_the_time` result set for `operation` carrying a single
@@ -848,50 +808,45 @@ pub(crate) fn time_result_set_with_dispersion(
     operation: &str,
     value: f64,
     half_width: f64,
-) -> ResultSet {
+) -> Run {
     let time = Timestamp::from_second(effective).unwrap();
     let git = git_info(commit);
     let context = RunContext::new(
-        Timestamps::new(time, time),
+        time,
+        time,
         git,
-        CiInfo::default(),
+        EnvironmentInfo::default(),
         ToolchainInfo::default(),
         TOOL_VERSION.to_owned(),
     );
-    let record = ResultRecord::new(
-        BenchmarkId::new(None, operation.to_owned(), None, None),
+    let record = BenchmarkResult::new(
+        BenchmarkId::new(vec![operation.to_owned()]),
         vec![
-            Metric::new(
-                "processor_time".to_owned(),
-                MetricKind::ProcessorTime,
-                value,
-                Some("ns".to_owned()),
-            )
-            .with_dispersion(
+            Metric::new(MetricKind::ProcessorTime, value).with_dispersion(
                 Some(half_width),
                 Some(value - half_width),
                 Some(value + half_width),
             ),
         ],
     );
-    ResultSet::new(context, vec![record])
+    Run::new(context, vec![record])
 }
 
-pub(crate) fn ir_of(record: &ResultRecord) -> f64 {
+pub(crate) fn ir_of(record: &BenchmarkResult) -> f64 {
     record
         .metrics
         .iter()
-        .find(|metric| metric.name == "Ir")
+        .find(|metric| metric.kind == MetricKind::InstructionCount)
         .unwrap()
         .value
 }
 
-/// The metric named `name` within a record.
-pub(crate) fn metric_named<'a>(record: &'a ResultRecord, name: &str) -> &'a Metric {
+/// The metric of kind `kind` within a record.
+pub(crate) fn metric_of(record: &BenchmarkResult, kind: MetricKind) -> &Metric {
     record
         .metrics
         .iter()
-        .find(|metric| metric.name == name)
+        .find(|metric| metric.kind == kind)
         .unwrap()
 }
 
@@ -913,40 +868,35 @@ pub(crate) fn storage_only_config() -> String {
 
 /// Builds a Callgrind result set for benchmark `nm::observe/pull` carrying the
 /// given `metrics`, stamped with the effective second and abbreviated `commit`.
-pub(crate) fn result_set_with(effective: i64, commit: &str, metrics: Vec<Metric>) -> ResultSet {
+pub(crate) fn result_set_with(effective: i64, commit: &str, metrics: Vec<Metric>) -> Run {
     let time = Timestamp::from_second(effective).unwrap();
     let git = git_info(commit);
     let context = RunContext::new(
-        Timestamps::new(time, time),
+        time,
+        time,
         git,
-        CiInfo::default(),
+        EnvironmentInfo::default(),
         ToolchainInfo::default(),
         TOOL_VERSION.to_owned(),
     );
-    let record = ResultRecord::new(
-        BenchmarkId::new(
-            Some("nm".to_owned()),
+    let record = BenchmarkResult::new(
+        BenchmarkId::new(vec![
+            "nm".to_owned(),
             "nm::observe".to_owned(),
-            Some("pull".to_owned()),
-            None,
-        ),
+            "pull".to_owned(),
+        ]),
         metrics,
     );
-    ResultSet::new(context, vec![record])
+    Run::new(context, vec![record])
 }
 
 /// Builds a Callgrind result set with a single `Ir` metric at `value`, stamped
 /// with the given effective second and abbreviated `commit`.
-pub(crate) fn ir_result_set(effective: i64, commit: &str, value: f64) -> ResultSet {
+pub(crate) fn ir_result_set(effective: i64, commit: &str, value: f64) -> Run {
     result_set_with(
         effective,
         commit,
-        vec![Metric::new(
-            "Ir".to_owned(),
-            MetricKind::InstructionCount,
-            value,
-            Some("count".to_owned()),
-        )],
+        vec![Metric::new(MetricKind::InstructionCount, value)],
     )
 }
 

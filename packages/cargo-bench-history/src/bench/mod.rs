@@ -15,7 +15,7 @@ pub(crate) use alloc_tracker::parse_alloc_tracker_operation;
 pub(crate) use callgrind::parse_callgrind_summary;
 pub(crate) use criterion::parse_criterion_case;
 
-use crate::comparability::EngineSystem;
+use crate::comparability::Engine;
 
 /// Directory under the cargo target root where Gungraun writes its summaries.
 pub(crate) const GUNGRAUN_DIR: &str = "gungraun";
@@ -51,12 +51,7 @@ pub(crate) const ALL_THE_TIME_DIR: &str = "all_the_time";
 /// files the tool harvests; Criterion writes `estimates.json` unconditionally, so
 /// it contributes nothing. Duplicate names are de-duplicated, keeping the first.
 pub(crate) fn injected_bench_env() -> Vec<(String, String)> {
-    dedup_env(
-        EngineSystem::ALL
-            .into_iter()
-            .flat_map(injected_env)
-            .collect(),
-    )
+    dedup_env(Engine::ALL.into_iter().flat_map(injected_env).collect())
 }
 
 /// Keeps the first occurrence of each variable name in `pairs`, dropping any later
@@ -76,14 +71,12 @@ fn dedup_env(pairs: Vec<(String, String)>) -> Vec<(String, String)> {
 /// Callgrind needs `GUNGRAUN_SAVE_SUMMARY=pretty-json` so Gungraun writes the
 /// `summary.json` files the tool harvests. Criterion, `alloc_tracker` and
 /// `all_the_time` write their output unconditionally, so they need nothing.
-fn injected_env(engine: EngineSystem) -> Vec<(String, String)> {
+fn injected_env(engine: Engine) -> Vec<(String, String)> {
     match engine {
-        EngineSystem::Callgrind => {
+        Engine::Callgrind => {
             vec![("GUNGRAUN_SAVE_SUMMARY".to_owned(), "pretty-json".to_owned())]
         }
-        EngineSystem::Criterion | EngineSystem::AllocTracker | EngineSystem::AllTheTime => {
-            Vec::new()
-        }
+        Engine::Criterion | Engine::AllocTracker | Engine::AllTheTime => Vec::new(),
     }
 }
 
@@ -94,7 +87,7 @@ mod tests {
 
     #[test]
     fn callgrind_injects_the_summary_flag() {
-        let env = injected_env(EngineSystem::Callgrind);
+        let env = injected_env(Engine::Callgrind);
         assert_eq!(
             env,
             vec![("GUNGRAUN_SAVE_SUMMARY".to_owned(), "pretty-json".to_owned())]
@@ -103,15 +96,15 @@ mod tests {
 
     #[test]
     fn criterion_injects_nothing() {
-        assert!(injected_env(EngineSystem::Criterion).is_empty());
+        assert!(injected_env(Engine::Criterion).is_empty());
     }
 
     #[test]
     fn auto_emitting_engines_inject_nothing() {
         // `alloc_tracker` and `all_the_time` write their JSON on `Session` drop,
         // so neither needs any environment variable injected.
-        assert!(injected_env(EngineSystem::AllocTracker).is_empty());
-        assert!(injected_env(EngineSystem::AllTheTime).is_empty());
+        assert!(injected_env(Engine::AllocTracker).is_empty());
+        assert!(injected_env(Engine::AllTheTime).is_empty());
     }
 
     #[test]

@@ -16,13 +16,13 @@ use crate::bench::{
     parse_callgrind_summary, parse_criterion_case,
 };
 use crate::bench_output::{BenchOutputSource, FsBenchOutputSource, Harvest};
-use crate::comparability::{ComparabilityKey, EngineSystem, resolve_target_triple};
+use crate::comparability::{DiscriminantSet, Engine};
 use crate::config::{StorageConfig, load_config};
-use crate::context::{CiInfo, RunContext, Timestamps, ToolchainInfo, detect_ci};
+use crate::context::{EnvironmentInfo, RunContext, ToolchainInfo, detect_environment};
 use crate::git::GitSnapshot;
 use crate::host::RustcInfo;
 use crate::machine::{HardwareProfile, resolve_machine_key};
-use crate::model::{ResultRecord, ResultSet};
+use crate::model::{BenchmarkResult, Run};
 use crate::probe::{EnvironmentProbe, SystemProbe};
 use crate::process::{BenchRunner, TokioBenchRunner};
 use crate::report::{Reporter, StderrReporter};
@@ -162,10 +162,11 @@ struct SharedContext {
     git: GitSnapshot,
     /// Active toolchain facts.
     rustc: RustcInfo,
-    /// Detected CI environment.
-    ci: CiInfo,
-    /// Host triple (possibly differing from the recorded target triple).
-    host_triple: String,
+    /// Detected execution environment.
+    env: EnvironmentInfo,
+    /// Target triple the benchmarks ran on (the host triple `rustc` reports; the
+    /// tool always runs on the same OS it benchmarks).
+    target_triple: String,
     /// Host hardware profile, fingerprinted for hardware-dependent engines.
     hardware: HardwareProfile,
 }
@@ -273,9 +274,9 @@ where
     let rustc = deps.probe.toolchain().await?;
     let shared = SharedContext {
         git: deps.probe.git().await?,
-        host_triple: rustc.host.clone().unwrap_or_default(),
+        target_triple: rustc.host.clone().unwrap_or_default(),
         rustc,
-        ci: detect_ci(deps.env),
+        env: detect_environment(deps.env),
         hardware: deps.probe.hardware().await,
     };
 
@@ -283,7 +284,7 @@ where
     let mut harvested = 0_usize;
     let mut labels = Vec::new();
 
-    for engine in EngineSystem::ALL {
+    for engine in Engine::ALL {
         let summary = harvest_engine(options, deps, &shared, engine, run_start).await?;
         if summary.stored {
             stored = stored.saturating_add(1);
@@ -352,7 +353,7 @@ async fn harvest_engine<R, P, O, S>(
     options: &RunOptions,
     deps: &RunDeps<'_, R, P, O, S>,
     shared: &SharedContext,
-    engine: EngineSystem,
+    engine: Engine,
     run_start: SystemTime,
 ) -> Result<EngineSummary, RunError>
 where
@@ -403,20 +404,20 @@ where
     // When no commit is available the observation time stands in.
     let dirty = shared.git.info.dirty;
     let commit_time = shared.git.committer.unwrap_or(observation);
-    let target_triple = resolve_target_triple(engine, &shared.host_triple);
+    let target_triple = &shared.target_triple;
 
     let context = RunContext::new(
-        Timestamps::new(commit_time, observation),
+        commit_time,
+        observation,
         shared.git.info.clone(),
-        shared.ci.clone(),
+        shared.env.clone(),
         ToolchainInfo {
             target_triple: target_triple.clone(),
-            host_triple: shared.host_triple.clone(),
             rustc_version: shared.rustc.version.clone(),
         },
         deps.tool_version.to_owned(),
     );
-    let result_set = ResultSet::new(context, records);
+    let run = Run::new(context, records);
 
     // Hardware-dependent engines (such as Criterion) partition their history by a
     // machine fingerprint so only equivalent machines share a series. An explicit
@@ -425,21 +426,16 @@ where
     let machine_key = engine
         .is_hardware_dependent()
         .then(|| resolve_machine_key(options.machine_key.as_deref(), &shared.hardware));
-    let key = ComparabilityKey::new(
-        deps.project_id,
-        engine,
-        &target_triple,
-        machine_key.as_deref(),
-    );
+    let key = DiscriminantSet::new(engine, target_triple, machine_key.as_deref());
     // History is organized by commit, so the full commit SHA names the directory
     // (`analyze` resolves which commits to read from git topology). A clean run is
     // keyed solely by its commit and so is deterministic; a dirty snapshot adds its
     // observation time so concurrent snapshots of the same commit coexist.
     let commit = shared.git.info.commit.as_deref().unwrap_or("unknown");
     let object_key = if dirty {
-        key.dirty_key(commit, observation.as_second())
+        key.dirty_key(deps.project_id, commit, observation.as_second())
     } else {
-        key.clean_key(commit)
+        key.clean_key(deps.project_id, commit)
     };
 
     deps.reporter.note(&format!(
@@ -451,11 +447,11 @@ where
             .map_or_else(String::new, |key| format!(", machine {key}")),
     ));
 
-    // A freshly built result set is composed of plain structs and finite counts,
-    // so serialization cannot fail.
-    let json = result_set
+    // A freshly built run is composed of plain structs and finite counts, so
+    // serialization cannot fail.
+    let json = run
         .to_json()
-        .expect("a freshly built result set always serializes to JSON");
+        .expect("a freshly built run always serializes to JSON");
     store_result(
         deps.storage,
         &object_key,
@@ -470,7 +466,7 @@ where
     // blessing sidecars on this commit no longer describe a stored level. Remove
     // them on overwrite so a stale blessing cannot silently re-baseline the new run.
     if options.overwrite && !dirty {
-        invalidate_blessings(deps.storage, &key, commit, deps.reporter).await?;
+        invalidate_blessings(deps.storage, &key, deps.project_id, commit, deps.reporter).await?;
     }
 
     Ok(EngineSummary {
@@ -510,11 +506,12 @@ async fn store_result<S: Storage>(
 /// the new (possibly different) level.
 async fn invalidate_blessings<S: Storage>(
     storage: &S,
-    key: &ComparabilityKey,
+    key: &DiscriminantSet,
+    project: &str,
     commit: &str,
     reporter: &dyn Reporter,
 ) -> Result<(), RunError> {
-    let prefix = key.commit_prefix(commit);
+    let prefix = key.commit_prefix(project, commit);
     let keys = storage.list(&prefix).await?;
     for object_key in keys {
         let is_bless = object_key
@@ -531,7 +528,7 @@ async fn invalidate_blessings<S: Storage>(
 
 /// Parses harvested engine output into result records, naming the offending
 /// source on a parse failure.
-fn parse_harvest(harvest: &Harvest) -> Result<Vec<ResultRecord>, RunError> {
+fn parse_harvest(harvest: &Harvest) -> Result<Vec<BenchmarkResult>, RunError> {
     match harvest {
         Harvest::Callgrind(summaries) => {
             let mut records = Vec::with_capacity(summaries.len());
@@ -1067,15 +1064,15 @@ mod tests {
     impl BenchOutputSource for FakeOutput {
         async fn collect(
             &self,
-            engine: EngineSystem,
+            engine: Engine,
             _since: SystemTime,
             _reporter: &dyn Reporter,
         ) -> io::Result<Harvest> {
             Ok(match engine {
-                EngineSystem::Callgrind => Harvest::Callgrind(self.callgrind.clone()),
-                EngineSystem::Criterion => Harvest::Criterion(self.criterion.clone()),
-                EngineSystem::AllocTracker => Harvest::AllocTracker(self.alloc.clone()),
-                EngineSystem::AllTheTime => Harvest::AllTheTime(self.time.clone()),
+                Engine::Callgrind => Harvest::Callgrind(self.callgrind.clone()),
+                Engine::Criterion => Harvest::Criterion(self.criterion.clone()),
+                Engine::AllocTracker => Harvest::AllocTracker(self.alloc.clone()),
+                Engine::AllTheTime => Harvest::AllTheTime(self.time.clone()),
             })
         }
     }
@@ -1220,21 +1217,20 @@ mod tests {
         assert_eq!(
             keys,
             vec![
-                "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/\
+                "v2/folo/callgrind/x86_64-pc-windows-msvc/synthetic/\
                  deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/clean.json"
                     .to_owned()
             ]
         );
 
         let bytes = block_on(storage.get(&keys[0])).unwrap();
-        let set = ResultSet::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
+        let set = Run::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
         assert_eq!(set.schema_version, crate::SCHEMA_VERSION);
         assert_eq!(set.results.len(), 2);
         assert_eq!(
             set.context.toolchain.target_triple,
-            "x86_64-unknown-linux-gnu"
+            "x86_64-pc-windows-msvc"
         );
-        assert_eq!(set.context.toolchain.host_triple, "x86_64-pc-windows-msvc");
     }
 
     #[test]
@@ -1303,7 +1299,7 @@ mod tests {
         assert_eq!(keys.len(), 1, "{keys:?}");
         assert!(keys[0].ends_with("/clean.json"), "{keys:?}");
         let bytes = block_on(storage.get(&keys[0])).unwrap();
-        let set = ResultSet::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
+        let set = Run::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
         assert_eq!(
             set.results.len(),
             1,
@@ -1323,7 +1319,7 @@ mod tests {
             &storage,
         )
         .unwrap();
-        let commit_dir = "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/\
+        let commit_dir = "v2/folo/callgrind/x86_64-pc-windows-msvc/synthetic/\
                           deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
         let bless_key = format!("{commit_dir}/bless-100.json");
         let record = BlessingRecord::new(
@@ -1390,7 +1386,7 @@ mod tests {
         // Blessings accept the clean run's data point, so a blessing sidecar on the
         // commit must survive when only a dirty snapshot of that commit is rewritten;
         // invalidation is reserved for a clean overwrite that discards the point.
-        let commit_dir = "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/\
+        let commit_dir = "v2/folo/callgrind/x86_64-pc-windows-msvc/synthetic/\
                           deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
         let bless_key = format!("{commit_dir}/bless-100.json");
         let record = BlessingRecord::new(
@@ -1653,7 +1649,7 @@ mod tests {
         assert!(keys[0].contains("/criterion/"), "{keys:?}");
 
         let bytes = block_on(storage.get(&keys[0])).unwrap();
-        let set = ResultSet::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
+        let set = Run::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
         assert_eq!(set.results.len(), 1);
         assert_eq!(set.results[0].metrics[0].kind, crate::MetricKind::WallTime);
     }
@@ -1773,7 +1769,7 @@ mod tests {
         assert!(keys[0].contains("/synthetic/"), "{keys:?}");
 
         let bytes = block_on(storage.get(&keys[0])).unwrap();
-        let set = ResultSet::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
+        let set = Run::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
         assert_eq!(set.results.len(), 1);
         let kinds: Vec<crate::MetricKind> = set.results[0].metrics.iter().map(|m| m.kind).collect();
         assert_eq!(
@@ -1815,7 +1811,7 @@ mod tests {
         );
 
         let bytes = block_on(storage.get(&keys[0])).unwrap();
-        let set = ResultSet::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
+        let set = Run::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
         assert_eq!(set.results.len(), 1);
         assert_eq!(
             set.results[0].metrics[0].kind,
