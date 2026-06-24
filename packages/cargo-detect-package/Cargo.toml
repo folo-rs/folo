@@ -15,7 +15,7 @@ rust-version.workspace = true
 all-features = true
 
 [dependencies]
-argh = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
 toml = { workspace = true, features = ["parse", "serde"] }
 
 [dev-dependencies]

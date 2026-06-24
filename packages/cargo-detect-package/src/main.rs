@@ -4,34 +4,13 @@
 //! Binary entry point for the cargo-detect-package tool.
 //!
 //! This module is excluded from mutation testing because testing process entry/exit behavior
-//! is impractical - it requires spawning subprocesses and checking exit codes.
+//! is impractical - it requires spawning subprocesses and checking exit codes. CLI parsing
+//! lives in the library's `cli` module and the core logic lives in `cargo_detect_package::run`,
+//! both tested directly.
 
-use std::path::PathBuf;
 use std::process::ExitCode;
 
-use argh::FromArgs;
-use cargo_detect_package::{OutsidePackageAction, RunInput, RunOutcome, run};
-
-/// A Cargo tool to detect the package that a file belongs to, passing the package name to a
-/// subcommand.
-#[derive(FromArgs)]
-struct Args {
-    /// path to the file to detect package for.
-    #[argh(option)]
-    path: PathBuf,
-
-    /// pass the detected package as an environment variable instead of as a cargo argument.
-    #[argh(option)]
-    via_env: Option<String>,
-
-    /// action to take when path is not in any package (workspace, ignore, error).
-    #[argh(option)]
-    outside_package: Option<OutsidePackageAction>,
-
-    /// the subcommand to execute.
-    #[argh(positional, greedy)]
-    subcommand: Vec<String>,
-}
+use cargo_detect_package::{Cli, RunOutcome, run};
 
 // Binary entry point - mutations would require subprocess testing which is impractical.
 #[cfg_attr(test, mutants::skip)]
@@ -45,35 +24,32 @@ fn main() -> ExitCode {
         env_args.remove(1);
     }
 
-    // Convert to &str for argh.
+    // Convert to &str for the parser.
     let str_args: Vec<&str> = env_args.iter().map(String::as_str).collect();
 
     let program_name = str_args
         .first()
         .expect("std::env::args() always provides at least the program name");
 
-    let args: Args = match Args::from_args(&[program_name], str_args.get(1..).unwrap_or(&[])) {
-        Ok(args) => args,
+    let cli = match Cli::from_args(&[program_name], str_args.get(1..).unwrap_or(&[])) {
+        Ok(cli) => cli,
         Err(early_exit) => {
-            println!("{}", early_exit.output);
-            return if early_exit.output.contains("help") {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::FAILURE
+            // `status` is `Ok` for a `--help`/usage request (print to stdout, exit
+            // success) and `Err` for a parse error (print to stderr, exit failure).
+            return match early_exit.status {
+                Ok(()) => {
+                    println!("{}", early_exit.output);
+                    ExitCode::SUCCESS
+                }
+                Err(()) => {
+                    eprintln!("{}", early_exit.output);
+                    ExitCode::FAILURE
+                }
             };
         }
     };
 
-    let input = RunInput {
-        path: args.path,
-        via_env: args.via_env,
-        outside_package: args
-            .outside_package
-            .unwrap_or(OutsidePackageAction::Workspace),
-        subcommand: args.subcommand,
-    };
-
-    match run(&input) {
+    match run(&cli.into_input()) {
         Ok(outcome) => match outcome {
             RunOutcome::PackageDetected {
                 subcommand_succeeded,

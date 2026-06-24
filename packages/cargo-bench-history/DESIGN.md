@@ -1169,8 +1169,8 @@ separated from the inactive context that is kept only for continuity.
 ## 10. Crate architecture
 
 `packages/cargo-bench-history/` — binary + library, `clap` (derive) subcommands.
-The other workspace cargo tools (`cargo-detect-package`/`cargo-freeze-deps`) still
-use `argh`; their migration to `clap` is tracked separately (GitHub issue #252).
+The other workspace cargo tools (`cargo-detect-package`/`cargo-freeze-deps`) also use
+`clap`, though their CLIs are trivial enough to need no grouped argument headings.
 
 ```
 src/
@@ -1629,4 +1629,5 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      (commits for `prune`, prefixes for `bless`, and the `runs|discriminants|
      blessings` selector for `list`) are bare positional words, not flags; and a bare
      `list` is an error that names its three subjects. The other workspace cargo tools
-     stay on `argh` for now (GitHub issue #252 tracks their migration).
+     (`cargo-detect-package`/`cargo-freeze-deps`) also use `clap` (issue #252), though
+     their flat CLIs need no grouped argument headings.
