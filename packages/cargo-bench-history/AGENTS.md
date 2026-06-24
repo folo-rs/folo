@@ -106,10 +106,10 @@ stored but none entered the analysis — most commonly when every run is a dirty
 snapshot on a base-side commit (the "config file never committed" trap). The hint
 makes a `0 runs` result self-explanatory without needing `--verbose`.
 
-## Storage model (commit-centric v2)
+## Storage model (commit-centric)
 
 `comparability::DiscriminantSet` builds object keys under the partition prefix
-`v2/<project>/<engine>/<triple>/<machine|synthetic>` and then keys each point by
+`v1/<project>/<engine>/<triple>/<machine|synthetic>` and then keys each point by
 **commit**:
 
 * `clean_key(commit)` → `…/<commit>/clean.json` — the one canonical point for a
@@ -122,7 +122,7 @@ makes a `0 runs` result self-explanatory without needing `--verbose`.
   a conflict.
 
 The commit segment is the **full** SHA (`git.info.commit`, `unknown` when there is
-no repo), because the git-aware `analyze` reads `v2/.../<full_sha>/` directories
+no repo), because the git-aware `analyze` reads `v1/.../<full_sha>/` directories
 resolved from `git rev-list`. The `run` store step picks clean vs dirty from
 `git.info.dirty`. Timestamps are split into a **commit** timestamp (the committer
 date, which orders the series) and an **observation** timestamp (wall-clock now,
@@ -145,7 +145,7 @@ timeline because which commits belong to a line of history depends on the branch
 being analyzed:
 
 * **Discriminant facets first.** `analyze::discriminant::parse_key` turns each
-  `v2/<project>/<engine>/<triple>/<machine|synthetic>/<commit>/<file>` key into a
+  `v1/<project>/<engine>/<triple>/<machine|synthetic>/<commit>/<file>` key into a
   `DiscriminantSet` (engine, triple, machine). `--engine`/`--target-triple`/
   `--machine-key` select sets — each facet is **repeatable**, accepts the widening
   keyword `all`, and auto-detects the current machine when omitted (`--target-triple`
@@ -460,7 +460,7 @@ Key invariants:
   `first_parent(to).split_off(position(from))` (avoid `vec[a..]` — clippy
   `indexing_slicing`).
 * **Pre-run existence check** (`run_commits`): in the default skip-existing mode,
-  `recorded_commits` lists the project prefix (`v2/{project}/`) once and
+  `recorded_commits` lists the project prefix (`v1/{project}/`) once and
   `commit_of_clean_key` extracts each clean object's commit segment; a commit in
   that set is reported `SkippedExisting` and its benchmark execution is skipped
   outright (no `reset_to`, no `run`). This makes backfill resumable without paying

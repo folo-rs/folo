@@ -461,4 +461,29 @@ mod tests {
         let sorted = [10.0, 20.0, 30.0, 40.0, 50.0];
         assert_eq!(percentile(&sorted, 0.625), 35.0);
     }
+
+    #[test]
+    fn per_iteration_value_of_a_zero_iteration_span_is_zero() {
+        // A span recording zero iterations cannot be divided by its count, so its
+        // per-iteration value degrades to zero rather than producing NaN.
+        assert_eq!(per_iteration_nanos(span(0, 1000)), 0.0);
+    }
+
+    #[test]
+    fn slope_of_zero_iteration_spans_is_zero() {
+        // With every span at zero iterations the weighted denominator Σ(nᵢ²) is
+        // zero, so the slope collapses to zero instead of dividing by zero.
+        assert_eq!(slope_nanos(&[span(0, 1000), span(0, 2000)]), 0.0);
+    }
+
+    #[test]
+    fn bootstrap_interval_of_zero_iteration_spans_is_zero() {
+        // Two zero-iteration spans clear the `< 2` early return and enter the
+        // resample loop, where every resample's denominator Σ(nᵢ²) is zero, so each
+        // resampled slope — and thus both interval bounds — is zero.
+        assert_eq!(
+            bootstrap_interval(&[span(0, 100), span(0, 200)]),
+            (0.0, 0.0)
+        );
+    }
 }

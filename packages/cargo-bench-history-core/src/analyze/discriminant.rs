@@ -11,7 +11,7 @@
 
 use nonempty::NonEmpty;
 
-use crate::model::DiscriminantSet;
+use crate::model::{DiscriminantSet, STORAGE_VERSION};
 
 /// A resolved filter for one discriminant facet (engine, target triple, or
 /// machine key).
@@ -136,7 +136,8 @@ impl StorageKey {
 
 /// Parses a storage object key into its components.
 ///
-/// Keys have the form `v2/{project}/{engine}/{triple}/{machine_key}/{commit}/{file}`
+/// Keys have the form
+/// `{STORAGE_VERSION}/{project}/{engine}/{triple}/{machine_key}/{commit}/{file}`
 /// — exactly seven non-empty segments. Any key that does not match that shape
 /// exactly (wrong version, too few or too many segments, or an empty segment) is
 /// ignored (returns `None`) rather than misattributed.
@@ -155,7 +156,7 @@ pub fn parse_key(key: &str) -> Option<StorageKey> {
     else {
         return None;
     };
-    if *version != "v2" {
+    if *version != STORAGE_VERSION {
         return None;
     }
     if parts.iter().any(|segment| segment.is_empty()) {
@@ -191,7 +192,7 @@ mod tests {
     #[test]
     fn parse_key_decomposes_a_clean_key() {
         let parsed =
-            parse_key("v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/clean.json")
+            parse_key("v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/clean.json")
                 .unwrap();
         assert_eq!(parsed.project, "folo");
         assert_eq!(parsed.set.engine, "callgrind");
@@ -206,7 +207,7 @@ mod tests {
     #[test]
     fn parse_key_recognizes_a_dirty_snapshot() {
         let parsed =
-            parse_key("v2/folo/criterion/x86_64-pc-windows-msvc/m1/abc123/dirty-1700000000.json")
+            parse_key("v1/folo/criterion/x86_64-pc-windows-msvc/m1/abc123/dirty-1700000000.json")
                 .unwrap();
         assert!(parsed.is_dirty());
         assert_eq!(parsed.set.target_triple, "x86_64-pc-windows-msvc");
@@ -216,7 +217,7 @@ mod tests {
     #[test]
     fn parse_key_recognizes_a_blessing_sidecar() {
         let parsed = parse_key(
-            "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/bless-1700000000.json",
+            "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/bless-1700000000.json",
         )
         .unwrap();
         assert!(parsed.is_bless());
@@ -227,21 +228,23 @@ mod tests {
     #[test]
     fn bless_key_targets_the_sets_commit_directory() {
         let parsed =
-            parse_key("v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/clean.json")
+            parse_key("v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/clean.json")
                 .unwrap();
         assert_eq!(
             parsed.bless_key(1_700_000_000),
-            "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/bless-1700000000.json"
+            "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/bless-1700000000.json"
         );
     }
 
     #[test]
     fn parse_key_rejects_malformed_keys() {
-        assert!(parse_key("v1/folo/callgrind/t/m/c/f.json").is_none());
-        assert!(parse_key("v2/folo/callgrind/t/m/f.json").is_none());
-        assert!(parse_key("v2/folo/callgrind/t/m/c/sub/f.json").is_none());
-        assert!(parse_key("v2//callgrind/t/m/c/f.json").is_none());
-        assert!(parse_key("v2/folo/callgrind/t/m/c/").is_none());
+        // Wrong (unrecognized) storage version, even with an otherwise valid shape.
+        assert!(parse_key("v2/folo/callgrind/t/m/c/f.json").is_none());
+        // Structurally malformed keys at the recognized version.
+        assert!(parse_key("v1/folo/callgrind/t/m/f.json").is_none());
+        assert!(parse_key("v1/folo/callgrind/t/m/c/sub/f.json").is_none());
+        assert!(parse_key("v1//callgrind/t/m/c/f.json").is_none());
+        assert!(parse_key("v1/folo/callgrind/t/m/c/").is_none());
     }
 
     #[test]

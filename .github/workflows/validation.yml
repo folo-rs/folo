@@ -609,10 +609,17 @@ jobs:
   # reach Codecov — the multi-platform `coverage` job runs without an emulator and
   # therefore cannot cover them; Codecov merges this azure-flagged upload with it.
   #
-  # Linux-only and package-gated: Azurite runs directly on the runner host via npm
-  # (service containers cannot reliably bind it to a reachable address), and the
+  # Runs on a single platform (Linux) by choice, not by limitation: the Azure Blob
+  # backend is OS-agnostic network I/O (HTTP via the azure SDK), so exercising it on
+  # one platform fully covers it — also running it on Windows/macOS would only
+  # duplicate the same coverage. Linux is picked because it is the cheapest/fastest
+  # runner and because Azurite runs directly on the host there via npm (service
+  # containers cannot reliably bind it to a reachable address). Package-gated: the
   # job is only relevant when cargo-bench-history is affected.
-  test-azure:
+  #
+  # Named `test-azurite` because it runs against the Azurite emulator, not a real
+  # Azure account; `test-azure` is reserved for a future job that targets real Azure.
+  test-azurite:
     needs: [delta]
     if: >-
       needs.delta.outputs.skip_all != 'true'

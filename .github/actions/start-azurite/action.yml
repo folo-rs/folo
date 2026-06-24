@@ -8,7 +8,7 @@ description: >-
 inputs:
   azurite-version:
     description: >-
-      Azurite npm version to install. Pinned by default so the `test-azure` job
+      Azurite npm version to install. Pinned by default so the `test-azurite` job
       is reproducible and unaffected by upstream releases.
     required: false
     default: "3.35.0"

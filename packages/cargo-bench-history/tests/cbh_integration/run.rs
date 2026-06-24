@@ -23,7 +23,7 @@ async fn run_callgrind_end_to_end_stores_results() {
     let triple = &set.context.toolchain.target_triple;
     assert_eq!(
         key,
-        format!("v2/testproj/callgrind/{triple}/synthetic/unknown/clean.json")
+        format!("v1/testproj/callgrind/{triple}/synthetic/unknown/clean.json")
     );
 
     assert_eq!(set.schema_version, SCHEMA_VERSION);
@@ -473,7 +473,7 @@ async fn run_then_analyze_round_trips_a_sanitizing_project_id() {
     assert!(
         objects
             .iter()
-            .all(|(key, _)| key.starts_with("v2/my_proj_sub/callgrind/")),
+            .all(|(key, _)| key.starts_with("v1/my_proj_sub/callgrind/")),
         "{objects:?}"
     );
 
@@ -518,7 +518,7 @@ async fn run_then_analyze_preserves_unusual_identity_characters() {
     // triple, so derive it from the stored context for a portable prefix.
     let triple = &set.context.toolchain.target_triple;
     assert!(
-        key.starts_with(&format!("v2/testproj/criterion/{triple}/pool/")),
+        key.starts_with(&format!("v1/testproj/criterion/{triple}/pool/")),
         "{key}"
     );
     assert!(

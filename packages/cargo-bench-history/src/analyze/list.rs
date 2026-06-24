@@ -973,7 +973,7 @@ mod tests {
     }
 
     fn clean_key(commit: &str) -> String {
-        format!("v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
+        format!("v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
     }
 
     fn store(storage: &MemoryStorage, key: &str, set: &Run) {
@@ -1265,7 +1265,7 @@ mod tests {
         store(&storage, &clean_key("c0"), &two_metric_set(0, "c0"));
         store(
             &storage,
-            "v2/folo/criterion/x86_64-unknown-linux-gnu/synthetic/c0/clean.json",
+            "v1/folo/criterion/x86_64-unknown-linux-gnu/synthetic/c0/clean.json",
             &two_metric_set(0, "c0"),
         );
         let git = linear_git();
@@ -1299,7 +1299,7 @@ mod tests {
         store(&storage, &clean_key("c0"), &two_metric_set(0, "c0"));
         store(
             &storage,
-            "v2/folo/criterion/x86_64-pc-windows-msvc/m1/c0/clean.json",
+            "v1/folo/criterion/x86_64-pc-windows-msvc/m1/c0/clean.json",
             &two_metric_set(0, "c0"),
         );
         let git = FakeGitHistory::new(); // No repo, but listing does not need one.
@@ -1462,7 +1462,7 @@ mod tests {
     /// The blessing-sidecar key in the same partition as [`clean_key`].
     fn bless_key(commit: &str, issued_unix: i64) -> String {
         format!(
-            "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/bless-{issued_unix}.json"
+            "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/bless-{issued_unix}.json"
         )
     }
 

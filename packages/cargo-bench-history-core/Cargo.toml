@@ -2,7 +2,7 @@
 # Cargo has its own logic for naming and expects dashes. Okay.
 name = "cargo-bench-history-core"
 description = "Pure data-model and analysis internals for cargo-bench-history (no I/O), split out so its fast in-process test suite can be mutation-tested cheaply"
-publish = false
+publish = true
 version = "0.0.1"
 
 authors.workspace = true

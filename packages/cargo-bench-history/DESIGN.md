@@ -2,7 +2,7 @@
 
 Status: implemented. All of the numbered iterations are shipped — `run`,
 `analyze` (engine-aware change-point + drift detection), `install`, the Azure Blob
-backend, the Criterion adapter, the commit-centric storage model (v2), git-aware
+backend, the Criterion adapter, the commit-centric storage model, git-aware
 `analyze`, and `backfill`. The resolved design decisions are logged in
 [§13 Decisions & open items](#13-decisions--open-items); the iteration mapping is
 in [§12 Implementation plan](#12-implementation-plan).
@@ -262,7 +262,7 @@ The layout is an immutable, append-only-by-new-file, **commit-centric** model
 concurrent CI). The path is `<discriminant set>/<commit_sha>/<run file>`:
 
 ```
-<root>/v2/<project>/<engine>/<target_triple>/<machine_key|synthetic>/<commit_sha>/
+<root>/v1/<project>/<engine>/<target_triple>/<machine_key|synthetic>/<commit_sha>/
     clean.json                       # ≤1 per commit — the canonical point
     dirty-<observation_unix>.json    # 0..N snapshots taken on top of this base commit
 ```
@@ -314,7 +314,7 @@ duplicating the target-triple dimension confused users. Filter on the triple
 directly.)
 
 * `list discriminants` lists the distinct sets present (a cheap key `list` under
-  `v2/<project>/`, parsed and de-duplicated; an index file can be added later if
+  `v1/<project>/`, parsed and de-duplicated; an index file can be added later if
   a store grows large), with their parsed engine / target triple / machine key.
 * Each facet is **repeatable** and accepts the literal `all`:
   * Omitting a facet **auto-detects the current machine**: `--target-triple`
@@ -710,7 +710,7 @@ produced output, and stores the result. Backfilled runs are always on a **clean*
 tree, so each is keyed by commit (§4.2) and collision-checked:
 
 * By **default** the commits that already have a stored result are listed once up
-  front (a single `list` of the `v2/<project>/` prefix); a commit already present
+  front (a single `list` of the `v1/<project>/` prefix); a commit already present
   is **skipped before its benches run** (reported, not an error), so no benchmark
   execution is wasted on commits already covered. This makes backfill **resumable**
   and cheap to re-issue — an interrupted run simply continues where it stopped. The
@@ -780,7 +780,7 @@ commit by default, or — with `--all` — the most recent blessing of every ben
 across the analysis window.
 
 `list discriminants` switches to a storage index: it lists the discriminant sets
-present under `v2/<project>/` (engine / target triple / machine key) **without
+present under `v1/<project>/` (engine / target triple / machine key) **without
 requiring a repository** (§4.3). This is where the storage-set listing lives,
 separate from the repository-driven data-set preview, so it ignores the timeline
 and data-filtering groups. Because it is a **discovery catalog**, it is the one
@@ -1208,7 +1208,7 @@ src/
     sas.rs                # self-signed account-SAS signer [feature = "azure"]
   analyze/
     mod.rs                # query orchestration (shared selection pipeline)
-    discriminant.rs       # parse v2 keys; DiscriminantSet/DiscriminantSetQuery
+    discriminant.rs       # parse v1 keys; DiscriminantSet/DiscriminantSetQuery
     selection.rs          # split the target ancestry at the merge-base
     series.rs             # per-(BenchmarkId, metric) series in topology order
     stats.rs              # pure statistical primitives (Pettitt, Mann-Kendall, ...)
@@ -1325,8 +1325,8 @@ adds macOS; mapped to the original request's numbering:
    `BenchmarkId.package` is `None` (Criterion files are package-agnostic; §3).
    Noise-aware thresholds and change-point/drift findings are split into a
    follow-up iteration.
-6. ✅ **Storage model v2 + `run` idempotency** (§4.2, §4.3) — commit-centric layout
-   (`…/<commit>/{clean.json | dirty-<unix>.json}`), schema `v1→v2`, a `Storage`
+6. ✅ **Commit-centric storage model + `run` idempotency** (§4.2, §4.3) — commit-centric layout
+   (`…/<commit>/{clean.json | dirty-<unix>.json}`), a `Storage`
    `put_overwrite` write-replacing escape hatch, the clean write-once collision refusal
    (surfaced as `RunError::Duplicate`) + `--overwrite`, and the dirty effective=now
    keying. Re-targets `comparability` and `run`'s store step; small, in-process, heavily
@@ -1481,8 +1481,8 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     pinned by a golden test. Finer signals (RAM size, base frequency) were left
     out of v1 for little gain in homogeneous CI pools; `--machine-key` / `machine.
     key` override the fingerprint (§5). Computed only for Criterion.
-21. **Storage layout & point identity** — *Decided:* **commit-centric** v2 layout
-    `v2/<project>/<engine>/<triple>/<machine|synthetic>/<commit>/{clean.json |
+21. **Storage layout & point identity** — *Decided:* **commit-centric** layout
+    `v1/<project>/<engine>/<triple>/<machine|synthetic>/<commit>/{clean.json |
     dirty-<observation_unix>.json}` (§4.2). The commit is a path segment, so a clean
     point has the single deterministic key `…/<commit>/clean.json` and collision
     detection rides on the write-once `put` contract — refused (as
@@ -1490,7 +1490,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     snapshots are keyed by observation time (wall-clock now) and coexist; only
     a same-timestamp clash is a conflict. Branch is **not** in the key (a SHA is
     globally unique); it is metadata only, and series membership is decided by
-    query-time topology, not by it. Schema bumped `v1→v2` (pre-release, no migration).
+    query-time topology, not by it. The storage layout is versioned `v1` (its prefix).
 22. **Analyze query model** — *Decided:* `analyze` **requires a resolvable git repo**
     (current checkout or `--repo`; errors out otherwise — no committer-date fallback,
     no stored parent lineage). It resolves the **first-parent** ancestry of a target

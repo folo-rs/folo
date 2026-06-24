@@ -282,7 +282,7 @@ mod tests {
     /// A clean object at `commit` carrying the given instruction-count value.
     fn clean_object(commit: &str, commit_time: i64, value: f64) -> LoadedObject {
         let object_key =
-            format!("v2/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json");
+            format!("v1/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json");
         LoadedObject {
             key: parse_key(&object_key).unwrap(),
             object_key,
@@ -293,7 +293,7 @@ mod tests {
     /// A dirty snapshot at `commit` taken at `unix`, carrying the given value.
     fn dirty_object(commit: &str, unix: i64, value: f64) -> LoadedObject {
         let object_key = format!(
-            "v2/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/dirty-{unix}.json"
+            "v1/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/dirty-{unix}.json"
         );
         LoadedObject {
             key: parse_key(&object_key).unwrap(),
@@ -360,7 +360,7 @@ mod tests {
     fn build_series_separates_sets() {
         // A second run in a different triple is a different (incomparable) series.
         let other_key =
-            "v2/proj/callgrind/aarch64-unknown-linux-gnu/synthetic/c0/clean.json".to_owned();
+            "v1/proj/callgrind/aarch64-unknown-linux-gnu/synthetic/c0/clean.json".to_owned();
         let other = LoadedObject {
             key: parse_key(&other_key).unwrap(),
             object_key: other_key,
@@ -376,9 +376,9 @@ mod tests {
         // Two results share group/case/kind and set but belong to different
         // packages, so they must form two series rather than silently merging.
         let foo_key =
-            "v2/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/c0/clean.json".to_owned();
+            "v1/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/c0/clean.json".to_owned();
         let bar_key =
-            "v2/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/c1/clean.json".to_owned();
+            "v1/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/c1/clean.json".to_owned();
         let objects = vec![
             LoadedObject {
                 key: parse_key(&foo_key).unwrap(),
@@ -399,9 +399,9 @@ mod tests {
     fn build_series_applies_prefix_filter() {
         // Two benchmarks in different packages; a prefix selects only one family.
         let foo_key =
-            "v2/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/c0/clean.json".to_owned();
+            "v1/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/c0/clean.json".to_owned();
         let bar_key =
-            "v2/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/c1/clean.json".to_owned();
+            "v1/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/c1/clean.json".to_owned();
         let objects = vec![
             LoadedObject {
                 key: parse_key(&foo_key).unwrap(),

@@ -438,6 +438,26 @@ mod tests {
         assert_eq!(format_mtime(time), "1970-01-01T00:00:03Z");
     }
 
+    #[test]
+    fn note_missing_dir_reports_a_vanished_nested_directory() {
+        // A nested directory that disappears mid-scan (dir != root) is a rare race
+        // noted only in verbose mode, distinct from a missing engine root.
+        let reporter = RecordingReporter::new();
+        let root = Path::new("target/criterion");
+        let dir = Path::new("target/criterion/group/new");
+        note_missing_dir(&reporter, "criterion", dir, root);
+        assert!(
+            reporter.contains("disappeared during the scan"),
+            "{:?}",
+            reporter.notes()
+        );
+        assert!(
+            !reporter.contains("does not exist"),
+            "{:?}",
+            reporter.notes()
+        );
+    }
+
     fn callgrind_summaries(harvest: Harvest) -> Vec<RawSummary> {
         match harvest {
             Harvest::Callgrind(summaries) => summaries,

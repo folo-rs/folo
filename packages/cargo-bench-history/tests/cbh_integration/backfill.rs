@@ -27,7 +27,7 @@ async fn backfill_stores_one_clean_object_per_commit_and_restores_checkout() {
     assert_eq!(objects.len(), 3, "{objects:?}");
     let triple = objects[0].1.context.toolchain.target_triple.clone();
     for sha in [&c1, &c2, &c3] {
-        let expected = format!("v2/testproj/callgrind/{triple}/synthetic/{sha}/clean.json");
+        let expected = format!("v1/testproj/callgrind/{triple}/synthetic/{sha}/clean.json");
         assert!(
             objects.iter().any(|(key, _)| key == &expected),
             "missing {expected} in {objects:?}"
@@ -84,7 +84,7 @@ async fn backfill_spans_a_merge_commit_along_first_parent() {
     assert_eq!(objects.len(), 3, "{objects:?}");
     let triple = objects[0].1.context.toolchain.target_triple.clone();
     for sha in [&c1, &m, &c3] {
-        let expected = format!("v2/testproj/callgrind/{triple}/synthetic/{sha}/clean.json");
+        let expected = format!("v1/testproj/callgrind/{triple}/synthetic/{sha}/clean.json");
         assert!(
             objects.iter().any(|(key, _)| key == &expected),
             "missing {expected} in {objects:?}"

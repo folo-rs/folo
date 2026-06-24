@@ -1009,6 +1009,23 @@ mod tests {
     }
 
     #[test]
+    fn chart_of_plots_improvements_and_overlays_a_partial_active_window() {
+        // Deterministic, Miri-safe color state for the rasciigraph plot.
+        colored::control::set_override(false);
+        let point = |value: f64| SeriesValue {
+            commit: None,
+            value,
+            dirty: false,
+        };
+        let series = [point(1.0), point(2.0), point(3.0)];
+        // An improvement plots through the green color arm and the whole-series path.
+        assert!(chart_of(&series, Direction::Improvement, 0).is_some());
+        // A partial active window (active_from in the interior) overlays the greyed
+        // pre-blessing prefix and the active tail as two series.
+        assert!(chart_of(&series, Direction::Improvement, 1).is_some());
+    }
+
+    #[test]
     fn covers_whole_series_only_at_the_boundaries() {
         // `active_from == 0` (everything active) and `active_from >= len` (nothing
         // to grey) both render a single series; anything in between splits.

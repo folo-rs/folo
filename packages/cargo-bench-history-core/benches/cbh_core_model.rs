@@ -56,7 +56,7 @@ fn storage_key(c: &mut Criterion) {
         });
     });
 
-    let key = "v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/\
+    let key = "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/\
                deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/clean.json";
     group.bench_function("parse_key", |b| {
         b.iter(|| black_box(parse_key(black_box(key))));

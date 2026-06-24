@@ -737,7 +737,7 @@ mod tests {
         // storage error, not as a Duplicate.
         let error = block_on(store_result(
             &FailingStorage,
-            "v2/p/e/t/m/c/clean.json",
+            "v1/p/e/t/m/c/clean.json",
             b"{}",
             false,
         ))
@@ -1167,7 +1167,7 @@ mod tests {
             reporter.notes()
         );
         assert!(
-            reporter.contains("stored v2/folo/callgrind/"),
+            reporter.contains("stored v1/folo/callgrind/"),
             "expected a stored-key note, got {:?}",
             reporter.notes()
         );
@@ -1218,7 +1218,7 @@ mod tests {
         assert_eq!(
             keys,
             vec![
-                "v2/folo/callgrind/x86_64-pc-windows-msvc/synthetic/\
+                "v1/folo/callgrind/x86_64-pc-windows-msvc/synthetic/\
                  deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/clean.json"
                     .to_owned()
             ]
@@ -1320,7 +1320,7 @@ mod tests {
             &storage,
         )
         .unwrap();
-        let commit_dir = "v2/folo/callgrind/x86_64-pc-windows-msvc/synthetic/\
+        let commit_dir = "v1/folo/callgrind/x86_64-pc-windows-msvc/synthetic/\
                           deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
         let bless_key = format!("{commit_dir}/bless-100.json");
         let record = BlessingRecord::new(
@@ -1387,7 +1387,7 @@ mod tests {
         // Blessings accept the clean run's data point, so a blessing sidecar on the
         // commit must survive when only a dirty snapshot of that commit is rewritten;
         // invalidation is reserved for a clean overwrite that discards the point.
-        let commit_dir = "v2/folo/callgrind/x86_64-pc-windows-msvc/synthetic/\
+        let commit_dir = "v1/folo/callgrind/x86_64-pc-windows-msvc/synthetic/\
                           deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
         let bless_key = format!("{commit_dir}/bless-100.json");
         let record = BlessingRecord::new(

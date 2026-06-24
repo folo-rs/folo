@@ -1,12 +1,21 @@
-//! Shared constants for the pure core: the Gungraun/Callgrind cache event-kind
-//! names that the shell's Callgrind output parser maps to metric kinds.
+//! Shared constants for the pure core: the storage layout version and the
+//! Gungraun/Callgrind cache event-kind names that the shell's Callgrind output
+//! parser maps to metric kinds.
 //!
-//! These are the raw event-kind strings Gungraun emits. The shell's Callgrind
-//! adapter matches against them to translate each event into the corresponding
-//! [`MetricKind`](crate::model::MetricKind); the per-kind comparison polarity then
-//! lives on the kind itself (only L1 hits are higher-is-better — an access served
-//! by L1 is the cheap outcome, while last-level and RAM hits are the expensive
-//! miss-escalation tiers).
+//! The cache event-kind strings are the raw values Gungraun emits. The shell's
+//! Callgrind adapter matches against them to translate each event into the
+//! corresponding [`MetricKind`](crate::model::MetricKind); the per-kind comparison
+//! polarity then lives on the kind itself (only L1 hits are higher-is-better — an
+//! access served by L1 is the cheap outcome, while last-level and RAM hits are the
+//! expensive miss-escalation tiers).
+
+/// Version segment that prefixes every storage object key.
+///
+/// It is the first segment of a partition prefix
+/// (`{STORAGE_VERSION}/{project}/{engine}/{triple}/{machine}`) and the value that
+/// [`parse_key`](crate::analyze::parse_key) requires before it accepts a key, so
+/// the writer and reader share a single source of truth for the layout version.
+pub const STORAGE_VERSION: &str = "v1";
 
 /// Gungraun event-kind name for an access served by the L1 cache (cheap).
 pub const L1_HITS_EVENT: &str = "L1hits";

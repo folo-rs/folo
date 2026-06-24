@@ -725,15 +725,15 @@ mod tests {
     }
 
     fn clean_key(commit: &str) -> String {
-        format!("v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
+        format!("v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
     }
 
     fn dirty_key(commit: &str, unix: i64) -> String {
-        format!("v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/dirty-{unix}.json")
+        format!("v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/dirty-{unix}.json")
     }
 
     fn bless_key(commit: &str, unix: i64) -> String {
-        format!("v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/bless-{unix}.json")
+        format!("v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/bless-{unix}.json")
     }
 
     fn store(storage: &MemoryStorage, key: &str, value: &Run) {
@@ -748,7 +748,7 @@ mod tests {
     }
 
     fn keys(storage: &MemoryStorage) -> Vec<String> {
-        let mut keys = block_on(storage.list("v2/")).unwrap();
+        let mut keys = block_on(storage.list("v1/")).unwrap();
         keys.sort();
         keys
     }
@@ -1186,7 +1186,7 @@ mod tests {
         // A criterion dirty run on the same commit must survive an engine-scoped
         // callgrind prune.
         let criterion_dirty =
-            "v2/folo/criterion/x86_64-unknown-linux-gnu/synthetic/f1/dirty-200.json";
+            "v1/folo/criterion/x86_64-unknown-linux-gnu/synthetic/f1/dirty-200.json";
         store(&storage, criterion_dirty, &set(200, "f1"));
         let git = feature_git();
 

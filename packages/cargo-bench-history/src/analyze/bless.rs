@@ -379,7 +379,7 @@ mod tests {
     }
 
     fn clean_key(commit: &str) -> String {
-        format!("v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
+        format!("v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
     }
 
     /// A linear master history `c0 - c1 - c2`, HEAD at the tip `c2`.
@@ -406,7 +406,7 @@ mod tests {
 
     /// All blessing sidecar keys stored under the project partition.
     fn stored_blessings(storage: &MemoryStorage) -> Vec<String> {
-        let mut keys = block_on(storage.list("v2/folo/")).unwrap();
+        let mut keys = block_on(storage.list("v1/folo/")).unwrap();
         keys.retain(|key| {
             key.rsplit('/')
                 .next()

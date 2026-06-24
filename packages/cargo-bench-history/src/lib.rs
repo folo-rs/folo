@@ -3,10 +3,10 @@
 #![expect(
     clippy::exhaustive_enums,
     clippy::exhaustive_structs,
-    reason = "this crate is publish = false; its `pub` items form a handoff boundary \
-              between lib.rs and the in-crate binary plus integration tests, not a \
-              stable public API, so exhaustive construction and matching by those \
-              in-workspace consumers is intended"
+    reason = "this crate's `pub` items form a handoff boundary between lib.rs and \
+              the in-crate binary plus integration tests, used only inside this \
+              workspace rather than as a stable public API, so exhaustive \
+              construction and matching by those in-workspace consumers is intended"
 )]
 
 //! Maintain a long-lived history of benchmark results and analyze it for trends
