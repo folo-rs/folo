@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "all_the_time"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "cpu-time",
  "criterion",
@@ -27,7 +27,7 @@ dependencies = [
 
 [[package]]
 name = "alloc_tracker"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "criterion",
  "folo_utils",
@@ -1397,7 +1397,7 @@ dependencies = [
 
 [[package]]
 name = "par_bench"
-version = "0.2.43"
+version = "0.2.44"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
