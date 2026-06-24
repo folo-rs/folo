@@ -712,10 +712,23 @@ The network tests (`storage::azure::tests` and the `cbh_azure`
 integration file) talk to a live [Azurite](https://github.com/Azure/Azurite)
 blob emulator. They **self-skip** when no emulator is reachable, so a normal
 `--all-features` run stays green without one; they run for real once Azurite is
-up. To run them:
+up.
+
+The `just test-azurite` recipe wraps the whole flow — install the emulator once
+with `npm install -g azurite`, then:
 
 ```powershell
-npm install -g azurite
+just test-azurite
+```
+
+It starts an in-memory Azurite on `127.0.0.1:10000` (reusing one already running),
+runs the Azure-backend tests with `BENCH_HISTORY_REQUIRE_AZURITE=1` so an
+unreachable emulator is a hard error rather than a silent skip, and stops the
+emulator it started afterward — even on failure (it never stops one it did not
+start). It is the local counterpart of `just test-azure`. To run the tests by hand
+instead, start the emulator and point `cargo` at it:
+
+```powershell
 # On Windows azurite-blob is a .cmd, so launch it through cmd:
 cmd /c azurite-blob --blobHost 127.0.0.1 --blobPort 10000 --inMemoryPersistence --skipApiVersionCheck --silent --loose
 # then, in another shell:
@@ -725,8 +738,9 @@ cargo test -p cargo-bench-history --features azure
 * `AZURITE_BLOB_ENDPOINT` overrides the default
   `http://127.0.0.1:10000/devstoreaccount1` endpoint.
 * `BENCH_HISTORY_REQUIRE_AZURITE=1` turns an unreachable emulator into a hard
-  failure instead of a skip. CI sets it in the dedicated `test-azurite` job so a
-  misconfigured emulator can never silently degrade into skipping every test.
+  failure instead of a skip. `just test-azurite` sets it for you; CI also sets it
+  in the dedicated `test-azurite` job so a misconfigured emulator can never
+  silently degrade into skipping every test.
 
 In CI these tests run only in the Linux-only `test-azurite` job (see
 `.github/workflows/validation.yml`), which starts Azurite on the runner host via
