@@ -63,6 +63,13 @@ mutants SHARD="" CAREFUL='false':
         "-e"
         (Escape-Wildcards "packages/benchmarks/**")
 
+        # The mock benchmark engine is a test-support binary (a `[[bin]]` so the
+        # integration tests can spawn it). It is scaffolding, not shipped code, so mutating it
+        # yields no production coverage signal - it only spawns extra subprocess-heavy test runs
+        # that time out on slower runners. Its own behavior is covered by the integration tests.
+        "-e"
+        (Escape-Wildcards "packages/cargo-bench-history/src/bin/**")
+
         # Some of our systems are single-processor, yet the code may only be meaningfully testable
         # on multi-processor systems. As a "good enough" approximation, we skip mutation testing
         # of code that is only testable in a multi-processor system.

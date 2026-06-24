@@ -1,0 +1,8 @@
+{
+  "operation": "allocate_vec",
+  "total_iterations": 4,
+  "total_bytes_allocated": 800,
+  "total_allocations_count": 8,
+  "mean_bytes_per_iteration": 200,
+  "mean_allocations_per_iteration": 2
+}

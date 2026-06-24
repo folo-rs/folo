@@ -1,0 +1,476 @@
+{
+  "baselines": [
+    null,
+    null
+  ],
+  "benchmark_exe": "/tmp/folo-cg/release/deps/fast_time_timestamp_performance_cg-f969bb1a0fce6c8d",
+  "benchmark_file": "/mnt/c/Source/folo/packages/fast_time/benches/fast_time_timestamp_performance_cg.rs",
+  "details": null,
+  "function_name": "timestamp_capture_std_now",
+  "id": null,
+  "kind": "LibraryBenchmark",
+  "module_path": "fast_time_timestamp_performance_cg::timestamp_capture::timestamp_capture_std_now",
+  "package_dir": "/mnt/c/Source/folo/packages/fast_time",
+  "profiles": [
+    {
+      "flamegraphs": [],
+      "log_paths": [
+        "/tmp/gungraun.tmpOj4vQSCYGvtimestamp_capture_std_now/callgrind.timestamp_capture_std_now.log"
+      ],
+      "out_paths": [
+        "/tmp/gungraun.tmpOj4vQSCYGvtimestamp_capture_std_now/callgrind.timestamp_capture_std_now.out"
+      ],
+      "summaries": {
+        "parts": [
+          {
+            "details": {
+              "Left": {
+                "command": "/tmp/folo-cg/release/deps/fast_time_timestamp_performance_cg-f969bb1a0fce6c8d --gungraun-run 00000 00003 00000",
+                "details": null,
+                "parent_pid": null,
+                "part": 1,
+                "path": "/tmp/gungraun.tmpOj4vQSCYGvtimestamp_capture_std_now/callgrind.timestamp_capture_std_now.out",
+                "pid": 2183,
+                "thread": 1
+              }
+            },
+            "metrics_summary": {
+              "Callgrind": {
+                "Bc": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Int": 4
+                    }
+                  }
+                },
+                "Bcm": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Int": 1
+                    }
+                  }
+                },
+                "Bi": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Int": 2
+                    }
+                  }
+                },
+                "Bim": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Int": 2
+                    }
+                  }
+                },
+                "D1MissRate": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Float": 5.88235294117647
+                    }
+                  }
+                },
+                "D1mr": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Int": 1
+                    }
+                  }
+                },
+                "D1mw": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Int": 0
+                    }
+                  }
+                },
+                "DLmr": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Int": 0
+                    }
+                  }
+                },
+                "DLmw": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Int": 0
+                    }
+                  }
+                },
+                "Dr": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Int": 11
+                    }
+                  }
+                },
+                "Dw": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Int": 6
+                    }
+                  }
+                },
+                "EstimatedCycles": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Int": 193
+                    }
+                  }
+                },
+                "I1MissRate": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Float": 11.11111111111111
+                    }
+                  }
+                },
+                "I1mr": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Int": 4
+                    }
+                  }
+                },
+                "ILmr": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Int": 4
+                    }
+                  }
+                },
+                "Ir": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Int": 36
+                    }
+                  }
+                },
+                "L1HitRate": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Float": 90.56603773584906
+                    }
+                  }
+                },
+                "L1hits": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Int": 48
+                    }
+                  }
+                },
+                "LLHitRate": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Float": 1.8867924528301887
+                    }
+                  }
+                },
+                "LLMissRate": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Float": 7.547169811320755
+                    }
+                  }
+                },
+                "LLdMissRate": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Float": 0.0
+                    }
+                  }
+                },
+                "LLhits": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Int": 1
+                    }
+                  }
+                },
+                "LLiMissRate": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Float": 11.11111111111111
+                    }
+                  }
+                },
+                "RamHitRate": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Float": 7.547169811320755
+                    }
+                  }
+                },
+                "RamHits": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Int": 4
+                    }
+                  }
+                },
+                "TotalRW": {
+                  "diffs": null,
+                  "metrics": {
+                    "Left": {
+                      "Int": 53
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "total": {
+          "regressions": [],
+          "summary": {
+            "Callgrind": {
+              "Bc": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Int": 4
+                  }
+                }
+              },
+              "Bcm": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Int": 1
+                  }
+                }
+              },
+              "Bi": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Int": 2
+                  }
+                }
+              },
+              "Bim": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Int": 2
+                  }
+                }
+              },
+              "D1MissRate": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Float": 5.88235294117647
+                  }
+                }
+              },
+              "D1mr": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Int": 1
+                  }
+                }
+              },
+              "D1mw": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Int": 0
+                  }
+                }
+              },
+              "DLmr": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Int": 0
+                  }
+                }
+              },
+              "DLmw": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Int": 0
+                  }
+                }
+              },
+              "Dr": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Int": 11
+                  }
+                }
+              },
+              "Dw": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Int": 6
+                  }
+                }
+              },
+              "EstimatedCycles": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Int": 193
+                  }
+                }
+              },
+              "I1MissRate": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Float": 11.11111111111111
+                  }
+                }
+              },
+              "I1mr": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Int": 4
+                  }
+                }
+              },
+              "ILmr": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Int": 4
+                  }
+                }
+              },
+              "Ir": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Int": 36
+                  }
+                }
+              },
+              "L1HitRate": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Float": 90.56603773584906
+                  }
+                }
+              },
+              "L1hits": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Int": 48
+                  }
+                }
+              },
+              "LLHitRate": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Float": 1.8867924528301887
+                  }
+                }
+              },
+              "LLMissRate": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Float": 7.547169811320755
+                  }
+                }
+              },
+              "LLdMissRate": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Float": 0.0
+                  }
+                }
+              },
+              "LLhits": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Int": 1
+                  }
+                }
+              },
+              "LLiMissRate": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Float": 11.11111111111111
+                  }
+                }
+              },
+              "RamHitRate": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Float": 7.547169811320755
+                  }
+                }
+              },
+              "RamHits": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Int": 4
+                  }
+                }
+              },
+              "TotalRW": {
+                "diffs": null,
+                "metrics": {
+                  "Left": {
+                    "Int": 53
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "tool": "Callgrind"
+    }
+  ],
+  "project_root": "/mnt/c/Source/folo",
+  "summary_output": {
+    "format": "PrettyJson",
+    "path": "/tmp/folo-cg/gungraun/fast_time/fast_time_timestamp_performance_cg/timestamp_capture/timestamp_capture_std_now/summary.json"
+  },
+  "version": "6"
+}

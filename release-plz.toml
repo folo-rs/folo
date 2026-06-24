@@ -12,6 +12,24 @@ git_release_enable = false
 publish_timeout = "45m"
 
 [[package]]
+name = "cargo-bench-history"
+
+# cargo-bench-history and cargo-bench-history-core are logically the same package
+# split into two crates for cargotechnical reasons (see docs/impl-crate-split.md).
+# They must always be released at the same version; the workspace Cargo.toml
+# additionally pins cargo-bench-history-core with `=` so the CLI and its core can
+# never end up at mismatched versions.
+version_group = "cargo-bench-history"
+
+[[package]]
+name = "cargo-bench-history-core"
+
+# See the `cargo-bench-history` entry above. `cargo-bench-history-core` carries the
+# pure, I/O-free logic the CLI depends on; its version number keeps the pair in
+# lockstep and the workspace Cargo.toml pins it with `=`.
+version_group = "cargo-bench-history"
+
+[[package]]
 name = "linked"
 
 # Changelogs of these two are merged into the `linked` package as the others are "invisible" packages.
@@ -19,6 +37,8 @@ changelog_include = ["linked_macros", "linked_macros_impl"]
 
 # All the `linked*` packages are published under the same version, as they are
 # all the "logically same" package, just separated for cargotechnical reasons.
+# The workspace Cargo.toml additionally pins linked_macros and linked_macros_impl
+# with `=` so downstream consumers cannot end up with a mismatched set.
 version_group = "linked"
 
 [[package]]

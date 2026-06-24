@@ -129,31 +129,20 @@ impl ThreadSpan {
         self
     }
 
-    /// Calculates the thread processor time delta since this span was created.
+    /// Total thread processor time consumed since this span was created.
     #[must_use]
-    #[cfg_attr(test, mutants::skip)] // The != 1 fork is broadly applicable, so mutations fail. Intentional.
-    fn to_duration(&self) -> Duration {
+    fn measured_nanos(&self) -> u64 {
         let current_time = self.platform.thread_time();
         let total_duration = current_time.saturating_sub(self.start_time);
-
-        if self.iterations > 1 {
-            Duration::from_nanos_u128(
-                total_duration
-                    .as_nanos()
-                    .checked_div(u128::from(self.iterations))
-                    .expect("guarded by if condition"),
-            )
-        } else {
-            total_duration
-        }
+        u64::try_from(total_duration.as_nanos()).unwrap_or(u64::MAX)
     }
 }
 
 impl Drop for ThreadSpan {
     fn drop(&mut self) {
-        let duration = self.to_duration();
+        let total_nanos = self.measured_nanos();
         let mut data = self.metrics.lock().expect(ERR_POISONED_LOCK);
-        data.add_iterations(duration, self.iterations);
+        data.add_span(self.iterations, total_nanos);
     }
 }
 

@@ -1,0 +1,31 @@
+[package]
+# Cargo has its own logic for naming and expects dashes. Okay.
+name = "cargo-bench-history-core"
+description = "Pure data-model and analysis internals for cargo-bench-history (no I/O), split out so its fast in-process test suite can be mutation-tested cheaply"
+publish = true
+version = "0.0.1"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+colored = { workspace = true }
+jiff = { workspace = true, features = ["serde"] }
+nonempty = { workspace = true, features = ["serialize"] }
+rasciigraph = { workspace = true, features = ["color"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+mutants = { workspace = true }
+
+[[bench]]
+name = "cbh_core_model"
+harness = false
+
+[lints]
+workspace = true

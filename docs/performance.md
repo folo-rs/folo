@@ -1,9 +1,26 @@
 # Performance
 
 This chapter covers the principles for performance optimization work in this
-workspace: when to add `#[inline]`, when to deviate from idiomatic Rust, when to
-file a performance issue, and a workspace-wide reminder that runtime memory
-allocation is something we go out of our way to avoid.
+workspace: when to add benchmarks, when to add `#[inline]`, when to deviate from
+idiomatic Rust, when to file a performance issue, and a workspace-wide reminder
+that runtime memory allocation is something we go out of our way to avoid.
+
+## Benchmark optimization candidates as you write them
+
+Benchmarks are a regular part of *creating* code, not just a part of optimizing
+it — exactly as tests are. We do not wait for a bug report to write a test, and
+we do not wait for a profiler to write a benchmark. When you add a function that
+is a plausible future optimization candidate — anything on a per-item or
+per-request path, anything doing string building, parsing, hashing, or
+allocation that scales with input size — add a Criterion benchmark for it in the
+same change that introduces it.
+
+Doing this up front, while the implementation is still simple, captures a
+baseline to measure any later optimization against and makes regressions
+visible early. It is far cheaper than reconstructing a benchmark months later
+when someone finally suspects the function is slow. See
+[`docs/benchmarks.md`](benchmarks.md) for how to write and register the
+benchmark.
 
 ## `#[inline]` annotations
 

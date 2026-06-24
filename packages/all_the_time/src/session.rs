@@ -215,7 +215,7 @@ impl Session {
         operations.is_empty()
             || operations
                 .values()
-                .all(|data| data.lock().expect(ERR_POISONED_LOCK).total_iterations == 0)
+                .all(|data| data.lock().expect(ERR_POISONED_LOCK).is_empty())
     }
 }
 

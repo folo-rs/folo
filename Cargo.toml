@@ -16,7 +16,14 @@ arc-swap = { version = "1.7.0", default-features = false }
 argh = { version = "0.1.13", default-features = false, features = ["default"] }
 awaiter_set = { version = "0.1.7", path = "packages/awaiter_set", default-features = false }
 axum = { version = "0.8.0", default-features = false }
+azure_core = { version = "1.0.0", default-features = false }
+azure_identity = { version = "1.0.0", default-features = false }
+azure_storage_blob = { version = "1.0.0", default-features = false }
+base64 = { version = "0.22.1", default-features = false, features = ["std"] }
+cargo-bench-history-core = { version = "=0.0.1", path = "packages/cargo-bench-history-core", default-features = false }
 cargo-freeze-deps = { version = "0.1.1", path = "packages/cargo-freeze-deps", default-features = false }
+clap = { version = "4.6.1", default-features = false, features = ["default"] }
+colored = { version = "2.2.0", default-features = false }
 cpu-time = { version = "1.0.0", default-features = false }
 cpulist = { version = "1.1.4", path = "packages/cpulist", default-features = false }
 criterion = { version = "0.8.2", default-features = false }
@@ -48,15 +55,17 @@ gungraun = { version = "=0.19.2", default-features = false }
 hash_hasher = { version = "2.0.0", default-features = false }
 hashbrown = { version = "0.17.1", default-features = false }
 heapless = { version = "0.9.1", default-features = false }
+hmac = { version = "0.13.0", default-features = false }
 http = { version = "1.2.0", default-features = false, features = ["std"] }
 infinity_pool = { version = "0.8.19", path = "packages/infinity_pool", default-features = false }
 itertools = { version = "0.15.0", default-features = false, features = [
     "use_std",
 ] }
+jiff = { version = "0.2.28", default-features = false, features = ["std"] }
 libc = { version = "0.2.172", default-features = false }
 linked = { version = "1.0.14", path = "packages/linked", default-features = false }
-linked_macros = { version = "1.0.14", path = "packages/linked_macros", default-features = false }
-linked_macros_impl = { version = "1.0.14", path = "packages/linked_macros_impl", default-features = false }
+linked_macros = { version = "=1.0.14", path = "packages/linked_macros", default-features = false }
+linked_macros_impl = { version = "=1.0.14", path = "packages/linked_macros_impl", default-features = false }
 many_cpus = { version = "2.4.9", path = "packages/many_cpus", default-features = false }
 many_cpus_impl = { version = "=2.4.9", path = "packages/many_cpus_impl", default-features = false }
 mockall = { version = "0.14.0", default-features = false }
@@ -83,16 +92,16 @@ pin-project = { version = "1.1.0", default-features = false }
 proc-macro2 = { version = "1.0.103", default-features = false }
 quote = { version = "1.0.42", default-features = false }
 rand = { version = "0.10.1", default-features = false, features = ["std"] }
+rasciigraph = { version = "0.3.0", default-features = false }
 rsevents = { version = "0.3.1", default-features = false }
 scc = { version = "3.0.2", default-features = false }
 scopeguard = { version = "1.2.0", default-features = false }
 semver = { version = "1.0.28", default-features = false, features = ["std"] }
 seq-macro = { version = "0.3.0", default-features = false }
 serde = { version = "1.0.228", default-features = false, features = ["std"] }
-serde_json = { version = "1.0.140", default-features = false, features = [
-    "std",
-] }
+serde_json = { version = "1.0.150", default-features = false, features = ["std"] }
 serial_test = { version = "3.2.0", default-features = false }
+sha2 = { version = "0.11.0", default-features = false }
 simple-mermaid = { version = "0.2.0", default-features = false }
 smallvec = { version = "1.15.0", default-features = false }
 static_assertions = { version = "1.1.0", default-features = false }

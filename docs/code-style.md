@@ -28,6 +28,12 @@ Do not forget proper language in tests and examples (both standalone and inline 
 
 Be professional. Do not use contractions. Use "do not" instead of "don't", for example.
 
+Do not use parenthesized-plural shorthand like `"run(s)"`, `"0 file(s)"` or
+`"item(s)"` in user-facing or computed text (messages, logs, reports). When a count
+is available, compute the grammatically correct singular or plural form from it —
+we have a fancy computer, so use it. A small helper that returns `"1 run"` versus
+`"2 runs"` is preferred over the evasive `(s)` form.
+
 ## Whitespace
 
 There should be one empty line between functions.

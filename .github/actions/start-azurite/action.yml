@@ -1,0 +1,51 @@
+name: Start Azurite
+description: >-
+  Installs and starts the Azurite blob storage emulator on the runner host so
+  that `azure`-feature tests can reach it at http://127.0.0.1:10000. Linux-only:
+  the emulator runs directly on the host (not as a service container, which
+  cannot reliably bind Azurite to a reachable address).
+
+inputs:
+  azurite-version:
+    description: >-
+      Azurite npm version to install. Pinned by default so the `test-azurite` job
+      is reproducible and unaffected by upstream releases.
+    required: false
+    default: "3.35.0"
+
+runs:
+  using: composite
+  steps:
+    - name: Install and start Azurite
+      shell: bash
+      env:
+        AZURITE_VERSION: ${{ inputs.azurite-version }}
+      run: |
+        set -euo pipefail
+
+        echo "Installing Azurite ${AZURITE_VERSION}..."
+        npm install -g "azurite@${AZURITE_VERSION}"
+
+        echo "Starting Azurite blob service on 127.0.0.1:10000..."
+        nohup azurite-blob \
+          --blobHost 127.0.0.1 \
+          --blobPort 10000 \
+          --inMemoryPersistence \
+          --skipApiVersionCheck \
+          --silent \
+          --loose \
+          > "$RUNNER_TEMP/azurite.log" 2>&1 &
+
+        echo "Waiting for Azurite to accept connections..."
+        for _ in $(seq 1 30); do
+          if (exec 3<>/dev/tcp/127.0.0.1/10000) 2>/dev/null; then
+            exec 3>&- 3<&-
+            echo "Azurite is ready."
+            exit 0
+          fi
+          sleep 1
+        done
+
+        echo "Azurite did not become ready in time." >&2
+        cat "$RUNNER_TEMP/azurite.log" >&2 || true
+        exit 1

@@ -1,0 +1,327 @@
+//! The parsed command model the binary and tests operate on: the [`Command`]
+//! enum and its per-subcommand option structs.
+
+use std::path::PathBuf;
+
+use crate::model::BenchmarkIdPrefix;
+/// A fully parsed command ready to execute.
+#[doc(hidden)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Command {
+    /// Run the configured benchmark engines and store the results.
+    Run(RunOptions),
+    /// Generate a starter configuration file.
+    Install(InstallOptions),
+    /// Analyze stored history for notable patterns.
+    Analyze(AnalyzeOptions),
+    /// List the data set a matching `analyze` pass would include.
+    List(ListOptions),
+    /// Delete stored runs (and their blessing sidecars) from the data set a
+    /// matching `analyze`/`list` pass resolves.
+    Prune(PruneOptions),
+    /// Replay `run` across a range of historical commits.
+    Backfill(BackfillOptions),
+    /// Accept a benchmark's current level on the base branch as intentional.
+    Bless(BlessOptions),
+    /// Remove blessings recorded at the current commit.
+    Unbless(UnblessOptions),
+}
+
+/// Options for the `run` command.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RunOptions {
+    /// Path to the configuration file, if overridden.
+    pub config_path: Option<PathBuf>,
+    /// Repository to run benchmarks in and read git state from; defaults to the
+    /// working directory.
+    pub repo: Option<PathBuf>,
+    /// Restrict the run to these packages (`--package`/`-p`); empty means the
+    /// whole workspace.
+    pub packages: Vec<String>,
+    /// Restrict the run to these benchmark targets (`--bench`); empty means all.
+    pub benches: Vec<String>,
+    /// Override for the machine fingerprint (hardware-dependent engines), if set.
+    pub machine_key: Option<String>,
+    /// Harvest and build results without storing them.
+    pub no_store: bool,
+    /// Replace an already-stored result for this run's identity instead of
+    /// refusing the run as a duplicate.
+    pub overwrite: bool,
+    /// Arguments forwarded verbatim to the benchmark command after the scope flags.
+    pub passthrough: Vec<String>,
+    /// Emit detailed diagnostic notes to standard error describing each step.
+    pub verbose: bool,
+}
+
+/// Options for the `install` command.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct InstallOptions {
+    /// Path to the configuration file to generate, if overridden.
+    pub config_path: Option<PathBuf>,
+    /// Emit detailed diagnostic notes to standard error describing each step.
+    pub verbose: bool,
+}
+
+/// Options for the `analyze` command.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct AnalyzeOptions {
+    /// Path to the configuration file, if overridden.
+    pub config_path: Option<PathBuf>,
+    /// Repository to resolve git topology from; defaults to the working directory.
+    pub repo: Option<PathBuf>,
+    /// Target ref whose history is analyzed; defaults to `HEAD`.
+    pub context: Option<String>,
+    /// Base ref the target's history is split at; defaults to the detected (or
+    /// configured) default branch.
+    pub base: Option<String>,
+    /// Exclude dirty (uncommitted-tree) snapshots from the target side.
+    pub no_dirty: bool,
+    /// Only consider commits made on or after this cutoff, if set.
+    pub since: Option<String>,
+    /// Only consider commits made on or before this cutoff, if set.
+    pub until: Option<String>,
+    /// Restrict analysis to these engines (repeatable). Empty auto-detects every
+    /// engine; the `all` keyword is an explicit synonym for no filter.
+    pub engine: Vec<String>,
+    /// Restrict analysis to these full target triples (repeatable). Empty
+    /// auto-detects the current machine's triple; `all` matches every triple.
+    pub target_triple: Vec<String>,
+    /// Restrict analysis to these machine keys (repeatable). Empty
+    /// auto-detects the current machine's fingerprint; `all` matches every
+    /// machine.
+    pub machine_key: Vec<String>,
+    /// Restrict analysis to benchmarks whose qualified identity starts with one of
+    /// these prefixes (repeatable). Empty means every benchmark.
+    pub prefixes: Vec<BenchmarkIdPrefix>,
+    /// Output format selector, if set.
+    pub format: Option<String>,
+    /// Analysis-mode selector (`auto`, `history`, `branch`, or `tip`), if set.
+    /// `auto` (the default) infers history vs branch mode from the git topology.
+    pub mode: Option<String>,
+    /// In history mode, also report sustained improvements (regressions only by
+    /// default, since improvement over time on the base branch is expected).
+    pub include_improvements: bool,
+    /// In history mode, also report inactive findings: changes that the current
+    /// state no longer reflects (a regression that later recovered). Hidden by
+    /// default since they need no action.
+    pub include_inactive: bool,
+    /// Emit detailed diagnostic notes to standard error describing each step.
+    pub verbose: bool,
+}
+/// The kind of thing a `list` invocation enumerates.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ListSubject {
+    /// The runs that would enter a matching `analyze` pass.
+    #[default]
+    Runs,
+    /// Every discriminant set present in storage (no repository required),
+    /// regardless of the current machine.
+    Discriminants,
+    /// The blessings recorded at the current commit (or, with `all`, the most
+    /// recent blessing of every benchmark in the analysis window).
+    Blessings,
+}
+
+/// Options for the `list` command.
+///
+/// The data-set-selection options mirror [`AnalyzeOptions`] exactly so a `list`
+/// invocation previews the data set the same `analyze` invocation would consume.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ListOptions {
+    /// What to enumerate (runs, discriminant sets, or blessings).
+    pub subject: ListSubject,
+    /// Path to the configuration file, if overridden.
+    pub config_path: Option<PathBuf>,
+    /// Repository to resolve git topology from; defaults to the working directory.
+    pub repo: Option<PathBuf>,
+    /// Target ref whose history is listed; defaults to `HEAD`.
+    pub context: Option<String>,
+    /// Base ref the target's history is split at; defaults to the detected (or
+    /// configured) default branch.
+    pub base: Option<String>,
+    /// Exclude dirty (uncommitted-tree) snapshots from the target side.
+    pub no_dirty: bool,
+    /// Only consider commits made on or after this cutoff, if set.
+    pub since: Option<String>,
+    /// Only consider commits made on or before this cutoff, if set.
+    pub until: Option<String>,
+    /// Restrict the listing to these engines (repeatable). Empty auto-detects
+    /// every engine; the `all` keyword is an explicit synonym for no filter.
+    pub engine: Vec<String>,
+    /// Restrict the listing to these full target triples (repeatable). Empty
+    /// auto-detects the current machine's triple; `all` matches every triple.
+    pub target_triple: Vec<String>,
+    /// Restrict the listing to these machine keys (repeatable). Empty
+    /// auto-detects the current machine's fingerprint; `all` matches every
+    /// machine.
+    pub machine_key: Vec<String>,
+    /// Output format selector, if set.
+    pub format: Option<String>,
+    /// With `blessings`, list the most recent blessing of every benchmark across
+    /// the whole analysis window rather than only those at the current commit.
+    pub all: bool,
+    /// Emit detailed diagnostic notes to standard error describing each step.
+    pub verbose: bool,
+}
+
+/// Options for the `prune` command.
+///
+/// The data-set-selection options mirror [`AnalyzeOptions`]/[`ListOptions`] so a
+/// `prune` invocation deletes runs from exactly the data set the same
+/// `analyze`/`list` invocation would resolve. The caller must say which kinds of
+/// run to delete: `clean` removes clean runs (plus the blessing sidecars on every
+/// commit whose clean run is removed), `dirty` removes dirty (uncommitted-tree)
+/// snapshots, and setting both removes everything. Pruning the base branch's own
+/// data set (when `context` resolves to the same commit as `base`) requires
+/// `prune_base` as a safety guard.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PruneOptions {
+    /// Path to the configuration file, if overridden.
+    pub config_path: Option<PathBuf>,
+    /// Repository to resolve git topology from; defaults to the working directory.
+    pub repo: Option<PathBuf>,
+    /// Target ref whose history is pruned; defaults to `HEAD`.
+    pub context: Option<String>,
+    /// Base ref the context branched off from; defaults to the detected (or
+    /// configured) default branch.
+    pub base: Option<String>,
+    /// Restrict removal to specific commits (case-insensitive SHA-prefix match);
+    /// repeatable. Empty means every one of the selected commits.
+    pub commit: Vec<String>,
+    /// Only prune commits made on or after this cutoff, if set.
+    pub since: Option<String>,
+    /// Only prune commits made on or before this cutoff, if set.
+    pub until: Option<String>,
+    /// Restrict removal to these engines (repeatable). Empty auto-detects every
+    /// engine; the `all` keyword is an explicit synonym for no filter.
+    pub engine: Vec<String>,
+    /// Restrict removal to these full target triples (repeatable). Empty
+    /// auto-detects the current machine's triple; `all` matches every triple.
+    pub target_triple: Vec<String>,
+    /// Restrict removal to these machine keys (repeatable). Empty
+    /// auto-detects the current machine's fingerprint; `all` matches every
+    /// machine.
+    pub machine_key: Vec<String>,
+    /// Remove clean runs (and their blessing sidecars).
+    pub clean: bool,
+    /// Remove dirty (uncommitted-tree) snapshots.
+    pub dirty: bool,
+    /// Confirm pruning the base branch's own data set (when `context` resolves to
+    /// the same commit as `base`).
+    pub prune_base: bool,
+    /// Preview what would be removed without deleting anything.
+    pub dry_run: bool,
+    /// Output format selector, if set.
+    pub format: Option<String>,
+    /// Emit detailed diagnostic notes to standard error describing each step.
+    pub verbose: bool,
+}
+
+/// Options for the `backfill` command.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct BackfillOptions {
+    /// Path to the configuration file, if overridden.
+    pub config_path: Option<PathBuf>,
+    /// Repository to run benchmarks in and read git history from; defaults to the
+    /// working directory.
+    pub repo: Option<PathBuf>,
+    /// Oldest commit of the range to backfill (inclusive).
+    pub from: String,
+    /// Newest commit of the range to backfill (inclusive).
+    pub to: String,
+    /// Restrict the runs to these packages (`--package`/`-p`); empty means the
+    /// whole workspace.
+    pub packages: Vec<String>,
+    /// Restrict the runs to these benchmark targets (`--bench`); empty means all.
+    pub benches: Vec<String>,
+    /// Override for the machine fingerprint (hardware-dependent engines), if set.
+    pub machine_key: Option<String>,
+    /// Replace already-stored results for the backfilled commits instead of
+    /// skipping them as duplicates.
+    pub overwrite: bool,
+    /// Continue past commits whose build or benchmark fails instead of stopping.
+    pub ignore_errors: bool,
+    /// Arguments forwarded verbatim to the benchmark command after the scope flags.
+    pub passthrough: Vec<String>,
+    /// Emit detailed diagnostic notes to standard error describing each step.
+    pub verbose: bool,
+}
+
+/// Options for the `bless` command.
+///
+/// The data-set-selection options mirror the facet subset of [`AnalyzeOptions`]
+/// (engine, target triple, and machine key) so a `bless` writes its sidecars into
+/// exactly the discriminant sets a matching `analyze` would consume. It always
+/// acts at the current commit (`HEAD`), so it has no `context` / `since` /
+/// `metric` selectors.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct BlessOptions {
+    /// Path to the configuration file, if overridden.
+    pub config_path: Option<PathBuf>,
+    /// Repository to resolve git topology from; defaults to the working directory.
+    pub repo: Option<PathBuf>,
+    /// Commit to bless; defaults to `HEAD`. The blessing is recorded against the
+    /// `clean.json` stored at this commit.
+    pub context: Option<String>,
+    /// Base ref the context commit must be on; defaults to the detected (or
+    /// configured) default branch.
+    pub base: Option<String>,
+    /// Restrict the blessing to these engines (repeatable). Empty auto-detects
+    /// every engine; the `all` keyword is an explicit synonym for no filter.
+    pub engine: Vec<String>,
+    /// Restrict the blessing to these full target triples (repeatable). Empty
+    /// auto-detects the current machine's triple; `all` matches every triple.
+    pub target_triple: Vec<String>,
+    /// Restrict the blessing to these machine keys (repeatable). Empty
+    /// auto-detects the current machine's fingerprint; `all` matches every
+    /// machine.
+    pub machine_key: Vec<String>,
+    /// Benchmark-id prefixes to accept (matched against the qualified identity).
+    /// At least one is required unless `all` is set.
+    pub prefixes: Vec<BenchmarkIdPrefix>,
+    /// Accept every benchmark at the context commit (no prefixes required).
+    pub all: bool,
+    /// Emit detailed diagnostic notes to standard error describing each step.
+    pub verbose: bool,
+}
+
+/// Options for the `unbless` command.
+///
+/// Mirrors [`BlessOptions`]' selection facets but takes no prefixes: an unbless
+/// removes every blessing recorded at the current commit in the selected sets
+/// (sidecars are immutable, so editing a blessing means unblessing then
+/// re-blessing the subset to keep).
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct UnblessOptions {
+    /// Path to the configuration file, if overridden.
+    pub config_path: Option<PathBuf>,
+    /// Repository to resolve git topology from; defaults to the working directory.
+    pub repo: Option<PathBuf>,
+    /// Commit to unbless; defaults to `HEAD`. Only blessings recorded at this
+    /// commit are removed.
+    pub context: Option<String>,
+    /// Base ref the context commit must be on; defaults to the detected (or
+    /// configured) default branch.
+    pub base: Option<String>,
+    /// Restrict the unblessing to these engines (repeatable). Empty auto-detects
+    /// every engine; the `all` keyword is an explicit synonym for no filter.
+    pub engine: Vec<String>,
+    /// Restrict the unblessing to these full target triples (repeatable). Empty
+    /// auto-detects the current machine's triple; `all` matches every triple.
+    pub target_triple: Vec<String>,
+    /// Restrict the unblessing to these machine keys (repeatable). Empty
+    /// auto-detects the current machine's fingerprint; `all` matches every
+    /// machine.
+    pub machine_key: Vec<String>,
+    /// Emit detailed diagnostic notes to standard error describing each step.
+    pub verbose: bool,
+}
