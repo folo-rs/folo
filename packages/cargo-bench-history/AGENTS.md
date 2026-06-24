@@ -46,8 +46,9 @@ When you add a new IO edge, follow the same pattern: a port trait with an
 The CLI is built with **clap** (derive API). It was chosen over `argh` because the
 command surface is wide and `argh` cannot group flags under named headings; clap's
 `help_heading` lets each command's `--help` present functionally grouped sections.
-The other workspace cargo tools still use `argh` — their migration is tracked in
-GitHub issue #252; do **not** assume they share this crate's CLI conventions.
+The other workspace cargo tools (`cargo-detect-package`/`cargo-freeze-deps`) also use
+clap, but their CLIs are trivial — do **not** assume they share this crate's grouped
+argument conventions.
 
 Flags are organised into functional groups, applied via `#[command(flatten)]` shared
 arg structs so a group looks identical everywhere it appears (and so analyze/list/

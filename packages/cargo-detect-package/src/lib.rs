@@ -7,12 +7,14 @@
 //! This crate provides the core logic for package detection, exposed via the [`run`] function.
 //! The binary entry point is in `main.rs`.
 
+mod cli;
 mod detection;
 mod execution;
 mod pal;
 mod types;
 mod workspace;
 
+pub use cli::{Cli, EarlyExit};
 use detection::{DetectedPackage, detect_package};
 use execution::{execute_with_cargo_args, execute_with_env_var};
 use pal::{Filesystem, FilesystemFacade};

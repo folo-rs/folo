@@ -5,35 +5,18 @@
 //!
 //! This module is excluded from mutation testing and coverage because testing process
 //! entry/exit behavior is impractical — it requires spawning subprocesses and checking
-//! exit codes. The bulk of the logic lives in the library and is tested directly via
-//! `cargo_freeze_deps::run`.
+//! exit codes. CLI parsing lives in the library's `cli` module and the bulk of the logic
+//! lives in `cargo_freeze_deps::run`, both tested directly.
 
-use std::path::PathBuf;
 use std::process::ExitCode;
 
-use argh::FromArgs;
-use cargo_freeze_deps::{RunInput, run};
-
-/// A Cargo subcommand that freezes all floating dependency versions in a Cargo.toml file
-/// to their literal values.
-#[derive(FromArgs)]
-struct Args {
-    /// path to the Cargo.toml file to freeze. Defaults to ./Cargo.toml in the current
-    /// working directory.
-    #[argh(option, short = 'p')]
-    path: Option<PathBuf>,
-
-    /// path to write the rewritten Cargo.toml to. Defaults to the input path
-    /// (rewriting in place).
-    #[argh(option, short = 'o')]
-    output: Option<PathBuf>,
-}
+use cargo_freeze_deps::{Cli, run};
 
 // Binary entry point — mutations would require subprocess testing which is impractical.
 #[cfg_attr(test, mutants::skip)]
 fn main() -> ExitCode {
     // When invoked as `cargo freeze-deps`, Cargo passes "freeze-deps" as the first
-    // argument after the program name. We strip it so argh sees a normal CLI invocation.
+    // argument after the program name. We strip it so clap sees a normal CLI invocation.
     let mut env_args: Vec<String> = std::env::args().collect();
 
     if env_args.get(1).is_some_and(|arg| arg == "freeze-deps") {
@@ -46,27 +29,33 @@ fn main() -> ExitCode {
         .first()
         .expect("std::env::args() always provides at least the program name");
 
-    let args: Args = match Args::from_args(&[program_name], str_args.get(1..).unwrap_or(&[])) {
-        Ok(args) => args,
+    let cli = match Cli::from_args(&[program_name], str_args.get(1..).unwrap_or(&[])) {
+        Ok(cli) => cli,
         Err(early_exit) => {
-            println!("{}", early_exit.output);
-            return if early_exit.output.contains("help") {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::FAILURE
+            // `status` is `Ok` for a `--help`/usage request (print to stdout, exit
+            // success) and `Err` for a parse error (print to stderr, exit failure).
+            return match early_exit.status {
+                Ok(()) => {
+                    println!("{}", early_exit.output);
+                    ExitCode::SUCCESS
+                }
+                Err(()) => {
+                    eprintln!("{}", early_exit.output);
+                    ExitCode::FAILURE
+                }
             };
         }
     };
 
-    let input = RunInput {
-        path: args.path.unwrap_or_else(|| PathBuf::from("Cargo.toml")),
-        output: args.output,
-    };
-
-    match run(&input) {
+    match run(&cli.into_input()) {
         Ok(outcome) => {
+            let noun = if outcome.frozen_count == 1 {
+                "dependency version"
+            } else {
+                "dependency versions"
+            };
             println!(
-                "Froze {} dependency version(s); left {} unchanged.",
+                "Froze {} {noun}; left {} unchanged.",
                 outcome.frozen_count, outcome.skipped_count
             );
             ExitCode::SUCCESS
