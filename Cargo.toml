@@ -10,8 +10,8 @@ repository = "https://github.com/folo-rs/folo"
 rust-version = "1.93"
 
 [workspace.dependencies]
-all_the_time = { version = "0.5.1", path = "packages/all_the_time", default-features = false }
-alloc_tracker = { version = "0.6.1", path = "packages/alloc_tracker", default-features = false }
+all_the_time = { version = "0.5.2", path = "packages/all_the_time", default-features = false }
+alloc_tracker = { version = "0.6.2", path = "packages/alloc_tracker", default-features = false }
 arc-swap = { version = "1.7.0", default-features = false }
 argh = { version = "0.1.13", default-features = false, features = ["default"] }
 awaiter_set = { version = "0.1.7", path = "packages/awaiter_set", default-features = false }
@@ -38,7 +38,7 @@ fake_headers = { version = "0.0.5", default-features = false }
 fast_time = { version = "0.1.24", path = "packages/fast_time", default-features = false }
 foldhash = { version = "0.2.0", default-features = false, features = ["std"] }
 folo_ffi = { version = "0.1.15", path = "packages/folo_ffi", default-features = false }
-folo_utils = { version = "0.1.8", path = "packages/folo_utils", default-features = false }
+folo_utils = { version = "0.1.9", path = "packages/folo_utils", default-features = false }
 frozen-collections = { version = "0.9.1", default-features = false }
 future_deque = { version = "0.1.11", path = "packages/future_deque", default-features = false }
 futures = { version = "0.3.11", default-features = false, features = ["std"] }
