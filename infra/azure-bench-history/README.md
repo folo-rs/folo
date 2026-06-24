@@ -76,9 +76,11 @@ just test-azure                # uses BENCH_HISTORY_AZURE_ACCOUNT from constants
 a misconfigured account fail loudly rather than skip) and runs the `real_azure`
 tests. Pass a name to target a different account: `just test-azure <storage-account-name>`.
 
-Without `BENCH_HISTORY_AZURE_ACCOUNT` the real-Azure tests self-skip (the Azurite
-tests are unaffected). Each test creates a unique `bh-it-*` container and deletes it
-when it finishes.
+Without `ENABLE_AZURE` (for example under a plain `just test`) the real-Azure tests
+self-skip regardless of the account, so they never target the cloud unintentionally;
+the Azurite tests are unaffected. With `ENABLE_AZURE` set (as `just test-azure` does)
+a missing `BENCH_HISTORY_AZURE_ACCOUNT` is instead a hard failure, not a skip. Each
+test creates a unique `bh-it-*` container and deletes it when it finishes.
 
 ## Clean up leftover containers
 

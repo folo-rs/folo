@@ -144,9 +144,10 @@ test FILTER="":
     cargo +{{ env_var('RUST_MSRV') }} nextest run {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast
 
 # Run the cargo-bench-history Azure storage tests against a REAL Azure account
-# (the Microsoft Entra ID auth path), as opposed to the `test` recipe which runs
-# them against the local Azurite emulator. Mirrors the CI `test-azure` job for
-# local verification.
+# (the Microsoft Entra ID auth path). This is the Azurite emulator path's
+# counterpart: the `test` recipe covers Azurite, but only when an emulator is
+# already reachable (it does not start one) — otherwise those tests self-skip.
+# Mirrors the CI `test-azure` job for local verification.
 #
 # Requires `az login` (the tests authenticate as your Entra user via the Azure
 # CLI) and a deployed storage account that grants your user the `Storage Blob
