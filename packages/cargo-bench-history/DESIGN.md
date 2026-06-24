@@ -1279,6 +1279,15 @@ exception), `serde`, `serde_json`, `toml`, `jiff` (timestamps +
 `azure_identity`, `azure_storage_blob`, `base64`, `hmac` (SAS signing pairs `hmac`
 with the always-on `sha2`), and `futures` at runtime.
 
+**Sibling stress crate.** `packages/cargo-bench-history-stress` is a separate,
+`publish = false` binary that drives the `analyze` scaling experiment (decision 32).
+It depends on this crate (`default-features = false`, plus its own `azure` feature
+forwarding to ours) and on `cargo-bench-history-core` for the model types it
+constructs. It owns no production logic: it replicates only the storage *write*
+layout to seed a giant synthetic dataset, then calls the public
+`run_with_overrides` to measure each mode. It is excluded from CI, mutation testing,
+and coverage; see its `README.md`.
+
 ## 11. Cross-platform notes
 
 * `analyze`, `install`, and the harvest/store half of `run` are platform-neutral
@@ -1682,3 +1691,32 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      test-azure` and the CI `test-azure` job read so local and CI target the same
      account. `deploy.ps1`/`teardown.ps1`/`cleanup-containers.ps1` wrap deploy,
      teardown and the leftover-container sweep.
+32. **`analyze` stress harness** — *Decided:* a separate, `publish = false` binary
+     crate (`packages/cargo-bench-history-stress`, run via `just stress` /
+     `just stress-azure`) fabricates a giant synthetic history (default 1000
+     benchmarks × 1000 `main` commits over ~12 months × 6 discriminant sets, plus a
+     short feature branch with dirty snapshots and partial blessings), seeds it into a
+     storage backend, and times each `analyze` mode over it. It is on-demand only —
+     **not** part of `just test`, CI, mutation testing, or coverage — because a
+     full-scale run takes ~100 s and writes ~1.3 GiB. It supports both storage
+     backends so the same scaling question can be asked of local-filesystem and Azure
+     Blob storage; Azure upload goes through `azcopy` (installed by
+     `just install-tools`) for throughput, against a fresh auto-deleted
+     `bh-stress-<unix>` container under the same `az login` + `constants.env` account
+     contract as `test-azure`. *Rejected* the `private-test-util`/`_impl`-crate split
+     and a test-only feature on the shell crate (features may gate only user-visible
+     API surface on a published crate): the harness instead replicates only the
+     storage *write* layout (the same object keys the backends already use) and reads
+     the data back through the real public `run_with_overrides` entry point, so it
+     measures exactly the production path while touching zero production code. The
+     synthetic value model is built on the *deterministic* `callgrind` engine (no
+     dispersion) and shaped by per-benchmark families and cross-cutting divisors so
+     each mode reports an explainable mix of regressions/improvements rather than
+     all-or-nothing; a fixed dataset anchor + SplitMix64 generator make a given seed
+     and sizing reproduce a byte-identical dataset. *Finding (first full-scale run):*
+     all three modes share a ~17 s floor spent loading and deserializing the ~6000
+     stored objects one at a time (`analyze/mod.rs` issues `storage.get(&key).await`
+     in a serial loop), and `history` mode adds ~38 s of per-series change-point
+     detection on top; both are embarrassingly parallel and are flagged for a future
+     optimization pass (critically so for Azure, where the serial loads become serial
+     network round-trips).

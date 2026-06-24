@@ -449,6 +449,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "cargo-bench-history-stress"
+version = "0.0.0"
+dependencies = [
+ "cargo-bench-history",
+ "cargo-bench-history-core",
+ "clap",
+ "jiff",
+ "nonempty",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "cargo-detect-package"
 version = "1.0.21"
 dependencies = [

@@ -1,0 +1,36 @@
+[package]
+# Cargo expects dashes in tool-style crate names. Okay.
+name = "cargo-bench-history-stress"
+description = "On-demand stress harness that seeds a giant synthetic benchmark history into a cargo-bench-history storage backend and times each analysis mode over it"
+publish = false
+version = "0.0.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+# Forwards the Azure Blob storage backend through to the cargo-bench-history shell
+# crate, so the stress harness can target a real (or emulated) Azure account in
+# addition to local-filesystem storage. Off by default to keep the common build
+# light, mirroring the cargo-bench-history `azure` feature it delegates to.
+azure = ["cargo-bench-history/azure"]
+
+[dependencies]
+cargo-bench-history = { path = "../cargo-bench-history", default-features = false }
+cargo-bench-history-core = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+jiff = { workspace = true, features = ["serde"] }
+nonempty = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt-multi-thread"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

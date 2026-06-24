@@ -176,6 +176,60 @@ test-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_AZURE_ACCOUNT', ''):
     Write-Host "Running real-Azure tests against account '$account' (Microsoft Entra ID; requires az login)."
     cargo +$env:RUST_MSRV nextest run -p cargo-bench-history --features azure real_azure --locked --no-fail-fast
 
+# Run the cargo-bench-history "stress analyze" harness against LOCAL filesystem
+# storage: it seeds a giant synthetic benchmark history (default 1000 benchmarks ×
+# 1000 commits over 12 months × 6 discriminant sets, plus a short feature branch
+# with dirty snapshots and some blessings) into a temporary store, then times each
+# analysis mode (history / branch / tip) over it. The dataset is fabricated; the
+# point is to observe how long `analyze` takes at scale, not to measure real code.
+#
+# Pass any harness flags through, e.g. a smaller scenario for a quick check:
+#   just stress --commits 100 --benchmarks 100
+#   just stress --verbose --modes history
+# Release build, because both seeding and analysis are CPU-bound and a debug build
+# distorts the timings badly.
+[group('testing')]
+[script]
+stress *ARGS:
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    cargo run --release -p cargo-bench-history-stress --locked -- --storage local {{ ARGS }}
+
+# Run the cargo-bench-history "stress analyze" harness against a REAL Azure storage
+# account: it seeds the same giant synthetic history into a fresh blob container
+# (created and, unless --keep, deleted automatically), then times each analysis
+# mode over it. This exercises the real network round-trips that dominate the cost
+# against cloud storage.
+#
+# Requires `az login` (the harness and azcopy authenticate as your Entra user via
+# the Azure CLI) and the `azcopy` binary on PATH for the bulk upload — both are
+# installed by `just install-tools`. The account defaults to
+# BENCH_HISTORY_AZURE_ACCOUNT from constants.env (shared with the test-azure job);
+# override it by passing a name as the first argument. Any further harness flags
+# follow, e.g.:
+#   just stress-azure                       # default account, full scenario
+#   just stress-azure mystorageacct --keep  # custom account, keep the container
+[group('testing')]
+[script]
+stress-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_AZURE_ACCOUNT', '') *ARGS:
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    $account = "{{ ACCOUNT }}"
+    if ([string]::IsNullOrEmpty($account)) {
+        Write-Error "No storage account specified. Pass it (just stress-azure <account> ...) or set BENCH_HISTORY_AZURE_ACCOUNT in constants.env. Deploy one with infra/azure-bench-history/deploy.ps1."
+        exit 1
+    }
+
+    if (-not (Get-Command azcopy -ErrorAction SilentlyContinue)) {
+        Write-Error "stress-azure requires the 'azcopy' binary on PATH for the bulk upload. Run 'just install-tools' to install it."
+        exit 1
+    }
+
+    Write-Host "Running the Azure stress harness against account '$account' (Microsoft Entra ID; requires az login)."
+    cargo run --release -p cargo-bench-history-stress --features azure --locked -- --storage azure --account $account {{ ARGS }}
+
 # Runs regular tests as well as doing one iteration of benchmarks.
 # We separate it from "test" because benchmarks are quite slow,
 # so we tend to only run them as part of a full validation pass.

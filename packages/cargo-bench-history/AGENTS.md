@@ -786,3 +786,37 @@ round-trip tests — carry `#[cfg_attr(test, mutants::skip)]`, the same pattern
 lean on (`classify`, `map_error`, the `storage::sas` signer, and
 `account_sas_expiry`) has dedicated unit tests and stays under mutation testing,
 so the error-mapping and signing behavior is still mutation-covered.
+
+## Stress harness (`cargo-bench-history-stress`)
+
+The sibling `cargo-bench-history-stress` package (under `packages/`) is an
+**on-demand** binary that fabricates a giant synthetic benchmark history, seeds it
+into a storage backend, and times each `analyze` mode (`history`, `branch`, `tip`)
+over it. Its purpose is to observe how `analyze` scales — it is **not** part of
+`just test`, CI, mutation testing, or coverage. See that package's `README.md` for
+the dataset shape and flags.
+
+Key facts when touching it:
+
+* **Zero production-code coupling.** The harness only *writes* objects in the same
+  key layout the storage backends use (`v1/{project}/{engine}/{triple}/{machine}/
+  {commit}/{file}`), then reads them back through the real public
+  `cargo_bench_history::run_with_overrides` entry point. It deliberately does **not**
+  reach into private storage internals, so it needs no `_impl`-crate split and no
+  test-only feature on the shell crate. If a refactor changes the on-disk key layout
+  or the JSON report's top-level fields, the harness's `seed.rs` / `report.rs` must
+  be updated in lockstep.
+* **Storage selection** mirrors the tests: local filesystem by default, Azure Blob
+  under `--storage azure` (its own `azure` feature forwards to the shell crate's
+  `azure` feature). Azure upload uses `azcopy` (installed by `just install-tools`)
+  for throughput, authenticating as the Entra user via the Azure CLI — same
+  `az login` + `BENCH_HISTORY_AZURE_ACCOUNT` contract as `test-azure`. Each run uses
+  a fresh `bh-stress-<unix>` container, deleted on exit unless `--keep`.
+* **Run it** with `just stress` (local) or `just stress-azure` (real Azure); both
+  pass extra flags through to the binary, e.g. `just stress --commits 100`.
+* **Determinism.** A given `--seed` and sizing reproduce a byte-identical dataset
+  (fixed dataset anchor + SplitMix64 value generator), so timings are comparable
+  across runs. The synthetic value model is shaped so each mode reports a sensible,
+  explainable mix of regressions/improvements rather than all-or-nothing (see the
+  family/divisor comments in `scenario.rs`).
+
