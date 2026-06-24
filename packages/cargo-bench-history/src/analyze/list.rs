@@ -27,14 +27,13 @@ use crate::{ListOptions, ListSubject, RunError, RunOutcome};
 
 use jiff::Timestamp;
 
-use super::report::ReportFormat;
-use super::series::{LoadedObject, Series, SeriesFilter, apply_blessings, build_series};
 use super::{
     AutoFacets, SelectedDataSet, Selection, detect_auto_facets, dirty_base_exception_warning,
     empty_history_hint, facet_filtered_candidates, parse_format, resolve_facets, select_dataset,
 };
-use crate::bless::BlessingRecord;
-use crate::comparability::DiscriminantSet;
+use super::{LoadedObject, ReportFormat, Series, SeriesFilter, apply_blessings, build_series};
+use crate::model::BlessingRecord;
+use crate::model::DiscriminantSet;
 
 /// The real `list`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
@@ -371,7 +370,7 @@ fn render_listing_json(listing: &Listing, hint: Option<&str>, warning: Option<&s
     struct JsonSet<'a> {
         engine: &'a str,
         target_triple: &'a str,
-        machine: &'a str,
+        machine_key: &'a str,
         runs: usize,
         series: usize,
         commits: Vec<JsonCommit<'a>>,
@@ -399,7 +398,7 @@ fn render_listing_json(listing: &Listing, hint: Option<&str>, warning: Option<&s
         .map(|set| JsonSet {
             engine: &set.set.engine,
             target_triple: &set.set.target_triple,
-            machine: &set.set.machine,
+            machine_key: &set.set.machine_key,
             runs: set.runs,
             series: set.series,
             commits: set
@@ -451,14 +450,14 @@ fn render_discriminants(sets: &[DiscriminantSet], format: ReportFormat) -> Strin
             struct JsonDiscriminant<'a> {
                 engine: &'a str,
                 target_triple: &'a str,
-                machine: &'a str,
+                machine_key: &'a str,
             }
             let list: Vec<JsonDiscriminant<'_>> = sets
                 .iter()
                 .map(|set| JsonDiscriminant {
                     engine: &set.engine,
                     target_triple: &set.target_triple,
-                    machine: &set.machine,
+                    machine_key: &set.machine_key,
                 })
                 .collect();
             serde_json::to_string_pretty(&list).expect("discriminant list serializes to JSON")
@@ -469,12 +468,12 @@ fn render_discriminants(sets: &[DiscriminantSet], format: ReportFormat) -> Strin
                 lines.push("No discriminant sets found.".to_owned());
                 return format!("{}\n", lines.join("\n"));
             }
-            lines.push("| Engine | Target triple | Machine |".to_owned());
+            lines.push("| Engine | Target triple | Machine key |".to_owned());
             lines.push("| --- | --- | --- |".to_owned());
             for set in sets {
                 lines.push(format!(
                     "| {} | {} | {} |",
-                    set.engine, set.target_triple, set.machine
+                    set.engine, set.target_triple, set.machine_key
                 ));
             }
             format!("{}\n", lines.join("\n"))
@@ -607,7 +606,7 @@ where
             commit: short_sha(&record.commit).to_owned(),
             commit_time: record.commit_time,
             issued_at: Some(record.issued_at),
-            prefixes: record.prefixes,
+            prefixes: record.prefixes.into_iter().map(String::from).collect(),
         });
     }
     Ok((short_sha(&head).to_owned(), entries))
@@ -808,7 +807,7 @@ fn render_blessings_json(
     struct JsonBlessing<'a> {
         engine: &'a str,
         target_triple: &'a str,
-        machine: &'a str,
+        machine_key: &'a str,
         #[serde(skip_serializing_if = "Option::is_none")]
         benchmark: Option<&'a str>,
         commit: &'a str,
@@ -832,7 +831,7 @@ fn render_blessings_json(
         .map(|entry| JsonBlessing {
             engine: &entry.set.engine,
             target_triple: &entry.set.target_triple,
-            machine: &entry.set.machine,
+            machine_key: &entry.set.machine_key,
             benchmark: entry.benchmark.as_deref(),
             commit: &entry.commit,
             commit_time: entry.commit_time,
@@ -858,11 +857,13 @@ mod tests {
     use jiff::Timestamp;
 
     use crate::config::{Config, parse_config};
-    use crate::context::{EnvironmentInfo, GitInfo, RunContext, ToolchainInfo};
     use crate::git_history::FakeGitHistory;
-    use crate::model::{BenchmarkId, BenchmarkResult, Metric, MetricKind, Run};
+    use crate::model::{BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, Metric, MetricKind, Run};
+    use crate::model::{EnvironmentInfo, GitInfo, RunContext, ToolchainInfo};
     use crate::report::RecordingReporter;
     use crate::storage::{MemoryStorage, Storage};
+
+    use nonempty::nonempty;
 
     use super::*;
 
@@ -900,7 +901,7 @@ mod tests {
             "0.0.1".to_owned(),
         );
         let record = BenchmarkResult::new(
-            BenchmarkId::new(vec![
+            BenchmarkId::new(nonempty![
                 "nm".to_owned(),
                 "nm::observe".to_owned(),
                 "pull".to_owned(),
@@ -932,7 +933,7 @@ mod tests {
         );
         let case = |case: &str| {
             BenchmarkResult::new(
-                BenchmarkId::new(vec![
+                BenchmarkId::new(nonempty![
                     "nm".to_owned(),
                     "nm::observe".to_owned(),
                     case.to_owned(),
@@ -961,7 +962,7 @@ mod tests {
             "0.0.1".to_owned(),
         );
         let record = BenchmarkResult::new(
-            BenchmarkId::new(vec![
+            BenchmarkId::new(nonempty![
                 "nm".to_owned(),
                 "nm::observe".to_owned(),
                 "pull".to_owned(),
@@ -984,7 +985,7 @@ mod tests {
         DiscriminantSet {
             engine: "callgrind".to_owned(),
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine: "synthetic".to_owned(),
+            machine_key: "synthetic".to_owned(),
         }
     }
 
@@ -997,7 +998,7 @@ mod tests {
         DiscriminantSet {
             engine: "criterion".to_owned(),
             target_triple: "aarch64-apple-darwin".to_owned(),
-            machine: "synthetic".to_owned(),
+            machine_key: "synthetic".to_owned(),
         }
     }
 
@@ -1259,7 +1260,7 @@ mod tests {
 
     #[test]
     fn list_engine_facet_restricts_the_data_set() {
-        // Two sets in the same triple/machine partition differing only by engine.
+        // Two sets in the same triple/machine-key partition differing only by engine.
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("c0"), &two_metric_set(0, "c0"));
         store(
@@ -1405,7 +1406,7 @@ mod tests {
         let report = list(&storage, &git, &opts);
         assert!(report.contains("# Discriminant sets"), "{report}");
         assert!(
-            report.contains("| Engine | Target triple | Machine |"),
+            report.contains("| Engine | Target triple | Machine key |"),
             "{report}"
         );
         assert!(
@@ -1479,7 +1480,7 @@ mod tests {
             "c3".to_owned(),
             Timestamp::from_second(3).unwrap(),
             Timestamp::from_second(100).unwrap(),
-            vec!["nm/nm::observe".to_owned()],
+            vec![BenchmarkIdPrefix::new("nm/nm::observe").unwrap()],
             "0.0.1".to_owned(),
         );
         store_bless(&storage, &bless_key("c3", 100), &record);
@@ -1527,7 +1528,7 @@ mod tests {
             "c3".to_owned(),
             Timestamp::from_second(3).unwrap(),
             Timestamp::from_second(100).unwrap(),
-            vec!["nm/nm::observe".to_owned()],
+            vec![BenchmarkIdPrefix::new("nm/nm::observe").unwrap()],
             "0.0.1".to_owned(),
         );
         store_bless(&storage, &bless_key("c3", 100), &record);
@@ -1640,7 +1641,7 @@ mod tests {
             "c2".to_owned(),
             Timestamp::from_second(2).unwrap(),
             Timestamp::from_second(100).unwrap(),
-            vec!["nm/nm::observe".to_owned()],
+            vec![BenchmarkIdPrefix::new("nm/nm::observe").unwrap()],
             "0.0.1".to_owned(),
         );
         store_bless(&storage, &bless_key("c2", 100), &record);
@@ -1682,7 +1683,7 @@ mod tests {
             "c2".to_owned(),
             Timestamp::from_second(2).unwrap(),
             Timestamp::from_second(100).unwrap(),
-            vec!["nm/nm::observe".to_owned()],
+            vec![BenchmarkIdPrefix::new("nm/nm::observe").unwrap()],
             "0.0.1".to_owned(),
         );
         store_bless(&storage, &bless_key("c2", 100), &record);
@@ -1747,7 +1748,7 @@ mod tests {
             "c1".to_owned(),
             Timestamp::from_second(1).unwrap(),
             Timestamp::from_second(100).unwrap(),
-            vec!["nm/nm::observe".to_owned()],
+            vec![BenchmarkIdPrefix::new("nm/nm::observe").unwrap()],
             "0.0.1".to_owned(),
         );
         store_bless(&storage, &bless_key("c1", 100), &record);

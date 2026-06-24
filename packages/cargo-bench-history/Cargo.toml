@@ -46,6 +46,7 @@ futures = { workspace = true, optional = true }
 hmac = { workspace = true, optional = true }
 jiff = { workspace = true, features = ["serde"] }
 many_cpus = { workspace = true }
+nonempty = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

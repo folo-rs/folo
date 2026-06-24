@@ -17,7 +17,9 @@ pub(crate) mod list;
 pub(crate) mod prune;
 
 pub(crate) use cargo_bench_history_core::analyze::{
-    discriminant, findings, report, selection, series,
+    AnalysisConfig, AnalysisContext, AnalysisMode, DiscriminantSetQuery, FacetFilter, LoadedObject,
+    ReportFormat, ReportInput, Series, SeriesFilter, SetSummary, StorageKey, apply_blessings,
+    build_series, find_changes, parse_key, render, select_commits,
 };
 
 use std::collections::HashMap;
@@ -28,13 +30,14 @@ use std::path::Path;
 
 use jiff::tz::TimeZone;
 use jiff::{Span, Timestamp};
+use nonempty::NonEmpty;
 
-use crate::bless::BlessingRecord;
-use crate::comparability::{DiscriminantSet, Engine, sanitize_segment};
 use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
 use crate::machine::resolve_machine_key;
+use crate::model::BlessingRecord;
 use crate::model::Run;
+use crate::model::{DiscriminantSet, Engine, sanitize_segment};
 use crate::probe::{EnvironmentProbe, SystemProbe};
 use crate::report::{Reporter, StderrReporter};
 use crate::storage::{Storage, build_storage};
@@ -43,12 +46,6 @@ use crate::wiring::{resolve_config_path, resolve_project_id, resolve_repo};
 use crate::{
     AnalyzeOptions, BlessOptions, ListOptions, PruneOptions, RunError, RunOutcome, UnblessOptions,
 };
-
-use discriminant::{DiscriminantSetQuery, FacetFilter, StorageKey, parse_key};
-use findings::{AnalysisConfig, AnalysisContext, AnalysisMode, find_changes};
-use report::{ReportFormat, ReportInput, SetSummary, render};
-use selection::select_commits;
-use series::{LoadedObject, SeriesFilter, build_series};
 
 /// The real `analyze`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
@@ -157,7 +154,7 @@ where
     let mut series = build_series(&dataset.loaded, &dataset.order, &filter);
     // Re-baseline blessed series before detection (history mode only; branch and
     // tip modes carry an empty blessing map).
-    series::apply_blessings(&mut series, &dataset.blessings);
+    apply_blessings(&mut series, &dataset.blessings);
     let context = AnalysisContext {
         mode: dataset.mode,
         config: AnalysisConfig::default(),
@@ -386,12 +383,12 @@ fn resolve_facet(values: &[String], auto: Option<&str>) -> FacetFilter {
     if values.iter().any(|value| value.eq_ignore_ascii_case("all")) {
         return FacetFilter::All;
     }
-    if values.is_empty() {
-        return auto.map_or(FacetFilter::All, |value| {
+    match NonEmpty::from_vec(values.to_vec()) {
+        Some(values) => FacetFilter::Explicit(values),
+        None => auto.map_or(FacetFilter::All, |value| {
             FacetFilter::Auto(value.to_owned())
-        });
+        }),
     }
-    FacetFilter::Explicit(values.to_vec())
 }
 
 /// Resolves every command-line facet into a [`DiscriminantSetQuery`] filter, validating that any
@@ -407,7 +404,7 @@ fn resolve_facets(
 ) -> Result<DiscriminantSetQuery, RunError> {
     let engine = resolve_facet(selection.engine, None);
     if let FacetFilter::Explicit(values) = &engine {
-        for value in values {
+        for value in values.iter() {
             parse_engine(Some(value))?;
         }
     }
@@ -1021,7 +1018,7 @@ fn describe_facets(facets: &DiscriminantSetQuery) -> String {
     let parts = [
         ("engine", &facets.engine),
         ("target_triple", &facets.target_triple),
-        ("machine", &facets.machine_key),
+        ("machine_key", &facets.machine_key),
     ]
     .into_iter()
     .filter_map(|(label, filter)| describe_filter(filter).map(|value| format!("{label}={value}")))
@@ -1038,7 +1035,7 @@ fn describe_filter(filter: &FacetFilter) -> Option<String> {
     match filter {
         FacetFilter::All => None,
         FacetFilter::Auto(value) => Some(format!("{value} (auto-detected)")),
-        FacetFilter::Explicit(values) => Some(values.join("|")),
+        FacetFilter::Explicit(values) => Some(values.iter().cloned().collect::<Vec<_>>().join("|")),
     }
 }
 
@@ -1198,11 +1195,13 @@ mod tests {
     use jiff::Timestamp;
 
     use crate::config::{Config, parse_config};
-    use crate::context::{EnvironmentInfo, GitInfo, RunContext, ToolchainInfo};
     use crate::git_history::FakeGitHistory;
-    use crate::model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
+    use crate::model::{BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, Metric, MetricKind};
+    use crate::model::{EnvironmentInfo, GitInfo, RunContext, ToolchainInfo};
     use crate::report::RecordingReporter;
     use crate::storage::{MemoryStorage, Storage};
+
+    use nonempty::nonempty;
 
     use super::*;
 
@@ -1232,7 +1231,7 @@ mod tests {
             "0.0.1".to_owned(),
         );
         let record = BenchmarkResult::new(
-            BenchmarkId::new(vec![
+            BenchmarkId::new(nonempty![
                 "nm".to_owned(),
                 "nm::observe".to_owned(),
                 "pull".to_owned(),
@@ -1247,7 +1246,7 @@ mod tests {
         format!("v2/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
     }
 
-    /// The clean object key for `commit` in an arbitrary engine/triple/machine partition.
+    /// The clean object key for `commit` in an arbitrary engine/triple/machine-key partition.
     fn clean_key_in(engine: &str, triple: &str, machine: &str, commit: &str) -> String {
         format!("v2/folo/{engine}/{triple}/{machine}/{commit}/clean.json")
     }
@@ -1270,7 +1269,7 @@ mod tests {
             "0.0.1".to_owned(),
         );
         let record = BenchmarkResult::new(
-            BenchmarkId::new(vec![
+            BenchmarkId::new(nonempty![
                 "nm".to_owned(),
                 "nm::observe".to_owned(),
                 "pull".to_owned(),
@@ -1456,14 +1455,14 @@ mod tests {
         assert_eq!(describe_facets(&empty), "none");
 
         let full = DiscriminantSetQuery {
-            engine: FacetFilter::Explicit(vec!["criterion".to_owned()]),
+            engine: FacetFilter::Explicit(nonempty!["criterion".to_owned()]),
             target_triple: FacetFilter::Auto("x86_64-pc-windows-msvc".to_owned()),
-            machine_key: FacetFilter::Explicit(vec!["abcd".to_owned()]),
+            machine_key: FacetFilter::Explicit(nonempty!["abcd".to_owned()]),
         };
         assert_eq!(
             describe_facets(&full),
             "engine=criterion, target_triple=x86_64-pc-windows-msvc (auto-detected), \
-             machine=abcd"
+             machine_key=abcd"
         );
     }
 
@@ -1735,7 +1734,7 @@ mod tests {
             "c3".to_owned(),
             ts(3),
             ts(3),
-            vec!["nm".to_owned()],
+            vec![BenchmarkIdPrefix::new("nm").unwrap()],
             "0.0.1".to_owned(),
         );
         let bless_key =
@@ -1846,7 +1845,7 @@ mod tests {
             "z9".to_owned(),
             ts(3),
             ts(3),
-            vec!["nm".to_owned()],
+            vec![BenchmarkIdPrefix::new("nm").unwrap()],
             "0.0.1".to_owned(),
         );
         let bless_key =
@@ -2479,7 +2478,7 @@ mod tests {
 
     #[test]
     fn engine_facet_narrows_the_listing() {
-        // Two sets in the same triple/machine partition differing only by engine,
+        // Two sets in the same triple/machine-key partition differing only by engine,
         // so the engine facet alone selects one.
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));

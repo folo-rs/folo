@@ -37,8 +37,8 @@ async fn run_callgrind_end_to_end_stores_results() {
     // The unparametrized summary carries no parameter segment, so its identity
     // ends at the function name.
     assert_eq!(
-        record.id.segments.last().map(String::as_str),
-        Some("timestamp_capture_std_now")
+        record.id.segments.last().as_str(),
+        "timestamp_capture_std_now"
     );
     assert_eq!(ir_of(record), 36.0);
     assert_eq!(metric_of(record, MetricKind::InstructionCount).value, 36.0);
@@ -102,14 +102,14 @@ async fn run_stores_a_record_per_summary() {
     let parametrized = set
         .results
         .iter()
-        .find(|record| record.id.segments.last().map(String::as_str) == Some("two_instants"))
+        .find(|record| record.id.segments.last().as_str() == "two_instants")
         .unwrap();
     assert_eq!(ir_of(parametrized), 87.0);
 
     let unparametrized = set
         .results
         .iter()
-        .find(|record| record.id.segments.last().map(String::as_str) != Some("two_instants"))
+        .find(|record| record.id.segments.last().as_str() != "two_instants")
         .unwrap();
     assert_eq!(ir_of(unparametrized), 36.0);
 }
@@ -335,7 +335,7 @@ async fn run_alloc_tracker_stores_results() {
     assert_eq!(record.id.qualified(), "allocate_vec");
     assert_eq!(record.metrics.len(), 2, "{:?}", record.metrics);
 
-    let bytes = metric_of(record, MetricKind::AllocationBytes);
+    let bytes = metric_of(record, MetricKind::AllocatedBytes);
     assert_eq!(bytes.value, 200.0);
     assert_eq!(bytes.kind.as_unit(), "bytes");
 

@@ -16,13 +16,13 @@ use crate::bench::{
     parse_callgrind_summary, parse_criterion_case,
 };
 use crate::bench_output::{BenchOutputSource, FsBenchOutputSource, Harvest};
-use crate::comparability::{DiscriminantSet, Engine};
 use crate::config::{StorageConfig, load_config};
-use crate::context::{EnvironmentInfo, RunContext, ToolchainInfo, detect_environment};
 use crate::git::GitSnapshot;
 use crate::host::RustcInfo;
 use crate::machine::{HardwareProfile, resolve_machine_key};
 use crate::model::{BenchmarkResult, Run};
+use crate::model::{DiscriminantSet, Engine};
+use crate::model::{EnvironmentInfo, RunContext, ToolchainInfo, detect_environment};
 use crate::probe::{EnvironmentProbe, SystemProbe};
 use crate::process::{BenchRunner, TokioBenchRunner};
 use crate::report::{Reporter, StderrReporter};
@@ -647,8 +647,9 @@ mod tests {
 
     use super::*;
     use crate::bench_output::{Harvest, RawCriterionCase, RawOperationFile, RawSummary};
-    use crate::bless::BlessingRecord;
     use crate::git::build_snapshot;
+    use crate::model::BenchmarkIdPrefix;
+    use crate::model::BlessingRecord;
     use crate::process::EngineStatus;
     use crate::report::RecordingReporter;
     use crate::storage::MemoryStorage;
@@ -1326,7 +1327,7 @@ mod tests {
             "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_owned(),
             Timestamp::from_second(1).unwrap(),
             Timestamp::from_second(100).unwrap(),
-            vec!["group".to_owned()],
+            vec![BenchmarkIdPrefix::new("group").unwrap()],
             "0.0.1".to_owned(),
         );
         block_on(storage.put(&bless_key, record.to_json().unwrap().as_bytes())).unwrap();
@@ -1393,7 +1394,7 @@ mod tests {
             "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_owned(),
             Timestamp::from_second(1).unwrap(),
             Timestamp::from_second(100).unwrap(),
-            vec!["group".to_owned()],
+            vec![BenchmarkIdPrefix::new("group").unwrap()],
             "0.0.1".to_owned(),
         );
         block_on(storage.put(&bless_key, record.to_json().unwrap().as_bytes())).unwrap();
@@ -1775,7 +1776,7 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
-                crate::MetricKind::AllocationBytes,
+                crate::MetricKind::AllocatedBytes,
                 crate::MetricKind::AllocationCount
             ]
         );

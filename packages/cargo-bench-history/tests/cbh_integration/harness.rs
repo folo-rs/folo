@@ -9,6 +9,7 @@ pub(crate) use cargo_bench_history::{
     default_template, run, run_with_overrides,
 };
 pub(crate) use jiff::Timestamp;
+use nonempty::nonempty;
 pub(crate) use serial_test::serial;
 pub(crate) use testing::CwdGuard;
 
@@ -706,7 +707,7 @@ pub(crate) fn two_benchmark_result_set(effective: i64, commit: &str, alpha: f64,
     let ir = |value: f64| vec![Metric::new(MetricKind::InstructionCount, value)];
     let records = vec![
         BenchmarkResult::new(
-            BenchmarkId::new(vec![
+            BenchmarkId::new(nonempty![
                 "alpha".to_owned(),
                 "alpha::bench".to_owned(),
                 "wide".to_owned(),
@@ -714,7 +715,7 @@ pub(crate) fn two_benchmark_result_set(effective: i64, commit: &str, alpha: f64,
             ir(alpha),
         ),
         BenchmarkResult::new(
-            BenchmarkId::new(vec![
+            BenchmarkId::new(nonempty![
                 "beta".to_owned(),
                 "beta::bench".to_owned(),
                 "narrow".to_owned(),
@@ -740,14 +741,17 @@ pub(crate) fn criterion_result_set(effective: i64, commit: &str, value: f64) -> 
         TOOL_VERSION.to_owned(),
     );
     let record = BenchmarkResult::new(
-        BenchmarkId::new(vec!["time/capture".to_owned(), "std_instant".to_owned()]),
+        BenchmarkId::new(nonempty![
+            "time/capture".to_owned(),
+            "std_instant".to_owned()
+        ]),
         vec![Metric::new(MetricKind::WallTime, value)],
     );
     Run::new(context, vec![record])
 }
 
 /// Builds an `alloc_tracker` result set for `operation` carrying an
-/// `allocation_bytes` and an `allocation_count` metric, stamped with the effective
+/// `allocated_bytes` and an `allocation_count` metric, stamped with the effective
 /// second and abbreviated `commit`.
 pub(crate) fn alloc_result_set(
     effective: i64,
@@ -767,9 +771,9 @@ pub(crate) fn alloc_result_set(
         TOOL_VERSION.to_owned(),
     );
     let record = BenchmarkResult::new(
-        BenchmarkId::new(vec![operation.to_owned()]),
+        BenchmarkId::new(nonempty![operation.to_owned()]),
         vec![
-            Metric::new(MetricKind::AllocationBytes, bytes),
+            Metric::new(MetricKind::AllocatedBytes, bytes),
             Metric::new(MetricKind::AllocationCount, allocs),
         ],
     );
@@ -791,7 +795,7 @@ pub(crate) fn time_result_set(effective: i64, commit: &str, operation: &str, val
         TOOL_VERSION.to_owned(),
     );
     let record = BenchmarkResult::new(
-        BenchmarkId::new(vec![operation.to_owned()]),
+        BenchmarkId::new(nonempty![operation.to_owned()]),
         vec![Metric::new(MetricKind::ProcessorTime, value)],
     );
     Run::new(context, vec![record])
@@ -820,7 +824,7 @@ pub(crate) fn time_result_set_with_dispersion(
         TOOL_VERSION.to_owned(),
     );
     let record = BenchmarkResult::new(
-        BenchmarkId::new(vec![operation.to_owned()]),
+        BenchmarkId::new(nonempty![operation.to_owned()]),
         vec![
             Metric::new(MetricKind::ProcessorTime, value).with_dispersion(
                 Some(half_width),
@@ -880,7 +884,7 @@ pub(crate) fn result_set_with(effective: i64, commit: &str, metrics: Vec<Metric>
         TOOL_VERSION.to_owned(),
     );
     let record = BenchmarkResult::new(
-        BenchmarkId::new(vec![
+        BenchmarkId::new(nonempty![
             "nm".to_owned(),
             "nm::observe".to_owned(),
             "pull".to_owned(),

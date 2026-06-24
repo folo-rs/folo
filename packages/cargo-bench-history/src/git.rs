@@ -3,7 +3,7 @@
 
 use jiff::Timestamp;
 
-use crate::context::GitInfo;
+use crate::model::GitInfo;
 
 /// A git snapshot: the recorded [`GitInfo`] plus the committer date used as the
 /// commit timestamp.

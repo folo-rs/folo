@@ -102,7 +102,7 @@ Its `Session` auto-emits, on drop, one flat JSON file per operation under
 * `{ operation, total_iterations, total_bytes_allocated, total_allocations_count,
   mean_bytes_per_iteration, mean_allocations_per_iteration }` (all `u64`).
 * The adapter (`bench/alloc_tracker.rs`) reads `operation` and the two `mean_*`
-  fields, mapping them to an `AllocationBytes` (`allocated_bytes`) and an
+  fields, mapping them to an `AllocatedBytes` (`allocated_bytes`) and an
   `AllocationCount` (`allocations`) metric. The `total_*` fields are ignored — the
   per-iteration means are comparable across runs with differing iteration counts.
 
@@ -186,7 +186,7 @@ flowchart LR
   `interval_low`, `interval_high`) where the engine reports it. `kind ∈ {WallTime,
   ProcessorTime, InstructionCount, EstimatedCycles, L1CacheHits,
   LastLevelCacheHits, RamHits, ConditionalBranches, ConditionalBranchMisses,
-  IndirectBranches, IndirectBranchMisses, AllocationBytes, AllocationCount}`. There
+  IndirectBranches, IndirectBranchMisses, AllocatedBytes, AllocationCount}`. There
   is no separate `name` or `unit` field: each kind has exactly one unit, obtained
   via `kind.as_unit()` (`ns` / `bytes` / `count`), and the kind *is* the display
   name (`kind.as_str()`, a stable `snake_case` label). `value` is the point
@@ -1091,7 +1091,7 @@ and reports regressions only.
     {
       "engine": "callgrind",
       "target_triple": "x86_64-unknown-linux-gnu",
-      "machine": "synthetic",
+      "machine_key": "synthetic",
       "segments": ["mypkg", "module::path", "case"],
       "kind": "instruction_count",
       "method": "change_point", "direction": "regression",

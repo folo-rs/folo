@@ -1,16 +1,12 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![allow(
+#![expect(
     clippy::exhaustive_enums,
     clippy::exhaustive_structs,
-    clippy::module_name_repetitions,
     reason = "this crate's `pub` items form a handoff boundary to the \
               cargo-bench-history shell crate (and that crate's tests), used only \
               inside this workspace rather than as a stable public API. Exhaustive \
-              construction and matching by those in-workspace consumers is intended, \
-              and the deliberately descriptive type names (DiscriminantSet, \
-              ReportFormat, RunContext, ...) read best at the shell's use sites even \
-              though they restate their module name"
+              construction and matching by those in-workspace consumers is intended"
 )]
 
 //! Pure internals of [`cargo-bench-history`]: the stored data model, the
@@ -26,11 +22,12 @@
 //! fast in-process unit-test suite that is cheap to mutation-test, instead of
 //! re-paying the shell's git-subprocess-heavy integration suite for every mutant.
 //!
+//! The public surface is two namespaces: [`model`] (the data model and
+//! comparability rules) and [`analyze`] (the analysis math and rendering). Within
+//! each, every type is re-exported flat, so consumers write `crate::model::Run`
+//! and `crate::analyze::Finding` rather than reaching into private submodules.
+//!
 //! [`cargo-bench-history`]: https://github.com/folo-rs/folo
 
 pub mod analyze;
-pub mod bless;
-pub mod comparability;
-pub mod constants;
-pub mod context;
 pub mod model;

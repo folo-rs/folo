@@ -1,127 +1,6 @@
-//! The data model: a benchmark run reduced to a set of benchmark results, each a
-//! stable identity plus its measured metrics, together with the immutable run
-//! stored per invocation.
-
-use std::fmt;
+//! A single measured quantity and the categories a benchmark engine can report.
 
 use serde::{Deserialize, Serialize};
-
-use crate::context::RunContext;
-
-/// Schema version of the stored [`Run`] JSON.
-///
-/// Bumped whenever the on-disk representation changes in a backward-incompatible
-/// way so that `analyze` can refuse or migrate older data.
-pub const SCHEMA_VERSION: u32 = 1;
-
-/// A complete benchmark run: the unit of storage (one immutable file per run).
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct Run {
-    /// Schema version of this record (see [`SCHEMA_VERSION`]).
-    pub schema_version: u32,
-    /// Context describing where, when, and against which commit the run happened.
-    pub context: RunContext,
-    /// One result per benchmark case measured in this run.
-    pub results: Vec<BenchmarkResult>,
-}
-
-impl Run {
-    /// Creates a run stamped with the current [`SCHEMA_VERSION`].
-    #[must_use]
-    pub fn new(context: RunContext, results: Vec<BenchmarkResult>) -> Self {
-        Self {
-            schema_version: SCHEMA_VERSION,
-            context,
-            results,
-        }
-    }
-
-    /// Serializes this run to pretty-printed JSON, the on-disk format.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if serialization fails.
-    pub fn to_json(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string_pretty(self)
-    }
-
-    /// Deserializes a run from its JSON representation.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `json` is not a valid serialized run.
-    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_str(json)
-    }
-}
-
-/// A single benchmark case: a stable identity plus its measured metrics.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct BenchmarkResult {
-    /// Stable identity of the benchmark case (its series key).
-    pub id: BenchmarkId,
-    /// Metrics captured for this case in this run.
-    pub metrics: Vec<Metric>,
-}
-
-impl BenchmarkResult {
-    /// Creates a result for `id` carrying `metrics`.
-    #[must_use]
-    pub fn new(id: BenchmarkId, metrics: Vec<Metric>) -> Self {
-        Self { id, metrics }
-    }
-}
-
-/// Stable identity of a benchmark series.
-///
-/// Two runs contribute to the same series if and only if their `BenchmarkId`
-/// values are equal, so the identity must be reproducible across runs *and*
-/// uniquely identify the benchmark within its project.
-///
-/// The identity is an ordered list of path-like segments, from coarsest to
-/// finest. Each benchmark engine decides what its segments are — the general
-/// model imposes no fixed `package`/`group`/`case` structure, because the
-/// engines disagree on which of those they can even report:
-///
-/// * **Callgrind** (via Gungraun) emits `[package, module_path, function_name]`
-///   plus an optional parameter segment.
-/// * **Criterion** emits `[group_id, function_id?]` plus an optional parameter
-///   segment; its machine-readable output records no owning package.
-/// * **`alloc_tracker`** and **`all_the_time`** emit a single operation-name
-///   segment.
-///
-/// Keeping the segments as a list (rather than fixed, partly optional fields)
-/// lets each engine adapter own the mapping from its raw output to a comparable
-/// identity, and lets prefix matching (used by `bless` and `analyze`) work
-/// uniformly against the [`qualified`](Self::qualified) join of the segments.
-#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct BenchmarkId {
-    /// The identity segments, coarsest first, joined by `/` to form the qualified
-    /// identity. Never empty.
-    pub segments: Vec<String>,
-}
-
-impl BenchmarkId {
-    /// Creates a benchmark identity from its ordered segments.
-    #[must_use]
-    pub fn new(segments: Vec<String>) -> Self {
-        Self { segments }
-    }
-
-    /// The fully qualified identity: every segment joined by `/`. This form
-    /// uniquely identifies the series and is what reports and prefix matching
-    /// use, so cross-package collisions stay visible.
-    #[must_use]
-    pub fn qualified(&self) -> String {
-        self.segments.join("/")
-    }
-}
-
-impl fmt::Display for BenchmarkId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.qualified())
-    }
-}
 
 /// A single measured quantity.
 ///
@@ -218,7 +97,7 @@ pub enum MetricKind {
     /// Mispredicted indirect branches (Callgrind); deterministic.
     IndirectBranchMisses,
     /// Bytes allocated per iteration (`alloc_tracker`); deterministic.
-    AllocationBytes,
+    AllocatedBytes,
     /// Allocation count per iteration (`alloc_tracker`); deterministic.
     AllocationCount,
 }
@@ -240,7 +119,7 @@ impl MetricKind {
             Self::ConditionalBranchMisses => "conditional_branch_misses",
             Self::IndirectBranches => "indirect_branches",
             Self::IndirectBranchMisses => "indirect_branch_misses",
-            Self::AllocationBytes => "allocation_bytes",
+            Self::AllocatedBytes => "allocated_bytes",
             Self::AllocationCount => "allocation_count",
         }
     }
@@ -250,7 +129,7 @@ impl MetricKind {
     pub fn as_unit(self) -> &'static str {
         match self {
             Self::WallTime | Self::ProcessorTime => "ns",
-            Self::AllocationBytes => "bytes",
+            Self::AllocatedBytes => "bytes",
             Self::InstructionCount
             | Self::EstimatedCycles
             | Self::L1CacheHits
@@ -274,50 +153,22 @@ impl MetricKind {
     pub fn higher_is_better(self) -> bool {
         matches!(self, Self::L1CacheHits)
     }
+
+    /// Whether this kind is measured by a deterministic engine.
+    ///
+    /// Wall time and processor time are the noisy metrics; every Callgrind- and
+    /// `alloc_tracker`-derived metric is exact. Analysis uses this to decide
+    /// whether a change needs noise-aware gating or can be judged exactly.
+    #[must_use]
+    pub fn is_deterministic(self) -> bool {
+        !matches!(self, Self::WallTime | Self::ProcessorTime)
+    }
 }
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use crate::context::{EnvironmentInfo, GitInfo, ToolchainInfo};
-
     use super::*;
-
-    fn sample_context() -> RunContext {
-        let epoch = "2024-01-01T00:00:00Z".parse().unwrap();
-        RunContext::new(
-            epoch,
-            epoch,
-            GitInfo::default(),
-            EnvironmentInfo::default(),
-            ToolchainInfo::default(),
-            "0.0.1".to_owned(),
-        )
-    }
-
-    #[test]
-    fn run_new_stamps_schema_version() {
-        let run = Run::new(sample_context(), Vec::new());
-        assert_eq!(run.schema_version, SCHEMA_VERSION);
-    }
-
-    #[test]
-    fn run_json_roundtrip() {
-        let result = BenchmarkResult::new(
-            BenchmarkId::new(vec![
-                "nm".to_owned(),
-                "nm::observe".to_owned(),
-                "pull".to_owned(),
-            ]),
-            vec![Metric::new(MetricKind::InstructionCount, 1234.0)],
-        );
-        let run = Run::new(sample_context(), vec![result]);
-
-        let json = run.to_json().unwrap();
-        let parsed = Run::from_json(&json).unwrap();
-
-        assert_eq!(parsed, run);
-    }
 
     #[test]
     fn metric_kind_serializes_snake_case() {
@@ -341,7 +192,7 @@ mod tests {
             MetricKind::ConditionalBranchMisses,
             MetricKind::IndirectBranches,
             MetricKind::IndirectBranchMisses,
-            MetricKind::AllocationBytes,
+            MetricKind::AllocatedBytes,
             MetricKind::AllocationCount,
         ] {
             let json = serde_json::to_string(&kind).unwrap();
@@ -355,7 +206,7 @@ mod tests {
     fn metric_kind_units_are_fixed_per_kind() {
         assert_eq!(MetricKind::WallTime.as_unit(), "ns");
         assert_eq!(MetricKind::ProcessorTime.as_unit(), "ns");
-        assert_eq!(MetricKind::AllocationBytes.as_unit(), "bytes");
+        assert_eq!(MetricKind::AllocatedBytes.as_unit(), "bytes");
         assert_eq!(MetricKind::InstructionCount.as_unit(), "count");
         assert_eq!(MetricKind::L1CacheHits.as_unit(), "count");
     }
@@ -374,7 +225,7 @@ mod tests {
             MetricKind::ConditionalBranchMisses,
             MetricKind::IndirectBranches,
             MetricKind::IndirectBranchMisses,
-            MetricKind::AllocationBytes,
+            MetricKind::AllocatedBytes,
             MetricKind::AllocationCount,
         ] {
             assert!(!kind.higher_is_better(), "{kind:?}");
@@ -403,50 +254,5 @@ mod tests {
         assert_eq!(parsed.std_dev, Some(0.47));
         assert_eq!(parsed.interval_low, Some(26.6));
         assert_eq!(parsed.interval_high, Some(27.2));
-    }
-
-    #[test]
-    fn leading_segment_distinguishes_otherwise_equal_ids() {
-        let foo = BenchmarkId::new(vec![
-            "foo".to_owned(),
-            "a::bench".to_owned(),
-            "run".to_owned(),
-        ]);
-        let bar = BenchmarkId::new(vec![
-            "bar".to_owned(),
-            "a::bench".to_owned(),
-            "run".to_owned(),
-        ]);
-
-        assert_ne!(foo, bar);
-    }
-
-    #[test]
-    fn ids_sort_lexicographically_by_segments() {
-        let bar = BenchmarkId::new(vec!["bar".to_owned(), "z".to_owned()]);
-        let foo = BenchmarkId::new(vec!["foo".to_owned(), "a".to_owned()]);
-
-        let mut ids = vec![foo.clone(), bar.clone()];
-        ids.sort();
-
-        assert_eq!(ids, vec![bar, foo]);
-    }
-
-    #[test]
-    fn qualified_joins_segments() {
-        let id = BenchmarkId::new(vec![
-            "fast_time".to_owned(),
-            "a::group".to_owned(),
-            "capture".to_owned(),
-            "two_instants".to_owned(),
-        ]);
-        assert_eq!(id.qualified(), "fast_time/a::group/capture/two_instants");
-        assert_eq!(id.to_string(), id.qualified());
-    }
-
-    #[test]
-    fn qualified_handles_a_single_segment() {
-        let id = BenchmarkId::new(vec!["a::group".to_owned()]);
-        assert_eq!(id.qualified(), "a::group");
     }
 }

@@ -1,6 +1,6 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![allow(
+#![expect(
     clippy::exhaustive_enums,
     clippy::exhaustive_structs,
     reason = "this crate is publish = false; its `pub` items form a handoff boundary \
@@ -227,7 +227,7 @@ mod storage;
 mod text;
 mod wiring;
 
-pub(crate) use cargo_bench_history_core::{bless, comparability, constants, context, model};
+pub(crate) use cargo_bench_history_core::model;
 
 pub use cli::{Cli, EarlyExit};
 pub use command::{
@@ -235,8 +235,10 @@ pub use command::{
     ListSubject, PruneOptions, RunOptions, UnblessOptions,
 };
 pub use config::{ConfigError, default_template};
-pub use context::{EnvironmentInfo, EnvironmentProvider, GitInfo, RunContext, ToolchainInfo};
 pub use dispatch::{Overrides, run, run_with_overrides};
-pub use model::{BenchmarkId, BenchmarkResult, Metric, MetricKind, Run, SCHEMA_VERSION};
+pub use model::{
+    BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo, EnvironmentProvider, GitInfo,
+    Metric, MetricKind, Run, RunContext, SCHEMA_VERSION, ToolchainInfo,
+};
 pub use outcome::{RunError, RunOutcome};
 pub use storage::StorageError;

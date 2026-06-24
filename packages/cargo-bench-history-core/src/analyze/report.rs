@@ -13,9 +13,9 @@ use colored::{Color, Colorize};
 use rasciigraph::{Config, plot_colored, plot_many_colored};
 use serde::Serialize;
 
-use crate::analyze::findings::{Direction, Finding, FindingMethod, SeriesValue};
-use crate::comparability::DiscriminantSet;
+use crate::analyze::{Direction, Finding, FindingMethod, SeriesValue};
 use crate::model::BenchmarkId;
+use crate::model::DiscriminantSet;
 
 /// Height, in rows, of a history-mode finding chart.
 const CHART_HEIGHT: u32 = 4;
@@ -92,8 +92,8 @@ struct JsonSet<'a> {
     engine: &'a str,
     /// Resolved target triple.
     target_triple: &'a str,
-    /// Machine partition (`synthetic` for hardware-independent engines).
-    machine: &'a str,
+    /// Machine key (`synthetic` for hardware-independent engines).
+    machine_key: &'a str,
     /// Stored runs loaded for this set.
     runs: usize,
     /// Distinct series compared in this set.
@@ -434,7 +434,7 @@ fn render_json(input: &ReportInput<'_>) -> String {
         .map(|summary| JsonSet {
             engine: &summary.set.engine,
             target_triple: &summary.set.target_triple,
-            machine: &summary.set.machine,
+            machine_key: &summary.set.machine_key,
             runs: summary.runs,
             series: summary.series,
             regressions: count_direction(&summary.findings, Direction::Regression),
@@ -550,20 +550,22 @@ mod tests {
 
     use crate::model::MetricKind;
 
+    use nonempty::nonempty;
+
     use super::*;
 
     fn discriminant_set() -> DiscriminantSet {
         DiscriminantSet {
             engine: "callgrind".to_owned(),
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine: "synthetic".to_owned(),
+            machine_key: "synthetic".to_owned(),
         }
     }
 
     fn regression() -> Finding {
         Finding {
             set: discriminant_set(),
-            id: BenchmarkId::new(vec![
+            id: BenchmarkId::new(nonempty![
                 "nm".to_owned(),
                 "nm::observe".to_owned(),
                 "pull".to_owned(),
@@ -747,7 +749,7 @@ mod tests {
         // must report the real counts, not a constant.
         let set = discriminant_set();
         let mut second = regression();
-        second.id = BenchmarkId::new(vec![
+        second.id = BenchmarkId::new(nonempty![
             "nm".to_owned(),
             "nm::other".to_owned(),
             "push".to_owned(),
@@ -979,14 +981,14 @@ mod tests {
 
     #[test]
     fn describe_id_joins_present_parts() {
-        let id = BenchmarkId::new(vec![
+        let id = BenchmarkId::new(nonempty![
             "pkg".to_owned(),
             "group".to_owned(),
             "case".to_owned(),
             "value".to_owned(),
         ]);
         assert_eq!(describe_id(&id), "pkg/group/case/value");
-        let bare = BenchmarkId::new(vec!["group".to_owned()]);
+        let bare = BenchmarkId::new(nonempty!["group".to_owned()]);
         assert_eq!(describe_id(&bare), "group");
     }
 
@@ -1098,7 +1100,7 @@ mod tests {
         DiscriminantSet {
             engine: "callgrind".to_owned(),
             target_triple: "aarch64-apple-darwin".to_owned(),
-            machine: "synthetic".to_owned(),
+            machine_key: "synthetic".to_owned(),
         }
     }
 

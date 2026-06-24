@@ -16,7 +16,7 @@ use crate::bench::{
     ALL_THE_TIME_DIR, ALLOC_TRACKER_DIR, CRITERION_BENCHMARK_FILE, CRITERION_DIR,
     CRITERION_ESTIMATES_FILE, CRITERION_NEW_DIR, GUNGRAUN_DIR, SUMMARY_FILE,
 };
-use crate::comparability::Engine;
+use crate::model::Engine;
 use crate::report::Reporter;
 use crate::text::count_noun;
 

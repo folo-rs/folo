@@ -29,9 +29,9 @@
 
 use serde::Serialize;
 
-use crate::analyze::series::{Series, SeriesPoint};
 use crate::analyze::stats;
-use crate::comparability::DiscriminantSet;
+use crate::analyze::{Series, SeriesPoint};
+use crate::model::DiscriminantSet;
 use crate::model::{BenchmarkId, MetricKind};
 
 /// Tunable parameters of the engine-aware analysis.
@@ -315,14 +315,6 @@ fn series_values(series: &Series) -> Vec<SeriesValue> {
         .collect()
 }
 
-/// Whether a metric `kind` is measured by a deterministic engine.
-///
-/// Wall time and processor time are the noisy metrics; every Callgrind- and
-/// `alloc_tracker`-derived metric is exact.
-fn is_deterministic(kind: MetricKind) -> bool {
-    !matches!(kind, MetricKind::WallTime | MetricKind::ProcessorTime)
-}
-
 /// The direction of a change, given the signed delta from the baseline and the
 /// metric's `kind`.
 ///
@@ -481,7 +473,7 @@ fn evaluate_change_point(series: &Series, config: &AnalysisConfig) -> Option<Can
     }
     let relative_delta = relative_delta_of(delta, baseline);
 
-    let deterministic = is_deterministic(series.kind);
+    let deterministic = series.kind.is_deterministic();
     let effective_p = if deterministic {
         0.0
     } else {
@@ -565,7 +557,7 @@ fn evaluate_drift(series: &Series, config: &AnalysisConfig) -> Option<Candidate>
         return None;
     }
 
-    let deterministic = is_deterministic(series.kind);
+    let deterministic = series.kind.is_deterministic();
     // A noisy trend must clear the measurement noise floor: the endpoints have to
     // separate by more than the run-to-run dispersion, or it is just jitter.
     if !deterministic
@@ -709,7 +701,7 @@ fn compare_samples(
     }
     let relative_delta = relative_delta_of(delta, baseline);
 
-    let deterministic = is_deterministic(series.kind);
+    let deterministic = series.kind.is_deterministic();
     let effective_p = if deterministic {
         0.0
     } else {
@@ -928,7 +920,7 @@ fn evaluate_resolved_spike(series: &Series, config: &AnalysisConfig) -> Option<C
         return None;
     }
 
-    let deterministic = is_deterministic(series.kind);
+    let deterministic = series.kind.is_deterministic();
     let effective_p = if deterministic {
         0.0
     } else {
@@ -1060,9 +1052,11 @@ mod tests {
 
     use jiff::Timestamp;
 
-    use crate::analyze::series::{Blessing, SeriesPoint};
-    use crate::comparability::DiscriminantSet;
+    use crate::analyze::{Blessing, SeriesPoint};
+    use crate::model::DiscriminantSet;
     use crate::model::MetricKind;
+
+    use nonempty::nonempty;
 
     use super::*;
 
@@ -1097,9 +1091,9 @@ mod tests {
             set: DiscriminantSet {
                 engine: "callgrind".to_owned(),
                 target_triple: "t".to_owned(),
-                machine: "synthetic".to_owned(),
+                machine_key: "synthetic".to_owned(),
             },
-            id: BenchmarkId::new(vec!["group".to_owned(), "case".to_owned()]),
+            id: BenchmarkId::new(nonempty!["group".to_owned(), "case".to_owned()]),
             kind,
             points,
             active_start: 0,
@@ -1131,9 +1125,9 @@ mod tests {
                 set: DiscriminantSet {
                     engine: "callgrind".to_owned(),
                     target_triple: "t".to_owned(),
-                    machine: "synthetic".to_owned(),
+                    machine_key: "synthetic".to_owned(),
                 },
-                id: BenchmarkId::new(vec!["group".to_owned(), "case".to_owned()]),
+                id: BenchmarkId::new(nonempty!["group".to_owned(), "case".to_owned()]),
                 kind: MetricKind::InstructionCount,
                 method,
                 direction: Direction::Regression,
@@ -1217,7 +1211,7 @@ mod tests {
         // The `alloc_tracker` and `all_the_time` metrics all improve as they
         // shrink, so more bytes / allocations / processor time is a regression.
         for kind in [
-            MetricKind::AllocationBytes,
+            MetricKind::AllocatedBytes,
             MetricKind::AllocationCount,
             MetricKind::ProcessorTime,
         ] {
@@ -1231,9 +1225,9 @@ mod tests {
     fn allocation_metrics_are_deterministic_but_processor_time_is_not() {
         // Allocation byte/count totals are an exact property of the code, so they
         // are treated as deterministic; processor time is noisy like wall time.
-        assert!(is_deterministic(MetricKind::AllocationBytes));
-        assert!(is_deterministic(MetricKind::AllocationCount));
-        assert!(!is_deterministic(MetricKind::ProcessorTime));
+        assert!(MetricKind::AllocatedBytes.is_deterministic());
+        assert!(MetricKind::AllocationCount.is_deterministic());
+        assert!(!MetricKind::ProcessorTime.is_deterministic());
     }
 
     #[test]
@@ -1627,7 +1621,7 @@ mod tests {
             &[],
         );
         // Distinguish the identity so both findings are retained.
-        smaller.id = BenchmarkId::new(vec!["other".to_owned(), "case".to_owned()]);
+        smaller.id = BenchmarkId::new(nonempty!["other".to_owned(), "case".to_owned()]);
         let findings = changes(&[smaller, larger]);
         assert_eq!(findings.len(), 2);
         assert!(findings[0].relative_delta.abs() > findings[1].relative_delta.abs());
@@ -1658,9 +1652,9 @@ mod tests {
             set: DiscriminantSet {
                 engine: "callgrind".to_owned(),
                 target_triple: "t".to_owned(),
-                machine: "synthetic".to_owned(),
+                machine_key: "synthetic".to_owned(),
             },
-            id: BenchmarkId::new(vec!["group".to_owned(), "case".to_owned()]),
+            id: BenchmarkId::new(nonempty!["group".to_owned(), "case".to_owned()]),
             kind: MetricKind::InstructionCount,
             points,
             active_start: 0,

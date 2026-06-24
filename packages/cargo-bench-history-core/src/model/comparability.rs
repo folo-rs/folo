@@ -93,33 +93,33 @@ pub struct DiscriminantSet {
     pub engine: String,
     /// Resolved target triple the run was recorded under.
     pub target_triple: String,
-    /// Machine partition (`synthetic` for hardware-independent engines).
-    pub machine: String,
+    /// Machine key (`synthetic` for hardware-independent engines).
+    pub machine_key: String,
 }
 
 impl DiscriminantSet {
     /// Creates a discriminant set, sanitizing the path-forming components.
     ///
-    /// `target_triple` and `machine` are sanitized so that every segment is a
+    /// `target_triple` and `machine_key` are sanitized so that every segment is a
     /// single, well-formed path component: any character that is not ASCII
     /// alphanumeric, `-`, `_`, or `.` is replaced with `_`, and a segment that
     /// would otherwise be empty or consist only of dots becomes `_`. This keeps a
     /// stray `/` (or other surprising input) from silently splitting a storage key
-    /// into the wrong number of segments. A `None` machine becomes the literal
+    /// into the wrong number of segments. A `None` machine key becomes the literal
     /// `synthetic`, used for hardware-independent engines.
     #[must_use]
-    pub fn new(engine: Engine, target_triple: &str, machine: Option<&str>) -> Self {
+    pub fn new(engine: Engine, target_triple: &str, machine_key: Option<&str>) -> Self {
         Self {
             engine: engine.as_str().to_owned(),
             target_triple: sanitize_segment(target_triple),
-            machine: machine.map_or_else(|| "synthetic".to_owned(), sanitize_segment),
+            machine_key: machine_key.map_or_else(|| "synthetic".to_owned(), sanitize_segment),
         }
     }
 
     /// Whether this is a hardware-independent (`synthetic`) set.
     #[must_use]
     pub fn is_synthetic(&self) -> bool {
-        self.machine == "synthetic"
+        self.machine_key == "synthetic"
     }
 
     /// The storage prefix that all runs in this series share, within `project`.
@@ -135,8 +135,8 @@ impl DiscriminantSet {
         let project = sanitize_segment(project);
         let engine = &self.engine;
         let triple = &self.target_triple;
-        let machine = &self.machine;
-        format!("v2/{project}/{engine}/{triple}/{machine}")
+        let machine_key = &self.machine_key;
+        format!("v2/{project}/{engine}/{triple}/{machine_key}")
     }
 
     /// The object key for the canonical (clean working tree) result at `commit`.
@@ -197,40 +197,38 @@ impl DiscriminantSet {
 
 impl fmt::Display for DiscriminantSet {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}/{}/{}", self.engine, self.target_triple, self.machine)
+        write!(
+            f,
+            "{}/{}/{}",
+            self.engine, self.target_triple, self.machine_key
+        )
     }
 }
 
-/// Path-segment sanitization shared by the comparability key builders.
-pub(crate) mod sanitize {
-    /// Replaces every character that is not safe in a single path segment with
-    /// `_`, mapping an otherwise-empty or all-dots result to `_`.
-    ///
-    /// "Safe" is the conservative set `[A-Za-z0-9._-]`, which is valid both as a
-    /// filesystem path component (for local storage) and as an Azure blob name
-    /// part. Mangling rather than rejecting means the tool never refuses a run
-    /// merely because its project, triple, or machine key contains an awkward
-    /// character.
-    #[must_use]
-    pub fn sanitize_segment(raw: &str) -> String {
-        let mangled: String = raw
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        if mangled.is_empty() || mangled.chars().all(|c| c == '.') {
-            return "_".to_owned();
-        }
-        mangled
+/// Replaces every character that is not safe in a single path segment with `_`,
+/// mapping an otherwise-empty or all-dots result to `_`.
+///
+/// "Safe" is the conservative set `[A-Za-z0-9._-]`, which is valid both as a
+/// filesystem path component (for local storage) and as an Azure blob name part.
+/// Mangling rather than rejecting means the tool never refuses a run merely
+/// because its project, triple, or machine key contains an awkward character.
+#[must_use]
+pub fn sanitize_segment(raw: &str) -> String {
+    let mangled: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if mangled.is_empty() || mangled.chars().all(|c| c == '.') {
+        return "_".to_owned();
     }
+    mangled
 }
-
-pub use sanitize::sanitize_segment;
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]

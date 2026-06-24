@@ -15,7 +15,7 @@ pub(crate) use alloc_tracker::parse_alloc_tracker_operation;
 pub(crate) use callgrind::parse_callgrind_summary;
 pub(crate) use criterion::parse_criterion_case;
 
-use crate::comparability::Engine;
+use crate::model::Engine;
 
 /// Directory under the cargo target root where Gungraun writes its summaries.
 pub(crate) const GUNGRAUN_DIR: &str = "gungraun";

@@ -2,6 +2,8 @@
 //! enum and its per-subcommand option structs.
 
 use std::path::PathBuf;
+
+use crate::model::BenchmarkIdPrefix;
 /// A fully parsed command ready to execute.
 #[doc(hidden)]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -87,13 +89,13 @@ pub struct AnalyzeOptions {
     /// Restrict analysis to these full target triples (repeatable). Empty
     /// auto-detects the current machine's triple; `all` matches every triple.
     pub target_triple: Vec<String>,
-    /// Restrict analysis to these machine partitions (repeatable). Empty
+    /// Restrict analysis to these machine keys (repeatable). Empty
     /// auto-detects the current machine's fingerprint; `all` matches every
     /// machine.
     pub machine_key: Vec<String>,
     /// Restrict analysis to benchmarks whose qualified identity starts with one of
     /// these prefixes (repeatable). Empty means every benchmark.
-    pub prefixes: Vec<String>,
+    pub prefixes: Vec<BenchmarkIdPrefix>,
     /// Output format selector, if set.
     pub format: Option<String>,
     /// Analysis-mode selector (`auto`, `history`, `branch`, or `tip`), if set.
@@ -154,7 +156,7 @@ pub struct ListOptions {
     /// Restrict the listing to these full target triples (repeatable). Empty
     /// auto-detects the current machine's triple; `all` matches every triple.
     pub target_triple: Vec<String>,
-    /// Restrict the listing to these machine partitions (repeatable). Empty
+    /// Restrict the listing to these machine keys (repeatable). Empty
     /// auto-detects the current machine's fingerprint; `all` matches every
     /// machine.
     pub machine_key: Vec<String>,
@@ -202,7 +204,7 @@ pub struct PruneOptions {
     /// Restrict removal to these full target triples (repeatable). Empty
     /// auto-detects the current machine's triple; `all` matches every triple.
     pub target_triple: Vec<String>,
-    /// Restrict removal to these machine partitions (repeatable). Empty
+    /// Restrict removal to these machine keys (repeatable). Empty
     /// auto-detects the current machine's fingerprint; `all` matches every
     /// machine.
     pub machine_key: Vec<String>,
@@ -278,13 +280,13 @@ pub struct BlessOptions {
     /// Restrict the blessing to these full target triples (repeatable). Empty
     /// auto-detects the current machine's triple; `all` matches every triple.
     pub target_triple: Vec<String>,
-    /// Restrict the blessing to these machine partitions (repeatable). Empty
+    /// Restrict the blessing to these machine keys (repeatable). Empty
     /// auto-detects the current machine's fingerprint; `all` matches every
     /// machine.
     pub machine_key: Vec<String>,
     /// Benchmark-id prefixes to accept (matched against the qualified identity).
     /// At least one is required unless `all` is set.
-    pub prefixes: Vec<String>,
+    pub prefixes: Vec<BenchmarkIdPrefix>,
     /// Accept every benchmark at the context commit (no prefixes required).
     pub all: bool,
     /// Emit detailed diagnostic notes to standard error describing each step.
@@ -316,7 +318,7 @@ pub struct UnblessOptions {
     /// Restrict the unblessing to these full target triples (repeatable). Empty
     /// auto-detects the current machine's triple; `all` matches every triple.
     pub target_triple: Vec<String>,
-    /// Restrict the unblessing to these machine partitions (repeatable). Empty
+    /// Restrict the unblessing to these machine keys (repeatable). Empty
     /// auto-detects the current machine's fingerprint; `all` matches every
     /// machine.
     pub machine_key: Vec<String>,

@@ -10,10 +10,11 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
+use nonempty::NonEmpty;
 use serde::Deserialize;
 
-use crate::constants::{L1_HITS_EVENT, LL_HITS_EVENT, RAM_HITS_EVENT};
 use crate::model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
+use crate::model::{L1_HITS_EVENT, LL_HITS_EVENT, RAM_HITS_EVENT};
 
 /// The Gungraun summary schema version this parser understands.
 const SUPPORTED_VERSION: &str = "6";
@@ -71,7 +72,7 @@ fn parse_summary(json: &str) -> Result<Summary, CallgrindParseError> {
 
 /// Maps a parsed summary to a [`BenchmarkResult`] (pure).
 fn summary_to_record(summary: &Summary) -> BenchmarkResult {
-    let segments = [
+    let segments: Vec<String> = [
         summary
             .package_dir
             .as_deref()
@@ -84,6 +85,8 @@ fn summary_to_record(summary: &Summary) -> BenchmarkResult {
     .flatten()
     .filter(|segment| !segment.is_empty())
     .collect();
+    let segments = NonEmpty::from_vec(segments)
+        .unwrap_or_else(|| NonEmpty::new(summary.function_name.clone()));
     let id = BenchmarkId::new(segments);
 
     let mut metrics = Vec::new();
@@ -231,6 +234,8 @@ mod tests {
         reason = "metric values are exact integer-derived counts"
     )]
 
+    use nonempty::nonempty;
+
     use super::*;
 
     const SINGLE_FIXTURE: &str =
@@ -251,7 +256,7 @@ mod tests {
         let record = parse_callgrind_summary(SINGLE_FIXTURE).unwrap();
         assert_eq!(
             record.id,
-            BenchmarkId::new(vec![
+            BenchmarkId::new(nonempty![
                 "fast_time".to_owned(),
                 "fast_time_timestamp_performance_cg::timestamp_capture::timestamp_capture_std_now"
                     .to_owned(),
@@ -263,20 +268,14 @@ mod tests {
     #[test]
     fn parses_package_from_package_dir() {
         let record = parse_callgrind_summary(SINGLE_FIXTURE).unwrap();
-        assert_eq!(
-            record.id.segments.first().map(String::as_str),
-            Some("fast_time")
-        );
+        assert_eq!(record.id.segments.first().as_str(), "fast_time");
     }
 
     #[test]
     fn parses_parametrized_identity_with_value() {
         let record = parse_callgrind_summary(PARAMETRIZED_FIXTURE).unwrap();
         // The value is the final segment; the function name precedes it.
-        assert_eq!(
-            record.id.segments.last().map(String::as_str),
-            Some("two_instants")
-        );
+        assert_eq!(record.id.segments.last().as_str(), "two_instants");
         assert!(
             record
                 .id
@@ -394,7 +393,10 @@ mod tests {
     #[test]
     fn summary_without_package_dir_has_no_package() {
         let record = parse_callgrind_summary(&summary_json("{}")).unwrap();
-        assert_eq!(record.id.segments, vec!["m".to_owned(), "f".to_owned()]);
+        assert_eq!(
+            record.id,
+            BenchmarkId::new(nonempty!["m".to_owned(), "f".to_owned()])
+        );
     }
 
     #[test]
@@ -407,8 +409,8 @@ mod tests {
         assert_eq!(foo.id.segments.get(1), bar.id.segments.get(1));
         assert_eq!(foo.id.segments.get(2), bar.id.segments.get(2));
         assert_ne!(foo.id, bar.id);
-        assert_eq!(foo.id.segments.first().map(String::as_str), Some("foo"));
-        assert_eq!(bar.id.segments.first().map(String::as_str), Some("bar"));
+        assert_eq!(foo.id.segments.first().as_str(), "foo");
+        assert_eq!(bar.id.segments.first().as_str(), "bar");
     }
 
     #[test]

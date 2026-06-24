@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 use clap::{ArgGroup, Args, Parser, Subcommand as ClapSubcommand, ValueEnum};
 
+use crate::model::BenchmarkIdPrefix;
 use crate::{
     AnalyzeOptions, BackfillOptions, BlessOptions, Command, InstallOptions, ListOptions,
     ListSubject, PruneOptions, RunOptions, UnblessOptions,
@@ -169,7 +170,7 @@ struct QueryFacetArgs {
     #[arg(long, value_name = "TRIPLE")]
     target_triple: Vec<String>,
 
-    /// Restrict to these machine partitions (repeatable; `all` matches every
+    /// Restrict to these machine keys (repeatable; `all` matches every
     /// machine; default: this machine's fingerprint).
     #[arg(long, value_name = "KEY")]
     machine_key: Vec<String>,
@@ -283,7 +284,7 @@ struct AnalyzeCommand {
     /// (for example, `all_the_time/read_cell` or a family prefix
     /// `overhead/groups_`); repeatable (default: every benchmark).
     #[arg(value_name = "PREFIX")]
-    prefixes: Vec<String>,
+    prefixes: Vec<BenchmarkIdPrefix>,
 
     #[command(flatten)]
     env: EnvArgs,
@@ -604,7 +605,7 @@ struct BlessCommand {
     /// (for example, `all_the_time/read_cell` or a family prefix
     /// `overhead/groups_`). At least one is required unless `--all` is given.
     #[arg(value_name = "PREFIX")]
-    prefixes: Vec<String>,
+    prefixes: Vec<BenchmarkIdPrefix>,
 
     #[command(flatten)]
     env: EnvArgs,
@@ -1020,8 +1021,8 @@ mod tests {
         assert_eq!(
             options.prefixes,
             vec![
-                "all_the_time/read_cell".to_owned(),
-                "overhead/groups_".to_owned()
+                BenchmarkIdPrefix::new("all_the_time/read_cell").unwrap(),
+                BenchmarkIdPrefix::new("overhead/groups_").unwrap()
             ]
         );
         assert_eq!(options.engine, vec!["callgrind".to_owned()]);
@@ -1045,6 +1046,17 @@ mod tests {
         assert_eq!(error.status, Err(()));
         assert!(
             error.output.contains("cannot be used with"),
+            "{}",
+            error.output
+        );
+    }
+
+    #[test]
+    fn bless_rejects_an_empty_prefix() {
+        let error = Cli::from_args(&["cargo-bench-history"], &["bless", ""]).unwrap_err();
+        assert_eq!(error.status, Err(()));
+        assert!(
+            error.output.contains("benchmark-id prefix"),
             "{}",
             error.output
         );

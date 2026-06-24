@@ -8,11 +8,12 @@
 //! The committed fixtures under `tests/fixtures/alloc_tracker/` are real
 //! `alloc_tracker` output and act as a schema-drift canary.
 //!
-//! [`Engine::is_hardware_dependent`]: crate::comparability::Engine::is_hardware_dependent
+//! [`Engine::is_hardware_dependent`]: crate::model::Engine::is_hardware_dependent
 
 use std::error::Error;
 use std::fmt;
 
+use nonempty::NonEmpty;
 use serde::Deserialize;
 
 use crate::model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
@@ -52,11 +53,11 @@ pub(crate) fn parse_alloc_tracker_operation(
 /// attribution, so the operation name alone identifies the series (mirroring the
 /// Criterion adapter).
 fn output_to_record(output: &OperationOutput) -> BenchmarkResult {
-    let id = BenchmarkId::new(vec![output.operation.clone()]);
+    let id = BenchmarkId::new(NonEmpty::new(output.operation.clone()));
 
     let metrics = vec![
         Metric::new(
-            MetricKind::AllocationBytes,
+            MetricKind::AllocatedBytes,
             as_f64(output.mean_bytes_per_iteration),
         ),
         Metric::new(
@@ -104,13 +105,19 @@ mod tests {
     #[test]
     fn parses_identity_from_operation_name() {
         let record = parse_alloc_tracker_operation(ALLOCATE_VEC_FIXTURE).unwrap();
-        assert_eq!(record.id, BenchmarkId::new(vec!["allocate_vec".to_owned()]));
+        assert_eq!(
+            record.id,
+            BenchmarkId::new(NonEmpty::new("allocate_vec".to_owned()))
+        );
     }
 
     #[test]
     fn alloc_tracker_identity_is_the_operation_name_only() {
         let record = parse_alloc_tracker_operation(ALLOCATE_VEC_FIXTURE).unwrap();
-        assert_eq!(record.id.segments, vec!["allocate_vec".to_owned()]);
+        assert_eq!(
+            record.id,
+            BenchmarkId::new(NonEmpty::new("allocate_vec".to_owned()))
+        );
     }
 
     #[test]
@@ -118,7 +125,7 @@ mod tests {
         let record = parse_alloc_tracker_operation(ALLOCATE_VEC_FIXTURE).unwrap();
         assert_eq!(record.metrics.len(), 2);
 
-        let bytes = metric(&record, MetricKind::AllocationBytes);
+        let bytes = metric(&record, MetricKind::AllocatedBytes);
         assert_eq!(bytes.value, 200.0);
 
         let count = metric(&record, MetricKind::AllocationCount);
@@ -141,7 +148,10 @@ mod tests {
     fn preserves_the_original_operation_name() {
         let json = operation_json("group/case name", 4096, 7);
         let record = parse_alloc_tracker_operation(&json).unwrap();
-        assert_eq!(record.id.segments, vec!["group/case name".to_owned()]);
+        assert_eq!(
+            record.id,
+            BenchmarkId::new(NonEmpty::new("group/case name".to_owned()))
+        );
     }
 
     #[test]

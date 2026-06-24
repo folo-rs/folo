@@ -14,10 +14,10 @@ use std::hash::BuildHasher;
 
 use jiff::Timestamp;
 
-use crate::analyze::discriminant::StorageKey;
-use crate::bless::BlessingRecord;
-use crate::comparability::DiscriminantSet;
-use crate::model::{BenchmarkId, MetricKind, Run};
+use crate::analyze::StorageKey;
+use crate::model::BlessingRecord;
+use crate::model::DiscriminantSet;
+use crate::model::{BenchmarkId, BenchmarkIdPrefix, MetricKind, Run};
 
 /// A single observation in a series.
 #[derive(Clone, Debug)]
@@ -92,7 +92,7 @@ pub struct LoadedObject {
 pub struct SeriesFilter<'a> {
     /// Keep only series whose benchmark identity's qualified id starts with one of
     /// these prefixes. Empty keeps every series.
-    pub prefixes: &'a [String],
+    pub prefixes: &'a [BenchmarkIdPrefix],
 }
 
 /// Whether `prefixes` accepts `id` (an empty prefix list accepts every id).
@@ -100,7 +100,7 @@ pub struct SeriesFilter<'a> {
 /// The match is a raw `starts_with` against the benchmark's qualified identity,
 /// mirroring blessing-prefix matching so the same prefix selects the same family
 /// of benchmarks in `bless` and `analyze`.
-fn prefixes_accept(prefixes: &[String], id: &BenchmarkId) -> bool {
+fn prefixes_accept(prefixes: &[BenchmarkIdPrefix], id: &BenchmarkId) -> bool {
     if prefixes.is_empty() {
         return true;
     }
@@ -228,9 +228,11 @@ mod tests {
     )]
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
-    use crate::analyze::discriminant::parse_key;
-    use crate::context::{EnvironmentInfo, GitInfo, RunContext, ToolchainInfo};
+    use crate::analyze::parse_key;
     use crate::model::{BenchmarkResult, Metric};
+    use crate::model::{EnvironmentInfo, GitInfo, RunContext, ToolchainInfo};
+
+    use nonempty::NonEmpty;
 
     use super::*;
 
@@ -271,7 +273,7 @@ mod tests {
         segments.push("group".to_owned());
         segments.push("case".to_owned());
         let record = BenchmarkResult::new(
-            BenchmarkId::new(segments),
+            BenchmarkId::new(NonEmpty::from_vec(segments).unwrap()),
             vec![Metric::new(MetricKind::InstructionCount, value)],
         );
         Run::new(context, vec![record])
@@ -412,7 +414,7 @@ mod tests {
                 result: run_for_package(ts(200), "c1", 20.0, Some("bar")),
             },
         ];
-        let prefixes = vec!["foo/".to_owned()];
+        let prefixes = vec![BenchmarkIdPrefix::new("foo/").unwrap()];
         let filter = SeriesFilter {
             prefixes: &prefixes,
         };
@@ -426,7 +428,10 @@ mod tests {
             commit.to_owned(),
             ts(commit_time),
             ts(commit_time.saturating_add(1)),
-            prefixes.iter().map(|prefix| (*prefix).to_owned()).collect(),
+            prefixes
+                .iter()
+                .map(|prefix| BenchmarkIdPrefix::new(*prefix).unwrap())
+                .collect(),
             "0.0.1".to_owned(),
         )
     }

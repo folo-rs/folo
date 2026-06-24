@@ -32,13 +32,13 @@ use crate::text::count_noun;
 use crate::wiring::{resolve_config_path, resolve_project_id, resolve_repo};
 use crate::{PruneOptions, RunError, RunOutcome};
 
-use super::report::ReportFormat;
+use super::ReportFormat;
 use super::{
     AutoFacets, DirtyTipPolicy, ResolvedHistory, Selection, detect_auto_facets,
     facet_filtered_candidates, parse_format, parse_since, parse_until, resolve_base_name,
     resolve_facets, resolve_history,
 };
-use crate::comparability::DiscriminantSet;
+use crate::model::DiscriminantSet;
 
 /// Which objects a prune pass deletes.
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -599,7 +599,7 @@ fn render_plan_json(plan: &Plan, dry_run: bool) -> String {
     struct JsonSet<'a> {
         engine: &'a str,
         target_triple: &'a str,
-        machine: &'a str,
+        machine_key: &'a str,
         runs: usize,
         blessings: usize,
         commits: Vec<JsonCommit<'a>>,
@@ -625,7 +625,7 @@ fn render_plan_json(plan: &Plan, dry_run: bool) -> String {
         .map(|set| JsonSet {
             engine: &set.set.engine,
             target_triple: &set.set.target_triple,
-            machine: &set.set.machine,
+            machine_key: &set.set.machine_key,
             runs: set.runs,
             blessings: set.blessings,
             commits: set
@@ -664,11 +664,13 @@ mod tests {
     use jiff::Timestamp;
 
     use crate::config::{Config, parse_config};
-    use crate::context::{EnvironmentInfo, GitInfo, RunContext, ToolchainInfo};
     use crate::git_history::FakeGitHistory;
     use crate::model::{BenchmarkId, BenchmarkResult, Metric, MetricKind, Run};
+    use crate::model::{EnvironmentInfo, GitInfo, RunContext, ToolchainInfo};
     use crate::report::RecordingReporter;
     use crate::storage::{MemoryStorage, Storage};
+
+    use nonempty::nonempty;
 
     use super::*;
 
@@ -712,7 +714,7 @@ mod tests {
             "0.0.1".to_owned(),
         );
         let record = BenchmarkResult::new(
-            BenchmarkId::new(vec![
+            BenchmarkId::new(nonempty![
                 "nm".to_owned(),
                 "nm::observe".to_owned(),
                 "pull".to_owned(),
@@ -1381,7 +1383,7 @@ mod tests {
         let set = DiscriminantSet {
             engine: "callgrind".to_owned(),
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine: "synthetic".to_owned(),
+            machine_key: "synthetic".to_owned(),
         };
         // Two clean runs (c0, c1) plus one blessing on c0: an asymmetric mix so a
         // run/blessing miscount diverges from the truth.

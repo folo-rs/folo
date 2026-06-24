@@ -9,7 +9,9 @@
 //! value is written by `run` and read back here; this module only adds the
 //! read-side concerns: filtering on facets and parsing keys.
 
-use crate::comparability::DiscriminantSet;
+use nonempty::NonEmpty;
+
+use crate::model::DiscriminantSet;
 
 /// A resolved filter for one discriminant facet (engine, target triple, or
 /// machine key).
@@ -27,8 +29,10 @@ pub enum FacetFilter {
     /// engine-independent history alongside this machine's data.
     Auto(String),
     /// Explicit user-provided values; a set passes if it equals one of them
-    /// (case-insensitive).
-    Explicit(Vec<String>),
+    /// (case-insensitive). Never empty — an omitted facet resolves to
+    /// [`All`](Self::All) or [`Auto`](Self::Auto) instead, so the values are a
+    /// [`NonEmpty`].
+    Explicit(NonEmpty<String>),
 }
 
 impl FacetFilter {
@@ -66,7 +70,7 @@ pub struct DiscriminantSetQuery {
     /// Restrict to one or more full target triples (for example,
     /// `x86_64-unknown-linux-gnu`).
     pub target_triple: FacetFilter,
-    /// Restrict to one or more machine partitions.
+    /// Restrict to one or more machine keys.
     pub machine_key: FacetFilter,
 }
 
@@ -86,7 +90,7 @@ impl DiscriminantSetQuery {
             && self
                 .target_triple
                 .passes(&set.target_triple, synthetic, false)
-            && self.machine_key.passes(&set.machine, synthetic, true)
+            && self.machine_key.passes(&set.machine_key, synthetic, true)
     }
 }
 
@@ -132,8 +136,8 @@ impl StorageKey {
 
 /// Parses a storage object key into its components.
 ///
-/// Keys have the form `v2/{project}/{engine}/{triple}/{machine}/{commit}/{file}` —
-/// exactly seven non-empty segments. Any key that does not match that shape
+/// Keys have the form `v2/{project}/{engine}/{triple}/{machine_key}/{commit}/{file}`
+/// — exactly seven non-empty segments. Any key that does not match that shape
 /// exactly (wrong version, too few or too many segments, or an empty segment) is
 /// ignored (returns `None`) rather than misattributed.
 #[must_use]
@@ -144,7 +148,7 @@ pub fn parse_key(key: &str) -> Option<StorageKey> {
         project,
         engine,
         target_triple,
-        machine,
+        machine_key,
         commit,
         file,
     ] = parts.as_slice()
@@ -162,7 +166,7 @@ pub fn parse_key(key: &str) -> Option<StorageKey> {
         set: DiscriminantSet {
             engine: (*engine).to_owned(),
             target_triple: (*target_triple).to_owned(),
-            machine: (*machine).to_owned(),
+            machine_key: (*machine_key).to_owned(),
         },
         commit: (*commit).to_owned(),
         file: (*file).to_owned(),
@@ -172,13 +176,15 @@ pub fn parse_key(key: &str) -> Option<StorageKey> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use nonempty::nonempty;
+
     use super::*;
 
     fn set(triple: &str) -> DiscriminantSet {
         DiscriminantSet {
             engine: "callgrind".to_owned(),
             target_triple: triple.to_owned(),
-            machine: "synthetic".to_owned(),
+            machine_key: "synthetic".to_owned(),
         }
     }
 
@@ -190,7 +196,7 @@ mod tests {
         assert_eq!(parsed.project, "folo");
         assert_eq!(parsed.set.engine, "callgrind");
         assert_eq!(parsed.set.target_triple, "x86_64-unknown-linux-gnu");
-        assert_eq!(parsed.set.machine, "synthetic");
+        assert_eq!(parsed.set.machine_key, "synthetic");
         assert_eq!(parsed.commit, "abc123");
         assert_eq!(parsed.file, "clean.json");
         assert!(!parsed.is_dirty());
@@ -204,7 +210,7 @@ mod tests {
                 .unwrap();
         assert!(parsed.is_dirty());
         assert_eq!(parsed.set.target_triple, "x86_64-pc-windows-msvc");
-        assert_eq!(parsed.set.machine, "m1");
+        assert_eq!(parsed.set.machine_key, "m1");
     }
 
     #[test]
@@ -244,8 +250,10 @@ mod tests {
         // Explicit target-triple + machine pass.
         assert!(
             DiscriminantSetQuery {
-                target_triple: FacetFilter::Explicit(vec!["x86_64-pc-windows-msvc".to_owned()]),
-                machine_key: FacetFilter::Explicit(vec!["synthetic".to_owned()]),
+                target_triple: FacetFilter::Explicit(nonempty![
+                    "x86_64-pc-windows-msvc".to_owned()
+                ]),
+                machine_key: FacetFilter::Explicit(nonempty!["synthetic".to_owned()]),
                 ..DiscriminantSetQuery::default()
             }
             .matches(&windows)
@@ -253,7 +261,9 @@ mod tests {
         // Case-insensitive on the explicit values.
         assert!(
             DiscriminantSetQuery {
-                target_triple: FacetFilter::Explicit(vec!["X86_64-PC-Windows-MSVC".to_owned()]),
+                target_triple: FacetFilter::Explicit(nonempty![
+                    "X86_64-PC-Windows-MSVC".to_owned()
+                ]),
                 ..DiscriminantSetQuery::default()
             }
             .matches(&windows)
@@ -261,7 +271,9 @@ mod tests {
         // A different explicit triple misses.
         assert!(
             !DiscriminantSetQuery {
-                target_triple: FacetFilter::Explicit(vec!["x86_64-unknown-linux-gnu".to_owned()]),
+                target_triple: FacetFilter::Explicit(nonempty![
+                    "x86_64-unknown-linux-gnu".to_owned()
+                ]),
                 ..DiscriminantSetQuery::default()
             }
             .matches(&windows)
@@ -269,7 +281,7 @@ mod tests {
         // A different explicit engine misses.
         assert!(
             !DiscriminantSetQuery {
-                engine: FacetFilter::Explicit(vec!["criterion".to_owned()]),
+                engine: FacetFilter::Explicit(nonempty!["criterion".to_owned()]),
                 ..DiscriminantSetQuery::default()
             }
             .matches(&windows)
@@ -282,7 +294,7 @@ mod tests {
         // Even an explicit, non-matching machine key includes a synthetic set.
         assert!(
             DiscriminantSetQuery {
-                machine_key: FacetFilter::Explicit(vec!["some-other-machine".to_owned()]),
+                machine_key: FacetFilter::Explicit(nonempty!["some-other-machine".to_owned()]),
                 ..DiscriminantSetQuery::default()
             }
             .matches(&synthetic)
@@ -311,7 +323,9 @@ mod tests {
         // An explicit triple is a deliberate scope and filters even synthetic sets.
         assert!(
             !DiscriminantSetQuery {
-                target_triple: FacetFilter::Explicit(vec!["x86_64-pc-windows-msvc".to_owned()]),
+                target_triple: FacetFilter::Explicit(nonempty![
+                    "x86_64-pc-windows-msvc".to_owned()
+                ]),
                 ..DiscriminantSetQuery::default()
             }
             .matches(&synthetic)
@@ -323,7 +337,7 @@ mod tests {
         let machine = DiscriminantSet {
             engine: "criterion".to_owned(),
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine: "m1".to_owned(),
+            machine_key: "m1".to_owned(),
         };
         // This machine matches its own auto-detected fingerprint.
         assert!(
@@ -348,7 +362,7 @@ mod tests {
         let linux = set("x86_64-unknown-linux-gnu");
         let windows = set("x86_64-pc-windows-msvc");
         let either = DiscriminantSetQuery {
-            target_triple: FacetFilter::Explicit(vec![
+            target_triple: FacetFilter::Explicit(nonempty![
                 "x86_64-unknown-linux-gnu".to_owned(),
                 "x86_64-pc-windows-msvc".to_owned(),
             ]),

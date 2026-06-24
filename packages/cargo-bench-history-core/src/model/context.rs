@@ -86,8 +86,10 @@ pub enum EnvironmentProvider {
     #[default]
     Local,
     /// GitHub Actions.
+    #[serde(rename = "github_actions")]
     GitHubActions,
     /// Azure DevOps pipelines.
+    #[serde(rename = "azure_devops")]
     AzureDevOps,
 }
 
@@ -166,5 +168,23 @@ mod tests {
     fn detect_environment_defaults_to_local() {
         let detected = detect_environment(env_from(&[]));
         assert_eq!(detected.provider, EnvironmentProvider::Local);
+    }
+
+    #[test]
+    fn provider_serializes_brand_names_without_mangling() {
+        // The brand names must serialize as recognizable tokens, not the
+        // `snake_case` split (`git_hub_actions` / `azure_dev_ops`) the default
+        // rename would produce.
+        let cases = [
+            (EnvironmentProvider::Local, "\"local\""),
+            (EnvironmentProvider::GitHubActions, "\"github_actions\""),
+            (EnvironmentProvider::AzureDevOps, "\"azure_devops\""),
+        ];
+        for (provider, wire) in cases {
+            let serialized = serde_json::to_string(&provider).unwrap();
+            assert_eq!(serialized, wire);
+            let parsed: EnvironmentProvider = serde_json::from_str(wire).unwrap();
+            assert_eq!(parsed, provider);
+        }
     }
 }

@@ -32,9 +32,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tick::Clock;
 
 use crate::bench_output::FsBenchOutputSource;
-use crate::comparability::sanitize_segment;
 use crate::config::load_config;
 use crate::git_history::{GitHistory, SystemGitHistory};
+use crate::model::sanitize_segment;
 use crate::probe::SystemProbe;
 use crate::process::{TokioBenchRunner, capture};
 use crate::report::StderrReporter;

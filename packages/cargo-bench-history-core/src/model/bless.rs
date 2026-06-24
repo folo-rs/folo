@@ -14,7 +14,7 @@
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::model::BenchmarkId;
+use crate::model::{BenchmarkId, BenchmarkIdPrefix};
 
 /// Schema version of the stored [`BlessingRecord`] JSON.
 ///
@@ -37,8 +37,9 @@ pub struct BlessingRecord {
     /// Benchmark-id prefixes this blessing accepts, matched against
     /// [`BenchmarkId::qualified`]. A prefix is a raw `starts_with` test, so
     /// `foo/bar` accepts `foo/bar` and `foo/bar/baz`; append a trailing `/` to
-    /// require a whole-segment boundary.
-    pub prefixes: Vec<String>,
+    /// require a whole-segment boundary. An empty list accepts *every* benchmark
+    /// (a `bless --all`).
+    pub prefixes: Vec<BenchmarkIdPrefix>,
     /// Version of the tool that issued the blessing.
     pub tool_version: String,
 }
@@ -50,7 +51,7 @@ impl BlessingRecord {
         commit: String,
         commit_time: Timestamp,
         issued_at: Timestamp,
-        prefixes: Vec<String>,
+        prefixes: Vec<BenchmarkIdPrefix>,
         tool_version: String,
     ) -> Self {
         Self {
@@ -81,12 +82,16 @@ impl BlessingRecord {
         serde_json::from_str(json)
     }
 
-    /// Whether any of this blessing's prefixes accepts `id`.
+    /// Whether this blessing accepts `id`.
     ///
-    /// The match is a raw `starts_with` against the benchmark's qualified
+    /// An empty prefix list accepts every benchmark (a `bless --all`). Otherwise
+    /// the match is a raw `starts_with` against the benchmark's qualified
     /// identity, so a prefix may select a whole family of benchmarks at once.
     #[must_use]
     pub fn matches(&self, id: &BenchmarkId) -> bool {
+        if self.prefixes.is_empty() {
+            return true;
+        }
         let qualified = id.qualified();
         self.prefixes
             .iter()
@@ -97,6 +102,8 @@ impl BlessingRecord {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use nonempty::NonEmpty;
+
     use super::*;
 
     fn ts(seconds: i64) -> Timestamp {
@@ -114,7 +121,7 @@ mod tests {
             .flatten()
             .map(ToOwned::to_owned)
             .collect();
-        BenchmarkId::new(segments)
+        BenchmarkId::new(NonEmpty::from_vec(segments).unwrap())
     }
 
     fn record(prefixes: &[&str]) -> BlessingRecord {
@@ -122,7 +129,10 @@ mod tests {
             "deadbeef".to_owned(),
             ts(1_700_000_000),
             ts(1_700_000_100),
-            prefixes.iter().map(|prefix| (*prefix).to_owned()).collect(),
+            prefixes
+                .iter()
+                .map(|prefix| BenchmarkIdPrefix::new(*prefix).unwrap())
+                .collect(),
             "0.0.1".to_owned(),
         )
     }
@@ -133,12 +143,20 @@ mod tests {
             "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_owned(),
             ts(1_700_000_000),
             ts(1_700_000_100),
-            vec!["all_the_time/read_cell".to_owned()],
+            vec![BenchmarkIdPrefix::new("all_the_time/read_cell").unwrap()],
             "1.2.3".to_owned(),
         );
         let json = original.to_json().unwrap();
         let parsed = BlessingRecord::from_json(&json).unwrap();
         assert_eq!(parsed, original);
+    }
+
+    #[test]
+    fn empty_prefix_list_accepts_every_benchmark() {
+        // A `bless --all` records no prefixes; the blessing then accepts every id.
+        let blessing = record(&[]);
+        assert!(blessing.matches(&id(Some("all_the_time"), "read_cell", None, None)));
+        assert!(blessing.matches(&id(None, "anything", Some("else"), None)));
     }
 
     #[test]

@@ -12,7 +12,7 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::comparability::sanitize_segment;
+use crate::model::sanitize_segment;
 
 /// Version tag of the fingerprint factor set, prefixed onto the canonical string.
 ///

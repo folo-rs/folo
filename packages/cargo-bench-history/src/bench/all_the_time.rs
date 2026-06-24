@@ -9,11 +9,12 @@
 //! fixtures under `tests/fixtures/all_the_time/` are real `all_the_time` output
 //! and act as a schema-drift canary.
 //!
-//! [`Engine::is_hardware_dependent`]: crate::comparability::Engine::is_hardware_dependent
+//! [`Engine::is_hardware_dependent`]: crate::model::Engine::is_hardware_dependent
 
 use std::error::Error;
 use std::fmt;
 
+use nonempty::NonEmpty;
 use serde::Deserialize;
 
 use crate::model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
@@ -59,7 +60,7 @@ pub(crate) fn parse_all_the_time_operation(
 /// metric, so analysis can apply its interval-overlap gate to processor time the
 /// same way it does for Criterion wall time.
 fn output_to_record(output: &OperationOutput) -> BenchmarkResult {
-    let id = BenchmarkId::new(vec![output.operation.clone()]);
+    let id = BenchmarkId::new(NonEmpty::new(output.operation.clone()));
 
     let value = output
         .slope_processor_time_nanos
@@ -121,13 +122,19 @@ mod tests {
     #[test]
     fn parses_identity_from_operation_name() {
         let record = parse_all_the_time_operation(READ_CELL_FIXTURE).unwrap();
-        assert_eq!(record.id, BenchmarkId::new(vec!["read_cell".to_owned()]));
+        assert_eq!(
+            record.id,
+            BenchmarkId::new(NonEmpty::new("read_cell".to_owned()))
+        );
     }
 
     #[test]
     fn all_the_time_identity_is_the_operation_name_only() {
         let record = parse_all_the_time_operation(READ_CELL_FIXTURE).unwrap();
-        assert_eq!(record.id.segments, vec!["read_cell".to_owned()]);
+        assert_eq!(
+            record.id,
+            BenchmarkId::new(NonEmpty::new("read_cell".to_owned()))
+        );
     }
 
     #[test]
@@ -183,7 +190,10 @@ mod tests {
     fn preserves_the_original_operation_name() {
         let json = operation_json("group/case name", 1234);
         let record = parse_all_the_time_operation(&json).unwrap();
-        assert_eq!(record.id.segments, vec!["group/case name".to_owned()]);
+        assert_eq!(
+            record.id,
+            BenchmarkId::new(NonEmpty::new("group/case name".to_owned()))
+        );
     }
 
     #[test]

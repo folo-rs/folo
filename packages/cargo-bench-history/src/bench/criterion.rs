@@ -11,6 +11,7 @@
 use std::error::Error;
 use std::fmt;
 
+use nonempty::NonEmpty;
 use serde::Deserialize;
 
 use crate::model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
@@ -69,7 +70,7 @@ pub(crate) fn parse_criterion_case(
 /// workspace crate-prefixes its Criterion group ids, so the `group_id` already
 /// disambiguates equally named benches across packages.
 fn case_to_record(benchmark: &Benchmark, estimates: &Estimates) -> BenchmarkResult {
-    let segments = [
+    let segments: Vec<String> = [
         Some(benchmark.group_id.clone()),
         Some(benchmark.function_id.clone()),
         non_empty(benchmark.value_str.as_deref()),
@@ -78,6 +79,8 @@ fn case_to_record(benchmark: &Benchmark, estimates: &Estimates) -> BenchmarkResu
     .flatten()
     .filter(|segment| !segment.is_empty())
     .collect();
+    let segments =
+        NonEmpty::from_vec(segments).unwrap_or_else(|| NonEmpty::new(benchmark.group_id.clone()));
     let id = BenchmarkId::new(segments);
 
     // Criterion fits a line through the per-sample timings when it uses linear
@@ -149,6 +152,8 @@ mod tests {
     )]
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
+    use nonempty::nonempty;
+
     use super::*;
 
     const STD_INSTANT_BENCHMARK: &str =
@@ -165,7 +170,7 @@ mod tests {
         let record = parse_criterion_case(STD_INSTANT_BENCHMARK, STD_INSTANT_ESTIMATES).unwrap();
         assert_eq!(
             record.id,
-            BenchmarkId::new(vec![
+            BenchmarkId::new(nonempty![
                 "fast_time_timestamp_performance/timestamp_capture".to_owned(),
                 "std_instant".to_owned(),
                 "now".to_owned(),
@@ -179,8 +184,8 @@ mod tests {
         // rather than a package segment.
         let record = parse_criterion_case(STD_INSTANT_BENCHMARK, STD_INSTANT_ESTIMATES).unwrap();
         assert_eq!(
-            record.id.segments.first().map(String::as_str),
-            Some("fast_time_timestamp_performance/timestamp_capture")
+            record.id.segments.first().as_str(),
+            "fast_time_timestamp_performance/timestamp_capture"
         );
     }
 
@@ -206,8 +211,12 @@ mod tests {
 
         assert_eq!(from_crate_a.id, from_crate_b.id);
         assert_eq!(
-            from_crate_a.id.segments,
-            vec!["convert".to_owned(), "encode".to_owned(), "4096".to_owned()]
+            from_crate_a.id,
+            BenchmarkId::new(nonempty![
+                "convert".to_owned(),
+                "encode".to_owned(),
+                "4096".to_owned()
+            ])
         );
     }
 
@@ -305,7 +314,10 @@ mod tests {
             estimate_json(1.0, 0.5, 1.5),
         );
         let record = parse_criterion_case(&benchmark_json("grp", "fun", ""), &estimates).unwrap();
-        assert_eq!(record.id.segments, vec!["grp".to_owned(), "fun".to_owned()]);
+        assert_eq!(
+            record.id,
+            BenchmarkId::new(nonempty!["grp".to_owned(), "fun".to_owned()])
+        );
         // With no slope and no std_dev, only the mean drives the metric.
         assert_eq!(record.metrics[0].std_dev, None);
     }
@@ -321,10 +333,13 @@ mod tests {
         // A whitespace-only value carries no identity and must not become a series
         // component; a padded value is trimmed to its meaningful content.
         let blank = parse_criterion_case(&benchmark_json("grp", "fun", "  "), &estimates).unwrap();
-        assert_eq!(blank.id.segments, vec!["grp".to_owned(), "fun".to_owned()]);
+        assert_eq!(
+            blank.id,
+            BenchmarkId::new(nonempty!["grp".to_owned(), "fun".to_owned()])
+        );
         let padded =
             parse_criterion_case(&benchmark_json("grp", "fun", "  4096  "), &estimates).unwrap();
-        assert_eq!(padded.id.segments.last().map(String::as_str), Some("4096"));
+        assert_eq!(padded.id.segments.last().as_str(), "4096");
     }
 
     #[test]

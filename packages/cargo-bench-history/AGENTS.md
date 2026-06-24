@@ -504,7 +504,7 @@ Four benchmark engines are supported, each behind a pure parser in `bench/`:
   is hardware-dependent → partitioned by the host triple and a machine key.
 * `bench::alloc_tracker` parses a flat `target/alloc_tracker/<operation>.json`
   file (one per operation, auto-emitted on `Session` drop) into a `BenchmarkResult`
-  with an `AllocationBytes` (`allocated_bytes`) and an `AllocationCount`
+  with an `AllocatedBytes` (`allocated_bytes`) and an `AllocationCount`
   (`allocations`) metric, both from the `mean_*_per_iteration` fields. `package`
   is `None`; the operation name is the identity. Allocation behaviour is a
   deterministic property of the code → `synthetic` partition, no machine key, no
@@ -662,7 +662,7 @@ real `resolve_target_root` runs) with the mock's `--chdir` flag standing in for
 that per-package cwd. Keep both: a regression in `resolve_target_root` would slip
 past every override-driven test.
 
-`tests/cargo_bench_history_real_engine.rs` is the one true end-to-end test: it
+`tests/cbh_real_engine.rs` is the one true end-to-end test: it
 writes a tiny standalone crate with a single real Criterion benchmark into a
 tempdir and drives the production `run` (no overrides) against an actual `cargo
 bench`, asserting the genuine wall-time output is harvested and stored. It is the
@@ -707,7 +707,7 @@ golden signature — do not "fix" that test by editing the expected value.
 
 ### Running the Azurite tests locally
 
-The network tests (`storage::azure::tests` and the `cargo_bench_history_azure`
+The network tests (`storage::azure::tests` and the `cbh_azure`
 integration file) talk to a live [Azurite](https://github.com/Azure/Azurite)
 blob emulator. They **self-skip** when no emulator is reachable, so a normal
 `--all-features` run stays green without one; they run for real once Azurite is

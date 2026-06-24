@@ -599,10 +599,7 @@ async fn analyze_alloc_tracker_step_is_flagged_as_change_point() {
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["findings"][0]["method"], "change_point", "{report}");
     assert_eq!(parsed["findings"][0]["direction"], "regression", "{report}");
-    assert_eq!(
-        parsed["findings"][0]["kind"], "allocation_bytes",
-        "{report}"
-    );
+    assert_eq!(parsed["findings"][0]["kind"], "allocated_bytes", "{report}");
     assert!(report.contains("allocate_vec"), "{report}");
 }
 

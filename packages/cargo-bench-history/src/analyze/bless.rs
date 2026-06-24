@@ -2,7 +2,7 @@
 //! benchmark's level on the base branch, so history analysis stops re-flagging an
 //! intentional change.
 //!
-//! `bless` writes an append-only [`BlessingRecord`](crate::bless::BlessingRecord)
+//! `bless` writes an append-only [`BlessingRecord`](crate::model::BlessingRecord)
 //! sidecar into every facet-selected discriminant set that has a stored result at
 //! the context commit (`HEAD` by default, or `--context <ref>`). It is
 //! base-branch-only with no escape hatch: a context commit that is not on the base
@@ -21,9 +21,9 @@ use std::path::Path;
 
 use jiff::Timestamp;
 
-use crate::bless::BlessingRecord;
 use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
+use crate::model::BlessingRecord;
 use crate::model::Run;
 use crate::report::{Reporter, StderrReporter};
 use crate::storage::{Storage, build_storage};
@@ -31,7 +31,7 @@ use crate::text::count_noun;
 use crate::wiring::{resolve_config_path, resolve_project_id, resolve_repo};
 use crate::{BlessOptions, RunError, RunOutcome, UnblessOptions};
 
-use super::discriminant::StorageKey;
+use super::StorageKey;
 use super::{
     AutoFacets, Selection, detect_auto_facets, facet_filtered_candidates, resolve_base_ref,
     resolve_facets,
@@ -133,9 +133,9 @@ where
     S: Storage,
 {
     let prefixes = if options.all {
-        // An empty prefix accepts every benchmark (every qualified id starts with
-        // the empty string), so `--all` blesses the whole commit.
-        vec![String::new()]
+        // An empty prefix list accepts every benchmark, so `--all` blesses the
+        // whole commit.
+        Vec::new()
     } else if options.prefixes.is_empty() {
         return Err(RunError::Bless {
             message: "at least one benchmark-id prefix is required (or pass --all); for example \
@@ -329,11 +329,13 @@ mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
     use futures::executor::block_on;
 
-    use crate::context::{EnvironmentInfo, GitInfo, RunContext, ToolchainInfo};
     use crate::git_history::FakeGitHistory;
-    use crate::model::{BenchmarkId, BenchmarkResult, Metric, MetricKind, Run};
+    use crate::model::{BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, Metric, MetricKind, Run};
+    use crate::model::{EnvironmentInfo, GitInfo, RunContext, ToolchainInfo};
     use crate::report::RecordingReporter;
     use crate::storage::MemoryStorage;
+
+    use nonempty::nonempty;
 
     use super::*;
 
@@ -370,7 +372,7 @@ mod tests {
             "0.0.1".to_owned(),
         );
         let record = BenchmarkResult::new(
-            BenchmarkId::new(vec!["all_the_time".to_owned(), "read_cell".to_owned()]),
+            BenchmarkId::new(nonempty!["all_the_time".to_owned(), "read_cell".to_owned()]),
             vec![Metric::new(MetricKind::InstructionCount, 100.0)],
         );
         Run::new(context, vec![record]).to_json().unwrap()
@@ -394,7 +396,10 @@ mod tests {
 
     fn bless_options(prefixes: &[&str]) -> BlessOptions {
         BlessOptions {
-            prefixes: prefixes.iter().map(|prefix| (*prefix).to_owned()).collect(),
+            prefixes: prefixes
+                .iter()
+                .map(|prefix| BenchmarkIdPrefix::new(*prefix).unwrap())
+                .collect(),
             ..BlessOptions::default()
         }
     }
@@ -456,7 +461,10 @@ mod tests {
         // read from the run it accepts.
         let bytes = block_on(storage.get(&blessings[0])).unwrap();
         let record = BlessingRecord::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
-        assert_eq!(record.prefixes, vec!["all_the_time/read_cell".to_owned()]);
+        assert_eq!(
+            record.prefixes,
+            vec![BenchmarkIdPrefix::new("all_the_time/read_cell").unwrap()]
+        );
         assert_eq!(record.commit, "c2");
         assert_eq!(record.commit_time, ts(1000));
     }
@@ -556,7 +564,7 @@ mod tests {
     }
 
     #[test]
-    fn bless_all_writes_an_empty_prefix_accepting_every_benchmark() {
+    fn bless_all_writes_an_empty_prefix_list_accepting_every_benchmark() {
         let storage = MemoryStorage::new();
         block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes())).unwrap();
         let options = BlessOptions {
@@ -571,8 +579,8 @@ mod tests {
         assert_eq!(blessings.len(), 1, "one sidecar written: {blessings:?}");
         let bytes = block_on(storage.get(&blessings[0])).unwrap();
         let record = BlessingRecord::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
-        // An empty prefix matches every qualified id.
-        assert_eq!(record.prefixes, vec![String::new()]);
+        // An empty prefix list accepts every benchmark.
+        assert!(record.prefixes.is_empty());
     }
 
     #[test]
