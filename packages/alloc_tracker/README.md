@@ -24,8 +24,6 @@ fn main() {
     // When `session` is dropped it prints a human-readable summary to stdout and
     // writes machine-readable JSON files (one per operation) into the Cargo
     // target directory: target/alloc_tracker/<operation>.json.
-    //
-    // Use `Session::new().no_stdout()` or `.no_file()` to suppress either output.
 }
 ```
 

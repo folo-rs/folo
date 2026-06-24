@@ -13,6 +13,8 @@ use std::time::Duration;
 /// # Examples
 ///
 /// ```
+/// use std::time::Duration;
+///
 /// use all_the_time::Session;
 ///
 /// # fn main() {
@@ -25,14 +27,20 @@ use std::time::Duration;
 /// }
 ///
 /// let report = session.to_report();
-/// report.print_to_stdout();
+///
+/// // A report exposes each operation's statistics for programmatic use.
+/// let total_time: Duration = report
+///     .operations()
+///     .map(|(_, op)| op.total_processor_time())
+///     .sum();
+/// println!("Total processor time: {total_time:?}");
 /// # }
 /// ```
 ///
 /// # Merging reports
 ///
 /// ```
-/// use std::thread;
+/// use std::time::Duration;
 ///
 /// use all_the_time::{Report, Session};
 ///
@@ -57,7 +65,12 @@ use std::time::Duration;
 /// let report2 = session2.to_report();
 /// let merged = Report::merge(&report1, &report2);
 ///
-/// merged.print_to_stdout();
+/// // The merged report exposes the combined statistics for programmatic use.
+/// let total_time: Duration = merged
+///     .operations()
+///     .map(|(_, op)| op.total_processor_time())
+///     .sum();
+/// println!("Merged report total processor time: {total_time:?}");
 /// # }
 /// ```
 #[derive(Clone, Debug, Default)]

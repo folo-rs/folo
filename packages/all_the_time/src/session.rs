@@ -170,6 +170,8 @@ impl Session {
     /// # Examples
     ///
     /// ```
+    /// use std::time::Duration;
+    ///
     /// use all_the_time::Session;
     ///
     /// let session = Session::new();
@@ -179,8 +181,13 @@ impl Session {
     /// // Work happens here
     ///
     /// let report = session.to_report();
-    /// // Report can be sent to another thread
-    /// report.print_to_stdout();
+    ///
+    /// // A report exposes each operation's statistics for programmatic use.
+    /// let total_time: Duration = report
+    ///     .operations()
+    ///     .map(|(_, op)| op.total_processor_time())
+    ///     .sum();
+    /// println!("Total processor time: {total_time:?}");
     /// ```
     #[must_use]
     pub fn to_report(&self) -> Report {

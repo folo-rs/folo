@@ -46,22 +46,7 @@
 //! summary is also printed to stdout.
 //!
 //! These outputs are produced automatically, so a typical benchmark only needs
-//! to create a session and record work. Either output can be suppressed:
-//!
-//! ```rust
-//! use all_the_time::Session;
-//!
-//! # fn main() {
-//! // Print to stdout but do not write JSON files.
-//! let session = Session::new().no_file();
-//!
-//! // Or write JSON files but do not print to stdout.
-//! let quiet_session = Session::new().no_stdout();
-//!
-//! // Or suppress both.
-//! let silent_session = Session::new().no_stdout().no_file();
-//! # }
-//! ```
+//! to create a session and record work.
 //!
 //! # Thread vs process processor time
 //!
@@ -107,8 +92,9 @@
 //!
 //! ```
 //! use std::thread;
+//! use std::time::Duration;
 //!
-//! use all_the_time::{Report, Session};
+//! use all_the_time::Session;
 //!
 //! # fn main() {
 //! let session = Session::new();
@@ -119,12 +105,17 @@
 //!
 //! let report = session.to_report();
 //!
-//! // Report can be sent to another thread
-//! thread::spawn(move || {
-//!     report.print_to_stdout();
+//! // Reports are `Send`, so they can be moved to another thread for processing.
+//! let total_time = thread::spawn(move || {
+//!     report
+//!         .operations()
+//!         .map(|(_, op)| op.total_processor_time())
+//!         .sum::<Duration>()
 //! })
 //! .join()
 //! .unwrap();
+//!
+//! println!("Total processor time: {total_time:?}");
 //! # }
 //! ```
 
