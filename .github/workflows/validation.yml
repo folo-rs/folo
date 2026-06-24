@@ -650,3 +650,82 @@ jobs:
           files: lcov.info
           flags: azure
           fail_ci_if_error: true
+
+  # Azure Blob storage backend tests against a real Azure Storage account.
+  #
+  # Complements `test-azurite` by exercising the Microsoft Entra ID authentication
+  # path that the emulator (account-key/SAS) never touches: a real Storage account
+  # with shared-key access disabled, reached over HTTPS, authenticated through
+  # GitHub OIDC workload identity federation — no stored secret. Each test creates a
+  # fresh blob container and deletes it when it finishes (even on panic); the final
+  # `if: always()` sweep is a backstop for a container a crashed run might leave.
+  #
+  # Gated two ways so it only runs when it can succeed:
+  #   * package-gated to cargo-bench-history (same gate as test-azurite);
+  #   * same-repo only — a fork PR cannot mint an OIDC token for our tenant, so it
+  #     would fail federation; the condition lets fork PRs skip cleanly instead.
+  # The Azure identifiers it needs are committed (non-secret) in constants.env, the
+  # same source `just test-azure` reads locally, so local and CI target the same
+  # account. The `just test-azure` recipe sets ENABLE_AZURE=1, which is what actually
+  # opts the real-Azure tests in (they self-skip without it) and turns a missing
+  # account into a hard failure, so once the job runs it can never silently degrade
+  # into skipping every test.
+  #
+  # Single-platform (Linux) by choice, not limitation: the Azure Blob backend is
+  # OS-agnostic network I/O, so one platform fully covers it and Linux is the
+  # cheapest runner. Unlike test-azurite it collects no coverage (azurite already
+  # covers azure.rs); its value is proving the real Entra + real Blob endpoint
+  # round-trip end to end.
+  #
+  # The account, managed identity and federated credentials are scripted/Bicep'd in
+  # infra/azure-bench-history/ — see that directory's README to deploy or re-create.
+  test-azure:
+    needs: [delta]
+    if: >-
+      needs.delta.outputs.skip_all != 'true'
+      && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'cargo-bench-history'))
+      && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    # `id-token: write` lets the job mint a short-lived GitHub OIDC token (a signed
+    # JWT proving "this run is repo folo-rs/folo on ref X"). `azure/login@v2` hands
+    # that token to Azure, which matches it against the managed identity's federated
+    # credentials (see infra/azure-bench-history/main.bicep) and issues an access
+    # token — so CI authenticates with no stored secret. The default GITHUB_TOKEN
+    # cannot request an OIDC token unless this permission is granted explicitly (and
+    # fork PRs cannot get it at all, hence the same-repo gate above). `contents: read`
+    # is the minimum the checkout needs.
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      # Surface the non-secret AZURE_* identity values and the account name from
+      # constants.env (the same source `just test-azure` reads) as job env vars, so
+      # the azure/login inputs and the cleanup step can reference them without
+      # duplicating values in repo Variables. Each line is `KEY=value`; comments skip.
+      - name: Load Azure identifiers from constants.env
+        shell: bash
+        run: grep -E '^(AZURE_CLIENT_ID|AZURE_TENANT_ID|AZURE_SUBSCRIPTION_ID|BENCH_HISTORY_AZURE_ACCOUNT)=' constants.env >> "$GITHUB_ENV"
+
+      - name: Sign in to Azure (OIDC workload identity federation)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run real-Azure storage tests
+        run: just test-azure
+
+      - name: Delete any leftover test containers
+        if: always()
+        shell: pwsh
+        # cleanup-containers.ps1 defaults its account to BENCH_HISTORY_AZURE_ACCOUNT,
+        # which the load step above put into the job env.
+        run: ./infra/azure-bench-history/cleanup-containers.ps1

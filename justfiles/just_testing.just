@@ -143,6 +143,39 @@ miri-example EXAMPLE:
 test FILTER="":
     cargo +{{ env_var('RUST_MSRV') }} nextest run {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast
 
+# Run the cargo-bench-history Azure storage tests against a REAL Azure account
+# (the Microsoft Entra ID auth path), as opposed to the `test` recipe which runs
+# them against the local Azurite emulator. Mirrors the CI `test-azure` job for
+# local verification.
+#
+# Requires `az login` (the tests authenticate as your Entra user via the Azure
+# CLI) and a deployed storage account that grants your user the `Storage Blob
+# Data Contributor` role — see infra/azure-bench-history/ to deploy one. The
+# account defaults to BENCH_HISTORY_AZURE_ACCOUNT from constants.env (shared with
+# CI); override it by passing a name: `just test-azure <account>`.
+#
+# Setting ENABLE_AZURE is what actually runs the real-Azure tests: without it they
+# self-skip, so the account name living in constants.env (and thus in every recipe's
+# dotenv environment) does not make a plain `just test` run them. This recipe sets
+# ENABLE_AZURE only here, so the real-Azure tests run for real only through it.
+[group('testing')]
+[script]
+test-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_AZURE_ACCOUNT', ''):
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    $account = "{{ ACCOUNT }}"
+    if ([string]::IsNullOrEmpty($account)) {
+        Write-Error "No storage account specified. Pass it (just test-azure <account>) or set BENCH_HISTORY_AZURE_ACCOUNT in constants.env. Deploy one with infra/azure-bench-history/deploy.ps1."
+        exit 1
+    }
+
+    $env:BENCH_HISTORY_AZURE_ACCOUNT = $account
+    $env:ENABLE_AZURE = "1"
+
+    Write-Host "Running real-Azure tests against account '$account' (Microsoft Entra ID; requires az login)."
+    cargo +$env:RUST_MSRV nextest run -p cargo-bench-history --features azure real_azure --locked --no-fail-fast
+
 # Runs regular tests as well as doing one iteration of benchmarks.
 # We separate it from "test" because benchmarks are quite slow,
 # so we tend to only run them as part of a full validation pass.

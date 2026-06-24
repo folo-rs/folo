@@ -456,8 +456,11 @@ no `async_trait` dependency, and `run`/`analyze` stay backend-agnostic by holdin
   The shipped azure-sdk-for-rust v1.0.0 removed connection-string parsing,
   `StorageSharedKeyCredential`, and `DefaultAzureCredential`, which is why the
   account-SAS path is self-signed rather than delegated to the SDK. Tested in
-  regular CI against the **Azurite emulator** (not real cloud, not `#[ignore]`);
-  the network tests **self-skip** when no emulator is reachable and are
+  regular CI two ways (decision 17): the `test-azurite` job against the **Azurite
+  emulator** (account-SAS path) and the additive `test-azure` job against a **real
+  Storage account** over the **Entra ID** path (signed in via GitHub OIDC, a fresh
+  container per test deleted afterward). Neither is `#[ignore]`; the network tests
+  **self-skip** when their backend is not configured and are
   `#[cfg_attr(miri, ignore)]`. Account-key construction reads the wall clock for
   the SAS expiry, so those pure tests are Miri-ignored too — the signing math is
   still covered under Miri by `storage::sas`'s fixed-expiry golden vector.
@@ -1453,17 +1456,42 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     is removed. `run`/`backfill` invoke `cargo bench` in-process, so to collect
     Callgrind data you run the tool natively on Linux/WSL and no env var has to
     cross a WSL boundary (decision 8).
-17. **Cloud-storage testing** — *Decided:* Azure backend is exercised in regular CI
-    against the **Azurite emulator** (not real cloud, not `#[ignore]`; only
-    `#[cfg_attr(miri, ignore)]` for the network edge). The emulator runs directly
-    on the runner host (started by the `start-azurite` composite action) in a
-    Linux-only, package-gated `test-azure` job rather than as a service container,
+17. **Cloud-storage testing** — *Decided:* the Azure backend is exercised in regular
+    CI two complementary ways.
+
+    **Azurite emulator** (`test-azurite` job): the default, fork-safe path — not real
+    cloud, not `#[ignore]`; only `#[cfg_attr(miri, ignore)]` for the network edge. The
+    emulator runs directly on the runner host (started by the `start-azurite` composite
+    action) in a Linux-only, package-gated job rather than as a service container,
     which cannot reliably bind Azurite to a reachable address. The network tests
-    **self-skip** when no emulator is reachable so the multi-platform
-    `--all-features` jobs stay green; `BENCH_HISTORY_REQUIRE_AZURITE=1` (set only
-    in `test-azure`) turns an unreachable emulator into a hard failure so it can
-    never silently skip. That job also collects coverage so the `azure.rs` network
-    paths reach Codecov.
+    **self-skip** when no emulator is reachable so the multi-platform `--all-features`
+    jobs stay green; `BENCH_HISTORY_REQUIRE_AZURITE=1` (set only in `test-azurite`)
+    turns an unreachable emulator into a hard failure so it can never silently skip.
+    That job also collects coverage so the `azure.rs` network paths reach Codecov.
+
+    **Real Azure account** (`test-azure` job): an additive job that exercises the
+    **Microsoft Entra ID** authentication path the emulator (account-key/SAS) never
+    touches — a real Storage account with shared-key access disabled, reached over
+    HTTPS. No Rust change is needed: `DeveloperToolsCredential` already chains to the
+    Azure CLI, so the same credential works locally (after `az login`) and in CI (after
+    `azure/login@v2` signs in via **GitHub OIDC workload identity federation**, no
+    stored secret). Each test (`*_in_real_azure`) creates a fresh blob container and
+    deletes it when it finishes, even on panic (`catch_unwind` + `resume_unwind`); a
+    final `if: always()` sweep (`cleanup-containers.ps1`) is a backstop for a container
+    a crashed run might leave. The tests **self-skip** unless `ENABLE_AZURE` is set —
+    an explicit opt-in (set by the `just test-azure` recipe the job invokes), so the
+    account name living in `constants.env` does not by itself make a plain test run
+    target the cloud; when set, a then-missing `BENCH_HISTORY_AZURE_ACCOUNT` is a hard
+    failure rather than a silent skip. The job is gated to same-repo runs (fork PRs
+    cannot mint an OIDC token for our tenant). Its Azure identifiers
+    (`BENCH_HISTORY_AZURE_ACCOUNT`, `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
+    `AZURE_SUBSCRIPTION_ID`) are committed, non-secret, in the repository-root
+    `constants.env` (the same source `just test-azure` reads), so local and CI target
+    the same account; a `grep` step surfaces them into `$GITHUB_ENV` for the
+    `azure/login` inputs. It collects no coverage — `test-azurite` already covers
+    `azure.rs`; its value is the real Entra + real Blob round-trip. The account,
+    identity and federated credentials are scripted/Bicep'd in
+    `infra/azure-bench-history/` (decision 31).
 18. **Integration testing** — *Decided:* integration tests invoke the **library
     entry** (`Cli::from_args(argv).into_command()` → `run()`), matching the
     workspace pattern (no `assert_cmd`); a table-driven CLI-flag matrix runs over
@@ -1631,3 +1659,26 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      `list` is an error that names its three subjects. The other workspace cargo tools
      (`cargo-detect-package`/`cargo-freeze-deps`) also use `clap` (issue #252), though
      their flat CLIs need no grouped argument headings.
+31. **Real-Azure test infrastructure (Bicep + UAMI federation)** — *Decided:* the
+     Azure resources backing the `test-azure` job are fully scripted in
+     `infra/azure-bench-history/` so the account and identity can be torn down and
+     re-created with one command. `main.bicep` (resource-group scope) provisions an
+     **Entra-only** Storage account (`allowSharedKeyAccess: false`, HTTPS/TLS1.2,
+     container + blob soft-delete disabled so a deleted test container's name is
+     immediately reusable), a **user-assigned managed identity** with **GitHub OIDC
+     federated credentials** (subjects `repo:folo-rs/folo:ref:refs/heads/main` and
+     `repo:folo-rs/folo:pull_request`; the federation loop is `@batchSize(1)` because
+     Azure rejects concurrent writes to one identity's credentials), and two
+     `Storage Blob Data Contributor` role assignments — for the managed identity (CI)
+     and an optional local developer principal. That single data-plane role covers
+     container create + delete and blob read/write/delete, so production `run`
+     (`ensure_container`) and the test cleanup both work without a control-plane role.
+     A UAMI is chosen over an App Registration because user-assigned identities and
+     their federated credentials are natively Bicep-able (no Graph extension) and
+     `azure/login@v2` accepts a UAMI `client-id` for OIDC sign-in. The Bicep outputs
+     map one-to-one to the Azure identifiers committed (non-secret) in the
+     repository-root `constants.env` (`BENCH_HISTORY_AZURE_ACCOUNT`/`AZURE_CLIENT_ID`/
+     `AZURE_TENANT_ID`/`AZURE_SUBSCRIPTION_ID`), the single source both `just
+     test-azure` and the CI `test-azure` job read so local and CI target the same
+     account. `deploy.ps1`/`teardown.ps1`/`cleanup-containers.ps1` wrap deploy,
+     teardown and the leftover-container sweep.
