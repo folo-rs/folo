@@ -166,7 +166,13 @@ impl Session {
     /// }
     ///
     /// let report = session.to_report();
-    /// report.print_to_stdout();
+    ///
+    /// // A report exposes each operation's statistics for programmatic use.
+    /// let total_bytes: u64 = report
+    ///     .operations()
+    ///     .map(|(_, op)| op.total_bytes_allocated())
+    ///     .sum();
+    /// println!("Captured {total_bytes} bytes across all operations");
     /// ```
     #[must_use]
     pub fn to_report(&self) -> Report {

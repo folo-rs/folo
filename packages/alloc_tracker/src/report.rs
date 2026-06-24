@@ -27,7 +27,13 @@ use std::fmt;
 /// }
 ///
 /// let report = session.to_report();
-/// report.print_to_stdout();
+///
+/// // A report exposes each operation's statistics for programmatic use.
+/// let total_bytes: u64 = report
+///     .operations()
+///     .map(|(_, op)| op.total_bytes_allocated())
+///     .sum();
+/// println!("Captured {total_bytes} bytes across all operations");
 /// # }
 /// ```
 ///
@@ -64,7 +70,12 @@ use std::fmt;
 /// let report2 = session2.to_report();
 /// let merged = Report::merge(&report1, &report2);
 ///
-/// merged.print_to_stdout();
+/// // The merged report exposes the combined statistics for programmatic use.
+/// let total_bytes: u64 = merged
+///     .operations()
+///     .map(|(_, op)| op.total_bytes_allocated())
+///     .sum();
+/// println!("Merged report captured {total_bytes} bytes across all operations");
 /// # }
 /// ```
 #[derive(Clone, Debug, Default)]

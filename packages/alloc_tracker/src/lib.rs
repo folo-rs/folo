@@ -73,25 +73,7 @@
 //! summary is also printed to stdout.
 //!
 //! These outputs are produced automatically, so a typical benchmark only needs
-//! to create a session and record work. Either output can be suppressed:
-//!
-//! ```
-//! use alloc_tracker::{Allocator, Session};
-//!
-//! #[global_allocator]
-//! static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
-//!
-//! # fn main() {
-//! // Print to stdout but do not write JSON files.
-//! let session = Session::new().no_file();
-//!
-//! // Or write JSON files but do not print to stdout.
-//! let quiet_session = Session::new().no_stdout();
-//!
-//! // Or suppress both.
-//! let silent_session = Session::new().no_stdout().no_file();
-//! # }
-//! ```
+//! to create a session and record work.
 //!
 //! # Tracking mean allocations
 //!
@@ -140,7 +122,7 @@
 //! ```
 //! use std::thread;
 //!
-//! use alloc_tracker::{Allocator, Report, Session};
+//! use alloc_tracker::{Allocator, Session};
 //!
 //! #[global_allocator]
 //! static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
@@ -156,12 +138,17 @@
 //!
 //! let report = session.to_report();
 //!
-//! // Report can be sent to another thread
-//! thread::spawn(move || {
-//!     report.print_to_stdout();
+//! // Reports are `Send`, so they can be moved to another thread for processing.
+//! let total_bytes: u64 = thread::spawn(move || {
+//!     report
+//!         .operations()
+//!         .map(|(_, op)| op.total_bytes_allocated())
+//!         .sum()
 //! })
 //! .join()
 //! .unwrap();
+//!
+//! println!("Captured {total_bytes} bytes across all operations");
 //! # }
 //! ```
 //!
