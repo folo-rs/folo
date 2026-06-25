@@ -385,6 +385,8 @@ async fn run_process(program: &str, args: &[&str], envs: &[(&str, &str)]) -> Res
 mod tests {
     use std::sync::Arc;
 
+    use futures::executor::block_on;
+
     use super::*;
 
     #[test]
@@ -425,6 +427,17 @@ mod tests {
         }
     }
 
+    /// A local-filesystem target over an explicit root that no temporary directory
+    /// backs, so pure-logic paths can be tested without touching the filesystem.
+    fn local_target(root: PathBuf) -> StorageTarget {
+        StorageTarget {
+            kind: Kind::Local,
+            root,
+            scratch: None,
+            runner: Runner::Process,
+        }
+    }
+
     /// The recorded calls, each flattened to a single `program arg arg ...` string.
     fn recorded(fake: &FakeRunner) -> Vec<String> {
         fake.calls
@@ -447,7 +460,7 @@ mod tests {
 
     #[test]
     fn label_names_the_backend() {
-        let local = StorageTarget::local(None).expect("a temp local target is created");
+        let local = local_target(PathBuf::from("store"));
         assert_eq!(local.label(), "local filesystem");
 
         let fake = Arc::new(FakeRunner::default());
@@ -463,14 +476,12 @@ mod tests {
         assert!(source.ends_with('*'), "got: {source}");
     }
 
-    #[tokio::test]
-    async fn provision_creates_the_container() {
+    #[test]
+    fn provision_creates_the_container() {
         let fake = Arc::new(FakeRunner::default());
         let target = fake_azure_target(&fake, PathBuf::from("staging"));
 
-        target
-            .provision(Logger::new(false))
-            .await
+        block_on(target.provision(Logger::new(false)))
             .expect("provisioning succeeds with a passing runner");
 
         let calls = recorded(&fake);
@@ -481,27 +492,25 @@ mod tests {
         assert!(call.contains("--name cont"), "got: {call}");
     }
 
-    #[tokio::test]
-    async fn provision_surfaces_a_runner_failure() {
+    #[test]
+    fn provision_surfaces_a_runner_failure() {
         let fake = Arc::new(FakeRunner {
             fail: true,
             ..FakeRunner::default()
         });
         let target = fake_azure_target(&fake, PathBuf::from("staging"));
 
-        let result = target.provision(Logger::new(false)).await;
+        let result = block_on(target.provision(Logger::new(false)));
 
         assert!(result.is_err(), "a failing runner must fail provisioning");
     }
 
-    #[tokio::test]
-    async fn upload_copies_the_staged_tree_with_azcopy() {
+    #[test]
+    fn upload_copies_the_staged_tree_with_azcopy() {
         let fake = Arc::new(FakeRunner::default());
         let target = fake_azure_target(&fake, PathBuf::from("staging"));
 
-        target
-            .upload(Logger::new(false))
-            .await
+        block_on(target.upload(Logger::new(false)))
             .expect("uploading succeeds with a passing runner");
 
         let calls = recorded(&fake);
@@ -514,24 +523,19 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn upload_is_a_noop_for_local_storage() {
-        let target = StorageTarget::local(None).expect("a temp local target is created");
+    #[test]
+    fn upload_is_a_noop_for_local_storage() {
+        let target = local_target(PathBuf::from("store"));
 
-        target
-            .upload(Logger::new(false))
-            .await
-            .expect("a local upload is a no-op");
+        block_on(target.upload(Logger::new(false))).expect("a local upload is a no-op");
     }
 
-    #[tokio::test]
-    async fn cleanup_deletes_the_container_when_not_kept() {
+    #[test]
+    fn cleanup_deletes_the_container_when_not_kept() {
         let fake = Arc::new(FakeRunner::default());
         let mut target = fake_azure_target(&fake, PathBuf::from("staging"));
 
-        target
-            .cleanup(false, Logger::new(false))
-            .await
+        block_on(target.cleanup(false, Logger::new(false)))
             .expect("cleanup succeeds with a passing runner");
 
         let calls = recorded(&fake);
@@ -540,29 +544,25 @@ mod tests {
         assert!(call.contains("storage container delete"), "got: {call}");
     }
 
-    #[tokio::test]
-    async fn cleanup_keeps_the_container_when_requested() {
+    #[test]
+    fn cleanup_keeps_the_container_when_requested() {
         let fake = Arc::new(FakeRunner::default());
         let mut target = fake_azure_target(&fake, PathBuf::from("staging"));
 
-        target
-            .cleanup(true, Logger::new(false))
-            .await
-            .expect("keeping the container succeeds");
+        block_on(target.cleanup(true, Logger::new(false))).expect("keeping the container succeeds");
 
         // Keeping the container must not invoke the deletion tool.
         assert!(recorded(&fake).is_empty(), "got: {:?}", recorded(&fake));
     }
 
-    #[tokio::test]
-    async fn cleanup_persists_a_kept_local_store() {
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn cleanup_persists_a_kept_local_store() {
         let mut target = StorageTarget::local(None).expect("a temp local target is created");
         let root = target.seed_root().to_path_buf();
         assert!(root.exists(), "the fresh temp store exists");
 
-        target
-            .cleanup(true, Logger::new(false))
-            .await
+        block_on(target.cleanup(true, Logger::new(false)))
             .expect("keeping the local store succeeds");
         drop(target);
 
@@ -570,29 +570,25 @@ mod tests {
         std::fs::remove_dir_all(&root).expect("the kept store is removable");
     }
 
-    #[tokio::test]
-    async fn cleanup_removes_an_unkept_local_store() {
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn cleanup_removes_an_unkept_local_store() {
         let mut target = StorageTarget::local(None).expect("a temp local target is created");
         let root = target.seed_root().to_path_buf();
         assert!(root.exists(), "the fresh temp store exists");
 
-        target
-            .cleanup(false, Logger::new(false))
-            .await
-            .expect("local cleanup succeeds");
+        block_on(target.cleanup(false, Logger::new(false))).expect("local cleanup succeeds");
         drop(target);
 
         assert!(!root.exists(), "an unkept local store is removed on drop");
     }
 
-    #[tokio::test]
-    async fn az_preserves_the_cli_invocation() {
+    #[test]
+    fn az_preserves_the_cli_invocation() {
         let fake = Arc::new(FakeRunner::default());
         let target = fake_azure_target(&fake, PathBuf::from("staging"));
 
-        target
-            .az(&["account", "show"], Logger::new(false))
-            .await
+        block_on(target.az(&["account", "show"], Logger::new(false)))
             .expect("the fake runner reports success");
 
         let calls = recorded(&fake);
@@ -604,6 +600,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)]
     async fn run_process_accepts_a_zero_exit() {
         let (program, args) = shell_command("exit 0");
         run_process(program, &args, &[])
@@ -612,6 +609,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)]
     async fn run_process_rejects_a_nonzero_exit() {
         let (program, args) = shell_command("exit 1");
         let result = run_process(program, &args, &[]).await;
@@ -619,6 +617,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)]
     async fn run_process_rejects_a_missing_program() {
         let result = run_process("definitely-not-a-real-program-zzz", &[], &[]).await;
         assert!(result.is_err(), "a missing program must be an error");

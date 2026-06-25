@@ -411,4 +411,46 @@ mod tests {
         assert_eq!(i64_from(0), 0);
         assert_eq!(i64_from(7), 7);
     }
+
+    #[test]
+    fn set_index_returns_the_targeted_discriminant_set() {
+        // A value distinct from both 0 and 1 detects a constant-return mutation
+        // across every task variant.
+        assert_eq!(
+            set_index(&Task::CleanMain {
+                set: 7,
+                index: 0,
+                sha: "a".to_owned(),
+                time: ts(1),
+            }),
+            7
+        );
+        assert_eq!(
+            set_index(&Task::CleanFeature {
+                set: 4,
+                sha: "b".to_owned(),
+                time: ts(2),
+            }),
+            4
+        );
+        assert_eq!(
+            set_index(&Task::Dirty {
+                set: 5,
+                k: 0,
+                sha: "c".to_owned(),
+                time: ts(3),
+                observation: 10,
+            }),
+            5
+        );
+        assert_eq!(
+            set_index(&Task::Bless {
+                set: 9,
+                sha: "d".to_owned(),
+                time: ts(4),
+                issued: 11,
+            }),
+            9
+        );
+    }
 }
