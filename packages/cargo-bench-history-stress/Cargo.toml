@@ -23,6 +23,7 @@ tempfile = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt-multi-thread"] }
 
 [dev-dependencies]
+futures = { workspace = true, features = ["executor"] }
 tempfile = { workspace = true }
 
 [lints]

@@ -162,3 +162,34 @@ fn overrides(workspace: &Path, anchor: Timestamp) -> Overrides {
 pub(crate) fn config_path(workspace: &Path) -> PathBuf {
     workspace.join(".cargo").join("bench_history.toml")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overrides_pin_the_workspace_and_clock() {
+        let workspace = Path::new("/tmp/stress-ws");
+        let anchor = Timestamp::from_second(1_750_000_000).expect("anchor is in range");
+
+        let overrides = overrides(workspace, anchor);
+
+        // The seeded workspace and the fixed analysis clock are what make the
+        // measurement read synthetic data at a reproducible "now"; the other
+        // overrides stay unset so production defaults apply.
+        assert_eq!(overrides.workspace_dir.as_deref(), Some(workspace));
+        assert_eq!(overrides.now, Some(anchor));
+        assert!(overrides.target_root.is_none());
+        assert!(overrides.bench_command.is_none());
+    }
+
+    #[test]
+    fn config_path_lives_under_dot_cargo() {
+        let path = config_path(Path::new("/tmp/stress-ws"));
+        assert!(
+            path.ends_with(".cargo/bench_history.toml"),
+            "{}",
+            path.display()
+        );
+    }
+}

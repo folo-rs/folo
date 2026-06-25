@@ -112,6 +112,10 @@ mod tests {
         assert_eq!(human_bytes(1536), "1.50 KiB");
         assert_eq!(human_bytes(1024 * 1024), "1.00 MiB");
         assert_eq!(human_bytes(1024 * 1024 * 1024), "1.00 GiB");
+        assert_eq!(human_bytes(1_u64 << 40), "1.00 TiB");
+        // TiB is the largest unit: anything bigger keeps scaling within TiB rather
+        // than indexing past the unit table (which the loop's upper bound prevents).
+        assert_eq!(human_bytes(1_u64 << 50), "1024.00 TiB");
     }
 
     #[test]

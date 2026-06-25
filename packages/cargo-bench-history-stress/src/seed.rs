@@ -347,3 +347,110 @@ fn set_index(task: &Task) -> usize {
 fn i64_from(value: usize) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
+
+#[cfg(test)]
+mod tests {
+    use cargo_bench_history_core::model::{DiscriminantSet, Engine};
+    use jiff::Timestamp;
+
+    use super::*;
+    use crate::repo::Commit;
+
+    fn ts(second: i64) -> Timestamp {
+        Timestamp::from_second(second).expect("test second is in range")
+    }
+
+    /// A repository with `main` first-parent commits and no feature branch, so the
+    /// planned tasks reduce to the `main` commits that store a run.
+    fn main_only_repo(commits: usize) -> SeededRepo {
+        SeededRepo {
+            main: (0..commits)
+                .map(|i| Commit {
+                    sha: format!("main{i:02}"),
+                    time: ts(1_000_i64.saturating_add(i64_from(i))),
+                })
+                .collect(),
+            feature: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn plan_tasks_only_seeds_commits_that_store_a_run() {
+        // A single discriminant set keeps the per-set fan-out at one, so the
+        // CleanMain tasks map one-to-one onto the main commits that have a run.
+        let sets = vec![DiscriminantSet::new(
+            Engine::Callgrind,
+            "x86_64-unknown-linux-gnu",
+            None,
+        )];
+        let repo = main_only_repo(4);
+        let scenario = Scenario {
+            benchmarks: 4,
+            commits: 4,
+            branch_commits: 0,
+            dirty_runs: 1,
+            seed: 1,
+        };
+
+        let mut indices: Vec<usize> = plan_tasks(scenario, &sets, &repo)
+            .into_iter()
+            .filter_map(|task| match task {
+                Task::CleanMain { index, .. } => Some(index),
+                _ => None,
+            })
+            .collect();
+        indices.sort_unstable();
+
+        // commits == 4 -> bless_index 2; runs land on the even indices {0, 2} plus
+        // the forced tip (3) and blessed (2) commits, leaving index 1 a gap.
+        assert_eq!(indices, vec![0, 2, 3]);
+    }
+
+    #[test]
+    fn i64_from_preserves_small_values() {
+        assert_eq!(i64_from(0), 0);
+        assert_eq!(i64_from(7), 7);
+    }
+
+    #[test]
+    fn set_index_returns_the_targeted_discriminant_set() {
+        // A value distinct from both 0 and 1 detects a constant-return mutation
+        // across every task variant.
+        assert_eq!(
+            set_index(&Task::CleanMain {
+                set: 7,
+                index: 0,
+                sha: "a".to_owned(),
+                time: ts(1),
+            }),
+            7
+        );
+        assert_eq!(
+            set_index(&Task::CleanFeature {
+                set: 4,
+                sha: "b".to_owned(),
+                time: ts(2),
+            }),
+            4
+        );
+        assert_eq!(
+            set_index(&Task::Dirty {
+                set: 5,
+                k: 0,
+                sha: "c".to_owned(),
+                time: ts(3),
+                observation: 10,
+            }),
+            5
+        );
+        assert_eq!(
+            set_index(&Task::Bless {
+                set: 9,
+                sha: "d".to_owned(),
+                time: ts(4),
+                issued: 11,
+            }),
+            9
+        );
+    }
+}
