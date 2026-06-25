@@ -1,3 +1,4 @@
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 //! On-demand stress harness for `cargo-bench-history`'s `analyze` command.
 //!
 //! The harness fabricates a large synthetic benchmark history — by default a
@@ -59,6 +60,12 @@ const ANCHOR_UNIX: i64 = 1_750_000_000;
 
 /// Runs the harness end to end, rendering any failure as one diagnostic line and
 /// mapping it to a process exit code.
+///
+/// This orchestration drives real git, filesystem, and subprocess IO, so it is
+/// covered by the integration tests through the spawned binary rather than by
+/// in-process unit tests; `llvm-cov` cannot instrument that subprocess, so the
+/// binary-only orchestration carries `coverage(off)`.
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[must_use]
 pub fn run() -> ExitCode {
     match run_harness() {
@@ -72,6 +79,7 @@ pub fn run() -> ExitCode {
 
 /// Builds the dataset, seeds it, and measures each mode. Split out from [`run`] so
 /// every failure path renders one diagnostic and yields a non-zero exit.
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[tokio::main]
 async fn run_harness() -> Result<(), Error> {
     let cli = Cli::parse();
@@ -179,7 +187,10 @@ fn analysis_clock(
         .map_err(|error| fail(format!("invalid analysis clock: {error}")))
 }
 
-/// Builds the storage target from the CLI, resolving Azure defaults.
+/// Builds the storage target from the CLI, resolving Azure defaults. The IO edge
+/// that selects and constructs a backend; like [`run`], it is reached only through
+/// the binary, so it carries `coverage(off)`.
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn build_target(cli: &Cli) -> Result<StorageTarget, Error> {
     match cli.storage {
         StorageKind::Local => StorageTarget::local(cli.dir.clone()),
@@ -205,7 +216,10 @@ fn default_container() -> String {
     format!("bh-stress-{}", Timestamp::now().as_second())
 }
 
-/// Writes the seeded configuration into the workspace's `.cargo/` directory.
+/// Writes the seeded configuration into the workspace's `.cargo/` directory. A
+/// filesystem IO edge reached only through the binary, so it carries
+/// `coverage(off)`.
+#[cfg_attr(coverage_nightly, coverage(off))]
 async fn write_config(
     workspace: &Path,
     target: &StorageTarget,

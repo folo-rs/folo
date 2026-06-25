@@ -126,6 +126,7 @@ impl StorageTarget {
     /// # Errors
     ///
     /// Returns an error if the staging directory cannot be created.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) fn azure(account: String, container: String) -> Result<Self, Error> {
         let scratch = TempDir::new()
             .map_err(|error| fail(format!("failed to create an upload staging dir: {error}")))?;
@@ -469,6 +470,28 @@ mod tests {
     }
 
     #[test]
+    fn config_toml_renders_each_backend() {
+        let local = local_target(PathBuf::from("store"));
+        let local_config = local.config_toml();
+        assert!(
+            local_config.contains("[storage.local]"),
+            "got: {local_config}"
+        );
+
+        let fake = Arc::new(FakeRunner::default());
+        let azure = fake_azure_target(&fake, PathBuf::from("staging"));
+        let azure_config = azure.config_toml();
+        assert!(
+            azure_config.contains("[storage.azure]"),
+            "got: {azure_config}"
+        );
+        assert!(
+            azure_config.contains("account = \"acct\""),
+            "got: {azure_config}"
+        );
+    }
+
+    #[test]
     fn wildcard_source_targets_directory_contents() {
         let source = wildcard_source(Path::new("seedroot"));
         // The contents are copied via a trailing `*`, not the directory itself.
@@ -603,7 +626,8 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     async fn run_process_accepts_a_zero_exit() {
         let (program, args) = shell_command("exit 0");
-        run_process(program, &args, &[])
+        // A non-empty env exercises the per-variable injection loop.
+        run_process(program, &args, &[("STRESS_PROBE", "1")])
             .await
             .expect("a zero-exit command succeeds");
     }
