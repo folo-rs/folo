@@ -18,6 +18,7 @@ Prerequisites:
     * vscode-just
     * WSL
 * PowerShell 7
+* Node.js with npm (used to install and run the Azurite Azure Blob emulator for `just test-azurite`)
 * `rustup toolchain install` to install Rust development tools based on `rust-toolchain.toml`
 * `cargo install just`
 * (Only if publishing releases) GitHub CLI + `gh auth login`
@@ -54,6 +55,7 @@ Prerequisites:
   ```
 * `rustup toolchain install` to install Rust development tools based on `rust-toolchain.toml`
 * `cargo install just`
+* Node.js with npm (used to install and run the Azurite Azure Blob emulator for `just test-azurite`)
 * If first time Git setup, execute `git config --global credential.helper "/mnt/c/Program\ Files/Git/mingw64/bin/git-credential-manager.exe"` to setup authentication flow
 
 Setup:
@@ -71,3 +73,24 @@ Validation:
     * `Tasks: Run Build Task`
     * `Tasks: Run Test Task`
 1. Execute `just validate-local` in terminal.
+
+# Testing Azure functionality
+
+The `cargo-bench-history` package has an optional `azure` feature with an Azure Blob storage
+backend. Its tests are special: they are **not** exercised by `just test`, because they need
+either a local storage emulator or a real cloud account that an ordinary test run cannot assume
+is present. Under `just test` these tests self-skip (no emulator is started), so they never break
+a normal test run. To actually exercise them, use one of the dedicated recipes below.
+
+There are two flavours:
+
+* **Azurite (emulator) tests** run against a local [Azurite](https://github.com/Azure/Azurite)
+  Blob emulator. `just install-tools` installs Azurite (via npm), and `just test-azurite` starts
+  the emulator, runs the tests against it, and stops the emulator afterward — including on failure.
+  If an emulator is already running on the default port, the recipe reuses it and leaves it running.
+* **Real-Azure tests** run against a real Azure Storage account to exercise the Microsoft Entra ID
+  authentication path that the emulator does not cover. Run them with `just test-azure` after
+  `az login`. They are opt-in and self-skip unless explicitly enabled.
+
+For account provisioning and the gating environment variables, see `infra/azure-bench-history/` and
+the `packages/cargo-bench-history/AGENTS.md` testing notes.

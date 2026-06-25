@@ -49,3 +49,25 @@ install-tools:
     if ($IsLinux) {
         cargo install gungraun-runner --version 0.19.2 --locked
     }
+
+    # Azurite is the Azure Blob storage emulator that backs the cargo-bench-history
+    # `azure` feature tests, exercised locally via `just test-azurite`. It is a Node
+    # package, so npm is a prerequisite (see DEVELOPMENT.md). We install it on every
+    # platform because the emulator and those tests are cross-platform. If npm is not
+    # present we warn and continue rather than fail, so the rest of the toolchain still
+    # installs.
+    #
+    # The version is pinned to match the CI `start-azurite` action
+    # (.github/actions/start-azurite/action.yml) so local and CI runs target the same
+    # emulator — keep the two in sync when bumping.
+    if ($env:CI) {
+        # Skip in CI: `npm install -g azurite` takes ~3 minutes and `install-tools` runs
+        # on every CI job, but only the `test-azurite` job needs the emulator — and that
+        # job provisions its own copy via the start-azurite action. Installing it here too
+        # would add ~3 minutes of uncached work to every other CI job for no benefit.
+        Write-Host "Skipping Azurite install in CI (the test-azurite job provisions its own via the start-azurite action)."
+    } elseif (Get-Command npm -ErrorAction SilentlyContinue) {
+        npm install -g azurite@3.35.0
+    } else {
+        Write-Warning "npm not found; skipping Azurite install. Install Node.js/npm (see DEVELOPMENT.md), then re-run 'just install-tools' to enable 'just test-azurite'."
+    }

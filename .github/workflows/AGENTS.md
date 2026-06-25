@@ -71,8 +71,8 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
 - **test-azurite** — single-platform (Linux) by choice, package-gated to `cargo-bench-history`
   - Runs the `azure`-feature tests against a live Azurite blob emulator and also
     collects coverage so the `azure.rs` network paths reach Codecov.
-  - Named for the Azurite emulator it targets; `test-azure` is reserved for a future
-    job that runs against a real Azure account. Single-platform by choice, not
+  - Named for the Azurite emulator it targets; its sibling `test-azure` runs the
+    same backend against a real Azure account. Single-platform by choice, not
     limitation: the Azure Blob backend is OS-agnostic network I/O, so one platform
     fully covers it and Linux is the cheapest runner.
   - The `azure` feature is off by default and its network paths **self-skip** when
@@ -88,6 +88,37 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
     containers cannot reliably bind the emulator to a reachable address (the
     default image binds `127.0.0.1` inside the container and the service syntax
     cannot override the command), so the host-process approach is used instead.
+
+- **test-azure** — single-platform (Linux) by choice, package-gated to `cargo-bench-history`
+  - Additive sibling of `test-azurite`: runs the same `azure`-feature backend
+    tests against a **real Azure Storage account** to exercise the **Microsoft
+    Entra ID** authentication path that the emulator (account-key/SAS) never
+    touches — a real account with shared-key access disabled, reached over HTTPS.
+  - Authenticates with **GitHub OIDC workload identity federation** (no stored
+    secret): `azure/login@v2` signs in a user-assigned managed identity, leaving
+    the Azure CLI authenticated, which the tests' `DeveloperToolsCredential` picks
+    up unchanged. Requires `permissions: { id-token: write, contents: read }`.
+  - **Double-gated** so it only runs when it can succeed: package-gated to
+    `cargo-bench-history` (same gate as `test-azurite`); and **same-repo only** (a
+    fork PR cannot mint an OIDC token for our tenant, so the `if:` lets fork PRs skip
+    cleanly instead of failing red). The `just test-azure` recipe it invokes sets
+    `ENABLE_AZURE=1`, which both opts the real-Azure tests in and turns a missing
+    account into a hard failure, so a job that does run can never silently skip every
+    test.
+  - Reads its Azure identifiers from the repository-root `constants.env` (the same
+    non-secret `BENCH_HISTORY_AZURE_ACCOUNT`, `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
+    `AZURE_SUBSCRIPTION_ID` that `just test-azure` reads locally, so local and CI
+    target the same account). A `bash` step `grep`s those keys into `$GITHUB_ENV` so
+    the `azure/login` inputs and the cleanup step can reference them. It then runs the
+    tests via the `just test-azure` recipe (the same one developers use locally; it
+    reads the account from the job's `BENCH_HISTORY_AZURE_ACCOUNT` env and runs the
+    `*_in_real_azure` tests). Each test deletes its own container, even on panic; a
+    final `if: always()` step runs `infra/azure-bench-history/cleanup-containers.ps1`
+    as a backstop for a container a crashed run might leave.
+  - Collects **no coverage** (`test-azurite` already covers `azure.rs`); its value
+    is proving the real Entra + real Blob endpoint round-trip end to end. The
+    account, identity and federated credentials are scripted/Bicep'd in
+    `infra/azure-bench-history/` (see its README to deploy or re-create).
 
 ### cache-warmup.yml
 

@@ -712,10 +712,23 @@ The network tests (`storage::azure::tests` and the `cbh_azure`
 integration file) talk to a live [Azurite](https://github.com/Azure/Azurite)
 blob emulator. They **self-skip** when no emulator is reachable, so a normal
 `--all-features` run stays green without one; they run for real once Azurite is
-up. To run them:
+up.
+
+The `just test-azurite` recipe wraps the whole flow. Install the emulator once with
+`just install-tools` (or manually with `npm install -g azurite`), then:
 
 ```powershell
-npm install -g azurite
+just test-azurite
+```
+
+It starts an in-memory Azurite on `127.0.0.1:10000` (reusing one already running),
+runs the Azure-backend tests with `BENCH_HISTORY_REQUIRE_AZURITE=1` so an
+unreachable emulator is a hard error rather than a silent skip, and stops the
+emulator it started afterward — even on failure (it never stops one it did not
+start). It is the local counterpart of `just test-azure`. To run the tests by hand
+instead, start the emulator and point `cargo` at it:
+
+```powershell
 # On Windows azurite-blob is a .cmd, so launch it through cmd:
 cmd /c azurite-blob --blobHost 127.0.0.1 --blobPort 10000 --inMemoryPersistence --skipApiVersionCheck --silent --loose
 # then, in another shell:
@@ -725,14 +738,57 @@ cargo test -p cargo-bench-history --features azure
 * `AZURITE_BLOB_ENDPOINT` overrides the default
   `http://127.0.0.1:10000/devstoreaccount1` endpoint.
 * `BENCH_HISTORY_REQUIRE_AZURITE=1` turns an unreachable emulator into a hard
-  failure instead of a skip. CI sets it in the dedicated `test-azure` job so a
-  misconfigured emulator can never silently degrade into skipping every test.
+  failure instead of a skip. `just test-azurite` sets it for you; CI also sets it
+  in the dedicated `test-azurite` job so a misconfigured emulator can never
+  silently degrade into skipping every test.
 
-In CI these tests run only in the Linux-only `test-azure` job (see
+In CI these tests run only in the Linux-only `test-azurite` job (see
 `.github/workflows/validation.yml`), which starts Azurite on the runner host via
 the `start-azurite` composite action and also collects coverage so the
 `azure.rs` network paths reach Codecov (the multi-platform `coverage` job runs
 without an emulator and so cannot cover them).
+
+### Running the real-Azure tests locally
+
+The `*_in_real_azure` tests in `cbh_azure` exercise the **Microsoft Entra ID**
+path against a real Storage account (the production default that Azurite's
+account-SAS path never touches). They **self-skip** unless `ENABLE_AZURE` is set —
+an explicit opt-in, so the account name living in `constants.env` does not by itself
+make a plain test run target the cloud. Each test uses a fresh container that is
+deleted when it finishes, even on panic.
+
+One-time: deploy the account, managed identity and federated credentials with the
+Bicep + scripts in [`infra/azure-bench-history/`](../../infra/azure-bench-history/)
+(see its README) and record the identifiers in the repository-root `constants.env`.
+Then, signing in as your own Entra user, the `just test-azure` recipe wraps the run
+(it sets `ENABLE_AZURE` and reads the account from `constants.env` for you):
+
+```powershell
+az login
+just test-azure
+# tidy up any container a crashed run left behind:
+./infra/azure-bench-history/cleanup-containers.ps1
+```
+
+`just test-azure` reads the account from `BENCH_HISTORY_AZURE_ACCOUNT` (committed in
+`constants.env`); pass a name to target a different account
+(`just test-azure <storage-account-name>`). The equivalent raw command is
+`cargo test -p cargo-bench-history --features azure real_azure` with `ENABLE_AZURE`
+and `BENCH_HISTORY_AZURE_ACCOUNT` set.
+
+* `BENCH_HISTORY_AZURE_ENDPOINT` overrides the default
+  `https://<account>.blob.core.windows.net` endpoint.
+* `ENABLE_AZURE` is the gate: when set, the real-Azure tests run, and a then-missing
+  `BENCH_HISTORY_AZURE_ACCOUNT` is a hard failure instead of a skip. `just test-azure`
+  sets it locally; CI sets it (via that recipe) in the dedicated `test-azure` job,
+  which signs in via GitHub OIDC workload identity federation, so it can never
+  silently skip. It is deliberately NOT in `constants.env`, so a plain `just test`
+  leaves the real-Azure tests skipped.
+
+In CI these tests run only in the Linux-only, same-repo-only `test-azure` job (see
+`.github/workflows/validation.yml` and `.github/workflows/AGENTS.md`). It collects
+no coverage — `test-azurite` already covers `azure.rs`; its value is proving the
+real Entra + real Blob endpoint round-trip.
 
 ### Mutation testing
 

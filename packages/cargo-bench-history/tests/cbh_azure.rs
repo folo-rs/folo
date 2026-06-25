@@ -1,22 +1,43 @@
 //! End-to-end integration tests for the Azure Blob storage backend.
 //!
-//! These drive the public `run` and `analyze` commands against a live Azurite
-//! emulator, proving the Azure adapter stores result sets (`run`) and reads them
+//! These drive the public `run` and `analyze` commands against a live Azure Blob
+//! endpoint, proving the Azure adapter stores result sets (`run`) and reads them
 //! back (`analyze`) through exactly the same command surface the binary uses.
 //!
-//! They compile only with the `azure` feature and require an Azurite blob
-//! endpoint (the CI `azure` job provides one; see the package AGENTS.md for
-//! running them locally). Each test uses a fresh container, so they never share
-//! state, and they are ignored under Miri (real network and process I/O).
+//! There are two flavours of the same scenarios:
+//!
+//! * **Azurite** (`*_in_azurite`) — against a local Azurite emulator using the
+//!   self-signed account-SAS path. They **self-skip** when no emulator is reachable
+//!   (so a normal `--all-features` run stays green) and run for real once Azurite is
+//!   up; CI provides one in the `test-azurite` job.
+//! * **Real Azure** (`*_in_real_azure`) — against a real Storage account using the
+//!   **Microsoft Entra ID** path (no account key). They self-skip unless
+//!   `ENABLE_AZURE` is set (an explicit opt-in, so the account name living in
+//!   `constants.env` does not by itself make a plain test run target the cloud);
+//!   CI provides one in the `test-azure` job, signing in via GitHub OIDC workload
+//!   identity federation, and locally `just test-azure` sets it after `az login`
+//!   (see the package AGENTS.md and `infra/azure-bench-history/`). The account name
+//!   comes from `BENCH_HISTORY_AZURE_ACCOUNT`. Each test uses a fresh container
+//!   that is deleted when the test finishes, even on panic.
+//!
+//! They compile only with the `azure` feature, each scenario uses its own container
+//! so they never share state, and they are ignored under Miri (real network and
+//! process I/O).
 #![cfg(feature = "azure")]
 #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
 use std::net::{TcpStream, ToSocketAddrs as _};
+use std::panic;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use azure_core::credentials::TokenCredential;
 use azure_core::http::Url;
+use azure_identity::DeveloperToolsCredential;
+use azure_storage_blob::BlobContainerClient;
 use cargo_bench_history::{Cli, Command, Overrides, RunError, RunOutcome, run_with_overrides};
+use futures::FutureExt as _;
 use serial_test::serial;
 
 /// The mock engine binary path, provided by Cargo for the auto-discovered binary target.
@@ -97,6 +118,129 @@ fn azure_config() -> String {
         endpoint = toml_escape(&azurite_endpoint()),
         key = AZURITE_KEY,
     )
+}
+
+/// The real Storage account name to target, or `None` when none is configured.
+fn real_azure_account() -> Option<String> {
+    std::env::var("BENCH_HISTORY_AZURE_ACCOUNT")
+        .ok()
+        .filter(|account| !account.is_empty())
+}
+
+/// The blob endpoint for `account`, overridable via `BENCH_HISTORY_AZURE_ENDPOINT`.
+fn real_azure_endpoint(account: &str) -> String {
+    std::env::var("BENCH_HISTORY_AZURE_ENDPOINT")
+        .unwrap_or_else(|_| format!("https://{account}.blob.core.windows.net"))
+}
+
+/// Whether the real-Azure tests are enabled.
+///
+/// They run only when `ENABLE_AZURE` is set, so a plain test run (and the
+/// `--all-features` jobs) self-skips them even though `BENCH_HISTORY_AZURE_ACCOUNT`
+/// may be in scope. `ENABLE_AZURE` is an explicit opt-in — set by the `just
+/// test-azure` recipe and the CI `test-azure` job — that says "really run these",
+/// so a then-missing `BENCH_HISTORY_AZURE_ACCOUNT` is a hard failure rather than a
+/// silent skip, mirroring how `BENCH_HISTORY_REQUIRE_AZURITE` guards Azurite.
+fn real_azure_enabled() -> bool {
+    if std::env::var_os("ENABLE_AZURE").is_none_or(|value| value.is_empty()) {
+        eprintln!("skipping real Azure integration test: ENABLE_AZURE not set");
+        return false;
+    }
+    assert!(
+        real_azure_account().is_some(),
+        "ENABLE_AZURE is set but BENCH_HISTORY_AZURE_ACCOUNT names no account"
+    );
+    true
+}
+
+/// A config that stores in `container` on the real account via Microsoft Entra ID.
+///
+/// It sets neither `account_key` nor `sas_token`, so `AzureBlobStorage` resolves the
+/// Entra credential path — the production default, which Azurite never exercises.
+fn real_azure_config(container: &str) -> String {
+    let account = real_azure_account().expect("real Azure account is configured");
+    format!(
+        "[project]\n\
+         id = \"azureproj\"\n\n\
+         [storage.azure]\n\
+         account = \"{account}\"\n\
+         container = \"{container}\"\n\
+         endpoint = \"{endpoint}\"\n",
+        endpoint = toml_escape(&real_azure_endpoint(&account)),
+    )
+}
+
+/// Runs `body` against a fresh real-Azure container, deleting the container
+/// afterward even if `body` panics, so a failed test never leaks storage.
+async fn with_real_azure_container<F>(body: F)
+where
+    F: AsyncFnOnce(String),
+{
+    let account = real_azure_account().expect("real Azure account is configured");
+    let endpoint = real_azure_endpoint(&account);
+    let container = unique_container();
+
+    // Capture a panic so the container is always deleted, then re-raise it.
+    let result = panic::AssertUnwindSafe(body(container.clone()))
+        .catch_unwind()
+        .await;
+
+    delete_container(&endpoint, &container).await;
+
+    if let Err(payload) = result {
+        panic::resume_unwind(payload);
+    }
+}
+
+/// Deletes `container` at `endpoint` using the Entra credential, best-effort.
+///
+/// Every fallible step logs a warning and returns instead of panicking. This runs
+/// during cleanup between `catch_unwind` and `resume_unwind`, so a panic here would
+/// both leak the container and mask the original test failure being re-raised.
+async fn delete_container(endpoint: &str, container: &str) {
+    let credential: Arc<dyn TokenCredential> = match DeveloperToolsCredential::new(None) {
+        Ok(credential) => credential,
+        Err(error) => {
+            eprintln!(
+                "warning: could not initialize Entra credential to delete test container \
+                 {container}: {error}"
+            );
+            return;
+        }
+    };
+    let mut url = match Url::parse(endpoint) {
+        Ok(url) => url,
+        Err(error) => {
+            eprintln!(
+                "warning: could not parse endpoint {endpoint} to delete test container \
+                 {container}: {error}"
+            );
+            return;
+        }
+    };
+    {
+        let Ok(mut segments) = url.path_segments_mut() else {
+            eprintln!(
+                "warning: endpoint {endpoint} is not a base URL; cannot delete test container \
+                 {container}"
+            );
+            return;
+        };
+        segments.pop_if_empty().push(container);
+    }
+    let client = match BlobContainerClient::new(url, Some(credential), None) {
+        Ok(client) => client,
+        Err(error) => {
+            eprintln!(
+                "warning: could not build container client to delete test container \
+                 {container}: {error}"
+            );
+            return;
+        }
+    };
+    if let Err(error) = client.delete(None).await {
+        eprintln!("warning: could not delete test container {container}: {error}");
+    }
 }
 
 /// A hermetic workspace that stores to Azurite rather than the local filesystem.
@@ -215,15 +359,9 @@ impl AzureWorkspace {
     }
 }
 
-/// `run` stores a harvested result set in Azure Blob storage.
-#[tokio::test]
-#[cfg_attr(miri, ignore)]
-#[serial]
-async fn run_stores_results_in_azurite() {
-    if !azurite_available() {
-        return;
-    }
-    let workspace = AzureWorkspace::new(&azure_config()).with_bench(&["--summary", "grp=single"]);
+/// Scenario: a single `run` stores one harvested result set.
+async fn scenario_run_stores(config: &str) {
+    let workspace = AzureWorkspace::new(config).with_bench(&["--summary", "grp=single"]);
 
     let outcome = workspace.drive(&["run"]).await.unwrap();
     let RunOutcome::Completed { message } = outcome else {
@@ -232,16 +370,10 @@ async fn run_stores_results_in_azurite() {
     assert!(message.contains("Stored 1"), "{message}");
 }
 
-/// A full public round-trip: two `run`s store result sets to Azurite, and
+/// Scenario: a full public round-trip — two `run`s store result sets, and
 /// `analyze` reads them back (list + get) and reports over the history.
-#[tokio::test]
-#[cfg_attr(miri, ignore)]
-#[serial]
-async fn run_then_analyze_round_trips_through_azurite() {
-    if !azurite_available() {
-        return;
-    }
-    let workspace = AzureWorkspace::new(&azure_config()).with_bench(&["--summary", "grp=single"]);
+async fn scenario_run_then_analyze(config: &str) {
+    let workspace = AzureWorkspace::new(config).with_bench(&["--summary", "grp=single"]);
 
     workspace.drive(&["run"]).await.unwrap();
     // A clean run is keyed by its commit, so the second point needs its own
@@ -270,19 +402,13 @@ async fn run_then_analyze_round_trips_through_azurite() {
     assert_eq!(parsed["regressions"], 0);
 }
 
-/// A non-trivial round-trip through Azurite: a multi-commit master line plus a
-/// feature branch carrying a clean and a dirty snapshot. This proves the Azure
-/// `list(prefix)` enumerates objects across several commit partitions and that
-/// the git-aware feature/official dirty-admission split works end to end against
-/// the real backend (not just a flat two-object listing).
-#[tokio::test]
-#[cfg_attr(miri, ignore)]
-#[serial]
-async fn analyze_feature_and_dirty_round_trip_through_azurite() {
-    if !azurite_available() {
-        return;
-    }
-    let workspace = AzureWorkspace::new(&azure_config()).with_bench(&["--summary", "grp=single"]);
+/// Scenario: a non-trivial round-trip — a multi-commit master line plus a feature
+/// branch carrying a clean and a dirty snapshot. This proves `list(prefix)`
+/// enumerates objects across several commit partitions and that the git-aware
+/// feature/official dirty-admission split works end to end against the backend (not
+/// just a flat two-object listing).
+async fn scenario_feature_and_dirty(config: &str) {
+    let workspace = AzureWorkspace::new(config).with_bench(&["--summary", "grp=single"]);
 
     // master: root - c2   (two clean points on the official line).
     workspace.drive(&["run"]).await.unwrap();
@@ -297,7 +423,7 @@ async fn analyze_feature_and_dirty_round_trip_through_azurite() {
     workspace.drive(&["run"]).await.unwrap();
 
     // The feature view admits the dirty snapshot on the target-side commit, so all
-    // four stored objects are loaded from Azurite.
+    // four stored objects are loaded from the backend.
     let RunOutcome::Analyzed { report, .. } = workspace
         .drive(&["analyze", "--format", "json"])
         .await
@@ -344,4 +470,83 @@ async fn analyze_feature_and_dirty_round_trip_through_azurite() {
         parsed["runs"], 2,
         "the official line excludes the feature commit and the dirty snapshot: {report}"
     );
+}
+
+// --- Azurite (self-signed account SAS) -------------------------------------
+
+/// `run` stores a harvested result set in Azurite.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn run_stores_results_in_azurite() {
+    if !azurite_available() {
+        return;
+    }
+    scenario_run_stores(&azure_config()).await;
+}
+
+/// A `run` + `analyze` round-trip through Azurite.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn run_then_analyze_round_trips_through_azurite() {
+    if !azurite_available() {
+        return;
+    }
+    scenario_run_then_analyze(&azure_config()).await;
+}
+
+/// A multi-commit feature/dirty round-trip through Azurite.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_feature_and_dirty_round_trip_through_azurite() {
+    if !azurite_available() {
+        return;
+    }
+    scenario_feature_and_dirty(&azure_config()).await;
+}
+
+// --- Real Azure (Microsoft Entra ID) ---------------------------------------
+
+/// `run` stores a harvested result set in a real Azure account via Entra ID.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn run_stores_results_in_real_azure() {
+    if !real_azure_enabled() {
+        return;
+    }
+    with_real_azure_container(async |container| {
+        scenario_run_stores(&real_azure_config(&container)).await;
+    })
+    .await;
+}
+
+/// A `run` + `analyze` round-trip through a real Azure account via Entra ID.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn run_then_analyze_round_trips_through_real_azure() {
+    if !real_azure_enabled() {
+        return;
+    }
+    with_real_azure_container(async |container| {
+        scenario_run_then_analyze(&real_azure_config(&container)).await;
+    })
+    .await;
+}
+
+/// A multi-commit feature/dirty round-trip through a real Azure account via Entra ID.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn analyze_feature_and_dirty_round_trip_through_real_azure() {
+    if !real_azure_enabled() {
+        return;
+    }
+    with_real_azure_container(async |container| {
+        scenario_feature_and_dirty(&real_azure_config(&container)).await;
+    })
+    .await;
 }
