@@ -19,7 +19,7 @@ use serde::Serialize;
 
 use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
-use crate::report::{Reporter, StderrReporter};
+use crate::report::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
 use crate::wiring::{resolve_config_path, resolve_project_id, resolve_repo};
@@ -599,7 +599,7 @@ where
         let record = BlessingRecord::from_json(&text).map_err(|error| RunError::Analyze {
             message: format!("stored object {key} is not a valid blessing: {error}"),
         })?;
-        reporter.note(&format!("blessing {key}"));
+        reporter.note_with(|| format!("blessing {key}"));
         entries.push(BlessingEntry {
             set: parsed.set,
             benchmark: None,

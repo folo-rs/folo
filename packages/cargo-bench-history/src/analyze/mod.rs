@@ -39,7 +39,7 @@ use crate::model::BlessingRecord;
 use crate::model::Run;
 use crate::model::{DiscriminantSet, Engine, STORAGE_VERSION, sanitize_segment};
 use crate::probe::{EnvironmentProbe, SystemProbe};
-use crate::report::{Reporter, StderrReporter};
+use crate::report::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
 use crate::wiring::{resolve_config_path, resolve_project_id, resolve_repo};
@@ -435,9 +435,7 @@ async fn facet_filtered_candidates<S: Storage>(
         "project id: {project_id} (storage segment: {project})"
     ));
     reporter.note(&format!("listing stored objects under prefix {prefix}"));
-    if reporter.enabled() {
-        reporter.note(&format!("facet filters: {}", describe_facets(facets)));
-    }
+    reporter.note_with(|| format!("facet filters: {}", describe_facets(facets)));
 
     let keys = storage.list(&prefix).await.map_err(RunError::Storage)?;
     reporter.note(&format!(
@@ -448,20 +446,22 @@ async fn facet_filtered_candidates<S: Storage>(
     let mut candidates: Vec<(String, StorageKey)> = Vec::new();
     for key in keys {
         if !key.ends_with(".json") {
-            reporter.note(&format!("skipping {key}: not a .json object"));
+            reporter.note_with(|| format!("skipping {key}: not a .json object"));
             continue;
         }
         let Some(parsed) = parse_key(&key) else {
-            reporter.note(&format!(
-                "skipping {key}: not a recognized {STORAGE_VERSION} storage key"
-            ));
+            reporter.note_with(|| {
+                format!("skipping {key}: not a recognized {STORAGE_VERSION} storage key")
+            });
             continue;
         };
         if !facets.matches(&parsed.set) {
-            reporter.note(&format!(
-                "skipping {key}: discriminant {} does not match the facet filters",
-                parsed.set
-            ));
+            reporter.note_with(|| {
+                format!(
+                    "skipping {key}: discriminant {} does not match the facet filters",
+                    parsed.set
+                )
+            });
             continue;
         }
         candidates.push((key, parsed));
@@ -659,10 +659,12 @@ where
     for (key, parsed) in candidates {
         if !order.contains_key(&parsed.commit) {
             excluded_outside_history = excluded_outside_history.saturating_add(1);
-            reporter.note(&format!(
-                "excluding {key}: commit {} is not on {target_ref}'s analyzed history",
-                parsed.commit
-            ));
+            reporter.note_with(|| {
+                format!(
+                    "excluding {key}: commit {} is not on {target_ref}'s analyzed history",
+                    parsed.commit
+                )
+            });
             continue;
         }
         if parsed.is_dirty()
@@ -672,11 +674,13 @@ where
                 .unwrap_or(false)
         {
             excluded_dirty_base = excluded_dirty_base.saturating_add(1);
-            reporter.note(&format!(
-                "excluding {key}: dirty snapshot on a base-side commit ({} \
-                 only admits clean runs); dirty runs count only on the target side",
-                parsed.commit
-            ));
+            reporter.note_with(|| {
+                format!(
+                    "excluding {key}: dirty snapshot on a base-side commit ({} \
+                     only admits clean runs); dirty runs count only on the target side",
+                    parsed.commit
+                )
+            });
             continue;
         }
         to_fetch.push((key, parsed));
@@ -704,16 +708,14 @@ where
     for (key, parsed, result) in fetched {
         if since.is_some_and(|since| result.context.commit < since) {
             excluded_since = excluded_since.saturating_add(1);
-            reporter.note(&format!(
-                "excluding {key}: commit time is before the --since cutoff"
-            ));
+            reporter
+                .note_with(|| format!("excluding {key}: commit time is before the --since cutoff"));
             continue;
         }
         if until.is_some_and(|until| result.context.commit > until) {
             excluded_until = excluded_until.saturating_add(1);
-            reporter.note(&format!(
-                "excluding {key}: commit time is after the --until cutoff"
-            ));
+            reporter
+                .note_with(|| format!("excluding {key}: commit time is after the --until cutoff"));
             continue;
         }
         if parsed.is_dirty()
@@ -723,12 +725,14 @@ where
                 .unwrap_or(false)
         {
             included_dirty_base_exception = true;
-            reporter.note(&format!(
-                "including {key}: dirty snapshot on the base-branch tip, admitted \
-                 because the working tree is dirty (ephemeral — see the warning)"
-            ));
+            reporter.note_with(|| {
+                format!(
+                    "including {key}: dirty snapshot on the base-branch tip, admitted \
+                     because the working tree is dirty (ephemeral — see the warning)"
+                )
+            });
         } else {
-            reporter.note(&format!("including {key}"));
+            reporter.note_with(|| format!("including {key}"));
         }
         loaded.push(LoadedObject {
             key: parsed,
@@ -756,10 +760,13 @@ where
             if order.contains_key(&parsed.commit) {
                 to_fetch.push((key, parsed));
             } else {
-                reporter.note(&format!(
-                    "skipping blessing {key}: commit {} is not on {target_ref}'s analyzed history",
-                    parsed.commit
-                ));
+                reporter.note_with(|| {
+                    format!(
+                        "skipping blessing {key}: commit {} is not on {target_ref}'s analyzed \
+                         history",
+                        parsed.commit
+                    )
+                });
             }
         }
         // Phase 2 — fetch and deserialize concurrently, then restore storage-key
@@ -780,11 +787,13 @@ where
                 .get(&parsed.commit)
                 .copied()
                 .expect("phase 1 admitted only blessings whose commit is on the analyzed history");
-            reporter.note(&format!(
-                "loaded blessing {key} ({} accepted at {})",
-                count_noun(record.prefixes.len(), "prefix filter"),
-                parsed.commit
-            ));
+            reporter.note_with(|| {
+                format!(
+                    "loaded blessing {key} ({} accepted at {})",
+                    count_noun(record.prefixes.len(), "prefix filter"),
+                    parsed.commit
+                )
+            });
             blessings
                 .entry(parsed.set.clone())
                 .or_default()
