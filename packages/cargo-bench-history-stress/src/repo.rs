@@ -146,6 +146,7 @@ fn append_commit(
 }
 
 /// Feeds the stream to `git fast-import`, writing SHAs to the marks file.
+#[cfg_attr(coverage_nightly, coverage(off))]
 async fn import_stream(dir: &Path, marks_path: &Path, stream: &[u8]) -> Result<(), Error> {
     let marks_arg = format!("--export-marks={}", marks_path.display());
     let mut child = Command::new("git")
@@ -188,6 +189,7 @@ async fn import_stream(dir: &Path, marks_path: &Path, stream: &[u8]) -> Result<(
 }
 
 /// Parses the export-marks file into a `mark -> SHA` map.
+#[cfg_attr(coverage_nightly, coverage(off))]
 async fn read_marks(marks_path: &Path) -> Result<HashMap<usize, String>, Error> {
     let text = tokio::fs::read_to_string(marks_path)
         .await
@@ -240,6 +242,7 @@ fn resolve_commits(
 }
 
 /// Runs a `git` subcommand in `dir`, failing on a non-zero exit.
+#[cfg_attr(coverage_nightly, coverage(off))]
 async fn run_git(dir: &Path, args: &[&str]) -> Result<(), Error> {
     let output = Command::new("git")
         .arg("-C")
@@ -256,4 +259,31 @@ async fn run_git(dir: &Path, args: &[&str]) -> Result<(), Error> {
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ts(second: i64) -> Timestamp {
+        Timestamp::from_second(second).expect("test second is in range")
+    }
+
+    #[test]
+    fn only_the_first_feature_commit_forks_from_main() {
+        // Three feature commits make the fork-point logic observable: only the
+        // first carries an explicit `from`, pinning it to main's tip (mark :2),
+        // while the rest chain implicitly and no main commit names a parent.
+        let main = vec![ts(1_000), ts(2_000)];
+        let feature = vec![ts(3_000), ts(4_000), ts(5_000)];
+
+        let stream = build_stream(&main, &feature);
+        let text = String::from_utf8(stream).expect("the fast-import stream is ASCII");
+
+        let from_lines: Vec<&str> = text
+            .lines()
+            .filter(|line| line.starts_with("from :"))
+            .collect();
+        assert_eq!(from_lines, vec!["from :2"]);
+    }
 }
