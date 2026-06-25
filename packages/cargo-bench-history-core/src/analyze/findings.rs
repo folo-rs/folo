@@ -27,6 +27,9 @@
 //! *hits* invert that — more hits means fewer, costlier misses (see
 //! [`MetricKind::higher_is_better`]).
 
+use std::num::NonZero;
+use std::{panic, thread};
+
 use serde::Serialize;
 
 use crate::analyze::stats;
@@ -976,32 +979,13 @@ fn evaluate_resolved_spike(series: &Series, config: &AnalysisConfig) -> Option<C
 #[must_use]
 pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Vec<Finding> {
     let config = &context.config;
-    let mut candidates: Vec<Candidate> = Vec::new();
-    for one in series {
-        let chosen = match context.mode {
-            AnalysisMode::History => {
-                let active = active_view(one);
-                let values: Vec<f64> = active.points.iter().map(|point| point.value).collect();
-                let change = evaluate_change_point(&active, config);
-                let drift = evaluate_drift(&active, config);
-                let mut chosen = arbitrate(&values, change, drift);
-                // A series with no active change may instead carry a recovered spike;
-                // surface it only when inactive findings are requested.
-                if chosen.is_none() && context.include_inactive {
-                    chosen = evaluate_resolved_spike(&active, config);
-                }
-                chosen.map(|mut candidate| {
-                    stamp_history(&mut candidate.finding, one);
-                    candidate
-                })
-            }
-            AnalysisMode::Branch => evaluate_branch(one, config, context.merge_base_index),
-            AnalysisMode::Tip => evaluate_tip(one, config),
-        };
-        if let Some(chosen) = chosen {
-            candidates.push(chosen);
-        }
-    }
+
+    // Each series is detected independently — there is no cross-series state in the
+    // detection step — so the per-series work is evaluated across a thread pool. The
+    // collect preserves the input order, so `candidates` is in the same series order a
+    // sequential pass would produce, keeping the false-discovery alignment below and
+    // the deterministic final ordering identical.
+    let candidates: Vec<Candidate> = detect_all(series, context);
 
     // Control the false-discovery rate across the noisy candidates only; the
     // deterministic ones are exact and need no correction.
@@ -1041,6 +1025,97 @@ pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Vec<Finding
     findings
 }
 
+/// Detects every series, returning the raised candidates in series order.
+///
+/// Each series is independent — there is no cross-series state in the detection step
+/// — so the work is split into one balanced, contiguous chunk per worker thread,
+/// each evaluated on a scoped thread, then the chunk results are concatenated in
+/// order. This preserves the exact series order a sequential pass would produce,
+/// which both the false-discovery alignment and the deterministic final ranking in
+/// [`find_changes`] rely on.
+///
+/// A single available CPU (Miri reports one by default) or a single series needs no
+/// parallelism, so it takes a plain serial pass — which is also the path Miri
+/// exercises, keeping the detection logic under Miri's checks.
+#[cfg_attr(test, mutants::skip)] // The worker count and chunking never change the output.
+fn detect_all(series: &[Series], context: &AnalysisContext) -> Vec<Candidate> {
+    let workers = thread::available_parallelism()
+        .map_or(1, NonZero::get)
+        .min(series.len());
+    if workers <= 1 {
+        return series
+            .iter()
+            .filter_map(|one| detect_one(one, context))
+            .collect();
+    }
+
+    thread::scope(|scope| {
+        // Peel one balanced, contiguous chunk per worker off the front: at each step the
+        // remaining series are divided as evenly as possible among the workers still to be
+        // assigned, so exactly `workers` non-empty chunks are spawned (every worker is
+        // used, not just the few that a fixed `chunks(div_ceil(len, workers))` split would
+        // yield when `len` only slightly exceeds `workers`). `workers <= series.len()`
+        // keeps every chunk non-empty.
+        let mut rest = series;
+        // The eager collect spawns every worker before the first join; a lazy
+        // `map`/`flat_map` would instead spawn and join each chunk one at a time,
+        // serializing the work.
+        let handles: Vec<_> = (1..=workers)
+            .rev()
+            .map(|remaining_workers| {
+                let take = rest.len().div_ceil(remaining_workers);
+                let (slice, tail) = rest.split_at(take);
+                rest = tail;
+                scope.spawn(move || {
+                    slice
+                        .iter()
+                        .filter_map(|one| detect_one(one, context))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|payload| panic::resume_unwind(payload))
+            })
+            .collect()
+    })
+}
+
+/// Runs the mode-appropriate detector on a single series and returns its candidate
+/// finding, if one is raised.
+///
+/// This is pure and depends on no other series, so [`find_changes`] evaluates every
+/// series with it in parallel. History mode locates a change-point and a drift and
+/// keeps the better-fitting one (optionally surfacing a recovered spike); branch and
+/// tip modes delegate to their dedicated detectors.
+fn detect_one(one: &Series, context: &AnalysisContext) -> Option<Candidate> {
+    let config = &context.config;
+    match context.mode {
+        AnalysisMode::History => {
+            let active = active_view(one);
+            let values: Vec<f64> = active.points.iter().map(|point| point.value).collect();
+            let change = evaluate_change_point(&active, config);
+            let drift = evaluate_drift(&active, config);
+            let mut chosen = arbitrate(&values, change, drift);
+            // A series with no active change may instead carry a recovered spike;
+            // surface it only when inactive findings are requested.
+            if chosen.is_none() && context.include_inactive {
+                chosen = evaluate_resolved_spike(&active, config);
+            }
+            chosen.map(|mut candidate| {
+                stamp_history(&mut candidate.finding, one);
+                candidate
+            })
+        }
+        AnalysisMode::Branch => evaluate_branch(one, config, context.merge_base_index),
+        AnalysisMode::Tip => evaluate_tip(one, config),
+    }
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -1064,6 +1139,14 @@ mod tests {
     /// order, with no dispersion.
     fn series_of(values: &[f64]) -> Series {
         series_with(values, MetricKind::InstructionCount, &[])
+    }
+
+    /// Builds a deterministic series whose benchmark id carries a distinct `name`,
+    /// so a batch of series stays individually identifiable in the findings.
+    fn named_series(name: &str, values: &[f64]) -> Series {
+        let mut series = series_of(values);
+        series.id = BenchmarkId::new(nonempty![name.to_owned(), "case".to_owned()]);
+        series
     }
 
     /// Builds a series tagged with `kind`. When `intervals` is non-empty it
@@ -1432,6 +1515,54 @@ mod tests {
     fn flat_series_never_flags() {
         let series = series_of(&[100.0, 100.0, 100.0, 100.0, 100.0, 100.0]);
         assert!(changes(&[series]).is_empty());
+    }
+
+    #[test]
+    fn many_independent_series_are_detected_in_a_stable_order() {
+        // `find_changes` runs the per-series detection across a thread pool. The work
+        // is embarrassingly parallel — no series depends on another — so this guards
+        // the properties the parallel pass must preserve: every independent finding is
+        // produced exactly once (the parallel `filter_map`/`collect` neither drops nor
+        // duplicates a candidate), flat series stay silent, and the ranking is
+        // identical across runs (the order-preserving collect plus the deterministic
+        // final sort leave no room for thread timing to reorder the output).
+        let mut series = Vec::new();
+        let mut stepped_ids = Vec::new();
+        for raw in 0_i32..32 {
+            // A clean step of a distinct magnitude: flags as a regression with its own
+            // `|relative_delta|`, so the final ranking is a total order.
+            let name = format!("step{raw:03}");
+            let raised = 130.0 + f64::from(raw);
+            series.push(named_series(
+                &name,
+                &[100.0, 100.0, 100.0, raised, raised, raised],
+            ));
+            stepped_ids.push(BenchmarkId::new(nonempty![name, "case".to_owned()]).qualified());
+            // A flat companion never flags, so it must be absent from the output.
+            series.push(named_series(
+                &format!("flat{raw:03}"),
+                &[100.0, 100.0, 100.0, 100.0, 100.0, 100.0],
+            ));
+        }
+
+        let findings = changes(&series);
+
+        // Exactly the stepped series flag, each exactly once.
+        let mut flagged: Vec<String> = findings
+            .iter()
+            .map(|finding| finding.id.qualified())
+            .collect();
+        flagged.sort();
+        stepped_ids.sort();
+        assert_eq!(flagged, stepped_ids);
+
+        // The ranking is byte-stable across repeated parallel passes.
+        let ranking = |list: &[Finding]| -> Vec<(String, f64)> {
+            list.iter()
+                .map(|finding| (finding.id.qualified(), finding.relative_delta))
+                .collect()
+        };
+        assert_eq!(ranking(&findings), ranking(&changes(&series)));
     }
 
     #[test]

@@ -1724,6 +1724,26 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      through `futures::stream::…buffer_unordered`, completing out of order then re-sorting
      by storage key for deterministic diagnostics), so the per-mode load floor is roughly
      its slowest fetch rather than the sum — critically so for Azure, where the serial
-     loads were serial network round-trips. The remaining `history`/`tip` per-series
-     change-point detection over 20000 series is still serial and is flagged for a future
-     parallelization pass.
+     loads were serial network round-trips. The per-series detection that each mode runs
+     over the 20000 series — `history`'s change-point/drift tests are the expensive case;
+     `tip` and `branch` use cheaper per-series detectors — is now parallelized (decision 33).
+
+33. **Parallel per-series change-point detection** — *Decided:* every mode's per-series
+     detection runs on a pool of scoped worker threads. `analyze::findings::find_changes`
+     splits the series into contiguous chunks — one per worker, where the worker count is
+     the available CPU count (`thread::available_parallelism`) capped at the number of
+     series — evaluates each chunk on a `std::thread::scope` worker via the pure per-series
+     `detect_one`, then concatenates the chunk results **in series order**. Order
+     preservation is load-bearing: the downstream false-discovery alignment pairs
+     `candidates` with `noisy_p` positionally and the final ranking is a deterministic total
+     order, so the output is byte-identical to the previous serial pass — only the wall time
+     changes (the win is concentrated in `history`, whose change-point/drift tests are the
+     most expensive per-series work; see decision 32's finding). A single CPU or a single
+     series takes a plain serial pass with no thread spawn. *Rejected*
+     `rayon`'s `par_iter` (the issue's original suggestion): its transitive `crossbeam-epoch`
+     dependency trips Miri's Stacked Borrows model (a known, benign, but as-yet-unreleased
+     issue), which would force an ugly `#[cfg(miri)]` serial fallback; `std::thread::scope`
+     is Miri-clean with no conditional compilation (Miri reports one CPU by default, so it
+     exercises the serial path) and adds no dependency. The worker-count and chunking
+     arithmetic never changes the output, so `detect_all` carries `#[mutants::skip]` while
+     the real detection logic in `detect_one` stays under mutation testing.
