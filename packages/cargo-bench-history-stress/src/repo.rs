@@ -257,3 +257,30 @@ async fn run_git(dir: &Path, args: &[&str]) -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ts(second: i64) -> Timestamp {
+        Timestamp::from_second(second).expect("test second is in range")
+    }
+
+    #[test]
+    fn only_the_first_feature_commit_forks_from_main() {
+        // Three feature commits make the fork-point logic observable: only the
+        // first carries an explicit `from`, pinning it to main's tip (mark :2),
+        // while the rest chain implicitly and no main commit names a parent.
+        let main = vec![ts(1_000), ts(2_000)];
+        let feature = vec![ts(3_000), ts(4_000), ts(5_000)];
+
+        let stream = build_stream(&main, &feature);
+        let text = String::from_utf8(stream).expect("the fast-import stream is ASCII");
+
+        let from_lines: Vec<&str> = text
+            .lines()
+            .filter(|line| line.starts_with("from :"))
+            .collect();
+        assert_eq!(from_lines, vec!["from :2"]);
+    }
+}

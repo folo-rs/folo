@@ -223,3 +223,47 @@ async fn write_config(
     ));
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clock_lead_is_one_hour() {
+        assert_eq!(CLOCK_LEAD_SECONDS, 3_600);
+    }
+
+    #[test]
+    fn analysis_clock_anchors_just_after_the_newest_commit() {
+        let main = vec![
+            Timestamp::from_second(1_000).expect("in range"),
+            Timestamp::from_second(2_000).expect("in range"),
+        ];
+        let feature = vec![Timestamp::from_second(3_000).expect("in range")];
+
+        // A feature branch is the newest history, so the clock sits one hour past
+        // its tip.
+        let clock = analysis_clock(&main, &feature).expect("clock");
+        assert_eq!(clock.as_second(), 3_000 + 3_600);
+
+        // Without a feature branch it anchors past the newest main commit instead.
+        let clock = analysis_clock(&main, &[]).expect("clock");
+        assert_eq!(clock.as_second(), 2_000 + 3_600);
+
+        // With no commits at all it falls back to the dataset anchor.
+        let clock = analysis_clock(&[], &[]).expect("clock");
+        assert_eq!(clock.as_second(), ANCHOR_UNIX + 3_600);
+    }
+
+    #[test]
+    fn default_container_is_prefixed_and_timestamped() {
+        let name = default_container();
+        let suffix = name
+            .strip_prefix("bh-stress-")
+            .expect("the default container name carries the bh-stress- prefix");
+        assert!(
+            suffix.parse::<i64>().is_ok(),
+            "the container suffix should be a unix second: {name}"
+        );
+    }
+}

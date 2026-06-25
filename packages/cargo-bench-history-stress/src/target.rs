@@ -25,6 +25,10 @@ pub(crate) struct StorageTarget {
     root: PathBuf,
     /// A temporary directory backing `root`, when the harness created one.
     scratch: Option<TempDir>,
+    /// How external tools (`az`, `azcopy`) are executed. Production spawns real
+    /// processes; tests substitute a recording double so the Azure orchestration
+    /// is exercised without live credentials.
+    runner: Runner,
 }
 
 /// Backend-specific identity and connection details.
@@ -39,6 +43,45 @@ enum Kind {
         /// Blob container name (created and, unless kept, deleted).
         container: String,
     },
+}
+
+/// How a [`StorageTarget`] runs the external tools its Azure path depends on.
+#[derive(Debug)]
+enum Runner {
+    /// Spawns real external processes.
+    Process,
+    /// A test double that records invocations and returns a canned outcome.
+    #[cfg(test)]
+    Fake(std::sync::Arc<FakeRunner>),
+}
+
+/// Records the external-tool invocations a target attempts and yields a fixed
+/// success or failure, so the Azure orchestration can be tested deterministically.
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct FakeRunner {
+    /// Each recorded call as `[program, arg, arg, ...]`.
+    calls: std::sync::Mutex<Vec<Vec<String>>>,
+    /// When set, every call returns an error instead of success.
+    fail: bool,
+}
+
+#[cfg(test)]
+impl FakeRunner {
+    /// Records the invocation and returns the configured outcome.
+    fn run(&self, program: &str, args: &[&str]) -> Result<(), Error> {
+        let mut call = vec![program.to_owned()];
+        call.extend(args.iter().map(|arg| (*arg).to_owned()));
+        self.calls
+            .lock()
+            .expect("the calls lock is not poisoned")
+            .push(call);
+        if self.fail {
+            Err(fail(format!("fake runner failed: {program}")))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 impl StorageTarget {
@@ -61,6 +104,7 @@ impl StorageTarget {
                     kind: Kind::Local,
                     root,
                     scratch: None,
+                    runner: Runner::Process,
                 })
             }
             None => {
@@ -71,6 +115,7 @@ impl StorageTarget {
                     kind: Kind::Local,
                     root,
                     scratch: Some(scratch),
+                    runner: Runner::Process,
                 })
             }
         }
@@ -89,6 +134,7 @@ impl StorageTarget {
             kind: Kind::Azure { account, container },
             root,
             scratch: Some(scratch),
+            runner: Runner::Process,
         })
     }
 
@@ -138,7 +184,7 @@ impl StorageTarget {
                     "a fresh container per run keeps stress data isolated and lets cleanup delete \
                      the whole container in one call",
                 );
-                az(
+                self.az(
                     &[
                         "storage",
                         "container",
@@ -176,7 +222,7 @@ impl StorageTarget {
         );
         let source = wildcard_source(&self.root);
         let destination = format!("https://{account}.blob.core.windows.net/{container}");
-        run_tool(
+        self.run_tool(
             "azcopy",
             &[
                 "copy",
@@ -219,7 +265,7 @@ impl StorageTarget {
                     return Ok(());
                 }
                 logger.step(&format!("deleting Azure blob container {container}"));
-                az(
+                self.az(
                     &[
                         "storage",
                         "container",
@@ -236,6 +282,36 @@ impl StorageTarget {
                 )
                 .await
             }
+        }
+    }
+
+    /// Runs the Azure CLI, which on Windows is a `.cmd` shim that must go through
+    /// `cmd /C` and elsewhere is directly executable. The `logger` is threaded
+    /// through so `--verbose` runs surface the actual CLI invocation.
+    async fn az(&self, args: &[&str], logger: Logger) -> Result<(), Error> {
+        if cfg!(windows) {
+            let mut all = vec!["/C", "az"];
+            all.extend_from_slice(args);
+            self.run_tool("cmd", &all, &[], logger).await
+        } else {
+            self.run_tool("az", args, &[], logger).await
+        }
+    }
+
+    /// Runs an external tool with extra environment variables, dispatching to a
+    /// real process or, under test, to the recording double.
+    async fn run_tool(
+        &self,
+        program: &str,
+        args: &[&str],
+        envs: &[(&str, &str)],
+        logger: Logger,
+    ) -> Result<(), Error> {
+        logger.detail(&format!("running {program} {}", args.join(" ")));
+        match &self.runner {
+            Runner::Process => run_process(program, args, envs).await,
+            #[cfg(test)]
+            Runner::Fake(fake) => fake.run(program, args),
         }
     }
 }
@@ -282,28 +358,9 @@ fn wildcard_source(root: &Path) -> String {
     root.join("*").display().to_string()
 }
 
-/// Runs the Azure CLI, which on Windows is a `.cmd` shim that must go through
-/// `cmd /C`, and elsewhere is directly executable. The caller's `logger` is threaded
-/// through so `--verbose` runs surface the actual CLI invocation.
-async fn az(args: &[&str], logger: Logger) -> Result<(), Error> {
-    if cfg!(windows) {
-        let mut all = vec!["/C", "az"];
-        all.extend_from_slice(args);
-        run_tool("cmd", &all, &[], logger).await
-    } else {
-        run_tool("az", args, &[], logger).await
-    }
-}
-
-/// Runs an external tool with extra environment variables, failing on non-zero
-/// exit and surfacing its stderr.
-async fn run_tool(
-    program: &str,
-    args: &[&str],
-    envs: &[(&str, &str)],
-    logger: Logger,
-) -> Result<(), Error> {
-    logger.detail(&format!("running {program} {}", args.join(" ")));
+/// Runs an external tool with extra environment variables, failing on a non-zero
+/// exit and surfacing its stdout and stderr.
+async fn run_process(program: &str, args: &[&str], envs: &[(&str, &str)]) -> Result<(), Error> {
     let mut command = Command::new(program);
     command.args(args);
     for (key, value) in envs {
@@ -326,6 +383,8 @@ async fn run_tool(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     #[test]
@@ -351,5 +410,217 @@ mod tests {
             config.contains("endpoint = \"https://acc\\\"t.blob.core.windows.net\""),
             "got: {config}"
         );
+    }
+
+    /// A target whose external tools route to the supplied recording double.
+    fn fake_azure_target(fake: &Arc<FakeRunner>, root: PathBuf) -> StorageTarget {
+        StorageTarget {
+            kind: Kind::Azure {
+                account: "acct".to_owned(),
+                container: "cont".to_owned(),
+            },
+            root,
+            scratch: None,
+            runner: Runner::Fake(Arc::clone(fake)),
+        }
+    }
+
+    /// The recorded calls, each flattened to a single `program arg arg ...` string.
+    fn recorded(fake: &FakeRunner) -> Vec<String> {
+        fake.calls
+            .lock()
+            .expect("the calls lock is not poisoned")
+            .iter()
+            .map(|call| call.join(" "))
+            .collect()
+    }
+
+    /// A command that runs `script` through the host's native shell and exits with
+    /// its status.
+    fn shell_command(script: &str) -> (&'static str, Vec<&str>) {
+        if cfg!(windows) {
+            ("cmd", vec!["/C", script])
+        } else {
+            ("sh", vec!["-c", script])
+        }
+    }
+
+    #[test]
+    fn label_names_the_backend() {
+        let local = StorageTarget::local(None).expect("a temp local target is created");
+        assert_eq!(local.label(), "local filesystem");
+
+        let fake = Arc::new(FakeRunner::default());
+        let azure = fake_azure_target(&fake, PathBuf::from("staging"));
+        assert_eq!(azure.label(), "azure (acct/cont)");
+    }
+
+    #[test]
+    fn wildcard_source_targets_directory_contents() {
+        let source = wildcard_source(Path::new("seedroot"));
+        // The contents are copied via a trailing `*`, not the directory itself.
+        assert!(source.contains("seedroot"), "got: {source}");
+        assert!(source.ends_with('*'), "got: {source}");
+    }
+
+    #[tokio::test]
+    async fn provision_creates_the_container() {
+        let fake = Arc::new(FakeRunner::default());
+        let target = fake_azure_target(&fake, PathBuf::from("staging"));
+
+        target
+            .provision(Logger::new(false))
+            .await
+            .expect("provisioning succeeds with a passing runner");
+
+        let calls = recorded(&fake);
+        assert_eq!(calls.len(), 1, "got: {calls:?}");
+        let call = calls.first().expect("one call was recorded");
+        assert!(call.contains("storage container create"), "got: {call}");
+        assert!(call.contains("--account-name acct"), "got: {call}");
+        assert!(call.contains("--name cont"), "got: {call}");
+    }
+
+    #[tokio::test]
+    async fn provision_surfaces_a_runner_failure() {
+        let fake = Arc::new(FakeRunner {
+            fail: true,
+            ..FakeRunner::default()
+        });
+        let target = fake_azure_target(&fake, PathBuf::from("staging"));
+
+        let result = target.provision(Logger::new(false)).await;
+
+        assert!(result.is_err(), "a failing runner must fail provisioning");
+    }
+
+    #[tokio::test]
+    async fn upload_copies_the_staged_tree_with_azcopy() {
+        let fake = Arc::new(FakeRunner::default());
+        let target = fake_azure_target(&fake, PathBuf::from("staging"));
+
+        target
+            .upload(Logger::new(false))
+            .await
+            .expect("uploading succeeds with a passing runner");
+
+        let calls = recorded(&fake);
+        assert_eq!(calls.len(), 1, "got: {calls:?}");
+        let call = calls.first().expect("one call was recorded");
+        assert!(call.starts_with("azcopy copy"), "got: {call}");
+        assert!(
+            call.contains("https://acct.blob.core.windows.net/cont"),
+            "got: {call}"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_is_a_noop_for_local_storage() {
+        let target = StorageTarget::local(None).expect("a temp local target is created");
+
+        target
+            .upload(Logger::new(false))
+            .await
+            .expect("a local upload is a no-op");
+    }
+
+    #[tokio::test]
+    async fn cleanup_deletes_the_container_when_not_kept() {
+        let fake = Arc::new(FakeRunner::default());
+        let mut target = fake_azure_target(&fake, PathBuf::from("staging"));
+
+        target
+            .cleanup(false, Logger::new(false))
+            .await
+            .expect("cleanup succeeds with a passing runner");
+
+        let calls = recorded(&fake);
+        assert_eq!(calls.len(), 1, "got: {calls:?}");
+        let call = calls.first().expect("one call was recorded");
+        assert!(call.contains("storage container delete"), "got: {call}");
+    }
+
+    #[tokio::test]
+    async fn cleanup_keeps_the_container_when_requested() {
+        let fake = Arc::new(FakeRunner::default());
+        let mut target = fake_azure_target(&fake, PathBuf::from("staging"));
+
+        target
+            .cleanup(true, Logger::new(false))
+            .await
+            .expect("keeping the container succeeds");
+
+        // Keeping the container must not invoke the deletion tool.
+        assert!(recorded(&fake).is_empty(), "got: {:?}", recorded(&fake));
+    }
+
+    #[tokio::test]
+    async fn cleanup_persists_a_kept_local_store() {
+        let mut target = StorageTarget::local(None).expect("a temp local target is created");
+        let root = target.seed_root().to_path_buf();
+        assert!(root.exists(), "the fresh temp store exists");
+
+        target
+            .cleanup(true, Logger::new(false))
+            .await
+            .expect("keeping the local store succeeds");
+        drop(target);
+
+        assert!(root.exists(), "a kept local store survives the target drop");
+        std::fs::remove_dir_all(&root).expect("the kept store is removable");
+    }
+
+    #[tokio::test]
+    async fn cleanup_removes_an_unkept_local_store() {
+        let mut target = StorageTarget::local(None).expect("a temp local target is created");
+        let root = target.seed_root().to_path_buf();
+        assert!(root.exists(), "the fresh temp store exists");
+
+        target
+            .cleanup(false, Logger::new(false))
+            .await
+            .expect("local cleanup succeeds");
+        drop(target);
+
+        assert!(!root.exists(), "an unkept local store is removed on drop");
+    }
+
+    #[tokio::test]
+    async fn az_preserves_the_cli_invocation() {
+        let fake = Arc::new(FakeRunner::default());
+        let target = fake_azure_target(&fake, PathBuf::from("staging"));
+
+        target
+            .az(&["account", "show"], Logger::new(false))
+            .await
+            .expect("the fake runner reports success");
+
+        let calls = recorded(&fake);
+        assert_eq!(calls.len(), 1, "got: {calls:?}");
+        // The `az account show` invocation survives regardless of the platform's
+        // `cmd /C` wrapper.
+        let call = calls.first().expect("one call was recorded");
+        assert!(call.contains("az account show"), "got: {call}");
+    }
+
+    #[tokio::test]
+    async fn run_process_accepts_a_zero_exit() {
+        let (program, args) = shell_command("exit 0");
+        run_process(program, &args, &[])
+            .await
+            .expect("a zero-exit command succeeds");
+    }
+
+    #[tokio::test]
+    async fn run_process_rejects_a_nonzero_exit() {
+        let (program, args) = shell_command("exit 1");
+        let result = run_process(program, &args, &[]).await;
+        assert!(result.is_err(), "a non-zero exit must be an error");
+    }
+
+    #[tokio::test]
+    async fn run_process_rejects_a_missing_program() {
+        let result = run_process("definitely-not-a-real-program-zzz", &[], &[]).await;
+        assert!(result.is_err(), "a missing program must be an error");
     }
 }
