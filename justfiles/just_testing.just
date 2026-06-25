@@ -243,6 +243,10 @@ test-azurite:
         }
 
         $env:BENCH_HISTORY_REQUIRE_AZURITE = "1"
+        # Pin the endpoint to the emulator this recipe manages so a developer's pre-existing
+        # AZURITE_BLOB_ENDPOINT cannot redirect the tests to a different target (the recipe
+        # would then start/reuse one emulator while the tests hit another — non-hermetic).
+        $env:AZURITE_BLOB_ENDPOINT = "http://${blobHost}:${blobPort}/devstoreaccount1"
         Write-Host "Running Azurite-backed tests against ${blobHost}:${blobPort}."
         cargo +$env:RUST_MSRV nextest run -p cargo-bench-history --features azure --locked --no-fail-fast azure azurite
     } finally {

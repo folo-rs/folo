@@ -193,16 +193,51 @@ where
 }
 
 /// Deletes `container` at `endpoint` using the Entra credential, best-effort.
+///
+/// Every fallible step logs a warning and returns instead of panicking. This runs
+/// during cleanup between `catch_unwind` and `resume_unwind`, so a panic here would
+/// both leak the container and mask the original test failure being re-raised.
 async fn delete_container(endpoint: &str, container: &str) {
-    let credential: Arc<dyn TokenCredential> =
-        DeveloperToolsCredential::new(None).expect("Entra credential initializes");
-    let mut url = Url::parse(endpoint).expect("endpoint is a valid URL");
-    url.path_segments_mut()
-        .expect("endpoint is a base URL")
-        .pop_if_empty()
-        .push(container);
-    let client =
-        BlobContainerClient::new(url, Some(credential), None).expect("container client builds");
+    let credential: Arc<dyn TokenCredential> = match DeveloperToolsCredential::new(None) {
+        Ok(credential) => credential,
+        Err(error) => {
+            eprintln!(
+                "warning: could not initialize Entra credential to delete test container \
+                 {container}: {error}"
+            );
+            return;
+        }
+    };
+    let mut url = match Url::parse(endpoint) {
+        Ok(url) => url,
+        Err(error) => {
+            eprintln!(
+                "warning: could not parse endpoint {endpoint} to delete test container \
+                 {container}: {error}"
+            );
+            return;
+        }
+    };
+    {
+        let Ok(mut segments) = url.path_segments_mut() else {
+            eprintln!(
+                "warning: endpoint {endpoint} is not a base URL; cannot delete test container \
+                 {container}"
+            );
+            return;
+        };
+        segments.pop_if_empty().push(container);
+    }
+    let client = match BlobContainerClient::new(url, Some(credential), None) {
+        Ok(client) => client,
+        Err(error) => {
+            eprintln!(
+                "warning: could not build container client to delete test container \
+                 {container}: {error}"
+            );
+            return;
+        }
+    };
     if let Err(error) = client.delete(None).await {
         eprintln!("warning: could not delete test container {container}: {error}");
     }
