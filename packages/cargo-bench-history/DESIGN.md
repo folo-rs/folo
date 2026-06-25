@@ -1724,6 +1724,9 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      through `futures::stream::…buffer_unordered`, completing out of order then re-sorting
      by storage key for deterministic diagnostics), so the per-mode load floor is roughly
      its slowest fetch rather than the sum — critically so for Azure, where the serial
-     loads were serial network round-trips. The remaining `history`/`tip` per-series
+     loads were serial network round-trips. The `--since`/`--until` window is applied
+     earlier still: each commit's committer time rides along its SHA on the first-parent
+     topology, so out-of-window commits are dropped during selection and their objects are
+     never fetched at all (issue #265). The remaining `history`/`tip` per-series
      change-point detection over 20000 series is still serial and is flagged for a future
      parallelization pass.

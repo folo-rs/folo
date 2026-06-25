@@ -178,8 +178,13 @@ being analyzed:
   commit by `(dirty, commit time, object key)` so a clean point precedes same-commit
   dirty snapshots deterministically. Topology — not commit time — is primary, so
   back-dated backfill runs still sort by where their commit sits in history.
-  `--since`/`--until` filter at the object level by **commit** timestamp — whole runs
-  outside the window are dropped. Bare `<prefix>` positionals scope the analysis to
+  `--since`/`--until` drop whole runs outside the window by **commit** timestamp.
+  `analyze`/`list` decide this from git topology — each commit's committer time is
+  carried alongside its SHA on the `first_parent` ancestry (`FirstParentCommit`),
+  so the window is applied in `select_dataset`'s key-only phase, *before* any
+  out-of-window object is fetched (the `window_excludes` helper; a commit with an
+  unknown time is kept). `prune` still recovers the timestamp per object
+  (`load_commit_timestamp`). Bare `<prefix>` positionals scope the analysis to
   benchmarks whose qualified id starts with one of the prefixes (`series::prefixes_accept`).
 * `analyze::findings` is the **engine-aware, noise-resistant** detector. It splits
   metrics into *deterministic* (every Callgrind kind plus the `alloc_tracker`
@@ -221,9 +226,13 @@ being analyzed:
 The read-only `git_history::GitHistory` port (`resolve`, `default_branch`,
 `merge_base`, `first_parent`) has a `SystemGitHistory` adapter that shells
 `git -C <repo>` and a `#[cfg(test)]` `FakeGitHistory` over a canned commit graph.
+`first_parent` returns `FirstParentCommit { sha, committer_time }` per commit
+(`git log --first-parent --reverse --format=%H %cI`), pairing each SHA with its
+committer date so the `--since`/`--until` window is decidable from topology alone.
 Integration tests build a **real** git repo in a tempdir (`Workspace::repo` /
 `Workspace::clean_repo`) and seed storage keys under the commits' real SHAs so the
-live topology and the stored keys agree.
+live topology and the stored keys agree; `Workspace::commit_dated` pins each seed
+commit's committer date to the seeded run's `context.commit` so the window matches.
 
 ### Analysis modes (`analyze` only)
 

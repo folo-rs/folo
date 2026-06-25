@@ -12,7 +12,27 @@ use std::future::Future;
 use std::io;
 use std::path::PathBuf;
 
+use jiff::Timestamp;
+
 use crate::process::capture;
+
+/// A commit on a first-parent ancestry, paired with its committer timestamp.
+///
+/// `analyze` orders a series by first-parent topology and filters it by the
+/// `--since`/`--until` window. A run's commit timestamp (`context.commit`) is its
+/// commit's committer date, so the window is a per-commit property that topology
+/// alone decides — letting out-of-window objects be skipped before any stored
+/// object is fetched. `committer_time` is `None` only when `git` emitted an
+/// unparseable date, which a real commit never does; such a commit is treated as
+/// in-window (never excluded by the window).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FirstParentCommit {
+    /// The commit's full SHA.
+    pub(crate) sha: String,
+    /// The commit's committer timestamp (`git`'s `%cI`), or `None` when absent or
+    /// unparseable.
+    pub(crate) committer_time: Option<Timestamp>,
+}
 
 /// Read-only access to a repository's commit topology.
 ///
@@ -40,8 +60,13 @@ pub(crate) trait GitHistory {
     /// Returns the first-parent ancestry of `reference`, **oldest commit first**.
     ///
     /// This is the linear mainline of the ref — the timeline `analyze` orders a
-    /// series by. An unresolvable ref yields an empty list.
-    fn first_parent(&self, reference: &str) -> impl Future<Output = io::Result<Vec<String>>>;
+    /// series by. Each commit carries its committer timestamp, which `analyze`
+    /// uses to apply the `--since`/`--until` window before fetching any object.
+    /// An unresolvable ref yields an empty list.
+    fn first_parent(
+        &self,
+        reference: &str,
+    ) -> impl Future<Output = io::Result<Vec<FirstParentCommit>>>;
 
     /// Reports whether the working tree currently has uncommitted changes
     /// (tracked modifications, staged changes, or untracked files).
@@ -118,13 +143,21 @@ impl GitHistory for SystemGitHistory {
         Ok(output.and_then(|stdout| parse_sha(&stdout)))
     }
 
-    #[cfg_attr(test, mutants::skip)] // Shells out to `git`; parsing delegated to `parse_rev_list`.
-    async fn first_parent(&self, reference: &str) -> io::Result<Vec<String>> {
+    #[cfg_attr(test, mutants::skip)] // Shells out to `git`; parsing delegated to `parse_first_parent_log`.
+    async fn first_parent(&self, reference: &str) -> io::Result<Vec<FirstParentCommit>> {
+        // `%H %cI` pairs each first-parent commit with its committer date (strict
+        // ISO 8601), so the window can be decided from topology before any fetch.
         let output = self
-            .run(&["rev-list", "--first-parent", "--reverse", reference])
+            .run(&[
+                "log",
+                "--first-parent",
+                "--reverse",
+                "--format=%H %cI",
+                reference,
+            ])
             .await?;
         Ok(output
-            .map(|stdout| parse_rev_list(&stdout))
+            .map(|stdout| parse_first_parent_log(&stdout))
             .unwrap_or_default())
     }
 
@@ -154,14 +187,22 @@ fn parse_sha(stdout: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// Parses `git rev-list` output into commit SHAs in line order, dropping blank
-/// lines. With `--reverse` the input is already oldest-first.
-fn parse_rev_list(stdout: &str) -> Vec<String> {
+/// Parses `git log --first-parent --reverse --format=%H %cI` output into
+/// [`FirstParentCommit`]s in line order, dropping blank lines. Each line is
+/// `<sha> <committer-date>`; a line missing the date — or carrying an unparseable
+/// one — yields `committer_time: None`. With `--reverse` the input is oldest-first.
+fn parse_first_parent_log(stdout: &str) -> Vec<FirstParentCommit> {
     stdout
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
+        .map(|line| {
+            let (sha, rest) = line.split_once(' ').unwrap_or((line, ""));
+            FirstParentCommit {
+                sha: sha.to_owned(),
+                committer_time: rest.trim().parse::<Timestamp>().ok(),
+            }
+        })
         .collect()
 }
 
@@ -185,7 +226,9 @@ mod fake {
     use std::future::{Future, ready};
     use std::io;
 
-    use super::GitHistory;
+    use jiff::Timestamp;
+
+    use super::{FirstParentCommit, GitHistory};
 
     /// An in-memory [`GitHistory`] over a canned first-parent commit graph.
     ///
@@ -205,6 +248,8 @@ mod fake {
         refs: HashMap<String, String>,
         /// Commit SHA -> its first parent (`None` for a root commit).
         parents: HashMap<String, Option<String>>,
+        /// Commit SHA -> its committer timestamp, for commits seeded with one.
+        times: HashMap<String, Timestamp>,
         /// The detected default branch, if the repository advertises one.
         default_branch: Option<String>,
         /// Whether the working tree has uncommitted changes.
@@ -217,6 +262,7 @@ mod fake {
             Self {
                 refs: HashMap::new(),
                 parents: HashMap::new(),
+                times: HashMap::new(),
                 default_branch: None,
                 dirty: false,
             }
@@ -226,6 +272,19 @@ mod fake {
         pub(crate) fn commit(&mut self, sha: &str, parent: Option<&str>) -> &mut Self {
             self.parents
                 .insert(sha.to_owned(), parent.map(ToOwned::to_owned));
+            self
+        }
+
+        /// Records a commit `sha` (first `parent`, `None` = root) carrying a
+        /// committer timestamp, so the topology window can be exercised.
+        pub(crate) fn commit_at(
+            &mut self,
+            sha: &str,
+            parent: Option<&str>,
+            time: Timestamp,
+        ) -> &mut Self {
+            self.commit(sha, parent);
+            self.times.insert(sha.to_owned(), time);
             self
         }
 
@@ -306,13 +365,23 @@ mod fake {
             ready(Ok(base))
         }
 
-        fn first_parent(&self, reference: &str) -> impl Future<Output = io::Result<Vec<String>>> {
+        fn first_parent(
+            &self,
+            reference: &str,
+        ) -> impl Future<Output = io::Result<Vec<FirstParentCommit>>> {
             let Some(sha) = self.resolve_sync(reference) else {
                 return ready(Ok(Vec::new()));
             };
             let mut chain = self.chain(&sha);
-            chain.reverse(); // oldest-first, matching `rev-list --reverse`.
-            ready(Ok(chain))
+            chain.reverse(); // oldest-first, matching `git log --reverse`.
+            let commits = chain
+                .into_iter()
+                .map(|sha| FirstParentCommit {
+                    committer_time: self.times.get(&sha).copied(),
+                    sha,
+                })
+                .collect();
+            ready(Ok(commits))
         }
 
         fn is_dirty(&self) -> impl Future<Output = io::Result<bool>> {
@@ -339,10 +408,42 @@ mod tests {
     }
 
     #[test]
-    fn parse_rev_list_keeps_order_and_drops_blanks() {
-        let parsed = parse_rev_list("c0\nc1\n\n  c2  \n");
-        assert_eq!(parsed, vec!["c0", "c1", "c2"]);
-        assert!(parse_rev_list("\n   \n").is_empty());
+    fn parse_first_parent_log_keeps_order_times_and_drops_blanks() {
+        let parsed = parse_first_parent_log(
+            "c0 2024-01-01T00:00:00+00:00\nc1 2024-02-01T00:00:00+00:00\n\n  c2 2024-03-01T00:00:00+00:00  \n",
+        );
+        assert_eq!(
+            parsed,
+            vec![
+                FirstParentCommit {
+                    sha: "c0".to_owned(),
+                    committer_time: Some("2024-01-01T00:00:00+00:00".parse().unwrap()),
+                },
+                FirstParentCommit {
+                    sha: "c1".to_owned(),
+                    committer_time: Some("2024-02-01T00:00:00+00:00".parse().unwrap()),
+                },
+                FirstParentCommit {
+                    sha: "c2".to_owned(),
+                    committer_time: Some("2024-03-01T00:00:00+00:00".parse().unwrap()),
+                },
+            ]
+        );
+        // A line missing the date, or carrying an unparseable one, is timeless.
+        assert_eq!(
+            parse_first_parent_log("c0\nc1 not-a-date\n"),
+            vec![
+                FirstParentCommit {
+                    sha: "c0".to_owned(),
+                    committer_time: None,
+                },
+                FirstParentCommit {
+                    sha: "c1".to_owned(),
+                    committer_time: None,
+                },
+            ]
+        );
+        assert!(parse_first_parent_log("\n   \n").is_empty());
     }
 
     #[test]
@@ -427,15 +528,45 @@ mod tests {
     #[test]
     fn fake_first_parent_is_oldest_first() {
         let git = fixture();
+        let shas = |reference: &str| {
+            block_on(git.first_parent(reference))
+                .unwrap()
+                .into_iter()
+                .map(|commit| commit.sha)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(shas("master"), vec!["c0", "c1", "c2", "c3"]);
+        assert_eq!(shas("feature"), vec!["c0", "c1", "f1", "f2"]);
+        assert!(block_on(git.first_parent("absent")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn fake_first_parent_carries_committer_times() {
+        let mut git = FakeGitHistory::new();
+        let t0: Timestamp = "2024-01-01T00:00:00+00:00".parse().unwrap();
+        let t1: Timestamp = "2024-02-01T00:00:00+00:00".parse().unwrap();
+        git.commit_at("c0", None, t0)
+            .commit_at("c1", Some("c0"), t1)
+            .commit("c2", Some("c1")) // A commit seeded without a time stays None.
+            .branch("master", "c2")
+            .head("master");
         assert_eq!(
             block_on(git.first_parent("master")).unwrap(),
-            vec!["c0", "c1", "c2", "c3"]
+            vec![
+                FirstParentCommit {
+                    sha: "c0".to_owned(),
+                    committer_time: Some(t0),
+                },
+                FirstParentCommit {
+                    sha: "c1".to_owned(),
+                    committer_time: Some(t1),
+                },
+                FirstParentCommit {
+                    sha: "c2".to_owned(),
+                    committer_time: None,
+                },
+            ]
         );
-        assert_eq!(
-            block_on(git.first_parent("feature")).unwrap(),
-            vec!["c0", "c1", "f1", "f2"]
-        );
-        assert!(block_on(git.first_parent("absent")).unwrap().is_empty());
     }
 
     #[test]

@@ -409,7 +409,9 @@ impl BackfillGit for SystemBackfillGit {
 
     #[cfg_attr(test, mutants::skip)] // Delegates to the git-shelling history port; no pure logic to assert.
     async fn first_parent(&self, reference: &str) -> io::Result<Vec<String>> {
-        self.history.first_parent(reference).await
+        // Backfill needs only the commit shas, not their committer timestamps.
+        let commits = self.history.first_parent(reference).await?;
+        Ok(commits.into_iter().map(|commit| commit.sha).collect())
     }
 
     #[cfg_attr(test, mutants::skip)] // Shells out to `git`; environment IO with no pure logic to assert.
@@ -592,7 +594,11 @@ mod tests {
         }
 
         fn first_parent(&self, reference: &str) -> impl Future<Output = io::Result<Vec<String>>> {
-            self.history.first_parent(reference)
+            let future = self.history.first_parent(reference);
+            async move {
+                let commits = future.await?;
+                Ok(commits.into_iter().map(|commit| commit.sha).collect())
+            }
         }
 
         fn add_worktree(&self, path: &Path, commit: &str) -> impl Future<Output = io::Result<()>> {
