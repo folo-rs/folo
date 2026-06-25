@@ -27,7 +27,7 @@ impl Logger {
     //
     // Takes `self` for call-site symmetry with `detail` (both are `logger.x(..)`),
     // even though a phase marker is unconditional and reads no state.
-    #[allow(
+    #[expect(
         clippy::unused_self,
         reason = "kept an instance method so callers use one logger handle uniformly"
     )]
