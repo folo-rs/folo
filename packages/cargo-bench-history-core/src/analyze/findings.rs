@@ -1028,10 +1028,11 @@ pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Vec<Finding
 /// Detects every series, returning the raised candidates in series order.
 ///
 /// Each series is independent — there is no cross-series state in the detection step
-/// — so the work is split into contiguous chunks evaluated on scoped threads, then
-/// the chunk results are concatenated in order. This preserves the exact series
-/// order a sequential pass would produce, which both the false-discovery alignment
-/// and the deterministic final ranking in [`find_changes`] rely on.
+/// — so the work is split into one balanced, contiguous chunk per worker thread,
+/// each evaluated on a scoped thread, then the chunk results are concatenated in
+/// order. This preserves the exact series order a sequential pass would produce,
+/// which both the false-discovery alignment and the deterministic final ranking in
+/// [`find_changes`] rely on.
 ///
 /// A single available CPU (Miri reports one by default) or a single series needs no
 /// parallelism, so it takes a plain serial pass — which is also the path Miri
@@ -1048,18 +1049,23 @@ fn detect_all(series: &[Series], context: &AnalysisContext) -> Vec<Candidate> {
             .collect();
     }
 
-    let chunk = series.len().div_ceil(workers);
     thread::scope(|scope| {
+        // Peel one balanced, contiguous chunk per worker off the front: at each step the
+        // remaining series are divided as evenly as possible among the workers still to be
+        // assigned, so exactly `workers` non-empty chunks are spawned (every worker is
+        // used, not just the few that a fixed `chunks(div_ceil(len, workers))` split would
+        // yield when `len` only slightly exceeds `workers`). `workers <= series.len()`
+        // keeps every chunk non-empty.
+        let mut rest = series;
         // The eager collect spawns every worker before the first join; a lazy
         // `map`/`flat_map` would instead spawn and join each chunk one at a time,
         // serializing the work.
-        #[expect(
-            clippy::needless_collect,
-            reason = "collecting the handles is what makes the chunks run concurrently"
-        )]
-        let handles: Vec<_> = series
-            .chunks(chunk)
-            .map(|slice| {
+        let handles: Vec<_> = (1..=workers)
+            .rev()
+            .map(|remaining_workers| {
+                let take = rest.len().div_ceil(remaining_workers);
+                let (slice, tail) = rest.split_at(take);
+                rest = tail;
                 scope.spawn(move || {
                     slice
                         .iter()

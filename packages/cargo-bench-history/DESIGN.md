@@ -1747,10 +1747,3 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      exercises the serial path) and adds no dependency. The worker-count and chunking
      arithmetic never changes the output, so `detect_all` carries `#[mutants::skip]` while
      the real detection logic in `detect_one` stays under mutation testing.
-     `rayon`'s `par_iter` (the issue's original suggestion): its transitive `crossbeam-epoch`
-     dependency trips Miri's Stacked Borrows model (a known, benign, but as-yet-unreleased
-     issue), which would force an ugly `#[cfg(miri)]` serial fallback; `std::thread::scope`
-     is Miri-clean with no conditional compilation (Miri reports one CPU by default, so it
-     exercises the serial path) and adds no dependency. The worker-count and chunking
-     arithmetic never changes the output, so `detect_all` carries `#[mutants::skip]` while
-     the real detection logic in `detect_one` stays under mutation testing.
