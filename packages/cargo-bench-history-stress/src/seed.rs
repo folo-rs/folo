@@ -292,7 +292,8 @@ fn clean_run(
     dirty: bool,
     value: impl Fn(usize) -> f64,
 ) -> Run {
-    let engine = Engine::from_name(&set.engine).unwrap_or(Engine::Callgrind);
+    let engine = Engine::from_name(&set.engine)
+        .expect("discriminant sets are built from Engine::ALL, so the engine name always resolves");
     let results: Vec<BenchmarkResult> = (0..scenario.benchmarks)
         .map(|b| {
             BenchmarkResult::new(

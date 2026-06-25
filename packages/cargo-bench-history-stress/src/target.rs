@@ -115,10 +115,7 @@ impl StorageTarget {
                 "[project]\nid = \"{project}\"\n\n[storage.local]\npath = {}\n",
                 toml_path(&self.root)
             ),
-            Kind::Azure { account, container } => format!(
-                "[project]\nid = \"{project}\"\n\n[storage.azure]\naccount = \"{account}\"\n\
-                 container = \"{container}\"\nendpoint = \"https://{account}.blob.core.windows.net\"\n",
-            ),
+            Kind::Azure { account, container } => azure_config_toml(project, account, container),
         }
     }
 
@@ -249,6 +246,30 @@ fn toml_path(path: &Path) -> String {
     format!("\"{escaped}\"")
 }
 
+/// Quotes a value as a TOML basic string, escaping the backslash and double-quote
+/// characters that would otherwise break the literal.
+fn toml_basic_string(value: &str) -> String {
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
+}
+
+/// Renders the `[storage.azure]` config block for `analyze`.
+///
+/// `account` and `container` originate from `--account` / `--container` (or env), so
+/// they are escaped as TOML basic strings rather than spliced in raw: a stray `"` or
+/// `\` would otherwise produce invalid TOML that `cargo-bench-history` then fails to
+/// parse.
+fn azure_config_toml(project: &str, account: &str, container: &str) -> String {
+    let endpoint = format!("https://{account}.blob.core.windows.net");
+    format!(
+        "[project]\nid = \"{project}\"\n\n[storage.azure]\naccount = {}\n\
+         container = {}\nendpoint = {}\n",
+        toml_basic_string(account),
+        toml_basic_string(container),
+        toml_basic_string(&endpoint),
+    )
+}
+
 /// The azcopy wildcard source that copies a directory's contents (preserving
 /// sub-paths) without nesting them under the staging directory's own name.
 fn wildcard_source(root: &Path) -> String {
@@ -294,4 +315,34 @@ async fn run_tool(
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn toml_basic_string_escapes_quotes_and_backslashes() {
+        assert_eq!(toml_basic_string("plain"), "\"plain\"");
+        assert_eq!(toml_basic_string("a\"b"), "\"a\\\"b\"");
+        assert_eq!(toml_basic_string("a\\b"), "\"a\\\\b\"");
+    }
+
+    #[test]
+    fn azure_config_toml_escapes_account_and_container() {
+        // Names carrying a quote and a backslash would break the generated TOML if
+        // spliced in raw; the config must escape them instead.
+        let config = azure_config_toml("stress", "acc\"t", "cont\\ainer");
+
+        assert!(config.contains("account = \"acc\\\"t\""), "got: {config}");
+        assert!(
+            config.contains("container = \"cont\\\\ainer\""),
+            "got: {config}"
+        );
+        // The account also forms the endpoint host, which is likewise escaped.
+        assert!(
+            config.contains("endpoint = \"https://acc\\\"t.blob.core.windows.net\""),
+            "got: {config}"
+        );
+    }
 }

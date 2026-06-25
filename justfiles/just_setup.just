@@ -51,11 +51,16 @@ install-tools:
     }
 
     # azcopy drives the bulk upload in the cargo-bench-history Azure stress harness
-    # (`just bench-history-stress-azure`). It is not a cargo crate and has no installer,
-    # so a helper script fetches the official static binary for this OS and drops it on
-    # PATH; see scripts/install-azcopy.ps1 (including its rationale for the destination).
-    # No-op when azcopy is already present.
-    & "{{justfile_directory()}}/scripts/install-azcopy.ps1"
+    # (`just bench-history-stress-azure`), which is on-demand only and never runs in
+    # CI — so, like the Azurite install below, skip the download in CI and only fetch
+    # azcopy for local PC setup. It is not a cargo crate and has no installer, so a
+    # helper script fetches the pinned official binary; see scripts/install-azcopy.ps1
+    # (including its rationale for the destination). No-op when azcopy is already present.
+    if ($env:CI) {
+        Write-Host "Skipping azcopy install in CI (only the on-demand 'just bench-history-stress-azure' needs it)."
+    } else {
+        & "{{justfile_directory()}}/scripts/install-azcopy.ps1"
+    }
 
     # Azurite is the Azure Blob storage emulator that backs the cargo-bench-history
     # Azure backend tests, exercised locally via `just test-azurite`. It is a Node

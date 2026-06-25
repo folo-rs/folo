@@ -2,13 +2,20 @@
 
 <#
 .SYNOPSIS
-    Installs the azcopy CLI used by the cargo-bench-history Azure stress harness.
+    Installs a pinned azcopy CLI used by the cargo-bench-history Azure stress harness.
 
 .DESCRIPTION
     azcopy performs the bulk blob upload in `just bench-history-stress-azure`. It is
     not a cargo crate, and Microsoft ships it as a standalone, portable binary with no
     installer and no canonical install location of its own, so this script downloads
-    the official static build for the current operating system and drops it on PATH.
+    the official static build for the current OS/architecture and drops it on PATH.
+
+    The version is pinned ($script:AzCopyVersion) and the download comes from the
+    matching GitHub release (not the floating `aka.ms/downloadazcopy-v10-*` redirect),
+    so `just install-tools` is reproducible. The published SHA-256 of each archive is
+    baked in below and verified after download, so a tampered or corrupted archive is
+    rejected. Bump the version and the six digests together when upgrading; the digests
+    are listed on the release page (and via the GitHub releases API).
 
     The default destination is the cargo bin directory. That is a deliberate, if
     pragmatic, choice: azcopy has no standard home to prefer instead, and the cargo bin
@@ -41,19 +48,38 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 $VerbosePreference = 'Continue'
 
-function Get-AzCopyDownload {
-    # Maps the current OS to the official azcopy download: the redirect URL, the
-    # archive format it serves, and the binary name inside it. `#requires -Version 7`
-    # above guarantees the $Is* automatic variables exist, so the final branch is
-    # simply "not macOS and not Linux", i.e. Windows.
-    Write-Verbose 'Selecting the azcopy download for the current operating system.'
-    if ($IsMacOS) {
-        return [pscustomobject]@{ Url = 'https://aka.ms/downloadazcopy-v10-mac'; Archive = 'zip'; BinaryName = 'azcopy' }
-    } elseif ($IsLinux) {
-        return [pscustomobject]@{ Url = 'https://aka.ms/downloadazcopy-v10-linux'; Archive = 'tar.gz'; BinaryName = 'azcopy' }
-    } else {
-        return [pscustomobject]@{ Url = 'https://aka.ms/downloadazcopy-v10-windows'; Archive = 'zip'; BinaryName = 'azcopy.exe' }
+# The pinned azcopy release. Keep $AzCopyVersion and the per-platform digests in
+# $AzCopyBuilds in sync — both come from one GitHub release of azure-storage-azcopy.
+$script:AzCopyVersion = '10.32.4'
+
+# One entry per supported OS/architecture: the release asset name, the archive format
+# it ships as, the binary inside it, and the asset's published lowercase SHA-256.
+$script:AzCopyBuilds = @{
+    'windows-amd64' = @{ Asset = "azcopy_windows_amd64_$($script:AzCopyVersion).zip"; Kind = 'zip'; Binary = 'azcopy.exe'; Sha256 = 'f3a91ff981095077540254e1681de07eddb3c7179475c542612464cbdaa30275' }
+    'windows-arm64' = @{ Asset = "azcopy_windows_arm64_$($script:AzCopyVersion).zip"; Kind = 'zip'; Binary = 'azcopy.exe'; Sha256 = 'c48447f0a65ece9f78d7bcbc75c4fe431aa5dff0b9a3e08d747ecc7c7855e9bc' }
+    'linux-amd64'   = @{ Asset = "azcopy_linux_amd64_$($script:AzCopyVersion).tar.gz"; Kind = 'tar.gz'; Binary = 'azcopy'; Sha256 = '8f859a0dbbc117660c249fb3569694fc8a0f33b68701f5b2b92ccc001ee50784' }
+    'linux-arm64'   = @{ Asset = "azcopy_linux_arm64_$($script:AzCopyVersion).tar.gz"; Kind = 'tar.gz'; Binary = 'azcopy'; Sha256 = 'c614777841277ab2c53eecc9ecca5704fd697375c2ffaf4a407058891f00f673' }
+    'mac-amd64'     = @{ Asset = "azcopy_darwin_amd64_$($script:AzCopyVersion).zip"; Kind = 'zip'; Binary = 'azcopy'; Sha256 = 'b4325d4d20a830270a2b00890aa15e238728778774fc1b3539bf2ddfc8093a66' }
+    'mac-arm64'     = @{ Asset = "azcopy_darwin_arm64_$($script:AzCopyVersion).zip"; Kind = 'zip'; Binary = 'azcopy'; Sha256 = '7563ceaa5f0cf2fa822df142c1a1a62e7236183d36eb87cc159c8b09f85afe0f' }
+}
+
+function Get-PlatformKey {
+    # Identifies the current OS/architecture as a `$AzCopyBuilds` key. `#requires
+    # -Version 7` guarantees the $Is* automatic variables exist, so the final OS
+    # branch is simply "not macOS and not Linux", i.e. Windows.
+    Write-Verbose 'Determining the operating system and processor architecture.'
+    if ($IsMacOS) { $os = 'mac' } elseif ($IsLinux) { $os = 'linux' } else { $os = 'windows' }
+
+    $processArch = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
+    $arch = switch ($processArch) {
+        ([System.Runtime.InteropServices.Architecture]::X64) { 'amd64' }
+        ([System.Runtime.InteropServices.Architecture]::Arm64) { 'arm64' }
+        default { throw "azcopy install does not support processor architecture '$processArch'." }
     }
+
+    $key = "$os-$arch"
+    Write-Verbose "Resolved platform key '$key'."
+    return $key
 }
 
 function Expand-AzCopyArchive {
@@ -75,9 +101,15 @@ if (-not $Force -and (Get-Command azcopy -ErrorAction SilentlyContinue)) {
     return
 }
 
-$download = Get-AzCopyDownload
-Write-Host "Installing azcopy (used by 'just bench-history-stress-azure')..."
-Write-Verbose "Resolved download URL '$($download.Url)' and expected binary name '$($download.BinaryName)'."
+$platformKey = Get-PlatformKey
+$build = $script:AzCopyBuilds[$platformKey]
+if ($null -eq $build) {
+    throw "No pinned azcopy build is configured for platform '$platformKey'."
+}
+
+$url = "https://github.com/Azure/azure-storage-azcopy/releases/download/v$($script:AzCopyVersion)/$($build.Asset)"
+Write-Host "Installing azcopy $($script:AzCopyVersion) (used by 'just bench-history-stress-azure')..."
+Write-Verbose "Platform '$platformKey' maps to asset '$($build.Asset)'; downloading from '$url'."
 
 Write-Verbose "Ensuring the destination directory '$Destination' exists."
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
@@ -87,21 +119,27 @@ New-Item -ItemType Directory -Force -Path $Destination | Out-Null
 $work = New-Item -ItemType Directory -Force -Path (Join-Path ([System.IO.Path]::GetTempPath()) ("azcopy-" + [guid]::NewGuid()))
 Write-Verbose "Staging the download in temp directory '$($work.FullName)'."
 try {
-    $archive = Join-Path $work ("azcopy." + $download.Archive)
+    $archive = Join-Path $work $build.Asset
     Write-Verbose "Downloading azcopy archive to '$archive'."
-    Invoke-WebRequest -Uri $download.Url -OutFile $archive
+    Invoke-WebRequest -Uri $url -OutFile $archive
 
-    Expand-AzCopyArchive -ArchivePath $archive -ArchiveKind $download.Archive -DestinationDir $work
+    Write-Verbose "Verifying the archive SHA-256 against the pinned digest."
+    $actual = (Get-FileHash -Path $archive -Algorithm SHA256).Hash
+    if ($actual -ne $build.Sha256) {
+        throw "azcopy archive SHA-256 mismatch for '$($build.Asset)': expected $($build.Sha256), got $($actual.ToLowerInvariant())."
+    }
 
-    Write-Verbose "Locating '$($download.BinaryName)' inside the extracted archive."
-    $bin = Get-ChildItem -Path $work -Recurse -Filter $download.BinaryName | Select-Object -First 1
+    Expand-AzCopyArchive -ArchivePath $archive -ArchiveKind $build.Kind -DestinationDir $work
+
+    Write-Verbose "Locating '$($build.Binary)' inside the extracted archive."
+    $bin = Get-ChildItem -Path $work -Recurse -Filter $build.Binary | Select-Object -First 1
     if ($null -eq $bin) {
-        throw "azcopy binary ('$($download.BinaryName)') was not found inside the downloaded archive."
+        throw "azcopy binary ('$($build.Binary)') was not found inside the downloaded archive."
     }
 
     Write-Verbose "Copying '$($bin.FullName)' to '$Destination'."
     Copy-Item -Path $bin.FullName -Destination $Destination -Force
-    Write-Host "Installed azcopy to $Destination."
+    Write-Host "Installed azcopy $($script:AzCopyVersion) to $Destination."
 } finally {
     Write-Verbose "Cleaning up temp directory '$($work.FullName)'."
     Remove-Item -Path $work -Recurse -Force -ErrorAction SilentlyContinue

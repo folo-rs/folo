@@ -145,7 +145,8 @@ test FILTER="":
 
 # Run the cargo-bench-history "stress analyze" harness against LOCAL filesystem
 # storage: it seeds a giant synthetic benchmark history (default 1000 benchmarks ×
-# 1000 commits over 12 months × 6 discriminant sets, plus a short feature branch
+# 2000 commits over 12 months, ~half of which store a run, × 20 discriminant sets
+# spanning every engine and the platforms it runs on, plus a short feature branch
 # with dirty snapshots and some blessings) into a temporary store, then times each
 # analysis mode (history / branch / tip) over it. The dataset is fabricated; the
 # point is to observe how long `analyze` takes at scale, not to measure real code.
