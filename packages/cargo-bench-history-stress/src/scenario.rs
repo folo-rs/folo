@@ -599,6 +599,13 @@ mod tests {
         let clean1 = s.feature_clean_value(1, 0);
         assert!(close(s.dirty_value(1, 0, 0), clean1));
         assert!(close(s.dirty_value(1, 0, 1), clean1));
+
+        // Pin the exact wobble formula: clean + base * DIRTY_WOBBLE * (k + 1). This
+        // distinguishes the intended `+`/`*` operators from their mutations, which
+        // preserve the "grows with k" ordering above but change the magnitude.
+        let base0 = s.base_value(0, 0);
+        assert!(close(d0, clean0 + base0 * DIRTY_WOBBLE * 1.0));
+        assert!(close(d1, clean0 + base0 * DIRTY_WOBBLE * 2.0));
     }
 
     #[test]
@@ -619,6 +626,12 @@ mod tests {
         let (main, feature) = commit_times(anchor, 4, 3);
         assert_eq!(main.len(), 4);
         assert_eq!(feature.len(), 3);
+
+        // The window widths are exact: a 365-day year and a one-hour feature spacing.
+        // Asserting the literals (not the symbols) keeps the arithmetic that defines
+        // them honest, since the windowing assertions below reuse the same symbols.
+        assert_eq!(YEAR_SECONDS, 31_536_000);
+        assert_eq!(FEATURE_COMMIT_SPACING_SECONDS, 3_600);
 
         // main is oldest-first, ends at the anchor, starts a year before it.
         for pair in main.windows(2) {
@@ -660,6 +673,9 @@ mod tests {
         let (main, feature) = commit_times(anchor, 1, 1);
         assert_eq!(main.len(), 1);
         assert_eq!(feature.len(), 1);
+        // The single main commit sits at the anchor itself (it has no range to
+        // spread over), which the `commits > 1` guard selects.
+        assert_eq!(main[0].as_second(), anchor.as_second());
     }
 
     #[test]
@@ -728,5 +744,51 @@ mod tests {
             // The half-width stays far below the smallest injected step (~10%).
             assert!(half < value * 0.05, "noise band too wide: {half}");
         }
+    }
+
+    #[test]
+    fn splitmix64_matches_reference_outputs() {
+        // Pinning the finalizer's exact outputs anchors every bitwise step (the
+        // XORs and shifts), which the value-shape assertions elsewhere would
+        // otherwise let drift since they only require determinism.
+        assert_eq!(splitmix64(0), 16_294_208_416_658_607_535);
+        assert_eq!(splitmix64(1), 10_451_216_379_200_822_465);
+        assert_eq!(splitmix64(0xDEAD_BEEF_1234_5678), 5_603_369_935_320_146_837);
+    }
+
+    #[test]
+    #[expect(
+        clippy::float_cmp,
+        reason = "base_value reduces to BASE_MIN + h % BASE_SPAN, an exact integer-valued f64"
+    )]
+    fn base_value_matches_reference_outputs() {
+        // Exact base values pin the seed/index mixing (the XOR fan-in) and the
+        // BASE_MIN + h % BASE_SPAN reduction, so a different bit-mix is detected.
+        let s = scenario();
+        assert_eq!(s.base_value(0, 0), 5016.0);
+        assert_eq!(s.base_value(1, 0), 8212.0);
+        assert_eq!(s.base_value(3, 1), 5503.0);
+        assert_eq!(s.base_value(5, 2), 6972.0);
+        assert_eq!(s.base_value(7, 3), 2697.0);
+        assert_eq!(s.base_value(2, 0), 9699.0);
+    }
+
+    #[test]
+    fn family_one_step_threshold_uses_doubled_index() {
+        // commits == 6 separates the real threshold (2*i >= 6, i.e. i >= 3) from a
+        // would-be additive one (2 + i >= 6, i.e. i >= 4): only `2 * i` steps at i = 3.
+        let s = Scenario {
+            benchmarks: 6,
+            commits: 6,
+            branch_commits: 1,
+            dirty_runs: 1,
+            seed: 99,
+        };
+        let base = s.base_value(1, 0);
+        assert!(close(s.main_clean_value(1, 0, 2, false), base));
+        assert!(close(
+            s.main_clean_value(1, 0, 3, false),
+            base * (1.0 + STEP_REGRESSION)
+        ));
     }
 }

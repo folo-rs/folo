@@ -455,6 +455,7 @@ dependencies = [
  "cargo-bench-history",
  "cargo-bench-history-core",
  "clap",
+ "futures",
  "jiff",
  "nonempty",
  "serde",

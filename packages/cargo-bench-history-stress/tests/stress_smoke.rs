@@ -159,3 +159,41 @@ fn rejects_an_empty_scenario() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("benchmarks"), "{stderr}");
 }
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn reports_progress_and_explains_only_under_verbose() {
+    // Always-on phase markers go to stderr; explanatory detail lines appear there
+    // only when --verbose is set.
+    let quiet = run_stress(&["--modes", "history"]);
+    assert!(
+        quiet.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&quiet.stderr)
+    );
+    let quiet_err = String::from_utf8_lossy(&quiet.stderr);
+    assert!(
+        quiet_err.contains("==>"),
+        "expected phase markers on stderr: {quiet_err}"
+    );
+    assert!(
+        !quiet_err.contains("local store directory is"),
+        "detail lines must stay silent without --verbose: {quiet_err}"
+    );
+
+    let verbose = run_stress(&["--modes", "history", "--verbose"]);
+    assert!(
+        verbose.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&verbose.stderr)
+    );
+    let verbose_err = String::from_utf8_lossy(&verbose.stderr);
+    assert!(
+        verbose_err.contains("==>"),
+        "expected phase markers on stderr: {verbose_err}"
+    );
+    assert!(
+        verbose_err.contains("local store directory is"),
+        "expected explanatory detail under --verbose: {verbose_err}"
+    );
+}
