@@ -8,8 +8,8 @@
 //!
 //! * **Azurite** (`*_in_azurite`) — against a local Azurite emulator using the
 //!   self-signed account-SAS path. They **self-skip** when no emulator is reachable
-//!   (so a normal `--all-features` run stays green) and run for real once Azurite is
-//!   up; CI provides one in the `test-azurite` job.
+//!   (so a normal test run stays green) and run for real once Azurite is up; CI
+//!   provides one in the `test-azurite` job.
 //! * **Real Azure** (`*_in_real_azure`) — against a real Storage account using the
 //!   **Microsoft Entra ID** path (no account key). They self-skip unless
 //!   `ENABLE_AZURE` is set (an explicit opt-in, so the account name living in
@@ -20,10 +20,8 @@
 //!   comes from `BENCH_HISTORY_AZURE_ACCOUNT`. Each test uses a fresh container
 //!   that is deleted when the test finishes, even on panic.
 //!
-//! They compile only with the `azure` feature, each scenario uses its own container
-//! so they never share state, and they are ignored under Miri (real network and
-//! process I/O).
-#![cfg(feature = "azure")]
+//! Each scenario uses its own container so they never share state, and they are
+//! ignored under Miri (real network and process I/O).
 #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
 use std::net::{TcpStream, ToSocketAddrs as _};
@@ -61,9 +59,9 @@ fn azurite_endpoint() -> String {
 
 /// Whether an Azurite blob endpoint is reachable via a short TCP connect.
 ///
-/// The `azure` feature builds these tests under `--all-features`, where the
-/// runner usually has no emulator. A reachability probe lets each test self-skip
-/// there while still running for real wherever Azurite is provided.
+/// These tests are always compiled, but the runner usually has no emulator. A
+/// reachability probe lets each test self-skip there while still running for real
+/// wherever Azurite is provided.
 ///
 /// Setting `BENCH_HISTORY_REQUIRE_AZURITE` turns an unreachable emulator into a
 /// hard failure, so the dedicated CI job that provisions Azurite cannot silently
@@ -135,12 +133,12 @@ fn real_azure_endpoint(account: &str) -> String {
 
 /// Whether the real-Azure tests are enabled.
 ///
-/// They run only when `ENABLE_AZURE` is set, so a plain test run (and the
-/// `--all-features` jobs) self-skips them even though `BENCH_HISTORY_AZURE_ACCOUNT`
-/// may be in scope. `ENABLE_AZURE` is an explicit opt-in — set by the `just
-/// test-azure` recipe and the CI `test-azure` job — that says "really run these",
-/// so a then-missing `BENCH_HISTORY_AZURE_ACCOUNT` is a hard failure rather than a
-/// silent skip, mirroring how `BENCH_HISTORY_REQUIRE_AZURITE` guards Azurite.
+/// They run only when `ENABLE_AZURE` is set, so a plain test run self-skips them
+/// even though `BENCH_HISTORY_AZURE_ACCOUNT` may be in scope. `ENABLE_AZURE` is an
+/// explicit opt-in — set by the `just test-azure` recipe and the CI `test-azure`
+/// job — that says "really run these", so a then-missing
+/// `BENCH_HISTORY_AZURE_ACCOUNT` is a hard failure rather than a silent skip,
+/// mirroring how `BENCH_HISTORY_REQUIRE_AZURITE` guards Azurite.
 fn real_azure_enabled() -> bool {
     if std::env::var_os("ENABLE_AZURE").is_none_or(|value| value.is_empty()) {
         eprintln!("skipping real Azure integration test: ENABLE_AZURE not set");

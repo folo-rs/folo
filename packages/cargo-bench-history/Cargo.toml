@@ -11,24 +11,8 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
-[package.metadata.docs.rs]
-all-features = true
-
-[features]
-# Azure Blob Storage backend. Off by default so the common build stays light;
-# enabling it pulls in the Azure SDK and the crypto crates used to self-sign SAS
-# tokens (for Azurite in CI and for SAS-authenticated production access).
-azure = [
-    "dep:azure_core",
-    "dep:azure_identity",
-    "dep:azure_storage_blob",
-    "dep:base64",
-    "dep:futures",
-    "dep:hmac",
-]
-
 [dependencies]
-azure_core = { workspace = true, optional = true }
+azure_core = { workspace = true }
 # The `default` feature on these two crates is load-bearing, not gratuitous: it
 # transitively enables `azure_core/default`, which selects the reqwest + rustls
 # HTTP transport. Without it the SDK still compiles, but `new_http_client()`
@@ -37,13 +21,13 @@ azure_core = { workspace = true, optional = true }
 # the same "defaults pick a backend" situation that keeps `clap` on its
 # defaults. The workspace declarations keep `default-features = false`, so the
 # defaults are scoped to this package alone.
-azure_identity = { workspace = true, optional = true, features = ["default"] }
-azure_storage_blob = { workspace = true, optional = true, features = ["default"] }
-base64 = { workspace = true, optional = true }
+azure_identity = { workspace = true, features = ["default"] }
+azure_storage_blob = { workspace = true, features = ["default"] }
+base64 = { workspace = true }
 cargo-bench-history-core = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
-futures = { workspace = true, optional = true }
-hmac = { workspace = true, optional = true }
+futures = { workspace = true }
+hmac = { workspace = true }
 jiff = { workspace = true, features = ["serde"] }
 many_cpus = { workspace = true }
 nonempty = { workspace = true }

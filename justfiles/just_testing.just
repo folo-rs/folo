@@ -248,7 +248,7 @@ test-azurite:
         # would then start/reuse one emulator while the tests hit another — non-hermetic).
         $env:AZURITE_BLOB_ENDPOINT = "http://${blobHost}:${blobPort}/devstoreaccount1"
         Write-Host "Running Azurite-backed tests against ${blobHost}:${blobPort}."
-        cargo +$env:RUST_MSRV nextest run -p cargo-bench-history --features azure --locked --no-fail-fast azure azurite
+        cargo +$env:RUST_MSRV nextest run -p cargo-bench-history --locked --no-fail-fast azure azurite
     } finally {
         if ($startedByUs) {
             Write-Host "Stopping the Azurite emulator we started."
@@ -290,7 +290,7 @@ test-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_AZURE_ACCOUNT', ''):
     $env:ENABLE_AZURE = "1"
 
     Write-Host "Running real-Azure tests against account '$account' (Microsoft Entra ID; requires az login)."
-    cargo +$env:RUST_MSRV nextest run -p cargo-bench-history --features azure real_azure --locked --no-fail-fast
+    cargo +$env:RUST_MSRV nextest run -p cargo-bench-history real_azure --locked --no-fail-fast
 
 # Runs regular tests as well as doing one iteration of benchmarks.
 # We separate it from "test" because benchmarks are quite slow,

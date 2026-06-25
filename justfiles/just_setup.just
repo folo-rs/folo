@@ -51,7 +51,7 @@ install-tools:
     }
 
     # Azurite is the Azure Blob storage emulator that backs the cargo-bench-history
-    # `azure` feature tests, exercised locally via `just test-azurite`. It is a Node
+    # Azure backend tests, exercised locally via `just test-azurite`. It is a Node
     # package, so npm is a prerequisite (see DEVELOPMENT.md). We install it on every
     # platform because the emulator and those tests are cross-platform. If npm is not
     # present we warn and continue rather than fail, so the rest of the toolchain still

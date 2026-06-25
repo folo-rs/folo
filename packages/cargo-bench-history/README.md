@@ -8,7 +8,7 @@ data".
 
 Most benchmark tooling only reports the current run, or at best compares against
 the previous local run. `cargo-bench-history` instead stores **every** run as an
-immutable record — on the local filesystem or, with the `azure` feature, in an
+immutable record — on the local filesystem or in an
 Azure Blob container — and reconstructs per-benchmark series in git first-parent
 commit order, so historical trends become analyzable.
 

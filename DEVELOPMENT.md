@@ -76,8 +76,8 @@ Validation:
 
 # Testing Azure functionality
 
-The `cargo-bench-history` package has an optional `azure` feature with an Azure Blob storage
-backend. Its tests are special: they are **not** exercised by `just test`, because they need
+The `cargo-bench-history` package has an Azure Blob storage backend. Its tests are
+special: they are **not** exercised by `just test`, because they need
 either a local storage emulator or a real cloud account that an ordinary test run cannot assume
 is present. Under `just test` these tests self-skip (no emulator is started), so they never break
 a normal test run. To actually exercise them, use one of the dedicated recipes below.

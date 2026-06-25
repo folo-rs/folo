@@ -14,8 +14,8 @@
 //!
 //! Most benchmark tooling only reports the current run, or at best compares
 //! against the previous local run. `cargo-bench-history` instead stores *every*
-//! run as an immutable result set — on the local filesystem or, with the `azure`
-//! feature, in an Azure Blob container — and reconstructs each benchmark's series
+//! run as an immutable result set — on the local filesystem or in an Azure Blob
+//! container — and reconstructs each benchmark's series
 //! in git first-parent commit order, so historical trends become analyzable
 //! ("benchmark X has been getting incrementally slower over the past 12 months",
 //! "scenario Y regressed after commit Z, visible only in hindsight against noisy
@@ -191,7 +191,7 @@
 //! `install` writes a starter `.cargo/bench_history.toml`. It carries an optional
 //! `[project]` id (used to namespace stored data; defaults to the workspace
 //! directory name) and a `[storage]` section selecting either the local filesystem
-//! or, behind the `azure` feature, an Azure Blob container:
+//! or an Azure Blob container:
 //!
 //! ```toml
 //! # [project]

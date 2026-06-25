@@ -672,8 +672,8 @@ mod tests {
     //
     // These exercise the real put/get/list paths and the error classification
     // that pure tests cannot reach. They require an Azurite blob endpoint (the
-    // CI `azure` job provides one; see the package AGENTS.md for running them
-    // locally) and so are network-bound: ignored under Miri and serialized.
+    // CI `test-azurite` job provides one; see the package AGENTS.md for running
+    // them locally) and so are network-bound: ignored under Miri and serialized.
     // Each test uses a freshly named container, so they never share state even
     // against a shared emulator.
     // =======================================================================
@@ -700,9 +700,9 @@ mod tests {
 
     /// Whether an Azurite blob endpoint is reachable via a short TCP connect.
     ///
-    /// The `azure` feature enables these tests under `--all-features`, where the
-    /// runner usually has no emulator. A reachability probe lets the test self-skip
-    /// there while still running for real wherever Azurite is provided.
+    /// These tests are always compiled, but the runner usually has no emulator. A
+    /// reachability probe lets the test self-skip there while still running for
+    /// real wherever Azurite is provided.
     fn azurite_reachable() -> bool {
         let endpoint = azurite_endpoint();
         let Ok(url) = Url::parse(&endpoint) else {

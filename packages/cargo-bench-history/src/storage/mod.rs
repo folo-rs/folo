@@ -1,12 +1,9 @@
 //! The storage abstraction: an immutable, list-by-prefix object store that both a
-//! local filesystem and an Azure Blob container (behind the `azure` feature)
-//! implement identically.
+//! local filesystem and an Azure Blob container implement identically.
 
-#[cfg(feature = "azure")]
 mod azure;
 mod facade;
 mod local;
-#[cfg(feature = "azure")]
 mod sas;
 
 pub(crate) use facade::build_storage;
@@ -99,7 +96,7 @@ pub enum StorageError {
         key: String,
     },
     /// The storage backend is misconfigured (e.g. conflicting Azure
-    /// authentication settings, or a backend the build does not support).
+    /// authentication settings).
     Config {
         /// Human-readable description of the misconfiguration.
         message: String,
@@ -151,13 +148,6 @@ pub(crate) fn is_plain_segment(segment: &str) -> bool {
 ///
 /// Returns [`StorageError::InvalidKey`] if any segment of `key` is not a single
 /// ordinary path component.
-#[cfg_attr(
-    not(any(test, feature = "azure")),
-    expect(
-        dead_code,
-        reason = "outside the azure feature the only caller, MemoryStorage, is test-only"
-    )
-)]
 pub(crate) fn validate_key(key: &str) -> Result<(), StorageError> {
     for segment in key.split('/') {
         if !is_plain_segment(segment) {
