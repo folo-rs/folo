@@ -148,13 +148,13 @@ test FILTER="":
 # targets a REAL account via Microsoft Entra ID. Mirrors the CI `test-azurite` job
 # for local verification.
 #
-# Requires the Azurite emulator (install with `npm install -g azurite`). If an
-# emulator is already listening on 127.0.0.1:10000 this recipe reuses it; otherwise
-# it starts one (in-memory, no persisted state) and stops it again when the tests
-# finish — even on failure. BENCH_HISTORY_REQUIRE_AZURITE is set so an unreachable
-# emulator is a hard error rather than a silent skip, mirroring the CI job. The
-# `azure azurite` test filter selects the Azure-backend tests by the naming
-# convention (the `storage::azure` unit tests and the `*_in_azurite` integration
+# Requires the Azurite emulator (installed by `just install-tools`, or manually via
+# `npm install -g azurite`). If an emulator is already listening on 127.0.0.1:10000
+# this recipe reuses it; otherwise it starts one (in-memory, no persisted state) and
+# stops it again when the tests finish — even on failure. BENCH_HISTORY_REQUIRE_AZURITE
+# is set so an unreachable emulator is a hard error rather than a silent skip, mirroring
+# the CI job. The `azure azurite` test filter selects the Azure-backend tests by the
+# naming convention (the `storage::azure` unit tests and the `*_in_azurite` integration
 # tests); the `*_in_real_azure` tests it also matches self-skip without ENABLE_AZURE.
 [group('testing')]
 [script]

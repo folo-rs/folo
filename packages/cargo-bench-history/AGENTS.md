@@ -714,8 +714,8 @@ blob emulator. They **self-skip** when no emulator is reachable, so a normal
 `--all-features` run stays green without one; they run for real once Azurite is
 up.
 
-The `just test-azurite` recipe wraps the whole flow — install the emulator once
-with `npm install -g azurite`, then:
+The `just test-azurite` recipe wraps the whole flow. Install the emulator once with
+`just install-tools` (or manually with `npm install -g azurite`), then:
 
 ```powershell
 just test-azurite
