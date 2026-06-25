@@ -25,7 +25,7 @@ use crate::model::{DiscriminantSet, Engine};
 use crate::model::{EnvironmentInfo, RunContext, ToolchainInfo, detect_environment};
 use crate::probe::{EnvironmentProbe, SystemProbe};
 use crate::process::{BenchRunner, TokioBenchRunner};
-use crate::report::{Reporter, StderrReporter};
+use crate::report::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, StorageError, build_storage};
 use crate::text::count_noun;
 use crate::wiring::{resolve_config_path, resolve_project_id, resolve_repo};
@@ -245,17 +245,16 @@ where
         deps.target_root.to_string_lossy().into_owned(),
     ));
 
-    if deps.reporter.enabled() {
-        deps.reporter
-            .note(&format!("running benchmark command: {}", argv.join(" ")));
+    deps.reporter
+        .note_with(|| format!("running benchmark command: {}", argv.join(" ")));
+    deps.reporter.note_with(|| {
         let rendered_env = env
             .iter()
             .map(|(name, value)| format!("{name}={value}"))
             .collect::<Vec<_>>()
             .join(", ");
-        deps.reporter
-            .note(&format!("injected environment: {rendered_env}"));
-    }
+        format!("injected environment: {rendered_env}")
+    });
 
     let run_start = deps.clock.system_time();
     let status = deps.runner.run_benches(&argv, &env).await?;
