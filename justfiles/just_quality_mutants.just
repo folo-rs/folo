@@ -70,15 +70,6 @@ mutants SHARD="" CAREFUL='false':
         "-e"
         (Escape-Wildcards "packages/cargo-bench-history/src/bin/**")
 
-        # The cargo-bench-history stress harness is an on-demand (`publish = false`) binary that
-        # seeds a giant synthetic history and times each analyze mode by hand - it is never run in
-        # `just test` or CI and has no unit tests of its own (its purpose is manual scaling
-        # measurement, not shipped behavior). It only enters the mutation run when a change to
-        # `cargo-bench-history` makes `cargo-delta` pull in this dependent package, so exclude it to
-        # match the test-support treatment of the other harness/benchmark packages above.
-        "-e"
-        (Escape-Wildcards "packages/cargo-bench-history-stress/**")
-
         # Some of our systems are single-processor, yet the code may only be meaningfully testable
         # on multi-processor systems. As a "good enough" approximation, we skip mutation testing
         # of code that is only testable in a multi-processor system.
