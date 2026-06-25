@@ -45,6 +45,7 @@ pub(crate) fn print(
     println!("discriminant sets: {set_count}");
     println!("benchmarks / set: {}", scenario.benchmarks);
     println!("main commits:     {}", scenario.commits);
+    println!("  with a run:     {}", scenario.commits_with_runs());
     println!("branch commits:   {}", scenario.branch_commits);
     println!("dirty snapshots:  {}", scenario.dirty_runs);
     println!("objects seeded:   {}", stats.objects);

@@ -1694,14 +1694,17 @@ Each iteration ships with tests and docs and leaves the tool runnable.
 32. **`analyze` stress harness** — *Decided:* a separate, `publish = false` binary
      crate (`packages/cargo-bench-history-stress`, run via `just bench-history-stress`
      / `just bench-history-stress-azure`) fabricates a giant synthetic history (default 1000
-     benchmarks × 1000 `main` commits over ~12 months × 6 discriminant sets, plus a
-     short feature branch with dirty snapshots and partial blessings), seeds it into a
-     storage backend, and times each `analyze` mode over it. A full-scale run is
-     on-demand only — launched by hand, so it never runs in `just test` or CI —
-     because it takes ~100 s and writes ~1.3 GiB; the package's own small unit and
-     integration tests do run as a normal workspace member (and so are subject to
-     mutation testing and coverage), exercising the harness at tiny sizes. It supports
-     both storage
+     benchmarks × 2000 `main` commits over ~12 months — roughly half storing a run,
+     the rest left as realistic gaps — across every supported engine crossed with the
+     platforms it runs on: `callgrind` on Linux only, plus `criterion`,
+     `alloc_tracker`, and `all_the_time` on all six `{windows, linux, macos} × {x64,
+     arm}` triples, for 20 discriminant sets; plus a short feature branch with dirty
+     snapshots and partial blessings), seeds it into a storage backend, and times each
+     `analyze` mode over it. A full-scale run is on-demand only — launched by hand, so
+     it never runs in `just test` or CI — because it takes minutes and writes several
+     GiB; the package's own small unit and integration tests do run as a normal
+     workspace member (and so are subject to mutation testing and coverage), exercising
+     the harness at tiny sizes. It supports both storage
      backends so the same scaling question can be asked of local-filesystem and Azure
      Blob storage; Azure upload goes through `azcopy` (installed by
      `just install-tools`) for throughput, against a fresh auto-deleted
@@ -1712,14 +1715,18 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      storage *write* layout (the same object keys the backends already use) and reads
      the data back through the real public `run_with_overrides` entry point, so it
      measures exactly the production path while touching zero production code. The
-     synthetic value model is built on the *deterministic* `callgrind` engine (no
-     dispersion) and shaped by per-benchmark families and cross-cutting divisors so
-     each mode reports an explainable mix of regressions/improvements rather than
-     all-or-nothing; a fixed dataset anchor + SplitMix64 generator make a given seed
-     and sizing reproduce a byte-identical dataset. *Finding (first full-scale run):*
-     all three modes share a ~17 s floor spent loading and deserializing the ~6000
-     stored objects one at a time (`analyze/mod.rs` issues `storage.get(&key).await`
-     in a serial loop), and `history` mode adds ~38 s of per-series change-point
-     detection on top; both are embarrassingly parallel and are flagged for a future
-     optimization pass (critically so for Azure, where the serial loads become serial
-     network round-trips).
+     synthetic value model spans every engine: the injected timeline shapes are sized
+     relatively, so *deterministic* engines (`callgrind`, `alloc_tracker`) store exact
+     values (any step detected exactly) while *noisy* engines (`criterion`,
+     `all_the_time`) store the same shape plus a tight confidence band (well inside the
+     step magnitudes) so the noise-aware detection path is exercised too; per-benchmark
+     families and cross-cutting divisors make each mode report an explainable mix of
+     regressions/improvements rather than all-or-nothing; a fixed dataset anchor +
+     SplitMix64 generator make a given seed and sizing reproduce a byte-identical
+     dataset. *Finding (full-scale run, default sizes, ~20000 objects / ~5.7 GiB on
+     local FS):* `history` ~240 s, `tip` ~126 s, `branch` ~81 s. All three modes share
+     a multi-second floor spent loading and deserializing the ~20000 stored objects one
+     at a time (`analyze/mod.rs` issues `storage.get(&key).await` in a serial loop), and
+     `history`/`tip` add per-series change-point detection over 20000 series on top; both
+     are embarrassingly parallel and are flagged for a future optimization pass
+     (critically so for Azure, where the serial loads become serial network round-trips).

@@ -22,8 +22,10 @@ pub(crate) struct Cli {
     #[arg(long, default_value_t = 1000)]
     pub(crate) benchmarks: usize,
 
-    /// Number of first-parent commits on the synthetic `main` history.
-    #[arg(long, default_value_t = 1000)]
+    /// Number of first-parent commits on the synthetic `main` history. Roughly
+    /// half of them store a benchmark run; the rest are gaps, exercising the
+    /// "commit with no run" path.
+    #[arg(long, default_value_t = 2000)]
     pub(crate) commits: usize,
 
     /// Number of commits on the synthetic feature branch (drives `branch` mode).

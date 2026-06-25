@@ -21,16 +21,20 @@ normal workspace member under `just test`, CI, mutation testing, and coverage.
 By default the harness fabricates:
 
 * **1000 benchmarks** per discriminant set,
-* across **1000 first-parent `main` commits** spread over the past ~12 months,
-* in **6 discriminant sets** — `{windows, linux, macos} × {x64, arm}`, all on the
-  deterministic `callgrind` engine,
+* across **2000 first-parent `main` commits** spread over the past ~12 months, of which
+  roughly **half store a run** — every other commit is a gap, exercising the realistic
+  "commit with no run" path,
+* in **every supported engine crossed with the platforms it runs on** — `callgrind` on
+  the two Linux triples only (it drives Valgrind), and `criterion`, `alloc_tracker`, and
+  `all_the_time` on all of `{windows, linux, macos} × {x64, arm}`, for **20 discriminant
+  sets** in total,
 * plus a short **feature branch** (6 commits) with a few **dirty** (uncommitted-tree)
   snapshots on its tip,
 * and **blessings** ~75% of the way back for one benchmark family, applied in some
   discriminant sets but not others.
 
-That is ~6000 stored objects and ~1.34 GiB of JSON. Sizes are all overridable (see
-flags), so `--commits 100 --benchmarks 100` gives a quick smoke run.
+That is roughly 20000 stored objects and ~5.7 GiB of JSON. Sizes are all overridable
+(see flags), so `--commits 100 --benchmarks 100` gives a quick smoke run.
 
 It then reads the data back through the real public
 `cargo_bench_history::run_with_overrides` entry point — the exact production path —
@@ -38,9 +42,14 @@ and reports how long each requested mode took.
 
 ### Why the values are shaped the way they are
 
-The synthetic values are built on `callgrind` instruction counts: a *deterministic*
-engine whose values carry no dispersion, so an injected step of any magnitude is
-detected exactly. Each benchmark belongs to a *family* (`index % 5`) that fixes its
+The dataset spans every engine, so it exercises both detection paths. The injected
+timeline shapes are sized in *relative* terms, so they read the same whichever metric an
+engine records: **deterministic** engines (`callgrind` instruction counts, `alloc_tracker`
+allocation counts) store an exact value with no dispersion, so any non-zero step is
+detected exactly; **noisy** engines (`criterion` wall time, `all_the_time` processor time)
+store the same shape plus a tight confidence band — kept well below the injected step
+magnitudes — so the seeded findings still surface while the noise-aware detection path is
+exercised too. Each benchmark belongs to a *family* (`index % 5`) that fixes its
 timeline shape (gradual drift, mid-step up, step down, blessable step, stable), and a
 couple of cross-cutting rules inject `tip`-only and `branch`-only changes. The result
 is that each mode reports a sensible, explainable *mix* of regressions and
@@ -93,7 +102,7 @@ distorts the timings badly.
 | --- | --- | --- |
 | `--storage <local\|azure>` | `local` | Storage backend to seed and analyze against. |
 | `--benchmarks <N>` | `1000` | Benchmark cases per discriminant set. |
-| `--commits <N>` | `1000` | First-parent commits on the synthetic `main` history. |
+| `--commits <N>` | `2000` | First-parent commits on the synthetic `main` history (~half store a run). |
 | `--branch-commits <N>` | `6` | Commits on the synthetic feature branch. |
 | `--dirty-runs <N>` | `3` | Dirty (uncommitted-tree) snapshots on the feature tip. |
 | `--dir <PATH>` | temp dir | Local-storage root (local only). |
@@ -114,13 +123,14 @@ so it can be redirected to a file cleanly; all progress logging goes to stderr.
 cargo-bench-history stress results
 ==================================
 storage:          local filesystem
-discriminant sets: 6
+discriminant sets: 20
 benchmarks / set: 1000
-main commits:     1000
+main commits:     2000
+  with a run:     1002
 ...
 mode        duration   objects   series  regressions  improvements  notable
 ----        --------   -------   ------  -----------  ------------  -------
-history      55.190s      6000     6000         3000          1200      yes
-branch       16.938s      6054     6000         3088             0      yes
-tip          17.578s      6000     6000         1884             0      yes
+history     240.400s     20040    20000        11400          4000      yes
+branch       81.164s     20220    20000         8119             0      yes
+tip         126.255s     20040    20000         4228             0      yes
 ```

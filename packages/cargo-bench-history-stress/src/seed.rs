@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::thread;
 
 use cargo_bench_history_core::model::{
-    BenchmarkIdPrefix, BenchmarkResult, BlessingRecord, DiscriminantSet, EnvironmentInfo, GitInfo,
-    Metric, MetricKind, Run, RunContext, ToolchainInfo,
+    BenchmarkIdPrefix, BenchmarkResult, BlessingRecord, DiscriminantSet, Engine, EnvironmentInfo,
+    GitInfo, Run, RunContext, ToolchainInfo,
 };
 use jiff::Timestamp;
 
@@ -103,7 +103,7 @@ pub(crate) fn seed(
         series
     ));
     logger.detail(
-        "each clean object holds every benchmark's instruction count at one commit; objects fan \
+        "each clean object holds every benchmark's primary metric at one commit; objects fan \
          out across CPU cores because serialization, not I/O, dominates generation",
     );
 
@@ -128,6 +128,9 @@ fn plan_tasks(scenario: Scenario, sets: &[DiscriminantSet], repo: &SeededRepo) -
 
     for set in 0..sets.len() {
         for (index, commit) in repo.main.iter().enumerate() {
+            if !scenario.commit_has_run(index) {
+                continue;
+            }
             tasks.push(Task::CleanMain {
                 set,
                 index,
@@ -276,7 +279,10 @@ fn write_one(
     Ok(body.len() as u64)
 }
 
-/// Builds a [`Run`] whose every benchmark's instruction count comes from `value`.
+/// Builds a [`Run`] whose every benchmark's primary metric comes from `value`.
+///
+/// The metric kind (and whether it carries a noise band) follows the set's engine,
+/// so each engine's runs are well-formed for the detection path that engine takes.
 fn clean_run(
     scenario: Scenario,
     set: &DiscriminantSet,
@@ -286,11 +292,12 @@ fn clean_run(
     dirty: bool,
     value: impl Fn(usize) -> f64,
 ) -> Run {
+    let engine = Engine::from_name(&set.engine).unwrap_or(Engine::Callgrind);
     let results: Vec<BenchmarkResult> = (0..scenario.benchmarks)
         .map(|b| {
             BenchmarkResult::new(
                 benchmark_id(b),
-                vec![Metric::new(MetricKind::InstructionCount, value(b).round())],
+                vec![scenario::metric_for(engine, value(b))],
             )
         })
         .collect();

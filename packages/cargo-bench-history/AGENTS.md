@@ -821,4 +821,13 @@ Key facts when touching it:
   across runs. The synthetic value model is shaped so each mode reports a sensible,
   explainable mix of regressions/improvements rather than all-or-nothing (see the
   family/divisor comments in `scenario.rs`).
+* **Dataset shape.** The default fabricates 1000 benchmarks × 2000 `main` commits
+  (only ~half store a run — the rest are gaps that exercise the "commit with no run"
+  path) across **all** engines crossed with the platforms they run on (`callgrind`
+  Linux-only; `criterion`/`alloc_tracker`/`all_the_time` on all six triples), for 20
+  discriminant sets. Deterministic engines (`callgrind`, `alloc_tracker`) store exact
+  values with no dispersion; noisy engines (`criterion`, `all_the_time`) store the
+  same shape plus a tight confidence band — kept well below the injected step
+  magnitudes — so both the exact and the noise-aware detection paths are exercised.
+  `scenario::metric_for` picks the metric kind and band per engine.
 

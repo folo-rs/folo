@@ -2,11 +2,16 @@
 //! identities, and the deterministic value generator that shapes each series.
 //!
 //! Everything here is a pure function of the [`Scenario`] sizes and seed, so a
-//! given seed and size set reproduce a byte-identical dataset. The generator is
-//! built around `callgrind` instruction counts: a *deterministic* engine whose
-//! values carry no dispersion, so an injected step of any magnitude is detected
-//! exactly. That makes the seeded findings reliable rather than dependent on the
-//! noise-gating that a wall-clock engine would require.
+//! given seed and size set reproduce a byte-identical dataset.
+//!
+//! The dataset spans every engine the tool supports. The injected timeline shapes
+//! are sized in *relative* terms, so they read the same whichever metric an engine
+//! records: deterministic engines (Callgrind instruction counts, `alloc_tracker`
+//! allocation counts) store an exact value with no dispersion, so any non-zero
+//! step is detected exactly; noisy engines (Criterion wall time, `all_the_time`
+//! processor time) store the same shape plus a tight confidence band — kept well
+//! below the injected step magnitudes — so the seeded findings still surface while
+//! the noise-aware detection path is exercised too.
 //!
 //! Each benchmark belongs to a *family* (`b % FAMILY_COUNT`) that fixes its
 //! timeline shape:
@@ -41,7 +46,7 @@
               behavior is intentional and cannot misbehave for the sizes used here"
 )]
 
-use cargo_bench_history_core::model::{BenchmarkId, DiscriminantSet, Engine};
+use cargo_bench_history_core::model::{BenchmarkId, DiscriminantSet, Engine, Metric, MetricKind};
 use jiff::Timestamp;
 use nonempty::nonempty;
 
@@ -113,6 +118,16 @@ const BRANCH_REGRESSION: f64 = 0.20;
 /// Relative per-snapshot wobble distinguishing the seeded dirty snapshots.
 const DIRTY_WOBBLE: f64 = 0.02;
 
+/// Per-measurement dispersion, as a fraction of the value, stamped onto noisy
+/// engines' metrics. Kept far below the injected step magnitudes (10–25%) so the
+/// seeded findings still surface on noisy engines while their runs stay
+/// well-formed and exercise the noise-aware detection path.
+const NOISE_FRACTION: f64 = 0.01;
+
+/// Half-width multiplier (≈ a 95% normal confidence interval) applied to the
+/// noisy dispersion band around each point estimate.
+const NOISE_CI_Z: f64 = 1.96;
+
 /// The six target triples spanning {windows, linux, macos} × {x64, arm}.
 const TRIPLES: [&str; 6] = [
     "x86_64-pc-windows-msvc",
@@ -123,16 +138,67 @@ const TRIPLES: [&str; 6] = [
     "aarch64-apple-darwin",
 ];
 
-/// The discriminant-set matrix: one synthetic `callgrind` set per target triple.
+/// Machine key for the hardware-dependent engines, whose series are partitioned
+/// per machine. The synthetic dataset attributes them all to one fixed rig.
+const MACHINE_KEY: &str = "stress-rig";
+
+/// Whether `triple` targets Linux — the only platform Callgrind can run on (it
+/// drives Valgrind), so Callgrind sets exist for the Linux triples only.
+fn targets_linux(triple: &str) -> bool {
+    triple.contains("linux")
+}
+
+/// The discriminant-set matrix: every supported engine crossed with the target
+/// triples it can run on.
 ///
-/// `callgrind` is hardware-independent, so every set shares the `synthetic`
-/// machine key and the six sets differ only by target triple — exactly the
-/// {windows, linux, macos} × {x64, arm} matrix.
+/// Callgrind is gated to Linux because Valgrind runs there only; the other engines
+/// span all six triples. Hardware-dependent engines (Criterion, `all_the_time`)
+/// carry a [`MACHINE_KEY`]; the hardware-independent ones (Callgrind,
+/// `alloc_tracker`) use the literal `synthetic` machine key. The data is not meant
+/// to be realistic across engines — the point is that every engine's partition is
+/// populated so `analyze` exercises each one.
 pub(crate) fn discriminant_sets() -> Vec<DiscriminantSet> {
-    TRIPLES
-        .iter()
-        .map(|triple| DiscriminantSet::new(Engine::Callgrind, triple, None))
-        .collect()
+    let mut sets = Vec::new();
+    for engine in Engine::ALL {
+        let machine = engine.is_hardware_dependent().then_some(MACHINE_KEY);
+        for triple in TRIPLES {
+            if engine == Engine::Callgrind && !targets_linux(triple) {
+                continue;
+            }
+            sets.push(DiscriminantSet::new(engine, triple, machine));
+        }
+    }
+    sets
+}
+
+/// The metric a synthetic run records for `engine` at point estimate `value`.
+///
+/// Deterministic engines record an exact integer count with no dispersion; noisy
+/// engines record the estimate plus a tight confidence band, mirroring a real run
+/// so the noise-aware gates have the dispersion they need.
+pub(crate) fn metric_for(engine: Engine, value: f64) -> Metric {
+    let kind = primary_metric(engine);
+    if engine.is_hardware_dependent() {
+        let std_dev = value * NOISE_FRACTION;
+        let half = std_dev * NOISE_CI_Z;
+        Metric::new(kind, value).with_dispersion(
+            Some(std_dev),
+            Some(value - half),
+            Some(value + half),
+        )
+    } else {
+        Metric::new(kind, value.round())
+    }
+}
+
+/// The primary metric kind each engine reports.
+fn primary_metric(engine: Engine) -> MetricKind {
+    match engine {
+        Engine::Callgrind => MetricKind::InstructionCount,
+        Engine::AllocTracker => MetricKind::AllocationCount,
+        Engine::Criterion => MetricKind::WallTime,
+        Engine::AllTheTime => MetricKind::ProcessorTime,
+    }
 }
 
 /// Whether the discriminant set at `set_index` receives the family-3 blessing.
@@ -175,6 +241,26 @@ impl Scenario {
     /// the blessing is recorded (~75% along, ≈ three months before the tip).
     pub(crate) fn bless_index(&self) -> usize {
         3 * self.commits.saturating_sub(1) / 4
+    }
+
+    /// Whether `main` commit `index` stores a run.
+    ///
+    /// Roughly half the commits do — every even index — so the analysis walks a
+    /// git topology in which many commits have no stored result, exercising the
+    /// "commit with no run" path that a real, sparsely-benchmarked history hits.
+    /// The tip and the blessed commit are always populated so `tip`/`branch`
+    /// detection and blessing stay well-defined regardless of where the parity
+    /// falls.
+    pub(crate) fn commit_has_run(&self, index: usize) -> bool {
+        let last = self.commits.saturating_sub(1);
+        index.is_multiple_of(2) || index == last || index == self.bless_index()
+    }
+
+    /// How many `main` commits store a run (the rest are gaps in the history).
+    pub(crate) fn commits_with_runs(&self) -> usize {
+        (0..self.commits)
+            .filter(|&i| self.commit_has_run(i))
+            .count()
     }
 
     /// The deterministic base instruction count for benchmark `b` in set `s`.
@@ -319,15 +405,58 @@ mod tests {
     }
 
     #[test]
-    fn discriminant_sets_span_the_six_os_arch_matrix() {
+    fn discriminant_sets_cover_every_engine_with_platform_constraints() {
         let sets = discriminant_sets();
-        assert_eq!(sets.len(), TRIPLES.len());
-        // Each triple yields one distinct set; none collide.
+
+        // Callgrind exists for the two Linux triples only; the other engines span
+        // all six. Expected: 2 + 6 + 6 + 6 = 20 distinct sets.
+        let expected: usize = Engine::ALL
+            .iter()
+            .map(|engine| {
+                TRIPLES
+                    .iter()
+                    .filter(|t| *engine != Engine::Callgrind || targets_linux(t))
+                    .count()
+            })
+            .sum();
+        assert_eq!(sets.len(), expected);
+        assert_eq!(sets.len(), 20);
+
+        // Every engine is represented at least once.
+        for engine in Engine::ALL {
+            assert!(
+                sets.iter().any(|set| set.engine == engine.as_str()),
+                "missing engine {engine}"
+            );
+        }
+
+        // Callgrind sets are Linux-only.
+        for set in &sets {
+            if set.engine == Engine::Callgrind.as_str() {
+                assert!(
+                    targets_linux(&set.target_triple),
+                    "callgrind set on non-Linux triple {}",
+                    set.target_triple
+                );
+            }
+        }
+
+        // Hardware-dependent engines carry the machine key; the others are synthetic.
+        for set in &sets {
+            let engine = Engine::from_name(&set.engine).expect("known engine");
+            if engine.is_hardware_dependent() {
+                assert_eq!(set.machine_key, MACHINE_KEY, "{}", set.engine);
+            } else {
+                assert!(set.is_synthetic(), "{}", set.engine);
+            }
+        }
+
+        // No two sets collide on their storage key.
         let keys: std::collections::HashSet<_> = sets
             .iter()
             .map(|set| set.clean_key(PROJECT, "abc"))
             .collect();
-        assert_eq!(keys.len(), TRIPLES.len());
+        assert_eq!(keys.len(), sets.len());
     }
 
     #[test]
@@ -529,5 +658,73 @@ mod tests {
         let (main, feature) = commit_times(anchor, 1, 1);
         assert_eq!(main.len(), 1);
         assert_eq!(feature.len(), 1);
+    }
+
+    #[test]
+    fn roughly_half_the_commits_store_a_run() {
+        let s = Scenario {
+            benchmarks: 3,
+            commits: 10,
+            branch_commits: 1,
+            dirty_runs: 1,
+            seed: 7,
+        };
+        // commits == 10 -> bless_index 3*9/4 = 6 (even, already a run); the last
+        // index 9 is odd and force-populated. So every even index is a run, plus
+        // the odd tip: {0,2,4,6,8} ∪ {9}.
+        assert_eq!(s.bless_index(), 6);
+        for i in 0..s.commits {
+            let expected = i.is_multiple_of(2) || i == s.commits - 1;
+            assert_eq!(s.commit_has_run(i), expected, "index {i}");
+        }
+        assert_eq!(s.commits_with_runs(), 6);
+        // The tip and the blessed commit are always populated, whatever the parity.
+        assert!(s.commit_has_run(s.commits - 1));
+        assert!(s.commit_has_run(s.bless_index()));
+    }
+
+    #[test]
+    fn odd_tip_and_bless_indices_are_forced_populated() {
+        // commits == 8 -> last index 7 (odd) and bless_index 3*7/4 = 5 (odd): both
+        // would be gaps under pure parity, so the overrides must populate them.
+        let s = Scenario {
+            benchmarks: 3,
+            commits: 8,
+            branch_commits: 1,
+            dirty_runs: 1,
+            seed: 7,
+        };
+        assert_eq!(s.bless_index(), 5);
+        assert!(s.commit_has_run(7), "tip must be populated");
+        assert!(s.commit_has_run(5), "blessed commit must be populated");
+        // Five even commits plus the two odd overrides.
+        assert_eq!(s.commits_with_runs(), 6);
+    }
+
+    #[test]
+    fn metric_for_matches_engine_determinism() {
+        // Deterministic engines store an exact integer count with no dispersion.
+        for engine in [Engine::Callgrind, Engine::AllocTracker] {
+            let metric = metric_for(engine, 1234.6);
+            assert_eq!(metric.kind, primary_metric(engine));
+            assert!(close(metric.value, 1235.0));
+            assert_eq!(metric.std_dev, None);
+            assert_eq!(metric.interval_low, None);
+            assert_eq!(metric.interval_high, None);
+        }
+
+        // Noisy engines carry a tight band well inside the injected step sizes.
+        for engine in [Engine::Criterion, Engine::AllTheTime] {
+            let value = 1000.0;
+            let metric = metric_for(engine, value);
+            assert_eq!(metric.kind, primary_metric(engine));
+            assert!(close(metric.value, value));
+            let half = value * NOISE_FRACTION * NOISE_CI_Z;
+            assert!(close(metric.std_dev.unwrap(), value * NOISE_FRACTION));
+            assert!(close(metric.interval_low.unwrap(), value - half));
+            assert!(close(metric.interval_high.unwrap(), value + half));
+            // The half-width stays far below the smallest injected step (~10%).
+            assert!(half < value * 0.05, "noise band too wide: {half}");
+        }
     }
 }
