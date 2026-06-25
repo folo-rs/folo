@@ -184,13 +184,13 @@ test-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_AZURE_ACCOUNT', ''):
 # point is to observe how long `analyze` takes at scale, not to measure real code.
 #
 # Pass any harness flags through, e.g. a smaller scenario for a quick check:
-#   just stress --commits 100 --benchmarks 100
-#   just stress --verbose --modes history
+#   just bench-history-stress --commits 100 --benchmarks 100
+#   just bench-history-stress --verbose --modes history
 # Release build, because both seeding and analysis are CPU-bound and a debug build
 # distorts the timings badly.
 [group('testing')]
 [script]
-stress *ARGS:
+bench-history-stress *ARGS:
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
@@ -208,22 +208,22 @@ stress *ARGS:
 # BENCH_HISTORY_AZURE_ACCOUNT from constants.env (shared with the test-azure job);
 # override it by passing a name as the first argument. Any further harness flags
 # follow, e.g.:
-#   just stress-azure                       # default account, full scenario
-#   just stress-azure mystorageacct --keep  # custom account, keep the container
+#   just bench-history-stress-azure                       # default account, full scenario
+#   just bench-history-stress-azure mystorageacct --keep  # custom account, keep the container
 [group('testing')]
 [script]
-stress-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_AZURE_ACCOUNT', '') *ARGS:
+bench-history-stress-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_AZURE_ACCOUNT', '') *ARGS:
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
     $account = "{{ ACCOUNT }}"
     if ([string]::IsNullOrEmpty($account)) {
-        Write-Error "No storage account specified. Pass it (just stress-azure <account> ...) or set BENCH_HISTORY_AZURE_ACCOUNT in constants.env. Deploy one with infra/azure-bench-history/deploy.ps1."
+        Write-Error "No storage account specified. Pass it (just bench-history-stress-azure <account> ...) or set BENCH_HISTORY_AZURE_ACCOUNT in constants.env. Deploy one with infra/azure-bench-history/deploy.ps1."
         exit 1
     }
 
     if (-not (Get-Command azcopy -ErrorAction SilentlyContinue)) {
-        Write-Error "stress-azure requires the 'azcopy' binary on PATH for the bulk upload. Run 'just install-tools' to install it."
+        Write-Error "bench-history-stress-azure requires the 'azcopy' binary on PATH for the bulk upload. Run 'just install-tools' to install it."
         exit 1
     }
 

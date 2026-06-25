@@ -1692,13 +1692,16 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      account. `deploy.ps1`/`teardown.ps1`/`cleanup-containers.ps1` wrap deploy,
      teardown and the leftover-container sweep.
 32. **`analyze` stress harness** — *Decided:* a separate, `publish = false` binary
-     crate (`packages/cargo-bench-history-stress`, run via `just stress` /
-     `just stress-azure`) fabricates a giant synthetic history (default 1000
+     crate (`packages/cargo-bench-history-stress`, run via `just bench-history-stress`
+     / `just bench-history-stress-azure`) fabricates a giant synthetic history (default 1000
      benchmarks × 1000 `main` commits over ~12 months × 6 discriminant sets, plus a
      short feature branch with dirty snapshots and partial blessings), seeds it into a
-     storage backend, and times each `analyze` mode over it. It is on-demand only —
-     **not** part of `just test`, CI, mutation testing, or coverage — because a
-     full-scale run takes ~100 s and writes ~1.3 GiB. It supports both storage
+     storage backend, and times each `analyze` mode over it. A full-scale run is
+     on-demand only — launched by hand, so it never runs in `just test` or CI —
+     because it takes ~100 s and writes ~1.3 GiB; the package's own small unit and
+     integration tests do run as a normal workspace member (and so are subject to
+     mutation testing and coverage), exercising the harness at tiny sizes. It supports
+     both storage
      backends so the same scaling question can be asked of local-filesystem and Azure
      Blob storage; Azure upload goes through `azcopy` (installed by
      `just install-tools`) for throughput, against a fresh auto-deleted

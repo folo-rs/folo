@@ -51,13 +51,13 @@ install-tools:
     }
 
     # azcopy drives the bulk upload in the cargo-bench-history Azure stress harness
-    # (`just stress-azure`). It is not a cargo crate, so fetch the official static
-    # binary for this OS and drop it next to the cargo tools (already on PATH).
-    # Skipped when azcopy is already available.
+    # (`just bench-history-stress-azure`). It is not a cargo crate, so fetch the
+    # official static binary for this OS and drop it next to the cargo tools (already
+    # on PATH). Skipped when azcopy is already available.
     if (Get-Command azcopy -ErrorAction SilentlyContinue) {
         Write-Host "azcopy already installed; skipping."
     } else {
-        Write-Host "Installing azcopy (used by 'just stress-azure')..."
+        Write-Host "Installing azcopy (used by 'just bench-history-stress-azure')..."
 
         # Land the binary in the cargo bin directory, which is already on PATH for
         # every other tool installed by this recipe.

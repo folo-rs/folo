@@ -792,9 +792,10 @@ so the error-mapping and signing behavior is still mutation-covered.
 The sibling `cargo-bench-history-stress` package (under `packages/`) is an
 **on-demand** binary that fabricates a giant synthetic benchmark history, seeds it
 into a storage backend, and times each `analyze` mode (`history`, `branch`, `tip`)
-over it. Its purpose is to observe how `analyze` scales — it is **not** part of
-`just test`, CI, mutation testing, or coverage. See that package's `README.md` for
-the dataset shape and flags.
+over it. Its purpose is to observe how `analyze` scales; a full-scale run is on-demand
+only and never runs automatically in `just test` or CI. The package's own small unit
+and integration tests do run as a normal workspace member (and are subject to mutation
+testing and coverage). See that package's `README.md` for the dataset shape and flags.
 
 Key facts when touching it:
 
@@ -812,8 +813,9 @@ Key facts when touching it:
   for throughput, authenticating as the Entra user via the Azure CLI — same
   `az login` + `BENCH_HISTORY_AZURE_ACCOUNT` contract as `test-azure`. Each run uses
   a fresh `bh-stress-<unix>` container, deleted on exit unless `--keep`.
-* **Run it** with `just stress` (local) or `just stress-azure` (real Azure); both
-  pass extra flags through to the binary, e.g. `just stress --commits 100`.
+* **Run it** with `just bench-history-stress` (local) or `just bench-history-stress-azure`
+  (real Azure); both pass extra flags through to the binary, e.g.
+  `just bench-history-stress --commits 100`.
 * **Determinism.** A given `--seed` and sizing reproduce a byte-identical dataset
   (fixed dataset anchor + SplitMix64 value generator), so timings are comparable
   across runs. The synthetic value model is shaped so each mode reports a sensible,

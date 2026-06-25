@@ -9,8 +9,12 @@ data-loading and detection path under a realistic, large-scale load so the per-m
 wall-clock cost can be observed — against either local-filesystem or Azure Blob
 storage.
 
-This package is `publish = false` and is **not** part of `just test`, CI, mutation
-testing, or coverage. Run it by hand when you want to know how `analyze` scales.
+This package is `publish = false`. A *full-scale* run is on-demand only — you launch
+it by hand (`just bench-history-stress` / `just bench-history-stress-azure`) when you
+want to know how `analyze`
+scales, so it never runs automatically in `just test` or CI. The package's own small
+unit and integration tests, which exercise the harness at tiny sizes, do run as a
+normal workspace member under `just test`, CI, mutation testing, and coverage.
 
 ## What it builds
 
@@ -51,11 +55,11 @@ anchor + SplitMix64 generator), so timings are comparable across runs.
 Local filesystem (a temporary directory, removed on exit unless `--keep`):
 
 ```powershell
-just stress
+just bench-history-stress
 # or a quick scaled-down run:
-just stress --commits 100 --benchmarks 100
+just bench-history-stress --commits 100 --benchmarks 100
 # pass any flags through:
-just stress --modes history --verbose
+just bench-history-stress --modes history --verbose
 ```
 
 Real Azure Blob storage (a fresh `bh-stress-<unix>` container, deleted on exit unless
@@ -64,11 +68,11 @@ Real Azure Blob storage (a fresh `bh-stress-<unix>` container, deleted on exit u
 ```powershell
 az login
 just install-tools          # one-time: installs azcopy, used for the bulk upload
-just stress-azure           # account from BENCH_HISTORY_AZURE_ACCOUNT in constants.env
-just stress-azure myacct --keep   # custom account; keep the container afterwards
+just bench-history-stress-azure           # account from BENCH_HISTORY_AZURE_ACCOUNT in constants.env
+just bench-history-stress-azure myacct --keep   # custom account; keep the container afterwards
 ```
 
-`just stress-azure` requires `az login` (the harness and `azcopy` authenticate as
+`just bench-history-stress-azure` requires `az login` (the harness and `azcopy` authenticate as
 your Entra user via the Azure CLI) and the `azcopy` binary on `PATH`. It uses the same
 account contract as the `test-azure` job; provision the account with the Bicep in
 [`infra/azure-bench-history/`](../../infra/azure-bench-history/).
