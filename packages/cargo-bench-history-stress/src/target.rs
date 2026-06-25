@@ -314,11 +314,11 @@ async fn run_tool(
         .await
         .map_err(|error| fail(format!("failed to run {program}: {error}")))?;
     if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(fail(format!(
-            "{program} {} failed:\n{}{}",
+            "{program} {} failed:\nstdout: {stdout}\nstderr: {stderr}",
             args.join(" "),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
         )));
     }
     Ok(())
