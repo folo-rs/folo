@@ -69,14 +69,14 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
   - Tests all feature combinations with `cargo hack --feature-powerset`
 
 - **test-azurite** — single-platform (Linux) by choice, package-gated to `cargo-bench-history`
-  - Runs the `azure`-feature tests against a live Azurite blob emulator and also
+  - Runs the Azure storage backend tests against a live Azurite blob emulator and also
     collects coverage so the `azure.rs` network paths reach Codecov.
   - Named for the Azurite emulator it targets; its sibling `test-azure` runs the
     same backend against a real Azure account. Single-platform by choice, not
     limitation: the Azure Blob backend is OS-agnostic network I/O, so one platform
     fully covers it and Linux is the cheapest runner.
-  - The `azure` feature is off by default and its network paths **self-skip** when
-    no emulator is reachable, so the multi-platform `--all-features` jobs
+  - The Azure backend's network paths **self-skip** when
+    no emulator is reachable, so the multi-platform test jobs
     (`test-more`, `coverage`) stay green without one. They run for real only in
     this job: Azurite is provisioned on the runner host (via the `start-azurite`
     composite action) and `BENCH_HISTORY_REQUIRE_AZURITE=1` turns an unreachable
@@ -90,7 +90,7 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
     cannot override the command), so the host-process approach is used instead.
 
 - **test-azure** — single-platform (Linux) by choice, package-gated to `cargo-bench-history`
-  - Additive sibling of `test-azurite`: runs the same `azure`-feature backend
+  - Additive sibling of `test-azurite`: runs the same Azure storage backend
     tests against a **real Azure Storage account** to exercise the **Microsoft
     Entra ID** authentication path that the emulator (account-key/SAS) never
     touches — a real account with shared-key access disabled, reached over HTTPS.
@@ -206,5 +206,5 @@ its args to `gungraun-runner`. Without `gungraun-runner` on `$PATH` the call fai
 The `start-azurite` composite action (`.github/actions/start-azurite`) installs the Azurite
 blob emulator via `npm install -g azurite` and starts it on the runner host at
 `127.0.0.1:10000`, blocking until the port accepts connections. It is Linux-only (uses bash and
-`/dev/tcp`) and is used only by the `test-azurite` job to back the `cargo-bench-history` `azure`
-feature tests. Node.js/npm are preinstalled on the GitHub-hosted Ubuntu runners.
+`/dev/tcp`) and is used only by the `test-azurite` job to back the `cargo-bench-history` Azure
+storage backend tests. Node.js/npm are preinstalled on the GitHub-hosted Ubuntu runners.

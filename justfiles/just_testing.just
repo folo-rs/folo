@@ -143,39 +143,6 @@ miri-example EXAMPLE:
 test FILTER="":
     cargo +{{ env_var('RUST_MSRV') }} nextest run {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast
 
-# Run the cargo-bench-history Azure storage tests against a REAL Azure account
-# (the Microsoft Entra ID auth path), as opposed to the `test` recipe which runs
-# them against the local Azurite emulator. Mirrors the CI `test-azure` job for
-# local verification.
-#
-# Requires `az login` (the tests authenticate as your Entra user via the Azure
-# CLI) and a deployed storage account that grants your user the `Storage Blob
-# Data Contributor` role — see infra/azure-bench-history/ to deploy one. The
-# account defaults to BENCH_HISTORY_AZURE_ACCOUNT from constants.env (shared with
-# CI); override it by passing a name: `just test-azure <account>`.
-#
-# Setting ENABLE_AZURE is what actually runs the real-Azure tests: without it they
-# self-skip, so the account name living in constants.env (and thus in every recipe's
-# dotenv environment) does not make a plain `just test` run them. This recipe sets
-# ENABLE_AZURE only here, so the real-Azure tests run for real only through it.
-[group('testing')]
-[script]
-test-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_AZURE_ACCOUNT', ''):
-    $ErrorActionPreference = "Stop"
-    $PSNativeCommandUseErrorActionPreference = $true
-
-    $account = "{{ ACCOUNT }}"
-    if ([string]::IsNullOrEmpty($account)) {
-        Write-Error "No storage account specified. Pass it (just test-azure <account>) or set BENCH_HISTORY_AZURE_ACCOUNT in constants.env. Deploy one with infra/azure-bench-history/deploy.ps1."
-        exit 1
-    }
-
-    $env:BENCH_HISTORY_AZURE_ACCOUNT = $account
-    $env:ENABLE_AZURE = "1"
-
-    Write-Host "Running real-Azure tests against account '$account' (Microsoft Entra ID; requires az login)."
-    cargo +$env:RUST_MSRV nextest run -p cargo-bench-history --features azure real_azure --locked --no-fail-fast
-
 # Run the cargo-bench-history "stress analyze" harness against LOCAL filesystem
 # storage: it seeds a giant synthetic benchmark history (default 1000 benchmarks ×
 # 1000 commits over 12 months × 6 discriminant sets, plus a short feature branch
@@ -228,7 +195,156 @@ bench-history-stress-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_AZURE_ACCOU
     }
 
     Write-Host "Running the Azure stress harness against account '$account' (Microsoft Entra ID; requires az login)."
-    cargo run --release -p cargo-bench-history-stress --features azure --locked -- --storage azure --account $account {{ ARGS }}
+    cargo run --release -p cargo-bench-history-stress --locked -- --storage azure --account $account {{ ARGS }}
+
+# Run the cargo-bench-history Azure storage tests against a local Azurite blob
+# emulator (the self-signed account-SAS auth path), as opposed to `test-azure` which
+# targets a REAL account via Microsoft Entra ID. Mirrors the CI `test-azurite` job
+# for local verification.
+#
+# Requires the Azurite emulator (installed by `just install-tools`, or manually via
+# `npm install -g azurite`). If an emulator is already listening on 127.0.0.1:10000
+# this recipe reuses it; otherwise it starts one (in-memory, no persisted state) and
+# stops it again when the tests finish — even on failure. BENCH_HISTORY_REQUIRE_AZURITE
+# is set so an unreachable emulator is a hard error rather than a silent skip, mirroring
+# the CI job. The `azure azurite` test filter selects the Azure-backend tests by the
+# naming convention (the `storage::azure` unit tests and the `*_in_azurite` integration
+# tests); the `*_in_real_azure` tests it also matches self-skip without ENABLE_AZURE.
+[group('testing')]
+[script]
+test-azurite:
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    $blobHost = "127.0.0.1"
+    $blobPort = 10000
+
+    # True when something is already accepting connections on the Azurite blob port.
+    function Test-AzuriteReachable {
+        $client = [System.Net.Sockets.TcpClient]::new()
+        try {
+            $client.Connect($blobHost, $blobPort)
+            return $true
+        } catch {
+            return $false
+        } finally {
+            $client.Dispose()
+        }
+    }
+
+    # Stop a process and (on Windows) its descendants. The Windows `.cmd` shim spawns
+    # node as a child, so killing only the shim would orphan the emulator.
+    function Stop-AzuriteProcessTree {
+        param([Parameter(Mandatory)][int] $ProcessId)
+
+        if ($IsWindows) {
+            Get-CimInstance Win32_Process -Filter "ParentProcessId = $ProcessId" -ErrorAction SilentlyContinue |
+                ForEach-Object { Stop-AzuriteProcessTree -ProcessId $_.ProcessId }
+        }
+        Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+    }
+
+    $startedByUs = $false
+    $launcher = $null
+    $emulatorPid = 0
+    try {
+        if (Test-AzuriteReachable) {
+            Write-Host "Azurite already reachable at ${blobHost}:${blobPort}; reusing the running emulator."
+        } else {
+            $shim = if ($IsWindows) { "azurite-blob.cmd" } else { "azurite-blob" }
+            $azurite = Get-Command $shim -ErrorAction SilentlyContinue
+            if (-not $azurite) {
+                throw "Azurite is not installed. Install it with: npm install -g azurite"
+            }
+
+            $azuriteArgs = @(
+                "--blobHost", $blobHost,
+                "--blobPort", "$blobPort",
+                "--inMemoryPersistence",
+                "--skipApiVersionCheck",
+                "--silent",
+                "--loose"
+            )
+
+            Write-Host "Starting Azurite blob emulator on ${blobHost}:${blobPort} (in-memory)."
+            $startParams = @{
+                FilePath     = $azurite.Source
+                ArgumentList = $azuriteArgs
+                PassThru     = $true
+            }
+            if ($IsWindows) { $startParams.WindowStyle = "Hidden" }
+            $launcher = Start-Process @startParams
+            $startedByUs = $true
+
+            $ready = $false
+            foreach ($attempt in 1..30) {
+                if (Test-AzuriteReachable) { $ready = $true; break }
+                Start-Sleep -Seconds 1
+            }
+            if (-not $ready) {
+                throw "Azurite did not become ready on ${blobHost}:${blobPort} within 30 seconds."
+            }
+
+            # The launcher may be a shim that spawns the real emulator as a child, so
+            # resolve the process actually holding the port to stop it directly later.
+            $emulatorPid = $launcher.Id
+            if ($IsWindows) {
+                $listener = Get-NetTCPConnection -LocalPort $blobPort -State Listen -ErrorAction SilentlyContinue |
+                    Select-Object -First 1
+                if ($listener) { $emulatorPid = [int] $listener.OwningProcess }
+            }
+            Write-Host "Azurite is ready (pid $emulatorPid)."
+        }
+
+        $env:BENCH_HISTORY_REQUIRE_AZURITE = "1"
+        # Pin the endpoint to the emulator this recipe manages so a developer's pre-existing
+        # AZURITE_BLOB_ENDPOINT cannot redirect the tests to a different target (the recipe
+        # would then start/reuse one emulator while the tests hit another — non-hermetic).
+        $env:AZURITE_BLOB_ENDPOINT = "http://${blobHost}:${blobPort}/devstoreaccount1"
+        Write-Host "Running Azurite-backed tests against ${blobHost}:${blobPort}."
+        cargo +$env:RUST_MSRV nextest run -p cargo-bench-history --locked --no-fail-fast azure azurite
+    } finally {
+        if ($startedByUs) {
+            Write-Host "Stopping the Azurite emulator we started."
+            if ($emulatorPid -gt 0) { Stop-AzuriteProcessTree -ProcessId $emulatorPid }
+            if ($launcher -and $launcher.Id -ne $emulatorPid) {
+                Stop-AzuriteProcessTree -ProcessId $launcher.Id
+            }
+        }
+    }
+
+# Run the cargo-bench-history Azure storage tests against a REAL Azure account
+# (the Microsoft Entra ID auth path), the counterpart of `test-azurite` which
+# covers the local Azurite emulator path. Mirrors the CI `test-azure` job for
+# local verification.
+#
+# Requires `az login` (the tests authenticate as your Entra user via the Azure
+# CLI) and a deployed storage account that grants your user the `Storage Blob
+# Data Contributor` role — see infra/azure-bench-history/ to deploy one. The
+# account defaults to BENCH_HISTORY_AZURE_ACCOUNT from constants.env (shared with
+# CI); override it by passing a name: `just test-azure <account>`.
+#
+# Setting ENABLE_AZURE is what actually runs the real-Azure tests: without it they
+# self-skip, so the account name living in constants.env (and thus in every recipe's
+# dotenv environment) does not make a plain `just test` run them. This recipe sets
+# ENABLE_AZURE only here, so the real-Azure tests run for real only through it.
+[group('testing')]
+[script]
+test-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_AZURE_ACCOUNT', ''):
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    $account = "{{ ACCOUNT }}"
+    if ([string]::IsNullOrEmpty($account)) {
+        Write-Error "No storage account specified. Pass it (just test-azure <account>) or set BENCH_HISTORY_AZURE_ACCOUNT in constants.env. Deploy one with infra/azure-bench-history/deploy.ps1."
+        exit 1
+    }
+
+    $env:BENCH_HISTORY_AZURE_ACCOUNT = $account
+    $env:ENABLE_AZURE = "1"
+
+    Write-Host "Running real-Azure tests against account '$account' (Microsoft Entra ID; requires az login)."
+    cargo +$env:RUST_MSRV nextest run -p cargo-bench-history real_azure --locked --no-fail-fast
 
 # Runs regular tests as well as doing one iteration of benchmarks.
 # We separate it from "test" because benchmarks are quite slow,

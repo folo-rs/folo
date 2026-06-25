@@ -26,8 +26,8 @@ driven in tests by fakes, never by real IO:
   one-file-per-operation trees, scanned by `collect_flat`) — all `mtime`-scoped to
   the run. Fake `FakeOutput` is engine-aware and returns in-memory `RawSummary`,
   `RawCriterionCase` or `RawOperationFile` values.
-* `storage::Storage` — real `LocalStorage` and (behind the `azure` feature)
-  `AzureBlobStorage`, selected at runtime by the `StorageFacade` enum that
+* `storage::Storage` — real `LocalStorage` and `AzureBlobStorage`, selected at
+  runtime by the `StorageFacade` enum that
   `build_storage` returns; fake `MemoryStorage`. `put` is **write-once** (an
   existing key yields `StorageError::AlreadyExists`); `put_overwrite` is the
   replacing escape hatch used only by `run --overwrite` (and, later, `backfill
@@ -690,13 +690,15 @@ make a test pass — regenerate the Callgrind fixtures from `just bench-cg` (and
 Criterion / `alloc_tracker` / `all_the_time` fixtures from a `cargo bench` run) if
 the upstream schema genuinely changes, and update the parser/tests to match.
 
-## Azure Blob storage (`azure` feature)
+## Azure Blob storage
 
-The `azure` feature adds `AzureBlobStorage`, a `Storage` backed by an Azure Blob
-container. It is **off by default** so the common build stays light; enabling it
-pulls in the Azure SDK and the RustCrypto `hmac`/`sha2` crates used to self-sign
-SAS tokens. Object keys map 1:1 to `/`-separated blob names, so the key model is
-identical to `LocalStorage` (write-once, list-by-prefix).
+`AzureBlobStorage` is a `Storage` backed by an Azure Blob container. It is
+**always compiled in** — `cargo-bench-history` is a CLI tool that users install
+without choosing feature flags, so gating the backend behind a build feature
+would only ever hide a backend the user explicitly configured. It pulls in the
+Azure SDK and the RustCrypto `hmac`/`sha2` crates used to self-sign SAS tokens.
+Object keys map 1:1 to `/`-separated blob names, so the key model is identical to
+`LocalStorage` (write-once, list-by-prefix).
 
 Authentication is resolved once in `AzureBlobStorage::from_config`, in priority
 order: a self-signed account SAS (`account_key`), a verbatim `sas_token`, or
@@ -710,23 +712,36 @@ golden signature — do not "fix" that test by editing the expected value.
 
 The network tests (`storage::azure::tests` and the `cbh_azure`
 integration file) talk to a live [Azurite](https://github.com/Azure/Azurite)
-blob emulator. They **self-skip** when no emulator is reachable, so a normal
-`--all-features` run stays green without one; they run for real once Azurite is
-up. To run them:
+blob emulator. They **self-skip** when no emulator is reachable, so a normal test
+run stays green without one; they run for real once Azurite is up.
+
+The `just test-azurite` recipe wraps the whole flow. Install the emulator once with
+`just install-tools` (or manually with `npm install -g azurite`), then:
 
 ```powershell
-npm install -g azurite
+just test-azurite
+```
+
+It starts an in-memory Azurite on `127.0.0.1:10000` (reusing one already running),
+runs the Azure-backend tests with `BENCH_HISTORY_REQUIRE_AZURITE=1` so an
+unreachable emulator is a hard error rather than a silent skip, and stops the
+emulator it started afterward — even on failure (it never stops one it did not
+start). It is the local counterpart of `just test-azure`. To run the tests by hand
+instead, start the emulator and point `cargo` at it:
+
+```powershell
 # On Windows azurite-blob is a .cmd, so launch it through cmd:
 cmd /c azurite-blob --blobHost 127.0.0.1 --blobPort 10000 --inMemoryPersistence --skipApiVersionCheck --silent --loose
 # then, in another shell:
-cargo test -p cargo-bench-history --features azure
+cargo test -p cargo-bench-history
 ```
 
 * `AZURITE_BLOB_ENDPOINT` overrides the default
   `http://127.0.0.1:10000/devstoreaccount1` endpoint.
 * `BENCH_HISTORY_REQUIRE_AZURITE=1` turns an unreachable emulator into a hard
-  failure instead of a skip. CI sets it in the dedicated `test-azurite` job so a
-  misconfigured emulator can never silently degrade into skipping every test.
+  failure instead of a skip. `just test-azurite` sets it for you; CI also sets it
+  in the dedicated `test-azurite` job so a misconfigured emulator can never
+  silently degrade into skipping every test.
 
 In CI these tests run only in the Linux-only `test-azurite` job (see
 `.github/workflows/validation.yml`), which starts Azurite on the runner host via
@@ -759,7 +774,7 @@ just test-azure
 `just test-azure` reads the account from `BENCH_HISTORY_AZURE_ACCOUNT` (committed in
 `constants.env`); pass a name to target a different account
 (`just test-azure <storage-account-name>`). The equivalent raw command is
-`cargo test -p cargo-bench-history --features azure real_azure` with `ENABLE_AZURE`
+`cargo test -p cargo-bench-history real_azure` with `ENABLE_AZURE`
 and `BENCH_HISTORY_AZURE_ACCOUNT` set.
 
 * `BENCH_HISTORY_AZURE_ENDPOINT` overrides the default
@@ -808,8 +823,8 @@ Key facts when touching it:
   or the JSON report's top-level fields, the harness's `seed.rs` / `report.rs` must
   be updated in lockstep.
 * **Storage selection** mirrors the tests: local filesystem by default, Azure Blob
-  under `--storage azure` (its own `azure` feature forwards to the shell crate's
-  `azure` feature). Azure upload uses `azcopy` (installed by `just install-tools`)
+  under `--storage azure` (the Azure backend is always compiled in). Azure upload
+  uses `azcopy` (installed by `just install-tools`)
   for throughput, authenticating as the Entra user via the Azure CLI — same
   `az login` + `BENCH_HISTORY_AZURE_ACCOUNT` contract as `test-azure`. Each run uses
   a fresh `bh-stress-<unix>` container, deleted on exit unless `--keep`.

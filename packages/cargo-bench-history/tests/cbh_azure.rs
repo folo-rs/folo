@@ -8,8 +8,8 @@
 //!
 //! * **Azurite** (`*_in_azurite`) — against a local Azurite emulator using the
 //!   self-signed account-SAS path. They **self-skip** when no emulator is reachable
-//!   (so a normal `--all-features` run stays green) and run for real once Azurite is
-//!   up; CI provides one in the `test-azurite` job.
+//!   (so a normal test run stays green) and run for real once Azurite is up; CI
+//!   provides one in the `test-azurite` job.
 //! * **Real Azure** (`*_in_real_azure`) — against a real Storage account using the
 //!   **Microsoft Entra ID** path (no account key). They self-skip unless
 //!   `ENABLE_AZURE` is set (an explicit opt-in, so the account name living in
@@ -20,10 +20,8 @@
 //!   comes from `BENCH_HISTORY_AZURE_ACCOUNT`. Each test uses a fresh container
 //!   that is deleted when the test finishes, even on panic.
 //!
-//! They compile only with the `azure` feature, each scenario uses its own container
-//! so they never share state, and they are ignored under Miri (real network and
-//! process I/O).
-#![cfg(feature = "azure")]
+//! Each scenario uses its own container so they never share state, and they are
+//! ignored under Miri (real network and process I/O).
 #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
 use std::net::{TcpStream, ToSocketAddrs as _};
@@ -61,9 +59,9 @@ fn azurite_endpoint() -> String {
 
 /// Whether an Azurite blob endpoint is reachable via a short TCP connect.
 ///
-/// The `azure` feature builds these tests under `--all-features`, where the
-/// runner usually has no emulator. A reachability probe lets each test self-skip
-/// there while still running for real wherever Azurite is provided.
+/// These tests are always compiled, but the runner usually has no emulator. A
+/// reachability probe lets each test self-skip there while still running for real
+/// wherever Azurite is provided.
 ///
 /// Setting `BENCH_HISTORY_REQUIRE_AZURITE` turns an unreachable emulator into a
 /// hard failure, so the dedicated CI job that provisions Azurite cannot silently
@@ -135,12 +133,12 @@ fn real_azure_endpoint(account: &str) -> String {
 
 /// Whether the real-Azure tests are enabled.
 ///
-/// They run only when `ENABLE_AZURE` is set, so a plain test run (and the
-/// `--all-features` jobs) self-skips them even though `BENCH_HISTORY_AZURE_ACCOUNT`
-/// may be in scope. `ENABLE_AZURE` is an explicit opt-in — set by the `just
-/// test-azure` recipe and the CI `test-azure` job — that says "really run these",
-/// so a then-missing `BENCH_HISTORY_AZURE_ACCOUNT` is a hard failure rather than a
-/// silent skip, mirroring how `BENCH_HISTORY_REQUIRE_AZURITE` guards Azurite.
+/// They run only when `ENABLE_AZURE` is set, so a plain test run self-skips them
+/// even though `BENCH_HISTORY_AZURE_ACCOUNT` may be in scope. `ENABLE_AZURE` is an
+/// explicit opt-in — set by the `just test-azure` recipe and the CI `test-azure`
+/// job — that says "really run these", so a then-missing
+/// `BENCH_HISTORY_AZURE_ACCOUNT` is a hard failure rather than a silent skip,
+/// mirroring how `BENCH_HISTORY_REQUIRE_AZURITE` guards Azurite.
 fn real_azure_enabled() -> bool {
     if std::env::var_os("ENABLE_AZURE").is_none_or(|value| value.is_empty()) {
         eprintln!("skipping real Azure integration test: ENABLE_AZURE not set");
@@ -193,16 +191,51 @@ where
 }
 
 /// Deletes `container` at `endpoint` using the Entra credential, best-effort.
+///
+/// Every fallible step logs a warning and returns instead of panicking. This runs
+/// during cleanup between `catch_unwind` and `resume_unwind`, so a panic here would
+/// both leak the container and mask the original test failure being re-raised.
 async fn delete_container(endpoint: &str, container: &str) {
-    let credential: Arc<dyn TokenCredential> =
-        DeveloperToolsCredential::new(None).expect("Entra credential initializes");
-    let mut url = Url::parse(endpoint).expect("endpoint is a valid URL");
-    url.path_segments_mut()
-        .expect("endpoint is a base URL")
-        .pop_if_empty()
-        .push(container);
-    let client =
-        BlobContainerClient::new(url, Some(credential), None).expect("container client builds");
+    let credential: Arc<dyn TokenCredential> = match DeveloperToolsCredential::new(None) {
+        Ok(credential) => credential,
+        Err(error) => {
+            eprintln!(
+                "warning: could not initialize Entra credential to delete test container \
+                 {container}: {error}"
+            );
+            return;
+        }
+    };
+    let mut url = match Url::parse(endpoint) {
+        Ok(url) => url,
+        Err(error) => {
+            eprintln!(
+                "warning: could not parse endpoint {endpoint} to delete test container \
+                 {container}: {error}"
+            );
+            return;
+        }
+    };
+    {
+        let Ok(mut segments) = url.path_segments_mut() else {
+            eprintln!(
+                "warning: endpoint {endpoint} is not a base URL; cannot delete test container \
+                 {container}"
+            );
+            return;
+        };
+        segments.pop_if_empty().push(container);
+    }
+    let client = match BlobContainerClient::new(url, Some(credential), None) {
+        Ok(client) => client,
+        Err(error) => {
+            eprintln!(
+                "warning: could not build container client to delete test container \
+                 {container}: {error}"
+            );
+            return;
+        }
+    };
     if let Err(error) = client.delete(None).await {
         eprintln!("warning: could not delete test container {container}: {error}");
     }

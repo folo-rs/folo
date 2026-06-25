@@ -90,7 +90,7 @@ The equivalent raw invocations are:
 
 ```powershell
 cargo run --release -p cargo-bench-history-stress -- --storage local
-cargo run --release -p cargo-bench-history-stress --features azure -- --storage azure --account <name>
+cargo run --release -p cargo-bench-history-stress -- --storage azure --account <name>
 ```
 
 Always build `--release`: both seeding and analysis are CPU-bound and a debug build
