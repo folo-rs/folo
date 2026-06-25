@@ -801,3 +801,48 @@ round-trip tests — carry `#[cfg_attr(test, mutants::skip)]`, the same pattern
 lean on (`classify`, `map_error`, the `storage::sas` signer, and
 `account_sas_expiry`) has dedicated unit tests and stays under mutation testing,
 so the error-mapping and signing behavior is still mutation-covered.
+
+## Stress harness (`cargo-bench-history-stress`)
+
+The sibling `cargo-bench-history-stress` package (under `packages/`) is an
+**on-demand** binary that fabricates a giant synthetic benchmark history, seeds it
+into a storage backend, and times each `analyze` mode (`history`, `branch`, `tip`)
+over it. Its purpose is to observe how `analyze` scales; a full-scale run is on-demand
+only and never runs automatically in `just test` or CI. The package's own small unit
+and integration tests do run as a normal workspace member (and are subject to mutation
+testing and coverage). See that package's `README.md` for the dataset shape and flags.
+
+Key facts when touching it:
+
+* **Zero production-code coupling.** The harness only *writes* objects in the same
+  key layout the storage backends use (`v1/{project}/{engine}/{triple}/{machine}/
+  {commit}/{file}`), then reads them back through the real public
+  `cargo_bench_history::run_with_overrides` entry point. It deliberately does **not**
+  reach into private storage internals, so it needs no `_impl`-crate split and no
+  test-only feature on the shell crate. If a refactor changes the on-disk key layout
+  or the JSON report's top-level fields, the harness's `seed.rs` / `report.rs` must
+  be updated in lockstep.
+* **Storage selection** mirrors the tests: local filesystem by default, Azure Blob
+  under `--storage azure` (the Azure backend is always compiled in). Azure upload
+  uses `azcopy` (installed by `just install-tools`)
+  for throughput, authenticating as the Entra user via the Azure CLI — same
+  `az login` + `BENCH_HISTORY_AZURE_ACCOUNT` contract as `test-azure`. Each run uses
+  a fresh `bh-stress-<unix>` container, deleted on exit unless `--keep`.
+* **Run it** with `just bench-history-stress` (local) or `just bench-history-stress-azure`
+  (real Azure); both pass extra flags through to the binary, e.g.
+  `just bench-history-stress --commits 100`.
+* **Determinism.** A given `--seed` and sizing reproduce a byte-identical dataset
+  (fixed dataset anchor + SplitMix64 value generator), so timings are comparable
+  across runs. The synthetic value model is shaped so each mode reports a sensible,
+  explainable mix of regressions/improvements rather than all-or-nothing (see the
+  family/divisor comments in `scenario.rs`).
+* **Dataset shape.** The default fabricates 1000 benchmarks × 2000 `main` commits
+  (only ~half store a run — the rest are gaps that exercise the "commit with no run"
+  path) across **all** engines crossed with the platforms they run on (`callgrind`
+  Linux-only; `criterion`/`alloc_tracker`/`all_the_time` on all six triples), for 20
+  discriminant sets. Deterministic engines (`callgrind`, `alloc_tracker`) store exact
+  values with no dispersion; noisy engines (`criterion`, `all_the_time`) store the
+  same shape plus a tight confidence band — kept well below the injected step
+  magnitudes — so both the exact and the noise-aware detection paths are exercised.
+  `scenario::metric_for` picks the metric kind and band per engine.
+
