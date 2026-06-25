@@ -849,7 +849,7 @@ fn stamp_history(finding: &mut Finding, series: &Series) {
     finding.active_from = series.active_start;
     if let Some(blessing) = &series.blessing {
         finding.blessed_at = Some(short_commit(&blessing.commit));
-        finding.blessed_commit_time = Some(blessing.commit_time.to_string());
+        finding.blessed_commit_time = blessing.commit_time.map(|time| time.to_string());
     }
 }
 
@@ -1078,7 +1078,6 @@ mod tests {
                 SeriesPoint {
                     topo_index: index,
                     dirty: false,
-                    commit_time: Timestamp::from_second(i64::try_from(index).unwrap()).unwrap(),
                     object_key: format!("v1/p/engine/t/synthetic/commit{index}/clean.json"),
                     commit: Some(format!("commit{index}")),
                     value,
@@ -1640,7 +1639,6 @@ mod tests {
             .map(|&(topo_index, value, dirty)| SeriesPoint {
                 topo_index,
                 dirty,
-                commit_time: Timestamp::from_second(i64::try_from(topo_index).unwrap()).unwrap(),
                 object_key: format!("v1/p/engine/t/synthetic/commit{topo_index}/clean.json"),
                 commit: Some(format!("commit{topo_index}")),
                 value,
@@ -1848,7 +1846,7 @@ mod tests {
         blessed.active_start = 3;
         blessed.blessing = Some(Blessing {
             commit: "abcdef0123456789".to_owned(),
-            commit_time: Timestamp::from_second(3).unwrap(),
+            commit_time: Some(Timestamp::from_second(3).unwrap()),
         });
         assert!(changes(&[blessed]).is_empty());
     }
@@ -1866,7 +1864,7 @@ mod tests {
         series.active_start = 3;
         series.blessing = Some(Blessing {
             commit: "abcdef0123456789cafe".to_owned(),
-            commit_time: Timestamp::from_second(3).unwrap(),
+            commit_time: Some(Timestamp::from_second(3).unwrap()),
         });
         let finding = only(changes(&[series]));
         assert!(finding.active);
@@ -1936,7 +1934,6 @@ mod tests {
             .map(|(index, &(value, half))| SeriesPoint {
                 topo_index: index,
                 dirty: false,
-                commit_time: Timestamp::from_second(i64::try_from(index).unwrap()).unwrap(),
                 object_key: format!("v1/p/engine/t/synthetic/commit{index}/clean.json"),
                 commit: Some(format!("commit{index}")),
                 value,

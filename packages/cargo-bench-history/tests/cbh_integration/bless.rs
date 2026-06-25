@@ -109,6 +109,12 @@ async fn list_blessings_reports_the_blessing_recorded_at_head() {
     let blessings = parsed["blessings"].as_array().unwrap();
     assert_eq!(blessings.len(), 1, "{message}");
     assert_eq!(blessings[0]["commit"], short_head, "{message}");
+    // The blessed commit's committer date is read from git topology (HEAD is the
+    // seeded c6, dated 2024-01-06), not from a denormalized copy on the sidecar.
+    assert_eq!(
+        blessings[0]["commit_time"], "2024-01-06T00:00:00Z",
+        "{message}"
+    );
     assert!(
         blessings[0]["prefixes"]
             .as_array()

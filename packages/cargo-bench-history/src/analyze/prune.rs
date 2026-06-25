@@ -25,7 +25,6 @@ use serde::Serialize;
 
 use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
-use crate::model::Run;
 use crate::report::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
@@ -34,9 +33,9 @@ use crate::{PruneOptions, RunError, RunOutcome};
 
 use super::ReportFormat;
 use super::{
-    AutoFacets, DirtyTipPolicy, ResolvedHistory, Selection, detect_auto_facets,
+    AutoFacets, DirtyTipPolicy, ResolvedHistory, Selection, WindowEdge, detect_auto_facets,
     facet_filtered_candidates, parse_format, parse_since, parse_until, resolve_base_name,
-    resolve_facets, resolve_history,
+    resolve_facets, resolve_history, window_excludes,
 };
 use crate::model::DiscriminantSet;
 
@@ -140,6 +139,7 @@ where
     let ResolvedHistory {
         target_ref,
         order,
+        commit_times,
         admit_dirty,
         merge_base_index,
         tip_is_merge_base,
@@ -247,25 +247,24 @@ where
             RunKind::Bless => unreachable!("blessings were partitioned out"),
         }
 
-        // The time window filters on the commit's own timestamp, so a corrupt run
-        // surfaces only under `--since`/`--until`.
+        // The time window is a per-commit property — git's committer date — which
+        // topology already resolved with the rest of the history, so deciding it
+        // needs no object fetch.
         if since.is_some() || until.is_some() {
-            let committed = load_commit_timestamp(storage, &key).await?;
-            if let Some(since) = since
-                && committed < since
-            {
-                reporter.note_with(|| {
-                    format!("skipping {key}: its commit predates the --since cutoff")
-                });
-                continue;
-            }
-            if let Some(until) = until
-                && committed > until
-            {
-                reporter.note_with(|| {
-                    format!("skipping {key}: its commit is after the --until cutoff")
-                });
-                continue;
+            match window_excludes(commit_times.get(&parsed.commit).copied(), since, until) {
+                Some(WindowEdge::Since) => {
+                    reporter.note_with(|| {
+                        format!("skipping {key}: its commit predates the --since cutoff")
+                    });
+                    continue;
+                }
+                Some(WindowEdge::Until) => {
+                    reporter.note_with(|| {
+                        format!("skipping {key}: its commit is after the --until cutoff")
+                    });
+                    continue;
+                }
+                None => {}
             }
         }
 
@@ -354,22 +353,6 @@ fn commit_matches(commit: &str, filters: &[String]) -> bool {
     filters
         .iter()
         .any(|filter| commit.starts_with(&filter.to_ascii_lowercase()))
-}
-
-/// Fetches and parses a stored run's commit timestamp for the time-window
-/// filters.
-async fn load_commit_timestamp<S: Storage>(
-    storage: &S,
-    key: &str,
-) -> Result<jiff::Timestamp, RunError> {
-    let bytes = storage.get(key).await.map_err(RunError::Storage)?;
-    let text = String::from_utf8(bytes).map_err(|error| RunError::Analyze {
-        message: format!("stored object {key} is not valid UTF-8: {error}"),
-    })?;
-    let result = Run::from_json(&text).map_err(|error| RunError::Analyze {
-        message: format!("stored object {key} is not a valid result set: {error}"),
-    })?;
-    Ok(result.context.commit)
 }
 
 /// Which kind of object a removal item names.
@@ -706,12 +689,11 @@ mod tests {
         }
     }
 
-    /// A minimal result set with the given commit time (seconds) and commit.
-    fn set(commit_second: i64, commit: &str) -> Run {
-        let time = Timestamp::from_second(commit_second).unwrap();
+    /// A minimal clean result set for `commit`. Topology (not the stored object)
+    /// now carries commit dates, so the run needs no timestamp of its own.
+    fn set(commit: &str) -> Run {
         let context = RunContext::new(
-            time,
-            time,
+            Timestamp::from_second(0).unwrap(),
             GitInfo {
                 commit: Some(commit.to_owned()),
                 short_commit: Some(commit.to_owned()),
@@ -797,6 +779,32 @@ mod tests {
         git
     }
 
+    /// A feature history whose own commits carry committer dates, for the
+    /// `--since`/`--until` window tests. Branched off the base at `c1`:
+    ///
+    /// ```text
+    /// master:  c0 - c1 - c2 - c3
+    ///                \
+    /// feature:        f1 - f2 - f3   (HEAD)
+    ///         dates:  100s 180s 300s
+    /// ```
+    fn dated_feature_git() -> FakeGitHistory {
+        let at = |seconds| Timestamp::from_second(seconds).unwrap();
+        let mut git = FakeGitHistory::new();
+        git.commit("c0", None)
+            .commit("c1", Some("c0"))
+            .commit("c2", Some("c1"))
+            .commit("c3", Some("c2"))
+            .commit_at("f1", Some("c1"), at(100))
+            .commit_at("f2", Some("f1"), at(180))
+            .commit_at("f3", Some("f2"), at(300))
+            .branch("master", "c3")
+            .branch("feature", "f3")
+            .head("feature")
+            .mark_default("master");
+        git
+    }
+
     /// Drives `prune_with` and unwraps the rendered message.
     fn prune(storage: &MemoryStorage, git: &FakeGitHistory, options: &PruneOptions) -> String {
         let outcome = block_on(prune_with(
@@ -819,7 +827,7 @@ mod tests {
     fn prune_skips_a_run_whose_commit_is_off_history() {
         let storage = MemoryStorage::new();
         // A dirty run on a commit that is not on the analyzed (HEAD) history.
-        store(&storage, &dirty_key("z9", 100), &set(100, "z9"));
+        store(&storage, &dirty_key("z9", 100), &set("z9"));
         let reporter = RecordingReporter::new();
         block_on(prune_with(
             &linear_git(),
@@ -845,12 +853,12 @@ mod tests {
         let storage = MemoryStorage::new();
         // Clean runs across the whole history.
         for commit in ["c0", "c1", "f1", "f2"] {
-            store(&storage, &clean_key(commit), &set(0, commit));
+            store(&storage, &clean_key(commit), &set(commit));
         }
         // Dirty snapshots: base-side (c1) must survive; target-side (f1, f2) go.
-        store(&storage, &dirty_key("c1", 150), &set(150, "c1"));
-        store(&storage, &dirty_key("f1", 200), &set(200, "f1"));
-        store(&storage, &dirty_key("f2", 300), &set(300, "f2"));
+        store(&storage, &dirty_key("c1", 150), &set("c1"));
+        store(&storage, &dirty_key("f1", 200), &set("f1"));
+        store(&storage, &dirty_key("f2", 300), &set("f2"));
         let git = feature_git();
 
         let opts = PruneOptions {
@@ -888,10 +896,10 @@ mod tests {
         // base-side dirty runs stay untouched.
         let storage = MemoryStorage::new();
         for commit in ["c0", "c1", "c2", "c3"] {
-            store(&storage, &clean_key(commit), &set(0, commit));
+            store(&storage, &clean_key(commit), &set(commit));
         }
-        store(&storage, &dirty_key("c1", 150), &set(150, "c1"));
-        store(&storage, &dirty_key("c3", 300), &set(300, "c3"));
+        store(&storage, &dirty_key("c1", 150), &set("c1"));
+        store(&storage, &dirty_key("c3", 300), &set("c3"));
         let git = linear_git(); // No mark_dirty: the working tree is clean.
 
         let report = prune(&storage, &git, &dirty_options());
@@ -911,11 +919,11 @@ mod tests {
     #[test]
     fn all_scope_removes_clean_dirty_and_blessings_for_a_commit() {
         let storage = MemoryStorage::new();
-        store(&storage, &clean_key("f1"), &set(0, "f1"));
-        store(&storage, &dirty_key("f1", 200), &set(200, "f1"));
+        store(&storage, &clean_key("f1"), &set("f1"));
+        store(&storage, &dirty_key("f1", 200), &set("f1"));
         store_bless(&storage, &bless_key("f1", 50));
         // A second commit's data must survive a commit-scoped prune.
-        store(&storage, &clean_key("f2"), &set(0, "f2"));
+        store(&storage, &clean_key("f2"), &set("f2"));
         store_bless(&storage, &bless_key("f2", 60));
         let git = feature_git();
 
@@ -951,8 +959,8 @@ mod tests {
     #[test]
     fn clean_scope_removes_clean_and_blessings_but_keeps_dirty() {
         let storage = MemoryStorage::new();
-        store(&storage, &clean_key("f1"), &set(0, "f1"));
-        store(&storage, &dirty_key("f1", 200), &set(200, "f1"));
+        store(&storage, &clean_key("f1"), &set("f1"));
+        store(&storage, &dirty_key("f1", 200), &set("f1"));
         store_bless(&storage, &bless_key("f1", 50));
         let git = feature_git();
 
@@ -978,7 +986,7 @@ mod tests {
     #[test]
     fn prune_leaves_a_blessing_whose_commit_is_off_history() {
         let storage = MemoryStorage::new();
-        store(&storage, &clean_key("f1"), &set(0, "f1"));
+        store(&storage, &clean_key("f1"), &set("f1"));
         // A blessing sidecar on a commit that is not on the analyzed history; the
         // clean-touching second pass skips it instead of removing it.
         store_bless(&storage, &bless_key("z9", 70));
@@ -1001,7 +1009,7 @@ mod tests {
     #[test]
     fn prune_requires_a_scope() {
         let storage = MemoryStorage::new();
-        store(&storage, &clean_key("f1"), &set(0, "f1"));
+        store(&storage, &clean_key("f1"), &set("f1"));
         let git = feature_git();
 
         let error = block_on(prune_with(
@@ -1030,7 +1038,7 @@ mod tests {
     fn all_scope_keeps_base_side_history_on_a_feature_branch() {
         let storage = MemoryStorage::new();
         for commit in ["c0", "c1", "f1", "f2"] {
-            store(&storage, &clean_key(commit), &set(0, commit));
+            store(&storage, &clean_key(commit), &set(commit));
         }
         let git = feature_git();
 
@@ -1059,7 +1067,7 @@ mod tests {
     #[test]
     fn base_prune_requires_prune_base() {
         let storage = MemoryStorage::new();
-        store(&storage, &clean_key("c3"), &set(0, "c3"));
+        store(&storage, &clean_key("c3"), &set("c3"));
         let git = linear_git(); // HEAD on master, which is the base branch.
 
         let opts = PruneOptions {
@@ -1093,7 +1101,7 @@ mod tests {
     #[test]
     fn prune_base_confirms_base_branch_deletion() {
         let storage = MemoryStorage::new();
-        store(&storage, &clean_key("c3"), &set(0, "c3"));
+        store(&storage, &clean_key("c3"), &set("c3"));
         let git = linear_git();
 
         let opts = PruneOptions {
@@ -1111,10 +1119,10 @@ mod tests {
     #[test]
     fn dry_run_previews_without_deleting() {
         let storage = MemoryStorage::new();
-        store(&storage, &clean_key("c0"), &set(0, "c0"));
-        store(&storage, &clean_key("c1"), &set(0, "c1"));
-        store(&storage, &clean_key("f1"), &set(0, "f1"));
-        store(&storage, &dirty_key("f1", 200), &set(200, "f1"));
+        store(&storage, &clean_key("c0"), &set("c0"));
+        store(&storage, &clean_key("c1"), &set("c1"));
+        store(&storage, &clean_key("f1"), &set("f1"));
+        store(&storage, &dirty_key("f1", 200), &set("f1"));
         let git = feature_git();
 
         let before = keys(&storage);
@@ -1135,9 +1143,9 @@ mod tests {
     #[test]
     fn text_format_reports_would_remove_under_dry_run() {
         let storage = MemoryStorage::new();
-        store(&storage, &clean_key("c0"), &set(0, "c0"));
-        store(&storage, &clean_key("f1"), &set(0, "f1"));
-        store(&storage, &dirty_key("f1", 200), &set(200, "f1"));
+        store(&storage, &clean_key("c0"), &set("c0"));
+        store(&storage, &clean_key("f1"), &set("f1"));
+        store(&storage, &dirty_key("f1", 200), &set("f1"));
         let git = feature_git();
 
         let opts = PruneOptions {
@@ -1154,7 +1162,7 @@ mod tests {
     fn dirty_scope_never_touches_clean_runs() {
         let storage = MemoryStorage::new();
         for commit in ["c0", "c1", "f1", "f2"] {
-            store(&storage, &clean_key(commit), &set(0, commit));
+            store(&storage, &clean_key(commit), &set(commit));
         }
         let git = feature_git();
 
@@ -1167,7 +1175,7 @@ mod tests {
     #[test]
     fn prune_requires_a_repository() {
         let storage = MemoryStorage::new();
-        store(&storage, &dirty_key("c0", 100), &set(100, "c0"));
+        store(&storage, &dirty_key("c0", 100), &set("c0"));
         let git = FakeGitHistory::new(); // No commits: HEAD does not resolve.
         let error = block_on(prune_with(
             &git,
@@ -1190,13 +1198,13 @@ mod tests {
     #[test]
     fn engine_facet_restricts_removal() {
         let storage = MemoryStorage::new();
-        store(&storage, &clean_key("f1"), &set(0, "f1"));
-        store(&storage, &dirty_key("f1", 200), &set(200, "f1"));
+        store(&storage, &clean_key("f1"), &set("f1"));
+        store(&storage, &dirty_key("f1", 200), &set("f1"));
         // A criterion dirty run on the same commit must survive an engine-scoped
         // callgrind prune.
         let criterion_dirty =
             "v1/folo/criterion/x86_64-unknown-linux-gnu/synthetic/f1/dirty-200.json";
-        store(&storage, criterion_dirty, &set(200, "f1"));
+        store(&storage, criterion_dirty, &set("f1"));
         let git = feature_git();
 
         let opts = PruneOptions {
@@ -1217,16 +1225,15 @@ mod tests {
     }
 
     #[test]
-    fn since_only_removes_runs_on_or_after_the_cutoff() {
+    fn since_only_removes_commits_on_or_after_the_cutoff() {
         let storage = MemoryStorage::new();
-        store(&storage, &clean_key("f1"), &set(0, "f1"));
-        // Two dirty snapshots on the target side, one before and one after the cutoff.
-        store(&storage, &dirty_key("f1", 100), &set(100, "f1"));
-        store(&storage, &dirty_key("f2", 300), &set(300, "f2"));
-        // A snapshot whose commit time is exactly the cutoff: the cutoff is
-        // inclusive, so it is removed.
-        store(&storage, &dirty_key("f1", 180), &set(180, "f1"));
-        let git = feature_git();
+        // One dirty snapshot per dated feature commit. The window is decided from
+        // each commit's committer date in the topology, not from the stored object,
+        // so the `dirty-<unix>` key second is irrelevant to the cutoff.
+        store(&storage, &dirty_key("f1", 10), &set("f1"));
+        store(&storage, &dirty_key("f2", 20), &set("f2"));
+        store(&storage, &dirty_key("f3", 30), &set("f3"));
+        let git = dated_feature_git();
 
         let opts = PruneOptions {
             since: Some("1970-01-01T00:03:00Z".to_owned()), // 180s
@@ -1236,26 +1243,26 @@ mod tests {
 
         let remaining = keys(&storage);
         assert!(
-            remaining.contains(&dirty_key("f1", 100)),
-            "a run before --since is kept"
+            remaining.contains(&dirty_key("f1", 10)),
+            "f1 (committed at 100s) predates --since and is kept"
         );
         assert!(
-            !remaining.contains(&dirty_key("f1", 180)),
-            "a run exactly at --since is removed (inclusive cutoff)"
+            !remaining.contains(&dirty_key("f2", 20)),
+            "f2 (committed exactly at the 180s cutoff) is removed (inclusive)"
         );
         assert!(
-            !remaining.contains(&dirty_key("f2", 300)),
-            "a run after --since is removed"
+            !remaining.contains(&dirty_key("f3", 30)),
+            "f3 (committed at 300s) is after --since and removed"
         );
     }
 
     #[test]
-    fn until_only_removes_runs_on_or_before_the_cutoff() {
+    fn until_only_removes_commits_on_or_before_the_cutoff() {
         let storage = MemoryStorage::new();
-        store(&storage, &dirty_key("f1", 100), &set(100, "f1"));
-        store(&storage, &dirty_key("f1", 180), &set(180, "f1"));
-        store(&storage, &dirty_key("f2", 300), &set(300, "f2"));
-        let git = feature_git();
+        store(&storage, &dirty_key("f1", 10), &set("f1"));
+        store(&storage, &dirty_key("f2", 20), &set("f2"));
+        store(&storage, &dirty_key("f3", 30), &set("f3"));
+        let git = dated_feature_git();
 
         let opts = PruneOptions {
             until: Some("1970-01-01T00:03:00Z".to_owned()), // 180s
@@ -1265,24 +1272,24 @@ mod tests {
 
         let remaining = keys(&storage);
         assert!(
-            !remaining.contains(&dirty_key("f1", 100)),
-            "a run before --until is removed"
+            !remaining.contains(&dirty_key("f1", 10)),
+            "f1 (committed at 100s) is before --until and removed"
         );
         assert!(
-            !remaining.contains(&dirty_key("f1", 180)),
-            "a run exactly at --until is removed (inclusive cutoff)"
+            !remaining.contains(&dirty_key("f2", 20)),
+            "f2 (committed exactly at the 180s cutoff) is removed (inclusive)"
         );
         assert!(
-            remaining.contains(&dirty_key("f2", 300)),
-            "a run after --until is kept"
+            remaining.contains(&dirty_key("f3", 30)),
+            "f3 (committed at 300s) is after --until and kept"
         );
     }
 
     #[test]
     fn commit_filter_restricts_removal_to_the_named_commit() {
         let storage = MemoryStorage::new();
-        store(&storage, &dirty_key("f1", 200), &set(200, "f1"));
-        store(&storage, &dirty_key("f2", 300), &set(300, "f2"));
+        store(&storage, &dirty_key("f1", 200), &set("f1"));
+        store(&storage, &dirty_key("f2", 300), &set("f2"));
         let git = feature_git();
 
         let opts = PruneOptions {
@@ -1305,8 +1312,8 @@ mod tests {
     #[test]
     fn commits_are_listed_oldest_first_by_topology() {
         let storage = MemoryStorage::new();
-        store(&storage, &dirty_key("f2", 300), &set(300, "f2"));
-        store(&storage, &dirty_key("f1", 200), &set(200, "f1"));
+        store(&storage, &dirty_key("f2", 300), &set("f2"));
+        store(&storage, &dirty_key("f1", 200), &set("f1"));
         let git = feature_git();
 
         let opts = PruneOptions {
@@ -1324,8 +1331,8 @@ mod tests {
     #[test]
     fn markdown_format_renders_a_table_per_set() {
         let storage = MemoryStorage::new();
-        store(&storage, &dirty_key("f1", 200), &set(200, "f1"));
-        store(&storage, &dirty_key("f2", 300), &set(300, "f2"));
+        store(&storage, &dirty_key("f1", 200), &set("f1"));
+        store(&storage, &dirty_key("f2", 300), &set("f2"));
         let git = feature_git();
 
         let opts = PruneOptions {
@@ -1344,7 +1351,7 @@ mod tests {
     fn markdown_format_reports_no_match_for_an_empty_plan() {
         let storage = MemoryStorage::new();
         for commit in ["c0", "c1", "f1", "f2"] {
-            store(&storage, &clean_key(commit), &set(0, commit));
+            store(&storage, &clean_key(commit), &set(commit));
         }
         let git = feature_git();
 
@@ -1435,31 +1442,5 @@ mod tests {
         assert_eq!(commits[1].commit, "c1");
         assert_eq!(commits[1].runs, 1);
         assert_eq!(commits[1].blessings, 0, "c1 has no blessing");
-    }
-
-    #[test]
-    fn load_commit_timestamp_rejects_a_non_utf8_object() {
-        let storage = MemoryStorage::new();
-        block_on(storage.put(&clean_key("c2"), &[0xff, 0xfe, 0x00])).unwrap();
-        let error = block_on(load_commit_timestamp(&storage, &clean_key("c2"))).unwrap_err();
-        match error {
-            RunError::Analyze { message } => {
-                assert!(message.contains("is not valid UTF-8"), "{message}");
-            }
-            other => panic!("expected an analyze error, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn load_commit_timestamp_rejects_an_invalid_result_set() {
-        let storage = MemoryStorage::new();
-        block_on(storage.put(&clean_key("c2"), b"{ not a valid result set")).unwrap();
-        let error = block_on(load_commit_timestamp(&storage, &clean_key("c2"))).unwrap_err();
-        match error {
-            RunError::Analyze { message } => {
-                assert!(message.contains("is not a valid result set"), "{message}");
-            }
-            other => panic!("expected an analyze error, got {other:?}"),
-        }
     }
 }

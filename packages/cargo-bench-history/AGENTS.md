@@ -16,7 +16,7 @@ driven in tests by fakes, never by real IO:
   `FakeRunner` records the argv and reports a canned exit status.
 * `probe::EnvironmentProbe` — real `SystemProbe` (shells `git`/`rustc`, and
   reads the local hardware profile via `machine::system_profile`); fake
-  `FakeProbe` returns canned `GitSnapshot`/`RustcInfo`/`HardwareProfile`.
+  `FakeProbe` returns canned `GitInfo`/`RustcInfo`/`HardwareProfile`.
 * `bench_output::BenchOutputSource` — real `FsBenchOutputSource` walks the
   engine's output tree and returns a `Harvest` enum: `Harvest::Callgrind` from
   `target/gungraun/**/summary.json`, `Harvest::Criterion` from
@@ -122,14 +122,14 @@ makes a `0 runs` result self-explanatory without needing `--verbose`.
   multiple dirty snapshots on one base commit coexist; only a same-second clash is
   a conflict.
 
-The commit segment is the **full** SHA (`git.info.commit`, `unknown` when there is
+The commit segment is the **full** SHA (`git.commit`, `unknown` when there is
 no repo), because the git-aware `analyze` reads `v1/.../<full_sha>/` directories
 resolved from `git rev-list`. The `run` store step picks clean vs dirty from
-`git.info.dirty`. Timestamps are split into a **commit** timestamp (the committer
-date, which orders the series) and an **observation** timestamp (wall-clock now,
-provenance only); there is no "effective timestamp" concept and no `--timestamp`
-override. A dirty key uses the observation second so concurrent snapshots coexist.
-There is no run-id in the key.
+`git.dirty`. A run stores only an **observation** timestamp (wall-clock now,
+provenance only); the commit's position on the timeline is its committer date,
+read from git topology at analyze time, not stored on the object. There is no
+"effective timestamp" concept and no `--timestamp` override. A dirty key uses the
+observation second so concurrent snapshots coexist. There is no run-id in the key.
 
 ## The `analyze` command
 
@@ -175,16 +175,17 @@ being analyzed:
   `SelectedCommit::dirty_base_exception` flags the tip so `analyze` knows to warn.
 * `analyze::series` reconstructs one series per `(location, benchmark, metric)`
   ordered by **git topology** (first-parent index of the commit), then within a
-  commit by `(dirty, commit time, object key)` so a clean point precedes same-commit
-  dirty snapshots deterministically. Topology — not commit time — is primary, so
+  commit by `(dirty, object key)` so a clean point precedes same-commit
+  dirty snapshots deterministically. Topology — not any timestamp — is primary, so
   back-dated backfill runs still sort by where their commit sits in history.
-  `--since`/`--until` drop whole runs outside the window by **commit** timestamp.
-  `analyze`/`list` decide this from git topology — each commit's committer time is
-  carried alongside its SHA on the `first_parent` ancestry (`FirstParentCommit`),
-  so the window is applied in `select_dataset`'s key-only phase, *before* any
-  out-of-window object is fetched (the `window_excludes` helper; a commit with an
-  unknown time is kept). `prune` still recovers the timestamp per object
-  (`load_commit_timestamp`). Bare `<prefix>` positionals scope the analysis to
+  `--since`/`--until` drop whole runs outside the window by each commit's **committer
+  date**. `analyze`/`list` decide this from git topology — each commit's committer
+  time is carried alongside its SHA on the `first_parent` ancestry
+  (`FirstParentCommit`), so the window is applied in `select_dataset`'s key-only
+  phase, *before* any out-of-window object is fetched (the `window_excludes` helper;
+  a commit with an unknown time is kept). `prune` decides the same window from the
+  same git-topology `commit -> committer_time` map (no per-object fetch). Bare
+  `<prefix>` positionals scope the analysis to
   benchmarks whose qualified id starts with one of the prefixes (`series::prefixes_accept`).
 * `analyze::findings` is the **engine-aware, noise-resistant** detector. It splits
   metrics into *deterministic* (every Callgrind kind plus the `alloc_tracker`
@@ -232,7 +233,7 @@ committer date so the `--since`/`--until` window is decidable from topology alon
 Integration tests build a **real** git repo in a tempdir (`Workspace::repo` /
 `Workspace::clean_repo`) and seed storage keys under the commits' real SHAs so the
 live topology and the stored keys agree; `Workspace::commit_dated` pins each seed
-commit's committer date to the seeded run's `context.commit` so the window matches.
+commit's committer date so the git-topology `--since`/`--until` window matches.
 
 ### Analysis modes (`analyze` only)
 
@@ -420,9 +421,9 @@ and `resolve_history` pipeline. `prune_with` resolves the history, applies the
 selected runs (recording which clean `(set, commit)` pairs were removed); pass 2 —
 only when the scope touches clean runs — removes a blessing sidecar iff its
 `(set, commit)` had its clean run removed (so blessings follow their clean run and
-are never time-filtered directly). `--since`/`--until` fetch each candidate's stored
-body (`load_commit_timestamp`) to recover its **commit** timestamp. The deletions
-are grouped
+are never time-filtered directly). `--since`/`--until` decide the window from the
+git-topology `commit -> committer_time` map (`window_excludes`), keyed by each
+candidate's commit SHA — no per-object body fetch. The deletions are grouped
 into a `Plan` (by discriminant set, commits oldest-first by topology) and — unless
 `--dry-run` — each key is removed via `Storage::delete`. The JSON report carries
 `dry_run`, the per-commit run/blessing counts, and the deleted `keys` per commit;

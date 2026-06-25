@@ -17,9 +17,9 @@ pub(crate) mod list;
 pub(crate) mod prune;
 
 pub(crate) use cargo_bench_history_core::analyze::{
-    AnalysisConfig, AnalysisContext, AnalysisMode, DiscriminantSetQuery, FacetFilter, LoadedObject,
-    ReportFormat, ReportInput, Series, SeriesFilter, SetSummary, StorageKey, apply_blessings,
-    build_series, find_changes, parse_key, render, select_commits,
+    AnalysisConfig, AnalysisContext, AnalysisMode, BlessingPlacement, DiscriminantSetQuery,
+    FacetFilter, LoadedObject, ReportFormat, ReportInput, Series, SeriesFilter, SetSummary,
+    StorageKey, apply_blessings, build_series, find_changes, parse_key, render, select_commits,
 };
 
 use std::collections::HashMap;
@@ -368,10 +368,11 @@ struct SelectedDataSet {
     /// split base-side history from the branch's own commits.
     merge_base_index: Option<usize>,
     /// Blessings recorded on in-window commits, grouped by discriminant set. Each
-    /// entry pairs the blessed commit's first-parent topological index with its
-    /// record; history-mode re-baselining picks, per series, the latest matching
-    /// blessing. Empty in branch and tip modes (they ignore blessings).
-    blessings: HashMap<DiscriminantSet, Vec<(usize, BlessingRecord)>>,
+    /// entry pairs the blessed commit's first-parent topological index and its
+    /// committer date (from topology, for the report anchor) with the record;
+    /// history-mode re-baselining picks, per series, the latest matching blessing.
+    /// Empty in branch and tip modes (they ignore blessings).
+    blessings: HashMap<DiscriminantSet, Vec<BlessingPlacement>>,
 }
 
 /// Resolves one facet's raw command-line values into a [`FacetFilter`].
@@ -761,7 +762,7 @@ where
     // blessing on a commit outside the analyzed history (or that fails to parse) is
     // irrelevant and skipped. Branch and tip modes ignore blessings entirely, so
     // only history mode pays the load.
-    let mut blessings: HashMap<DiscriminantSet, Vec<(usize, BlessingRecord)>> = HashMap::new();
+    let mut blessings: HashMap<DiscriminantSet, Vec<BlessingPlacement>> = HashMap::new();
     if mode == AnalysisMode::History {
         // Phase 1 — key-only filtering: drop blessings whose commit is not on the
         // analyzed history before fetching, in candidate order.
@@ -791,12 +792,14 @@ where
         })
         .await?;
         fetched.sort_by(|left, right| left.0.cmp(&right.0));
-        // Phase 3 — record each blessing against its commit's topological index.
+        // Phase 3 — record each blessing against its commit's topological index
+        // and committer date (resolved from topology, for the report anchor).
         for (key, parsed, record) in fetched {
             let topo_index = order
                 .get(&parsed.commit)
                 .copied()
                 .expect("phase 1 admitted only blessings whose commit is on the analyzed history");
+            let commit_time = commit_times.get(&parsed.commit).copied();
             reporter.note_with(|| {
                 format!(
                     "loaded blessing {key} ({} accepted at {})",
@@ -804,10 +807,11 @@ where
                     parsed.commit
                 )
             });
-            blessings
-                .entry(parsed.set.clone())
-                .or_default()
-                .push((topo_index, record));
+            blessings.entry(parsed.set.clone()).or_default().push((
+                topo_index,
+                commit_time,
+                record,
+            ));
         }
     }
 
@@ -1382,7 +1386,6 @@ mod tests {
         let time = ts(effective);
         let context = RunContext::new(
             time,
-            time,
             GitInfo {
                 commit: Some(commit.to_owned()),
                 short_commit: Some(commit.to_owned()),
@@ -1419,7 +1422,6 @@ mod tests {
     fn two_metric_set(effective: i64, commit: &str, ir: f64, cycles: f64) -> Run {
         let time = ts(effective);
         let context = RunContext::new(
-            time,
             time,
             GitInfo {
                 commit: Some(commit.to_owned()),
@@ -1923,7 +1925,6 @@ mod tests {
         let record = BlessingRecord::new(
             "c3".to_owned(),
             ts(3),
-            ts(3),
             vec![BenchmarkIdPrefix::new("nm").unwrap()],
             "0.0.1".to_owned(),
         );
@@ -2034,7 +2035,6 @@ mod tests {
         let record = BlessingRecord::new(
             "z9".to_owned(),
             ts(3),
-            ts(3),
             vec![BenchmarkIdPrefix::new("nm").unwrap()],
             "0.0.1".to_owned(),
         );
@@ -2113,19 +2113,20 @@ mod tests {
     }
 
     #[test]
-    fn series_order_follows_topology_not_commit_time() {
+    fn series_order_follows_topology_not_observation_time() {
         // Topology is c0..c5 with a sustained step at c3 (100,100,100,130,130,130),
-        // but the commit clock is reversed (c0 newest, c5 oldest). Ordering by
-        // topology reconstructs the rising step and flags a regression; ordering by
-        // commit time would reverse it into a falling step (an improvement, no
-        // regression). So a single detected regression proves topology won.
+        // but the objects' observation clock is reversed (c0 newest, c5 oldest).
+        // Ordering by topology reconstructs the rising step and flags a regression;
+        // were the provenance-only observation time ever allowed to order the series
+        // it would reverse into a falling step (an improvement, no regression). So a
+        // single detected regression proves topology won.
         let storage = MemoryStorage::new();
         for (index, value) in [100.0, 100.0, 100.0, 130.0, 130.0, 130.0]
             .into_iter()
             .enumerate()
         {
             let commit = format!("c{index}");
-            // Reverse the clock: c0 is newest, c5 is oldest by commit time.
+            // Reverse the clock: c0 has the newest observation time, c5 the oldest.
             let second = 100 - i64::try_from(index).unwrap();
             store(
                 &storage,

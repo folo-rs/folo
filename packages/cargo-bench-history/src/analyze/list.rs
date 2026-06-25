@@ -502,8 +502,9 @@ struct BlessingEntry {
     benchmark: Option<String>,
     /// Abbreviated commit the blessing was issued at (the re-baseline point).
     commit: String,
-    /// Committer date of the blessed commit.
-    commit_time: Timestamp,
+    /// Committer date of the blessed commit, resolved from git topology; `None`
+    /// when git did not report one.
+    commit_time: Option<Timestamp>,
     /// When the blessing was issued; `Some` only in the HEAD view.
     issued_at: Option<Timestamp>,
     /// Accepted benchmark-id prefixes; populated only in the HEAD view.
@@ -587,6 +588,16 @@ where
     let facets = resolve_facets(selection, Some(auto))?;
     let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
 
+    // The blessed commit is HEAD; its committer date comes from git topology, so
+    // the sidecar itself need not carry a denormalized copy.
+    let head_commit_time = git
+        .first_parent("HEAD")
+        .await
+        .map_err(RunError::Io)?
+        .into_iter()
+        .find(|commit| commit.sha == head)
+        .and_then(|commit| commit.committer_time);
+
     let mut entries = Vec::new();
     for (key, parsed) in candidates {
         if !(parsed.is_bless() && parsed.commit == head) {
@@ -604,7 +615,7 @@ where
             set: parsed.set,
             benchmark: None,
             commit: short_sha(&record.commit).to_owned(),
-            commit_time: record.commit_time,
+            commit_time: head_commit_time,
             issued_at: Some(record.issued_at),
             prefixes: record.prefixes.into_iter().map(String::from).collect(),
         });
@@ -724,10 +735,10 @@ fn render_blessings_text(
         lines.push(set.to_string());
         for row in rows {
             if let Some(benchmark) = &row.benchmark {
-                lines.push(format!(
-                    "  {benchmark}  blessed at {} ({})",
-                    row.commit, row.commit_time
-                ));
+                let at = row
+                    .commit_time
+                    .map_or_else(String::new, |time| format!(" ({time})"));
+                lines.push(format!("  {benchmark}  blessed at {}{at}", row.commit));
             } else {
                 let issued = row
                     .issued_at
@@ -771,11 +782,14 @@ fn render_blessings_markdown(
             lines.push("| Benchmark | Blessed at | Commit time |".to_owned());
             lines.push("| --- | --- | --- |".to_owned());
             for row in rows {
+                let time = row
+                    .commit_time
+                    .map_or_else(String::new, |time| time.to_string());
                 lines.push(format!(
                     "| {} | {} | {} |",
                     row.benchmark.as_deref().unwrap_or(""),
                     row.commit,
-                    row.commit_time
+                    time
                 ));
             }
         } else {
@@ -811,7 +825,8 @@ fn render_blessings_json(
         #[serde(skip_serializing_if = "Option::is_none")]
         benchmark: Option<&'a str>,
         commit: &'a str,
-        commit_time: Timestamp,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        commit_time: Option<Timestamp>,
         #[serde(skip_serializing_if = "Option::is_none")]
         issued_at: Option<Timestamp>,
         #[serde(skip_serializing_if = "<[String]>::is_empty")]
@@ -889,7 +904,6 @@ mod tests {
         let time = Timestamp::from_second(effective).unwrap();
         let context = RunContext::new(
             time,
-            time,
             GitInfo {
                 commit: Some(commit.to_owned()),
                 short_commit: Some(commit.to_owned()),
@@ -920,7 +934,6 @@ mod tests {
         let time = Timestamp::from_second(effective).unwrap();
         let context = RunContext::new(
             time,
-            time,
             GitInfo {
                 commit: Some(commit.to_owned()),
                 short_commit: Some(commit.to_owned()),
@@ -949,7 +962,6 @@ mod tests {
     fn single_metric_set(effective: i64, commit: &str) -> Run {
         let time = Timestamp::from_second(effective).unwrap();
         let context = RunContext::new(
-            time,
             time,
             GitInfo {
                 commit: Some(commit.to_owned()),
@@ -1008,7 +1020,7 @@ mod tests {
             set,
             benchmark: Some(benchmark.to_owned()),
             commit: "c0".to_owned(),
-            commit_time: bts(1),
+            commit_time: Some(bts(1)),
             issued_at: None,
             prefixes: Vec::new(),
         };
@@ -1053,7 +1065,7 @@ mod tests {
             set: linux_set(),
             benchmark: None,
             commit: "abc123".to_owned(),
-            commit_time: bts(1_700_000_000),
+            commit_time: Some(bts(1_700_000_000)),
             issued_at: Some(bts(1_700_000_500)),
             prefixes: vec!["nm/observe".to_owned(), "nm/record".to_owned()],
         };
@@ -1075,7 +1087,7 @@ mod tests {
             set: linux_set(),
             benchmark: Some("nm/observe".to_owned()),
             commit: "abc123".to_owned(),
-            commit_time: bts(1_700_000_000),
+            commit_time: Some(bts(1_700_000_000)),
             issued_at: None,
             prefixes: Vec::new(),
         };
@@ -1099,7 +1111,7 @@ mod tests {
             set: linux_set(),
             benchmark: None,
             commit: "abc123".to_owned(),
-            commit_time: bts(1_700_000_000),
+            commit_time: Some(bts(1_700_000_000)),
             issued_at: Some(bts(1_700_000_500)),
             prefixes: vec!["nm/observe".to_owned()],
         };
@@ -1112,7 +1124,7 @@ mod tests {
             set: linux_set(),
             benchmark: Some("nm/observe".to_owned()),
             commit: "abc123".to_owned(),
-            commit_time: bts(1_700_000_000),
+            commit_time: Some(bts(1_700_000_000)),
             issued_at: None,
             prefixes: Vec::new(),
         };
@@ -1478,7 +1490,6 @@ mod tests {
         store(&storage, &clean_key("c3"), &two_metric_set(3, "c3"));
         let record = BlessingRecord::new(
             "c3".to_owned(),
-            Timestamp::from_second(3).unwrap(),
             Timestamp::from_second(100).unwrap(),
             vec![BenchmarkIdPrefix::new("nm/nm::observe").unwrap()],
             "0.0.1".to_owned(),
@@ -1526,7 +1537,6 @@ mod tests {
         store(&storage, &clean_key("c3"), &two_metric_set(3, "c3"));
         let record = BlessingRecord::new(
             "c3".to_owned(),
-            Timestamp::from_second(3).unwrap(),
             Timestamp::from_second(100).unwrap(),
             vec![BenchmarkIdPrefix::new("nm/nm::observe").unwrap()],
             "0.0.1".to_owned(),
@@ -1639,7 +1649,6 @@ mod tests {
         // A blessing at c2 (mid-history) accepting the benchmark family.
         let record = BlessingRecord::new(
             "c2".to_owned(),
-            Timestamp::from_second(2).unwrap(),
             Timestamp::from_second(100).unwrap(),
             vec![BenchmarkIdPrefix::new("nm/nm::observe").unwrap()],
             "0.0.1".to_owned(),
@@ -1681,7 +1690,6 @@ mod tests {
         }
         let record = BlessingRecord::new(
             "c2".to_owned(),
-            Timestamp::from_second(2).unwrap(),
             Timestamp::from_second(100).unwrap(),
             vec![BenchmarkIdPrefix::new("nm/nm::observe").unwrap()],
             "0.0.1".to_owned(),
@@ -1746,7 +1754,6 @@ mod tests {
         }
         let record = BlessingRecord::new(
             "c1".to_owned(),
-            Timestamp::from_second(1).unwrap(),
             Timestamp::from_second(100).unwrap(),
             vec![BenchmarkIdPrefix::new("nm/nm::observe").unwrap()],
             "0.0.1".to_owned(),

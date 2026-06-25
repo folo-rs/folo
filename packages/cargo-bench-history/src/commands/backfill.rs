@@ -4,8 +4,9 @@
 //! and supports ad-hoc "what did this look like N commits ago" investigations. It
 //! checks out each commit of a range in a dedicated git **worktree** (never the
 //! primary checkout) and runs the configured engines there exactly as the `run`
-//! command does, recording each commit's committer date as the commit timestamp
-//! (see the `backfill` command in `DESIGN.md`).
+//! command does. A backfilled run carries no commit timestamp of its own; its
+//! position on the timeline is where its commit sits in git history, resolved live
+//! at analyze time (see the `backfill` command in `DESIGN.md`).
 //!
 //! Like `run`, the orchestration is generic over small ports so the loop logic is
 //! exercised with in-memory fakes (Miri-safe): a [`BackfillGit`] port for the git

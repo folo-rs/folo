@@ -1,25 +1,25 @@
 //! The run context: the metadata that situates a [`Run`](crate::model::Run) in
-//! time, in history (git), and in its execution environment (automation provider,
+//! history (git) and in its execution environment (automation provider,
 //! toolchain, host).
 //!
-//! Only the *commit* timestamp orders a series; the observation timestamp is
-//! recorded for provenance and is never used for ordering.
+//! A run is positioned on its series timeline purely by git topology — the
+//! first-parent index of its commit, resolved live during analysis from the
+//! stored commit SHA. The object records no commit timestamp of its own; the
+//! observation timestamp it does carry is provenance and is never used for
+//! ordering or windowing.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 /// Metadata attached to every stored run.
 ///
-/// `commit` is the run's position on the timeline; `observation` is provenance
-/// metadata and is never used for ordering. `commit` is the committer date of the
-/// benchmarked commit (for a dirty snapshot, the commit it is based on).
+/// A run's timeline position comes from git topology (keyed by the commit SHA in
+/// [`git`](Self::git)), not from any stored timestamp. `observation` is provenance
+/// metadata and is never used for ordering or windowing.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RunContext {
-    /// Committer date of the benchmarked commit; the run's timeline position. For
-    /// a dirty snapshot it is the committer date of the commit it is based on.
-    pub commit: Timestamp,
     /// Wall-clock time at which the run was observed (benchmarks executed and
-    /// stored). Provenance only; never used to order a series.
+    /// stored). Provenance only; never used to order or window a series.
     pub observation: Timestamp,
     /// Information about the git commit the benchmarks were run against.
     pub git: GitInfo,
@@ -36,7 +36,6 @@ impl RunContext {
     /// Creates a run context from its components.
     #[must_use]
     pub fn new(
-        commit: Timestamp,
         observation: Timestamp,
         git: GitInfo,
         env: EnvironmentInfo,
@@ -44,7 +43,6 @@ impl RunContext {
         tool_version: String,
     ) -> Self {
         Self {
-            commit,
             observation,
             git,
             env,

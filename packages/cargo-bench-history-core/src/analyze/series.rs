@@ -6,8 +6,8 @@
 //! kind. Its points are ordered by *git topology* — the first-parent position of
 //! their commit, supplied as a `commit -> index` map — so the timeline reflects
 //! the history the runs were measured against rather than when they were ingested.
-//! Within a single commit, clean runs precede dirty snapshots, and ties break by
-//! commit time and then the storage key for determinism.
+//! Within a single commit, clean runs precede dirty snapshots, and any remaining
+//! tie breaks by the storage key for determinism.
 
 use std::collections::{BTreeMap, HashMap};
 use std::hash::BuildHasher;
@@ -26,8 +26,6 @@ pub struct SeriesPoint {
     pub topo_index: usize,
     /// Whether the observation came from a dirty (uncommitted-tree) snapshot.
     pub dirty: bool,
-    /// Commit time of the run (a within-commit, within-cleanliness tie-break).
-    pub commit_time: Timestamp,
     /// Storage key the observation came from (final tie-break and provenance).
     pub object_key: String,
     /// Abbreviated commit the run was measured against, if known.
@@ -52,9 +50,18 @@ pub struct SeriesPoint {
 pub struct Blessing {
     /// Full commit SHA the blessing was issued at (the report anchor).
     pub commit: String,
-    /// Committer date of the blessed commit, for the report anchor.
-    pub commit_time: Timestamp,
+    /// Committer date of the blessed commit (resolved from git topology), for the
+    /// report anchor. `None` when topology did not report a date for the commit.
+    pub commit_time: Option<Timestamp>,
 }
+
+/// A blessing positioned in history, collected per discriminant set and consumed
+/// by [`apply_blessings`].
+///
+/// The tuple pairs the topological index of the commit the blessing was issued at,
+/// that commit's committer date (resolved from git topology, `None` when topology
+/// did not report one), and the blessing record itself.
+pub type BlessingPlacement = (usize, Option<Timestamp>, BlessingRecord);
 
 /// A per-`(set, benchmark, metric kind)` time series ordered by git topology.
 #[derive(Clone, Debug)]
@@ -65,7 +72,7 @@ pub struct Series {
     pub id: BenchmarkId,
     /// The metric kind all points share (governs unit and comparison semantics).
     pub kind: MetricKind,
-    /// Observations ordered by `(topo_index, dirty, commit_time, object_key)`.
+    /// Observations ordered by `(topo_index, dirty, object_key)`.
     pub points: Vec<SeriesPoint>,
     /// Index into `points` where the active (post-blessing) window begins; `0`
     /// when the series is unblessed (every point is active). History-mode
@@ -117,9 +124,9 @@ fn prefixes_accept(prefixes: &[BenchmarkIdPrefix], id: &BenchmarkId) -> bool {
 /// metric of each kind, so the kind alone keys the series unambiguously. The
 /// `order` map gives each commit its first-parent topological index; an object
 /// whose commit is not in `order` is outside the analyzed selection and is
-/// skipped. Points are sorted by `(topo_index, dirty, commit_time, object_key)`
-/// so a clean run precedes a dirty snapshot on the same commit and the timeline
-/// follows git history rather than storage-listing order.
+/// skipped. Points are sorted by `(topo_index, dirty, object_key)` so a clean run
+/// precedes a dirty snapshot on the same commit and the timeline follows git
+/// history rather than storage-listing order.
 #[must_use]
 pub fn build_series<S: BuildHasher>(
     objects: &[LoadedObject],
@@ -134,7 +141,6 @@ pub fn build_series<S: BuildHasher>(
             continue;
         };
         let dirty = object.key.is_dirty();
-        let commit_time = object.result.context.commit;
         let commit = object.result.context.git.short_commit.clone();
 
         for record in &object.result.results {
@@ -145,7 +151,6 @@ pub fn build_series<S: BuildHasher>(
                 let point = SeriesPoint {
                     topo_index,
                     dirty,
-                    commit_time,
                     object_key: object.object_key.clone(),
                     commit: commit.clone(),
                     value: metric.value,
@@ -167,7 +172,6 @@ pub fn build_series<S: BuildHasher>(
                 left.topo_index
                     .cmp(&right.topo_index)
                     .then_with(|| left.dirty.cmp(&right.dirty))
-                    .then_with(|| left.commit_time.cmp(&right.commit_time))
                     .then_with(|| left.object_key.cmp(&right.object_key))
             });
             Series {
@@ -191,9 +195,13 @@ pub fn build_series<S: BuildHasher>(
 /// for charting. A series with no matching blessing is left untouched
 /// (`active_start = 0`). Branch and tip modes pass an empty map and so are
 /// unaffected.
+///
+/// Each blessing carries the committer date of its commit (resolved from git
+/// topology, `None` when topology did not report one), which becomes the report
+/// anchor for the re-baselined series.
 pub fn apply_blessings<S: BuildHasher>(
     series: &mut [Series],
-    blessings: &HashMap<DiscriminantSet, Vec<(usize, BlessingRecord)>, S>,
+    blessings: &HashMap<DiscriminantSet, Vec<BlessingPlacement>, S>,
 ) {
     for one in series.iter_mut() {
         let Some(set_blessings) = blessings.get(&one.set) else {
@@ -201,9 +209,9 @@ pub fn apply_blessings<S: BuildHasher>(
         };
         let latest = set_blessings
             .iter()
-            .filter(|(_, record)| record.matches(&one.id))
-            .max_by_key(|(topo_index, _)| *topo_index);
-        let Some((topo_index, record)) = latest else {
+            .filter(|(_, _, record)| record.matches(&one.id))
+            .max_by_key(|(topo_index, _, _)| *topo_index);
+        let Some((topo_index, commit_time, record)) = latest else {
             continue;
         };
         // The active window starts at the first point on or after the blessed
@@ -214,7 +222,7 @@ pub fn apply_blessings<S: BuildHasher>(
             .partition_point(|point| point.topo_index < *topo_index);
         one.blessing = Some(Blessing {
             commit: record.commit.clone(),
-            commit_time: record.commit_time,
+            commit_time: *commit_time,
         });
     }
 }
@@ -241,21 +249,20 @@ mod tests {
     }
 
     /// Builds a stored run with one result carrying one instruction-count metric.
-    fn run(commit_time: Timestamp, commit: &str, value: f64) -> Run {
-        run_for_package(commit_time, commit, value, None)
+    fn run(observation: Timestamp, commit: &str, value: f64) -> Run {
+        run_for_package(observation, commit, value, None)
     }
 
     /// Builds a stored run whose single result is scoped to `package`, keeping
     /// every other identity segment fixed.
     fn run_for_package(
-        commit_time: Timestamp,
+        observation: Timestamp,
         commit: &str,
         value: f64,
         package: Option<&str>,
     ) -> Run {
         let context = RunContext::new(
-            commit_time,
-            commit_time,
+            observation,
             GitInfo {
                 commit: Some(format!("{commit}full")),
                 short_commit: Some(commit.to_owned()),
@@ -280,13 +287,13 @@ mod tests {
     }
 
     /// A clean object at `commit` carrying the given instruction-count value.
-    fn clean_object(commit: &str, commit_time: i64, value: f64) -> LoadedObject {
+    fn clean_object(commit: &str, observation: i64, value: f64) -> LoadedObject {
         let object_key =
             format!("v1/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json");
         LoadedObject {
             key: parse_key(&object_key).unwrap(),
             object_key,
-            result: run(ts(commit_time), commit, value),
+            result: run(ts(observation), commit, value),
         }
     }
 
@@ -311,9 +318,10 @@ mod tests {
     }
 
     #[test]
-    fn build_series_orders_points_by_topology_not_commit_time() {
-        // Topology is c0,c1,c2 but the commit times are deliberately reversed;
-        // topology must win so the values come out in commit order.
+    fn build_series_orders_points_by_topology() {
+        // The objects are supplied out of topological order; build_series must sort
+        // them by their commit's first-parent index so the values come out in
+        // commit order regardless of insertion order.
         let objects = vec![
             clean_object("c2", 100, 30.0),
             clean_object("c0", 300, 10.0),
@@ -332,7 +340,7 @@ mod tests {
     #[test]
     fn build_series_orders_clean_before_dirty_within_a_commit() {
         // One commit with a clean run plus two dirty snapshots; clean comes first,
-        // then the dirty snapshots ordered by commit time.
+        // then the dirty snapshots ordered by their storage key (`dirty-<unix>`).
         let objects = vec![
             dirty_object("c0", 300, 33.0),
             dirty_object("c0", 200, 22.0),
@@ -423,11 +431,10 @@ mod tests {
         assert_eq!(series[0].id.qualified(), "foo/group/case");
     }
 
-    fn blessing(prefixes: &[&str], commit: &str, commit_time: i64) -> BlessingRecord {
+    fn blessing(prefixes: &[&str], commit: &str, issued: i64) -> BlessingRecord {
         BlessingRecord::new(
             commit.to_owned(),
-            ts(commit_time),
-            ts(commit_time.saturating_add(1)),
+            ts(issued),
             prefixes
                 .iter()
                 .map(|prefix| BenchmarkIdPrefix::new(*prefix).unwrap())
@@ -456,8 +463,11 @@ mod tests {
         let mut series = four_commit_series();
         let set = series[0].set.clone();
         let mut map = HashMap::new();
-        // Blessed at the c2 commit (topological index 2).
-        map.insert(set, vec![(2_usize, blessing(&["group"], "c2full", 300))]);
+        // Blessed at the c2 commit (topological index 2), committer date ts(300).
+        map.insert(
+            set,
+            vec![(2_usize, Some(ts(300)), blessing(&["group"], "c2full", 301))],
+        );
 
         apply_blessings(&mut series, &map);
 
@@ -466,6 +476,7 @@ mod tests {
         assert_eq!(series[0].active_start, 2);
         let recorded = series[0].blessing.as_ref().unwrap();
         assert_eq!(recorded.commit, "c2full");
+        assert_eq!(recorded.commit_time, Some(ts(300)));
     }
 
     #[test]
@@ -474,7 +485,10 @@ mod tests {
         let set = series[0].set.clone();
         let mut map = HashMap::new();
         // The series' benchmark id is `group/case`; this prefix matches nothing.
-        map.insert(set, vec![(2_usize, blessing(&["other"], "c2full", 300))]);
+        map.insert(
+            set,
+            vec![(2_usize, Some(ts(300)), blessing(&["other"], "c2full", 301))],
+        );
 
         apply_blessings(&mut series, &map);
 
@@ -491,8 +505,8 @@ mod tests {
         map.insert(
             set,
             vec![
-                (1_usize, blessing(&["group"], "c1full", 200)),
-                (3_usize, blessing(&["group"], "c3full", 400)),
+                (1_usize, Some(ts(200)), blessing(&["group"], "c1full", 201)),
+                (3_usize, Some(ts(400)), blessing(&["group"], "c3full", 401)),
             ],
         );
 

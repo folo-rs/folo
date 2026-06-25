@@ -76,8 +76,6 @@ enum Task {
         set: usize,
         /// The blessed commit SHA.
         sha: String,
-        /// The blessed commit's committer date.
-        time: Timestamp,
         /// The blessing's issued second (part of its key).
         issued: i64,
     },
@@ -163,7 +161,6 @@ fn plan_tasks(scenario: Scenario, sets: &[DiscriminantSet], repo: &SeededRepo) -
             tasks.push(Task::Bless {
                 set,
                 sha: commit.sha.clone(),
-                time: commit.time,
                 issued: commit.time.as_second().saturating_add(60),
             });
         }
@@ -252,14 +249,11 @@ fn write_one(
             });
             (set.dirty_key(PROJECT, sha, *observation), run.to_json()?)
         }
-        Task::Bless {
-            sha, time, issued, ..
-        } => {
+        Task::Bless { sha, issued, .. } => {
             let prefix = BenchmarkIdPrefix::new(scenario::blessable_family_prefix())
                 .map_err(|error| fail(error.to_string()))?;
             let record = BlessingRecord::new(
                 sha.clone(),
-                *time,
                 Timestamp::from_second(*issued)
                     .map_err(|error| fail(format!("invalid blessing time: {error}")))?,
                 vec![prefix],
@@ -324,7 +318,6 @@ fn run_context(
         rustc_version: None,
     };
     RunContext::new(
-        time,
         time,
         git,
         EnvironmentInfo::default(),
@@ -447,7 +440,6 @@ mod tests {
             set_index(&Task::Bless {
                 set: 9,
                 sha: "d".to_owned(),
-                time: ts(4),
                 issued: 11,
             }),
             9

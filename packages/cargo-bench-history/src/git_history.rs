@@ -19,12 +19,11 @@ use crate::process::capture;
 /// A commit on a first-parent ancestry, paired with its committer timestamp.
 ///
 /// `analyze` orders a series by first-parent topology and filters it by the
-/// `--since`/`--until` window. A run's commit timestamp (`context.commit`) is its
-/// commit's committer date, so the window is a per-commit property that topology
-/// alone decides — letting out-of-window objects be skipped before any stored
-/// object is fetched. `committer_time` is `None` only when `git` emitted an
-/// unparseable date, which a real commit never does; such a commit is treated as
-/// in-window (never excluded by the window).
+/// `--since`/`--until` window. The window is a per-commit property — a commit's
+/// committer date — that topology alone decides, letting out-of-window objects be
+/// skipped before any stored object is fetched. `committer_time` is `None` only
+/// when `git` emitted an unparseable date, which a real commit never does; such a
+/// commit is treated as in-window (never excluded by the window).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FirstParentCommit {
     /// The commit's full SHA.

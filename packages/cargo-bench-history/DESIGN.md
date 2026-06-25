@@ -194,13 +194,14 @@ flowchart LR
   otherwise the `mean`. Noisy engines (Criterion, `all_the_time`) also carry the
   confidence interval and std-dev so analysis can be noise-aware.
 * **BenchmarkResult** — one `BenchmarkId` + its metrics from a single run.
-* **Run timestamps** — every run carries two distinct times (§6): the **commit
-  timestamp** (the benchmarked commit's committer date — for a dirty snapshot, the
-  commit it is based on) and the **observation timestamp** (wall clock when the
-  benches ran and were stored). The series is ordered by git topology (§8.3) using
-  the commit timestamp only as a within-commit tiebreak; the observation timestamp is
-  provenance only and never orders anything. There is no "effective timestamp"
-  concept and no `--timestamp` override. The two times live directly on `RunContext`.
+* **Run timestamp** — every run carries a single **observation timestamp** (§6):
+  the wall clock when the benches ran and were stored. It is provenance only and
+  **never** orders anything. The series is ordered by git topology (§8.3); runs on
+  one commit sub-order clean-before-dirty, then by storage key. The benchmarked
+  commit's committer date — its position on the timeline and the basis for the
+  `--since`/`--until` window — is read from the git graph at analyze time (§8.3),
+  not copied onto the run. There is no "effective timestamp" concept and no
+  `--timestamp` override. The observation time lives directly on `RunContext`.
 * **RunContext** — metadata attached to every stored run (see §6).
 * **Run** — `{ schema_version, context, results: [BenchmarkResult] }`; the
   unit of storage (one immutable file per run).
@@ -382,19 +383,20 @@ the computed fingerprint.
 
 Captured once per stored run and attached to the `Run`:
 
-* **Commit timestamp** — the benchmarked commit's committer date (for a **dirty**
-  run, the committer date of the commit it is based on). This is the run's position
-  on the timeline. It is **not** the primary series order — git topology is (§8.3) —
-  but it is the within-commit tiebreak and the `--since`/`--until` window filter. The
-  commit timestamp is never overridable from the CLI; the timeline is the git graph.
 * **Observation timestamp** — wall clock when the benches ran and were stored,
   read from an injected `tick::Clock` (§10) so tests drive it deterministically.
   Provenance only; **never** used to order a series. It names the dirty filename
   (`dirty-<observation_unix>`) so concurrent dirty snapshots of one commit coexist.
-* **Git:** commit SHA + short SHA, branch, committer date, dirty flag (`git`).
+  This is the only timestamp the run stores: the benchmarked commit's position on
+  the timeline is its committer date, read from the git graph at analyze time
+  (§8.3) and never copied onto the run, so a rebase or an amended date can never
+  leave a stale timestamp behind.
+* **Git:** commit SHA + short SHA, branch, dirty flag (`git`).
   Branch is metadata only — query-time topology, not this field, decides series
-  membership (§8.3). Parent lineage is **not** recorded: `analyze` resolves topology
-  from a live repo (§8.3), so storage never needs to reconstruct the commit graph.
+  membership (§8.3). Parent lineage and committer date are **not** recorded:
+  `analyze` resolves topology *and* each commit's committer date from a live repo
+  (§8.3), so storage never needs to reconstruct the commit graph or carry a
+  per-object date.
 * **Environment (`EnvironmentInfo`):** provider + run id + PR number, detected
   from env. "Environment" rather than "CI" because `Local` is a first-class
   provider and the automated providers are not always doing continuous integration:
@@ -571,8 +573,9 @@ the hardware fingerprint, §4.1), `--no-store`, `--overwrite` (replace an existi
 same-commit point instead of refusing, §4.2), `--verbose` (print a step-by-step
 diagnostic trail to stderr — the benchmark command and injected env, directories
 scanned, files included/skipped-as-stale, and each stored key — to diagnose a run
-that unexpectedly stored nothing). The commit timestamp is always the benchmarked
-commit's committer date (§6) — there is no `--timestamp` override. The target triple
+that unexpectedly stored nothing). The benchmarked commit's position on the
+timeline is its committer date, read from git at analyze time (§6) — there is no
+`--timestamp` override. The target triple
 is always auto-detected (§4.1) — there is no `--target-triple` override. `--engine`
 is **not** a `run` flag — it is an `analyze` facet over stored data (§8.3).
 
@@ -621,7 +624,8 @@ This single rule covers both use cases: an "official" view is just
 `--context <default>` (target == base ⇒ everything is base ⇒ clean-only); the
 "how does my feature fit in" view is the default (clean default-branch baseline,
 then the branch's own clean + dirty snapshots). Series are **ordered by git
-topology**; multiple runs on one commit sub-order by commit time (§6). Branch
+topology**; multiple runs on one commit sub-order clean-before-dirty, then by
+storage key (§8.3). Branch
 *metadata* on a run is never consulted — membership is purely topological, so a
 dirty snapshot taken on a shared base commit (scratch work before committing) is
 excluded from an official view until it is committed.
@@ -709,7 +713,7 @@ line, regardless of where `HEAD` sits).
 **Per commit**, in order, the tool first consults storage to decide whether the
 commit needs benchmarking at all, then (if it does) checks out the commit, runs the
 benches with `cargo bench` exactly as §8.1 (no `--timestamp` override exists — each
-point's commit timestamp is its own committer date, §6), harvests every engine that
+point's position on the timeline is its own committer date, read from git §8.3), harvests every engine that
 produced output, and stores the result. Backfilled runs are always on a **clean**
 tree, so each is keyed by commit (§4.2) and collision-checked:
 
@@ -902,8 +906,9 @@ accidental edit is visible.
 **Storage: append-only sidecar.** `bless` writes a `BlessingRecord` sidecar
 `…/<commit>/bless-<issued_unix>.json` alongside the commit's `clean.json` in every
 facet-selected discriminant set that has a result at the context commit. The record
-carries the blessed commit, its committer time, the issue time, the prefix filters,
-and the tool version. Sidecars are **immutable** (append-only), so narrowing a
+carries the blessed commit, the issue time, the prefix filters, and the tool
+version; the blessed commit's committer time is read from git at analyze time, not
+stored on the sidecar. Sidecars are **immutable** (append-only), so narrowing a
 blessing means `unbless` then re-bless the subset to keep. Overwriting a commit's
 `clean.json` (a `run --overwrite`) deletes its stale blessing sidecars, since the
 accepted data point is gone.
@@ -923,7 +928,8 @@ benchmarks are currently re-baselined and since which commit.
 ## 9. Analysis algorithms
 
 Series: per `(DiscriminantSet, BenchmarkId, metric)`, ordered by git first-parent
-topology (§8.3) with runs on one commit sub-ordered by commit time (§6). The
+topology (§8.3) with runs on one commit sub-ordered clean-before-dirty, then by
+storage key (§8.3). The
 goal is **high signal-to-noise**: report level shifts and trends that are real,
 and stay silent on measurement jitter. The design is *engine-aware* because the
 two engines have fundamentally different noise profiles, and a single detector
@@ -1158,7 +1164,8 @@ fully blessed by construction, so they ignore blessings entirely. The pre-blessi
 points still feed the chart and any long-range technique that needs context outside
 the active window; they are *excluded from detection*, not discarded. A finding whose
 series was re-baselined records `blessed_at` (the blessing's abbreviated commit) and
-`blessed_commit_time` (its committer time) for provenance.
+`blessed_commit_time` (the blessed commit's committer time, read from git) for
+provenance.
 
 Blessings load only for commits inside the analysis window (the same topological
 selection as the rest of `analyze`); a blessing on a commit outside the window is not
@@ -1188,10 +1195,10 @@ src/
   model.rs                # Run/BenchmarkResult/Metric/BenchmarkId/Context (serde)
   comparability.rs        # DiscriminantSet + commit-centric partition path
   bless.rs                # BlessingRecord data model + append-only sidecar
-  context.rs              # RunContext (CI/git/toolchain + commit/observation times)
+  context.rs              # RunContext (CI/git/toolchain + observation time)
   process.rs              # ProcessRunner port (async) + tokio adapter + fake
   probe.rs                # environment probe port (git/rustc) + shell adapter + fake
-  git.rs                  # pure parse of git output -> GitSnapshot
+  git.rs                  # pure parse of git output -> GitInfo
   git_history.rs          # read-only GitHistory port (rev-list/merge-base) + fake
   host.rs                 # rustc -vV pure parse -> toolchain/host triple
   machine.rs              # machine key (many_cpus + SHA-256 fingerprint)
@@ -1236,7 +1243,7 @@ adapter plus an in-lib `#[cfg(test)]` in-memory fake:
   injected env; return exit status. Real = `tokio::process::Command`; fake records
   the invocation and can drop fixture `summary.json` files to simulate a bench run.
 * `EnvProbe` (async, `probe.rs`) — discover the run-time git facts
-  (commit/short/branch/committer-date/dirty) and toolchain facts; the real adapter
+  (commit/short/branch/dirty) and toolchain facts; the real adapter
   shells `git` and `rustc` (PARSE pure in `git.rs`/`host.rs`), the fake returns
   canned facts.
 * `GitHistory` (async, `git_history.rs`) — the read-only history query
@@ -1410,17 +1417,19 @@ Each iteration ships with tests and docs and leaves the tool runnable.
    *(Superseded: the earlier per-engine `command`/`os`/`extra_args` config and
    `WSLENV` bridging are gone — to collect Callgrind data, run the tool natively on
    Linux/WSL.)*
-9. **Commit time vs observation time** — *Decided:* every run records two times —
-   the **commit timestamp** (the benchmarked commit's committer date; for a dirty
-   snapshot, the commit it is based on) and the **observation timestamp** (wall clock
-   when the run executed and was stored). The commit timestamp is the run's timeline
-   position and is never overridable from the CLI — the timeline is the git graph. It
-   **does not order a series** (git topology does — decision 24); it only sub-orders
-   runs within one commit and drives the `--since`/`--until` window. The observation
-   timestamp is provenance only — it names the dirty file and is never used to order
-   anything. *(Superseded: an earlier model recorded three times — effective,
-   execution, ingest — with a `--timestamp` override of the effective time; the
-   effective-time concept and `--timestamp` are gone.)*
+9. **Commit time vs observation time** — *Decided:* a run records a single
+   **observation timestamp** (wall clock when the run executed and was stored). The
+   benchmarked commit's position on the timeline is its **committer date**, read
+   from the git graph at analyze time (decision 24) and never copied onto the run,
+   so a rebase or amended date can never leave a stale per-object timestamp behind.
+   It is never overridable from the CLI. The committer date **does not order a
+   series** (git topology does — decision 24); it only drives the `--since`/`--until`
+   window. The observation timestamp is provenance only — it names the dirty file and
+   is never used to order anything. *(Superseded: earlier models recorded the
+   committer date on each run as a `commit`/`commit_time` field, and earlier still
+   three times — effective, execution, ingest — with a `--timestamp` override of the
+   effective time; the stored commit timestamp, the effective-time concept, and
+   `--timestamp` are all gone.)*
 10. **Filtering** — *Decided:* `run`/`backfill` expose first-class scope
     flags — `--workspace` (default), `--package`/`-p NAME`, `--bench NAME` — that
     translate directly to `cargo bench` arguments; everything after `--` is
@@ -1528,7 +1537,8 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     (`--base`, default the detected default branch): base-ancestry commits contribute
     **clean only**, target-unique commits contribute **clean + dirty** (`--no-dirty`
     to drop dirty). Series are ordered by **git topology** (decision 24 supersedes the
-    old effective-time ordering); runs within one commit sub-order by commit time.
+    old effective-time ordering); runs within one commit sub-order clean-before-dirty,
+    then by storage key.
     Discriminant sets are selected via the repeatable facets `--engine` /
     `--target-triple` / `--machine-key`, each accepting the widening keyword `all`
     and auto-detecting the current machine when omitted (decision 29, §4.3); each
@@ -1547,8 +1557,8 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     first-parent ancestor of `<to>`, then derives the range purely from `<to>`'s
     first-parent history — it does **not** depend on the current checkout or branch,
     so any range whose endpoints form a first-parent line can be backfilled. Each
-    commit is benchmarked exactly as `run` (no `--timestamp` override; the commit
-    timestamp is its own committer date) from inside a dedicated **git worktree** so
+    commit is benchmarked exactly as `run` (no `--timestamp` override; a commit's
+    position on the timeline is its own committer date, read from git) from inside a dedicated **git worktree** so
     the user's checkout is never disturbed and an interruption leaves them in place.
     Existing points are **skipped before they are re-benchmarked** by default (the
     commits already stored are listed once up front, so backfill is resumable without
@@ -1558,11 +1568,12 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     while infrastructure failures always abort. Benches are whatever each commit
     contains, run with `cargo bench` exactly as `run` (§8.4).
 24. **Series ordering** — *Decided:* **git topology** (first-parent order of the
-    resolved commit list), not commit timestamp. This removes the committer-date
-    monotonicity hazard (rebases / amended dates no longer misorder) and is the
-    reason `analyze` needs a live repo (decision 22). The commit timestamp only
-    sub-orders multiple runs sharing one commit and drives the `--since`/`--until`
-    window.
+    resolved commit list), not a stored commit timestamp. This removes the
+    committer-date monotonicity hazard (rebases / amended dates no longer misorder)
+    and is the reason `analyze` needs a live repo (decision 22). Each commit's
+    committer date — read from that same git topology, not from any stored field —
+    drives only the `--since`/`--until` window; runs sharing one commit sub-order
+    clean-before-dirty, then by storage key.
 25. **No engine configuration** — *Decided:* there is no `[engines]` config.
     `run`/`backfill` run the workspace's benches once with `cargo bench`, inject the
     combined environment every supported engine needs, and detect each engine from
