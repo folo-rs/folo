@@ -138,18 +138,21 @@ impl StorageTarget {
                     "a fresh container per run keeps stress data isolated and lets cleanup delete \
                      the whole container in one call",
                 );
-                az(&[
-                    "storage",
-                    "container",
-                    "create",
-                    "--account-name",
-                    account,
-                    "--name",
-                    container,
-                    "--auth-mode",
-                    "login",
-                    "--only-show-errors",
-                ])
+                az(
+                    &[
+                        "storage",
+                        "container",
+                        "create",
+                        "--account-name",
+                        account,
+                        "--name",
+                        container,
+                        "--auth-mode",
+                        "login",
+                        "--only-show-errors",
+                    ],
+                    logger,
+                )
                 .await
             }
         }
@@ -216,18 +219,21 @@ impl StorageTarget {
                     return Ok(());
                 }
                 logger.step(&format!("deleting Azure blob container {container}"));
-                az(&[
-                    "storage",
-                    "container",
-                    "delete",
-                    "--account-name",
-                    account,
-                    "--name",
-                    container,
-                    "--auth-mode",
-                    "login",
-                    "--only-show-errors",
-                ])
+                az(
+                    &[
+                        "storage",
+                        "container",
+                        "delete",
+                        "--account-name",
+                        account,
+                        "--name",
+                        container,
+                        "--auth-mode",
+                        "login",
+                        "--only-show-errors",
+                    ],
+                    logger,
+                )
                 .await
             }
         }
@@ -277,14 +283,15 @@ fn wildcard_source(root: &Path) -> String {
 }
 
 /// Runs the Azure CLI, which on Windows is a `.cmd` shim that must go through
-/// `cmd /C`, and elsewhere is directly executable.
-async fn az(args: &[&str]) -> Result<(), Error> {
+/// `cmd /C`, and elsewhere is directly executable. The caller's `logger` is threaded
+/// through so `--verbose` runs surface the actual CLI invocation.
+async fn az(args: &[&str], logger: Logger) -> Result<(), Error> {
     if cfg!(windows) {
         let mut all = vec!["/C", "az"];
         all.extend_from_slice(args);
-        run_tool("cmd", &all, &[], Logger::new(false)).await
+        run_tool("cmd", &all, &[], logger).await
     } else {
-        run_tool("az", args, &[], Logger::new(false)).await
+        run_tool("az", args, &[], logger).await
     }
 }
 

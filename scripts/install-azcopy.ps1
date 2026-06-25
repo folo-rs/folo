@@ -96,9 +96,31 @@ function Expand-AzCopyArchive {
     }
 }
 
-if (-not $Force -and (Get-Command azcopy -ErrorAction SilentlyContinue)) {
-    Write-Host 'azcopy already installed; skipping.'
-    return
+function Get-InstalledAzCopyVersion {
+    # Returns the version of the azcopy already on PATH, or $null if none is found.
+    # `azcopy --version` prints e.g. "azcopy version 10.32.4".
+    if ($null -eq (Get-Command azcopy -ErrorAction SilentlyContinue)) {
+        return $null
+    }
+    $output = (& azcopy --version 2>$null) -join ' '
+    if ($output -match 'version\s+([0-9][0-9.]*)') {
+        return $Matches[1]
+    }
+    return $null
+}
+
+if (-not $Force) {
+    # Only skip when the azcopy already on PATH is exactly the pinned version. A
+    # different (e.g. older, globally-installed) azcopy would defeat the point of
+    # pinning, so install the pinned build over it rather than honouring it.
+    $installed = Get-InstalledAzCopyVersion
+    if ($installed -eq $script:AzCopyVersion) {
+        Write-Host "azcopy $installed already installed; skipping."
+        return
+    }
+    if ($null -ne $installed) {
+        Write-Verbose "Found azcopy $installed on PATH, but the pinned version is $($script:AzCopyVersion); installing the pinned build."
+    }
 }
 
 $platformKey = Get-PlatformKey
@@ -124,9 +146,11 @@ try {
     Invoke-WebRequest -Uri $url -OutFile $archive
 
     Write-Verbose "Verifying the archive SHA-256 against the pinned digest."
-    $actual = (Get-FileHash -Path $archive -Algorithm SHA256).Hash
+    # Get-FileHash returns uppercase hex; normalize both sides to lowercase so the
+    # comparison cannot fail on case alone.
+    $actual = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actual -ne $build.Sha256) {
-        throw "azcopy archive SHA-256 mismatch for '$($build.Asset)': expected $($build.Sha256), got $($actual.ToLowerInvariant())."
+        throw "azcopy archive SHA-256 mismatch for '$($build.Asset)': expected $($build.Sha256), got $actual."
     }
 
     Expand-AzCopyArchive -ArchivePath $archive -ArchiveKind $build.Kind -DestinationDir $work

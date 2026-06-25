@@ -348,8 +348,10 @@ const FEATURE_COMMIT_SPACING_SECONDS: i64 = 60 * 60;
 /// Committer dates for the synthetic history, oldest first.
 ///
 /// `main` commits are spread evenly across the trailing 12 months ending at
-/// `anchor`; feature commits follow just after the anchor. The dates double as
-/// each run's `commit` timestamp, which is what `analyze` windows `--since` by.
+/// `anchor`; feature commits follow just after the anchor. A single `main` commit
+/// (`commits == 1`) has no range to spread over and is placed at `anchor` itself.
+/// The dates double as each run's `commit` timestamp, which is what `analyze`
+/// windows `--since` by.
 pub(crate) fn commit_times(
     anchor: Timestamp,
     commits: usize,
