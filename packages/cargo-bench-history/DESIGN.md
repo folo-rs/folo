@@ -1274,11 +1274,11 @@ regression twins; zero warnings; alphabetical no-default-features deps.
 Dependency sketch: `clap` (derive; `default` feature on per the workspace CLI
 exception), `serde`, `serde_json`, `toml`, `jiff` (timestamps +
 `--since`/`--until`), `tokio` (rt-multi-thread, macros, process, fs, io-util),
-`tick` (clock; `tokio` feature in prod, `test-util` in dev), `many_cpus` and `sha2`
-(the machine key), and `futures` (`executor`, dev-only) for the Miri-safe
-`block_on`. The **Azure backend** pulls in `azure_core`, `azure_identity`,
-`azure_storage_blob`, `base64`, `hmac` (SAS signing pairs `hmac` with the
-always-on `sha2`), and `futures` at runtime.
+`tick` (clock; `tokio` feature in prod, `test-util` in dev), and `many_cpus` and
+`sha2` (the machine key). The **Azure backend** pulls in `azure_core`,
+`azure_identity`, `azure_storage_blob`, `base64`, `hmac` (SAS signing pairs `hmac`
+with the always-on `sha2`), and `futures` (the stream combinators it uses at
+runtime; the `executor` feature is added in dev for the Miri-safe `block_on`).
 
 ## 11. Cross-platform notes
 
