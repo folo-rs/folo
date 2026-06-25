@@ -473,6 +473,65 @@ async fn facet_filtered_candidates<S: Storage>(
     Ok(candidates)
 }
 
+/// How many stored objects to fetch concurrently while loading a data set.
+///
+/// `analyze`/`list` load every in-selection object before reconstructing the
+/// series. Each [`Storage::get`] is a round-trip — a *network* round-trip against
+/// the Azure Blob backend — so fetching them one at a time makes the load a sum of
+/// latencies, which dominates wall time at scale. Overlapping a bounded number of
+/// fetches turns that sum into roughly its maximum, cutting the per-mode load
+/// floor (critical for the remote backend, where thousands of sequential
+/// round-trips would otherwise stretch the local floor into minutes). The bound
+/// keeps the remote backend from being hit with an unbounded burst of requests
+/// (which it would throttle) while still keeping enough in flight to hide latency.
+const LOAD_CONCURRENCY: usize = 32;
+
+/// Fetches and deserializes the given stored objects with bounded concurrency.
+///
+/// `parse` turns one object's raw bytes into the parsed value `T` (it owns the
+/// UTF-8 decoding so the per-type error wording stays exact). The fetches overlap
+/// up to [`LOAD_CONCURRENCY`] at a time and therefore complete out of order, so
+/// the caller must re-sort the results (by storage key) to keep diagnostics and
+/// the loaded order deterministic. The whole operation stays single-threaded and
+/// `!Send`, so it runs unchanged under the Miri-driven `block_on` tests.
+async fn load_objects_concurrently<S, T, F>(
+    storage: &S,
+    keys: Vec<(String, StorageKey)>,
+    parse: F,
+) -> Result<Vec<(String, StorageKey, T)>, RunError>
+where
+    S: Storage,
+    F: Fn(&str, Vec<u8>) -> Result<T, RunError>,
+{
+    use futures::StreamExt as _;
+    use futures::TryStreamExt as _;
+
+    let parse = &parse;
+    futures::stream::iter(keys)
+        .map(move |(key, parsed)| fetch_one(storage, key, parsed, parse))
+        .buffer_unordered(LOAD_CONCURRENCY)
+        .try_collect::<Vec<_>>()
+        .await
+}
+
+/// Fetches and deserializes a single stored object. Factored out of
+/// [`load_objects_concurrently`] so the stream closure stays a plain `FnMut`
+/// returning this future (rather than a closure wrapping an `async` block).
+async fn fetch_one<S, T, F>(
+    storage: &S,
+    key: String,
+    parsed: StorageKey,
+    parse: &F,
+) -> Result<(String, StorageKey, T), RunError>
+where
+    S: Storage,
+    F: Fn(&str, Vec<u8>) -> Result<T, RunError>,
+{
+    let bytes = storage.get(&key).await.map_err(RunError::Storage)?;
+    let value = parse(&key, bytes)?;
+    Ok((key, parsed, value))
+}
+
 /// Resolves the git topology, selects the comparable commits, and loads the
 /// in-selection objects into a [`SelectedDataSet`]. Requires a repository: the
 /// timeline is reconstructed from git history, not from stored timestamps.
@@ -591,10 +650,12 @@ where
     // dirty-tree exception, so the report can warn that it is ephemeral.
     let mut included_dirty_base_exception = false;
 
-    // Load each in-selection object, admitting a dirty snapshot only on a commit
-    // whose side of the merge-base allows it, then apply the `--since`/`--until`
-    // window.
-    let mut loaded: Vec<LoadedObject> = Vec::new();
+    // Phase 1 — key-only filtering, in candidate order. The checks that need only
+    // the storage key (history membership and base-side dirty admission) run here,
+    // before anything is fetched, so an excluded candidate never costs a
+    // round-trip. The checks that need the parsed run (`--since`/`--until`, which
+    // read its commit timestamp) run after the fetch, in phase 3.
+    let mut to_fetch: Vec<(String, StorageKey)> = Vec::new();
     for (key, parsed) in candidates {
         if !order.contains_key(&parsed.commit) {
             excluded_outside_history = excluded_outside_history.saturating_add(1);
@@ -618,13 +679,29 @@ where
             ));
             continue;
         }
-        let bytes = storage.get(&key).await.map_err(RunError::Storage)?;
+        to_fetch.push((key, parsed));
+    }
+
+    // Phase 2 — fetch and deserialize the survivors concurrently, then restore a
+    // deterministic (storage-key) order, since `buffer_unordered` completes out of
+    // order.
+    let mut fetched = load_objects_concurrently(storage, to_fetch, |key, bytes| {
         let text = String::from_utf8(bytes).map_err(|error| RunError::Analyze {
             message: format!("stored object {key} is not valid UTF-8: {error}"),
         })?;
-        let result = Run::from_json(&text).map_err(|error| RunError::Analyze {
+        Run::from_json(&text).map_err(|error| RunError::Analyze {
             message: format!("stored object {key} is not a valid result set: {error}"),
-        })?;
+        })
+    })
+    .await?;
+    fetched.sort_by(|left, right| left.0.cmp(&right.0));
+
+    // Phase 3 — apply the parsed-run window filters (`--since`/`--until`) and admit
+    // each object, in storage-key order so the verbose diagnostics and the loaded
+    // order stay deterministic. A dirty snapshot reaches here only on a commit
+    // whose side of the merge-base allows it (phase 1 already dropped the rest).
+    let mut loaded: Vec<LoadedObject> = Vec::new();
+    for (key, parsed, result) in fetched {
         if since.is_some_and(|since| result.context.commit < since) {
             excluded_since = excluded_since.saturating_add(1);
             reporter.note(&format!(
@@ -672,21 +749,37 @@ where
     // only history mode pays the load.
     let mut blessings: HashMap<DiscriminantSet, Vec<(usize, BlessingRecord)>> = HashMap::new();
     if mode == AnalysisMode::History {
+        // Phase 1 — key-only filtering: drop blessings whose commit is not on the
+        // analyzed history before fetching, in candidate order.
+        let mut to_fetch: Vec<(String, StorageKey)> = Vec::new();
         for (key, parsed) in bless_candidates {
-            let Some(&topo_index) = order.get(&parsed.commit) else {
+            if order.contains_key(&parsed.commit) {
+                to_fetch.push((key, parsed));
+            } else {
                 reporter.note(&format!(
                     "skipping blessing {key}: commit {} is not on {target_ref}'s analyzed history",
                     parsed.commit
                 ));
-                continue;
-            };
-            let bytes = storage.get(&key).await.map_err(RunError::Storage)?;
+            }
+        }
+        // Phase 2 — fetch and deserialize concurrently, then restore storage-key
+        // order (`buffer_unordered` completes out of order).
+        let mut fetched = load_objects_concurrently(storage, to_fetch, |key, bytes| {
             let text = String::from_utf8(bytes).map_err(|error| RunError::Analyze {
                 message: format!("stored blessing {key} is not valid UTF-8: {error}"),
             })?;
-            let record = BlessingRecord::from_json(&text).map_err(|error| RunError::Analyze {
+            BlessingRecord::from_json(&text).map_err(|error| RunError::Analyze {
                 message: format!("stored blessing {key} is not a valid blessing record: {error}"),
-            })?;
+            })
+        })
+        .await?;
+        fetched.sort_by(|left, right| left.0.cmp(&right.0));
+        // Phase 3 — record each blessing against its commit's topological index.
+        for (key, parsed, record) in fetched {
+            let topo_index = order
+                .get(&parsed.commit)
+                .copied()
+                .expect("phase 1 admitted only blessings whose commit is on the analyzed history");
             reporter.note(&format!(
                 "loaded blessing {key} ({} accepted at {})",
                 count_noun(record.prefixes.len(), "prefix filter"),

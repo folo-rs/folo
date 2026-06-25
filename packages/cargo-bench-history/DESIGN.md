@@ -1717,9 +1717,13 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      regressions/improvements rather than all-or-nothing; a fixed dataset anchor +
      SplitMix64 generator make a given seed and sizing reproduce a byte-identical
      dataset. *Finding (full-scale run, default sizes, ~20000 objects / ~5.7 GiB on
-     local FS):* `history` ~240 s, `tip` ~126 s, `branch` ~81 s. All three modes share
+     local FS):* `history` ~240 s, `tip` ~126 s, `branch` ~81 s. All three modes shared
      a multi-second floor spent loading and deserializing the ~20000 stored objects one
-     at a time (`analyze/mod.rs` issues `storage.get(&key).await` in a serial loop), and
-     `history`/`tip` add per-series change-point detection over 20000 series on top; both
-     are embarrassingly parallel and are flagged for a future optimization pass
-     (critically so for Azure, where the serial loads become serial network round-trips).
+     at a time; `analyze`/`list` now fetch and deserialize them with **bounded
+     concurrency** (`analyze/mod.rs`'s `load_objects_concurrently` drives the survivors
+     through `futures::stream::…buffer_unordered`, completing out of order then re-sorting
+     by storage key for deterministic diagnostics), so the per-mode load floor is roughly
+     its slowest fetch rather than the sum — critically so for Azure, where the serial
+     loads were serial network round-trips. The remaining `history`/`tip` per-series
+     change-point detection over 20000 series is still serial and is flagged for a future
+     parallelization pass.
