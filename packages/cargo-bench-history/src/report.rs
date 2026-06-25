@@ -19,6 +19,33 @@ pub(crate) trait Reporter {
     fn note(&self, message: &str);
 }
 
+/// Lazy-formatting helpers available on every [`Reporter`], including
+/// `&dyn Reporter`.
+///
+/// These live on a separate trait rather than on [`Reporter`] itself so the base
+/// trait stays dyn-compatible: a method taking a generic closure cannot be
+/// dispatched through `&dyn Reporter`. A blanket impl makes the helpers available
+/// on every reporter regardless.
+pub(crate) trait ReporterExt {
+    /// Records a diagnostic note whose formatting runs only when notes are
+    /// consumed.
+    ///
+    /// The `build` closure — typically an allocating `format!` — is invoked only
+    /// when [`enabled`](Reporter::enabled) is true. On a hot path that emits one
+    /// note per scanned object this avoids building (and immediately discarding) a
+    /// string for every object when `--verbose` is off, without sprinkling an
+    /// `if reporter.enabled()` guard around each call site.
+    fn note_with(&self, build: impl FnOnce() -> String);
+}
+
+impl<R: Reporter + ?Sized> ReporterExt for R {
+    fn note_with(&self, build: impl FnOnce() -> String) {
+        if self.enabled() {
+            self.note(&build());
+        }
+    }
+}
+
 /// A [`Reporter`] that writes notes to standard error when verbose mode is on,
 /// and discards them otherwise.
 #[derive(Clone, Copy, Debug)]
@@ -123,5 +150,28 @@ mod tests {
         );
         assert!(reporter.contains("stale"));
         assert!(!reporter.contains("missing"));
+    }
+
+    #[test]
+    fn note_with_skips_formatting_when_disabled() {
+        use std::cell::Cell;
+
+        // A disabled reporter must never run the formatting closure, so a per-object
+        // note costs nothing when nothing will consume it.
+        let built = Cell::new(0_u32);
+        StderrReporter::new(false).note_with(|| {
+            built.set(built.get() + 1);
+            "discarded".to_owned()
+        });
+        assert_eq!(built.get(), 0);
+
+        // An enabled reporter runs the closure and records the resulting note.
+        let recording = RecordingReporter::new();
+        recording.note_with(|| {
+            built.set(built.get() + 1);
+            "lazy note".to_owned()
+        });
+        assert_eq!(built.get(), 1);
+        assert!(recording.contains("lazy note"));
     }
 }

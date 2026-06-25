@@ -26,7 +26,7 @@ use serde::Serialize;
 use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
 use crate::model::Run;
-use crate::report::{Reporter, StderrReporter};
+use crate::report::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
 use crate::wiring::{resolve_config_path, resolve_project_id, resolve_repo};
@@ -174,28 +174,34 @@ where
 
     for (key, parsed) in runs {
         let Some(&index) = order.get(&parsed.commit) else {
-            reporter.note(&format!(
-                "skipping {key}: commit {} is not on {target_ref}'s history",
-                parsed.commit
-            ));
+            reporter.note_with(|| {
+                format!(
+                    "skipping {key}: commit {} is not on {target_ref}'s history",
+                    parsed.commit
+                )
+            });
             continue;
         };
         // Preserve base-branch history: unless this is a base-branch prune, only
         // the commits after the merge-base (the context branch's own commits) are
         // eligible for removal.
         if !commit_is_eligible(index, merge_base_index, tip_is_merge_base) {
-            reporter.note(&format!(
-                "skipping {key}: commit {} is on the base branch (preserved; prune from \
-                 the base branch with --prune-base to remove it)",
-                parsed.commit
-            ));
+            reporter.note_with(|| {
+                format!(
+                    "skipping {key}: commit {} is on the base branch (preserved; prune from \
+                     the base branch with --prune-base to remove it)",
+                    parsed.commit
+                )
+            });
             continue;
         }
         if !commit_matches(&parsed.commit, &options.commit) {
-            reporter.note(&format!(
-                "skipping {key}: commit {} does not match the requested <commit> arguments",
-                parsed.commit
-            ));
+            reporter.note_with(|| {
+                format!(
+                    "skipping {key}: commit {} does not match the requested <commit> arguments",
+                    parsed.commit
+                )
+            });
             continue;
         }
 
@@ -208,7 +214,8 @@ where
         match kind {
             RunKind::Dirty => {
                 if !scope.touches_dirty() {
-                    reporter.note(&format!("skipping {key}: --clean removes only clean runs"));
+                    reporter
+                        .note_with(|| format!("skipping {key}: --clean removes only clean runs"));
                     continue;
                 }
                 // `--dirty` reproduces `clean`: a dirty snapshot is removed only on
@@ -220,17 +227,20 @@ where
                         .copied()
                         .unwrap_or(false)
                 {
-                    reporter.note(&format!(
-                        "skipping {key}: dirty snapshot on a base-side commit ({} admits \
-                         only clean runs)",
-                        parsed.commit
-                    ));
+                    reporter.note_with(|| {
+                        format!(
+                            "skipping {key}: dirty snapshot on a base-side commit ({} admits \
+                             only clean runs)",
+                            parsed.commit
+                        )
+                    });
                     continue;
                 }
             }
             RunKind::Clean => {
                 if !scope.touches_clean() {
-                    reporter.note(&format!("skipping {key}: --dirty removes only dirty runs"));
+                    reporter
+                        .note_with(|| format!("skipping {key}: --dirty removes only dirty runs"));
                     continue;
                 }
             }
@@ -244,17 +254,17 @@ where
             if let Some(since) = since
                 && committed < since
             {
-                reporter.note(&format!(
-                    "skipping {key}: its commit predates the --since cutoff"
-                ));
+                reporter.note_with(|| {
+                    format!("skipping {key}: its commit predates the --since cutoff")
+                });
                 continue;
             }
             if let Some(until) = until
                 && committed > until
             {
-                reporter.note(&format!(
-                    "skipping {key}: its commit is after the --until cutoff"
-                ));
+                reporter.note_with(|| {
+                    format!("skipping {key}: its commit is after the --until cutoff")
+                });
                 continue;
             }
         }
@@ -262,7 +272,7 @@ where
         if kind == RunKind::Clean {
             clean_removed.insert((parsed.set.clone(), parsed.commit.clone()));
         }
-        reporter.note(&format!("selected {key} for removal"));
+        reporter.note_with(|| format!("selected {key} for removal"));
         items.push(RemovalItem {
             index,
             set: parsed.set,
@@ -281,12 +291,11 @@ where
                 continue;
             };
             if !clean_removed.contains(&(parsed.set.clone(), parsed.commit.clone())) {
-                reporter.note(&format!(
-                    "skipping {key}: its clean run is not being removed"
-                ));
+                reporter
+                    .note_with(|| format!("skipping {key}: its clean run is not being removed"));
                 continue;
             }
-            reporter.note(&format!("selected {key} for removal (blessing sidecar)"));
+            reporter.note_with(|| format!("selected {key} for removal (blessing sidecar)"));
             items.push(RemovalItem {
                 index,
                 set: parsed.set,
@@ -303,7 +312,7 @@ where
         for set in &plan.sets {
             for commit in &set.commits {
                 for key in &commit.keys {
-                    reporter.note(&format!("deleting {key}"));
+                    reporter.note_with(|| format!("deleting {key}"));
                     storage.delete(key).await.map_err(RunError::Storage)?;
                 }
             }
