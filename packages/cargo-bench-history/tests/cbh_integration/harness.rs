@@ -148,6 +148,13 @@ pub(crate) struct Workspace {
     /// agree on the commit-directory segment. Interior mutability lets the
     /// `&self` seed helpers create commits lazily.
     commits: RefCell<HashMap<String, String>>,
+    /// Maps a commit label to the calendar date ([`commit_dated`](Self::commit_dated)
+    /// `YYYY-MM-DD`) its empty commit was stamped with, so reusing a label with a
+    /// *different* commit date — a clean run whose effective second would no longer
+    /// match its commit's committer timestamp — is rejected rather than silently
+    /// reusing the first commit. Labels created undated (via [`commit`](Self::commit)
+    /// or [`merge`](Self::merge)) are absent, so no date is asserted for them.
+    commit_dates: RefCell<HashMap<String, String>>,
     /// Arguments passed to the mock benchmark engine that `run`/`backfill` invoke
     /// in place of `cargo bench`. They tell the mock which fixtures to emit (which
     /// `--summary` / `--criterion` cases, or an `--exit-code`), so each engine's
@@ -161,6 +168,7 @@ impl Workspace {
         let workspace = Self {
             dir: tempfile::tempdir().unwrap(),
             commits: RefCell::new(HashMap::new()),
+            commit_dates: RefCell::new(HashMap::new()),
             bench: Vec::new(),
         };
         let cargo_dir = workspace.root().join(".cargo");
@@ -191,6 +199,7 @@ impl Workspace {
         Self {
             dir: tempfile::tempdir().unwrap(),
             commits: RefCell::new(HashMap::new()),
+            commit_dates: RefCell::new(HashMap::new()),
             bench: Vec::new(),
         }
     }
@@ -200,6 +209,7 @@ impl Workspace {
         let workspace = Self {
             dir: tempfile::tempdir().unwrap(),
             commits: RefCell::new(HashMap::new()),
+            commit_dates: RefCell::new(HashMap::new()),
             bench: Vec::new(),
         };
         let path = workspace.root().join(relative);
@@ -230,11 +240,7 @@ impl Workspace {
 
     /// Like [`git`](Self::git), but sets the given environment variables on the
     /// invocation — used to pin a commit's author/committer date.
-    pub(crate) fn git_with_env(
-        &self,
-        args: &[&str],
-        env: &[(&str, &str)],
-    ) -> std::process::Output {
+    pub(crate) fn git_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> std::process::Output {
         run_git_with_env(self.root(), args, env)
     }
 
@@ -309,18 +315,59 @@ impl Workspace {
 
     /// Lazily creates an empty commit labeled `label`, dated `date` (`YYYY-MM-DD`,
     /// at UTC midnight), on the current branch and returns its full SHA, reusing
-    /// the SHA if the label was already created.
+    /// the SHA if the label was already created at the same `date`.
     ///
     /// Pinning the author and committer date makes git's committer timestamp equal
-    /// the run that [`seed`](Self::seed) stores at this commit (whose
-    /// `context.commit` is derived from the same `date`). `analyze`/`list` decide
-    /// the `--since`/`--until` window from that committer timestamp — read from git
+    /// the run that [`seed`](Self::seed) stores at this commit (whose effective
+    /// second is derived from the same `date`). `analyze`/`list` decide the
+    /// `--since`/`--until` window from that committer timestamp — read from git
     /// topology before any object is fetched — so the two must agree for the window
     /// to behave as it does in production.
+    ///
+    /// Reusing a label with a *different* date is a seeding mistake (the commit's
+    /// committer timestamp would no longer match the clean run's effective second),
+    /// so it panics rather than silently returning the first commit. A *dirty*
+    /// snapshot, whose effective second legitimately differs from the commit it sits
+    /// on, is seeded through [`commit_for_dirty`](Self::commit_for_dirty) instead.
     pub(crate) fn commit_dated(&self, date: &str, label: &str) -> String {
+        if let Some(sha) = self.commits.borrow().get(label) {
+            if let Some(existing) = self.commit_dates.borrow().get(label) {
+                assert_eq!(
+                    existing, date,
+                    "commit label `{label}` was created at {existing} but is now reused at \
+                     {date}; a clean run's effective second must match its commit's committer \
+                     date — seed a distinct label or use a dirty snapshot for a later run"
+                );
+            }
+            return sha.clone();
+        }
+        let sha = self.commit_at_date(date, label);
+        self.commit_dates
+            .borrow_mut()
+            .insert(label.to_owned(), date.to_owned());
+        sha
+    }
+
+    /// Resolves the commit a *dirty* snapshot sits on: reuses the label's existing
+    /// commit when present (its committer date stays fixed, and the snapshot's
+    /// effective second may legitimately be later, as a real dirty run executes
+    /// after the commit it is based on), or creates it dated `date` when the label
+    /// is new. Unlike [`commit_dated`](Self::commit_dated) it does not assert the
+    /// date on reuse, because the effective second is not the commit's timestamp.
+    pub(crate) fn commit_for_dirty(&self, date: &str, label: &str) -> String {
         if let Some(sha) = self.commits.borrow().get(label) {
             return sha.clone();
         }
+        let sha = self.commit_at_date(date, label);
+        self.commit_dates
+            .borrow_mut()
+            .insert(label.to_owned(), date.to_owned());
+        sha
+    }
+
+    /// Creates and records an empty commit labeled `label` with its author and
+    /// committer date pinned to `date` (`YYYY-MM-DD`, at UTC midnight).
+    fn commit_at_date(&self, date: &str, label: &str) -> String {
         let when = format!("{date}T00:00:00+00:00");
         self.git_with_env(
             &["commit", "--allow-empty", "-m", label],
@@ -548,8 +595,12 @@ impl Workspace {
 
     /// Seeds one *dirty* (uncommitted-tree) Callgrind snapshot with an `Ir` value
     /// at commit `label`, keyed by the effective second like a real dirty run.
+    ///
+    /// `date` is the snapshot's effective second (the `dirty-<unix>` key), not the
+    /// commit's committer date: it may be later than (and is independent of) the
+    /// commit `label` sits on, exactly as a real dirty run executes after its commit.
     pub(crate) fn seed_dirty_callgrind(&self, date: &str, label: &str, value: f64) {
-        let sha = self.commit_dated(date, label);
+        let sha = self.commit_for_dirty(date, label);
         let effective: Timestamp = format!("{date}T00:00:00Z").parse().unwrap();
         let key = format!(
             "v1/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{sha}/dirty-{}.json",
@@ -597,8 +648,11 @@ impl Workspace {
     /// Seeds one *dirty* (uncommitted-tree) Criterion `wall_time` snapshot at the
     /// given `date`, commit `label`, and machine-key partition `machine`, keyed by
     /// the effective second like a real dirty run.
+    ///
+    /// As with [`seed_dirty_callgrind`](Self::seed_dirty_callgrind), `date` is the
+    /// snapshot's effective second, independent of the commit `label` sits on.
     pub(crate) fn seed_dirty_criterion(&self, date: &str, label: &str, machine: &str, value: f64) {
-        let sha = self.commit_dated(date, label);
+        let sha = self.commit_for_dirty(date, label);
         let effective: Timestamp = format!("{date}T00:00:00Z").parse().unwrap();
         let key = format!(
             "v1/testproj/criterion/x86_64-pc-windows-msvc/{machine}/{sha}/dirty-{}.json",
@@ -976,4 +1030,54 @@ pub(crate) fn collect_json_files(dir: &Path, out: &mut Vec<PathBuf>) {
             out.push(path);
         }
     }
+}
+
+/// A clean run's effective second must match its commit's committer date, so
+/// reusing a commit label with a *different* date is a seeding mistake that
+/// [`Workspace::commit_dated`] rejects instead of silently returning the first
+/// commit (which would reintroduce the topology-vs-object timestamp divergence the
+/// git-aware window filter relies on being absent).
+#[test]
+#[should_panic(expected = "was created at")]
+#[cfg_attr(miri, ignore)]
+fn commit_dated_rejects_a_label_reused_with_a_different_date() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.commit_dated("2024-01-02", "c1");
+}
+
+/// Reusing a label at the same date is fine: it returns the original commit so
+/// several comparable objects (parallel CI pools) can share one commit directory.
+#[test]
+#[cfg_attr(miri, ignore)]
+fn commit_dated_reuses_the_commit_at_the_same_date() {
+    let workspace = Workspace::repo(&storage_only_config());
+    let first = workspace.commit_dated("2024-01-01", "c1");
+    let again = workspace.commit_dated("2024-01-01", "c1");
+    assert_eq!(first, again, "the same date reuses c1's commit");
+}
+
+/// A dirty snapshot sits on an existing commit without redating it: a real dirty
+/// run executes after the commit it is based on, so its effective second is later
+/// than (and independent of) the commit's committer date. `commit_for_dirty`
+/// therefore reuses the commit and never panics on the later date.
+#[test]
+#[cfg_attr(miri, ignore)]
+fn commit_for_dirty_reuses_the_commit_with_a_later_effective_second() {
+    let workspace = Workspace::repo(&storage_only_config());
+    let commit = workspace.commit_dated("2024-01-01", "c1");
+    let dirty = workspace.commit_for_dirty("2024-01-05", "c1");
+    assert_eq!(commit, dirty, "the dirty snapshot reuses c1's commit");
+}
+
+/// The date a label was first stamped with is remembered across the clean and
+/// dirty paths, so seeding a *clean* run on a commit a dirty snapshot already
+/// established at a different date is still caught as a mistake.
+#[test]
+#[should_panic(expected = "was created at")]
+#[cfg_attr(miri, ignore)]
+fn commit_dated_rejects_a_clean_reuse_of_a_dirty_established_label() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.commit_for_dirty("2024-01-01", "c1");
+    workspace.commit_dated("2024-01-02", "c1");
 }
