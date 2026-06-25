@@ -24,10 +24,10 @@ pub(crate) use cargo_bench_history_core::analyze::{
 
 use std::collections::HashMap;
 use std::io::IsTerminal;
-
-use jiff::civil::Date;
 use std::path::Path;
 
+use futures::{StreamExt as _, TryStreamExt as _};
+use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use jiff::{Span, Timestamp};
 use nonempty::NonEmpty;
@@ -503,9 +503,6 @@ where
     S: Storage,
     F: Fn(&str, Vec<u8>) -> Result<T, RunError>,
 {
-    use futures::StreamExt as _;
-    use futures::TryStreamExt as _;
-
     let parse = &parse;
     futures::stream::iter(keys)
         .map(move |(key, parsed)| fetch_one(storage, key, parsed, parse))
