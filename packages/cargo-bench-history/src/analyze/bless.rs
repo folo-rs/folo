@@ -25,7 +25,7 @@ use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
 use crate::model::BlessingRecord;
 use crate::model::Run;
-use crate::report::{Reporter, StderrReporter};
+use crate::report::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
 use crate::wiring::{resolve_config_path, resolve_project_id, resolve_repo};
@@ -221,7 +221,7 @@ where
             .put_overwrite(&bless_key, json.as_bytes())
             .await
             .map_err(RunError::Storage)?;
-        reporter.note(&format!("blessed set {} at {bless_key}", parsed.set));
+        reporter.note_with(|| format!("blessed set {} at {bless_key}", parsed.set));
         sets = sets.saturating_add(1);
     }
 
@@ -276,7 +276,7 @@ where
     let mut removed = 0_usize;
     for key in &blessings_at_head {
         storage.delete(key).await.map_err(RunError::Storage)?;
-        reporter.note(&format!("removed blessing {key}"));
+        reporter.note_with(|| format!("removed blessing {key}"));
         removed = removed.saturating_add(1);
     }
 

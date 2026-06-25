@@ -17,7 +17,7 @@ use crate::bench::{
     CRITERION_ESTIMATES_FILE, CRITERION_NEW_DIR, GUNGRAUN_DIR, SUMMARY_FILE,
 };
 use crate::model::Engine;
-use crate::report::Reporter;
+use crate::report::{Reporter, ReporterExt};
 use crate::text::count_noun;
 
 /// Tolerance subtracted from the run-start boundary before comparing file
@@ -140,13 +140,11 @@ impl FsBenchOutputSource {
                 } else if path.file_name() == Some(summary_name) {
                     let modified = entry.metadata().await?.modified()?;
                     if modified >= threshold {
-                        if reporter.enabled() {
-                            reporter.note(&format!("callgrind: including {}", path.display()));
-                        }
+                        reporter.note_with(|| format!("callgrind: including {}", path.display()));
                         let content = tokio::fs::read_to_string(&path).await?;
                         summaries.push(RawSummary { path, content });
-                    } else if reporter.enabled() {
-                        reporter.note(&format!(
+                    } else {
+                        reporter.note_with(|| format!(
                             "callgrind: excluding {} (modified {}, older than the run boundary)",
                             path.display(),
                             format_mtime(modified)
@@ -223,19 +221,17 @@ impl FsBenchOutputSource {
                 continue;
             }
             let Some(modified) = estimates_mtime.filter(|_| has_benchmark) else {
-                if reporter.enabled() {
-                    reporter.note(&format!(
+                reporter.note_with(|| {
+                    format!(
                         "criterion: skipping {} (missing {CRITERION_BENCHMARK_FILE} or \
                          {CRITERION_ESTIMATES_FILE})",
                         dir.display()
-                    ));
-                }
+                    )
+                });
                 continue;
             };
             if modified >= threshold {
-                if reporter.enabled() {
-                    reporter.note(&format!("criterion: including {}", dir.display()));
-                }
+                reporter.note_with(|| format!("criterion: including {}", dir.display()));
                 let benchmark =
                     tokio::fs::read_to_string(dir.join(CRITERION_BENCHMARK_FILE)).await?;
                 let estimates =
@@ -245,12 +241,14 @@ impl FsBenchOutputSource {
                     benchmark,
                     estimates,
                 });
-            } else if reporter.enabled() {
-                reporter.note(&format!(
-                    "criterion: excluding {} (modified {}, older than the run boundary)",
-                    dir.display(),
-                    format_mtime(modified)
-                ));
+            } else {
+                reporter.note_with(|| {
+                    format!(
+                        "criterion: excluding {} (modified {}, older than the run boundary)",
+                        dir.display(),
+                        format_mtime(modified)
+                    )
+                });
             }
         }
 
@@ -303,17 +301,17 @@ impl FsBenchOutputSource {
             }
             let modified = entry.metadata().await?.modified()?;
             if modified >= threshold {
-                if reporter.enabled() {
-                    reporter.note(&format!("{label}: including {}", path.display()));
-                }
+                reporter.note_with(|| format!("{label}: including {}", path.display()));
                 let content = tokio::fs::read_to_string(&path).await?;
                 files.push(RawOperationFile { path, content });
-            } else if reporter.enabled() {
-                reporter.note(&format!(
-                    "{label}: excluding {} (modified {}, older than the run boundary)",
-                    path.display(),
-                    format_mtime(modified)
-                ));
+            } else {
+                reporter.note_with(|| {
+                    format!(
+                        "{label}: excluding {} (modified {}, older than the run boundary)",
+                        path.display(),
+                        format_mtime(modified)
+                    )
+                });
             }
         }
 
@@ -370,11 +368,13 @@ fn note_missing_dir(reporter: &dyn Reporter, engine: &str, dir: &Path, root: &Pa
             "{engine}: directory {} does not exist; no output was produced here",
             dir.display()
         ));
-    } else if reporter.enabled() {
-        reporter.note(&format!(
-            "{engine}: directory {} disappeared during the scan; skipping",
-            dir.display()
-        ));
+    } else {
+        reporter.note_with(|| {
+            format!(
+                "{engine}: directory {} disappeared during the scan; skipping",
+                dir.display()
+            )
+        });
     }
 }
 
