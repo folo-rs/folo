@@ -163,6 +163,16 @@ try {
 
     Write-Verbose "Copying '$($bin.FullName)' to '$Destination'."
     Copy-Item -Path $bin.FullName -Destination $Destination -Force
+
+    if (-not $IsWindows) {
+        # Expand-Archive (used for the macOS .zip builds) discards the stored Unix
+        # executable bit, so the extracted azcopy lands non-executable. Restore it on
+        # every Unix host so the installed binary actually runs and resolves on PATH.
+        $installed = Join-Path $Destination $build.Binary
+        Write-Verbose "Marking '$installed' executable."
+        chmod +x $installed
+    }
+
     Write-Host "Installed azcopy $($script:AzCopyVersion) to $Destination."
 } finally {
     Write-Verbose "Cleaning up temp directory '$($work.FullName)'."
