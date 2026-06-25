@@ -439,9 +439,10 @@ no `async_trait` dependency, and `run`/`analyze` stay backend-agnostic by holdin
 * **LocalStorage** (iteration 1): root from config; create dirs; write/read/walk
   via `tokio::fs` (iterative directory walk — no boxed async recursion).
 * **AzureBlobStorage** (iteration 4): `azure_storage_blob` (+ `azure_identity`),
-  behind an **optional `azure` Cargo feature** so default builds and Miri stay
-  light and dependency-free; the feature compiles on Windows, Linux **and
-  macOS**. Auth is resolved once in `from_config`, in priority order:
+  always compiled in — `cargo-bench-history` is a CLI tool installed without
+  feature flags, so a build-time gate would only ever hide a backend the user
+  explicitly configured. It compiles on Windows, Linux **and macOS**. Auth is
+  resolved once in `from_config`, in priority order:
   1. **self-signed account SAS** (`account_key`) — the signing math lives in
      `storage::sas` (HMAC-SHA256 via the pure-Rust RustCrypto `hmac`/`sha2`
      crates) and is the path used for **Azurite** in CI and for SAS-based
@@ -1207,8 +1208,8 @@ src/
     mod.rs                # Storage trait (async) + in-memory fake
     local.rs              # tokio::fs backend
     facade.rs             # StorageFacade enum (Local | Azure), static dispatch
-    azure.rs              # AzureBlobStorage           [feature = "azure"]
-    sas.rs                # self-signed account-SAS signer [feature = "azure"]
+    azure.rs              # AzureBlobStorage
+    sas.rs                # self-signed account-SAS signer
   analyze/
     mod.rs                # query orchestration (shared selection pipeline)
     discriminant.rs       # parse v1 keys; DiscriminantSet/DiscriminantSetQuery
@@ -1270,15 +1271,6 @@ the process CWD (see `cargo-detect-package/AGENTS.md`); no `parking_lot`; no
 real-time sleeps (inject `tick::Clock`); proptest with bounded cases + Miri-safe
 regression twins; zero warnings; alphabetical no-default-features deps.
 
-Dependency sketch: `clap` (derive; `default` feature on per the workspace CLI
-exception), `serde`, `serde_json`, `toml`, `jiff` (timestamps +
-`--since`/`--until`), `tokio` (rt-multi-thread, macros, process, fs, io-util),
-`tick` (clock; `tokio` feature in prod, `test-util` in dev), `many_cpus` and `sha2`
-(the machine key), and `futures` (`executor`, dev-only) for the Miri-safe
-`block_on`. The optional **`azure`** feature pulls in `azure_core`,
-`azure_identity`, `azure_storage_blob`, `base64`, `hmac` (SAS signing pairs `hmac`
-with the always-on `sha2`), and `futures` at runtime.
-
 ## 11. Cross-platform notes
 
 * `analyze`, `install`, and the harvest/store half of `run` are platform-neutral
@@ -1317,9 +1309,9 @@ adds macOS; mapped to the original request's numbering:
    regression over local Callgrind history; text report (+ `--fail-on`).
 3. ✅ **`install`** (your 4) — generate `.cargo/bench_history.toml`, point the user
    to it.
-4. ✅ **Azure blob** (your 5) — `azure` feature, `AzureBlobStorage`, self-signed
+4. ✅ **Azure blob** (your 5) — `AzureBlobStorage`, self-signed
    account SAS (Azurite/CI + SAS production) / verbatim SAS / Entra ID;
-   `run`/`analyze` become storage-agnostic; verify the feature builds and runs on
+   `run`/`analyze` become storage-agnostic; verify it builds and runs on
    Windows, Linux and macOS.
 5. ✅ **Criterion** (your 6) — adapter parses `target/criterion/**/new/{benchmark,
    estimates}.json` into `WallTime` records (slope estimate when present, else the
@@ -1464,7 +1456,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     emulator runs directly on the runner host (started by the `start-azurite` composite
     action) in a Linux-only, package-gated job rather than as a service container,
     which cannot reliably bind Azurite to a reachable address. The network tests
-    **self-skip** when no emulator is reachable so the multi-platform `--all-features`
+    **self-skip** when no emulator is reachable so the multi-platform test
     jobs stay green; `BENCH_HISTORY_REQUIRE_AZURITE=1` (set only in `test-azurite`)
     turns an unreachable emulator into a hard failure so it can never silently skip.
     That job also collects coverage so the `azure.rs` network paths reach Codecov.

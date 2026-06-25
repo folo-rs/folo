@@ -21,12 +21,11 @@ const DEFAULT_TEMPLATE: &str = "\
 path = \"./bench-history\"
 
 # To store results in Azure Blob Storage instead, replace the [storage.local]
-# section above with a [storage.azure] section. The `azure` build feature must
-# be enabled. Authentication is, in priority order: a self-signed account SAS
-# (set `account_key`), a pre-made SAS token (set `sas_token`), or Microsoft Entra
-# ID (set neither; requires an HTTPS endpoint). Entra ID is the recommended mode
-# for CI, where GitHub Actions can federate into Azure without a stored secret;
-# for setup, see
+# section above with a [storage.azure] section. Authentication is, in priority
+# order: a self-signed account SAS (set `account_key`), a pre-made SAS token (set
+# `sas_token`), or Microsoft Entra ID (set neither; requires an HTTPS endpoint).
+# Entra ID is the recommended mode for CI, where GitHub Actions can federate into
+# Azure without a stored secret; for setup, see
 # https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-azure
 #
 # [storage.azure]
@@ -72,10 +71,6 @@ pub(crate) enum StorageConfig {
         path: PathBuf,
     },
     /// Store result sets in an Azure Blob Storage container.
-    ///
-    /// Available only when the crate is built with the `azure` feature; the
-    /// variant always parses so configuration is portable, but building the
-    /// backend without the feature is an error.
     Azure {
         /// The storage account name (e.g. `devstoreaccount1` for Azurite).
         account: String,
