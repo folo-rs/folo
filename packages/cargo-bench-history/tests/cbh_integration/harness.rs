@@ -596,9 +596,11 @@ impl Workspace {
     /// Seeds one *dirty* (uncommitted-tree) Callgrind snapshot with an `Ir` value
     /// at commit `label`, keyed by the effective second like a real dirty run.
     ///
-    /// `date` is the snapshot's effective second (the `dirty-<unix>` key), not the
-    /// commit's committer date: it may be later than (and is independent of) the
-    /// commit `label` sits on, exactly as a real dirty run executes after its commit.
+    /// `date` is the snapshot's effective second (the `dirty-<unix>` key). When the
+    /// commit `label` already exists it may be later than that commit's committer
+    /// date — a real dirty run executes after the commit it is based on — and is not
+    /// asserted against it. When the label is new the commit is created stamped at
+    /// `date` (see [`commit_for_dirty`](Self::commit_for_dirty)).
     pub(crate) fn seed_dirty_callgrind(&self, date: &str, label: &str, value: f64) {
         let sha = self.commit_for_dirty(date, label);
         let effective: Timestamp = format!("{date}T00:00:00Z").parse().unwrap();
@@ -650,7 +652,9 @@ impl Workspace {
     /// the effective second like a real dirty run.
     ///
     /// As with [`seed_dirty_callgrind`](Self::seed_dirty_callgrind), `date` is the
-    /// snapshot's effective second, independent of the commit `label` sits on.
+    /// snapshot's effective second: when the commit `label` already exists it may be
+    /// later than that commit's committer date, and when the label is new the commit
+    /// is created stamped at `date`.
     pub(crate) fn seed_dirty_criterion(&self, date: &str, label: &str, machine: &str, value: f64) {
         let sha = self.commit_for_dirty(date, label);
         let effective: Timestamp = format!("{date}T00:00:00Z").parse().unwrap();
