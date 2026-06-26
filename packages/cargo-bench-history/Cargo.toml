@@ -12,6 +12,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+async-trait = { workspace = true }
 azure_core = { workspace = true }
 # The `default` feature on these two crates is load-bearing, not gratuitous: it
 # transitively enables `azure_core/default`, which selects the reqwest + rustls

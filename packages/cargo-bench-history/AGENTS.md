@@ -715,6 +715,13 @@ order: a self-signed account SAS (`account_key`), a verbatim `sas_token`, or
 Microsoft Entra ID (`DeveloperToolsCredential`). SAS modes carry the token in the
 endpoint URL's query and pass no credential, so the emulator's plain-HTTP
 endpoint is accepted; Entra mode passes a token credential and requires HTTPS.
+The Entra credential is wrapped in a `CachingCredential` decorator that holds a
+cache lock across the inner acquisition, so a concurrent read burst collapses to
+one `az account get-access-token` call rather than racing the Windows MSAL
+token-cache lockfile (which fails the read with a permission error).
+`CachingCredential` implements the azure SDK's `#[async_trait]` `TokenCredential`
+trait, so it is the one place the crate pulls in `async_trait` — the crate's own
+IO ports still use RPITIT (`impl Future`), as the external trait leaves no choice.
 The account-SAS signer lives in `storage::sas` and is verified against a pinned
 golden signature — do not "fix" that test by editing the expected value.
 

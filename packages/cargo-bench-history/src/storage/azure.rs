@@ -13,13 +13,15 @@
 //! and pass no credential (so the emulator's plain-HTTP endpoint is accepted);
 //! Entra mode passes a token credential and requires HTTPS.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::io;
 use std::sync::Arc;
 
-use azure_core::credentials::TokenCredential;
+use azure_core::credentials::{AccessToken, TokenCredential, TokenRequestOptions};
 use azure_core::error::ErrorKind;
 use azure_core::http::{RequestContent, StatusCode, Url};
+use azure_core::time::{Duration, OffsetDateTime};
 use azure_identity::DeveloperToolsCredential;
 use azure_storage_blob::models::{
     BlobClientUploadOptions, BlobContainerClientListBlobsOptions, StorageErrorCode,
@@ -123,7 +125,11 @@ impl AzureBlobStorage {
                 .map_err(|error| {
                     config_error(format!("could not initialize Entra ID credential: {error}"))
                 })?;
-            Some(credential)
+            // Wrap the credential so a burst of concurrent reads shares one token
+            // instead of each driving its own Azure CLI token acquisition (see
+            // `CachingCredential`).
+            let caching: Arc<dyn TokenCredential> = Arc::new(CachingCredential::new(credential));
+            Some(caching)
         };
 
         Ok(Self {
@@ -272,6 +278,97 @@ impl Storage for AzureBlobStorage {
     }
 }
 
+/// How long before a cached token's stated expiry it is treated as stale and
+/// re-acquired, so a token is never handed out only to expire while the request
+/// that just read it is still in flight.
+const TOKEN_REFRESH_MARGIN: Duration = Duration::minutes(5);
+
+/// A [`TokenCredential`] decorator that serializes token acquisition and caches
+/// each scope's most recent token, so a burst of concurrent reads shares one
+/// token instead of each driving a separate acquisition of the wrapped
+/// credential.
+///
+/// The Entra credential ([`DeveloperToolsCredential`]) shells out to the Azure
+/// CLI on every uncached `get_token`. Without this decorator, `analyze`'s
+/// concurrent object loads fan out into that many simultaneous
+/// `az account get-access-token` invocations; on Windows they collide on the
+/// exclusive MSAL token-cache lockfile and the whole read fails with a permission
+/// error. Holding the cache lock across the inner acquisition means only one
+/// acquisition is ever in flight, so later callers reuse the freshly cached token
+/// rather than racing the CLI.
+struct CachingCredential {
+    /// The wrapped credential that performs the real token acquisition.
+    inner: Arc<dyn TokenCredential>,
+    /// The most recent token per requested scope set. The lock is deliberately
+    /// held across the inner acquisition, so concurrent callers serialize on it
+    /// and share a single fetch rather than stampeding the wrapped credential.
+    cache: futures::lock::Mutex<HashMap<Vec<String>, AccessToken>>,
+    /// The wall-clock source used to decide whether a cached token is still
+    /// fresh. Injected so the freshness logic is deterministic under test.
+    now: fn() -> OffsetDateTime,
+}
+
+impl fmt::Debug for CachingCredential {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CachingCredential")
+            .field("inner", &self.inner)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CachingCredential {
+    /// Wraps `inner`, reading the real wall clock for token-freshness decisions.
+    fn new(inner: Arc<dyn TokenCredential>) -> Self {
+        Self::with_clock(inner, OffsetDateTime::now_utc)
+    }
+
+    /// Wraps `inner` with an explicit clock, so tests pin token freshness
+    /// deterministically instead of reading the wall clock.
+    fn with_clock(inner: Arc<dyn TokenCredential>, now: fn() -> OffsetDateTime) -> Self {
+        Self {
+            inner,
+            cache: futures::lock::Mutex::new(HashMap::new()),
+            now,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl TokenCredential for CachingCredential {
+    async fn get_token(
+        &self,
+        scopes: &[&str],
+        options: Option<TokenRequestOptions<'_>>,
+    ) -> azure_core::Result<AccessToken> {
+        let cache_key: Vec<String> = scopes.iter().map(|scope| (*scope).to_owned()).collect();
+
+        // Holding the lock across the inner acquisition is the whole point: it
+        // collapses a concurrent burst into one acquisition whose result the
+        // other callers then read from the cache.
+        let mut cache = self.cache.lock().await;
+        if let Some(token) = cache.get(&cache_key)
+            && token_is_fresh(token, (self.now)())
+        {
+            return Ok(token.clone());
+        }
+
+        let token = self.inner.get_token(scopes, options).await?;
+        cache.insert(cache_key, token.clone());
+        Ok(token)
+    }
+}
+
+/// Whether `token` is still far enough from its expiry to reuse at `now`,
+/// keeping a [`TOKEN_REFRESH_MARGIN`] safety margin so it cannot expire while a
+/// request that just read it is still in flight.
+///
+/// A `now` so close to the maximum representable date that adding the margin
+/// overflows is treated as not fresh (re-acquire), which is the safe default.
+fn token_is_fresh(token: &AccessToken, now: OffsetDateTime) -> bool {
+    now.checked_add(TOKEN_REFRESH_MARGIN)
+        .is_some_and(|deadline| token.expires_on > deadline)
+}
+
 /// Uploads `bytes` to `client`, creating the container and retrying once if it
 /// does not exist yet. When `if_not_exists` is set the upload is write-once
 /// (failing if the blob already exists); otherwise it replaces any existing blob.
@@ -352,8 +449,14 @@ fn map_error(error: &azure_core::Error, key: &str) -> StorageError {
 }
 
 /// Wraps an Azure error as a generic storage I/O error.
+///
+/// Formats with `Debug` rather than `Display` on purpose: the SDK's retry policy
+/// replaces the `Display` text with an opaque "non-transport error occurred which
+/// will not be retried", masking the real cause (for example a credential
+/// acquisition failure). The `Debug` representation preserves the full error
+/// chain, so the underlying fault is visible in diagnostics.
 fn azure_io(error: &azure_core::Error) -> StorageError {
-    StorageError::Io(io::Error::other(format!("Azure Blob error: {error}")))
+    StorageError::Io(io::Error::other(format!("Azure Blob error: {error:?}")))
 }
 
 /// Builds a generic storage I/O error from a static message.
@@ -665,6 +768,229 @@ mod tests {
         assert!(matches!(put, StorageError::InvalidKey { .. }), "{put:?}");
         let get = block_on(storage.get("../bad")).unwrap_err();
         assert!(matches!(get, StorageError::InvalidKey { .. }), "{get:?}");
+    }
+
+    // =======================================================================
+    // Caching-credential tests.
+    //
+    // These cover the token caching/serialization decorator with a fake inner
+    // credential, so they exercise the dedup, freshness, and per-scope behaviour
+    // without a real Entra credential or any wall-clock read (the clock is
+    // injected). They stay Miri-safe: no IO, no real time.
+    //
+    // `AtomicU64` and `Ordering` are imported by the Azurite section below (one
+    // `tests` module, so module-scoped). `Future` is in the 2024 prelude.
+    // =======================================================================
+
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    use futures::future::join_all;
+
+    /// The Unix-second anchor shared by [`fixed_now`] and [`at_offset`].
+    const BASE_UNIX: i64 = 1_000_000_000;
+
+    /// A fixed "now" used by the caching-credential tests so token freshness is
+    /// deterministic and Miri-safe (no wall-clock read).
+    fn fixed_now() -> OffsetDateTime {
+        OffsetDateTime::from_unix_timestamp(BASE_UNIX).unwrap()
+    }
+
+    /// Builds an [`OffsetDateTime`] `offset` seconds from [`fixed_now`].
+    fn at_offset(offset: i64) -> OffsetDateTime {
+        OffsetDateTime::from_unix_timestamp(BASE_UNIX.saturating_add(offset)).unwrap()
+    }
+
+    /// Yields control back to the executor exactly once, so a concurrently-polled
+    /// burst can interleave inside the fake credential's acquisition (and thus be
+    /// observed as concurrent if it were ever allowed to run unserialized).
+    struct YieldOnce(bool);
+
+    impl Future for YieldOnce {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+            if self.0 {
+                Poll::Ready(())
+            } else {
+                self.0 = true;
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        }
+    }
+
+    /// A fake [`TokenCredential`] that records how many times — and how
+    /// concurrently — it is asked to acquire a token, optionally yielding once
+    /// mid-acquisition so a burst can be observed as concurrent if it is not
+    /// serialized by the decorator.
+    #[derive(Debug)]
+    struct CountingCredential {
+        calls: AtomicU64,
+        in_flight: AtomicU64,
+        max_in_flight: AtomicU64,
+        yield_during_acquire: bool,
+        expires_at_unix: i64,
+    }
+
+    impl CountingCredential {
+        fn new(expires_at_unix: i64, yield_during_acquire: bool) -> Self {
+            Self {
+                calls: AtomicU64::new(0),
+                in_flight: AtomicU64::new(0),
+                max_in_flight: AtomicU64::new(0),
+                yield_during_acquire,
+                expires_at_unix,
+            }
+        }
+
+        fn calls(&self) -> u64 {
+            self.calls.load(Ordering::Relaxed)
+        }
+
+        fn max_in_flight(&self) -> u64 {
+            self.max_in_flight.load(Ordering::Relaxed)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl TokenCredential for CountingCredential {
+        async fn get_token(
+            &self,
+            _scopes: &[&str],
+            _options: Option<TokenRequestOptions<'_>>,
+        ) -> azure_core::Result<AccessToken> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            let now = self.in_flight.fetch_add(1, Ordering::Relaxed) + 1;
+            self.max_in_flight.fetch_max(now, Ordering::Relaxed);
+            if self.yield_during_acquire {
+                YieldOnce(false).await;
+            }
+            self.in_flight.fetch_sub(1, Ordering::Relaxed);
+            Ok(AccessToken::new(
+                "fake-token",
+                OffsetDateTime::from_unix_timestamp(self.expires_at_unix).unwrap(),
+            ))
+        }
+    }
+
+    #[test]
+    fn token_is_fresh_accepts_a_token_beyond_the_refresh_margin() {
+        let margin = TOKEN_REFRESH_MARGIN.whole_seconds();
+        let token = AccessToken::new("t", at_offset(margin + 1));
+        assert!(token_is_fresh(&token, fixed_now()));
+    }
+
+    #[test]
+    fn token_is_fresh_rejects_a_token_within_the_refresh_margin() {
+        let margin = TOKEN_REFRESH_MARGIN.whole_seconds();
+        let token = AccessToken::new("t", at_offset(margin - 1));
+        assert!(!token_is_fresh(&token, fixed_now()));
+    }
+
+    #[test]
+    fn token_is_fresh_rejects_a_token_exactly_at_the_refresh_margin() {
+        let margin = TOKEN_REFRESH_MARGIN.whole_seconds();
+        let token = AccessToken::new("t", at_offset(margin));
+        assert!(!token_is_fresh(&token, fixed_now()));
+    }
+
+    #[test]
+    fn token_is_fresh_rejects_an_expired_token() {
+        let token = AccessToken::new("t", at_offset(-1));
+        assert!(!token_is_fresh(&token, fixed_now()));
+    }
+
+    #[test]
+    fn counting_credential_observes_concurrency_when_unserialized() {
+        // Establishes the discriminating power of the burst test: hit the fake
+        // directly (no decorator) and the yield lets the burst overlap, so the
+        // observed max concurrency exceeds one.
+        let inner = Arc::new(CountingCredential::new(
+            at_offset(3600).unix_timestamp(),
+            true,
+        ));
+        let scopes = ["scope"];
+        let calls = std::iter::repeat_with(|| inner.get_token(&scopes, None)).take(8);
+        for result in block_on(join_all(calls)) {
+            result.unwrap();
+        }
+        assert_eq!(inner.calls(), 8);
+        assert!(inner.max_in_flight() > 1, "{}", inner.max_in_flight());
+    }
+
+    #[test]
+    fn caching_credential_collapses_a_concurrent_burst_into_one_acquisition() {
+        let inner = Arc::new(CountingCredential::new(
+            at_offset(3600).unix_timestamp(),
+            true,
+        ));
+        let cred =
+            CachingCredential::with_clock(Arc::<CountingCredential>::clone(&inner), fixed_now);
+        let scopes = ["scope"];
+        let calls = std::iter::repeat_with(|| cred.get_token(&scopes, None)).take(8);
+        for result in block_on(join_all(calls)) {
+            result.unwrap();
+        }
+        // Serialized through the cache lock: a single acquisition, never overlapping.
+        assert_eq!(inner.calls(), 1);
+        assert_eq!(inner.max_in_flight(), 1);
+    }
+
+    #[test]
+    fn caching_credential_reuses_a_fresh_token() {
+        let inner = Arc::new(CountingCredential::new(
+            at_offset(3600).unix_timestamp(),
+            false,
+        ));
+        let cred =
+            CachingCredential::with_clock(Arc::<CountingCredential>::clone(&inner), fixed_now);
+        let scopes = ["scope"];
+        block_on(cred.get_token(&scopes, None)).unwrap();
+        block_on(cred.get_token(&scopes, None)).unwrap();
+        assert_eq!(inner.calls(), 1);
+    }
+
+    #[test]
+    fn caching_credential_reacquires_an_expired_token() {
+        // The fake hands back an already-stale token, so every call must refresh.
+        let inner = Arc::new(CountingCredential::new(
+            at_offset(-10).unix_timestamp(),
+            false,
+        ));
+        let cred =
+            CachingCredential::with_clock(Arc::<CountingCredential>::clone(&inner), fixed_now);
+        let scopes = ["scope"];
+        block_on(cred.get_token(&scopes, None)).unwrap();
+        block_on(cred.get_token(&scopes, None)).unwrap();
+        assert_eq!(inner.calls(), 2);
+    }
+
+    #[test]
+    fn caching_credential_caches_each_scope_independently() {
+        let inner = Arc::new(CountingCredential::new(
+            at_offset(3600).unix_timestamp(),
+            false,
+        ));
+        let cred =
+            CachingCredential::with_clock(Arc::<CountingCredential>::clone(&inner), fixed_now);
+        block_on(cred.get_token(&["scope-a"], None)).unwrap();
+        block_on(cred.get_token(&["scope-b"], None)).unwrap();
+        // Each new scope acquires once; re-requesting a cached scope does not.
+        assert_eq!(inner.calls(), 2);
+        block_on(cred.get_token(&["scope-a"], None)).unwrap();
+        assert_eq!(inner.calls(), 2);
+    }
+
+    #[test]
+    fn caching_credential_debug_hides_the_cache_and_clock() {
+        let inner: Arc<dyn TokenCredential> = Arc::new(CountingCredential::new(
+            at_offset(3600).unix_timestamp(),
+            false,
+        ));
+        let cred = CachingCredential::with_clock(inner, fixed_now);
+        let rendered = format!("{cred:?}");
+        assert!(rendered.contains("CachingCredential"), "{rendered}");
     }
 
     // =======================================================================
