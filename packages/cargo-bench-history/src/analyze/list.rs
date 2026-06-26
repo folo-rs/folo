@@ -589,14 +589,9 @@ where
     let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
 
     // The blessed commit is HEAD; its committer date comes from git topology, so
-    // the sidecar itself need not carry a denormalized copy.
-    let head_commit_time = git
-        .first_parent("HEAD")
-        .await
-        .map_err(RunError::Io)?
-        .into_iter()
-        .find(|commit| commit.sha == head)
-        .and_then(|commit| commit.committer_time);
+    // the sidecar itself need not carry a denormalized copy. A single-commit read
+    // dates HEAD without walking its first-parent ancestry.
+    let head_commit_time = git.committer_time("HEAD").await.map_err(RunError::Io)?;
 
     let mut entries = Vec::new();
     for (key, parsed) in candidates {

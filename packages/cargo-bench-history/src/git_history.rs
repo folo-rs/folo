@@ -67,6 +67,18 @@ pub(crate) trait GitHistory {
         reference: &str,
     ) -> impl Future<Output = io::Result<Vec<FirstParentCommit>>>;
 
+    /// Returns the committer timestamp of the commit `reference` resolves to, read
+    /// from that one commit alone — no first-parent history walk.
+    ///
+    /// `analyze`/`list` use this to date a single commit (for example `HEAD`, when
+    /// reporting the blessings recorded there) without paying for the whole
+    /// ancestry. `Ok(None)` when the ref does not resolve or carries no parseable
+    /// committer date.
+    fn committer_time(
+        &self,
+        reference: &str,
+    ) -> impl Future<Output = io::Result<Option<Timestamp>>>;
+
     /// Reports whether the working tree currently has uncommitted changes
     /// (tracked modifications, staged changes, or untracked files).
     ///
@@ -160,6 +172,13 @@ impl GitHistory for SystemGitHistory {
             .unwrap_or_default())
     }
 
+    #[cfg_attr(test, mutants::skip)] // Shells out to `git`; parsing delegated to `parse_committer_time`.
+    async fn committer_time(&self, reference: &str) -> io::Result<Option<Timestamp>> {
+        // `-1` reads a single commit, so the date is fetched without walking history.
+        let output = self.run(&["log", "-1", "--format=%cI", reference]).await?;
+        Ok(output.and_then(|stdout| parse_committer_time(&stdout)))
+    }
+
     #[cfg_attr(test, mutants::skip)] // Shells out to `git`; the dirty test is delegated to `porcelain_is_dirty`.
     async fn is_dirty(&self) -> io::Result<bool> {
         let output = self.run(&["status", "--porcelain"]).await?;
@@ -203,6 +222,17 @@ fn parse_first_parent_log(stdout: &str) -> Vec<FirstParentCommit> {
             }
         })
         .collect()
+}
+
+/// Parses `git log -1 --format=%cI` output into a single committer [`Timestamp`]:
+/// the first non-empty trimmed line parsed as strict ISO 8601, or `None` when
+/// there is none (an unresolved ref) or it does not parse.
+fn parse_committer_time(stdout: &str) -> Option<Timestamp> {
+    stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .and_then(|line| line.parse::<Timestamp>().ok())
 }
 
 /// Extracts the branch name from `git symbolic-ref refs/remotes/origin/HEAD`
@@ -383,6 +413,16 @@ mod fake {
             ready(Ok(commits))
         }
 
+        fn committer_time(
+            &self,
+            reference: &str,
+        ) -> impl Future<Output = io::Result<Option<Timestamp>>> {
+            let time = self
+                .resolve_sync(reference)
+                .and_then(|sha| self.times.get(&sha).copied());
+            ready(Ok(time))
+        }
+
         fn is_dirty(&self) -> impl Future<Output = io::Result<bool>> {
             ready(Ok(self.dirty))
         }
@@ -443,6 +483,17 @@ mod tests {
             ]
         );
         assert!(parse_first_parent_log("\n   \n").is_empty());
+    }
+
+    #[test]
+    fn parse_committer_time_takes_first_non_empty_line() {
+        assert_eq!(
+            parse_committer_time("  \n 2024-03-01T00:00:00+00:00 \n ignored \n"),
+            Some("2024-03-01T00:00:00+00:00".parse().unwrap())
+        );
+        assert_eq!(parse_committer_time("not-a-date\n"), None);
+        assert_eq!(parse_committer_time("   \n  \n"), None);
+        assert_eq!(parse_committer_time(""), None);
     }
 
     #[test]
@@ -566,6 +617,24 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn fake_committer_time_reads_a_single_commit() {
+        let mut git = FakeGitHistory::new();
+        let t0: Timestamp = "2024-01-01T00:00:00+00:00".parse().unwrap();
+        let t1: Timestamp = "2024-02-01T00:00:00+00:00".parse().unwrap();
+        git.commit_at("c0", None, t0)
+            .commit_at("c1", Some("c0"), t1)
+            .commit("c2", Some("c1")) // Seeded without a time.
+            .branch("master", "c1")
+            .head("master");
+        // Resolves a ref to its commit's time, and a raw SHA likewise.
+        assert_eq!(block_on(git.committer_time("HEAD")).unwrap(), Some(t1));
+        assert_eq!(block_on(git.committer_time("c0")).unwrap(), Some(t0));
+        // A commit without a recorded time, and an unresolved ref, are `None`.
+        assert_eq!(block_on(git.committer_time("c2")).unwrap(), None);
+        assert_eq!(block_on(git.committer_time("absent")).unwrap(), None);
     }
 
     #[test]

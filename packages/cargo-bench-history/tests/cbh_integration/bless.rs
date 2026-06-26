@@ -175,9 +175,11 @@ async fn unbless_restores_a_previously_blessed_regression() {
 #[cfg_attr(miri, ignore)]
 async fn bless_on_a_feature_branch_is_rejected() {
     let workspace = Workspace::clean_repo(&storage_only_config());
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
     workspace.checkout_new_branch("feature");
-    workspace.seed_callgrind("2024-01-02", "f1", 130.0);
+    workspace.commit_dated("2024-01-02", "f1");
+    workspace.seed_callgrind("f1", 130.0);
 
     let error = workspace
         .drive(&["bless", "nm/nm::observe"])
@@ -203,16 +205,26 @@ async fn bless_on_a_feature_branch_is_rejected() {
 async fn analyze_include_inactive_surfaces_a_recovered_spike() {
     let workspace = Workspace::clean_repo(&storage_only_config());
     // A flat baseline, a sustained spike, then a return to the baseline level.
-    workspace.seed_callgrind("2024-01-01", "c1", 10.0);
-    workspace.seed_callgrind("2024-01-02", "c2", 10.0);
-    workspace.seed_callgrind("2024-01-03", "c3", 10.0);
-    workspace.seed_callgrind("2024-01-04", "c4", 10.0);
-    workspace.seed_callgrind("2024-01-05", "c5", 20.0);
-    workspace.seed_callgrind("2024-01-06", "c6", 20.0);
-    workspace.seed_callgrind("2024-01-07", "c7", 10.0);
-    workspace.seed_callgrind("2024-01-08", "c8", 10.0);
-    workspace.seed_callgrind("2024-01-09", "c9", 10.0);
-    workspace.seed_callgrind("2024-01-10", "c10", 10.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 10.0);
+    workspace.commit_dated("2024-01-02", "c2");
+    workspace.seed_callgrind("c2", 10.0);
+    workspace.commit_dated("2024-01-03", "c3");
+    workspace.seed_callgrind("c3", 10.0);
+    workspace.commit_dated("2024-01-04", "c4");
+    workspace.seed_callgrind("c4", 10.0);
+    workspace.commit_dated("2024-01-05", "c5");
+    workspace.seed_callgrind("c5", 20.0);
+    workspace.commit_dated("2024-01-06", "c6");
+    workspace.seed_callgrind("c6", 20.0);
+    workspace.commit_dated("2024-01-07", "c7");
+    workspace.seed_callgrind("c7", 10.0);
+    workspace.commit_dated("2024-01-08", "c8");
+    workspace.seed_callgrind("c8", 10.0);
+    workspace.commit_dated("2024-01-09", "c9");
+    workspace.seed_callgrind("c9", 10.0);
+    workspace.commit_dated("2024-01-10", "c10");
+    workspace.seed_callgrind("c10", 10.0);
 
     // By default, a fully recovered spike is not reported.
     let RunOutcome::Analyzed { report, .. } = workspace
