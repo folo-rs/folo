@@ -284,6 +284,10 @@ impl Finding {
 struct Candidate {
     /// The finding that will be emitted if it survives filtering.
     finding: Finding,
+    /// Index of the source series in the analysed slice. The finding's charting
+    /// points ([`Finding::series`]) are materialised from it only once the
+    /// candidate survives filtering, so a dropped candidate never pays for them.
+    source_index: usize,
     /// The p-value contributed to the false-discovery pool (noisy candidates only).
     bh_p: f64,
     /// Whether the source engine is deterministic (bypasses the FDR filter).
@@ -311,11 +315,20 @@ fn series_values(series: &Series) -> Vec<SeriesValue> {
         .points
         .iter()
         .map(|point| SeriesValue {
-            commit: point.commit.clone(),
+            commit: owned_commit(point),
             value: point.value,
             dirty: point.dirty,
         })
         .collect()
+}
+
+/// The abbreviated commit of a point as an owned `String`, for the JSON output.
+///
+/// Points intern their commit as a shared `Arc<str>`; the public finding fields are
+/// plain owned strings, so a surviving finding pays one allocation here rather than
+/// every point carrying its own copy.
+fn owned_commit(point: &SeriesPoint) -> Option<String> {
+    point.commit.as_deref().map(str::to_owned)
 }
 
 /// The direction of a change, given the signed delta from the baseline and the
@@ -354,17 +367,20 @@ fn relative_delta_of(delta: f64, baseline: f64) -> f64 {
 /// The representative confidence interval of a regime: the median of its points'
 /// lower and upper bounds, available only when the engine reports dispersion.
 fn regime_interval(points: &[&SeriesPoint]) -> Option<(f64, f64)> {
-    let lows: Vec<f64> = points
+    let mut lows: Vec<f64> = points
         .iter()
         .filter_map(|point| point.interval_low)
         .collect();
-    let highs: Vec<f64> = points
+    let mut highs: Vec<f64> = points
         .iter()
         .filter_map(|point| point.interval_high)
         .collect();
-    // `median` yields `None` for an empty side, so a regime missing either bound
-    // short-circuits here without a separate emptiness guard.
-    Some((stats::median(&lows)?, stats::median(&highs)?))
+    // `median_in_place` yields `None` for an empty side, so a regime missing either
+    // bound short-circuits here without a separate emptiness guard.
+    Some((
+        stats::median_in_place(&mut lows)?,
+        stats::median_in_place(&mut highs)?,
+    ))
 }
 
 /// Whether two intervals are disjoint (the after regime sits wholly above or
@@ -376,7 +392,7 @@ fn intervals_disjoint(before: (f64, f64), after: (f64, f64)) -> bool {
 /// The median confidence-interval half-width across `points`, when the engine
 /// reports dispersion. Used as the per-measurement noise floor for noisy drift.
 fn median_half_width(points: &[SeriesPoint]) -> Option<f64> {
-    let halves: Vec<f64> = points
+    let mut halves: Vec<f64> = points
         .iter()
         .filter_map(|point| match (point.interval_low, point.interval_high) {
             (Some(low), Some(high)) => Some((high - low) / 2.0),
@@ -386,7 +402,7 @@ fn median_half_width(points: &[SeriesPoint]) -> Option<f64> {
     if halves.is_empty() {
         return None;
     }
-    stats::median(&halves)
+    stats::median_in_place(&mut halves)
 }
 
 /// The median absolute residual of the two-regime (step) model: each point's
@@ -396,22 +412,22 @@ fn step_model_residual(values: &[f64], tau: usize) -> Option<f64> {
     let after = values.get(tau..)?;
     let before_median = stats::median(before)?;
     let after_median = stats::median(after)?;
-    let residuals: Vec<f64> = before
+    let mut residuals: Vec<f64> = before
         .iter()
         .map(|value| (value - before_median).abs())
         .chain(after.iter().map(|value| (value - after_median).abs()))
         .collect();
-    stats::median(&residuals)
+    stats::median_in_place(&mut residuals)
 }
 
 /// The median absolute residual of the linear (drift) model `intercept + slope·i`.
 fn line_model_residual(values: &[f64], slope: f64, intercept: f64) -> Option<f64> {
-    let residuals: Vec<f64> = values
+    let mut residuals: Vec<f64> = values
         .iter()
         .enumerate()
         .map(|(index, value)| (value - (intercept + slope * count_to_f64(index))).abs())
         .collect();
-    stats::median(&residuals)
+    stats::median_in_place(&mut residuals)
 }
 
 /// Chooses between a change-point and a drift candidate for the same series.
@@ -453,12 +469,15 @@ fn arbitrate(
 /// non-zero step. A noisy engine additionally requires a significant Mann–Whitney
 /// rank-sum difference between the regimes, non-overlapping regime confidence
 /// intervals (when reported), and a practically meaningful relative magnitude.
-fn evaluate_change_point(series: &Series, config: &AnalysisConfig) -> Option<Candidate> {
+fn evaluate_change_point(
+    series: &Series,
+    values: &[f64],
+    config: &AnalysisConfig,
+) -> Option<Candidate> {
     let points = &series.points;
     let n = points.len();
-    let values: Vec<f64> = points.iter().map(|point| point.value).collect();
 
-    let change = stats::pettitt(&values)?;
+    let change = stats::pettitt(values)?;
     let tau = change.index;
     let before_len = tau;
     let after_len = n.checked_sub(tau)?;
@@ -499,7 +518,7 @@ fn evaluate_change_point(series: &Series, config: &AnalysisConfig) -> Option<Can
         mann_whitney
     };
 
-    let commit = points.get(tau).and_then(|point| point.commit.clone());
+    let commit = points.get(tau).and_then(owned_commit);
     Some(Candidate {
         finding: Finding {
             set: series.set.clone(),
@@ -518,8 +537,9 @@ fn evaluate_change_point(series: &Series, config: &AnalysisConfig) -> Option<Can
             active_from: 0,
             blessed_at: None,
             blessed_commit_time: None,
-            series: series_values(series),
+            series: Vec::new(),
         },
+        source_index: 0,
         bh_p: effective_p,
         deterministic,
         split: Some(tau),
@@ -535,19 +555,18 @@ fn evaluate_change_point(series: &Series, config: &AnalysisConfig) -> Option<Can
 /// engine the total movement must also exceed the per-measurement noise floor
 /// (twice the median confidence-interval half-width), so jitter does not read as a
 /// trend.
-fn evaluate_drift(series: &Series, config: &AnalysisConfig) -> Option<Candidate> {
+fn evaluate_drift(series: &Series, values: &[f64], config: &AnalysisConfig) -> Option<Candidate> {
     let points = &series.points;
     let n = points.len();
     if n < config.drift_min_points {
         return None;
     }
-    let values: Vec<f64> = points.iter().map(|point| point.value).collect();
 
-    let trend = stats::mann_kendall(&values);
+    let trend = stats::mann_kendall(values);
     if trend.p_value >= config.drift_alpha {
         return None;
     }
-    let (slope, intercept) = stats::theil_sen_line(&values)?;
+    let (slope, intercept) = stats::theil_sen_line(values)?;
     let span = count_to_f64(n.checked_sub(1)?);
     let baseline = intercept;
     let latest = intercept + slope * span;
@@ -570,7 +589,7 @@ fn evaluate_drift(series: &Series, config: &AnalysisConfig) -> Option<Candidate>
         return None;
     }
 
-    let commit = points.last().and_then(|point| point.commit.clone());
+    let commit = points.last().and_then(owned_commit);
     Some(Candidate {
         finding: Finding {
             set: series.set.clone(),
@@ -589,8 +608,9 @@ fn evaluate_drift(series: &Series, config: &AnalysisConfig) -> Option<Candidate>
             active_from: 0,
             blessed_at: None,
             blessed_commit_time: None,
-            series: series_values(series),
+            series: Vec::new(),
         },
+        source_index: 0,
         bh_p: trend.p_value,
         deterministic,
         split: None,
@@ -671,7 +691,7 @@ fn latest_regime<'a>(
         .get(tau..)
         .map(<[&SeriesPoint]>::to_vec)
         .unwrap_or_default();
-    let flipped_at = branch.get(tau).and_then(|point| point.commit.clone());
+    let flipped_at = branch.get(tau).and_then(|&point| owned_commit(point));
     (after_points, flipped_at)
 }
 
@@ -759,8 +779,9 @@ fn compare_samples(
             active_from: 0,
             blessed_at: None,
             blessed_commit_time: None,
-            series: series_values(series),
+            series: Vec::new(),
         },
+        source_index: 0,
         bh_p: effective_p,
         deterministic,
         split: None,
@@ -784,7 +805,7 @@ fn evaluate_branch(
     // either sample's median is absent, so no explicit emptiness guard is needed.
     let base_window = recent(&base, config.compare_window);
     let (latest_points, flipped_at) = latest_regime(&branch, config);
-    let commit = branch.last().and_then(|point| point.commit.clone());
+    let commit = branch.last().and_then(|&point| owned_commit(point));
     compare_samples(
         series,
         &base_window,
@@ -807,7 +828,7 @@ fn evaluate_tip(series: &Series, config: &AnalysisConfig) -> Option<Candidate> {
     let all: Vec<&SeriesPoint> = points.iter().collect();
     let (preceding, tip) = all.split_at(n.saturating_sub(1));
     let before = recent(preceding, config.compare_window);
-    let commit = tip.first().and_then(|point| point.commit.clone());
+    let commit = tip.first().and_then(|&point| owned_commit(point));
     compare_samples(
         series,
         &before,
@@ -844,11 +865,13 @@ fn active_view(series: &Series) -> Series {
     }
 }
 
-/// Restores the full series onto a history-mode finding and records the re-baseline
-/// provenance, so the chart can grey the pre-blessing prefix and the report can name
-/// the blessing.
+/// Records a history-mode finding's re-baseline provenance, so the chart can grey
+/// the pre-blessing prefix and the report can name the blessing.
+///
+/// The finding's charting points ([`Finding::series`]) are filled in later, when
+/// the candidate survives filtering (see [`find_changes`]); a dropped candidate
+/// never builds them.
 fn stamp_history(finding: &mut Finding, series: &Series) {
-    finding.series = series_values(series);
     finding.active_from = series.active_start;
     if let Some(blessing) = &series.blessing {
         finding.blessed_at = Some(short_commit(&blessing.commit));
@@ -874,7 +897,11 @@ const RESOLVED_SPIKE_MAX_POINTS: usize = 200;
 /// and `latest` the spike's own level (its magnitude is what is notable). A
 /// deterministic engine accepts any sustained non-zero plateau; a noisy engine
 /// requires both the rise and the recovery to be Mann–Whitney significant.
-fn evaluate_resolved_spike(series: &Series, config: &AnalysisConfig) -> Option<Candidate> {
+fn evaluate_resolved_spike(
+    series: &Series,
+    values: &[f64],
+    config: &AnalysisConfig,
+) -> Option<Candidate> {
     let points = &series.points;
     let n = points.len();
     if n > RESOLVED_SPIKE_MAX_POINTS {
@@ -885,7 +912,6 @@ fn evaluate_resolved_spike(series: &Series, config: &AnalysisConfig) -> Option<C
     if n < min.checked_mul(3)? {
         return None;
     }
-    let values: Vec<f64> = points.iter().map(|point| point.value).collect();
     let baseline = stats::median(values.get(..min)?)?;
     let current = stats::median(values.get(n.checked_sub(min)?..)?)?;
     // Only a spike that has recovered qualifies; a still-elevated tail is an active
@@ -951,14 +977,15 @@ fn evaluate_resolved_spike(series: &Series, config: &AnalysisConfig) -> Option<C
             delta: deviation,
             relative_delta,
             confidence: (1.0 - effective_p).clamp(0.0, 1.0),
-            commit: points.get(rise).and_then(|point| point.commit.clone()),
-            flipped_at: points.get(recovery).and_then(|point| point.commit.clone()),
+            commit: points.get(rise).and_then(owned_commit),
+            flipped_at: points.get(recovery).and_then(owned_commit),
             active: false,
             active_from: 0,
             blessed_at: None,
             blessed_commit_time: None,
-            series: series_values(series),
+            series: Vec::new(),
         },
+        source_index: 0,
         bh_p: effective_p,
         deterministic,
         split: Some(rise),
@@ -998,7 +1025,9 @@ pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Vec<Finding
     let mut keep_iter = keep.into_iter();
 
     // `candidates` and `noisy_p` were built in the same order, so advancing
-    // `keep_iter` exactly for the noisy candidates keeps the mask aligned.
+    // `keep_iter` exactly for the noisy candidates keeps the mask aligned. A
+    // surviving finding that the mode keeps materialises its charting points here —
+    // a dropped candidate never pays for them.
     let mut findings: Vec<Finding> = candidates
         .into_iter()
         .filter_map(|candidate| {
@@ -1007,9 +1036,23 @@ pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Vec<Finding
             } else {
                 keep_iter.next().unwrap_or(false)
             };
-            survive.then_some(candidate.finding)
+            if !survive {
+                return None;
+            }
+            let Candidate {
+                mut finding,
+                source_index,
+                ..
+            } = candidate;
+            if !context.keeps(finding.direction) {
+                return None;
+            }
+            let source = series
+                .get(source_index)
+                .expect("the source index was assigned from this series slice");
+            finding.series = series_values(source);
+            Some(finding)
         })
-        .filter(|finding| context.keeps(finding.direction))
         .collect();
 
     findings.sort_by(|left, right| {
@@ -1045,7 +1088,8 @@ fn detect_all(series: &[Series], context: &AnalysisContext) -> Vec<Candidate> {
     if workers <= 1 {
         return series
             .iter()
-            .filter_map(|one| detect_one(one, context))
+            .enumerate()
+            .filter_map(|(index, one)| detect_one(index, one, context))
             .collect();
     }
 
@@ -1057,6 +1101,10 @@ fn detect_all(series: &[Series], context: &AnalysisContext) -> Vec<Candidate> {
         // yield when `len` only slightly exceeds `workers`). `workers <= series.len()`
         // keeps every chunk non-empty.
         let mut rest = series;
+        // The running offset of `rest` within `series`, so each worker can recover the
+        // global index of every series it evaluates (the chunk-local position plus this
+        // base) and stamp it onto the candidate.
+        let mut base = 0_usize;
         // The eager collect spawns every worker before the first join; a lazy
         // `map`/`flat_map` would instead spawn and join each chunk one at a time,
         // serializing the work.
@@ -1066,10 +1114,20 @@ fn detect_all(series: &[Series], context: &AnalysisContext) -> Vec<Candidate> {
                 let take = rest.len().div_ceil(remaining_workers);
                 let (slice, tail) = rest.split_at(take);
                 rest = tail;
+                let chunk_base = base;
+                base = base
+                    .checked_add(take)
+                    .expect("the total series count fits in usize");
                 scope.spawn(move || {
                     slice
                         .iter()
-                        .filter_map(|one| detect_one(one, context))
+                        .enumerate()
+                        .filter_map(|(offset, one)| {
+                            let index = chunk_base
+                                .checked_add(offset)
+                                .expect("a series index fits in usize");
+                            detect_one(index, one, context)
+                        })
                         .collect::<Vec<_>>()
                 })
             })
@@ -1085,26 +1143,30 @@ fn detect_all(series: &[Series], context: &AnalysisContext) -> Vec<Candidate> {
     })
 }
 
-/// Runs the mode-appropriate detector on a single series and returns its candidate
-/// finding, if one is raised.
+/// Runs the mode-appropriate detector on the series at `index` and returns its
+/// candidate finding, if one is raised.
 ///
 /// This is pure and depends on no other series, so [`find_changes`] evaluates every
 /// series with it in parallel. History mode locates a change-point and a drift and
 /// keeps the better-fitting one (optionally surfacing a recovered spike); branch and
-/// tip modes delegate to their dedicated detectors.
-fn detect_one(one: &Series, context: &AnalysisContext) -> Option<Candidate> {
+/// tip modes delegate to their dedicated detectors. `index` is the series' position
+/// in the analysed slice, stamped onto the candidate so [`find_changes`] can
+/// materialise its charting points only if it survives filtering.
+fn detect_one(index: usize, one: &Series, context: &AnalysisContext) -> Option<Candidate> {
     let config = &context.config;
-    match context.mode {
+    let candidate = match context.mode {
         AnalysisMode::History => {
             let active = active_view(one);
+            // The point values are projected once here and shared by every history
+            // detector, rather than each rebuilding the same `Vec<f64>`.
             let values: Vec<f64> = active.points.iter().map(|point| point.value).collect();
-            let change = evaluate_change_point(&active, config);
-            let drift = evaluate_drift(&active, config);
+            let change = evaluate_change_point(&active, &values, config);
+            let drift = evaluate_drift(&active, &values, config);
             let mut chosen = arbitrate(&values, change, drift);
             // A series with no active change may instead carry a recovered spike;
             // surface it only when inactive findings are requested.
             if chosen.is_none() && context.include_inactive {
-                chosen = evaluate_resolved_spike(&active, config);
+                chosen = evaluate_resolved_spike(&active, &values, config);
             }
             chosen.map(|mut candidate| {
                 stamp_history(&mut candidate.finding, one);
@@ -1113,7 +1175,11 @@ fn detect_one(one: &Series, context: &AnalysisContext) -> Option<Candidate> {
         }
         AnalysisMode::Branch => evaluate_branch(one, config, context.merge_base_index),
         AnalysisMode::Tip => evaluate_tip(one, config),
-    }
+    };
+    candidate.map(|mut candidate| {
+        candidate.source_index = index;
+        candidate
+    })
 }
 
 #[cfg(test)]
@@ -1126,6 +1192,8 @@ mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
     use jiff::Timestamp;
+
+    use std::sync::Arc;
 
     use crate::analyze::{Blessing, SeriesPoint};
     use crate::model::DiscriminantSet;
@@ -1161,8 +1229,8 @@ mod tests {
                 SeriesPoint {
                     topo_index: index,
                     dirty: false,
-                    object_key: format!("v1/p/engine/t/synthetic/commit{index}/clean.json"),
-                    commit: Some(format!("commit{index}")),
+                    object_ordinal: u32::try_from(index).unwrap(),
+                    commit: Some(Arc::from(format!("commit{index}"))),
                     value,
                     interval_low: half.map(|half| value - half),
                     interval_high: half.map(|half| value + half),
@@ -1193,6 +1261,12 @@ mod tests {
     fn only(findings: Vec<Finding>) -> Finding {
         assert_eq!(findings.len(), 1, "expected exactly one finding");
         findings.into_iter().next().unwrap()
+    }
+
+    /// The point values of a series, projected as the history detectors receive
+    /// them (the production path shares one such projection across detectors).
+    fn values_of(series: &Series) -> Vec<f64> {
+        series.points.iter().map(|point| point.value).collect()
     }
 
     /// Builds a minimal [`Candidate`] carrying only the fields [`arbitrate`]
@@ -1226,6 +1300,7 @@ mod tests {
                 blessed_commit_time: None,
                 series: Vec::new(),
             },
+            source_index: 0,
             bh_p: 0.0,
             deterministic: true,
             split,
@@ -1636,7 +1711,7 @@ mod tests {
             practical_relative: 30.0_f64 / 100.0,
             ..AnalysisConfig::default()
         };
-        let candidate = evaluate_change_point(&series, &config).unwrap();
+        let candidate = evaluate_change_point(&series, &values_of(&series), &config).unwrap();
         assert_eq!(candidate.finding.baseline, 100.0);
         assert_eq!(candidate.finding.latest, 130.0);
         assert_eq!(candidate.finding.relative_delta, config.practical_relative);
@@ -1770,8 +1845,8 @@ mod tests {
             .map(|&(topo_index, value, dirty)| SeriesPoint {
                 topo_index,
                 dirty,
-                object_key: format!("v1/p/engine/t/synthetic/commit{topo_index}/clean.json"),
-                commit: Some(format!("commit{topo_index}")),
+                object_ordinal: u32::try_from(topo_index).unwrap(),
+                commit: Some(Arc::from(format!("commit{topo_index}"))),
                 value,
                 interval_low: None,
                 interval_high: None,
@@ -2027,7 +2102,9 @@ mod tests {
         // A sustained interior plateau (20) between baseline regimes (10) that has
         // since recovered: a deterministic engine accepts any non-zero plateau.
         let spike = series_of(&[10.0, 10.0, 10.0, 10.0, 20.0, 20.0, 10.0, 10.0, 10.0, 10.0]);
-        let candidate = evaluate_resolved_spike(&spike, &AnalysisConfig::default()).unwrap();
+        let candidate =
+            evaluate_resolved_spike(&spike, &values_of(&spike), &AnalysisConfig::default())
+                .unwrap();
         assert!(!candidate.finding.active);
         assert_eq!(candidate.finding.baseline, 10.0);
         assert_eq!(candidate.finding.latest, 20.0);
@@ -2065,8 +2142,8 @@ mod tests {
             .map(|(index, &(value, half))| SeriesPoint {
                 topo_index: index,
                 dirty: false,
-                object_key: format!("v1/p/engine/t/synthetic/commit{index}/clean.json"),
-                commit: Some(format!("commit{index}")),
+                object_ordinal: u32::try_from(index).unwrap(),
+                commit: Some(Arc::from(format!("commit{index}"))),
                 value,
                 interval_low: Some(value - half),
                 interval_high: Some(value + half),
@@ -2190,7 +2267,7 @@ mod tests {
             practical_relative: 20.0 / 100.0,
             ..AnalysisConfig::default()
         };
-        let candidate = evaluate_drift(&series, &config).unwrap();
+        let candidate = evaluate_drift(&series, &values_of(&series), &config).unwrap();
         assert_eq!(candidate.finding.method, FindingMethod::Drift);
         assert!(candidate.finding.confidence < 1.0);
     }
@@ -2202,7 +2279,7 @@ mod tests {
         // trend. The `2.0 * half_width` floor must be a product (a `+` mutant lowers
         // the floor to 14 and would flag it).
         let series = wall_series(&[100.0, 104.0, 108.0, 112.0, 116.0, 120.0], 12.0);
-        assert!(evaluate_drift(&series, &AnalysisConfig::default()).is_none());
+        assert!(evaluate_drift(&series, &values_of(&series), &AnalysisConfig::default()).is_none());
     }
 
     #[test]
@@ -2215,9 +2292,9 @@ mod tests {
             ..AnalysisConfig::default()
         };
         let short = series_of(&[100.0, 104.0, 108.0, 112.0, 116.0]);
-        assert!(evaluate_drift(&short, &config).is_none());
+        assert!(evaluate_drift(&short, &values_of(&short), &config).is_none());
         let long = series_of(&[100.0, 104.0, 108.0, 112.0, 116.0, 120.0, 124.0]);
-        assert!(evaluate_drift(&long, &config).is_some());
+        assert!(evaluate_drift(&long, &values_of(&long), &config).is_some());
     }
 
     #[test]
@@ -2258,7 +2335,9 @@ mod tests {
         // baseline (10) by 10 -- the `level - baseline` difference, not a sum or
         // quotient.
         let series = series_of(&[10.0, 10.0, 20.0, 20.0, 10.0, 10.0]);
-        let candidate = evaluate_resolved_spike(&series, &AnalysisConfig::default()).unwrap();
+        let candidate =
+            evaluate_resolved_spike(&series, &values_of(&series), &AnalysisConfig::default())
+                .unwrap();
         assert_eq!(candidate.finding.delta, 10.0);
     }
 
@@ -2276,7 +2355,10 @@ mod tests {
             *value = 20.0;
         }
         let series = series_with(&values, MetricKind::InstructionCount, &[]);
-        assert!(evaluate_resolved_spike(&series, &AnalysisConfig::default()).is_some());
+        assert!(
+            evaluate_resolved_spike(&series, &values_of(&series), &AnalysisConfig::default())
+                .is_some()
+        );
     }
 
     #[test]
@@ -2292,7 +2374,10 @@ mod tests {
             *value = 20.0;
         }
         let series = series_with(&values, MetricKind::InstructionCount, &[]);
-        assert!(evaluate_resolved_spike(&series, &AnalysisConfig::default()).is_none());
+        assert!(
+            evaluate_resolved_spike(&series, &values_of(&series), &AnalysisConfig::default())
+                .is_none()
+        );
     }
 
     #[test]
@@ -2301,7 +2386,10 @@ mod tests {
         // floor. The reject gate is `deviation <= 0 || relative < floor`; an `&&`
         // mutant (needing BOTH) would wrongly surface it.
         let series = series_of(&[1000.0, 1000.0, 1010.0, 1010.0, 1000.0, 1000.0]);
-        assert!(evaluate_resolved_spike(&series, &AnalysisConfig::default()).is_none());
+        assert!(
+            evaluate_resolved_spike(&series, &values_of(&series), &AnalysisConfig::default())
+                .is_none()
+        );
     }
 
     #[test]
@@ -2314,7 +2402,7 @@ mod tests {
             practical_relative: 3.0 / 100.0,
             ..AnalysisConfig::default()
         };
-        assert!(evaluate_resolved_spike(&series, &config).is_some());
+        assert!(evaluate_resolved_spike(&series, &values_of(&series), &config).is_some());
     }
 
     #[test]
@@ -2327,7 +2415,9 @@ mod tests {
             .chain(std::iter::repeat_n(100.0, 8))
             .collect();
         let series = wall_series(&values, 1.0);
-        let candidate = evaluate_resolved_spike(&series, &AnalysisConfig::default()).unwrap();
+        let candidate =
+            evaluate_resolved_spike(&series, &values_of(&series), &AnalysisConfig::default())
+                .unwrap();
         assert!(candidate.finding.confidence < 1.0);
     }
 
@@ -2341,7 +2431,10 @@ mod tests {
             .chain([100.0, 100.0])
             .collect();
         let series = wall_series(&values, 1.0);
-        assert!(evaluate_resolved_spike(&series, &AnalysisConfig::default()).is_none());
+        assert!(
+            evaluate_resolved_spike(&series, &values_of(&series), &AnalysisConfig::default())
+                .is_none()
+        );
     }
 
     #[test]
@@ -2376,7 +2469,10 @@ mod tests {
         // Five points cannot hold a baseline, an elevated middle, and a recovery of
         // at least `min_regime` (2) each, so the `n < min * 3` gate rejects it.
         let series = series_of(&[10.0, 10.0, 20.0, 20.0, 10.0]);
-        assert!(evaluate_resolved_spike(&series, &AnalysisConfig::default()).is_none());
+        assert!(
+            evaluate_resolved_spike(&series, &values_of(&series), &AnalysisConfig::default())
+                .is_none()
+        );
     }
 
     #[test]
@@ -2384,6 +2480,9 @@ mod tests {
         // The recovery tail (30) stays far above the baseline (10), so the series has
         // not recovered; an active change-point handles it instead.
         let series = series_of(&[10.0, 10.0, 20.0, 20.0, 30.0, 30.0]);
-        assert!(evaluate_resolved_spike(&series, &AnalysisConfig::default()).is_none());
+        assert!(
+            evaluate_resolved_spike(&series, &values_of(&series), &AnalysisConfig::default())
+                .is_none()
+        );
     }
 }

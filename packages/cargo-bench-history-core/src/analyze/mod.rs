@@ -23,6 +23,6 @@ pub use findings::{
 pub use report::{ReportFormat, ReportInput, SetSummary, render};
 pub use selection::{SelectedCommit, select_commits};
 pub use series::{
-    Blessing, BlessingPlacement, LoadedObject, Series, SeriesFilter, SeriesPoint, apply_blessings,
-    build_series,
+    Blessing, BlessingPlacement, LoadedObject, Series, SeriesBuilder, SeriesFilter, SeriesPoint,
+    apply_blessings, build_series,
 };

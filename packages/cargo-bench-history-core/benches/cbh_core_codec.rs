@@ -65,7 +65,6 @@ fn sample_run_json(result_count: usize) -> Vec<u8> {
     let epoch = "2024-01-01T00:00:00Z".parse().unwrap();
     let context = RunContext::new(
         epoch,
-        epoch,
         GitInfo::default(),
         EnvironmentInfo::default(),
         ToolchainInfo::default(),

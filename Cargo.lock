@@ -456,6 +456,7 @@ dependencies = [
 name = "cargo-bench-history-stress"
 version = "0.0.0"
 dependencies = [
+ "all_the_time",
  "cargo-bench-history",
  "cargo-bench-history-core",
  "clap",

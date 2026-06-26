@@ -12,7 +12,7 @@
 //! `list discriminants` lists the distinct discriminant sets present in storage
 //! and, like that listing, needs no repository.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use serde::Serialize;
@@ -28,10 +28,10 @@ use crate::{ListOptions, ListSubject, RunError, RunOutcome};
 use jiff::Timestamp;
 
 use super::{
-    AutoFacets, SelectedDataSet, Selection, detect_auto_facets, dirty_base_exception_warning,
-    empty_history_hint, facet_filtered_candidates, parse_format, resolve_facets, select_dataset,
+    AutoFacets, Selection, detect_auto_facets, dirty_base_exception_warning, empty_history_hint,
+    facet_filtered_candidates, parse_format, resolve_facets, select_dataset,
 };
-use super::{LoadedObject, ReportFormat, Series, SeriesFilter, apply_blessings, build_series};
+use super::{ReportFormat, RunIndex, Series, SeriesFilter, apply_blessings};
 use crate::model::BlessingRecord;
 use crate::model::DiscriminantSet;
 
@@ -134,20 +134,20 @@ where
             Ok(RunOutcome::Completed { message })
         }
         ListSubject::Runs => {
+            let filter = SeriesFilter::default();
             let dataset = select_dataset(
-                git, storage, project_id, config, &selection, auto, now, reporter,
+                git, storage, project_id, config, &selection, filter, auto, now, reporter,
             )
             .await?;
-            let filter = SeriesFilter::default();
-            let series = build_series(&dataset.loaded, &dataset.order, &filter);
-            let listing = build_listing(project_id, &dataset, &series);
+            let series = dataset.series;
+            let listing = build_listing(project_id, &dataset.run_index, &series);
 
             // The same self-explaining diagnostics `analyze` shows: a hint when
             // stored runs matched the facets but none entered the selection, and a
             // warning when a dirty base-branch-tip run was admitted because the
             // working tree is dirty.
             let hint = empty_history_hint(
-                dataset.loaded.is_empty(),
+                dataset.run_index.is_empty(),
                 dataset.candidate_count,
                 &dataset.target_ref,
                 dataset.tally,
@@ -203,53 +203,30 @@ struct Listing {
 
 /// Groups the selected runs by discriminant set and counts each set's runs,
 /// series, and per-commit breakdown (ordered by first-parent topology).
-fn build_listing(project_id: &str, dataset: &SelectedDataSet, series: &[Series]) -> Listing {
-    let mut sets: Vec<DiscriminantSet> = dataset
-        .loaded
-        .iter()
-        .map(|object| object.key.set.clone())
-        .collect();
-    sets.sort();
-    sets.dedup();
-
-    let set_listings: Vec<SetListing> = sets
-        .iter()
-        .map(|set| {
-            let objects: Vec<&LoadedObject> = dataset
-                .loaded
-                .iter()
-                .filter(|object| &object.key.set == set)
-                .collect();
+fn build_listing(project_id: &str, run_index: &RunIndex, series: &[Series]) -> Listing {
+    let set_listings: Vec<SetListing> = run_index
+        .sets()
+        .map(|(set, by_commit)| {
             let series_count = series.iter().filter(|one| &one.set == set).count();
 
-            // Key by first-parent position so commits read oldest-first, matching
-            // the order their series points are compared in.
-            let mut by_commit: BTreeMap<usize, CommitEntry> = BTreeMap::new();
-            for object in &objects {
-                let index = dataset
-                    .order
-                    .get(&object.key.commit)
-                    .copied()
-                    .unwrap_or(usize::MAX);
-                let entry = by_commit.entry(index).or_insert_with(|| CommitEntry {
-                    commit: object.key.commit.clone(),
-                    runs: 0,
-                    clean: 0,
-                    dirty: 0,
-                });
-                entry.runs = entry.runs.saturating_add(1);
-                if object.key.is_dirty() {
-                    entry.dirty = entry.dirty.saturating_add(1);
-                } else {
-                    entry.clean = entry.clean.saturating_add(1);
-                }
-            }
+            // `by_commit` is keyed by first-parent position, so iterating it yields
+            // commits oldest-first, matching the order their series points compare.
+            let commits: Vec<CommitEntry> = by_commit
+                .values()
+                .map(|counts| CommitEntry {
+                    commit: counts.commit.clone(),
+                    runs: counts.clean.saturating_add(counts.dirty),
+                    clean: counts.clean,
+                    dirty: counts.dirty,
+                })
+                .collect();
+            let runs = commits.iter().map(|entry| entry.runs).sum();
 
             SetListing {
                 set: set.clone(),
-                runs: objects.len(),
+                runs,
                 series: series_count,
-                commits: by_commit.into_values().collect(),
+                commits,
             }
         })
         .collect();
@@ -257,7 +234,7 @@ fn build_listing(project_id: &str, dataset: &SelectedDataSet, series: &[Series])
     Listing {
         project: project_id.to_owned(),
         sets: set_listings,
-        total_runs: dataset.loaded.len(),
+        total_runs: run_index.total(),
         total_series: series.len(),
     }
 }
@@ -638,12 +615,12 @@ where
     G: GitHistory,
     S: Storage,
 {
+    let filter = SeriesFilter::default();
     let dataset = select_dataset(
-        git, storage, project_id, config, selection, auto, now, reporter,
+        git, storage, project_id, config, selection, filter, auto, now, reporter,
     )
     .await?;
-    let filter = SeriesFilter::default();
-    let mut series = build_series(&dataset.loaded, &dataset.order, &filter);
+    let mut series = dataset.series;
     apply_blessings(&mut series, &dataset.blessings);
 
     // A benchmark's metrics each form their own series but share a blessing, so the

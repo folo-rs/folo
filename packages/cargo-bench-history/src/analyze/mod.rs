@@ -18,11 +18,11 @@ pub(crate) mod prune;
 
 pub(crate) use cargo_bench_history_core::analyze::{
     AnalysisConfig, AnalysisContext, AnalysisMode, BlessingPlacement, DiscriminantSetQuery,
-    FacetFilter, LoadedObject, ReportFormat, ReportInput, Series, SeriesFilter, SetSummary,
-    StorageKey, apply_blessings, build_series, find_changes, parse_key, render, select_commits,
+    FacetFilter, ReportFormat, ReportInput, Series, SeriesBuilder, SeriesFilter, SetSummary,
+    StorageKey, apply_blessings, find_changes, parse_key, render, select_commits,
 };
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::IsTerminal;
 use std::path::Path;
 
@@ -143,15 +143,15 @@ where
 {
     let format = parse_format(options.format.as_deref())?;
     let selection = Selection::from_analyze(options)?;
-    let dataset = select_dataset(
-        git, storage, project_id, config, &selection, auto, now, reporter,
-    )
-    .await?;
-
     let filter = SeriesFilter {
         prefixes: &options.prefixes,
     };
-    let mut series = build_series(&dataset.loaded, &dataset.order, &filter);
+    let dataset = select_dataset(
+        git, storage, project_id, config, &selection, filter, auto, now, reporter,
+    )
+    .await?;
+
+    let mut series = dataset.series;
     // Re-baseline blessed series before detection (history mode only; branch and
     // tip modes carry an empty blessing map).
     apply_blessings(&mut series, &dataset.blessings);
@@ -177,11 +177,7 @@ where
         .iter()
         .map(|set| SetSummary {
             set,
-            runs: dataset
-                .loaded
-                .iter()
-                .filter(|object| &object.key.set == set)
-                .count(),
+            runs: dataset.run_index.runs_in_set(set),
             series: series.iter().filter(|one| &one.set == set).count(),
             findings: findings
                 .iter()
@@ -194,7 +190,7 @@ where
     // otherwise indistinguishable from "no data". Explain the dominant reasons so
     // the user can act without resorting to `--verbose`.
     let hint = empty_history_hint(
-        dataset.loaded.is_empty(),
+        dataset.run_index.is_empty(),
         dataset.candidate_count,
         &dataset.target_ref,
         dataset.tally,
@@ -211,7 +207,7 @@ where
         project: project_id,
         mode: dataset.mode.as_str(),
         notable,
-        runs: dataset.loaded.len(),
+        runs: dataset.run_index.total(),
         series: series.len(),
         findings: &findings,
         sets: &summaries,
@@ -346,13 +342,98 @@ pub(crate) struct AutoFacets {
     pub(crate) machine_key: String,
 }
 
-/// The objects an analysis (or listing) draws on, plus the bookkeeping needed to
+/// One commit's run tally within a discriminant set, the granularity the report
+/// summaries and the `list runs` breakdown need.
+#[derive(Clone, Debug)]
+pub(crate) struct CommitCounts {
+    /// The commit the runs were measured against (full SHA, or a label in tests).
+    pub(crate) commit: String,
+    /// Clean (committed-tree) runs recorded on the commit.
+    pub(crate) clean: usize,
+    /// Dirty (uncommitted-tree) snapshots recorded on the commit.
+    pub(crate) dirty: usize,
+}
+
+/// Compact per-set, per-commit run tallies kept *in place of* a retained copy of
+/// every loaded object.
+///
+/// A long history holds tens of thousands of run objects, each carrying every
+/// benchmark; keeping them all resident alongside the reconstructed series is what
+/// drove analysis into tens of gigabytes. The analysis only needs the series plus
+/// these aggregate counts (total runs, per-set runs, and the per-commit breakdown
+/// the listing renders), so each parsed run is folded into the series and dropped,
+/// updating this index as it goes.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RunIndex {
+    total: usize,
+    sets: BTreeMap<DiscriminantSet, BTreeMap<usize, CommitCounts>>,
+}
+
+impl RunIndex {
+    /// An empty index.
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Records one run on `commit` (first-parent position `topo_index`) in `set`.
+    fn record(&mut self, set: &DiscriminantSet, topo_index: usize, commit: &str, dirty: bool) {
+        self.total = self.total.saturating_add(1);
+        let entry = self
+            .sets
+            .entry(set.clone())
+            .or_default()
+            .entry(topo_index)
+            .or_insert_with(|| CommitCounts {
+                commit: commit.to_owned(),
+                clean: 0,
+                dirty: 0,
+            });
+        if dirty {
+            entry.dirty = entry.dirty.saturating_add(1);
+        } else {
+            entry.clean = entry.clean.saturating_add(1);
+        }
+    }
+
+    /// Total runs admitted across every set.
+    pub(crate) fn total(&self) -> usize {
+        self.total
+    }
+
+    /// Whether no run entered the selection.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.total == 0
+    }
+
+    /// Runs admitted in `set`.
+    pub(crate) fn runs_in_set(&self, set: &DiscriminantSet) -> usize {
+        self.sets.get(set).map_or(0, |by_commit| {
+            by_commit
+                .values()
+                .map(|counts| counts.clean.saturating_add(counts.dirty))
+                .sum()
+        })
+    }
+
+    /// Each set with at least one run, paired with its per-commit tallies in
+    /// first-parent topological order (oldest first).
+    pub(crate) fn sets(
+        &self,
+    ) -> impl Iterator<Item = (&DiscriminantSet, &BTreeMap<usize, CommitCounts>)> {
+        self.sets.iter()
+    }
+}
+
+/// The data an analysis (or listing) draws on, plus the bookkeeping needed to
 /// explain an empty outcome and warn about ephemeral data.
 struct SelectedDataSet {
-    /// The in-selection objects, loaded and parsed, in storage-key order.
-    loaded: Vec<LoadedObject>,
-    /// First-parent position of each selected commit, for series ordering.
-    order: HashMap<String, usize>,
+    /// The reconstructed series for the in-window runs, built with the caller's
+    /// series filter and ordered by git topology. Pre-blessing: the caller applies
+    /// blessings (history mode) or leaves them unapplied (branch/tip, listings).
+    series: Vec<Series>,
+    /// Compact per-set, per-commit run tallies, standing in for a retained copy of
+    /// every loaded object (which a large history cannot afford to keep resident).
+    run_index: RunIndex,
     /// How many facet-matching candidates existed before topology filtering.
     candidate_count: usize,
     /// Why candidates were excluded, for the empty-history hint.
@@ -530,6 +611,26 @@ where
     Ok((key, parsed, value))
 }
 
+/// Like [`fetch_one`], but carries an arbitrary `rank` through the out-of-order
+/// fetch so the caller can recover each object's position (its storage-key
+/// ordinal). Kept as a named `async fn` for the same reason as [`fetch_one`]: the
+/// stream closure then stays a plain `FnMut` returning this future rather than one
+/// wrapping an `async` block.
+async fn fetch_one_ranked<S, F>(
+    storage: &S,
+    rank: usize,
+    key: String,
+    parsed: StorageKey,
+    parse: &F,
+) -> Result<(usize, String, StorageKey, Run), RunError>
+where
+    S: Storage,
+    F: Fn(&str, Vec<u8>) -> Result<Run, RunError>,
+{
+    let (key, parsed, run) = fetch_one(storage, key, parsed, parse).await?;
+    Ok((rank, key, parsed, run))
+}
+
 /// Resolves the git topology, selects the comparable commits, and loads the
 /// in-selection objects into a [`SelectedDataSet`]. Requires a repository: the
 /// timeline is reconstructed from git history, not from stored timestamps.
@@ -543,6 +644,7 @@ async fn select_dataset<G, S>(
     project_id: &str,
     config: &Config,
     selection: &Selection<'_>,
+    filter: SeriesFilter<'_>,
     auto: &AutoFacets,
     now: Timestamp,
     reporter: &dyn Reporter,
@@ -708,34 +810,62 @@ where
         to_fetch.push((key, parsed));
     }
 
-    // Phase 2 — fetch and deserialize the survivors concurrently, then restore a
-    // deterministic (storage-key) order, since `buffer_unordered` completes out of
-    // order.
-    let mut fetched = load_objects_concurrently(storage, to_fetch, |key, bytes| {
-        let text = String::from_utf8(bytes).map_err(|error| RunError::Analyze {
-            message: format!("stored object {key} is not valid UTF-8: {error}"),
-        })?;
-        Run::from_json(&text).map_err(|error| RunError::Analyze {
-            message: format!("stored object {key} is not a valid result set: {error}"),
-        })
-    })
-    .await?;
-    fetched.sort_by(|left, right| left.0.cmp(&right.0));
+    // Phase 2/3 — fetch the survivors concurrently and fold each into the series as
+    // it arrives, dropping the parsed run immediately so the whole parsed data set
+    // is never resident at once (the peak that drove analysis into tens of
+    // gigabytes). Each object's ordinal — the final point tie-break — is its rank
+    // in storage-key order, assigned up front because `buffer_unordered` completes
+    // out of order. The per-object verbose notes and the run tally are collected
+    // during the fold and emitted in storage-key order afterwards, so the
+    // diagnostics stay byte-identical to a deterministic in-order pass.
+    to_fetch.sort_by(|left, right| left.0.cmp(&right.0));
 
-    // Phase 3 — admit each fetched object, in storage-key order so the verbose
-    // diagnostics and the loaded order stay deterministic. Every exclusion already
-    // happened in phase 1 (history membership, base-side dirty admission, and the
-    // `--since`/`--until` window), so a fetched object only needs its
-    // dirty-base-exception flag inspected for the ephemeral-data warning.
-    let mut loaded: Vec<LoadedObject> = Vec::new();
-    for (key, parsed, result) in fetched {
-        if parsed.is_dirty()
-            && dirty_base_exception
-                .get(parsed.commit.as_str())
+    let mut builder = SeriesBuilder::new(filter);
+    let mut run_index = RunIndex::new();
+    // (storage key, admitted-by-dirty-base-exception) per folded object, for the
+    // key-ordered verbose notes emitted once the fold completes.
+    let mut admitted: Vec<(String, bool)> = Vec::new();
+    {
+        let parse = |key: &str, bytes: Vec<u8>| -> Result<Run, RunError> {
+            let text = String::from_utf8(bytes).map_err(|error| RunError::Analyze {
+                message: format!("stored object {key} is not valid UTF-8: {error}"),
+            })?;
+            Run::from_json(&text).map_err(|error| RunError::Analyze {
+                message: format!("stored object {key} is not a valid result set: {error}"),
+            })
+        };
+        let parse = &parse;
+        let mut fetches = futures::stream::iter(to_fetch.into_iter().enumerate())
+            .map(move |(rank, (key, parsed))| fetch_one_ranked(storage, rank, key, parsed, parse))
+            .buffer_unordered(LOAD_CONCURRENCY);
+
+        while let Some(fetched) = fetches.next().await {
+            let (rank, key, parsed, run) = fetched?;
+            let topo_index = order
+                .get(&parsed.commit)
                 .copied()
-                .unwrap_or(false)
-        {
-            included_dirty_base_exception = true;
+                .expect("phase 1 admitted only commits on the analyzed history");
+            let dirty = parsed.is_dirty();
+            let is_exception = dirty
+                && dirty_base_exception
+                    .get(parsed.commit.as_str())
+                    .copied()
+                    .unwrap_or(false);
+            if is_exception {
+                included_dirty_base_exception = true;
+            }
+            run_index.record(&parsed.set, topo_index, &parsed.commit, dirty);
+            builder.push(&parsed.set, topo_index, dirty, ordinal_of(rank), &run);
+            admitted.push((key, is_exception));
+            // `run` is dropped here; only the extracted (compact) points are kept.
+        }
+    }
+
+    // Emit the per-object verbose notes in storage-key order — the deterministic
+    // order objects were previously admitted in — then the summary.
+    admitted.sort_by(|left, right| left.0.cmp(&right.0));
+    for (key, is_exception) in &admitted {
+        if *is_exception {
             reporter.note_with(|| {
                 format!(
                     "including {key}: dirty snapshot on the base-branch tip, admitted \
@@ -745,17 +875,13 @@ where
         } else {
             reporter.note_with(|| format!("including {key}"));
         }
-        loaded.push(LoadedObject {
-            key: parsed,
-            object_key: key,
-            result,
-        });
     }
+    let series = builder.finish();
     reporter.note(&format!(
         "{} entered the analysis ({excluded_outside_history} outside history, \
          {excluded_dirty_base} dirty-on-base, {excluded_since} before --since, \
          {excluded_until} after --until)",
-        count_noun(loaded.len(), "object")
+        count_noun(run_index.total(), "object")
     ));
 
     // Load the blessing sidecars on in-window commits into a per-set map. A
@@ -816,8 +942,8 @@ where
     }
 
     Ok(SelectedDataSet {
-        loaded,
-        order,
+        series,
+        run_index,
         candidate_count,
         tally: ExclusionTally {
             outside_history: excluded_outside_history,
@@ -831,6 +957,19 @@ where
         merge_base_index,
         blessings,
     })
+}
+
+/// Narrows a storage-key rank to the series point ordinal width.
+///
+/// The ordinal is a pure tie-break, so the (practically impossible) overflow past
+/// `u32::MAX` distinct in-window objects merely lets the last ordinals collide —
+/// the affected points then keep their stable fold order rather than panicking.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "saturating: ordinals only tie-break, and >4 billion in-window objects never occur"
+)]
+fn ordinal_of(rank: usize) -> u32 {
+    rank.min(u32::MAX as usize) as u32
 }
 
 /// Auto-detects the analysis mode from the resolved topology and recorded data.
@@ -3062,5 +3201,46 @@ mod tests {
     fn since_rejects_garbage() {
         let error = parse_since(Some("not-a-date")).unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
+    }
+
+    #[test]
+    fn run_index_counts_runs_and_reports_emptiness() {
+        let set = DiscriminantSet {
+            engine: "criterion".to_owned(),
+            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
+            machine_key: "synthetic".to_owned(),
+        };
+        let mut index = RunIndex::new();
+        assert!(index.is_empty(), "a fresh index admits no runs");
+        assert_eq!(index.total(), 0);
+        assert_eq!(index.runs_in_set(&set), 0);
+
+        index.record(&set, 0, "c0", false);
+        index.record(&set, 0, "c0", true);
+        index.record(&set, 1, "c1", false);
+
+        assert!(
+            !index.is_empty(),
+            "recording even one run makes the index non-empty"
+        );
+        assert_eq!(index.total(), 3, "every recorded run is counted once");
+        assert_eq!(
+            index.runs_in_set(&set),
+            3,
+            "clean and dirty runs both count toward the set tally"
+        );
+    }
+
+    #[test]
+    fn ordinal_of_passes_small_ranks_through_unchanged() {
+        // The ordinal is the storage-key rank narrowed to the point's `u32` width;
+        // realistic ranks pass through verbatim so the series tie-break stays in
+        // key order.
+        assert_eq!(ordinal_of(0), 0);
+        assert_eq!(ordinal_of(7), 7);
+        assert_eq!(
+            ordinal_of(usize::try_from(u32::MAX).expect("u32 fits in usize")),
+            u32::MAX
+        );
     }
 }
