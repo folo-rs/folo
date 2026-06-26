@@ -104,6 +104,12 @@ fn toml_escape(value: &str) -> String {
 
 /// A config that stores in a fresh Azurite container.
 fn azure_config() -> String {
+    azure_config_for(&unique_container())
+}
+
+/// A config that stores in the named Azurite container, so a test can inspect the
+/// same container directly afterward.
+fn azure_config_for(container: &str) -> String {
     format!(
         "[project]\n\
          id = \"azureproj\"\n\n\
@@ -112,10 +118,54 @@ fn azure_config() -> String {
          container = \"{container}\"\n\
          endpoint = \"{endpoint}\"\n\
          account_key = \"{key}\"\n",
-        container = unique_container(),
         endpoint = toml_escape(&azurite_endpoint()),
         key = AZURITE_KEY,
     )
+}
+
+/// Mints an account SAS query for the Azurite dev account, mirroring the
+/// production minting in `storage::sas` (which is unit-tested there). It is
+/// reproduced here because the Azure SDK exposes no shared-key credential and the
+/// production minting is crate-private, so a test that inspects blobs directly
+/// must sign its own token.
+fn azurite_account_sas() -> String {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as BASE64;
+    use hmac::{Hmac, KeyInit as _, Mac as _};
+    use sha2::Sha256;
+
+    let expiry = "2030-01-01T00:00:00Z";
+    let protocol = "https,http";
+    let string_to_sign =
+        format!("devstoreaccount1\nrwdlac\nb\nsco\n\n{expiry}\n\n{protocol}\n2021-08-06\n\n");
+    let key = BASE64.decode(AZURITE_KEY).unwrap();
+    let mut mac = Hmac::<Sha256>::new_from_slice(&key).unwrap();
+    mac.update(string_to_sign.as_bytes());
+    let signature = BASE64.encode(mac.finalize().into_bytes());
+
+    let mut url = Url::parse("http://sas.invalid/").unwrap();
+    url.query_pairs_mut().extend_pairs([
+        ("sv", "2021-08-06"),
+        ("ss", "b"),
+        ("srt", "sco"),
+        ("sp", "rwdlac"),
+        ("se", expiry),
+        ("spr", protocol),
+        ("sig", signature.as_str()),
+    ]);
+    url.query().unwrap().to_owned()
+}
+
+/// A SAS-authenticated container client for inspecting blobs Azurite stored,
+/// bypassing the production backend (which would transparently inflate them).
+fn azurite_container_client(container: &str) -> BlobContainerClient {
+    let mut url = Url::parse(&azurite_endpoint()).unwrap();
+    url.path_segments_mut()
+        .unwrap()
+        .pop_if_empty()
+        .push(container);
+    url.set_query(Some(&azurite_account_sas()));
+    BlobContainerClient::new(url, None, None).unwrap()
 }
 
 /// The real Storage account name to target, or `None` when none is configured.
@@ -503,6 +553,52 @@ async fn analyze_feature_and_dirty_round_trip_through_azurite() {
         return;
     }
     scenario_feature_and_dirty(&azure_config()).await;
+}
+
+/// A stored blob carries `Content-Encoding: gzip`, so a non-SDK reader knows the
+/// body is compressed. The production round-trip tests cannot prove this — the
+/// backend inflates on `get` regardless of the header — so this inspects the blob
+/// directly through a SAS-authenticated client.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[serial]
+async fn stored_blob_declares_gzip_content_encoding_in_azurite() {
+    use azure_storage_blob::models::BlobClientGetPropertiesResultHeaders as _;
+    use futures::TryStreamExt as _;
+
+    if !azurite_available() {
+        return;
+    }
+
+    let container = unique_container();
+    let workspace =
+        AzureWorkspace::new(&azure_config_for(&container)).with_bench(&["--summary", "grp=single"]);
+    workspace.drive(&["run"]).await.unwrap();
+
+    let client = azurite_container_client(&container);
+    let mut pager = client.list_blobs(None).unwrap();
+    let mut names = Vec::new();
+    while let Some(item) = pager.try_next().await.unwrap() {
+        if let Some(name) = item.name {
+            names.push(name);
+        }
+    }
+    assert_eq!(
+        names.len(),
+        1,
+        "the run stored exactly one object: {names:?}"
+    );
+
+    let properties = client
+        .blob_client(&names[0])
+        .get_properties(None)
+        .await
+        .unwrap();
+    assert_eq!(
+        properties.content_encoding().unwrap().as_deref(),
+        Some("gzip"),
+        "the stored blob must declare its gzip encoding"
+    );
 }
 
 // --- Real Azure (Microsoft Entra ID) ---------------------------------------

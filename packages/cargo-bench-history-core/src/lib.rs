@@ -22,12 +22,15 @@
 //! fast in-process unit-test suite that is cheap to mutation-test, instead of
 //! re-paying the shell's git-subprocess-heavy integration suite for every mutant.
 //!
-//! The public surface is two namespaces: [`model`] (the data model and
-//! comparability rules) and [`analyze`] (the analysis math and rendering). Within
-//! each, every type is re-exported flat, so consumers write `crate::model::Run`
-//! and `crate::analyze::Finding` rather than reaching into private submodules.
+//! The public surface is three namespaces: [`model`] (the data model and
+//! comparability rules), [`analyze`] (the analysis math and rendering), and
+//! [`codec`] (the gzip byte format the storage layer and the stress harness share
+//! so they encode stored objects identically). Within each, every type is
+//! re-exported flat, so consumers write `crate::model::Run` and
+//! `crate::analyze::Finding` rather than reaching into private submodules.
 //!
 //! [`cargo-bench-history`]: https://github.com/folo-rs/folo
 
 pub mod analyze;
+pub mod codec;
 pub mod model;

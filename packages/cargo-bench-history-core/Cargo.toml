@@ -13,6 +13,7 @@ rust-version.workspace = true
 
 [dependencies]
 colored = { workspace = true }
+flate2 = { workspace = true }
 jiff = { workspace = true, features = ["serde"] }
 nonempty = { workspace = true, features = ["serialize"] }
 rasciigraph = { workspace = true, features = ["color"] }
@@ -20,11 +21,24 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+alloc_tracker = { path = "../alloc_tracker" }
 criterion = { workspace = true }
 mutants = { workspace = true }
 
+# Gungraun drives Valgrind-based Callgrind benchmarks; Linux-only.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
 [[bench]]
 name = "cbh_core_model"
+harness = false
+
+[[bench]]
+name = "cbh_core_codec"
+harness = false
+
+[[bench]]
+name = "cbh_core_codec_cg"
 harness = false
 
 [lints]
