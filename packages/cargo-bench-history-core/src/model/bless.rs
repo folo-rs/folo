@@ -18,10 +18,10 @@ use crate::model::{BenchmarkId, BenchmarkIdPrefix};
 
 /// Schema version of the stored [`BlessingRecord`] JSON.
 ///
-/// Bumped whenever the on-disk representation changes in a backward-incompatible
-/// way so that `analyze` can refuse or migrate older data. Version 2 dropped the
-/// `commit_time` field: the blessed commit's date is resolved from git topology
-/// (keyed by the commit SHA) at analysis time, so the stored copy was redundant.
+/// Records which on-disk format a file was written with. Reads are not gated on
+/// it: version 2 dropped the redundant `commit_time` field (the blessed commit's
+/// date is resolved from git topology, keyed by the commit SHA), and older records
+/// still deserialize because the removed field is simply ignored.
 pub const BLESS_SCHEMA_VERSION: u32 = 2;
 
 /// A single blessing: which benchmarks were accepted, at which commit, and when.
