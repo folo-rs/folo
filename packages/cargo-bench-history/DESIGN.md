@@ -432,9 +432,9 @@ selected runs.
 
 Storage I/O is **async** (§10): `LocalStorage` over `tokio::fs`, `AzureBlobStorage`
 over async HTTP. `async fn` in a trait is not `dyn`-compatible, so backend
-selection is a `StorageFacade` **enum** (`Local` | `Azure`) with static dispatch —
-no `async_trait` dependency, and `run`/`analyze` stay backend-agnostic by holding a
-`StorageFacade`.
+selection is a `StorageFacade` **enum** (`Local` | `Azure`) with static dispatch
+rather than a boxed-future trait object, and `run`/`analyze` stay
+backend-agnostic by holding a `StorageFacade`.
 
 * **LocalStorage** (iteration 1): root from config; create dirs; write/read/walk
   via `tokio::fs` (iterative directory walk — no boxed async recursion).
