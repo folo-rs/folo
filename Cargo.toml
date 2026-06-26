@@ -35,6 +35,7 @@ events = { version = "0.7.8", path = "packages/events", default-features = false
 events_once = { version = "0.5.28", path = "packages/events_once", default-features = false }
 fake_headers = { version = "0.0.5", default-features = false }
 fast_time = { version = "0.1.24", path = "packages/fast_time", default-features = false }
+flate2 = { version = "1.1.9", default-features = false, features = ["rust_backend"] }
 foldhash = { version = "0.2.0", default-features = false, features = ["std"] }
 folo_ffi = { version = "0.1.15", path = "packages/folo_ffi", default-features = false }
 folo_utils = { version = "0.1.9", path = "packages/folo_utils", default-features = false }

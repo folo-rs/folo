@@ -33,8 +33,11 @@ By default the harness fabricates:
 * and **blessings** ~75% of the way back for one benchmark family, applied in some
   discriminant sets but not others.
 
-That is roughly 20000 stored objects and ~5.7 GiB of JSON. Sizes are all overridable
-(see flags), so `--commits 100 --benchmarks 100` gives a quick smoke run.
+That is roughly 20000 stored objects whose JSON totals ~5.7 GiB uncompressed.
+The storage layer gzip-compresses every object, so the actual on-disk/wire
+volume — the quantity the harness measures and reports — is roughly an order of
+magnitude smaller. Sizes are all overridable (see flags), so
+`--commits 100 --benchmarks 100` gives a quick smoke run.
 
 It then reads the data back through the real public
 `cargo_bench_history::run_with_overrides` entry point — the exact production path —

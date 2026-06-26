@@ -339,6 +339,14 @@ mod tests {
 ///
 /// Its async methods complete synchronously (no real I/O), so orchestration tests
 /// can drive them with a reactor-free `block_on` and remain Miri-safe.
+///
+/// Unlike the real backends, this fake stores object bodies **uncompressed**. Its
+/// contract is the key/value model — `put X` then `get X` returns `X`, with the
+/// same key validation — which holds identically whether or not bodies are gzip,
+/// and no test inspects a raw stored body (the fake exposes only [`keys`](Self::keys)).
+/// Skipping the codec keeps the Miri-driven orchestration suite fast and free of
+/// gzip on its hot path; the codec itself is exercised by its own unit tests and
+/// by the real backends.
 #[cfg(test)]
 #[derive(Clone, Debug, Default)]
 pub(crate) struct MemoryStorage {

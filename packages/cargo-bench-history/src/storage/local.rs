@@ -9,6 +9,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::io::AsyncWriteExt;
 
+use cargo_bench_history_core::codec;
+
 use super::{Storage, StorageError, is_plain_segment};
 
 /// Filename prefix for the transient files an atomic write renames into place.
@@ -78,7 +80,9 @@ impl Storage for LocalStorage {
             Ok(false) => {}
             Err(error) => return Err(StorageError::Io(error)),
         }
-        write_atomic(&path, bytes).await.map_err(StorageError::Io)
+        write_atomic(&path, &codec::compress(bytes))
+            .await
+            .map_err(StorageError::Io)
     }
 
     async fn put_overwrite(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
@@ -90,13 +94,15 @@ impl Storage for LocalStorage {
         }
         // The atomic rename replaces any existing object in full, the deliberate
         // escape hatch from the write-once contract.
-        write_atomic(&path, bytes).await.map_err(StorageError::Io)
+        write_atomic(&path, &codec::compress(bytes))
+            .await
+            .map_err(StorageError::Io)
     }
 
     async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError> {
         let path = self.key_path(key)?;
         match tokio::fs::read(&path).await {
-            Ok(bytes) => Ok(bytes),
+            Ok(bytes) => codec::decompress(&bytes).map_err(StorageError::Io),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Err(StorageError::NotFound {
                 key: key.to_owned(),
             }),
@@ -251,6 +257,44 @@ mod tests {
         let bytes = storage.get("v1/folo/run.json").await.unwrap();
 
         assert_eq!(bytes, b"payload");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn put_compresses_the_object_at_rest() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path());
+
+        let plain = br#"{"schema":1,"results":[]}"#;
+        storage.put("v1/folo/run.json", plain).await.unwrap();
+
+        // The file on disk is gzip, not the original plaintext: the bytes #260
+        // transfers are the compressed ones, and `get` inflates them back.
+        let on_disk = std::fs::read(dir.path().join("v1").join("folo").join("run.json")).unwrap();
+        assert!(
+            on_disk.starts_with(&[0x1f, 0x8b]),
+            "stored bytes must be gzip"
+        );
+        assert_ne!(on_disk, plain, "the object is not stored verbatim");
+        assert_eq!(codec::decompress(&on_disk).unwrap(), plain);
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn get_rejects_a_legacy_plaintext_object() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path());
+
+        // An object written before compression existed is plaintext JSON. Reading
+        // it back must fail loudly (the gzip magic is absent), never return raw
+        // bytes that a later parse would misinterpret.
+        let path = dir.path().join("v1").join("folo").join("run.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, br#"{"schema":1}"#).unwrap();
+
+        let error = storage.get("v1/folo/run.json").await.unwrap_err();
+
+        assert!(matches!(error, StorageError::Io(_)), "{error:?}");
     }
 
     #[tokio::test]

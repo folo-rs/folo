@@ -131,6 +131,25 @@ provenance only); there is no "effective timestamp" concept and no `--timestamp`
 override. A dirty key uses the observation second so concurrent snapshots coexist.
 There is no run-id in the key.
 
+### Object byte format (gzip)
+
+Object **keys/filenames are unchanged** (still `…/clean.json` etc.), but the
+**body bytes are gzip**, not plaintext JSON. The storage layer compresses
+transparently at the `Storage` trait boundary: `put`/`put_overwrite` compress the
+caller's plaintext JSON and `get` inflates back to plaintext, so every caller
+(`run`, `backfill`, `analyze`, `prune`, `bless`) keeps handing and receiving plain
+JSON and is unaffected. The single source of the encoding is
+`cargo_bench_history_core::codec` (`compress`/`decompress`, gzip level 6, pure-Rust
+`miniz_oxide`, deterministic, Miri-clean); both the storage backends and the stress
+harness call it, so they cannot drift apart. `AzureBlobStorage` additionally sets
+`Content-Encoding: gzip` on upload so a non-SDK reader can inflate the blob, though
+the backend still inflates on `get` itself rather than relying on the service.
+`MemoryStorage` (the test fake) deliberately stays **plaintext** — its contract is
+the key/value model, no test inspects raw stored bytes, and keeping it uncompressed
+keeps the Miri-driven `analyze` suite fast. This is a breaking storage-format change
+(there is no migration): `get` on a legacy plaintext object errors loudly because
+the gzip magic never collides with JSON's first byte.
+
 ## The `analyze` command
 
 `analyze::execute` builds the real `SystemGitHistory` (rooted at `--repo` or the
@@ -816,8 +835,12 @@ Key facts when touching it:
 
 * **Zero production-code coupling.** The harness only *writes* objects in the same
   key layout the storage backends use (`v1/{project}/{engine}/{triple}/{machine}/
-  {commit}/{file}`), then reads them back through the real public
-  `cargo_bench_history::run_with_overrides` entry point. It deliberately does **not**
+  {commit}/{file}`) and in the same **gzip body encoding** — it calls
+  `cargo_bench_history_core::codec::compress` (the exact function the backends use)
+  rather than reimplementing it, and `seed.rs` reports the *compressed* byte length
+  so the total-bytes figure reflects real on-disk/wire volume. It then reads the
+  objects back through the real public `cargo_bench_history::run_with_overrides`
+  entry point, which inflates them transparently. It deliberately does **not**
   reach into private storage internals, so it needs no `_impl`-crate split and no
   test-only feature on the shell crate. If a refactor changes the on-disk key layout
   or the JSON report's top-level fields, the harness's `seed.rs` / `report.rs` must

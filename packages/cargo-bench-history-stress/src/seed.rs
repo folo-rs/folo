@@ -10,6 +10,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::thread;
 
+use cargo_bench_history_core::codec;
 use cargo_bench_history_core::model::{
     BenchmarkIdPrefix, BenchmarkResult, BlessingRecord, DiscriminantSet, Engine, EnvironmentInfo,
     GitInfo, Run, RunContext, ToolchainInfo,
@@ -274,9 +275,13 @@ fn write_one(
         std::fs::create_dir_all(parent)
             .map_err(|error| fail(format!("failed to create {}: {error}", parent.display())))?;
     }
-    std::fs::write(&path, &body)
+    // Mirror the storage layer's encoding by calling the same codec it uses, so
+    // the seeded tree is byte-for-byte what a real `put` would have written and
+    // the reported volume is the real on-disk/wire size #260 is about.
+    let stored = codec::compress(body.as_bytes());
+    std::fs::write(&path, &stored)
         .map_err(|error| fail(format!("failed to write {}: {error}", path.display())))?;
-    Ok(body.len() as u64)
+    Ok(stored.len() as u64)
 }
 
 /// Builds a [`Run`] whose every benchmark's primary metric comes from `value`.

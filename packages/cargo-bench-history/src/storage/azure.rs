@@ -25,6 +25,7 @@ use azure_storage_blob::models::{
     BlobClientUploadOptions, BlobContainerClientListBlobsOptions, StorageErrorCode,
 };
 use azure_storage_blob::{BlobClient, BlobContainerClient};
+use cargo_bench_history_core::codec;
 use futures::TryStreamExt as _;
 use jiff::tz::TimeZone;
 use jiff::{Timestamp, ToSpan as _};
@@ -39,6 +40,13 @@ const SAS_PERMISSIONS: &str = "rwdlac";
 
 /// The SAS resource types a self-signed token covers: service, container, object.
 const SAS_RESOURCE_TYPES: &str = "sco";
+
+/// The HTTP content coding declared on every uploaded blob. The storage layer
+/// always stores gzip, so this header is unconditionally truthful and lets a
+/// non-SDK reader inflate the blob with standard tooling (the backend still
+/// inflates on [`get`](AzureBlobStorage::get) itself rather than relying on the
+/// service to decode).
+const GZIP_CONTENT_ENCODING: &str = "gzip";
 
 /// A [`Storage`] that persists objects as blobs in an Azure Blob container.
 #[derive(Clone)]
@@ -193,14 +201,16 @@ impl Storage for AzureBlobStorage {
     async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
         validate_key(key)?;
         let client = self.blob_client(key)?;
-        self.upload_with_retry(&client, bytes, key, true).await
+        self.upload_with_retry(&client, &codec::compress(bytes), key, true)
+            .await
     }
 
     #[cfg_attr(test, mutants::skip)] // Delegates to the Azure SDK; verified by the Azurite round-trip tests, which mutation testing cannot run.
     async fn put_overwrite(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
         validate_key(key)?;
         let client = self.blob_client(key)?;
-        self.upload_with_retry(&client, bytes, key, false).await
+        self.upload_with_retry(&client, &codec::compress(bytes), key, false)
+            .await
     }
 
     #[cfg_attr(test, mutants::skip)] // Delegates to the Azure SDK; verified by the Azurite round-trip tests, which mutation testing cannot run.
@@ -214,7 +224,7 @@ impl Storage for AzureBlobStorage {
                     .collect()
                     .await
                     .map_err(|error| azure_io(&error))?;
-                Ok(bytes.to_vec())
+                codec::decompress(&bytes).map_err(StorageError::Io)
             }
             Err(error) if matches!(classify(&error), Fault::NotFound | Fault::ContainerMissing) => {
                 Err(StorageError::NotFound {
@@ -277,7 +287,12 @@ impl Storage for AzureBlobStorage {
 /// (failing if the blob already exists); otherwise it replaces any existing blob.
 #[cfg_attr(test, mutants::skip)] // Delegates to the Azure SDK; verified by the Azurite round-trip tests, which mutation testing cannot run.
 async fn upload(client: &BlobClient, bytes: &[u8], if_not_exists: bool) -> azure_core::Result<()> {
-    let mut options = BlobClientUploadOptions::default();
+    let mut options = BlobClientUploadOptions {
+        // The body is always gzip, so declare it: a non-SDK reader can then
+        // inflate the blob with standard tooling.
+        blob_content_encoding: Some(GZIP_CONTENT_ENCODING.to_owned()),
+        ..Default::default()
+    };
     if if_not_exists {
         options = options.if_not_exists();
     }

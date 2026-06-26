@@ -27,6 +27,7 @@
 use std::path::{Path, PathBuf};
 
 use cargo_bench_history::{Cli, Command, MetricKind, Run, RunOutcome, run};
+use cargo_bench_history_core::codec;
 use serial_test::serial;
 use testing::CwdGuard;
 
@@ -165,7 +166,9 @@ async fn run_against_real_criterion_bench_stores_wall_time() {
         "expected exactly one stored object, found {files:?}"
     );
 
-    let set = Run::from_json(&std::fs::read_to_string(&files[0]).unwrap()).unwrap();
+    let raw = std::fs::read(&files[0]).unwrap();
+    let json = String::from_utf8(codec::decompress(&raw).unwrap()).unwrap();
+    let set = Run::from_json(&json).unwrap();
     assert_eq!(set.results.len(), 1, "one harvested benchmark case");
     let record = &set.results[0];
     assert_eq!(record.id.qualified(), "e2e/add");

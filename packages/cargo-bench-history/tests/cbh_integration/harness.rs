@@ -8,6 +8,7 @@ pub(crate) use cargo_bench_history::{
     Overrides, Run, RunContext, RunError, RunOutcome, SCHEMA_VERSION, ToolchainInfo,
     default_template, run, run_with_overrides,
 };
+use cargo_bench_history_core::codec;
 pub(crate) use jiff::Timestamp;
 use nonempty::nonempty;
 pub(crate) use serial_test::serial;
@@ -443,7 +444,9 @@ impl Workspace {
                     .map(|component| component.as_os_str().to_string_lossy().into_owned())
                     .collect::<Vec<_>>()
                     .join("/");
-                let set = Run::from_json(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                let raw = std::fs::read(&path).unwrap();
+                let json = String::from_utf8(codec::decompress(&raw).unwrap()).unwrap();
+                let set = Run::from_json(&json).unwrap();
                 (key, set)
             })
             .collect();
@@ -464,14 +467,15 @@ impl Workspace {
     }
 
     /// Writes `set` to `key` (a `/`-separated object key) under the local store,
-    /// mirroring the layout `run` produces.
+    /// mirroring the layout `run` produces — including the gzip body encoding the
+    /// storage layer applies, so the production read path inflates it correctly.
     pub(crate) fn seed(&self, key: &str, set: &Run) {
         let mut path = self.root().join("store");
         for part in key.split('/') {
             path.push(part);
         }
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, set.to_json().unwrap()).unwrap();
+        std::fs::write(path, codec::compress(set.to_json().unwrap().as_bytes())).unwrap();
     }
 
     /// Seeds one Callgrind result set with an `Ir` value at the given `date`

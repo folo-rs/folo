@@ -438,8 +438,11 @@ dependencies = [
 name = "cargo-bench-history-core"
 version = "0.0.1"
 dependencies = [
+ "alloc_tracker",
  "colored",
  "criterion",
+ "flate2",
+ "gungraun",
  "jiff",
  "mutants",
  "nonempty",
