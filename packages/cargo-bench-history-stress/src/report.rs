@@ -57,18 +57,36 @@ pub(crate) fn print(
     println!();
 
     println!(
-        "{:<9} {:>10} {:>9} {:>8} {:>12} {:>13} {:>8}",
-        "mode", "duration", "objects", "series", "regressions", "improvements", "notable"
+        "{:<9} {:>10} {:>10} {:>6} {:>9} {:>8} {:>12} {:>13} {:>8}",
+        "mode",
+        "duration",
+        "cpu",
+        "cpu%",
+        "objects",
+        "series",
+        "regressions",
+        "improvements",
+        "notable"
     );
     println!(
-        "{:<9} {:>10} {:>9} {:>8} {:>12} {:>13} {:>8}",
-        "----", "--------", "-------", "------", "-----------", "------------", "-------"
+        "{:<9} {:>10} {:>10} {:>6} {:>9} {:>8} {:>12} {:>13} {:>8}",
+        "----",
+        "--------",
+        "----------",
+        "----",
+        "-------",
+        "------",
+        "-----------",
+        "------------",
+        "-------"
     );
     for result in results {
         println!(
-            "{:<9} {:>10} {:>9} {:>8} {:>12} {:>13} {:>8}",
+            "{:<9} {:>10} {:>10} {:>6} {:>9} {:>8} {:>12} {:>13} {:>8}",
             result.mode.keyword(),
             seconds(result.duration),
+            seconds(result.processor_time),
+            percent(result.cpu_efficiency),
             result.runs,
             result.series,
             result.regressions,
@@ -82,6 +100,11 @@ pub(crate) fn print(
 /// Formats a duration as seconds with millisecond precision.
 fn seconds(duration: Duration) -> String {
     format!("{:.3}s", duration.as_secs_f64())
+}
+
+/// Formats a `0.0..=1.0` ratio as a whole-number percentage.
+fn percent(ratio: f64) -> String {
+    format!("{:.0}%", ratio * 100.0)
 }
 
 /// Formats a byte count in binary units (KiB, MiB, ...).
@@ -122,5 +145,12 @@ mod tests {
     fn seconds_renders_millisecond_precision() {
         assert_eq!(seconds(Duration::from_millis(1500)), "1.500s");
         assert_eq!(seconds(Duration::from_secs(0)), "0.000s");
+    }
+
+    #[test]
+    fn percent_renders_a_whole_number_percentage() {
+        assert_eq!(percent(0.0), "0%");
+        assert_eq!(percent(0.25), "25%");
+        assert_eq!(percent(1.0), "100%");
     }
 }

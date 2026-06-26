@@ -7,10 +7,15 @@
 //! their commit, supplied as a `commit -> index` map — so the timeline reflects
 //! the history the runs were measured against rather than when they were ingested.
 //! Within a single commit, clean runs precede dirty snapshots, and any remaining
-//! tie breaks by the storage key for determinism.
+//! tie breaks by the object's storage-key order (its ordinal) for determinism.
+//!
+//! Points are kept deliberately small: tens of millions can be resident at once on
+//! a large history, so the storage key is reduced to a 4-byte ordinal and the
+//! per-point commit string is interned to a shared `Arc<str>` rather than cloned.
 
 use std::collections::{BTreeMap, HashMap};
 use std::hash::BuildHasher;
+use std::sync::Arc;
 
 use jiff::Timestamp;
 
@@ -20,16 +25,26 @@ use crate::model::DiscriminantSet;
 use crate::model::{BenchmarkId, BenchmarkIdPrefix, MetricKind, Run};
 
 /// A single observation in a series.
+///
+/// Kept compact because a large history materializes tens of millions of these at
+/// once: the provenance storage key is reduced to [`object_ordinal`] (the key's
+/// rank in sorted storage-key order, the final tie-break) and the abbreviated
+/// commit is an interned [`Arc<str>`] shared across every point measured against
+/// the same commit.
+///
+/// [`object_ordinal`]: SeriesPoint::object_ordinal
 #[derive(Clone, Debug)]
 pub struct SeriesPoint {
     /// First-parent topological position of the run's commit (oldest = 0).
     pub topo_index: usize,
     /// Whether the observation came from a dirty (uncommitted-tree) snapshot.
     pub dirty: bool,
-    /// Storage key the observation came from (final tie-break and provenance).
-    pub object_key: String,
-    /// Abbreviated commit the run was measured against, if known.
-    pub commit: Option<String>,
+    /// The object's rank in sorted storage-key order (the final tie-break),
+    /// standing in for the full storage key to keep the point small.
+    pub object_ordinal: u32,
+    /// Abbreviated commit the run was measured against, if known. Interned so all
+    /// points on one commit share a single allocation.
+    pub commit: Option<Arc<str>>,
     /// The measured value.
     pub value: f64,
     /// Lower confidence-interval bound, when the engine reports one (Criterion).
@@ -72,7 +87,7 @@ pub struct Series {
     pub id: BenchmarkId,
     /// The metric kind all points share (governs unit and comparison semantics).
     pub kind: MetricKind,
-    /// Observations ordered by `(topo_index, dirty, object_key)`.
+    /// Observations ordered by `(topo_index, dirty, object_ordinal)`.
     pub points: Vec<SeriesPoint>,
     /// Index into `points` where the active (post-blessing) window begins; `0`
     /// when the series is unblessed (every point is active). History-mode
@@ -124,66 +139,178 @@ fn prefixes_accept(prefixes: &[BenchmarkIdPrefix], id: &BenchmarkId) -> bool {
 /// metric of each kind, so the kind alone keys the series unambiguously. The
 /// `order` map gives each commit its first-parent topological index; an object
 /// whose commit is not in `order` is outside the analyzed selection and is
-/// skipped. Points are sorted by `(topo_index, dirty, object_key)` so a clean run
-/// precedes a dirty snapshot on the same commit and the timeline follows git
-/// history rather than storage-listing order.
+/// skipped. Points are sorted by `(topo_index, dirty, object_ordinal)` so a clean
+/// run precedes a dirty snapshot on the same commit and the timeline follows git
+/// history rather than storage-listing order; the ordinal is each object's rank in
+/// sorted storage-key order, so the final tie-break matches a sort by storage key.
+///
+/// This is a convenience wrapper over [`SeriesBuilder`]: it assigns each object its
+/// storage-key ordinal up front, then folds every object in. Callers that fetch
+/// objects incrementally (and want to drop each parsed run immediately, never
+/// holding the whole data set in memory) should drive a [`SeriesBuilder`] directly.
 #[must_use]
 pub fn build_series<S: BuildHasher>(
     objects: &[LoadedObject],
     order: &HashMap<String, usize, S>,
     filter: &SeriesFilter<'_>,
 ) -> Vec<Series> {
-    let mut groups: BTreeMap<(DiscriminantSet, BenchmarkId, MetricKind), Vec<SeriesPoint>> =
-        BTreeMap::new();
+    // Assign each in-selection object an ordinal equal to its rank in sorted
+    // storage-key order, so ordering points by `object_ordinal` is identical to
+    // ordering them by the full storage key.
+    let mut keys: Vec<&str> = objects
+        .iter()
+        .filter(|object| order.contains_key(&object.key.commit))
+        .map(|object| object.object_key.as_str())
+        .collect();
+    keys.sort_unstable();
+    keys.dedup();
+    let ordinals: HashMap<&str, u32> = keys
+        .iter()
+        .enumerate()
+        .map(|(index, key)| (*key, ordinal_of(index)))
+        .collect();
 
+    let mut builder = SeriesBuilder::new(*filter);
     for object in objects {
         let Some(&topo_index) = order.get(&object.key.commit) else {
             continue;
         };
-        let dirty = object.key.is_dirty();
-        let commit = object.result.context.git.short_commit.clone();
+        let ordinal = ordinals
+            .get(object.object_key.as_str())
+            .copied()
+            .unwrap_or(u32::MAX);
+        builder.push(
+            &object.key.set,
+            topo_index,
+            object.key.is_dirty(),
+            ordinal,
+            &object.result,
+        );
+    }
+    builder.finish()
+}
 
-        for record in &object.result.results {
-            if !prefixes_accept(filter.prefixes, &record.id) {
+/// Narrows a storage-key rank to the [`SeriesPoint::object_ordinal`] width.
+///
+/// Ordinals are a pure tie-break, so the (practically impossible) overflow past
+/// `u32::MAX` distinct objects merely lets the last ordinals collide — points then
+/// keep their stable insertion order, never a panic.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "saturating: ordinals only tie-break, and >4 billion objects never occur"
+)]
+fn ordinal_of(rank: usize) -> u32 {
+    rank.min(u32::MAX as usize) as u32
+}
+
+/// Folds stored runs into per-`(set, benchmark, metric kind)` series.
+///
+/// Each pushed run contributes one point per metric to the series for its
+/// identity; [`finish`](SeriesBuilder::finish) sorts every series by
+/// `(topo_index, dirty, object_ordinal)`. Unlike [`build_series`], the builder
+/// retains nothing of a run beyond the extracted points, so a streaming loader can
+/// fold each fetched run and drop it immediately, keeping only the (compact) points
+/// resident rather than the whole parsed data set.
+///
+/// The abbreviated commit of each run is interned, so all points measured against
+/// one commit share a single [`Arc<str>`] instead of cloning the string per point.
+#[derive(Debug)]
+pub struct SeriesBuilder<'a> {
+    filter: SeriesFilter<'a>,
+    groups: BTreeMap<(DiscriminantSet, BenchmarkId, MetricKind), Vec<SeriesPoint>>,
+    commits: HashMap<Box<str>, Arc<str>>,
+}
+
+impl<'a> SeriesBuilder<'a> {
+    /// Starts an empty builder that keeps only series matching `filter`.
+    #[must_use]
+    pub fn new(filter: SeriesFilter<'a>) -> Self {
+        Self {
+            filter,
+            groups: BTreeMap::new(),
+            commits: HashMap::new(),
+        }
+    }
+
+    /// Folds one stored run into the accumulating series.
+    ///
+    /// `topo_index` is the run commit's first-parent position and `object_ordinal`
+    /// its rank in sorted storage-key order (the final point tie-break); the caller
+    /// supplies both because they come from the storage key and git topology, not
+    /// the run payload. Only the matching metrics are retained — the run itself can
+    /// be dropped as soon as this returns.
+    pub fn push(
+        &mut self,
+        set: &DiscriminantSet,
+        topo_index: usize,
+        dirty: bool,
+        object_ordinal: u32,
+        run: &Run,
+    ) {
+        let commit = run
+            .context
+            .git
+            .short_commit
+            .as_deref()
+            .map(|commit| self.intern(commit));
+
+        for record in &run.results {
+            if !prefixes_accept(self.filter.prefixes, &record.id) {
                 continue;
             }
             for metric in &record.metrics {
                 let point = SeriesPoint {
                     topo_index,
                     dirty,
-                    object_key: object.object_key.clone(),
+                    object_ordinal,
                     commit: commit.clone(),
                     value: metric.value,
                     interval_low: metric.interval_low,
                     interval_high: metric.interval_high,
                 };
-                groups
-                    .entry((object.key.set.clone(), record.id.clone(), metric.kind))
+                self.groups
+                    .entry((set.clone(), record.id.clone(), metric.kind))
                     .or_default()
                     .push(point);
             }
         }
     }
 
-    groups
-        .into_iter()
-        .map(|((set, id, kind), mut points)| {
-            points.sort_by(|left, right| {
-                left.topo_index
-                    .cmp(&right.topo_index)
-                    .then_with(|| left.dirty.cmp(&right.dirty))
-                    .then_with(|| left.object_key.cmp(&right.object_key))
-            });
-            Series {
-                set,
-                id,
-                kind,
-                points,
-                active_start: 0,
-                blessing: None,
-            }
-        })
-        .collect()
+    /// Returns the interned `Arc<str>` for `commit`, allocating once per distinct
+    /// commit so the millions of points on a commit share one allocation.
+    fn intern(&mut self, commit: &str) -> Arc<str> {
+        if let Some(existing) = self.commits.get(commit) {
+            return Arc::clone(existing);
+        }
+        let interned: Arc<str> = Arc::from(commit);
+        self.commits
+            .insert(Box::from(commit), Arc::clone(&interned));
+        interned
+    }
+
+    /// Finalizes every accumulated series, each sorted into topological order.
+    #[must_use]
+    pub fn finish(self) -> Vec<Series> {
+        self.groups
+            .into_iter()
+            .map(|((set, id, kind), mut points)| {
+                points.sort_by(|left, right| {
+                    left.topo_index
+                        .cmp(&right.topo_index)
+                        .then_with(|| left.dirty.cmp(&right.dirty))
+                        .then_with(|| left.object_ordinal.cmp(&right.object_ordinal))
+                });
+                Series {
+                    set,
+                    id,
+                    kind,
+                    points,
+                    active_start: 0,
+                    blessing: None,
+                }
+            })
+            .collect()
+    }
 }
 
 /// Re-baselines each series to its latest matching blessing (history mode).

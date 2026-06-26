@@ -12,6 +12,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+all_the_time = { workspace = true }
 cargo-bench-history = { path = "../cargo-bench-history", default-features = false }
 cargo-bench-history-core = { workspace = true }
 clap = { workspace = true, features = ["derive"] }

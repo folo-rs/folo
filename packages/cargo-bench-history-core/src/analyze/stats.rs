@@ -28,20 +28,36 @@ fn same(left: f64, right: f64) -> bool {
 ///
 /// Uses [`f64::total_cmp`] so `NaN` cannot corrupt the ordering, and computes the
 /// midpoint index with checked integer arithmetic to satisfy the workspace lints.
+///
+/// This copies `values` into a scratch buffer first; a caller that already owns a
+/// buffer it no longer needs in input order should call [`median_in_place`] to
+/// avoid the copy.
 pub(crate) fn median(values: &[f64]) -> Option<f64> {
     if values.is_empty() {
         return None;
     }
     let mut sorted = values.to_vec();
-    sorted.sort_by(f64::total_cmp);
-    let len = sorted.len();
+    median_in_place(&mut sorted)
+}
+
+/// The median of `values`, sorting them in place rather than copying.
+///
+/// The allocation-free core of [`median`]: it sorts `values` with
+/// [`f64::total_cmp`] (so `NaN` cannot corrupt the ordering) and reads the
+/// midpoint, leaving the slice sorted. Returns `None` for an empty slice.
+pub(crate) fn median_in_place(values: &mut [f64]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_by(f64::total_cmp);
+    let len = values.len();
     let mid = len.checked_div(2)?;
     if len.checked_rem(2) == Some(1) {
-        sorted.get(mid).copied()
+        values.get(mid).copied()
     } else {
         let lower = mid.checked_sub(1)?;
-        let low = *sorted.get(lower)?;
-        let high = *sorted.get(mid)?;
+        let low = *values.get(lower)?;
+        let high = *values.get(mid)?;
         Some(f64::midpoint(low, high))
     }
 }
@@ -294,14 +310,14 @@ pub(crate) fn theil_sen_line(values: &[f64]) -> Option<(f64, f64)> {
             slopes.push((later - earlier) / span);
         }
     }
-    let slope = median(&slopes)?;
+    let slope = median_in_place(&mut slopes)?;
 
-    let intercepts: Vec<f64> = values
+    let mut intercepts: Vec<f64> = values
         .iter()
         .enumerate()
         .map(|(i, &value)| value - slope * count_to_f64(i))
         .collect();
-    let intercept = median(&intercepts)?;
+    let intercept = median_in_place(&mut intercepts)?;
     Some((slope, intercept))
 }
 

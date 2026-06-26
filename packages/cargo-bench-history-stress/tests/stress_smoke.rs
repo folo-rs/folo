@@ -36,17 +36,18 @@ fn run_stress(extra: &[&str]) -> Output {
         .expect("the stress binary should be runnable")
 }
 
-/// Extracts the per-mode report rows, keyed by mode, with the timing column dropped
-/// so the deterministic columns (objects, series, regressions, improvements,
-/// notable) can be compared across runs.
+/// Extracts the per-mode report rows, keyed by mode, with the non-deterministic
+/// timing columns (duration, cpu, cpu%) dropped so the deterministic columns
+/// (objects, series, regressions, improvements, notable) can be compared across
+/// runs.
 fn deterministic_columns(stdout: &str) -> BTreeMap<String, Vec<String>> {
     stdout
         .lines()
         .filter_map(|line| {
             let columns: Vec<&str> = line.split_whitespace().collect();
-            if columns.len() == 7 && ["history", "branch", "tip"].contains(&columns[0]) {
-                // Skip column 1 (duration); keep the rest.
-                let kept = columns[2..].iter().map(|c| (*c).to_owned()).collect();
+            if columns.len() == 9 && ["history", "branch", "tip"].contains(&columns[0]) {
+                // Skip columns 1-3 (duration, cpu, cpu%); keep the rest.
+                let kept = columns[4..].iter().map(|c| (*c).to_owned()).collect();
                 Some((columns[0].to_owned(), kept))
             } else {
                 None
