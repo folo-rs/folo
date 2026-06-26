@@ -23,8 +23,11 @@ serde_json = { workspace = true }
 [dev-dependencies]
 alloc_tracker = { path = "../alloc_tracker" }
 criterion = { workspace = true }
-gungraun = { workspace = true, features = ["default"] }
 mutants = { workspace = true }
+
+# Gungraun drives Valgrind-based Callgrind benchmarks; Linux-only.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
 
 [[bench]]
 name = "cbh_core_model"

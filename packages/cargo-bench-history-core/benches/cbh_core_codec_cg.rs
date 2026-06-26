@@ -28,6 +28,15 @@
           c:/Source/gungraun-lint-issues/ pending upstream filing."
     )
 )]
+#![cfg_attr(
+    target_os = "linux",
+    expect(
+        clippy::needless_pass_by_value,
+        reason = "Gungraun's #[bench] setup contract hands the owned setup value to the \
+          benchmark function by value; the measured body only borrows it, but the signature \
+          must own it so the input's construction stays outside the measured region."
+    )
+)]
 
 #[cfg(not(target_os = "linux"))]
 fn main() {
