@@ -170,9 +170,12 @@ fn keep_fastest(
 }
 
 /// The fraction of the available cores the analysis kept busy: process CPU time
-/// over the wall time times the core count. 1.0 means every core was saturated
-/// for the whole run; values above 1.0 are impossible barring clock skew and are
-/// clamped away by a zero or sub-zero ideal collapsing to 0.0.
+/// over the wall time times the core count, clamped to `0.0..=1.0`. 1.0 means
+/// every core was saturated for the whole run; a zero or sub-zero ideal (an
+/// unmeasurably short or zero-core interval) yields 0.0. Measurement skew that
+/// would nudge the raw ratio just past full saturation is clamped back, so the
+/// value always honours the `0.0..=1.0` contract the report renders as a
+/// percentage.
 #[expect(
     clippy::cast_precision_loss,
     reason = "core counts and sub-hour durations are far below 2^53"
@@ -182,7 +185,7 @@ fn cpu_efficiency(processor_time: Duration, wall: Duration, cores: usize) -> f64
     if ideal <= 0.0 {
         0.0
     } else {
-        processor_time.as_secs_f64() / ideal
+        (processor_time.as_secs_f64() / ideal).min(1.0)
     }
 }
 
@@ -271,6 +274,15 @@ mod tests {
         // Only one of four cores busy == a quarter of the ideal.
         let quarter = cpu_efficiency(Duration::from_secs(1), Duration::from_secs(1), 4);
         assert!((quarter - 0.25).abs() < 1e-9, "{quarter}");
+    }
+
+    #[test]
+    fn cpu_efficiency_clamps_above_full_saturation() {
+        // Measurement skew can report more CPU time than the wall-times-cores
+        // ideal; the fraction is clamped to full saturation so it never breaches
+        // the `0.0..=1.0` contract the report renders as a percentage.
+        let over = cpu_efficiency(Duration::from_secs(5), Duration::from_secs(1), 4);
+        assert!((over - 1.0).abs() < 1e-9, "{over}");
     }
 
     #[test]

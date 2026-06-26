@@ -271,7 +271,10 @@ fn run_inflate(
     out: &mut Vec<u8>,
 ) -> Result<()> {
     inflate.reset(false);
-    out.reserve(body.len().saturating_mul(4).max(64));
+    // The deflate body is a lower bound on the plaintext, so it sizes the output
+    // conservatively: incompressible data lands without an over-reservation while
+    // genuinely compressible data grows the buffer the few extra times it needs.
+    out.reserve(body.len().max(64));
     loop {
         let consumed = usize::try_from(inflate.total_in())
             .expect("a compressed body shorter than usize::MAX was processed");
