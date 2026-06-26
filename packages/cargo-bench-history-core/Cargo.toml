@@ -14,6 +14,8 @@ rust-version.workspace = true
 [dependencies]
 colored = { workspace = true }
 flate2 = { workspace = true }
+foldhash = { workspace = true }
+hashbrown = { workspace = true, features = ["default-hasher", "inline-more"] }
 jiff = { workspace = true, features = ["serde"] }
 nonempty = { workspace = true, features = ["serialize"] }
 rasciigraph = { workspace = true, features = ["color"] }

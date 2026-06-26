@@ -19,7 +19,7 @@ pub(crate) mod prune;
 pub(crate) use cargo_bench_history_core::analyze::{
     AnalysisConfig, AnalysisContext, AnalysisMode, BlessingPlacement, DiscriminantSetQuery,
     FacetFilter, ReportFormat, ReportInput, Series, SeriesBuilder, SeriesFilter, SetSummary,
-    StorageKey, apply_blessings, find_changes, parse_key, render, select_commits,
+    StorageKey, apply_blessings, find_changes, map_parallel, parse_key, render, select_commits,
 };
 
 use std::collections::{BTreeMap, HashMap};
@@ -568,6 +568,19 @@ async fn facet_filtered_candidates<S: Storage>(
 /// (which it would throttle) while still keeping enough in flight to hide latency.
 const LOAD_CONCURRENCY: usize = 32;
 
+/// How many fetched run objects to deserialize per parallel batch.
+///
+/// Parsing a stored run from JSON is the dominant CPU cost of a load and is
+/// independent per object, so the fold collects the decompressed bytes of up to this
+/// many objects and parses the batch across a thread pool before folding the results
+/// into the series. The batch is bounded rather than unbounded so the load keeps its
+/// streaming memory profile: only this many parsed runs (plus their source bytes) are
+/// ever resident at once, instead of the whole data set, which on a large history is
+/// the difference between hundreds of megabytes and tens of gigabytes. It is set well
+/// above the core count so every worker stays busy and the per-batch thread-spawn
+/// overhead is amortized across plenty of parses.
+const PARSE_CHUNK: usize = 256;
+
 /// Fetches and deserializes the given stored objects with bounded concurrency.
 ///
 /// `parse` turns one object's raw bytes into the parsed value `T` (it owns the
@@ -611,24 +624,24 @@ where
     Ok((key, parsed, value))
 }
 
-/// Like [`fetch_one`], but carries an arbitrary `rank` through the out-of-order
-/// fetch so the caller can recover each object's position (its storage-key
-/// ordinal). Kept as a named `async fn` for the same reason as [`fetch_one`]: the
-/// stream closure then stays a plain `FnMut` returning this future rather than one
-/// wrapping an `async` block.
-async fn fetch_one_ranked<S, F>(
+/// Like [`fetch_one`], but returns the object's decompressed bytes without parsing
+/// them, carrying an arbitrary `rank` through the out-of-order fetch so the caller
+/// can recover each object's position (its storage-key ordinal). Parsing is deferred
+/// to a parallel batch step in the caller, so this fetch stays a thin, `!Send` async
+/// wrapper over [`Storage::get`]. Kept as a named `async fn` for the same reason as
+/// [`fetch_one`]: the stream closure then stays a plain `FnMut` returning this future
+/// rather than one wrapping an `async` block.
+async fn fetch_bytes_ranked<S>(
     storage: &S,
     rank: usize,
     key: String,
     parsed: StorageKey,
-    parse: &F,
-) -> Result<(usize, String, StorageKey, Run), RunError>
+) -> Result<(usize, String, StorageKey, Vec<u8>), RunError>
 where
     S: Storage,
-    F: Fn(&str, Vec<u8>) -> Result<Run, RunError>,
 {
-    let (key, parsed, run) = fetch_one(storage, key, parsed, parse).await?;
-    Ok((rank, key, parsed, run))
+    let bytes = storage.get(&key).await.map_err(RunError::Storage)?;
+    Ok((rank, key, parsed, bytes))
 }
 
 /// Resolves the git topology, selects the comparable commits, and loads the
@@ -810,14 +823,17 @@ where
         to_fetch.push((key, parsed));
     }
 
-    // Phase 2/3 — fetch the survivors concurrently and fold each into the series as
-    // it arrives, dropping the parsed run immediately so the whole parsed data set
-    // is never resident at once (the peak that drove analysis into tens of
-    // gigabytes). Each object's ordinal — the final point tie-break — is its rank
-    // in storage-key order, assigned up front because `buffer_unordered` completes
-    // out of order. The per-object verbose notes and the run tally are collected
-    // during the fold and emitted in storage-key order afterwards, so the
-    // diagnostics stay byte-identical to a deterministic in-order pass.
+    // Phase 2/3 — fetch the survivors concurrently and fold them into the series in
+    // bounded batches: each batch's runs are parsed across a thread pool (the load's
+    // dominant CPU cost) and then folded serially, dropping the parsed runs as soon
+    // as their points are extracted so the whole parsed data set is never resident at
+    // once (the peak that drove analysis into tens of gigabytes). Each object's
+    // ordinal — the final point tie-break — is its rank in storage-key order,
+    // assigned up front because `buffer_unordered` completes out of order, so the
+    // result is independent of the order batches happen to fill. The per-object
+    // verbose notes and the run tally are collected during the fold and emitted in
+    // storage-key order afterwards, so the diagnostics stay byte-identical to a
+    // deterministic in-order pass.
     to_fetch.sort_by(|left, right| left.0.cmp(&right.0));
 
     let mut builder = SeriesBuilder::new(filter);
@@ -826,38 +842,63 @@ where
     // key-ordered verbose notes emitted once the fold completes.
     let mut admitted: Vec<(String, bool)> = Vec::new();
     {
-        let parse = |key: &str, bytes: Vec<u8>| -> Result<Run, RunError> {
-            let text = String::from_utf8(bytes).map_err(|error| RunError::Analyze {
+        // Borrows `&[u8]` rather than owning the bytes so the parse can run over the
+        // batch's buffers in place, on shared references, across worker threads.
+        let parse = |key: &str, bytes: &[u8]| -> Result<Run, RunError> {
+            let text = std::str::from_utf8(bytes).map_err(|error| RunError::Analyze {
                 message: format!("stored object {key} is not valid UTF-8: {error}"),
             })?;
-            Run::from_json(&text).map_err(|error| RunError::Analyze {
+            Run::from_json(text).map_err(|error| RunError::Analyze {
                 message: format!("stored object {key} is not a valid result set: {error}"),
             })
         };
-        let parse = &parse;
+
+        // Parses one fetched batch in parallel, then folds the results serially. The
+        // batch is drained (not consumed) so its allocation is reused for the next
+        // batch. `map_parallel` preserves order, so zipping its results back onto the
+        // drained objects keeps each parsed run paired with its own key and rank.
+        let mut fold_batch = |batch: &mut Vec<(usize, String, StorageKey, Vec<u8>)>| -> Result<
+            (),
+            RunError,
+        > {
+            let parsed_runs: Vec<Result<Run, RunError>> =
+                map_parallel(batch.as_slice(), |(_, key, _, bytes)| parse(key, bytes));
+            for ((rank, key, parsed, _bytes), run) in batch.drain(..).zip(parsed_runs) {
+                let run = run?;
+                let topo_index = order
+                    .get(&parsed.commit)
+                    .copied()
+                    .expect("phase 1 admitted only commits on the analyzed history");
+                let dirty = parsed.is_dirty();
+                let is_exception = dirty
+                    && dirty_base_exception
+                        .get(parsed.commit.as_str())
+                        .copied()
+                        .unwrap_or(false);
+                if is_exception {
+                    included_dirty_base_exception = true;
+                }
+                run_index.record(&parsed.set, topo_index, &parsed.commit, dirty);
+                builder.push(&parsed.set, topo_index, dirty, ordinal_of(rank), &run);
+                admitted.push((key, is_exception));
+                // `run` is dropped here; only the extracted (compact) points are kept.
+            }
+            Ok(())
+        };
+
         let mut fetches = futures::stream::iter(to_fetch.into_iter().enumerate())
-            .map(move |(rank, (key, parsed))| fetch_one_ranked(storage, rank, key, parsed, parse))
+            .map(move |(rank, (key, parsed))| fetch_bytes_ranked(storage, rank, key, parsed))
             .buffer_unordered(LOAD_CONCURRENCY);
 
+        let mut batch: Vec<(usize, String, StorageKey, Vec<u8>)> = Vec::with_capacity(PARSE_CHUNK);
         while let Some(fetched) = fetches.next().await {
-            let (rank, key, parsed, run) = fetched?;
-            let topo_index = order
-                .get(&parsed.commit)
-                .copied()
-                .expect("phase 1 admitted only commits on the analyzed history");
-            let dirty = parsed.is_dirty();
-            let is_exception = dirty
-                && dirty_base_exception
-                    .get(parsed.commit.as_str())
-                    .copied()
-                    .unwrap_or(false);
-            if is_exception {
-                included_dirty_base_exception = true;
+            batch.push(fetched?);
+            if batch.len() >= PARSE_CHUNK {
+                fold_batch(&mut batch)?;
             }
-            run_index.record(&parsed.set, topo_index, &parsed.commit, dirty);
-            builder.push(&parsed.set, topo_index, dirty, ordinal_of(rank), &run);
-            admitted.push((key, is_exception));
-            // `run` is dropped here; only the extracted (compact) points are kept.
+        }
+        if !batch.is_empty() {
+            fold_batch(&mut batch)?;
         }
     }
 

@@ -27,8 +27,7 @@
 //! *hits* invert that — more hits means fewer, costlier misses (see
 //! [`MetricKind::higher_is_better`]).
 
-use std::num::NonZero;
-use std::{panic, thread};
+use crate::analyze::map_parallel;
 
 use serde::Serialize;
 
@@ -1071,76 +1070,18 @@ pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Vec<Finding
 /// Detects every series, returning the raised candidates in series order.
 ///
 /// Each series is independent — there is no cross-series state in the detection step
-/// — so the work is split into one balanced, contiguous chunk per worker thread,
-/// each evaluated on a scoped thread, then the chunk results are concatenated in
-/// order. This preserves the exact series order a sequential pass would produce,
-/// which both the false-discovery alignment and the deterministic final ranking in
-/// [`find_changes`] rely on.
-///
-/// A single available CPU (Miri reports one by default) or a single series needs no
-/// parallelism, so it takes a plain serial pass — which is also the path Miri
-/// exercises, keeping the detection logic under Miri's checks.
-#[cfg_attr(test, mutants::skip)] // The worker count and chunking never change the output.
+/// — so the per-series work is spread across a thread pool by [`map_parallel`], which
+/// preserves input order. That keeps the candidate order identical to a sequential
+/// pass, which both the false-discovery alignment and the deterministic final ranking
+/// in [`find_changes`] rely on.
 fn detect_all(series: &[Series], context: &AnalysisContext) -> Vec<Candidate> {
-    let workers = thread::available_parallelism()
-        .map_or(1, NonZero::get)
-        .min(series.len());
-    if workers <= 1 {
-        return series
-            .iter()
-            .enumerate()
-            .filter_map(|(index, one)| detect_one(index, one, context))
-            .collect();
-    }
-
-    thread::scope(|scope| {
-        // Peel one balanced, contiguous chunk per worker off the front: at each step the
-        // remaining series are divided as evenly as possible among the workers still to be
-        // assigned, so exactly `workers` non-empty chunks are spawned (every worker is
-        // used, not just the few that a fixed `chunks(div_ceil(len, workers))` split would
-        // yield when `len` only slightly exceeds `workers`). `workers <= series.len()`
-        // keeps every chunk non-empty.
-        let mut rest = series;
-        // The running offset of `rest` within `series`, so each worker can recover the
-        // global index of every series it evaluates (the chunk-local position plus this
-        // base) and stamp it onto the candidate.
-        let mut base = 0_usize;
-        // The eager collect spawns every worker before the first join; a lazy
-        // `map`/`flat_map` would instead spawn and join each chunk one at a time,
-        // serializing the work.
-        let handles: Vec<_> = (1..=workers)
-            .rev()
-            .map(|remaining_workers| {
-                let take = rest.len().div_ceil(remaining_workers);
-                let (slice, tail) = rest.split_at(take);
-                rest = tail;
-                let chunk_base = base;
-                base = base
-                    .checked_add(take)
-                    .expect("the total series count fits in usize");
-                scope.spawn(move || {
-                    slice
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(offset, one)| {
-                            let index = chunk_base
-                                .checked_add(offset)
-                                .expect("a series index fits in usize");
-                            detect_one(index, one, context)
-                        })
-                        .collect::<Vec<_>>()
-                })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .flat_map(|handle| {
-                handle
-                    .join()
-                    .unwrap_or_else(|payload| panic::resume_unwind(payload))
-            })
-            .collect()
-    })
+    // Pair each series with its global index so a candidate can be stamped with its
+    // original position regardless of which worker chunk evaluates it.
+    let indexed: Vec<(usize, &Series)> = series.iter().enumerate().collect();
+    map_parallel(&indexed, |&(index, one)| detect_one(index, one, context))
+        .into_iter()
+        .flatten()
+        .collect()
 }
 
 /// Runs the mode-appropriate detector on the series at `index` and returns its

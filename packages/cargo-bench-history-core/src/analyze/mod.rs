@@ -10,6 +10,7 @@
 
 pub(crate) mod discriminant;
 pub(crate) mod findings;
+pub(crate) mod parallel;
 pub(crate) mod report;
 pub(crate) mod selection;
 pub(crate) mod series;
@@ -20,6 +21,7 @@ pub use findings::{
     AnalysisConfig, AnalysisContext, AnalysisMode, Direction, Finding, FindingMethod, SeriesValue,
     find_changes,
 };
+pub use parallel::map_parallel;
 pub use report::{ReportFormat, ReportInput, SetSummary, render};
 pub use selection::{SelectedCommit, select_commits};
 pub use series::{

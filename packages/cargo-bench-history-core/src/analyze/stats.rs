@@ -24,6 +24,21 @@ fn same(left: f64, right: f64) -> bool {
     left.total_cmp(&right) == Ordering::Equal
 }
 
+/// The number of unordered pairs `(i, j)` with `i < j` drawn from `count`
+/// elements, i.e. `count·(count−1)/2`.
+///
+/// Used to size the pairwise-slope buffer in [`theil_sen_line`] exactly up front,
+/// so it never reallocates while filling. The product `count·(count−1)` is always
+/// even, so halving it is exact; the saturating/checked steps keep the workspace
+/// arithmetic lints satisfied without an overflow path (series lengths are far
+/// below the point where the product could wrap a `usize`).
+fn pair_count(count: usize) -> usize {
+    count
+        .saturating_mul(count.saturating_sub(1))
+        .checked_div(2)
+        .unwrap_or(0)
+}
+
 /// The median of `values`, or `None` if empty.
 ///
 /// Uses [`f64::total_cmp`] so `NaN` cannot corrupt the ordering, and computes the
@@ -45,11 +60,18 @@ pub(crate) fn median(values: &[f64]) -> Option<f64> {
 /// The allocation-free core of [`median`]: it sorts `values` with
 /// [`f64::total_cmp`] (so `NaN` cannot corrupt the ordering) and reads the
 /// midpoint, leaving the slice sorted. Returns `None` for an empty slice.
+///
+/// The sort is **unstable** ([`sort_unstable_by`](slice::sort_unstable_by)): it
+/// runs entirely in place with no scratch allocation, whereas the stable sort
+/// allocates a temporary buffer of up to `values.len()` elements. The median
+/// only depends on the sorted *values*, and two elements that compare
+/// [`Ordering::Equal`] under [`f64::total_cmp`] are bit-identical, so reordering
+/// ties cannot change the result.
 pub(crate) fn median_in_place(values: &mut [f64]) -> Option<f64> {
     if values.is_empty() {
         return None;
     }
-    values.sort_by(f64::total_cmp);
+    values.sort_unstable_by(f64::total_cmp);
     let len = values.len();
     let mid = len.checked_div(2)?;
     if len.checked_rem(2) == Some(1) {
@@ -93,7 +115,10 @@ pub(crate) fn two_sided_p_from_z(z: f64) -> f64 {
 /// of the ranks they span.
 fn average_ranks(values: &[f64]) -> Vec<f64> {
     let mut indexed: Vec<(usize, f64)> = values.iter().copied().enumerate().collect();
-    indexed.sort_by(|left, right| left.1.total_cmp(&right.1));
+    // Unstable sort: ties are resolved explicitly below by spanning every element
+    // of equal value, so the relative order within a tie run is irrelevant and the
+    // in-place sort avoids the stable sort's scratch allocation.
+    indexed.sort_unstable_by(|left, right| left.1.total_cmp(&right.1));
 
     let mut ranks = vec![0.0_f64; values.len()];
     let mut start = 0_usize;
@@ -118,7 +143,7 @@ fn average_ranks(values: &[f64]) -> Vec<f64> {
 /// affect any tie correction).
 fn tie_group_sizes(values: &[f64]) -> Vec<usize> {
     let mut sorted = values.to_vec();
-    sorted.sort_by(f64::total_cmp);
+    sorted.sort_unstable_by(f64::total_cmp);
     sorted
         .chunk_by(|left, right| same(*left, *right))
         .map(<[f64]>::len)
@@ -302,7 +327,7 @@ pub(crate) fn theil_sen_line(values: &[f64]) -> Option<(f64, f64)> {
     if n < 2 {
         return None;
     }
-    let mut slopes = Vec::new();
+    let mut slopes = Vec::with_capacity(pair_count(n));
     for (i, &earlier) in values.iter().enumerate() {
         let i_f = count_to_f64(i);
         for (j, &later) in values.iter().enumerate().skip(i.saturating_add(1)) {
@@ -337,7 +362,11 @@ pub(crate) fn benjamini_hochberg(p_values: &[f64], q: f64) -> Vec<bool> {
     let m_f = count_to_f64(m);
 
     let mut ordered: Vec<(usize, f64)> = p_values.iter().copied().enumerate().collect();
-    ordered.sort_by(|left, right| left.1.total_cmp(&right.1));
+    // Unstable sort: equal p-values are interchangeable for the step-up cutoff (a
+    // tie can never fall across the `(k/m)·q` boundary, since a smaller rank passing
+    // implies the equal larger rank passes too), so reordering ties cannot change
+    // the keep-set, and the in-place sort skips the stable sort's allocation.
+    ordered.sort_unstable_by(|left, right| left.1.total_cmp(&right.1));
 
     // The largest 1-based rank whose ordered p-value clears `(k/m)·q`.
     let mut max_rank = 0_usize;

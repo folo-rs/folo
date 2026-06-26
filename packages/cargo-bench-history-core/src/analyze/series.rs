@@ -13,13 +13,19 @@
 //! a large history, so the storage key is reduced to a 4-byte ordinal and the
 //! per-point commit string is interned to a shared `Arc<str>` rather than cloned.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::hash::BuildHasher;
 use std::sync::Arc;
 
+use foldhash::HashMap as FoldHashMap;
+use foldhash::HashMapExt;
+use foldhash::fast::RandomState;
+use hashbrown::HashTable;
+use hashbrown::hash_table::Entry;
 use jiff::Timestamp;
 
 use crate::analyze::StorageKey;
+use crate::analyze::parallel::for_each_mut_parallel;
 use crate::model::BlessingRecord;
 use crate::model::DiscriminantSet;
 use crate::model::{BenchmarkId, BenchmarkIdPrefix, MetricKind, Run};
@@ -217,9 +223,34 @@ fn ordinal_of(rank: usize) -> u32 {
 #[derive(Debug)]
 pub struct SeriesBuilder<'a> {
     filter: SeriesFilter<'a>,
-    groups: BTreeMap<(DiscriminantSet, BenchmarkId, MetricKind), Vec<SeriesPoint>>,
+    groups: GroupTree,
     commits: HashMap<Box<str>, Arc<str>>,
+    /// Hashes benchmark ids for the [`HashTable`] id level. One fixed instance so
+    /// the lookup-time hash and the growth-time rehash agree on the hash of a key.
+    hasher: RandomState,
 }
+
+/// Series points for one benchmark id, keyed by metric kind. The metric kind is
+/// `Copy`, so [`FoldHashMap::entry`] resolves it in a single probe with no clone.
+type KindGroups = FoldHashMap<MetricKind, Vec<SeriesPoint>>;
+
+/// Every benchmark id within one discriminant set, paired with its per-kind series.
+///
+/// A [`HashTable`] (not a [`HashMap`]) so the `entry(hash, eq, hasher)` API resolves
+/// each id in a single probe and clones the [`BenchmarkId`] only on a true cache
+/// miss — the steady state of the fold is one stored object per benchmark per
+/// commit, so the same id is looked up once per commit and must stay clone-free on
+/// that hot path. `HashMap`'s `entry` would force a clone per lookup, and the
+/// `get_mut`-first early return that would avoid it fails the NLL borrow check.
+type IdGroups = HashTable<(BenchmarkId, KindGroups)>;
+
+/// Series points grouped by discriminant set, then benchmark id, then metric kind.
+///
+/// The nesting clones each key level only when it is first encountered rather than
+/// once per point: the set is resolved once per run, the benchmark id once per
+/// record, and the `Copy` metric kind needs no allocation at all — so each distinct
+/// series costs one key clone, not one clone per metric point folded into it.
+type GroupTree = FoldHashMap<DiscriminantSet, IdGroups>;
 
 impl<'a> SeriesBuilder<'a> {
     /// Starts an empty builder that keeps only series matching `filter`.
@@ -227,8 +258,9 @@ impl<'a> SeriesBuilder<'a> {
     pub fn new(filter: SeriesFilter<'a>) -> Self {
         Self {
             filter,
-            groups: BTreeMap::new(),
+            groups: FoldHashMap::new(),
             commits: HashMap::new(),
+            hasher: RandomState::default(),
         }
     }
 
@@ -254,10 +286,44 @@ impl<'a> SeriesBuilder<'a> {
             .as_deref()
             .map(|commit| self.intern(commit));
 
+        // The discriminant set is constant for the whole run, so resolve its
+        // subtree once and clone the set key only when the set is first seen — not
+        // per record or per metric. Copying the prefix slice and borrowing the
+        // hasher out first keeps the `self.groups` borrow below from entangling
+        // with the other fields.
+        let prefixes = self.filter.prefixes;
+        let hasher = &self.hasher;
+        if !self.groups.contains_key(set) {
+            self.groups.insert(set.clone(), HashTable::new());
+        }
+        let id_groups = self
+            .groups
+            .get_mut(set)
+            .expect("the set's subtree was just inserted when absent");
+
         for record in &run.results {
-            if !prefixes_accept(self.filter.prefixes, &record.id) {
+            if !prefixes_accept(prefixes, &record.id) {
                 continue;
             }
+            // Resolve the benchmark id's subtree in a single probe, cloning the id
+            // only on a true cache miss. The same id recurs across every run that
+            // measured it, so this keeps id clones at one per distinct series. The
+            // `eq` closure confirms the match, so a hash collision never merges two
+            // distinct benchmarks.
+            let hash = hasher.hash_one(&record.id);
+            let kind_groups = match id_groups.entry(
+                hash,
+                |(existing, _)| *existing == record.id,
+                |(existing, _)| hasher.hash_one(existing),
+            ) {
+                Entry::Occupied(occupied) => &mut occupied.into_mut().1,
+                Entry::Vacant(vacant) => {
+                    &mut vacant
+                        .insert((record.id.clone(), FoldHashMap::new()))
+                        .into_mut()
+                        .1
+                }
+            };
             for metric in &record.metrics {
                 let point = SeriesPoint {
                     topo_index,
@@ -268,10 +334,7 @@ impl<'a> SeriesBuilder<'a> {
                     interval_low: metric.interval_low,
                     interval_high: metric.interval_high,
                 };
-                self.groups
-                    .entry((set.clone(), record.id.clone(), metric.kind))
-                    .or_default()
-                    .push(point);
+                kind_groups.entry(metric.kind).or_default().push(point);
             }
         }
     }
@@ -291,25 +354,52 @@ impl<'a> SeriesBuilder<'a> {
     /// Finalizes every accumulated series, each sorted into topological order.
     #[must_use]
     pub fn finish(self) -> Vec<Series> {
-        self.groups
-            .into_iter()
-            .map(|((set, id, kind), mut points)| {
-                points.sort_by(|left, right| {
-                    left.topo_index
-                        .cmp(&right.topo_index)
-                        .then_with(|| left.dirty.cmp(&right.dirty))
-                        .then_with(|| left.object_ordinal.cmp(&right.object_ordinal))
-                });
-                Series {
-                    set,
-                    id,
-                    kind,
-                    points,
-                    active_start: 0,
-                    blessing: None,
+        // Flatten the nested grouping into one series per `(set, id, kind)`, with
+        // points still in insertion order.
+        let mut series: Vec<Series> = Vec::new();
+        for (set, id_groups) in self.groups {
+            for (id, kind_groups) in id_groups {
+                for (kind, points) in kind_groups {
+                    series.push(Series {
+                        set: set.clone(),
+                        id: id.clone(),
+                        kind,
+                        points,
+                        active_start: 0,
+                        blessing: None,
+                    });
                 }
-            })
-            .collect()
+            }
+        }
+
+        // The nested maps iterate in an unspecified order, so restore the
+        // deterministic `(set, id, kind)` ordering callers rely on. The key is
+        // unique per series, so the unstable sort has no ties to reorder.
+        series.sort_unstable_by(|left, right| {
+            left.set
+                .cmp(&right.set)
+                .then_with(|| left.id.cmp(&right.id))
+                .then_with(|| left.kind.cmp(&right.kind))
+        });
+
+        // Each series' point sort is independent and is the dominant cost once a
+        // series holds millions of points, so the sorts run across a thread pool.
+        // Sorting in place per series leaves the surrounding `series` order — and
+        // therefore the result — identical to sorting each series sequentially.
+        for_each_mut_parallel(&mut series, |series| {
+            // `sort_unstable_by` orders in place without the scratch buffer a stable
+            // sort allocates. The key is a total order in practice — a series holds
+            // at most one point per object, so `object_ordinal` is unique within it
+            // — making the unstable sort deterministic.
+            series.points.sort_unstable_by(|left, right| {
+                left.topo_index
+                    .cmp(&right.topo_index)
+                    .then_with(|| left.dirty.cmp(&right.dirty))
+                    .then_with(|| left.object_ordinal.cmp(&right.object_ordinal))
+            });
+        });
+
+        series
     }
 }
 
