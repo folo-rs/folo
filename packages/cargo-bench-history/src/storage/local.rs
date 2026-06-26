@@ -80,7 +80,8 @@ impl Storage for LocalStorage {
             Ok(false) => {}
             Err(error) => return Err(StorageError::Io(error)),
         }
-        write_atomic(&path, &codec::compress(bytes))
+        let compressed = codec::compress(bytes);
+        write_atomic(&path, &compressed)
             .await
             .map_err(StorageError::Io)
     }
@@ -94,7 +95,8 @@ impl Storage for LocalStorage {
         }
         // The atomic rename replaces any existing object in full, the deliberate
         // escape hatch from the write-once contract.
-        write_atomic(&path, &codec::compress(bytes))
+        let compressed = codec::compress(bytes);
+        write_atomic(&path, &compressed)
             .await
             .map_err(StorageError::Io)
     }

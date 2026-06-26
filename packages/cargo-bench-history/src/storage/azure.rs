@@ -201,7 +201,8 @@ impl Storage for AzureBlobStorage {
     async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
         validate_key(key)?;
         let client = self.blob_client(key)?;
-        self.upload_with_retry(&client, &codec::compress(bytes), key, true)
+        let compressed = codec::compress(bytes);
+        self.upload_with_retry(&client, &compressed, key, true)
             .await
     }
 
@@ -209,7 +210,8 @@ impl Storage for AzureBlobStorage {
     async fn put_overwrite(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
         validate_key(key)?;
         let client = self.blob_client(key)?;
-        self.upload_with_retry(&client, &codec::compress(bytes), key, false)
+        let compressed = codec::compress(bytes);
+        self.upload_with_retry(&client, &compressed, key, false)
             .await
     }
 
