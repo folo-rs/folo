@@ -13,6 +13,7 @@ rust-version = "1.93"
 all_the_time = { version = "0.5.2", path = "packages/all_the_time", default-features = false }
 alloc_tracker = { version = "0.6.2", path = "packages/alloc_tracker", default-features = false }
 arc-swap = { version = "1.7.0", default-features = false }
+async-trait = { version = "0.1.89", default-features = false }
 awaiter_set = { version = "0.1.7", path = "packages/awaiter_set", default-features = false }
 axum = { version = "0.8.0", default-features = false }
 azure_core = { version = "1.0.0", default-features = false }

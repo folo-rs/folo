@@ -453,6 +453,11 @@ no `async_trait` dependency, and `run`/`analyze` stay backend-agnostic by holdin
   3. **Microsoft Entra ID** (`DeveloperToolsCredential`) — the secret-free
      production default (CI managed identity / workload-identity federation,
      local `az login`, env service principals); requires an **HTTPS** endpoint.
+     The credential is wrapped in a `CachingCredential` decorator that serializes
+     token acquisition and caches the token per scope, so `analyze`'s concurrent
+     object-load burst shares one acquisition instead of driving that many
+     simultaneous `az account get-access-token` calls — which on Windows collide
+     on the exclusive MSAL token-cache lockfile and fail the whole read.
 
   The shipped azure-sdk-for-rust v1.0.0 removed connection-string parsing,
   `StorageSharedKeyCredential`, and `DefaultAzureCredential`, which is why the

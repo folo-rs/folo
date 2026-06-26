@@ -133,42 +133,55 @@ async fn run_harness() -> Result<(), Error> {
     write_config(workspace_dir.path(), &target, logger).await?;
     target.provision(logger).await?;
 
-    let seed_started = Instant::now();
-    let stats = seed::seed(target.seed_root(), scenario, &sets, &repo, logger)?;
-    let seed_elapsed = seed_started.elapsed();
+    // The target is now provisioned (for Azure, the per-run container exists), so
+    // run the remaining fallible work under a guard that always cleans up
+    // afterward — even if seeding, upload, or a measured mode fails — so a failed
+    // run never orphans its container.
+    let measured = async {
+        let seed_started = Instant::now();
+        let stats = seed::seed(target.seed_root(), scenario, &sets, &repo, logger)?;
+        let seed_elapsed = seed_started.elapsed();
 
-    let upload_started = Instant::now();
-    target.upload(logger).await?;
-    let upload_elapsed = upload_started.elapsed();
+        let upload_started = Instant::now();
+        target.upload(logger).await?;
+        let upload_elapsed = upload_started.elapsed();
 
-    let mut results = Vec::with_capacity(cli.modes.len());
-    for mode in &cli.modes {
-        let result = measure::measure(
-            workspace_dir.path(),
-            repo_dir.path(),
-            *mode,
-            clock,
-            cli.repeat,
-            logger,
-        )
-        .await?;
-        results.push(result);
+        let mut results = Vec::with_capacity(cli.modes.len());
+        for mode in &cli.modes {
+            let result = measure::measure(
+                workspace_dir.path(),
+                repo_dir.path(),
+                *mode,
+                clock,
+                cli.repeat,
+                logger,
+            )
+            .await?;
+            results.push(result);
+        }
+
+        report::print(
+            &target.label(),
+            scenario,
+            sets.len(),
+            stats,
+            Phases {
+                repo: repo_elapsed,
+                seed: seed_elapsed,
+                upload: upload_elapsed,
+            },
+            &results,
+        );
+        Ok::<(), Error>(())
     }
+    .await;
 
-    report::print(
-        &target.label(),
-        scenario,
-        sets.len(),
-        stats,
-        Phases {
-            repo: repo_elapsed,
-            seed: seed_elapsed,
-            upload: upload_elapsed,
-        },
-        &results,
-    );
+    let cleaned = target.cleanup(cli.keep, logger).await;
 
-    target.cleanup(cli.keep, logger).await?;
+    // Surface a measured failure first (it is the root cause); a cleanup failure
+    // is reported only when the run itself otherwise succeeded.
+    measured?;
+    cleaned?;
     Ok(())
 }
 
