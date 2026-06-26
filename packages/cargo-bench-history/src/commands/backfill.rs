@@ -4,8 +4,9 @@
 //! and supports ad-hoc "what did this look like N commits ago" investigations. It
 //! checks out each commit of a range in a dedicated git **worktree** (never the
 //! primary checkout) and runs the configured engines there exactly as the `run`
-//! command does, recording each commit's committer date as the commit timestamp
-//! (see the `backfill` command in `DESIGN.md`).
+//! command does. A backfilled run carries no commit timestamp of its own; its
+//! position on the timeline is where its commit sits in git history, resolved live
+//! at analyze time (see the `backfill` command in `DESIGN.md`).
 //!
 //! Like `run`, the orchestration is generic over small ports so the loop logic is
 //! exercised with in-memory fakes (Miri-safe): a [`BackfillGit`] port for the git
@@ -409,7 +410,9 @@ impl BackfillGit for SystemBackfillGit {
 
     #[cfg_attr(test, mutants::skip)] // Delegates to the git-shelling history port; no pure logic to assert.
     async fn first_parent(&self, reference: &str) -> io::Result<Vec<String>> {
-        self.history.first_parent(reference).await
+        // Backfill needs only the commit shas, not their committer timestamps.
+        let commits = self.history.first_parent(reference).await?;
+        Ok(commits.into_iter().map(|commit| commit.sha).collect())
     }
 
     #[cfg_attr(test, mutants::skip)] // Shells out to `git`; environment IO with no pure logic to assert.
@@ -592,7 +595,11 @@ mod tests {
         }
 
         fn first_parent(&self, reference: &str) -> impl Future<Output = io::Result<Vec<String>>> {
-            self.history.first_parent(reference)
+            let future = self.history.first_parent(reference);
+            async move {
+                let commits = future.await?;
+                Ok(commits.into_iter().map(|commit| commit.sha).collect())
+            }
         }
 
         fn add_worktree(&self, path: &Path, commit: &str) -> impl Future<Output = io::Result<()>> {

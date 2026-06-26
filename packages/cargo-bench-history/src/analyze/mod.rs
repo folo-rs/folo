@@ -17,9 +17,9 @@ pub(crate) mod list;
 pub(crate) mod prune;
 
 pub(crate) use cargo_bench_history_core::analyze::{
-    AnalysisConfig, AnalysisContext, AnalysisMode, DiscriminantSetQuery, FacetFilter, LoadedObject,
-    ReportFormat, ReportInput, Series, SeriesFilter, SetSummary, StorageKey, apply_blessings,
-    build_series, find_changes, parse_key, render, select_commits,
+    AnalysisConfig, AnalysisContext, AnalysisMode, BlessingPlacement, DiscriminantSetQuery,
+    FacetFilter, LoadedObject, ReportFormat, ReportInput, Series, SeriesFilter, SetSummary,
+    StorageKey, apply_blessings, build_series, find_changes, parse_key, render, select_commits,
 };
 
 use std::collections::HashMap;
@@ -368,10 +368,11 @@ struct SelectedDataSet {
     /// split base-side history from the branch's own commits.
     merge_base_index: Option<usize>,
     /// Blessings recorded on in-window commits, grouped by discriminant set. Each
-    /// entry pairs the blessed commit's first-parent topological index with its
-    /// record; history-mode re-baselining picks, per series, the latest matching
-    /// blessing. Empty in branch and tip modes (they ignore blessings).
-    blessings: HashMap<DiscriminantSet, Vec<(usize, BlessingRecord)>>,
+    /// entry pairs the blessed commit's first-parent topological index and its
+    /// committer date (from topology, for the report anchor) with the record;
+    /// history-mode re-baselining picks, per series, the latest matching blessing.
+    /// Empty in branch and tip modes (they ignore blessings).
+    blessings: HashMap<DiscriminantSet, Vec<BlessingPlacement>>,
 }
 
 /// Resolves one facet's raw command-line values into a [`FacetFilter`].
@@ -569,6 +570,7 @@ where
     let ResolvedHistory {
         target_ref,
         order,
+        commit_times,
         admit_dirty,
         dirty_base_exception,
         merge_base_index,
@@ -647,11 +649,11 @@ where
     // dirty-tree exception, so the report can warn that it is ephemeral.
     let mut included_dirty_base_exception = false;
 
-    // Phase 1 — key-only filtering, in candidate order. The checks that need only
-    // the storage key (history membership and base-side dirty admission) run here,
-    // before anything is fetched, so an excluded candidate never costs a
-    // round-trip. The checks that need the parsed run (`--since`/`--until`, which
-    // read its commit timestamp) run after the fetch, in phase 3.
+    // Phase 1 — key-only filtering, in candidate order. Every exclusion that does
+    // not need the object's payload runs here, before anything is fetched, so an
+    // excluded candidate never costs a round-trip: history membership, base-side
+    // dirty admission, and the `--since`/`--until` window (decided from each
+    // commit's committer time, which git reports with the topology).
     let mut to_fetch: Vec<(String, StorageKey)> = Vec::new();
     for (key, parsed) in candidates {
         if !order.contains_key(&parsed.commit) {
@@ -680,6 +682,29 @@ where
             });
             continue;
         }
+        match window_excludes(commit_times.get(&parsed.commit).copied(), since, until) {
+            Some(WindowEdge::Since) => {
+                excluded_since = excluded_since.saturating_add(1);
+                reporter.note_with(|| {
+                    format!(
+                        "excluding {key}: commit {} is before the --since cutoff",
+                        parsed.commit
+                    )
+                });
+                continue;
+            }
+            Some(WindowEdge::Until) => {
+                excluded_until = excluded_until.saturating_add(1);
+                reporter.note_with(|| {
+                    format!(
+                        "excluding {key}: commit {} is after the --until cutoff",
+                        parsed.commit
+                    )
+                });
+                continue;
+            }
+            None => {}
+        }
         to_fetch.push((key, parsed));
     }
 
@@ -697,24 +722,13 @@ where
     .await?;
     fetched.sort_by(|left, right| left.0.cmp(&right.0));
 
-    // Phase 3 — apply the parsed-run window filters (`--since`/`--until`) and admit
-    // each object, in storage-key order so the verbose diagnostics and the loaded
-    // order stay deterministic. A dirty snapshot reaches here only on a commit
-    // whose side of the merge-base allows it (phase 1 already dropped the rest).
+    // Phase 3 — admit each fetched object, in storage-key order so the verbose
+    // diagnostics and the loaded order stay deterministic. Every exclusion already
+    // happened in phase 1 (history membership, base-side dirty admission, and the
+    // `--since`/`--until` window), so a fetched object only needs its
+    // dirty-base-exception flag inspected for the ephemeral-data warning.
     let mut loaded: Vec<LoadedObject> = Vec::new();
     for (key, parsed, result) in fetched {
-        if since.is_some_and(|since| result.context.commit < since) {
-            excluded_since = excluded_since.saturating_add(1);
-            reporter
-                .note_with(|| format!("excluding {key}: commit time is before the --since cutoff"));
-            continue;
-        }
-        if until.is_some_and(|until| result.context.commit > until) {
-            excluded_until = excluded_until.saturating_add(1);
-            reporter
-                .note_with(|| format!("excluding {key}: commit time is after the --until cutoff"));
-            continue;
-        }
         if parsed.is_dirty()
             && dirty_base_exception
                 .get(parsed.commit.as_str())
@@ -748,7 +762,7 @@ where
     // blessing on a commit outside the analyzed history (or that fails to parse) is
     // irrelevant and skipped. Branch and tip modes ignore blessings entirely, so
     // only history mode pays the load.
-    let mut blessings: HashMap<DiscriminantSet, Vec<(usize, BlessingRecord)>> = HashMap::new();
+    let mut blessings: HashMap<DiscriminantSet, Vec<BlessingPlacement>> = HashMap::new();
     if mode == AnalysisMode::History {
         // Phase 1 — key-only filtering: drop blessings whose commit is not on the
         // analyzed history before fetching, in candidate order.
@@ -778,12 +792,14 @@ where
         })
         .await?;
         fetched.sort_by(|left, right| left.0.cmp(&right.0));
-        // Phase 3 — record each blessing against its commit's topological index.
+        // Phase 3 — record each blessing against its commit's topological index
+        // and committer date (resolved from topology, for the report anchor).
         for (key, parsed, record) in fetched {
             let topo_index = order
                 .get(&parsed.commit)
                 .copied()
                 .expect("phase 1 admitted only blessings whose commit is on the analyzed history");
+            let commit_time = commit_times.get(&parsed.commit).copied();
             reporter.note_with(|| {
                 format!(
                     "loaded blessing {key} ({} accepted at {})",
@@ -791,10 +807,11 @@ where
                     parsed.commit
                 )
             });
-            blessings
-                .entry(parsed.set.clone())
-                .or_default()
-                .push((topo_index, record));
+            blessings.entry(parsed.set.clone()).or_default().push((
+                topo_index,
+                commit_time,
+                record,
+            ));
         }
     }
 
@@ -919,6 +936,10 @@ struct ResolvedHistory {
     /// First-parent position of each selected commit, for series ordering. An
     /// object whose commit is absent is outside the analyzed history.
     order: HashMap<String, usize>,
+    /// Committer timestamp of each first-parent commit, for deciding the
+    /// `--since`/`--until` window from topology before any object is fetched. A
+    /// commit absent here has an unknown time and is treated as in-window.
+    commit_times: HashMap<String, Timestamp>,
     /// Whether each selected commit admits dirty (uncommitted-tree) snapshots.
     admit_dirty: HashMap<String, bool>,
     /// Whether a commit's dirty runs are admitted *only* by the base-branch
@@ -961,7 +982,18 @@ where
     };
 
     let base_sha = resolve_base_ref(git, config, selection.base).await?;
-    let ancestry = git.first_parent(&target_sha).await.map_err(RunError::Io)?;
+    let first_parent = git.first_parent(&target_sha).await.map_err(RunError::Io)?;
+    // Split the first-parent ancestry into the SHA timeline (for commit selection
+    // and the merge-base lookup) and a SHA -> committer-time map (for the window).
+    let commit_count = first_parent.len();
+    let mut ancestry: Vec<String> = Vec::with_capacity(commit_count);
+    let mut commit_times: HashMap<String, Timestamp> = HashMap::new();
+    for commit in first_parent {
+        if let Some(time) = commit.committer_time {
+            commit_times.insert(commit.sha.clone(), time);
+        }
+        ancestry.push(commit.sha);
+    }
     let merge_base = match &base_sha {
         Some(base) => git
             .merge_base(&target_sha, base)
@@ -972,7 +1004,7 @@ where
 
     reporter.note(&format!(
         "target ref {target_ref} resolves to {target_sha}; {} on its first-parent line",
-        count_noun(ancestry.len(), "commit")
+        count_noun(commit_count, "commit")
     ));
     reporter.note(&format!(
         "base ref resolves to {}; merge-base with target is {}",
@@ -1033,6 +1065,7 @@ where
     Ok(ResolvedHistory {
         target_ref: target_ref.to_owned(),
         order,
+        commit_times,
         admit_dirty,
         dirty_base_exception,
         merge_base_index,
@@ -1232,6 +1265,39 @@ fn parse_until(value: Option<&str>) -> Result<Option<Timestamp>, RunError> {
     parse_instant(value, "--until")
 }
 
+/// Which edge of the `--since`/`--until` window a commit falls outside of.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WindowEdge {
+    /// The commit predates the `--since` lower bound.
+    Since,
+    /// The commit postdates the `--until` upper bound.
+    Until,
+}
+
+/// Decides whether a commit's `committer_time` places it outside the
+/// `--since`/`--until` window, reporting which edge it fell off.
+///
+/// `--since` is an inclusive-on-or-after lower bound and `--until` an
+/// inclusive-on-or-before upper bound, matching the object-timestamp comparison
+/// the analysis used before topology carried the time. A commit with an unknown
+/// time (`None`) is never excluded — git always reports a committer date for a
+/// real commit, so this only guards a degenerate input conservatively (by
+/// keeping the object and letting the rest of the pipeline judge it).
+fn window_excludes(
+    committer_time: Option<Timestamp>,
+    since: Option<Timestamp>,
+    until: Option<Timestamp>,
+) -> Option<WindowEdge> {
+    let time = committer_time?;
+    if since.is_some_and(|since| time < since) {
+        return Some(WindowEdge::Since);
+    }
+    if until.is_some_and(|until| time > until) {
+        return Some(WindowEdge::Until);
+    }
+    None
+}
+
 /// Parses a time-cutoff option into an absolute instant, if set.
 ///
 /// Three input forms are accepted, tried in order:
@@ -1320,7 +1386,6 @@ mod tests {
         let time = ts(effective);
         let context = RunContext::new(
             time,
-            time,
             GitInfo {
                 commit: Some(commit.to_owned()),
                 short_commit: Some(commit.to_owned()),
@@ -1358,7 +1423,6 @@ mod tests {
         let time = ts(effective);
         let context = RunContext::new(
             time,
-            time,
             GitInfo {
                 commit: Some(commit.to_owned()),
                 short_commit: Some(commit.to_owned()),
@@ -1394,13 +1458,16 @@ mod tests {
         block_on(storage.put(key, json.as_bytes())).unwrap();
     }
 
-    /// A linear master history `c0 - c1 - c2 - c3`, HEAD at the tip.
+    /// A linear master history `c0 - c1 - c2 - c3`, HEAD at the tip. Each commit
+    /// carries committer time `ts(N)` for `cN`, matching the `effective`-second
+    /// convention the seeders use, so the topology-decided `--since`/`--until`
+    /// window can be exercised.
     fn linear_git() -> FakeGitHistory {
         let mut git = FakeGitHistory::new();
-        git.commit("c0", None)
-            .commit("c1", Some("c0"))
-            .commit("c2", Some("c1"))
-            .commit("c3", Some("c2"))
+        git.commit_at("c0", None, ts(0))
+            .commit_at("c1", Some("c0"), ts(1))
+            .commit_at("c2", Some("c1"), ts(2))
+            .commit_at("c3", Some("c2"), ts(3))
             .branch("master", "c3")
             .head("master")
             .mark_default("master");
@@ -1732,6 +1799,30 @@ mod tests {
         assert_eq!(cutoff, "2023-09-30T00:00:00Z".parse::<Timestamp>().unwrap());
     }
 
+    #[test]
+    fn window_excludes_decides_each_edge_from_committer_time() {
+        let since = Some(ts(10));
+        let until = Some(ts(20));
+        // Before the lower bound, after the upper bound, and inside the window.
+        assert_eq!(
+            window_excludes(Some(ts(5)), since, until),
+            Some(WindowEdge::Since)
+        );
+        assert_eq!(
+            window_excludes(Some(ts(25)), since, until),
+            Some(WindowEdge::Until)
+        );
+        assert_eq!(window_excludes(Some(ts(15)), since, until), None);
+        // Both bounds are inclusive: a commit exactly on an edge stays in-window.
+        assert_eq!(window_excludes(Some(ts(10)), since, until), None);
+        assert_eq!(window_excludes(Some(ts(20)), since, until), None);
+        // An open bound never excludes on that side.
+        assert_eq!(window_excludes(Some(ts(0)), None, until), None);
+        assert_eq!(window_excludes(Some(ts(99)), since, None), None);
+        // An unknown committer time is never excluded, even with both bounds set.
+        assert_eq!(window_excludes(None, since, until), None);
+    }
+
     /// Runs `analyze_with` and unwraps the rendered report and regression count.
     fn analyze(
         git: &FakeGitHistory,
@@ -1833,7 +1924,6 @@ mod tests {
         seed_linear_step(&storage);
         let record = BlessingRecord::new(
             "c3".to_owned(),
-            ts(3),
             ts(3),
             vec![BenchmarkIdPrefix::new("nm").unwrap()],
             "0.0.1".to_owned(),
@@ -1945,7 +2035,6 @@ mod tests {
         let record = BlessingRecord::new(
             "z9".to_owned(),
             ts(3),
-            ts(3),
             vec![BenchmarkIdPrefix::new("nm").unwrap()],
             "0.0.1".to_owned(),
         );
@@ -2024,19 +2113,20 @@ mod tests {
     }
 
     #[test]
-    fn series_order_follows_topology_not_commit_time() {
+    fn series_order_follows_topology_not_observation_time() {
         // Topology is c0..c5 with a sustained step at c3 (100,100,100,130,130,130),
-        // but the commit clock is reversed (c0 newest, c5 oldest). Ordering by
-        // topology reconstructs the rising step and flags a regression; ordering by
-        // commit time would reverse it into a falling step (an improvement, no
-        // regression). So a single detected regression proves topology won.
+        // but the objects' observation clock is reversed (c0 newest, c5 oldest).
+        // Ordering by topology reconstructs the rising step and flags a regression;
+        // were the provenance-only observation time ever allowed to order the series
+        // it would reverse into a falling step (an improvement, no regression). So a
+        // single detected regression proves topology won.
         let storage = MemoryStorage::new();
         for (index, value) in [100.0, 100.0, 100.0, 130.0, 130.0, 130.0]
             .into_iter()
             .enumerate()
         {
             let commit = format!("c{index}");
-            // Reverse the clock: c0 is newest, c5 is oldest by commit time.
+            // Reverse the clock: c0 has the newest observation time, c5 the oldest.
             let second = 100 - i64::try_from(index).unwrap();
             store(
                 &storage,

@@ -7,20 +7,9 @@ use crate::harness::*;
 async fn list_discriminants_lists_present_sets() {
     let workspace = Workspace::repo(&storage_only_config());
     // One commit, but two comparable sets: a Linux and a Windows callgrind pool.
-    workspace.seed_callgrind_in(
-        "x86_64-unknown-linux-gnu",
-        "synthetic",
-        "2024-01-01",
-        "c1",
-        100.0,
-    );
-    workspace.seed_callgrind_in(
-        "x86_64-pc-windows-msvc",
-        "synthetic",
-        "2024-01-01",
-        "c1",
-        100.0,
-    );
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind_in("x86_64-unknown-linux-gnu", "synthetic", "c1", 100.0);
+    workspace.seed_callgrind_in("x86_64-pc-windows-msvc", "synthetic", "c1", 100.0);
 
     let RunOutcome::Completed { message } = workspace
         .drive(&["list", "discriminants", "--format", "json"])
@@ -88,20 +77,9 @@ async fn list_previews_the_analyzed_data_set() {
 #[cfg_attr(miri, ignore)]
 async fn list_facet_selection_mirrors_analyze() {
     let workspace = Workspace::repo(&storage_only_config());
-    workspace.seed_callgrind_in(
-        "x86_64-unknown-linux-gnu",
-        "synthetic",
-        "2024-01-01",
-        "c1",
-        100.0,
-    );
-    workspace.seed_callgrind_in(
-        "x86_64-pc-windows-msvc",
-        "synthetic",
-        "2024-01-01",
-        "c1",
-        50.0,
-    );
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind_in("x86_64-unknown-linux-gnu", "synthetic", "c1", 100.0);
+    workspace.seed_callgrind_in("x86_64-pc-windows-msvc", "synthetic", "c1", 50.0);
 
     let RunOutcome::Completed { message } = workspace
         .drive(&[
@@ -132,9 +110,11 @@ async fn list_facet_selection_mirrors_analyze() {
 #[cfg_attr(miri, ignore)]
 async fn list_admits_and_excludes_dirty_like_analyze() {
     let workspace = Workspace::repo(&storage_only_config());
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
     workspace.checkout_new_branch("feature");
-    workspace.seed_callgrind("2024-01-02", "f1", 100.0);
+    workspace.commit_dated("2024-01-02", "f1");
+    workspace.seed_callgrind("f1", 100.0);
     workspace.seed_dirty_callgrind("2024-01-03", "f1", 200.0);
 
     // By default the dirty snapshot on the target side is included: f1 hosts both a
@@ -186,7 +166,8 @@ async fn list_without_a_repository_errors() {
 #[cfg_attr(miri, ignore)]
 async fn list_runs_rejects_the_blessings_only_all_switch() {
     let workspace = Workspace::repo(&storage_only_config());
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
 
     let error = workspace
         .drive(&["list", "runs", "--all"])

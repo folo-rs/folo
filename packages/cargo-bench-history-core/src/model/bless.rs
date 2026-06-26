@@ -18,20 +18,20 @@ use crate::model::{BenchmarkId, BenchmarkIdPrefix};
 
 /// Schema version of the stored [`BlessingRecord`] JSON.
 ///
-/// Bumped whenever the on-disk representation changes in a backward-incompatible
-/// way so that `analyze` can refuse or migrate older data.
-pub const BLESS_SCHEMA_VERSION: u32 = 1;
+/// Records which on-disk format a file was written with. Reads are not gated on
+/// it: version 2 dropped the redundant `commit_time` field (the blessed commit's
+/// date is resolved from git topology, keyed by the commit SHA), and older records
+/// still deserialize because the removed field is simply ignored.
+pub const BLESS_SCHEMA_VERSION: u32 = 2;
 
 /// A single blessing: which benchmarks were accepted, at which commit, and when.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct BlessingRecord {
     /// Schema version of this record (see [`BLESS_SCHEMA_VERSION`]).
     pub schema_version: u32,
-    /// Full commit SHA the blessing was issued at (the blessed data point).
+    /// Full commit SHA the blessing was issued at (the blessed data point). The
+    /// commit's date, when a report needs it, is resolved from git topology.
     pub commit: String,
-    /// Committer date of the blessed commit, used to label and anchor the
-    /// blessing in reports and charts.
-    pub commit_time: Timestamp,
     /// Wall-clock time at which the blessing was issued (provenance).
     pub issued_at: Timestamp,
     /// Benchmark-id prefixes this blessing accepts, matched against
@@ -49,7 +49,6 @@ impl BlessingRecord {
     #[must_use]
     pub fn new(
         commit: String,
-        commit_time: Timestamp,
         issued_at: Timestamp,
         prefixes: Vec<BenchmarkIdPrefix>,
         tool_version: String,
@@ -57,7 +56,6 @@ impl BlessingRecord {
         Self {
             schema_version: BLESS_SCHEMA_VERSION,
             commit,
-            commit_time,
             issued_at,
             prefixes,
             tool_version,
@@ -127,7 +125,6 @@ mod tests {
     fn record(prefixes: &[&str]) -> BlessingRecord {
         BlessingRecord::new(
             "deadbeef".to_owned(),
-            ts(1_700_000_000),
             ts(1_700_000_100),
             prefixes
                 .iter()
@@ -141,7 +138,6 @@ mod tests {
     fn json_round_trips() {
         let original = BlessingRecord::new(
             "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_owned(),
-            ts(1_700_000_000),
             ts(1_700_000_100),
             vec![BenchmarkIdPrefix::new("all_the_time/read_cell").unwrap()],
             "1.2.3".to_owned(),

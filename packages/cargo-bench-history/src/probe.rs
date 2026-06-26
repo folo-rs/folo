@@ -7,20 +7,21 @@ use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::git::{GitSnapshot, build_snapshot};
+use crate::git::parse_git_info;
 use crate::host::{RustcInfo, parse_rustc_verbose};
 use crate::machine::{HardwareProfile, system_profile};
+use crate::model::GitInfo;
 use crate::process::capture;
 
 /// Discovers the git and toolchain context of a run.
 pub(crate) trait EnvironmentProbe {
-    /// Captures the git snapshot of the working directory.
+    /// Captures the git facts of the working directory.
     ///
     /// # Errors
     ///
     /// Returns an error only on an unexpected probe failure; a missing repository
-    /// or absent `git` yields an empty snapshot rather than an error.
-    fn git(&self) -> impl Future<Output = io::Result<GitSnapshot>>;
+    /// or absent `git` yields empty facts rather than an error.
+    fn git(&self) -> impl Future<Output = io::Result<GitInfo>>;
 
     /// Captures the active toolchain's version and host triple.
     ///
@@ -77,18 +78,13 @@ impl SystemProbe {
 
 impl EnvironmentProbe for SystemProbe {
     #[cfg_attr(test, mutants::skip)] // Shells out to `git`; the parsing it delegates to is tested.
-    async fn git(&self) -> io::Result<GitSnapshot> {
+    async fn git(&self) -> io::Result<GitInfo> {
         let commit = self.git_field(&["rev-parse", "HEAD"]).await;
         let short = self.git_field(&["rev-parse", "--short", "HEAD"]).await;
         let branch = self.git_field(&["rev-parse", "--abbrev-ref", "HEAD"]).await;
         let status = self.git_field(&["status", "--porcelain"]).await;
-        let committer = self
-            .git_field(&["show", "-s", "--format=%cI", "HEAD"])
-            .await;
 
-        Ok(build_snapshot(
-            &commit, &short, &branch, &status, &committer,
-        ))
+        Ok(parse_git_info(&commit, &short, &branch, &status))
     }
 
     #[cfg_attr(test, mutants::skip)] // Shells out to `rustc`; the parsing it delegates to is tested.

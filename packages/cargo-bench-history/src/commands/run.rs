@@ -17,12 +17,11 @@ use crate::bench::{
 };
 use crate::bench_output::{BenchOutputSource, FsBenchOutputSource, Harvest};
 use crate::config::{StorageConfig, load_config};
-use crate::git::GitSnapshot;
 use crate::host::RustcInfo;
 use crate::machine::{HardwareProfile, resolve_machine_key};
 use crate::model::{BenchmarkResult, Run};
 use crate::model::{DiscriminantSet, Engine};
-use crate::model::{EnvironmentInfo, RunContext, ToolchainInfo, detect_environment};
+use crate::model::{EnvironmentInfo, GitInfo, RunContext, ToolchainInfo, detect_environment};
 use crate::probe::{EnvironmentProbe, SystemProbe};
 use crate::process::{BenchRunner, TokioBenchRunner};
 use crate::report::{Reporter, ReporterExt, StderrReporter};
@@ -158,8 +157,8 @@ pub(crate) fn default_bench_command() -> Vec<String> {
 
 /// Probe facts shared across every engine in a single run.
 struct SharedContext {
-    /// Git snapshot of the working directory.
-    git: GitSnapshot,
+    /// Git facts of the working directory.
+    git: GitInfo,
     /// Active toolchain facts.
     rustc: RustcInfo,
     /// Detected execution environment.
@@ -398,17 +397,12 @@ where
     }
 
     let observation = timestamp_from(run_start);
-    // A run records the benchmarked commit, so its timeline position is that
-    // commit's committer date (for a dirty snapshot, the commit it is based on).
-    // When no commit is available the observation time stands in.
-    let dirty = shared.git.info.dirty;
-    let commit_time = shared.git.committer.unwrap_or(observation);
+    let dirty = shared.git.dirty;
     let target_triple = &shared.target_triple;
 
     let context = RunContext::new(
-        commit_time,
         observation,
-        shared.git.info.clone(),
+        shared.git.clone(),
         shared.env.clone(),
         ToolchainInfo {
             target_triple: target_triple.clone(),
@@ -430,7 +424,7 @@ where
     // (`analyze` resolves which commits to read from git topology). A clean run is
     // keyed solely by its commit and so is deterministic; a dirty snapshot adds its
     // observation time so concurrent snapshots of the same commit coexist.
-    let commit = shared.git.info.commit.as_deref().unwrap_or("unknown");
+    let commit = shared.git.commit.as_deref().unwrap_or("unknown");
     let object_key = if dirty {
         key.dirty_key(deps.project_id, commit, observation.as_second())
     } else {
@@ -438,7 +432,7 @@ where
     };
 
     deps.reporter.note(&format!(
-        "{engine}: {} at commit {commit} ({}), commit time {commit_time}{} -> {object_key}",
+        "{engine}: {} at commit {commit} ({}){} -> {object_key}",
         count_noun(count, "case"),
         if dirty { "dirty" } else { "clean" },
         machine_key
@@ -646,7 +640,7 @@ mod tests {
 
     use super::*;
     use crate::bench_output::{Harvest, RawCriterionCase, RawOperationFile, RawSummary};
-    use crate::git::build_snapshot;
+    use crate::git::parse_git_info;
     use crate::model::BenchmarkIdPrefix;
     use crate::model::BlessingRecord;
     use crate::process::EngineStatus;
@@ -906,7 +900,7 @@ mod tests {
 
     #[derive(Clone)]
     struct FakeProbe {
-        git: GitSnapshot,
+        git: GitInfo,
         rustc: RustcInfo,
         hardware: HardwareProfile,
     }
@@ -923,12 +917,11 @@ mod tests {
 
         fn with_status(status: &str) -> Self {
             Self {
-                git: build_snapshot(
+                git: parse_git_info(
                     "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
                     "deadbee",
                     "main",
                     status,
-                    "",
                 ),
                 rustc: RustcInfo {
                     version: Some("1.91.0".to_owned()),
@@ -944,7 +937,7 @@ mod tests {
     }
 
     impl EnvironmentProbe for FakeProbe {
-        async fn git(&self) -> io::Result<GitSnapshot> {
+        async fn git(&self) -> io::Result<GitInfo> {
             Ok(self.git.clone())
         }
 
@@ -1324,7 +1317,6 @@ mod tests {
         let bless_key = format!("{commit_dir}/bless-100.json");
         let record = BlessingRecord::new(
             "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_owned(),
-            Timestamp::from_second(1).unwrap(),
             Timestamp::from_second(100).unwrap(),
             vec![BenchmarkIdPrefix::new("group").unwrap()],
             "0.0.1".to_owned(),
@@ -1391,7 +1383,6 @@ mod tests {
         let bless_key = format!("{commit_dir}/bless-100.json");
         let record = BlessingRecord::new(
             "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_owned(),
-            Timestamp::from_second(1).unwrap(),
             Timestamp::from_second(100).unwrap(),
             vec![BenchmarkIdPrefix::new("group").unwrap()],
             "0.0.1".to_owned(),

@@ -72,7 +72,8 @@
 //! host-runnable engines are stored). Re-running the same clean commit is refused
 //! as a duplicate unless `--overwrite` replaces the stored result; `--no-store`
 //! harvests and reports without writing. A run is positioned on the timeline by
-//! its commit's committer date, never by when the benchmarks happened to execute.
+//! where its commit sits in git history (first-parent topology), resolved live at
+//! analyze time — never by when the benchmarks happened to execute.
 //!
 //! ## `install`
 //!
@@ -85,8 +86,8 @@
 //! Replays `run` across the inclusive commit range `<from> <to>`, bootstrapping
 //! history for a repository that adopted the tool late. Each commit is checked out
 //! in a dedicated git **worktree** (the primary checkout is never touched, so a
-//! dirty working tree is fine) and benched there, recording the commit's committer
-//! date as its timeline position. The range `<from> <to>` only needs to form a
+//! dirty working tree is fine) and benched there, taking its timeline position
+//! from where the commit sits in git history. The range `<from> <to>` only needs to form a
 //! first-parent chain; it does not have to lie on the current branch. Commits that
 //! already have a stored result are skipped
 //! (so backfill is resumable and cheap to re-run); `--overwrite` re-benches the
@@ -164,8 +165,8 @@
 //!   `--context` is the ref whose history is analyzed (default `HEAD`); `--base` is
 //!   the ref it branched from (default: the configured or detected default branch),
 //!   which determines the merge-base split. `--since`/`--until` bound the window by
-//!   **commit** timestamp and accept an RFC 3339 timestamp, a `YYYY-MM-DD` date, or
-//!   a relative duration such as `6 months ago`.
+//!   each commit's **committer date** (read from git history) and accept an RFC 3339
+//!   timestamp, a `YYYY-MM-DD` date, or a relative duration such as `6 months ago`.
 //! * **Data filtering** (`--no-dirty`) — exclude dirty snapshots.
 //!
 //! # Analyze modes

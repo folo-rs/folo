@@ -24,7 +24,6 @@ use jiff::Timestamp;
 use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
 use crate::model::BlessingRecord;
-use crate::model::Run;
 use crate::report::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
@@ -186,9 +185,10 @@ where
     let selection = Selection::from_bless(options);
     let facets = resolve_facets(&selection, Some(auto))?;
     let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
-    let clean_at_head: Vec<(String, StorageKey)> = candidates
+    let clean_at_head: Vec<StorageKey> = candidates
         .into_iter()
         .filter(|(_, parsed)| parsed.commit == head && parsed.file == "clean.json")
+        .map(|(_, parsed)| parsed)
         .collect();
     if clean_at_head.is_empty() {
         return Err(RunError::Bless {
@@ -201,18 +201,9 @@ where
 
     let issued_unix = now.as_second();
     let mut sets = 0_usize;
-    for (clean_key, parsed) in &clean_at_head {
-        // The blessed commit's commit time is the committer date already recorded
-        // on its run, so the blessing labels and anchors consistently without a
-        // separate probe.
-        let commit_time = load_commit_time(storage, clean_key).await?;
-        let record = BlessingRecord::new(
-            head.clone(),
-            commit_time,
-            now,
-            prefixes.clone(),
-            tool_version.to_owned(),
-        );
+    for parsed in &clean_at_head {
+        let record =
+            BlessingRecord::new(head.clone(), now, prefixes.clone(), tool_version.to_owned());
         let json = record
             .to_json()
             .expect("a freshly built blessing always serializes to JSON");
@@ -306,18 +297,6 @@ async fn resolve_commit<G: GitHistory>(git: &G, reference: &str) -> Result<Strin
         })
 }
 
-/// Reads the commit time (committer date) recorded on the clean result at `key`.
-async fn load_commit_time<S: Storage>(storage: &S, key: &str) -> Result<Timestamp, RunError> {
-    let bytes = storage.get(key).await.map_err(RunError::Storage)?;
-    let text = String::from_utf8(bytes).map_err(|error| RunError::Bless {
-        message: format!("stored object {key} is not valid UTF-8: {error}"),
-    })?;
-    let result = Run::from_json(&text).map_err(|error| RunError::Bless {
-        message: format!("stored object {key} is not a valid result set: {error}"),
-    })?;
-    Ok(result.context.commit)
-}
-
 /// The first twelve characters of a SHA (all of it when shorter), for messages.
 fn short_sha(sha: &str) -> &str {
     sha.get(..12).unwrap_or(sha)
@@ -359,7 +338,6 @@ mod tests {
     fn clean_run_json(commit: &str, effective: i64) -> String {
         let time = ts(effective);
         let context = RunContext::new(
-            time,
             time,
             GitInfo {
                 commit: Some(commit.to_owned()),
@@ -457,8 +435,7 @@ mod tests {
             blessings[0]
         );
 
-        // The record carries the requested prefix, blessed commit, and commit time
-        // read from the run it accepts.
+        // The record carries the requested prefix and the blessed commit.
         let bytes = block_on(storage.get(&blessings[0])).unwrap();
         let record = BlessingRecord::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
         assert_eq!(
@@ -466,7 +443,6 @@ mod tests {
             vec![BenchmarkIdPrefix::new("all_the_time/read_cell").unwrap()]
         );
         assert_eq!(record.commit, "c2");
-        assert_eq!(record.commit_time, ts(1000));
     }
 
     #[test]
@@ -711,32 +687,6 @@ mod tests {
                     "{message}"
                 );
                 assert!(message.contains("--base"), "{message}");
-            }
-            other => panic!("expected a bless error, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn load_commit_time_rejects_a_non_utf8_object() {
-        let storage = MemoryStorage::new();
-        block_on(storage.put(&clean_key("c2"), &[0xff, 0xfe, 0x00])).unwrap();
-        let error = block_on(load_commit_time(&storage, &clean_key("c2"))).unwrap_err();
-        match error {
-            RunError::Bless { message } => {
-                assert!(message.contains("is not valid UTF-8"), "{message}");
-            }
-            other => panic!("expected a bless error, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn load_commit_time_rejects_an_invalid_result_set() {
-        let storage = MemoryStorage::new();
-        block_on(storage.put(&clean_key("c2"), b"{ not a valid result set")).unwrap();
-        let error = block_on(load_commit_time(&storage, &clean_key("c2"))).unwrap_err();
-        match error {
-            RunError::Bless { message } => {
-                assert!(message.contains("is not a valid result set"), "{message}");
             }
             other => panic!("expected a bless error, got {other:?}"),
         }

@@ -135,10 +135,14 @@ async fn analyze_markdown_format_renders_table() {
 async fn analyze_since_filters_old_points() {
     let workspace = Workspace::repo(&storage_only_config());
     // A flat recent history (no change), preceded long ago by an unrelated point.
-    workspace.seed_callgrind("2020-01-01", "c0", 999.0);
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
-    workspace.seed_callgrind("2024-01-02", "c2", 100.0);
-    workspace.seed_callgrind("2024-01-03", "c3", 100.0);
+    workspace.commit_dated("2020-01-01", "c0");
+    workspace.seed_callgrind("c0", 999.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
+    workspace.commit_dated("2024-01-02", "c2");
+    workspace.seed_callgrind("c2", 100.0);
+    workspace.commit_dated("2024-01-03", "c3");
+    workspace.seed_callgrind("c3", 100.0);
 
     let outcome = workspace
         .drive(&["analyze", "--since", "2024-01-01", "--format", "json"])
@@ -160,7 +164,8 @@ async fn analyze_since_filters_old_points() {
 #[cfg_attr(miri, ignore)]
 async fn analyze_engine_filters_partition() {
     let workspace = Workspace::repo(&storage_only_config());
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
     // A criterion-partition object that the callgrind filter must skip. Its commit
     // segment is never read because the engine facet excludes it from listing.
     workspace.seed(
@@ -205,12 +210,18 @@ async fn analyze_rejects_unknown_format() {
 async fn analyze_prefix_filter_excludes_other_benchmarks() {
     let workspace = Workspace::repo(&storage_only_config());
     // `alpha` stays flat while `beta` climbs into a regression.
-    workspace.seed_two_benchmarks("2024-01-01", "c1", 100.0, 100.0);
-    workspace.seed_two_benchmarks("2024-01-02", "c2", 100.0, 100.0);
-    workspace.seed_two_benchmarks("2024-01-03", "c3", 100.0, 100.0);
-    workspace.seed_two_benchmarks("2024-01-04", "c4", 100.0, 130.0);
-    workspace.seed_two_benchmarks("2024-01-05", "c5", 100.0, 130.0);
-    workspace.seed_two_benchmarks("2024-01-06", "c6", 100.0, 130.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_two_benchmarks("c1", 100.0, 100.0);
+    workspace.commit_dated("2024-01-02", "c2");
+    workspace.seed_two_benchmarks("c2", 100.0, 100.0);
+    workspace.commit_dated("2024-01-03", "c3");
+    workspace.seed_two_benchmarks("c3", 100.0, 100.0);
+    workspace.commit_dated("2024-01-04", "c4");
+    workspace.seed_two_benchmarks("c4", 100.0, 130.0);
+    workspace.commit_dated("2024-01-05", "c5");
+    workspace.seed_two_benchmarks("c5", 100.0, 130.0);
+    workspace.commit_dated("2024-01-06", "c6");
+    workspace.seed_two_benchmarks("c6", 100.0, 130.0);
 
     // Unfiltered, the `beta` climb flags as a regression.
     let RunOutcome::Analyzed { regressions, .. } = workspace.drive(&["analyze"]).await.unwrap()
@@ -245,11 +256,8 @@ async fn analyze_falling_cache_hits_is_a_regression() {
         ("2024-01-05", "c5", 700.0),
         ("2024-01-06", "c6", 700.0),
     ] {
-        workspace.seed_metrics(
-            date,
-            commit,
-            vec![Metric::new(MetricKind::L1CacheHits, hits)],
-        );
+        workspace.commit_dated(date, commit);
+        workspace.seed_metrics(commit, vec![Metric::new(MetricKind::L1CacheHits, hits)]);
     }
 
     let RunOutcome::Analyzed {
@@ -282,11 +290,8 @@ async fn analyze_rising_l1_cache_hits_is_an_improvement() {
         ("2024-01-05", "c5", 1000.0),
         ("2024-01-06", "c6", 1000.0),
     ] {
-        workspace.seed_metrics(
-            date,
-            commit,
-            vec![Metric::new(MetricKind::L1CacheHits, hits)],
-        );
+        workspace.commit_dated(date, commit);
+        workspace.seed_metrics(commit, vec![Metric::new(MetricKind::L1CacheHits, hits)]);
     }
 
     let RunOutcome::Analyzed {
@@ -323,7 +328,8 @@ async fn analyze_rising_ram_hits_is_a_regression() {
         ("2024-01-05", "c5", 1000.0),
         ("2024-01-06", "c6", 1000.0),
     ] {
-        workspace.seed_metrics(date, commit, vec![Metric::new(MetricKind::RamHits, hits)]);
+        workspace.commit_dated(date, commit);
+        workspace.seed_metrics(commit, vec![Metric::new(MetricKind::RamHits, hits)]);
     }
 
     let RunOutcome::Analyzed {
@@ -351,12 +357,18 @@ async fn analyze_rising_ram_hits_is_a_regression() {
 async fn analyze_ranks_findings_by_relative_move_across_benchmarks() {
     let workspace = Workspace::repo(&storage_only_config());
     // `alpha` doubles (+100%); `beta` ticks up ~2%.
-    workspace.seed_two_benchmarks("2024-01-01", "c1", 100.0, 100.0);
-    workspace.seed_two_benchmarks("2024-01-02", "c2", 100.0, 100.0);
-    workspace.seed_two_benchmarks("2024-01-03", "c3", 100.0, 100.0);
-    workspace.seed_two_benchmarks("2024-01-04", "c4", 200.0, 102.0);
-    workspace.seed_two_benchmarks("2024-01-05", "c5", 200.0, 102.0);
-    workspace.seed_two_benchmarks("2024-01-06", "c6", 200.0, 102.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_two_benchmarks("c1", 100.0, 100.0);
+    workspace.commit_dated("2024-01-02", "c2");
+    workspace.seed_two_benchmarks("c2", 100.0, 100.0);
+    workspace.commit_dated("2024-01-03", "c3");
+    workspace.seed_two_benchmarks("c3", 100.0, 100.0);
+    workspace.commit_dated("2024-01-04", "c4");
+    workspace.seed_two_benchmarks("c4", 200.0, 102.0);
+    workspace.commit_dated("2024-01-05", "c5");
+    workspace.seed_two_benchmarks("c5", 200.0, 102.0);
+    workspace.commit_dated("2024-01-06", "c6");
+    workspace.seed_two_benchmarks("c6", 200.0, 102.0);
 
     let RunOutcome::Analyzed {
         regressions,
@@ -401,12 +413,18 @@ async fn analyze_ranks_findings_by_relative_move_across_benchmarks() {
 #[cfg_attr(miri, ignore)]
 async fn analyze_reports_improvement_without_regression() {
     let workspace = Workspace::repo(&storage_only_config());
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
-    workspace.seed_callgrind("2024-01-02", "c2", 100.0);
-    workspace.seed_callgrind("2024-01-03", "c3", 100.0);
-    workspace.seed_callgrind("2024-01-04", "c4", 70.0);
-    workspace.seed_callgrind("2024-01-05", "c5", 70.0);
-    workspace.seed_callgrind("2024-01-06", "c6", 70.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
+    workspace.commit_dated("2024-01-02", "c2");
+    workspace.seed_callgrind("c2", 100.0);
+    workspace.commit_dated("2024-01-03", "c3");
+    workspace.seed_callgrind("c3", 100.0);
+    workspace.commit_dated("2024-01-04", "c4");
+    workspace.seed_callgrind("c4", 70.0);
+    workspace.commit_dated("2024-01-05", "c5");
+    workspace.seed_callgrind("c5", 70.0);
+    workspace.commit_dated("2024-01-06", "c6");
+    workspace.seed_callgrind("c6", 70.0);
 
     let RunOutcome::Analyzed {
         regressions,
@@ -447,7 +465,8 @@ async fn analyze_criterion_jitter_is_not_flagged() {
         ("2024-02-07", "d7", 18.0),
         ("2024-02-08", "d8", 20.0),
     ] {
-        workspace.seed_criterion(date, label, "mk", value);
+        workspace.commit_dated(date, label);
+        workspace.seed_criterion(label, "mk", value);
     }
 
     let RunOutcome::Analyzed {
@@ -500,7 +519,8 @@ async fn analyze_criterion_slow_drift_is_flagged_as_drift() {
         ("2024-02-07", "d7", 26.0),
         ("2024-02-08", "d8", 27.0),
     ] {
-        workspace.seed_criterion(date, label, "mk", value);
+        workspace.commit_dated(date, label);
+        workspace.seed_criterion(label, "mk", value);
     }
 
     let RunOutcome::Analyzed {
@@ -537,12 +557,18 @@ async fn analyze_criterion_slow_drift_is_flagged_as_drift() {
 #[cfg_attr(miri, ignore)]
 async fn analyze_callgrind_tiny_deterministic_step_is_flagged() {
     let workspace = Workspace::repo(&storage_only_config());
-    workspace.seed_callgrind("2024-01-01", "c1", 1000.0);
-    workspace.seed_callgrind("2024-01-02", "c2", 1000.0);
-    workspace.seed_callgrind("2024-01-03", "c3", 1000.0);
-    workspace.seed_callgrind("2024-01-04", "c4", 1001.0);
-    workspace.seed_callgrind("2024-01-05", "c5", 1001.0);
-    workspace.seed_callgrind("2024-01-06", "c6", 1001.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 1000.0);
+    workspace.commit_dated("2024-01-02", "c2");
+    workspace.seed_callgrind("c2", 1000.0);
+    workspace.commit_dated("2024-01-03", "c3");
+    workspace.seed_callgrind("c3", 1000.0);
+    workspace.commit_dated("2024-01-04", "c4");
+    workspace.seed_callgrind("c4", 1001.0);
+    workspace.commit_dated("2024-01-05", "c5");
+    workspace.seed_callgrind("c5", 1001.0);
+    workspace.commit_dated("2024-01-06", "c6");
+    workspace.seed_callgrind("c6", 1001.0);
 
     let RunOutcome::Analyzed {
         regressions,
@@ -574,12 +600,18 @@ async fn analyze_alloc_tracker_step_is_flagged_as_change_point() {
     let workspace = Workspace::repo(&storage_only_config());
     // A flat allocated-bytes baseline that steps up by one byte at the fourth
     // commit; the allocation count stays constant throughout.
-    workspace.seed_alloc_tracker("2024-03-01", "a1", "allocate_vec", 200.0, 2.0);
-    workspace.seed_alloc_tracker("2024-03-02", "a2", "allocate_vec", 200.0, 2.0);
-    workspace.seed_alloc_tracker("2024-03-03", "a3", "allocate_vec", 200.0, 2.0);
-    workspace.seed_alloc_tracker("2024-03-04", "a4", "allocate_vec", 201.0, 2.0);
-    workspace.seed_alloc_tracker("2024-03-05", "a5", "allocate_vec", 201.0, 2.0);
-    workspace.seed_alloc_tracker("2024-03-06", "a6", "allocate_vec", 201.0, 2.0);
+    workspace.commit_dated("2024-03-01", "a1");
+    workspace.seed_alloc_tracker("a1", "allocate_vec", 200.0, 2.0);
+    workspace.commit_dated("2024-03-02", "a2");
+    workspace.seed_alloc_tracker("a2", "allocate_vec", 200.0, 2.0);
+    workspace.commit_dated("2024-03-03", "a3");
+    workspace.seed_alloc_tracker("a3", "allocate_vec", 200.0, 2.0);
+    workspace.commit_dated("2024-03-04", "a4");
+    workspace.seed_alloc_tracker("a4", "allocate_vec", 201.0, 2.0);
+    workspace.commit_dated("2024-03-05", "a5");
+    workspace.seed_alloc_tracker("a5", "allocate_vec", 201.0, 2.0);
+    workspace.commit_dated("2024-03-06", "a6");
+    workspace.seed_alloc_tracker("a6", "allocate_vec", 201.0, 2.0);
 
     let RunOutcome::Analyzed {
         regressions,
@@ -613,12 +645,18 @@ async fn analyze_alloc_tracker_ignores_gaps_in_a_sparse_history() {
     let workspace = Workspace::repo(&storage_only_config());
     // `allocate_vec` is measured only at every other commit; the intervening
     // commits measure `free_box` instead, leaving `allocate_vec` unobserved there.
-    workspace.seed_alloc_tracker("2024-04-01", "g1", "allocate_vec", 200.0, 2.0);
-    workspace.seed_alloc_tracker("2024-04-02", "g2", "free_box", 8.0, 1.0);
-    workspace.seed_alloc_tracker("2024-04-03", "g3", "allocate_vec", 200.0, 2.0);
-    workspace.seed_alloc_tracker("2024-04-04", "g4", "free_box", 8.0, 1.0);
-    workspace.seed_alloc_tracker("2024-04-05", "g5", "allocate_vec", 260.0, 2.0);
-    workspace.seed_alloc_tracker("2024-04-06", "g6", "allocate_vec", 260.0, 2.0);
+    workspace.commit_dated("2024-04-01", "g1");
+    workspace.seed_alloc_tracker("g1", "allocate_vec", 200.0, 2.0);
+    workspace.commit_dated("2024-04-02", "g2");
+    workspace.seed_alloc_tracker("g2", "free_box", 8.0, 1.0);
+    workspace.commit_dated("2024-04-03", "g3");
+    workspace.seed_alloc_tracker("g3", "allocate_vec", 200.0, 2.0);
+    workspace.commit_dated("2024-04-04", "g4");
+    workspace.seed_alloc_tracker("g4", "free_box", 8.0, 1.0);
+    workspace.commit_dated("2024-04-05", "g5");
+    workspace.seed_alloc_tracker("g5", "allocate_vec", 260.0, 2.0);
+    workspace.commit_dated("2024-04-06", "g6");
+    workspace.seed_alloc_tracker("g6", "allocate_vec", 260.0, 2.0);
 
     let RunOutcome::Analyzed {
         regressions,
@@ -667,7 +705,8 @@ async fn analyze_all_the_time_slow_drift_is_flagged_as_drift() {
         ("2024-05-07", "t7", 26.0),
         ("2024-05-08", "t8", 27.0),
     ] {
-        workspace.seed_all_the_time(date, label, "mk", "read_cell", value);
+        workspace.commit_dated(date, label);
+        workspace.seed_all_the_time(label, "mk", "read_cell", value);
     }
 
     let RunOutcome::Analyzed {
@@ -714,7 +753,8 @@ async fn analyze_all_the_time_jitter_is_not_flagged() {
         ("2024-06-07", "j7", 18.0),
         ("2024-06-08", "j8", 20.0),
     ] {
-        workspace.seed_all_the_time(date, label, "mk", "read_cell", value);
+        workspace.commit_dated(date, label);
+        workspace.seed_all_the_time(label, "mk", "read_cell", value);
     }
 
     let RunOutcome::Analyzed {
@@ -770,7 +810,8 @@ async fn analyze_all_the_time_step_with_disjoint_intervals_is_a_regression() {
         ("2024-07-09", "s9", 129.0),
         ("2024-07-10", "s10", 131.0),
     ] {
-        workspace.seed_all_the_time_with_interval(date, label, "mk", "read_cell", value, 2.0);
+        workspace.commit_dated(date, label);
+        workspace.seed_all_the_time_with_interval(label, "mk", "read_cell", value, 2.0);
     }
 
     let RunOutcome::Analyzed {
@@ -824,7 +865,8 @@ async fn analyze_all_the_time_step_with_overlapping_intervals_is_suppressed() {
         ("2024-08-10", "o10", 131.0),
     ] {
         // A +/-60ns interval makes the ~100ns and ~130ns regimes overlap.
-        workspace.seed_all_the_time_with_interval(date, label, "mk", "read_cell", value, 60.0);
+        workspace.commit_dated(date, label);
+        workspace.seed_all_the_time_with_interval(label, "mk", "read_cell", value, 60.0);
     }
 
     let RunOutcome::Analyzed {
@@ -879,10 +921,14 @@ async fn analyze_without_a_repository_errors() {
 async fn analyze_official_view_excludes_dirty_runs() {
     // A clean working tree, so the base-branch dirty-tree exception does not apply.
     let workspace = Workspace::clean_repo(&storage_only_config());
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
-    workspace.seed_callgrind("2024-01-02", "c2", 100.0);
-    workspace.seed_callgrind("2024-01-03", "c3", 100.0);
-    workspace.seed_callgrind("2024-01-04", "c4", 100.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
+    workspace.commit_dated("2024-01-02", "c2");
+    workspace.seed_callgrind("c2", 100.0);
+    workspace.commit_dated("2024-01-03", "c3");
+    workspace.seed_callgrind("c3", 100.0);
+    workspace.commit_dated("2024-01-04", "c4");
+    workspace.seed_callgrind("c4", 100.0);
     // A dirty snapshot on the tip commit that would spike the series if admitted.
     workspace.seed_dirty_callgrind("2024-01-05", "c4", 200.0);
 
@@ -918,7 +964,9 @@ async fn analyze_hints_when_every_run_is_a_dirty_snapshot_on_the_base() {
     // and every dirty-on-base snapshot stays excluded (yielding the hint).
     let workspace = Workspace::clean_repo(&storage_only_config());
     // Two dirty snapshots on master commits and not a single clean run anywhere.
+    workspace.commit_dated("2024-01-01", "c1");
     workspace.seed_dirty_callgrind("2024-01-01", "c1", 100.0);
+    workspace.commit_dated("2024-01-02", "c2");
     workspace.seed_dirty_callgrind("2024-01-02", "c2", 130.0);
 
     let RunOutcome::Analyzed { report, .. } = workspace
@@ -954,9 +1002,12 @@ async fn analyze_hints_when_every_run_is_a_dirty_snapshot_on_the_base() {
 #[cfg_attr(miri, ignore)]
 async fn analyze_dirty_tree_on_the_base_admits_the_tip_with_a_warning() {
     let workspace = Workspace::clean_repo(&storage_only_config());
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
-    workspace.seed_callgrind("2024-01-02", "c2", 100.0);
-    workspace.seed_callgrind("2024-01-03", "c3", 100.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
+    workspace.commit_dated("2024-01-02", "c2");
+    workspace.seed_callgrind("c2", 100.0);
+    workspace.commit_dated("2024-01-03", "c3");
+    workspace.seed_callgrind("c3", 100.0);
     // Two dirty regression snapshots on the tip commit (c3) complete a sustained
     // step over the clean baseline.
     workspace.seed_dirty_callgrind("2024-01-04", "c3", 130.0);
@@ -1022,12 +1073,18 @@ async fn analyze_dirty_tree_without_recorded_dirty_runs_stays_history_mode() {
     let workspace = Workspace::clean_repo(&storage_only_config());
     // A clean base branch with a sustained upward step (a regression). No dirty
     // snapshots are recorded anywhere.
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
-    workspace.seed_callgrind("2024-01-02", "c2", 100.0);
-    workspace.seed_callgrind("2024-01-03", "c3", 100.0);
-    workspace.seed_callgrind("2024-01-04", "c4", 130.0);
-    workspace.seed_callgrind("2024-01-05", "c5", 130.0);
-    workspace.seed_callgrind("2024-01-06", "c6", 130.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
+    workspace.commit_dated("2024-01-02", "c2");
+    workspace.seed_callgrind("c2", 100.0);
+    workspace.commit_dated("2024-01-03", "c3");
+    workspace.seed_callgrind("c3", 100.0);
+    workspace.commit_dated("2024-01-04", "c4");
+    workspace.seed_callgrind("c4", 130.0);
+    workspace.commit_dated("2024-01-05", "c5");
+    workspace.seed_callgrind("c5", 130.0);
+    workspace.commit_dated("2024-01-06", "c6");
+    workspace.seed_callgrind("c6", 130.0);
     // Dirty the working tree, even though no dirty run was ever stored.
     workspace.make_dirty("uncommitted.txt");
 
@@ -1069,13 +1126,17 @@ async fn analyze_dirty_tree_without_recorded_dirty_runs_stays_history_mode() {
 async fn analyze_feature_branch_admits_dirty_snapshots() {
     let workspace = Workspace::repo(&storage_only_config());
     // A flat clean baseline on master.
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
-    workspace.seed_callgrind("2024-01-02", "c2", 100.0);
-    workspace.seed_callgrind("2024-01-03", "c3", 100.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
+    workspace.commit_dated("2024-01-02", "c2");
+    workspace.seed_callgrind("c2", 100.0);
+    workspace.commit_dated("2024-01-03", "c3");
+    workspace.seed_callgrind("c3", 100.0);
     // Branch off master and add a clean point plus two dirty regression snapshots
     // on it (two raised points satisfy the change-point persistence requirement).
     workspace.checkout_new_branch("feature");
-    workspace.seed_callgrind("2024-01-04", "f1", 100.0);
+    workspace.commit_dated("2024-01-04", "f1");
+    workspace.seed_callgrind("f1", 100.0);
     workspace.seed_dirty_callgrind("2024-01-05", "f1", 200.0);
     workspace.seed_dirty_callgrind("2024-01-06", "f1", 200.0);
 
@@ -1112,12 +1173,18 @@ async fn analyze_orders_by_topology_not_commit_time() {
     // Topology c1 -> .. -> c6 with a sustained step at c4, but commit times
     // strictly descend, so a commit-time ordering would reverse the step into
     // a non-regression (a drop). A flagged regression proves topology order won.
-    workspace.seed_callgrind("2024-04-06", "c1", 100.0);
-    workspace.seed_callgrind("2024-04-05", "c2", 100.0);
-    workspace.seed_callgrind("2024-04-04", "c3", 100.0);
-    workspace.seed_callgrind("2024-04-03", "c4", 130.0);
-    workspace.seed_callgrind("2024-04-02", "c5", 130.0);
-    workspace.seed_callgrind("2024-04-01", "c6", 130.0);
+    workspace.commit_dated("2024-04-06", "c1");
+    workspace.seed_callgrind("c1", 100.0);
+    workspace.commit_dated("2024-04-05", "c2");
+    workspace.seed_callgrind("c2", 100.0);
+    workspace.commit_dated("2024-04-04", "c3");
+    workspace.seed_callgrind("c3", 100.0);
+    workspace.commit_dated("2024-04-03", "c4");
+    workspace.seed_callgrind("c4", 130.0);
+    workspace.commit_dated("2024-04-02", "c5");
+    workspace.seed_callgrind("c5", 130.0);
+    workspace.commit_dated("2024-04-01", "c6");
+    workspace.seed_callgrind("c6", 130.0);
 
     let RunOutcome::Analyzed {
         regressions,
@@ -1148,18 +1215,27 @@ async fn analyze_orders_by_topology_not_commit_time() {
 async fn analyze_branch_mode_reports_the_latest_regime_with_a_flip() {
     let workspace = Workspace::repo(&storage_only_config());
     // A flat clean baseline on master.
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
-    workspace.seed_callgrind("2024-01-02", "c2", 100.0);
-    workspace.seed_callgrind("2024-01-03", "c3", 100.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
+    workspace.commit_dated("2024-01-02", "c2");
+    workspace.seed_callgrind("c2", 100.0);
+    workspace.commit_dated("2024-01-03", "c3");
+    workspace.seed_callgrind("c3", 100.0);
     // The feature branch first improves (80) then regresses hard (130): the latest
     // state is what matters, so this must be reported as a regression vs the base.
     workspace.checkout_new_branch("feature");
-    workspace.seed_callgrind("2024-01-04", "f1", 80.0);
-    workspace.seed_callgrind("2024-01-05", "f2", 80.0);
-    workspace.seed_callgrind("2024-01-06", "f3", 80.0);
-    workspace.seed_callgrind("2024-01-07", "f4", 130.0);
-    workspace.seed_callgrind("2024-01-08", "f5", 130.0);
-    workspace.seed_callgrind("2024-01-09", "f6", 130.0);
+    workspace.commit_dated("2024-01-04", "f1");
+    workspace.seed_callgrind("f1", 80.0);
+    workspace.commit_dated("2024-01-05", "f2");
+    workspace.seed_callgrind("f2", 80.0);
+    workspace.commit_dated("2024-01-06", "f3");
+    workspace.seed_callgrind("f3", 80.0);
+    workspace.commit_dated("2024-01-07", "f4");
+    workspace.seed_callgrind("f4", 130.0);
+    workspace.commit_dated("2024-01-08", "f5");
+    workspace.seed_callgrind("f5", 130.0);
+    workspace.commit_dated("2024-01-09", "f6");
+    workspace.seed_callgrind("f6", 130.0);
 
     let RunOutcome::Analyzed {
         regressions,
@@ -1200,13 +1276,19 @@ async fn analyze_branch_mode_reports_the_latest_regime_with_a_flip() {
 #[cfg_attr(miri, ignore)]
 async fn analyze_branch_mode_stays_silent_on_a_flat_branch() {
     let workspace = Workspace::repo(&storage_only_config());
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
-    workspace.seed_callgrind("2024-01-02", "c2", 100.0);
-    workspace.seed_callgrind("2024-01-03", "c3", 100.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
+    workspace.commit_dated("2024-01-02", "c2");
+    workspace.seed_callgrind("c2", 100.0);
+    workspace.commit_dated("2024-01-03", "c3");
+    workspace.seed_callgrind("c3", 100.0);
     workspace.checkout_new_branch("feature");
-    workspace.seed_callgrind("2024-01-04", "f1", 100.0);
-    workspace.seed_callgrind("2024-01-05", "f2", 100.0);
-    workspace.seed_callgrind("2024-01-06", "f3", 100.0);
+    workspace.commit_dated("2024-01-04", "f1");
+    workspace.seed_callgrind("f1", 100.0);
+    workspace.commit_dated("2024-01-05", "f2");
+    workspace.seed_callgrind("f2", 100.0);
+    workspace.commit_dated("2024-01-06", "f3");
+    workspace.seed_callgrind("f3", 100.0);
 
     let RunOutcome::Analyzed {
         regressions,
@@ -1237,12 +1319,18 @@ async fn analyze_branch_mode_stays_silent_on_a_flat_branch() {
 async fn analyze_history_mode_suppresses_improvements_by_default() {
     let workspace = Workspace::repo(&storage_only_config());
     // A clean base branch with a sustained downward step (an improvement).
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
-    workspace.seed_callgrind("2024-01-02", "c2", 100.0);
-    workspace.seed_callgrind("2024-01-03", "c3", 100.0);
-    workspace.seed_callgrind("2024-01-04", "c4", 70.0);
-    workspace.seed_callgrind("2024-01-05", "c5", 70.0);
-    workspace.seed_callgrind("2024-01-06", "c6", 70.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
+    workspace.commit_dated("2024-01-02", "c2");
+    workspace.seed_callgrind("c2", 100.0);
+    workspace.commit_dated("2024-01-03", "c3");
+    workspace.seed_callgrind("c3", 100.0);
+    workspace.commit_dated("2024-01-04", "c4");
+    workspace.seed_callgrind("c4", 70.0);
+    workspace.commit_dated("2024-01-05", "c5");
+    workspace.seed_callgrind("c5", 70.0);
+    workspace.commit_dated("2024-01-06", "c6");
+    workspace.seed_callgrind("c6", 70.0);
 
     // By default history mode stays silent about the improvement.
     let RunOutcome::Analyzed { report, .. } = workspace
@@ -1285,11 +1373,16 @@ async fn analyze_history_mode_suppresses_improvements_by_default() {
 #[cfg_attr(miri, ignore)]
 async fn analyze_tip_mode_flags_only_a_tip_regression() {
     let regressing = Workspace::repo(&storage_only_config());
-    regressing.seed_callgrind("2024-01-01", "c1", 100.0);
-    regressing.seed_callgrind("2024-01-02", "c2", 100.0);
-    regressing.seed_callgrind("2024-01-03", "c3", 100.0);
-    regressing.seed_callgrind("2024-01-04", "c4", 100.0);
-    regressing.seed_callgrind("2024-01-05", "c5", 130.0);
+    regressing.commit_dated("2024-01-01", "c1");
+    regressing.seed_callgrind("c1", 100.0);
+    regressing.commit_dated("2024-01-02", "c2");
+    regressing.seed_callgrind("c2", 100.0);
+    regressing.commit_dated("2024-01-03", "c3");
+    regressing.seed_callgrind("c3", 100.0);
+    regressing.commit_dated("2024-01-04", "c4");
+    regressing.seed_callgrind("c4", 100.0);
+    regressing.commit_dated("2024-01-05", "c5");
+    regressing.seed_callgrind("c5", 130.0);
 
     let RunOutcome::Analyzed {
         regressions,
@@ -1307,11 +1400,16 @@ async fn analyze_tip_mode_flags_only_a_tip_regression() {
     assert_eq!(parsed["mode"], "tip", "the override must win: {report}");
 
     let improving = Workspace::repo(&storage_only_config());
-    improving.seed_callgrind("2024-01-01", "c1", 100.0);
-    improving.seed_callgrind("2024-01-02", "c2", 100.0);
-    improving.seed_callgrind("2024-01-03", "c3", 100.0);
-    improving.seed_callgrind("2024-01-04", "c4", 100.0);
-    improving.seed_callgrind("2024-01-05", "c5", 70.0);
+    improving.commit_dated("2024-01-01", "c1");
+    improving.seed_callgrind("c1", 100.0);
+    improving.commit_dated("2024-01-02", "c2");
+    improving.seed_callgrind("c2", 100.0);
+    improving.commit_dated("2024-01-03", "c3");
+    improving.seed_callgrind("c3", 100.0);
+    improving.commit_dated("2024-01-04", "c4");
+    improving.seed_callgrind("c4", 100.0);
+    improving.commit_dated("2024-01-05", "c5");
+    improving.seed_callgrind("c5", 70.0);
 
     let RunOutcome::Analyzed {
         regressions,
@@ -1364,8 +1462,9 @@ async fn analyze_target_triple_facet_isolates_linux_from_windows() {
         ("2024-01-05", "c5", 130.0, 50.0),
         ("2024-01-06", "c6", 130.0, 50.0),
     ] {
-        workspace.seed_callgrind_in("x86_64-unknown-linux-gnu", "synthetic", date, label, linux);
-        workspace.seed_callgrind_in("x86_64-pc-windows-msvc", "synthetic", date, label, windows);
+        workspace.commit_dated(date, label);
+        workspace.seed_callgrind_in("x86_64-unknown-linux-gnu", "synthetic", label, linux);
+        workspace.seed_callgrind_in("x86_64-pc-windows-msvc", "synthetic", label, windows);
     }
 
     // The Linux triple sees the regression.
@@ -1400,14 +1499,21 @@ async fn analyze_target_triple_facet_isolates_linux_from_windows() {
 async fn analyze_branch_selects_official_line_from_a_feature_checkout() {
     let workspace = Workspace::repo(&storage_only_config());
     // Master carries a clean sustained regression.
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
-    workspace.seed_callgrind("2024-01-02", "c2", 100.0);
-    workspace.seed_callgrind("2024-01-03", "c3", 100.0);
-    workspace.seed_callgrind("2024-01-04", "c4", 130.0);
-    workspace.seed_callgrind("2024-01-05", "c5", 130.0);
-    workspace.seed_callgrind("2024-01-06", "c6", 130.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
+    workspace.commit_dated("2024-01-02", "c2");
+    workspace.seed_callgrind("c2", 100.0);
+    workspace.commit_dated("2024-01-03", "c3");
+    workspace.seed_callgrind("c3", 100.0);
+    workspace.commit_dated("2024-01-04", "c4");
+    workspace.seed_callgrind("c4", 130.0);
+    workspace.commit_dated("2024-01-05", "c5");
+    workspace.seed_callgrind("c5", 130.0);
+    workspace.commit_dated("2024-01-06", "c6");
+    workspace.seed_callgrind("c6", 130.0);
     // A feature branch with an unrelated dirty improvement that master must ignore.
     workspace.checkout_new_branch("feature");
+    workspace.commit_dated("2024-01-07", "f1");
     workspace.seed_dirty_callgrind("2024-01-07", "f1", 10.0);
 
     let RunOutcome::Analyzed {
@@ -1453,16 +1559,16 @@ async fn analyze_official_line_follows_first_parent_across_a_merge() {
     workspace.commit("c6");
 
     // The first-parent line carries a clean sustained regression on its tail.
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
-    workspace.seed_callgrind("2024-01-02", "M", 100.0);
-    workspace.seed_callgrind("2024-01-03", "c3", 100.0);
-    workspace.seed_callgrind("2024-01-04", "c4", 130.0);
-    workspace.seed_callgrind("2024-01-05", "c5", 130.0);
-    workspace.seed_callgrind("2024-01-06", "c6", 130.0);
+    workspace.seed_callgrind("c1", 100.0);
+    workspace.seed_callgrind("M", 100.0);
+    workspace.seed_callgrind("c3", 100.0);
+    workspace.seed_callgrind("c4", 130.0);
+    workspace.seed_callgrind("c5", 130.0);
+    workspace.seed_callgrind("c6", 130.0);
     // Side-branch points sit on the second-parent side and must never leak into the
     // official line; they carry wild values that would distort the series if read.
-    workspace.seed_callgrind("2024-01-02", "sf1", 999.0);
-    workspace.seed_callgrind("2024-01-02", "sf2", 999.0);
+    workspace.seed_callgrind("sf1", 999.0);
+    workspace.seed_callgrind("sf2", 999.0);
 
     let RunOutcome::Analyzed {
         regressions,
@@ -1514,16 +1620,16 @@ async fn analyze_feature_that_merged_master_admits_dirty_off_chain_merge_base() 
     workspace.commit("f2");
 
     // Clean points along the feature's first-parent line.
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
-    workspace.seed_callgrind("2024-01-02", "f1", 100.0);
-    workspace.seed_callgrind("2024-01-05", "f2", 100.0);
+    workspace.seed_callgrind("c1", 100.0);
+    workspace.seed_callgrind("f1", 100.0);
+    workspace.seed_callgrind("f2", 100.0);
     // A dirty snapshot on c1. Without the merge, c1 would be base-side (clean
     // only) and this would be excluded; the off-chain merge-base makes the whole
     // line target-side, so it is admitted.
     workspace.seed_dirty_callgrind("2024-01-03", "c1", 200.0);
     // Merged-in master commits c2/c3 are off the first-parent line and excluded.
-    workspace.seed_callgrind("2024-01-03", "c2", 999.0);
-    workspace.seed_callgrind("2024-01-04", "c3", 999.0);
+    workspace.seed_callgrind("c2", 999.0);
+    workspace.seed_callgrind("c3", 999.0);
 
     let RunOutcome::Analyzed { report, .. } = workspace
         .drive(&["analyze", "--format", "json"])
@@ -1554,10 +1660,14 @@ async fn analyze_criterion_machine_keys_stay_isolated() {
     let workspace = Workspace::repo(&storage_only_config());
     // Same commits, same Windows/x86_64 triple, two distinct machine keys.
     workspace.seed_rising_criterion_history("mk-rising");
-    workspace.seed_criterion("2024-02-01", "d1", "mk-flat", 20.0);
-    workspace.seed_criterion("2024-02-02", "d2", "mk-flat", 20.0);
-    workspace.seed_criterion("2024-02-03", "d3", "mk-flat", 20.0);
-    workspace.seed_criterion("2024-02-04", "d4", "mk-flat", 20.0);
+    workspace.commit_dated("2024-02-01", "d1");
+    workspace.seed_criterion("d1", "mk-flat", 20.0);
+    workspace.commit_dated("2024-02-02", "d2");
+    workspace.seed_criterion("d2", "mk-flat", 20.0);
+    workspace.commit_dated("2024-02-03", "d3");
+    workspace.seed_criterion("d3", "mk-flat", 20.0);
+    workspace.commit_dated("2024-02-04", "d4");
+    workspace.seed_criterion("d4", "mk-flat", 20.0);
 
     let RunOutcome::Analyzed {
         regressions,
@@ -1607,8 +1717,9 @@ async fn analyze_target_triple_facet_selects_one_set() {
         ("2024-01-05", "c5", 130.0, 50.0),
         ("2024-01-06", "c6", 130.0, 50.0),
     ] {
-        workspace.seed_callgrind_in("x86_64-unknown-linux-gnu", "synthetic", date, label, x64);
-        workspace.seed_callgrind_in("aarch64-unknown-linux-gnu", "synthetic", date, label, arm);
+        workspace.commit_dated(date, label);
+        workspace.seed_callgrind_in("x86_64-unknown-linux-gnu", "synthetic", label, x64);
+        workspace.seed_callgrind_in("aarch64-unknown-linux-gnu", "synthetic", label, arm);
     }
 
     let RunOutcome::Analyzed { regressions, .. } = workspace
@@ -1639,10 +1750,14 @@ async fn analyze_target_triple_facet_selects_one_set() {
 async fn analyze_machine_key_facet_selects_one_set() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_rising_criterion_history("mk-rising");
-    workspace.seed_criterion("2024-02-01", "d1", "mk-flat", 20.0);
-    workspace.seed_criterion("2024-02-02", "d2", "mk-flat", 20.0);
-    workspace.seed_criterion("2024-02-03", "d3", "mk-flat", 20.0);
-    workspace.seed_criterion("2024-02-04", "d4", "mk-flat", 20.0);
+    workspace.commit_dated("2024-02-01", "d1");
+    workspace.seed_criterion("d1", "mk-flat", 20.0);
+    workspace.commit_dated("2024-02-02", "d2");
+    workspace.seed_criterion("d2", "mk-flat", 20.0);
+    workspace.commit_dated("2024-02-03", "d3");
+    workspace.seed_criterion("d3", "mk-flat", 20.0);
+    workspace.commit_dated("2024-02-04", "d4");
+    workspace.seed_criterion("d4", "mk-flat", 20.0);
 
     let RunOutcome::Analyzed { regressions, .. } = workspace
         .drive(&[
@@ -1690,13 +1805,17 @@ async fn analyze_machine_key_facet_selects_one_set() {
 async fn analyze_criterion_feature_branch_admits_dirty_snapshots() {
     let workspace = Workspace::repo(&storage_only_config());
     // A flat clean Criterion baseline on master.
-    workspace.seed_criterion("2024-02-01", "c1", "mk", 20.0);
-    workspace.seed_criterion("2024-02-02", "c2", "mk", 20.0);
-    workspace.seed_criterion("2024-02-03", "c3", "mk", 20.0);
+    workspace.commit_dated("2024-02-01", "c1");
+    workspace.seed_criterion("c1", "mk", 20.0);
+    workspace.commit_dated("2024-02-02", "c2");
+    workspace.seed_criterion("c2", "mk", 20.0);
+    workspace.commit_dated("2024-02-03", "c3");
+    workspace.seed_criterion("c3", "mk", 20.0);
     // Branch off master, add a clean point, then several dirty snapshots that step
     // up — enough points on each side for the rank-sum gate to clear the noise.
     workspace.checkout_new_branch("feature");
-    workspace.seed_criterion("2024-02-04", "f1", "mk", 20.0);
+    workspace.commit_dated("2024-02-04", "f1");
+    workspace.seed_criterion("f1", "mk", 20.0);
     workspace.seed_dirty_criterion("2024-02-05", "f1", "mk", 40.0);
     workspace.seed_dirty_criterion("2024-02-06", "f1", "mk", 40.0);
     workspace.seed_dirty_criterion("2024-02-07", "f1", "mk", 40.0);

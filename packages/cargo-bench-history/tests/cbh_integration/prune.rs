@@ -8,9 +8,11 @@ use crate::harness::*;
 #[cfg_attr(miri, ignore)]
 async fn prune_dirty_removes_dirty_runs_on_a_feature_branch() {
     let workspace = Workspace::repo(&storage_only_config());
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
     workspace.checkout_new_branch("feature");
-    workspace.seed_callgrind("2024-01-02", "f1", 100.0);
+    workspace.commit_dated("2024-01-02", "f1");
+    workspace.seed_callgrind("f1", 100.0);
     workspace.seed_dirty_callgrind("2024-01-03", "f1", 200.0);
 
     // Before: the target-side dirty snapshot is part of the data set.
@@ -60,7 +62,8 @@ async fn prune_dirty_removes_dirty_runs_on_a_feature_branch() {
 #[cfg_attr(miri, ignore)]
 async fn prune_dirty_removes_the_base_branch_tip_dirty_with_a_clean_tree() {
     let workspace = Workspace::clean_repo(&storage_only_config());
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
     workspace.seed_dirty_callgrind("2024-01-02", "c1", 200.0);
 
     // With a clean working tree, `list` excludes the base-tip dirty snapshot.
@@ -116,8 +119,10 @@ async fn prune_dirty_removes_the_base_branch_tip_dirty_with_a_clean_tree() {
 #[cfg_attr(miri, ignore)]
 async fn prune_dry_run_reports_without_deleting() {
     let workspace = Workspace::repo(&storage_only_config());
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
     workspace.checkout_new_branch("feature");
+    workspace.commit_dated("2024-01-02", "f1");
     workspace.seed_dirty_callgrind("2024-01-02", "f1", 200.0);
 
     let RunOutcome::Completed { message } = workspace
@@ -150,8 +155,10 @@ async fn prune_dry_run_reports_without_deleting() {
 #[cfg_attr(miri, ignore)]
 async fn prune_dirty_scopes_by_engine() {
     let workspace = Workspace::repo(&storage_only_config());
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
     workspace.checkout_new_branch("feature");
+    workspace.commit_dated("2024-01-02", "f1");
     workspace.seed_dirty_callgrind("2024-01-02", "f1", 200.0);
     workspace.seed_dirty_criterion("2024-01-02", "f1", "m1", 20.0);
 
@@ -213,8 +220,10 @@ async fn prune_dirty_scopes_by_engine() {
 #[cfg_attr(miri, ignore)]
 async fn prune_dirty_scopes_by_target_triple_facet() {
     let workspace = Workspace::repo(&storage_only_config());
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
     workspace.checkout_new_branch("feature");
+    workspace.commit_dated("2024-01-02", "f1");
     workspace.seed_dirty_callgrind("2024-01-02", "f1", 200.0);
     workspace.seed_dirty_criterion("2024-01-02", "f1", "m1", 20.0);
 
@@ -279,8 +288,10 @@ async fn prune_dirty_scopes_by_target_triple_facet() {
 #[cfg_attr(miri, ignore)]
 async fn prune_dirty_removes_runs_across_multiple_discriminant_sets() {
     let workspace = Workspace::repo(&storage_only_config());
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
     workspace.checkout_new_branch("feature");
+    workspace.commit_dated("2024-01-02", "f1");
     workspace.seed_dirty_callgrind("2024-01-02", "f1", 200.0);
     workspace.seed_dirty_criterion("2024-01-02", "f1", "m1", 20.0);
 
@@ -337,9 +348,12 @@ async fn prune_dirty_removes_runs_across_multiple_discriminant_sets() {
 #[cfg_attr(miri, ignore)]
 async fn prune_dirty_since_only_removes_runs_on_or_after_the_cutoff() {
     let workspace = Workspace::repo(&storage_only_config());
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
     workspace.checkout_new_branch("feature");
+    workspace.commit_dated("2024-01-02", "f1");
     workspace.seed_dirty_callgrind("2024-01-02", "f1", 100.0);
+    workspace.commit_dated("2024-01-05", "f2");
     workspace.seed_dirty_callgrind("2024-01-05", "f2", 200.0);
 
     // Only the 2024-01-05 run is on or after the cutoff.
@@ -402,9 +416,12 @@ async fn prune_dirty_since_only_removes_runs_on_or_after_the_cutoff() {
 #[cfg_attr(miri, ignore)]
 async fn prune_dirty_until_only_removes_runs_on_or_before_the_cutoff() {
     let workspace = Workspace::repo(&storage_only_config());
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
     workspace.checkout_new_branch("feature");
+    workspace.commit_dated("2024-01-02", "f1");
     workspace.seed_dirty_callgrind("2024-01-02", "f1", 100.0);
+    workspace.commit_dated("2024-01-05", "f2");
     workspace.seed_dirty_callgrind("2024-01-05", "f2", 200.0);
 
     // Only the 2024-01-02 run is on or before the cutoff.
@@ -447,9 +464,11 @@ async fn prune_dirty_until_only_removes_runs_on_or_before_the_cutoff() {
 #[cfg_attr(miri, ignore)]
 async fn prune_all_removes_clean_and_dirty_for_a_commit() {
     let workspace = Workspace::repo(&storage_only_config());
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
     workspace.checkout_new_branch("feature");
-    workspace.seed_callgrind("2024-01-02", "f1", 100.0);
+    workspace.commit_dated("2024-01-02", "f1");
+    workspace.seed_callgrind("f1", 100.0);
     workspace.seed_dirty_callgrind("2024-01-03", "f1", 200.0);
     let f1 = workspace.commit("f1");
 
@@ -498,9 +517,11 @@ fn prune_requires_a_scope() {
 #[cfg_attr(miri, ignore)]
 async fn prune_all_removes_only_the_feature_side() {
     let workspace = Workspace::repo(&storage_only_config());
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
     workspace.checkout_new_branch("feature");
-    workspace.seed_callgrind("2024-01-02", "f1", 100.0);
+    workspace.commit_dated("2024-01-02", "f1");
+    workspace.seed_callgrind("f1", 100.0);
 
     let RunOutcome::Completed { message } = workspace
         .drive(&["prune", "--all", "--context", "feature", "--format", "json"])
@@ -536,9 +557,11 @@ async fn prune_all_removes_only_the_feature_side() {
 #[cfg_attr(miri, ignore)]
 async fn prune_clean_scope_removes_clean_and_keeps_dirty() {
     let workspace = Workspace::repo(&storage_only_config());
-    workspace.seed_callgrind("2024-01-01", "c1", 100.0);
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
     workspace.checkout_new_branch("feature");
-    workspace.seed_callgrind("2024-01-02", "f1", 100.0);
+    workspace.commit_dated("2024-01-02", "f1");
+    workspace.seed_callgrind("f1", 100.0);
     workspace.seed_dirty_callgrind("2024-01-03", "f1", 200.0);
     let f1 = workspace.commit("f1");
 

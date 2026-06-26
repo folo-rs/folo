@@ -28,9 +28,6 @@ async fn run_callgrind_end_to_end_stores_results() {
 
     assert_eq!(set.schema_version, SCHEMA_VERSION);
     assert_eq!(set.context.tool_version, TOOL_VERSION);
-    // Outside a git repository there is no committer date, so the commit time
-    // falls back to the observation time.
-    assert_eq!(set.context.commit, set.context.observation);
 
     assert_eq!(set.results.len(), 1);
     let record = &set.results[0];

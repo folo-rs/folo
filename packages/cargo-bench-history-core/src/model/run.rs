@@ -6,9 +6,11 @@ use crate::model::{BenchmarkId, Metric, RunContext};
 
 /// Schema version of the stored [`Run`] JSON.
 ///
-/// Bumped whenever the on-disk representation changes in a backward-incompatible
-/// way so that `analyze` can refuse or migrate older data.
-pub const SCHEMA_VERSION: u32 = 1;
+/// Records which on-disk format a file was written with. Reads are not gated on
+/// it: version 2 dropped the redundant per-object `commit` timestamp (a run's
+/// timeline position is resolved from git topology, keyed by its commit SHA), and
+/// older records still deserialize because the removed field is simply ignored.
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// A complete benchmark run: the unit of storage (one immutable file per run).
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -79,7 +81,6 @@ mod tests {
     fn sample_context() -> RunContext {
         let epoch = "2024-01-01T00:00:00Z".parse().unwrap();
         RunContext::new(
-            epoch,
             epoch,
             GitInfo::default(),
             EnvironmentInfo::default(),
