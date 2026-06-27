@@ -80,7 +80,7 @@ pub(crate) async fn measure(
     repeat: usize,
     logger: Logger,
 ) -> Result<MeasureResult, Error> {
-    let options = build_options(workspace, repo, mode);
+    let options = build_options(workspace, repo, mode, logger.verbose());
     logger.step(&format!("analyzing in {} mode", mode.keyword()));
     logger.detail(&format!(
         "context={}, base={}, facets forced to all (seeded triples and the synthetic machine key \
@@ -190,7 +190,13 @@ fn cpu_efficiency(processor_time: Duration, wall: Duration, cores: usize) -> f64
 }
 
 /// Builds the analyze options for `mode`.
-fn build_options(workspace: &Path, repo: &Path, mode: ModeArg) -> AnalyzeOptions {
+///
+/// `timing` requests the analyze pipeline's per-stage wall-clock breakdown
+/// (under the harness's `--verbose`). The per-object note stream stays off
+/// (`verbose: false`) because the stress dataset holds tens of thousands of
+/// objects: one note per object would both bury the timings and distort the very
+/// wall clock being measured.
+fn build_options(workspace: &Path, repo: &Path, mode: ModeArg, timing: bool) -> AnalyzeOptions {
     let (context, base, since) = match mode {
         ModeArg::History => (
             BRANCH_MAIN,
@@ -217,6 +223,7 @@ fn build_options(workspace: &Path, repo: &Path, mode: ModeArg) -> AnalyzeOptions
         include_improvements: true,
         include_inactive: false,
         verbose: false,
+        timing,
     }
 }
 

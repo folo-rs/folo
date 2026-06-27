@@ -27,11 +27,13 @@
 //! *hits* invert that — more hits means fewer, costlier misses (see
 //! [`MetricKind::higher_is_better`]).
 
-use std::num::NonZero;
-use std::{panic, thread};
+use std::ops::Range;
+use std::sync::Arc;
 
+use anyspawn::Spawner;
 use serde::Serialize;
 
+use crate::analyze::parallel::{balanced_chunk_sizes, worker_count};
 use crate::analyze::stats;
 use crate::analyze::{Series, SeriesPoint};
 use crate::model::DiscriminantSet;
@@ -136,7 +138,7 @@ impl AnalysisMode {
 /// Carries which analysis to perform, the tuned parameters, where the branch forks
 /// from its base (branch mode only), and whether improvements are reported
 /// alongside regressions.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct AnalysisContext {
     /// The analysis to perform.
     pub mode: AnalysisMode,
@@ -1005,14 +1007,42 @@ fn evaluate_resolved_spike(
 /// then method, then a deterministic identity tie-break.
 #[must_use]
 pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Vec<Finding> {
-    let config = &context.config;
+    let candidates = detect_all(series, context);
+    finalize_findings(candidates, series, context)
+}
 
-    // Each series is detected independently — there is no cross-series state in the
-    // detection step — so the per-series work is evaluated across a thread pool. The
-    // collect preserves the input order, so `candidates` is in the same series order a
-    // sequential pass would produce, keeping the false-discovery alignment below and
-    // the deterministic final ordering identical.
-    let candidates: Vec<Candidate> = detect_all(series, context);
+/// The spawner-distributed equivalent of [`find_changes`].
+///
+/// Detection is per-series independent, so the series are split into one balanced
+/// contiguous chunk per worker and each chunk runs on its own blocking task via
+/// `spawner`; the chunks are then recombined in series order, yielding output
+/// identical to [`find_changes`] but spread across cores. The false-discovery
+/// filtering and final ranking that follow are cheap and stay on the calling thread.
+///
+/// The series are taken as an `Arc<[Series]>` so each blocking task can share them
+/// without copying. Production passes a Tokio-backed spawner; tests and Miri pass an
+/// inline spawner that runs each task on the calling thread.
+pub async fn find_changes_spawned(
+    series: Arc<[Series]>,
+    context: AnalysisContext,
+    spawner: &Spawner,
+) -> Vec<Finding> {
+    let candidates = detect_all_spawned(&series, context, spawner).await;
+    finalize_findings(candidates, &series, &context)
+}
+
+/// Applies the false-discovery filter, materialises the surviving findings' charting
+/// points, and ranks them — the cross-series tail shared by [`find_changes`] and
+/// [`find_changes_spawned`].
+///
+/// `candidates` must be in series order (the order both detection paths produce) so
+/// the Benjamini–Hochberg mask built over the noisy candidates stays aligned.
+fn finalize_findings(
+    candidates: Vec<Candidate>,
+    series: &[Series],
+    context: &AnalysisContext,
+) -> Vec<Finding> {
+    let config = &context.config;
 
     // Control the false-discovery rate across the noisy candidates only; the
     // deterministic ones are exact and need no correction.
@@ -1068,79 +1098,62 @@ pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Vec<Finding
     findings
 }
 
-/// Detects every series, returning the raised candidates in series order.
-///
-/// Each series is independent — there is no cross-series state in the detection step
-/// — so the work is split into one balanced, contiguous chunk per worker thread,
-/// each evaluated on a scoped thread, then the chunk results are concatenated in
-/// order. This preserves the exact series order a sequential pass would produce,
-/// which both the false-discovery alignment and the deterministic final ranking in
-/// [`find_changes`] rely on.
-///
-/// A single available CPU (Miri reports one by default) or a single series needs no
-/// parallelism, so it takes a plain serial pass — which is also the path Miri
-/// exercises, keeping the detection logic under Miri's checks.
-#[cfg_attr(test, mutants::skip)] // The worker count and chunking never change the output.
+/// Detects every series sequentially, returning the raised candidates in series
+/// order — the order [`finalize_findings`] relies on.
 fn detect_all(series: &[Series], context: &AnalysisContext) -> Vec<Candidate> {
-    let workers = thread::available_parallelism()
-        .map_or(1, NonZero::get)
-        .min(series.len());
-    if workers <= 1 {
-        return series
-            .iter()
-            .enumerate()
-            .filter_map(|(index, one)| detect_one(index, one, context))
-            .collect();
+    detect_range(series, 0..series.len(), context)
+}
+
+/// The spawner-distributed counterpart of [`detect_all`]: splits the series into one
+/// balanced contiguous chunk per worker, runs each chunk on its own blocking task via
+/// `spawner`, and recombines the candidates in series order.
+///
+/// A single available CPU or a single series takes the serial path (also the path
+/// Miri exercises), so no blocking task is dispatched when there is nothing to gain.
+async fn detect_all_spawned(
+    series: &Arc<[Series]>,
+    context: AnalysisContext,
+    spawner: &Spawner,
+) -> Vec<Candidate> {
+    let len = series.len();
+    let Some(workers) = worker_count(len) else {
+        return detect_range(series, 0..len, &context);
+    };
+
+    // Spawn every chunk before awaiting any, so the blocking tasks run concurrently;
+    // each owns a shared `Arc` handle to the series and a `Copy` of the context.
+    let mut handles = Vec::with_capacity(workers);
+    let mut start: usize = 0;
+    for size in balanced_chunk_sizes(len, workers) {
+        let end = start.saturating_add(size);
+        let chunk = Arc::clone(series);
+        handles.push(spawner.spawn_blocking(move || detect_range(&chunk, start..end, &context)));
+        start = end;
     }
 
-    thread::scope(|scope| {
-        // Peel one balanced, contiguous chunk per worker off the front: at each step the
-        // remaining series are divided as evenly as possible among the workers still to be
-        // assigned, so exactly `workers` non-empty chunks are spawned (every worker is
-        // used, not just the few that a fixed `chunks(div_ceil(len, workers))` split would
-        // yield when `len` only slightly exceeds `workers`). `workers <= series.len()`
-        // keeps every chunk non-empty.
-        let mut rest = series;
-        // The running offset of `rest` within `series`, so each worker can recover the
-        // global index of every series it evaluates (the chunk-local position plus this
-        // base) and stamp it onto the candidate.
-        let mut base = 0_usize;
-        // The eager collect spawns every worker before the first join; a lazy
-        // `map`/`flat_map` would instead spawn and join each chunk one at a time,
-        // serializing the work.
-        let handles: Vec<_> = (1..=workers)
-            .rev()
-            .map(|remaining_workers| {
-                let take = rest.len().div_ceil(remaining_workers);
-                let (slice, tail) = rest.split_at(take);
-                rest = tail;
-                let chunk_base = base;
-                base = base
-                    .checked_add(take)
-                    .expect("the total series count fits in usize");
-                scope.spawn(move || {
-                    slice
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(offset, one)| {
-                            let index = chunk_base
-                                .checked_add(offset)
-                                .expect("a series index fits in usize");
-                            detect_one(index, one, context)
-                        })
-                        .collect::<Vec<_>>()
-                })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .flat_map(|handle| {
-                handle
-                    .join()
-                    .unwrap_or_else(|payload| panic::resume_unwind(payload))
-            })
-            .collect()
-    })
+    // Concatenate in spawn order, which is series order, so the candidate sequence is
+    // identical to the serial pass.
+    let mut candidates = Vec::new();
+    for handle in handles {
+        candidates.extend(handle.await);
+    }
+    candidates
+}
+
+/// Detects the series in `range`, returning the raised candidates in index order.
+fn detect_range(
+    series: &[Series],
+    range: Range<usize>,
+    context: &AnalysisContext,
+) -> Vec<Candidate> {
+    range
+        .filter_map(|index| {
+            let one = series
+                .get(index)
+                .expect("the range is within the series slice");
+            detect_one(index, one, context)
+        })
+        .collect()
 }
 
 /// Runs the mode-appropriate detector on the series at `index` and returns its
@@ -1326,6 +1339,51 @@ mod tests {
     #[test]
     fn change_point_method_sorts_before_drift() {
         assert!(FindingMethod::ChangePoint < FindingMethod::Drift);
+    }
+
+    /// The spawner-distributed [`find_changes_spawned`] must produce exactly the same
+    /// findings as the serial [`find_changes`]. On a multi-core host this exercises
+    /// the chunked spawn-and-recombine path (the inline spawner runs each chunk on the
+    /// calling thread); under Miri, which reports one CPU, both take the serial path.
+    #[cfg(feature = "private-test-util")]
+    #[test]
+    fn find_changes_spawned_matches_the_serial_pass() {
+        use crate::testing::synchronous_spawner;
+
+        // A batch large enough to span several worker chunks, mixing series that raise
+        // a finding with flat ones that do not, so the spawned path must detect across
+        // chunks and preserve series order when recombining.
+        let step_up = [100.0, 100.0, 100.0, 100.0, 130.0, 130.0, 130.0, 130.0];
+        let step_down = [130.0, 130.0, 130.0, 130.0, 100.0, 100.0, 100.0, 100.0];
+        let flat = [100.0; 8];
+        let shapes: [&[f64]; 3] = [&step_up, &step_down, &flat];
+        let series: Vec<Series> = shapes
+            .iter()
+            .cycle()
+            .take(24)
+            .enumerate()
+            .map(|(index, &values)| named_series(&format!("bench{index:02}"), values))
+            .collect();
+
+        let context = AnalysisContext {
+            mode: AnalysisMode::History,
+            config: AnalysisConfig::default(),
+            merge_base_index: None,
+            include_improvements: true,
+            include_inactive: false,
+        };
+
+        let serial = find_changes(&series, &context);
+        let spawned = futures::executor::block_on(find_changes_spawned(
+            Arc::from(series.as_slice()),
+            context,
+            &synchronous_spawner(),
+        ));
+
+        // `Finding` is not `PartialEq`; its `Debug` projection is a faithful, total
+        // rendering of every field, so equal debug output means equal findings.
+        assert!(!serial.is_empty(), "the fixture must raise some findings");
+        assert_eq!(format!("{serial:#?}"), format!("{spawned:#?}"));
     }
 
     #[test]
@@ -1593,7 +1651,8 @@ mod tests {
 
     #[test]
     fn many_independent_series_are_detected_in_a_stable_order() {
-        // `find_changes` runs the per-series detection across a thread pool. The work
+        // `find_changes` runs the per-series detection across scoped fork/join threads.
+        // The work
         // is embarrassingly parallel — no series depends on another — so this guards
         // the properties the parallel pass must preserve: every independent finding is
         // produced exactly once (the parallel `filter_map`/`collect` neither drops nor

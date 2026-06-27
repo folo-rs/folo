@@ -35,6 +35,13 @@ impl Logger {
         eprintln!("==> {message}");
     }
 
+    /// Whether `--verbose` is enabled. The harness threads this into the analyze
+    /// options' `timing` flag so a verbose run surfaces the per-stage breakdown
+    /// without the per-object note flood (tens of thousands of objects).
+    pub(crate) fn verbose(self) -> bool {
+        self.verbose
+    }
+
     /// Emits an explanatory detail line, only under `--verbose`.
     ///
     /// The message should state the inputs and reasoning behind a decision, not

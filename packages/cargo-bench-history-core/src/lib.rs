@@ -34,3 +34,7 @@
 pub mod analyze;
 pub mod codec;
 pub mod model;
+
+#[cfg(feature = "private-test-util")]
+#[cfg_attr(docsrs, doc(cfg(feature = "private-test-util")))]
+pub mod testing;
