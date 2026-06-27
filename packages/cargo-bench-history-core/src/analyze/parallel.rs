@@ -14,26 +14,29 @@
 use std::num::NonZero;
 use std::{panic, thread};
 
-/// How many worker threads to split `len` items across: the available parallelism,
-/// capped at `len` so every spawned worker gets at least one item (never an empty
-/// chunk).
+/// How many worker threads to split `len` items across, or `None` when a serial pass
+/// is the right choice — a single available CPU, or a slice short enough (`len <= 1`)
+/// that splitting it would gain nothing. When `Some`, the count is the available
+/// parallelism capped at `len`, so every spawned worker gets at least one item (never
+/// an empty chunk).
 //
 // Mutation-skipped: the return value only selects how the work is partitioned, never
-// the result. Both helpers take a serial pass for `<= 1`, and every worker count
-// yields the same order-preserving output, so no behavioral test can distinguish the
-// values.
+// the result. A `None` takes the serial pass and every `Some(workers)` count yields
+// the same order-preserving output, so no behavioral test can distinguish them — that
+// includes the serial-vs-parallel threshold folded in here.
 #[cfg_attr(test, mutants::skip)]
-fn worker_count(len: usize) -> usize {
-    thread::available_parallelism()
+fn worker_count(len: usize) -> Option<usize> {
+    let workers = thread::available_parallelism()
         .map_or(1, NonZero::get)
-        .min(len)
+        .min(len);
+    (workers > 1).then_some(workers)
 }
 
 /// The lengths of exactly `workers` contiguous chunks that partition `len` items as
 /// evenly as possible: the first `len % workers` chunks hold one extra item, the
 /// rest hold `len / workers`.
 ///
-/// Both callers guarantee `1 <= workers <= len` before taking the parallel path (a
+/// Both callers guarantee `2 <= workers <= len` before taking the parallel path (a
 /// single worker, or a slice no longer than the worker count, takes the serial path
 /// instead), so every chunk is non-empty and the sizes differ by at most one.
 fn balanced_chunk_sizes(len: usize, workers: usize) -> impl Iterator<Item = usize> {
@@ -67,10 +70,9 @@ where
     R: Send,
     F: Fn(&T) -> R + Sync,
 {
-    let workers = worker_count(items.len());
-    if workers <= 1 {
+    let Some(workers) = worker_count(items.len()) else {
         return items.iter().map(&worker).collect();
-    }
+    };
 
     let worker = &worker;
     let total = items.len();
@@ -114,11 +116,10 @@ where
     T: Send,
     F: Fn(&mut T) + Sync,
 {
-    let workers = worker_count(items.len());
-    if workers <= 1 {
+    let Some(workers) = worker_count(items.len()) else {
         items.iter_mut().for_each(&worker);
         return;
-    }
+    };
 
     let worker = &worker;
     let total = items.len();
