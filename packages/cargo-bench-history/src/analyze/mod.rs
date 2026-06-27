@@ -65,7 +65,7 @@ pub(crate) async fn execute(
     // Per-object notes follow `--verbose`; stage timings are emitted under either
     // `--verbose` or the programmatic `timing` flag (the stress harness sets the
     // latter alone to see the load breakdown without the per-object flood).
-    let reporter = StderrReporter::with_timing(options.verbose, options.verbose || options.timing);
+    let reporter = StderrReporter::with_timing(options.verbose, options.stage_timings_enabled());
 
     let config_path = resolve_config_path(workspace_dir, options.config_path.as_deref());
     reporter.note(&format!(

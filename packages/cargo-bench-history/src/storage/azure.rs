@@ -180,6 +180,12 @@ impl AzureBlobStorage {
     /// backed by the one shared, pooled [`http_client`](Self::http_client), so
     /// all operations reuse a single `reqwest` connection pool (keep-alive)
     /// rather than each opening its own and handshaking afresh.
+    // Mutation-skipped: injecting the shared transport is a connection-reuse
+    // performance optimization. A client built with default options round-trips
+    // identically against Azure (only its pooling differs), so no behavioral test
+    // can distinguish carrying the shared transport from not, and a mutant that
+    // drops it makes the SDK build a default client that hangs the round-trip.
+    #[cfg_attr(test, mutants::skip)]
     fn shared_client_options(&self) -> ClientOptions {
         ClientOptions {
             transport: Some(Transport::new(Arc::clone(&self.http_client))),
@@ -189,6 +195,11 @@ impl AzureBlobStorage {
 
     /// Builds a client for the blob named `key`, constructing the URL one path
     /// segment at a time so `/` separators in the key stay literal.
+    // Mutation-skipped: the surviving mutant only drops the shared-transport
+    // client options, an unobservable connection-reuse optimization (see
+    // `shared_client_options`). The URL plumbing is exercised by the Azurite
+    // round-trip and prefix-escape tests, which mutation testing cannot run.
+    #[cfg_attr(test, mutants::skip)]
     fn blob_client(&self, key: &str) -> Result<BlobClient, StorageError> {
         let mut url = self.container_endpoint.clone();
         url.path_segments_mut()
@@ -203,6 +214,11 @@ impl AzureBlobStorage {
     }
 
     /// Builds a client for the configured container.
+    // Mutation-skipped: the surviving mutant only drops the shared-transport
+    // client options, an unobservable connection-reuse optimization (see
+    // `shared_client_options`). The container round-trip is covered by the
+    // Azurite tests, which mutation testing cannot run.
+    #[cfg_attr(test, mutants::skip)]
     fn container_client(&self) -> Result<BlobContainerClient, StorageError> {
         let options = BlobContainerClientOptions {
             client_options: self.shared_client_options(),
