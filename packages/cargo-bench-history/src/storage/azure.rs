@@ -653,6 +653,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "builds a real HTTP client (reqwest) that Miri cannot run"
+    )]
     fn sas_token_mode_uses_the_token_verbatim() {
         let storage = AzureBlobStorage::from_config(
             "prod",
@@ -672,6 +676,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "builds a real HTTP client (reqwest) that Miri cannot run"
+    )]
     fn entra_mode_uses_a_credential_and_default_endpoint() {
         let storage = AzureBlobStorage::from_config("prod", "history", None, None, None).unwrap();
 
@@ -817,6 +825,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "builds a real HTTP client (reqwest) that Miri cannot run"
+    )]
     fn put_and_get_reject_keys_that_escape_the_prefix() {
         // The Azure IO methods delegate to the SDK (and are mutation-skipped), but
         // each first runs the pure `validate_key` guard before any network call.

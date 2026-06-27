@@ -156,8 +156,8 @@ the gzip magic never collides with JSON's first byte.
 > canonical map of the `analyze` load and detection path — what loads where, in what
 > order, what is computed/sorted, and exactly where I/O concurrency vs. CPU
 > parallelism happens (with Mermaid diagrams). Keep it in sync whenever you change the
-> fetch/parse/fold batching, the `analyze::parallel` helpers, the detection stages, or
-> the Azure transport.
+> concurrent fetch/fold, the detection distribution (`find_changes_spawned` + the
+> `analyze::parallel` chunk math), or the Azure transport.
 
 `analyze::execute` builds the real `SystemGitHistory` (rooted at `--repo` or the
 current directory) and the storage from `build_storage`, then delegates to
@@ -165,6 +165,16 @@ current directory) and the storage from `build_storage`, then delegates to
 ports so tests drive it with `FakeGitHistory` + `MemoryStorage` +
 `futures::executor::block_on` (Miri-safe, no Tokio). Everything below the IO ports
 is pure and synchronous.
+
+The one compute pass that fans out across cores is detection: `analyze_with` takes a
+`&anyspawn::Spawner` and calls `find_changes_spawned`, which dispatches per-series
+detection chunks to blocking tasks. `execute` injects `Spawner::new_tokio()` (the
+runtime's blocking pool); tests inject `cargo_bench_history_core::testing::
+synchronous_spawner()` (the shell takes core as a dev-dependency with its
+`private-test-util` feature) so `block_on`/Miri runs need no Tokio runtime. The fold
+and point sort stay serial. Do **not** spawn ad-hoc threads (`std::thread::scope`,
+`map_parallel`-style helpers) for compute — route fan-out through the injected
+`Spawner` so it shares the runtime's threads and stays legible in a profiler.
 
 `analyze` assembles a series by **resolving git topology at query time** rather
 than reading a flat storage prefix — the storage layout cannot pre-assemble a
@@ -264,8 +274,8 @@ commit's committer date so the git-topology `--since`/`--until` window matches.
 ### Analysis modes (`analyze` only)
 
 `analyze` runs in one of three modes, resolved in `analyze/mod.rs` (`auto_mode`,
-`parse_mode`, `resolve_since`) and dispatched in `analyze::findings::find_changes`
-on `AnalysisMode`:
+`parse_mode`, `resolve_since`) and dispatched per series in `analyze::findings`
+(`detect_one`, reached through `find_changes_spawned`) on `AnalysisMode`:
 
 * **history** — auto-selected when the analyzed tip *is* the merge-base with the
   base **and** no dirty run is recorded on top of that tip (the official base-branch

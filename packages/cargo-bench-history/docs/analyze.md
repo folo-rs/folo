@@ -23,13 +23,16 @@ The single most important distinction:
 | Mechanism | What it is | Where | Threads |
 |---|---|---|---|
 | **I/O concurrency** | `buffer_unordered(LOAD_CONCURRENCY)` multiplexes in-flight `Storage::get` futures on **one** `!Send` task | the fetch loop in `select_dataset` | cooperative on a single task — **not** OS-thread parallelism |
-| **CPU parallelism** | `std::thread::scope` carves a slice into one chunk per worker and joins | `map_parallel` / `for_each_mut_parallel` (`analyze::parallel`) | real OS-thread fork/join |
+| **CPU parallelism** | one balanced contiguous chunk per worker is dispatched to a blocking task through an injected `anyspawn::Spawner` (`spawn_blocking`); chunk math in `analyze::parallel` | `find_changes_spawned` (the detection step) | runtime worker threads, not freshly spawned per call |
 
-"Fetching N at once" and "parsing across cores" are *different machines*. The fetch
-is latency-hiding I/O on one logical task; the parse/sort/detect stages are the only
-places that use multiple cores. The whole load future is `!Send` and reactor-free, so
-it runs unchanged under the Miri-driven `futures::executor::block_on` tests; the
-production binary runs it under `#[tokio::main]`.
+"Fetching N at once" and "detecting across cores" are *different machines*. The fetch
+is latency-hiding I/O on one logical task; the **detection** stage is the only place
+that fans compute out across cores, and it does so through a `Spawner` so the work
+runs on the runtime's shared blocking pool (production) — or inline on the calling
+thread (tests/Miri) — rather than on anonymous per-call OS threads. The load future
+is `!Send` and reactor-free, so it runs unchanged under the Miri-driven
+`futures::executor::block_on` tests; the production binary runs it under
+`#[tokio::main]`, and that same runtime backs the detection spawner.
 
 ---
 
@@ -41,7 +44,7 @@ flowchart TD
   AW --> SD["select_dataset()"]
   SD --> DS[("SelectedDataSet:\nseries + run_index + blessings")]
   DS --> AB["apply_blessings()\n(history mode re-baseline)"]
-  AB --> FC["find_changes()"]
+  AB --> FC["find_changes_spawned()"]
   FC --> SUM["per-set summaries"]
   SUM --> RENDER["render()"]
   RENDER --> OUT["RunOutcome::Analyzed\nreport + regressions"]
@@ -69,12 +72,8 @@ flowchart TD
   end
   SK --> LOOP
   subgraph P23["Phase 2/3 — fetch + fold, streaming"]
-    LOOP["buffer_unordered(LOAD_CONCURRENCY)\nfetch_bytes_ranked → Storage::get"] -->|"bytes, OUT of order"| BATCH{"batch.len ≥ PARSE_CHUNK?"}
-    BATCH -->|no| LOOP
-    BATCH -->|"yes / stream end"| FOLD["fold_batch()"]
-    FOLD --> PAR["map_parallel: JSON → Run\n★ SCOPED FORK/JOIN ★"]
-    PAR --> SER["serial fold: SeriesBuilder.push per run\nintern commit, hash id, group points"]
-    SER --> DROP["drop parsed Runs\nkeep only compact SeriesPoints"]
+    LOOP["buffer_unordered(LOAD_CONCURRENCY)\nfetch_one_ranked → Storage::get → JSON → Run"] -->|"Run, OUT of order"| FOLD["serial fold: SeriesBuilder.push per run\nintern commit, hash id, group points"]
+    FOLD --> DROP["drop parsed Run\nkeep only compact SeriesPoints"]
     DROP --> LOOP
   end
   DROP --> FIN["SeriesBuilder.finish()"]
@@ -89,14 +88,17 @@ Key properties:
   `buffer_unordered` completes out of order; this makes the result independent of
   fetch arrival order. `object_ordinal` is the final point tie-break and stands in for
   the full storage key to keep points small.
-- **Streaming memory.** Only one `PARSE_CHUNK`-sized batch of raw bytes + parsed
-  `Run`s is resident at a time; each `Run` is dropped right after its points are
-  extracted. On a large history this is the difference between hundreds of MB and tens
-  of GB.
-- **The fork/join is per batch.** `map_parallel` forks at each `PARSE_CHUNK` flush and
-  joins before the serial fold — so parse-parallelism and fold-serial *alternate* once
-  per batch. The serial fold (`SeriesBuilder::push`) is a sequential section between
-  parallel bursts; it is an Amdahl ceiling on load speed (see §7).
+- **Streaming memory.** Only the objects currently in flight (raw bytes + the one
+  parsed `Run` being folded) are resident; each `Run` is dropped right after its
+  points are extracted. On a large history this is the difference between hundreds of
+  MB and tens of GB.
+- **Fetch is concurrent, parse + fold are serial.** Each completed fetch is parsed
+  (JSON → `Run`) and folded (`SeriesBuilder::push`) inline on the single load task as
+  it arrives, overlapped with the still-in-flight fetches. The fold is a sequential
+  section, but it overlaps the concurrent fetch pipeline, so on the remote backend it
+  hides under fetch latency rather than gating it; an earlier per-batch parallel-parse
+  scheme was dropped because its chunks were too small to beat the fork/join overhead
+  (see §6).
 
 ### `SeriesBuilder::push` — what the fold does (`analyze::series`)
 
@@ -115,21 +117,18 @@ hence the compactness and interning.
   latency (critical on the remote backend); set near the knee where in-flight fetches
   saturate the network path, past which extra concurrency only subdivides the fixed
   path bandwidth and lengthens each request without lifting throughput.
-- `PARSE_CHUNK` — how many fetched objects are parsed per parallel batch. Bounded so
-  the load keeps its streaming memory profile, yet well above the core count so every
-  worker stays busy and per-batch fork/join overhead is amortised.
 
 ---
 
-## 4. `SeriesBuilder::finish()` + `find_changes()` — build & detect
+## 4. `SeriesBuilder::finish()` + `find_changes_spawned()` — build & detect
 
 ```mermaid
 flowchart TD
   FIN["finish()"] --> FLAT["flatten nested maps → Vec<Series>"]
   FLAT --> SS["sort series by (set,id,kind)\n— SERIAL —"]
-  SS --> PPS["for_each_mut_parallel:\nsort each series' points by topology\n★ SCOPED FORK/JOIN ★"]
-  PPS --> SERIES[("Vec<Series>")]
-  SERIES --> DALL["detect_all: map_parallel(detect_one)\n★ SCOPED FORK/JOIN, per-series ★"]
+  SS --> PPS["sort each series' points by topology\n— SERIAL —"]
+  PPS --> SERIES[("Vec<Series> → Arc<[Series]>")]
+  SERIES --> DALL["detect_all_spawned: one chunk per worker\n→ spawn_blocking(detect_one)\n★ SPAWNED BLOCKING TASKS ★"]
   DALL --> CANDS["Vec<Candidate>"]
   CANDS --> BH["benjamini_hochberg FDR filter\n— SERIAL —"]
   BH --> MAT["materialise surviving findings'\nchart points"]
@@ -139,8 +138,10 @@ flowchart TD
 
 ### Inside one `detect_one` (`analyze::findings`) — per series, runs on a worker
 
-The detection step has no cross-series state, so every series is evaluated
-independently across scoped fork/join threads. The mode selects the detector:
+The detection step has no cross-series state, so the series are split into one
+balanced contiguous chunk per worker and each chunk is detected on its own blocking
+task; the chunks recombine in series order, so the output is identical to a sequential
+pass. The mode selects the detector:
 
 - **History** (long-range trend): project point values once, then run a
   **change-point** detector *and* a **drift** detector and keep the better fit
@@ -170,29 +171,31 @@ reordering them cannot change the median.
 | `storage.list` | single async request | the whole prefix | — |
 | Phase-1 filtering | serial | per candidate key | — |
 | **fetch** | **I/O-concurrent (one task)** | per object, bounded in flight | `buffer_unordered(LOAD_CONCURRENCY)` |
-| **parse** | **CPU-parallel (scoped threads)** | one chunk per worker, of a `PARSE_CHUNK` batch | fork at each flush, join before fold |
-| fold (`push`) | **serial** | per `Run` | runs between parallel bursts |
+| parse | **serial** (on the load task) | per object, as it arrives | — |
+| fold (`push`) | **serial** | per `Run` | overlaps the concurrent fetch |
 | series sort | serial | the `Vec<Series>` | — |
-| **point sort** | **CPU-parallel (scoped threads)** | one chunk of series per worker | single fork/join over all series |
-| **detect** | **CPU-parallel (scoped threads)** | one chunk of series per worker | single fork/join over all series |
+| point sort | serial | per series | — |
+| **detect** | **CPU-parallel (spawned blocking tasks)** | one chunk of series per worker | split once over all series, await + concat |
 | BH filter + finding sort + render | serial | the candidate/finding list | — |
 
-`map_parallel` / `for_each_mut_parallel` split the slice into **exactly one balanced
-chunk per worker** (sizes differ by at most one), so a slice just above the worker
-count still uses every worker rather than collapsing to fewer chunks. Both early-return
-to a serial pass for a single worker or a slice no longer than the worker count, and
-both preserve input order so results are identical to a sequential pass.
+`find_changes_spawned` splits the series into **exactly one balanced chunk per
+worker** (sizes differ by at most one, so a slice just above the worker count still
+uses every worker rather than collapsing to fewer chunks), dispatches each chunk to a
+blocking task through the injected `Spawner`, then awaits and concatenates them in
+series order — identical output to a sequential pass. A single available CPU (Miri
+reports one) or a single series takes the serial path, dispatching no task.
 
 ---
 
 ## 6. Where the bottlenecks live (to steer optimization)
 
-- **Local-filesystem backend:** CPU-bound on **parse** (the only heavy parallel
-  stage), gated by the **serial fold** between batches and by I/O arrival. When core
-  utilisation is low, the ceiling is the serial fold + per-batch fork/join overhead +
-  fetch arrival, not raw parse throughput. Levers: shrink the serial section (cheaper
-  `push`), overlap the fold with the next batch's fetch, larger batches to amortise
-  fork/join.
+- **Local-filesystem backend:** the load is **fetch + serial parse/fold** bound. The
+  fold runs inline as each object arrives, overlapped with the concurrent fetch, so
+  the ceiling is fetch arrival plus the serial fold throughput. Levers: shrink the
+  serial section (cheaper `push`), fewer/larger objects. A previous per-batch
+  parallel-parse scheme was reverted: its chunks were too small to beat the fork/join
+  overhead, and the fold already overlapped the fetch pipeline, so it added complexity
+  for no measurable win.
 - **Azure backend:** network-bound. With the shared connection pool (§7) the per-object
   TCP+TLS handshake is amortised across a keep-alive pool, leaving two ceilings: the
   path bandwidth between the client and the storage region, and — for small objects — a
@@ -290,11 +293,11 @@ specific stage of the diagrams above without reading the code. Each line reads
 | `git topology resolution`      | §2/§3 `resolve_history` (commit order + times)    |
 | `git.first_parent ancestry …`  | §3 the first-parent ancestry walk alone (scales with history) |
 | `phase 1 — key-only …`         | §3 Phase 1 filtering loop (no fetches)            |
-| `phase 2/3 — concurrent fetch …` | §3 Phase 2/3 fetch + parallel parse + serial fold |
-| `series build finalization`    | §4 `SeriesBuilder::finish()` (+ parallel sort)    |
+| `phase 2/3 — concurrent fetch …` | §3 Phase 2/3 concurrent fetch + serial parse + fold |
+| `series build finalization`    | §4 `SeriesBuilder::finish()` (+ serial point sort) |
 | `blessing sidecar load`        | §3 history-mode blessing fetch (history only)     |
 | `re-baseline blessed series`   | §2 `apply_blessings`                              |
-| `change detection (find_changes …)` | §4 `find_changes` (per-series detect + FDR)  |
+| `change detection (find_changes …)` | §4 `find_changes_spawned` (per-series detect + FDR) |
 | `report render`                | §2 `render`                                       |
 
 The timing channel is *deliberately independent* of the per-object note stream. The

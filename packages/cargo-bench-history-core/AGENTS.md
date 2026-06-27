@@ -23,24 +23,26 @@ here, alongside the workspace-wide rules in `docs/` (especially
 * **Reuse memory and preallocate to known sizes.** Size buffers up front when the
   count is known (e.g. `theil_sen_line` reserves the exact `n·(n−1)/2` pairwise
   slopes via `pair_count`, so the fill loop never reallocates), and drain-and-reuse
-  a working buffer across iterations rather than reallocating it (the shell loader
-  reuses one batch `Vec` across every parse batch). The gzip codec (`codec`) holds
-  per-thread inflate/deflate state and resets it between calls, so each thread
-  allocates the working state once and repeated calls — including from worker
-  threads — stay allocation-free; keep this reuse intact.
-* **Parallelize independent passes with the shared helpers.** Several passes walk a
-  slice whose elements are independent; route them through
-  [`analyze::parallel`](src/analyze/parallel.rs) (`map_parallel` /
-  `for_each_mut_parallel`) rather than hand-rolling scoped threads. `detect_all`
-  detects each series, `SeriesBuilder::finish` sorts each series' points, and the
-  shell crate's loader parses each fetched batch of runs — all on those helpers,
-  which keep input order, fall back to a serial pass for a single worker (the Miri
-  default, which is what keeps the logic under Miri's checks), and propagate worker
-  panics. New per-series (or per-element) logic must stay side-effect-free so it can
-  run on any worker; do not introduce shared mutable state into a parallel pass.
-  Decompression deliberately stays serial inside `Storage::get` so the in-memory
-  test fake and the gzip backends remain interchangeable — parallelize the parse and
-  the analysis around it, not the decode.
+  a working buffer across iterations rather than reallocating it. The gzip codec
+  (`codec`) holds per-thread inflate/deflate state and resets it between calls, so
+  each thread allocates the working state once and repeated calls — including from
+  worker threads — stay allocation-free; keep this reuse intact.
+* **Distribute independent compute through an injected `Spawner`, not ad-hoc
+  threads.** The detection step (`find_changes_spawned`) is the one compute pass that
+  fans out across cores: it splits the series into one balanced contiguous chunk per
+  worker — sizes from [`analyze::parallel`](src/analyze/parallel.rs)
+  (`worker_count` + `balanced_chunk_sizes`) — and dispatches each chunk to a blocking
+  task on an injected `anyspawn::Spawner`, then awaits and concatenates in series order
+  so the output equals a sequential pass. Production injects a Tokio spawner (sharing
+  the runtime's blocking pool); tests and Miri inject
+  [`testing::synchronous_spawner`](src/testing.rs), which runs each task inline on the
+  calling thread, so the analysis needs no runtime and stays deterministic under
+  `block_on`/Miri. A single available CPU (the Miri default) or a single series takes
+  the serial path, dispatching no task. New per-series logic must stay
+  side-effect-free so it can run on any worker; do not introduce shared mutable state
+  into a distributed pass. The series fold (`SeriesBuilder::push`) and per-series point
+  sort (`SeriesBuilder::finish`) stay **serial** — their work is dominated by task
+  overhead, and the fold already overlaps the shell loader's concurrent fetch.
 
 When you add a hot-path optimization, justify any deviation from a standard
 ecosystem pattern (see `docs/performance.md`) and cover the numeric boundaries

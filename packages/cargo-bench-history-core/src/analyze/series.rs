@@ -25,7 +25,6 @@ use hashbrown::hash_table::Entry;
 use jiff::Timestamp;
 
 use crate::analyze::StorageKey;
-use crate::analyze::parallel::for_each_mut_parallel;
 use crate::model::BlessingRecord;
 use crate::model::DiscriminantSet;
 use crate::model::{BenchmarkId, BenchmarkIdPrefix, MetricKind, Run};
@@ -382,22 +381,19 @@ impl<'a> SeriesBuilder<'a> {
                 .then_with(|| left.kind.cmp(&right.kind))
         });
 
-        // Each series' point sort is independent and is the dominant cost once a
-        // series holds millions of points, so the sorts run across scoped fork/join
-        // threads. Sorting in place per series leaves the surrounding `series` order — and
-        // therefore the result — identical to sorting each series sequentially.
-        for_each_mut_parallel(&mut series, |series| {
-            // `sort_unstable_by` orders in place without the scratch buffer a stable
-            // sort allocates. The key is a total order in practice — a series holds
-            // at most one point per object, so `object_ordinal` is unique within it
-            // — making the unstable sort deterministic.
+        // Each series' point sort is independent, so sort each series' points in
+        // place. `sort_unstable_by` orders in place without the scratch buffer a
+        // stable sort allocates. The key is a total order in practice — a series
+        // holds at most one point per object, so `object_ordinal` is unique within
+        // it — making the unstable sort deterministic.
+        for series in &mut series {
             series.points.sort_unstable_by(|left, right| {
                 left.topo_index
                     .cmp(&right.topo_index)
                     .then_with(|| left.dirty.cmp(&right.dirty))
                     .then_with(|| left.object_ordinal.cmp(&right.object_ordinal))
             });
-        });
+        }
 
         series
     }

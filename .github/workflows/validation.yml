@@ -488,7 +488,7 @@ jobs:
   mutants:
     needs: [delta, test-more-x64]
     if: needs.delta.outputs.skip_all != 'true'
-    timeout-minutes: 180
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:

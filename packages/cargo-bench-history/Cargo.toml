@@ -12,6 +12,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+anyspawn = { workspace = true, features = ["tokio"] }
 async-trait = { workspace = true }
 azure_core = { workspace = true }
 # The `default` feature on these two crates is load-bearing, not gratuitous: it
@@ -40,6 +41,7 @@ tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "r
 toml = { workspace = true, features = ["parse", "serde"] }
 
 [dev-dependencies]
+cargo-bench-history-core = { path = "../cargo-bench-history-core", features = ["private-test-util"] }
 futures = { workspace = true, features = ["executor"] }
 mutants = { workspace = true }
 serial_test = { workspace = true }
