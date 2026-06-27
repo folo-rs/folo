@@ -587,9 +587,11 @@ async fn facet_filtered_candidates<S: Storage>(
 /// fetches turns that sum into roughly its maximum, cutting the per-mode load
 /// floor (critical for the remote backend, where thousands of sequential
 /// round-trips would otherwise stretch the local floor into minutes). The bound
-/// keeps the remote backend from being hit with an unbounded burst of requests
-/// (which it would throttle) while still keeping enough in flight to hide latency.
-const LOAD_CONCURRENCY: usize = 32;
+/// sits near the knee of the throughput curve: enough fetches are in flight to
+/// saturate the network path and hide per-object latency, while staying below the
+/// point where extra concurrency merely subdivides the fixed path bandwidth among
+/// more requests and lengthens each one's latency without lifting throughput.
+const LOAD_CONCURRENCY: usize = 128;
 
 /// How many fetched run objects to deserialize per parallel batch.
 ///

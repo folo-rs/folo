@@ -112,8 +112,9 @@ hence the compactness and interning.
 ### Tuning constants (`analyze::mod`)
 
 - `LOAD_CONCURRENCY` — how many `Storage::get` round-trips overlap. Hides per-object
-  latency (critical on the remote backend); bounded so the backend is not hit with an
-  unbounded burst.
+  latency (critical on the remote backend); set near the knee where in-flight fetches
+  saturate the network path, past which extra concurrency only subdivides the fixed
+  path bandwidth and lengthens each request without lifting throughput.
 - `PARSE_CHUNK` — how many fetched objects are parsed per parallel batch. Bounded so
   the load keeps its streaming memory profile, yet well above the core count so every
   worker stays busy and per-batch fork/join overhead is amortised.
@@ -192,10 +193,12 @@ both preserve input order so results are identical to a sequential pass.
   fetch arrival, not raw parse throughput. Levers: shrink the serial section (cheaper
   `push`), overlap the fold with the next batch's fetch, larger batches to amortise
   fork/join.
-- **Azure backend:** network-bound on **per-request latency** (round-trips), not CPU and
-  not fetch concurrency. With the shared connection pool (§7) the per-object TCP+TLS
-  handshake is amortised across a keep-alive pool, so the dominant remaining cost is the
-  request round-trip itself; fewer-larger blobs help more than more concurrency.
+- **Azure backend:** network-bound. With the shared connection pool (§7) the per-object
+  TCP+TLS handshake is amortised across a keep-alive pool, leaving two ceilings: the
+  path bandwidth between the client and the storage region, and — for small objects — a
+  per-request round-trip rate, since each object costs one round-trip. Concurrency past
+  the knee (`LOAD_CONCURRENCY`) only subdivides the fixed bandwidth and inflates latency
+  tails, so fewer-larger blobs (and fewer bytes) help more than more concurrency.
 - **Data-structure hot spots:** `SeriesPoint` compactness, `Arc<str>` commit interning
   and single-probe `HashTable` id lookups (clone-on-miss) keep the
   tens-of-millions-of-points fold affordable. Preserve these; do not regress them.
