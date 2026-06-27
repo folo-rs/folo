@@ -248,3 +248,41 @@ BlobClient::new(url, self.credential.clone(), Some(options))
 This enables keep-alive connection reuse (far fewer handshakes, lower per-object
 latency, no port exhaustion) and lets fetch concurrency actually pay off on the remote
 backend.
+
+---
+
+## 8. Localizing a slowdown with `--verbose` stage timings
+
+`analyze --verbose` emits a per-stage wall-clock breakdown to standard error, on a
+channel separate from the per-object notes, so a mystery slowdown can be pinned to a
+specific stage of the diagrams above without reading the code. Each line reads
+`[bench-history] timing: <stage> took <elapsed>`. The stages mirror this document:
+
+| Stage label (substring)        | Diagram location                                  |
+|--------------------------------|---------------------------------------------------|
+| `select_dataset (full load …)` | §2 `select_dataset` — the whole load              |
+| `candidate listing + facet …`  | §3 Phase 1 listing + facet filter                 |
+| `storage.list(prefix) …`       | §3 the single `storage.list` round-trip alone     |
+| `git topology resolution`      | §2/§3 `resolve_history` (commit order + times)    |
+| `git.first_parent ancestry …`  | §3 the first-parent ancestry walk alone (scales with history) |
+| `phase 1 — key-only …`         | §3 Phase 1 filtering loop (no fetches)            |
+| `phase 2/3 — concurrent fetch …` | §3 Phase 2/3 fetch + parallel parse + serial fold |
+| `series build finalization`    | §4 `SeriesBuilder::finish()` (+ parallel sort)    |
+| `blessing sidecar load`        | §3 history-mode blessing fetch (history only)     |
+| `re-baseline blessed series`   | §2 `apply_blessings`                              |
+| `change detection (find_changes …)` | §4 `find_changes` (per-series detect + FDR)  |
+| `report render`                | §2 `render`                                       |
+
+The timing channel is *deliberately independent* of the per-object note stream. The
+notes emit one line per stored object; at stress scale (tens of thousands of objects)
+that flood would both bury the timings and distort the very wall clock being measured.
+So a programmatic caller can request timings alone: `AnalyzeOptions.timing` turns on the
+stage breakdown without the notes (the `--verbose` CLI flag turns on both). The stress
+harness (`cargo-bench-history-stress --verbose`) uses exactly this to surface the load
+breakdown while keeping its own measurement clean.
+
+Implementation: `report::Reporter::timing(stage, elapsed)` is the sink;
+`StderrReporter::with_timing(verbose, timing)` controls the two streams independently;
+the stage boundaries are timed with `Instant` in `analyze_with` and `select_dataset`.
+Keep the labels above in sync with the diagrams when stage boundaries move.
+

@@ -110,6 +110,12 @@ pub struct AnalyzeOptions {
     pub include_inactive: bool,
     /// Emit detailed diagnostic notes to standard error describing each step.
     pub verbose: bool,
+    /// Emit per-stage wall-clock timings to standard error, independent of
+    /// `verbose`. `verbose` implies these as well; this flag exists so a
+    /// programmatic caller (the stress harness) can observe the per-stage load
+    /// breakdown *without* the per-object note flood that would both bury the
+    /// timings and distort them.
+    pub timing: bool,
 }
 /// The kind of thing a `list` invocation enumerates.
 #[doc(hidden)]

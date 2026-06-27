@@ -6,6 +6,15 @@
 //! summary, which is returned as a [`RunOutcome`](crate::RunOutcome) and printed
 //! to standard output. The real adapter writes notes to standard error so they
 //! never contaminate machine-readable stdout; tests record them in memory.
+//!
+//! Stage timings are a *second*, independent channel ([`Reporter::timing`]): they
+//! report the wall-clock cost of each pipeline stage so a mystery slowdown can be
+//! localized. They are kept separate from per-object [`note`](Reporter::note)s
+//! precisely so a caller can ask for the coarse per-stage breakdown *without* the
+//! per-object flood — the stress harness, which analyzes tens of thousands of
+//! objects, would otherwise drown in (and be slowed by) one note per object.
+
+use std::time::Duration;
 
 /// Receives human-facing diagnostic notes emitted while a command runs.
 pub(crate) trait Reporter {
@@ -17,6 +26,14 @@ pub(crate) trait Reporter {
 
     /// Records a single diagnostic note.
     fn note(&self, message: &str);
+
+    /// Records the wall-clock duration of a named pipeline `stage`.
+    ///
+    /// `stage` should name the stage *and* what it encompasses (so the breakdown
+    /// reconstructs where the time went), e.g. `"phase 2/3 fetch + parallel parse +
+    /// fold"`. This is a separate channel from [`note`](Reporter::note) so the
+    /// per-stage cost can be surfaced without the per-object note flood.
+    fn timing(&self, stage: &str, elapsed: Duration);
 }
 
 /// Lazy-formatting helpers available on every [`Reporter`], including
@@ -50,13 +67,33 @@ impl<R: Reporter + ?Sized> ReporterExt for R {
 /// and discards them otherwise.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct StderrReporter {
+    /// Whether per-object diagnostic notes are emitted.
     verbose: bool,
+    /// Whether per-stage timing notes are emitted. Independent of `verbose` so a
+    /// caller can ask for the timing breakdown alone.
+    timing_enabled: bool,
 }
 
 impl StderrReporter {
     /// Creates a reporter that emits notes only when `verbose` is set.
+    ///
+    /// Stage timings follow `verbose` too, so a plain `--verbose` run gets the
+    /// per-stage breakdown alongside the per-object detail.
     pub(crate) fn new(verbose: bool) -> Self {
-        Self { verbose }
+        Self {
+            verbose,
+            timing_enabled: verbose,
+        }
+    }
+
+    /// Creates a reporter with independent control over the per-object note stream
+    /// (`verbose`) and the per-stage timing stream (`timing`), so a caller can ask
+    /// for the timing breakdown without the per-object flood.
+    pub(crate) fn with_timing(verbose: bool, timing: bool) -> Self {
+        Self {
+            verbose,
+            timing_enabled: timing,
+        }
     }
 }
 
@@ -76,6 +113,33 @@ impl Reporter for StderrReporter {
             eprintln!("[bench-history] {message}");
         }
     }
+
+    /// Writes the stage timing to standard error when timing is enabled.
+    ///
+    /// A pure standard-error side effect, untestable for the same reason as
+    /// [`note`](Self::note); the `timing_enabled` flag it guards on is covered by
+    /// `stderr_reporter_reports_timing_state`.
+    #[cfg_attr(test, mutants::skip)]
+    fn timing(&self, stage: &str, elapsed: Duration) {
+        if self.timing_enabled {
+            eprintln!(
+                "[bench-history] timing: {stage} took {}",
+                format_elapsed(elapsed)
+            );
+        }
+    }
+}
+
+/// Formats a stage duration for a timing note: seconds (with millisecond
+/// precision) at or above one second, milliseconds below that, so both a
+/// multi-second load and a sub-millisecond step read naturally.
+fn format_elapsed(elapsed: Duration) -> String {
+    let seconds = elapsed.as_secs_f64();
+    if seconds >= 1.0 {
+        format!("{seconds:.3} s")
+    } else {
+        format!("{:.1} ms", seconds * 1000.0)
+    }
 }
 
 #[cfg(test)]
@@ -85,6 +149,7 @@ pub(crate) use test_support::RecordingReporter;
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod test_support {
     use std::cell::RefCell;
+    use std::time::Duration;
 
     use super::Reporter;
 
@@ -93,6 +158,7 @@ mod test_support {
     #[derive(Debug, Default)]
     pub(crate) struct RecordingReporter {
         notes: RefCell<Vec<String>>,
+        timings: RefCell<Vec<String>>,
     }
 
     impl RecordingReporter {
@@ -110,6 +176,14 @@ mod test_support {
         pub(crate) fn contains(&self, needle: &str) -> bool {
             self.notes.borrow().iter().any(|note| note.contains(needle))
         }
+
+        /// Whether a stage timing whose label contains `needle` was recorded.
+        pub(crate) fn timed(&self, needle: &str) -> bool {
+            self.timings
+                .borrow()
+                .iter()
+                .any(|stage| stage.contains(needle))
+        }
     }
 
     impl Reporter for RecordingReporter {
@@ -119,6 +193,12 @@ mod test_support {
 
         fn note(&self, message: &str) {
             self.notes.borrow_mut().push(message.to_owned());
+        }
+
+        fn timing(&self, stage: &str, _elapsed: Duration) {
+            // Record only the stage label; the elapsed time is non-deterministic, so
+            // tests assert that a stage *was* timed, not how long it took.
+            self.timings.borrow_mut().push(stage.to_owned());
         }
     }
 }
@@ -132,6 +212,48 @@ mod tests {
     fn stderr_reporter_reports_enabled_state() {
         assert!(StderrReporter::new(true).enabled());
         assert!(!StderrReporter::new(false).enabled());
+    }
+
+    #[test]
+    fn stderr_reporter_reports_timing_state() {
+        // `new` ties timing to verbose, so a plain `--verbose` run also gets timings.
+        assert!(StderrReporter::new(true).timing_enabled);
+        assert!(!StderrReporter::new(false).timing_enabled);
+
+        // `with_timing` controls the two streams independently, so a caller can ask
+        // for the timing breakdown without the per-object note flood.
+        let timing_only = StderrReporter::with_timing(false, true);
+        assert!(!timing_only.enabled());
+        assert!(timing_only.timing_enabled);
+
+        let notes_only = StderrReporter::with_timing(true, false);
+        assert!(notes_only.enabled());
+        assert!(!notes_only.timing_enabled);
+    }
+
+    #[test]
+    fn recording_reporter_captures_timings_separately_from_notes() {
+        let reporter = RecordingReporter::new();
+        reporter.note("a per-object note");
+        reporter.timing("select_dataset (full load)", Duration::from_millis(5));
+
+        // Timings live in their own channel, so a per-object note assertion is not
+        // disturbed by them and vice versa.
+        assert_eq!(reporter.notes(), vec!["a per-object note".to_owned()]);
+        assert!(reporter.timed("select_dataset"));
+        assert!(!reporter.timed("find_changes"));
+    }
+
+    #[test]
+    fn format_elapsed_uses_seconds_at_or_above_one_second() {
+        assert_eq!(format_elapsed(Duration::from_secs(1)), "1.000 s");
+        assert_eq!(format_elapsed(Duration::from_millis(2500)), "2.500 s");
+    }
+
+    #[test]
+    fn format_elapsed_uses_milliseconds_below_one_second() {
+        assert_eq!(format_elapsed(Duration::from_millis(250)), "250.0 ms");
+        assert_eq!(format_elapsed(Duration::ZERO), "0.0 ms");
     }
 
     #[test]

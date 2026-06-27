@@ -25,6 +25,7 @@ pub(crate) use cargo_bench_history_core::analyze::{
 use std::collections::{BTreeMap, HashMap};
 use std::io::IsTerminal;
 use std::path::Path;
+use std::time::Instant;
 
 use futures::{StreamExt as _, TryStreamExt as _};
 use jiff::civil::Date;
@@ -59,7 +60,10 @@ pub(crate) async fn execute(
     workspace_dir: &Path,
     now_override: Option<Timestamp>,
 ) -> Result<RunOutcome, RunError> {
-    let reporter = StderrReporter::new(options.verbose);
+    // Per-object notes follow `--verbose`; stage timings are emitted under either
+    // `--verbose` or the programmatic `timing` flag (the stress harness sets the
+    // latter alone to see the load breakdown without the per-object flood).
+    let reporter = StderrReporter::with_timing(options.verbose, options.verbose || options.timing);
 
     let config_path = resolve_config_path(workspace_dir, options.config_path.as_deref());
     reporter.note(&format!(
@@ -146,15 +150,25 @@ where
     let filter = SeriesFilter {
         prefixes: &options.prefixes,
     };
+    let load_started = Instant::now();
     let dataset = select_dataset(
         git, storage, project_id, config, &selection, filter, auto, now, reporter,
     )
     .await?;
+    reporter.timing(
+        "select_dataset (full load: list + filter + topology + fetch/parse/fold + build)",
+        load_started.elapsed(),
+    );
 
     let mut series = dataset.series;
     // Re-baseline blessed series before detection (history mode only; branch and
     // tip modes carry an empty blessing map).
+    let rebaseline_started = Instant::now();
     apply_blessings(&mut series, &dataset.blessings);
+    reporter.timing(
+        "re-baseline blessed series (apply_blessings)",
+        rebaseline_started.elapsed(),
+    );
     let context = AnalysisContext {
         mode: dataset.mode,
         config: AnalysisConfig::default(),
@@ -162,7 +176,12 @@ where
         include_improvements: options.include_improvements,
         include_inactive: options.include_inactive,
     };
+    let detect_started = Instant::now();
     let findings = find_changes(&series, &context);
+    reporter.timing(
+        "change detection (find_changes: per-series detectors + FDR filter)",
+        detect_started.elapsed(),
+    );
     let regressions = findings
         .iter()
         .filter(|finding| finding.is_regression())
@@ -214,7 +233,9 @@ where
         hint: hint.as_deref(),
         warning: warning.as_deref(),
     };
+    let render_started = Instant::now();
     let report = render(&input, format, color);
+    reporter.timing("report render", render_started.elapsed());
 
     Ok(RunOutcome::Analyzed {
         report,
@@ -519,7 +540,9 @@ async fn facet_filtered_candidates<S: Storage>(
     reporter.note(&format!("listing stored objects under prefix {prefix}"));
     reporter.note_with(|| format!("facet filters: {}", describe_facets(facets)));
 
+    let list_started = Instant::now();
     let keys = storage.list(&prefix).await.map_err(RunError::Storage)?;
+    reporter.timing("storage.list(prefix) round-trip", list_started.elapsed());
     reporter.note(&format!(
         "storage returned {}",
         count_noun(keys.len(), "object key")
@@ -667,7 +690,12 @@ where
     S: Storage,
 {
     let facets = resolve_facets(selection, Some(auto))?;
+    let listing_started = Instant::now();
     let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
+    reporter.timing(
+        "candidate listing + facet filter (includes storage.list)",
+        listing_started.elapsed(),
+    );
 
     // Separate blessing sidecars from run objects: they share the partition prefix
     // but carry a different payload and are loaded into their own map rather than
@@ -682,6 +710,7 @@ where
         ));
     }
 
+    let topology_started = Instant::now();
     let ResolvedHistory {
         target_ref,
         order,
@@ -698,6 +727,10 @@ where
         reporter,
     )
     .await?;
+    reporter.timing(
+        "git topology resolution (resolve_history)",
+        topology_started.elapsed(),
+    );
 
     // Mode auto-detection keys off the *recorded data set*, not the on-disk
     // repository state. The branch view exists to compare a feature branch's runs
@@ -769,6 +802,7 @@ where
     // excluded candidate never costs a round-trip: history membership, base-side
     // dirty admission, and the `--since`/`--until` window (decided from each
     // commit's committer time, which git reports with the topology).
+    let phase1_started = Instant::now();
     let mut to_fetch: Vec<(String, StorageKey)> = Vec::new();
     for (key, parsed) in candidates {
         if !order.contains_key(&parsed.commit) {
@@ -822,6 +856,10 @@ where
         }
         to_fetch.push((key, parsed));
     }
+    reporter.timing(
+        "phase 1 — key-only candidate filtering (no fetches)",
+        phase1_started.elapsed(),
+    );
 
     // Phase 2/3 — fetch the survivors concurrently and fold them into the series in
     // bounded batches: each batch's runs are parsed across a thread pool (the load's
@@ -836,6 +874,7 @@ where
     // deterministic in-order pass.
     to_fetch.sort_by(|left, right| left.0.cmp(&right.0));
 
+    let fetch_fold_started = Instant::now();
     let mut builder = SeriesBuilder::new(filter);
     let mut run_index = RunIndex::new();
     // (storage key, admitted-by-dirty-base-exception) per folded object, for the
@@ -903,6 +942,10 @@ where
             fold_batch(&mut batch)?;
         }
     }
+    reporter.timing(
+        "phase 2/3 — concurrent fetch + parallel parse + fold into series",
+        fetch_fold_started.elapsed(),
+    );
 
     // Emit the per-object verbose notes in storage-key order — the deterministic
     // order objects were previously admitted in — then the summary.
@@ -919,7 +962,12 @@ where
             reporter.note_with(|| format!("including {key}"));
         }
     }
+    let finish_started = Instant::now();
     let series = builder.finish();
+    reporter.timing(
+        "series build finalization (builder.finish: assemble + parallel point sort)",
+        finish_started.elapsed(),
+    );
     reporter.note(&format!(
         "{} entered the analysis ({excluded_outside_history} outside history, \
          {excluded_dirty_base} dirty-on-base, {excluded_since} before --since, \
@@ -933,6 +981,7 @@ where
     // only history mode pays the load.
     let mut blessings: HashMap<DiscriminantSet, Vec<BlessingPlacement>> = HashMap::new();
     if mode == AnalysisMode::History {
+        let blessing_started = Instant::now();
         // Phase 1 — key-only filtering: drop blessings whose commit is not on the
         // analyzed history before fetching, in candidate order.
         let mut to_fetch: Vec<(String, StorageKey)> = Vec::new();
@@ -982,6 +1031,10 @@ where
                 record,
             ));
         }
+        reporter.timing(
+            "blessing sidecar load (history mode: filter + fetch + parse)",
+            blessing_started.elapsed(),
+        );
     }
 
     Ok(SelectedDataSet {
@@ -1164,7 +1217,12 @@ where
     };
 
     let base_sha = resolve_base_ref(git, config, selection.base).await?;
+    let first_parent_started = Instant::now();
     let first_parent = git.first_parent(&target_sha).await.map_err(RunError::Io)?;
+    reporter.timing(
+        "git.first_parent ancestry walk (target's first-parent line)",
+        first_parent_started.elapsed(),
+    );
     // Split the first-parent ancestry into the SHA timeline (for commit selection
     // and the merge-base lookup) and a SHA -> committer-time map (for the window).
     let commit_count = first_parent.len();
@@ -2154,6 +2212,62 @@ mod tests {
             "{:?}",
             reporter.notes()
         );
+    }
+
+    #[test]
+    fn analyze_records_a_timing_for_each_pipeline_stage() {
+        // Every stage drawn in docs/analyze.md emits a timing on the dedicated
+        // timing channel, so a `--verbose` run can localize a mystery slowdown.
+        // History mode is used because it also exercises the blessing-load stage.
+        let storage = MemoryStorage::new();
+        seed_linear_step(&storage);
+        let record = BlessingRecord::new(
+            "c3".to_owned(),
+            ts(3),
+            vec![BenchmarkIdPrefix::new("nm").unwrap()],
+            "0.0.1".to_owned(),
+        );
+        let bless_key =
+            "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/c3/bless-3.json".to_owned();
+        block_on(storage.put(&bless_key, record.to_json().unwrap().as_bytes())).unwrap();
+
+        let reporter = RecordingReporter::new();
+        block_on(analyze_with(
+            &linear6_git(),
+            &storage,
+            "folo",
+            &config(),
+            &options(),
+            &auto(),
+            now_anchor(),
+            &reporter,
+            false,
+        ))
+        .unwrap();
+
+        for stage in [
+            // analyze_with stages.
+            "select_dataset",
+            "re-baseline",
+            "change detection",
+            "report render",
+            // select_dataset sub-stages.
+            "candidate listing",
+            "storage.list",
+            "git topology",
+            "git.first_parent",
+            "phase 1",
+            "phase 2/3",
+            "series build finalization",
+            // History-mode-only blessing load.
+            "blessing sidecar load",
+        ] {
+            assert!(reporter.timed(stage), "missing timing for {stage:?}");
+        }
+
+        // Timings are a distinct channel: they never leak into the per-object note
+        // stream a `--verbose` run also prints.
+        assert!(!reporter.contains("timing:"), "{:?}", reporter.notes());
     }
 
     /// Drives history-mode analyze expecting the blessing load to fail.
