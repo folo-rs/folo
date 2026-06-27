@@ -146,10 +146,13 @@ mod tests {
         );
 
         let json = serde_json::to_string(&result).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let metrics = value.get("metrics").expect("the metrics field is present");
         assert!(
-            json.contains("\"metrics\":[{"),
+            metrics.is_array(),
             "metrics must serialize as a JSON array: {json}"
         );
+        assert_eq!(metrics.as_array().unwrap().len(), 2);
 
         let parsed: BenchmarkResult = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, result);
@@ -158,9 +161,19 @@ mod tests {
     #[test]
     fn result_roundtrips_across_the_inline_capacity_boundary() {
         // One and two metrics stay inline; three spill to the heap. Serde must
-        // treat all three identically.
+        // treat all three identically. Each metric uses a distinct kind, as a
+        // result carries at most one metric per `MetricKind`.
+        const KINDS: [MetricKind; 3] = [
+            MetricKind::InstructionCount,
+            MetricKind::L1CacheHits,
+            MetricKind::EstimatedCycles,
+        ];
         for count in [1_usize, 2, 3] {
-            let metrics = vec![Metric::new(MetricKind::InstructionCount, 1.0); count];
+            let metrics: Vec<Metric> = KINDS
+                .iter()
+                .take(count)
+                .map(|&kind| Metric::new(kind, 1.0))
+                .collect();
             let result = BenchmarkResult::new(
                 BenchmarkId::new(nonempty!["pkg".to_owned(), "case".to_owned()]),
                 metrics,
