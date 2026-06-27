@@ -390,10 +390,9 @@ pub(crate) struct Workspace {
 impl Drop for Workspace {
     fn drop(&mut self) {
         // Close any open `fast-import` stream so the child releases its handles on
-        // the `.git` directory before the tempdir (a later-declared field) is
-        // removed. `finalize` only asserts success when the thread is not already
-        // panicking, so a failing test is reported as itself rather than a double
-        // panic here.
+        // the `.git` directory before `TempDir` cleanup removes the repository.
+        // `finalize` only asserts success when the thread is not already panicking,
+        // so a failing test is reported as itself rather than a double panic here.
         self.flush_git();
     }
 }
