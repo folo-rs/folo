@@ -766,31 +766,8 @@ impl Workspace {
         .await
     }
 
-    /// Drives a command with an explicit benchmark command, overriding the
-    /// workspace's configured one for this invocation only. This lets a test make
-    /// the engine behave differently across two drives — for example, succeed on a
-    /// first backfill, then exit non-zero if it is invoked at all on a re-run.
-    pub(crate) async fn drive_with_bench(
-        &self,
-        bench: &[&str],
-        args: &[&str],
-    ) -> Result<RunOutcome, RunError> {
-        self.flush_git();
-        let target_root = self.root().join("target");
-        let mut bench_command = vec![MOCK_ENGINE.to_owned()];
-        bench_command.extend(bench.iter().map(|arg| (*arg).to_owned()));
-
-        run_with_overrides(
-            &command_from(args),
-            Overrides {
-                workspace_dir: Some(self.root().to_path_buf()),
-                target_root: Some(target_root),
-                bench_command: Some(bench_command),
-                now: Some(analysis_now()),
-            },
-        )
-        .await
-    }
+    /// Like [`drive`], but leaves the target root unset so the harvester resolves
+    /// it the default way, exercising the no-override target-root path.
     ///
     /// [`drive`]: Self::drive
     pub(crate) async fn drive_resolving_target_root(

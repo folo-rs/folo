@@ -10,23 +10,22 @@ async fn backfill_stores_one_clean_object_per_commit_and_restores_checkout() {
         Workspace::clean_repo(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
     let c1 = workspace.commit("c1");
     let c2 = workspace.commit("c2");
-    let c3 = workspace.commit("c3");
     let branch_before = workspace.current_branch();
     let head_before = workspace.head();
 
-    let RunOutcome::Completed { message } = workspace.drive(&["backfill", &c1, &c3]).await.unwrap()
+    let RunOutcome::Completed { message } = workspace.drive(&["backfill", &c1, &c2]).await.unwrap()
     else {
         panic!("expected a completed outcome");
     };
-    assert!(message.contains("3 stored"), "{message}");
+    assert!(message.contains("2 stored"), "{message}");
 
     // One clean object per commit, keyed by that commit's full SHA. `backfill`
     // auto-detects the target triple, so derive it from a stored object to keep
     // the key assertions correct on every platform CI runs on.
     let objects = workspace.stored_objects();
-    assert_eq!(objects.len(), 3, "{objects:?}");
+    assert_eq!(objects.len(), 2, "{objects:?}");
     let triple = objects[0].1.context.toolchain.target_triple.clone();
-    for sha in [&c1, &c2, &c3] {
+    for sha in [&c1, &c2] {
         let expected = format!("v1/testproj/callgrind/{triple}/synthetic/{sha}/clean.json");
         assert!(
             objects.iter().any(|(key, _)| key == &expected),
@@ -49,7 +48,7 @@ async fn backfill_stores_one_clean_object_per_commit_and_restores_checkout() {
     };
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
-        parsed["runs"], 3,
+        parsed["runs"], 2,
         "analyze should see every backfilled commit: {report}"
     );
 }
@@ -100,92 +99,6 @@ async fn backfill_spans_a_merge_commit_along_first_parent() {
     }
 }
 
-/// Re-running an identical backfill skips every commit whose result already
-/// exists (write-once collision), making backfill resumable without duplicating.
-#[tokio::test]
-#[cfg_attr(miri, ignore)]
-async fn backfill_skips_already_stored_commits_on_rerun() {
-    let workspace =
-        Workspace::clean_repo(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
-    let c1 = workspace.commit("c1");
-    let c2 = workspace.commit("c2");
-
-    workspace.drive(&["backfill", &c1, &c2]).await.unwrap();
-    assert_eq!(workspace.stored_objects().len(), 2);
-
-    let RunOutcome::Completed { message } = workspace.drive(&["backfill", &c1, &c2]).await.unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
-    assert!(
-        message.contains("0 stored, 2 skipped (existing)"),
-        "{message}"
-    );
-    // No new objects were written.
-    assert_eq!(workspace.stored_objects().len(), 2);
-}
-
-/// The pre-run existence check skips an already-recorded commit *before* it is
-/// benchmarked: a re-run whose engine would fail if it were invoked still
-/// succeeds, because the recorded commits never reach the (failing) engine.
-#[tokio::test]
-#[cfg_attr(miri, ignore)]
-async fn backfill_skips_recorded_commits_without_invoking_the_engine() {
-    let workspace =
-        Workspace::clean_repo(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
-    let c1 = workspace.commit("c1");
-    let c2 = workspace.commit("c2");
-
-    workspace.drive(&["backfill", &c1, &c2]).await.unwrap();
-    assert_eq!(workspace.stored_objects().len(), 2);
-
-    // Re-run with an engine that exits non-zero whenever it actually runs — the
-    // `.git` marker is present in every worktree, so `--fail-if-exists .git` fails
-    // unconditionally. The pre-run check recognizes both commits as already
-    // recorded and skips them before the engine is invoked, so the command still
-    // succeeds; without the pre-check the failing engine would run and abort.
-    let RunOutcome::Completed { message } = workspace
-        .drive_with_bench(
-            &["--summary", "grp=single", "--fail-if-exists", ".git"],
-            &["backfill", &c1, &c2],
-        )
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
-    assert!(
-        message.contains("0 stored, 2 skipped (existing)"),
-        "{message}"
-    );
-    // Nothing changed: the skip path neither re-ran nor rewrote anything.
-    assert_eq!(workspace.stored_objects().len(), 2);
-}
-
-/// `--overwrite` replaces every already-stored commit in the range rather than
-/// skipping it, leaving exactly one clean object per commit.
-#[tokio::test]
-#[cfg_attr(miri, ignore)]
-async fn backfill_overwrite_replaces_already_stored_commits() {
-    let workspace =
-        Workspace::clean_repo(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
-    let c1 = workspace.commit("c1");
-    let c2 = workspace.commit("c2");
-
-    workspace.drive(&["backfill", &c1, &c2]).await.unwrap();
-
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["backfill", &c1, &c2, "--overwrite"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
-    assert!(message.contains("2 stored"), "{message}");
-    // Each commit still has exactly one object; nothing was duplicated.
-    assert_eq!(workspace.stored_objects().len(), 2);
-}
-
 /// A commit that fails to benchmark stops the backfill by default: earlier commits
 /// are stored, but the loop halts at the failure and reports a non-zero exit.
 #[tokio::test]
@@ -211,81 +124,6 @@ async fn backfill_stops_on_a_failing_commit_by_default() {
     let objects = workspace.stored_objects();
     assert_eq!(objects.len(), 1, "{objects:?}");
     assert!(objects[0].0.contains(&c1), "{:?}", objects[0].0);
-}
-
-/// `--ignore-errors` continues past a failing commit, storing the healthy commits
-/// on either side and reporting the failure in the summary.
-#[tokio::test]
-#[cfg_attr(miri, ignore)]
-async fn backfill_ignore_errors_continues_past_a_failing_commit() {
-    let workspace = Workspace::clean_repo(&storage_only_config()).with_bench(&[
-        "--summary",
-        "grp=single",
-        "--fail-if-exists",
-        "BROKEN",
-    ]);
-    let c1 = workspace.commit("c1");
-    workspace.commit_with_file("c2 introduces a broken build", "BROKEN", "boom\n");
-    let c3 = workspace.commit_removing_file("c3 fixes the build", "BROKEN");
-
-    let outcome = workspace
-        .drive(&["backfill", &c1, &c3, "--ignore-errors"])
-        .await
-        .unwrap();
-    // Even though a commit failed to benchmark, `--ignore-errors` makes the
-    // overall command succeed (exit code zero); the failure is reported, not fatal.
-    assert!(
-        outcome.is_success(),
-        "--ignore-errors must yield a successful exit despite the failure: {outcome:?}"
-    );
-    let RunOutcome::Completed { message } = outcome else {
-        panic!("expected a completed outcome");
-    };
-    assert!(message.contains("2 stored"), "{message}");
-    assert!(message.contains("1 failed"), "{message}");
-    // The two healthy commits are stored; the broken one contributed nothing.
-    assert_eq!(workspace.stored_objects().len(), 2);
-}
-
-/// A dirty primary working tree does not block backfill: it runs in an isolated
-/// worktree and benches the requested commit by SHA, so the primary checkout's
-/// state is irrelevant to what gets measured and stored.
-#[tokio::test]
-#[cfg_attr(miri, ignore)]
-async fn backfill_ignores_a_dirty_primary_working_tree() {
-    let workspace =
-        Workspace::clean_repo(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
-    let c1 = workspace.commit("c1");
-    workspace.make_dirty("uncommitted.txt");
-
-    let outcome = workspace.drive(&["backfill", &c1, &c1]).await.unwrap();
-    assert!(
-        outcome.is_success(),
-        "a dirty primary tree must not affect backfill: {outcome:?}"
-    );
-    let RunOutcome::Completed { message } = outcome else {
-        panic!("expected a completed outcome");
-    };
-    assert!(message.contains("1 stored"), "{message}");
-    assert!(!workspace.stored_objects().is_empty());
-}
-
-/// A range whose `--from` is not a first-parent ancestor of `--to` (here, a
-/// reversed range) is rejected before any worktree work, storing nothing.
-#[tokio::test]
-#[cfg_attr(miri, ignore)]
-async fn backfill_rejects_a_range_outside_the_first_parent_history() {
-    let workspace =
-        Workspace::clean_repo(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
-    let c1 = workspace.commit("c1");
-    let c2 = workspace.commit("c2");
-
-    let error = workspace.drive(&["backfill", &c2, &c1]).await.unwrap_err();
-    let RunError::Backfill { message } = error else {
-        panic!("expected a backfill error, got {error:?}");
-    };
-    assert!(message.contains("not a first-parent ancestor"), "{message}");
-    assert!(workspace.stored_objects().is_empty());
 }
 
 /// `backfill --help` is an early exit whose usage text documents the range

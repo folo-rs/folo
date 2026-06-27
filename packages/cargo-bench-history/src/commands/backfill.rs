@@ -1041,6 +1041,45 @@ mod tests {
     }
 
     #[test]
+    fn render_lists_a_line_for_every_outcome_section() {
+        let report = BackfillReport {
+            stored: vec![("aaaaaaa".to_owned(), 2)],
+            skipped_existing: vec!["bbbbbbb".to_owned()],
+            skipped_empty: vec!["ccccccc".to_owned()],
+            failed: vec![("ddddddd".to_owned(), "boom".to_owned())],
+            stopped: Some("ddddddd".to_owned()),
+        };
+
+        let rendered = report.render(5);
+
+        assert!(
+            rendered.contains(
+                "Backfill range of 5 commits: 1 stored, 1 skipped (existing), \
+                 1 skipped (empty), 1 failed."
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("  stored aaaaaaa (2 cases)"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("  skipped bbbbbbb (already stored)"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("  skipped ccccccc (no benchmark cases)"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("  failed ddddddd (boom)"), "{rendered}");
+        assert!(
+            rendered
+                .contains("  stopped at ddddddd (pass --ignore-errors to continue past failures)"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
     fn execute_completes_and_tears_down_on_success() {
         let git = FakeBackfillGit::new(fixture());
         let runner = FakeCommitRunner::new();
