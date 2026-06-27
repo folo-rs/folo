@@ -20,13 +20,18 @@ use std::sync::Arc;
 
 use azure_core::credentials::{AccessToken, TokenCredential, TokenRequestOptions};
 use azure_core::error::ErrorKind;
-use azure_core::http::{RequestContent, StatusCode, Url};
+use azure_core::http::{
+    ClientOptions, HttpClient, HttpClientOptions, RequestContent, StatusCode, Transport, Url,
+    new_http_client,
+};
 use azure_core::time::{Duration, OffsetDateTime};
 use azure_identity::DeveloperToolsCredential;
 use azure_storage_blob::models::{
     BlobClientUploadOptions, BlobContainerClientListBlobsOptions, StorageErrorCode,
 };
-use azure_storage_blob::{BlobClient, BlobContainerClient};
+use azure_storage_blob::{
+    BlobClient, BlobClientOptions, BlobContainerClient, BlobContainerClientOptions,
+};
 use cargo_bench_history_core::codec;
 use futures::TryStreamExt as _;
 use jiff::tz::TimeZone;
@@ -59,6 +64,16 @@ pub(crate) struct AzureBlobStorage {
     /// The token credential for Entra ID authentication, or `None` when a SAS
     /// query on `container_endpoint` carries the authentication instead.
     credential: Option<Arc<dyn TokenCredential>>,
+    /// One pooled HTTP client shared by every per-object blob and container
+    /// client (injected via the transport seam in [`shared_client_options`]).
+    /// All operations then reuse a single `reqwest` connection pool, so the
+    /// backend keeps TCP+TLS connections alive across objects instead of paying
+    /// a fresh handshake per object (and exhausting ephemeral ports at high
+    /// fetch concurrency). Built once in [`from_config`].
+    ///
+    /// [`shared_client_options`]: AzureBlobStorage::shared_client_options
+    /// [`from_config`]: AzureBlobStorage::from_config
+    http_client: Arc<dyn HttpClient>,
 }
 
 impl fmt::Debug for AzureBlobStorage {
@@ -67,10 +82,12 @@ impl fmt::Debug for AzureBlobStorage {
         // signature, which must never reach logs.
         let mut endpoint = self.container_endpoint.clone();
         endpoint.set_query(None);
+        // `http_client` is an opaque shared transport with no meaningful debug
+        // representation and no security relevance; omit it explicitly.
         f.debug_struct("AzureBlobStorage")
             .field("endpoint", &endpoint.as_str())
             .field("entra", &self.credential.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -140,10 +157,34 @@ impl AzureBlobStorage {
             Some(caching)
         };
 
+        // Build one HTTP client up front and share it across every per-object
+        // blob and container client (via the transport seam in
+        // `shared_client_options`), so all operations reuse a single connection
+        // pool and keep TCP+TLS connections alive instead of paying a fresh
+        // handshake per object. `automatic_decompression` is left off to match
+        // the SDK's own per-client default: the storage layer stores gzip and
+        // inflates it itself in `get`, so the transport must hand back the raw
+        // compressed bytes (turning auto-decompression on would double-inflate).
+        let http_client = new_http_client(Some(HttpClientOptions {
+            automatic_decompression: false,
+        }));
+
         Ok(Self {
             container_endpoint,
             credential,
+            http_client,
         })
+    }
+
+    /// The client options every per-object client is built with: a transport
+    /// backed by the one shared, pooled [`http_client`](Self::http_client), so
+    /// all operations reuse a single `reqwest` connection pool (keep-alive)
+    /// rather than each opening its own and handshaking afresh.
+    fn shared_client_options(&self) -> ClientOptions {
+        ClientOptions {
+            transport: Some(Transport::new(Arc::clone(&self.http_client))),
+            ..Default::default()
+        }
     }
 
     /// Builds a client for the blob named `key`, constructing the URL one path
@@ -153,15 +194,24 @@ impl AzureBlobStorage {
         url.path_segments_mut()
             .map_err(|()| io_error("Azure endpoint cannot be a base URL"))?
             .extend(key.split('/'));
-        BlobClient::new(url, self.credential.clone(), None).map_err(|error| azure_io(&error))
+        let options = BlobClientOptions {
+            client_options: self.shared_client_options(),
+            ..Default::default()
+        };
+        BlobClient::new(url, self.credential.clone(), Some(options))
+            .map_err(|error| azure_io(&error))
     }
 
     /// Builds a client for the configured container.
     fn container_client(&self) -> Result<BlobContainerClient, StorageError> {
+        let options = BlobContainerClientOptions {
+            client_options: self.shared_client_options(),
+            ..Default::default()
+        };
         BlobContainerClient::new(
             self.container_endpoint.clone(),
             self.credential.clone(),
-            None,
+            Some(options),
         )
         .map_err(|error| azure_io(&error))
     }

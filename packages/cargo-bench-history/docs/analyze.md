@@ -192,28 +192,30 @@ both preserve input order so results are identical to a sequential pass.
   fetch arrival, not raw parse throughput. Levers: shrink the serial section (cheaper
   `push`), overlap the fold with the next batch's fetch, larger batches to amortise
   fork/join.
-- **Azure backend:** network-bound on **connection setup**, not CPU and not fetch
-  concurrency (see §7). The process spends almost all of its time waiting on TCP+TLS
-  handshakes.
+- **Azure backend:** network-bound on **per-request latency** (round-trips), not CPU and
+  not fetch concurrency. With the shared connection pool (§7) the per-object TCP+TLS
+  handshake is amortised across a keep-alive pool, so the dominant remaining cost is the
+  request round-trip itself; fewer-larger blobs help more than more concurrency.
 - **Data-structure hot spots:** `SeriesPoint` compactness, `Arc<str>` commit interning
   and single-probe `HashTable` id lookups (clone-on-miss) keep the
   tens-of-millions-of-points fold affordable. Preserve these; do not regress them.
 
 ---
 
-## 7. Azure connection reuse (a known performance characteristic)
+## 7. Azure connection reuse
 
-The Azure backend (`storage::azure::AzureBlobStorage`) builds a **fresh client per
-object** and passes `None` options: `blob_client(key)` constructs a new
-`BlobClient::new(url, credential, None)` (and `container_client()` a new
-`BlobContainerClient` for `list`), called by `get`/`put`/`delete`/`list`.
+The Azure backend (`storage::azure::AzureBlobStorage`) needs a separate per-object
+`BlobClient` (and a `BlobContainerClient` for `list`) to address each blob, but they
+all share **one** pooled HTTP client so every `get`/`put`/`delete`/`list` reuses a
+single `reqwest` connection pool.
 
-With `None` client options, the Azure SDK pipeline takes `transport.unwrap_or_default()`
-→ `Transport::default()` → `new_http_client(None)` → a **brand-new `reqwest::Client`**.
-`reqwest` pools connections *inside each `Client`*, so a new client per object means a
-fresh TCP+TLS handshake every time and **no HTTP keep-alive reuse**. Raising fetch
-concurrency does not help (each object still pays full connection setup) and at high
-concurrency exhausts ephemeral ports.
+The reuse matters because `reqwest` pools connections *inside each `Client`*. If each
+per-object client built its own transport — which is what `BlobClient::new(url,
+credential, None)` does (`None` options → `Transport::default()` →
+`new_http_client(None)` → a brand-new `reqwest::Client`) — every object would pay a
+fresh TCP+TLS handshake with **no HTTP keep-alive reuse**. Raising fetch concurrency
+would not help (each object still pays full connection setup) and at high concurrency
+would exhaust ephemeral ports.
 
 ```mermaid
 flowchart LR
@@ -230,24 +232,43 @@ flowchart LR
   end
 ```
 
-**The reuse lever:** build **one** pooled HTTP client in `AzureBlobStorage::from_config`
-and inject it into every client via the transport seam, so all per-object operations
-share a single `reqwest` connection pool. The relevant symbols are re-exported from
-`azure_core::http` (`new_http_client`, `Transport`, `HttpClient`):
+**How it is wired:** `AzureBlobStorage::from_config` builds **one** pooled HTTP client
+(stored as the `http_client: Arc<dyn HttpClient>` field) and `shared_client_options()`
+injects it into every per-object client through the transport seam, so all operations
+share a single connection pool. The relevant symbols are re-exported from
+`azure_core::http` (`new_http_client`, `HttpClientOptions`, `Transport`, `HttpClient`,
+`ClientOptions`):
 
 ```rust
-// struct field, built once:
-http_client: Arc<dyn HttpClient>,         // = azure_core::http::new_http_client(None)
+// built once in from_config:
+let http_client = new_http_client(Some(HttpClientOptions {
+    // The storage layer stores gzip and inflates it itself in `get`, so the
+    // transport must hand back raw compressed bytes. This mirrors the SDK's own
+    // per-client default; turning auto-decompression on would double-inflate.
+    automatic_decompression: false,
+}));
 
-// per client:
-let mut options = BlobClientOptions::default();
-options.client_options.transport = Some(Transport::new(self.http_client.clone()));
+// per client (via shared_client_options):
+let options = BlobClientOptions {
+    client_options: ClientOptions {
+        transport: Some(Transport::new(Arc::clone(&self.http_client))),
+        ..Default::default()
+    },
+    ..Default::default()
+};
 BlobClient::new(url, self.credential.clone(), Some(options))
 ```
 
-This enables keep-alive connection reuse (far fewer handshakes, lower per-object
-latency, no port exhaustion) and lets fetch concurrency actually pay off on the remote
-backend.
+`automatic_decompression` must stay **off**: the SDK's own per-client transport sets it
+to `false` and the storage layer inflates gzip manually in `get` (`codec::decompress`).
+A shared client built with `new_http_client(None)` would default it to `true`, so
+`reqwest` would auto-inflate and the manual `codec::decompress` would then double-inflate
+the bytes.
+
+This shared pool gives keep-alive connection reuse (far fewer handshakes, lower
+per-object latency, no port exhaustion) and lets fetch concurrency actually pay off on
+the remote backend. Validated by the Azurite round-trip tests (`storage::azure`) and the
+real-Azure end-to-end tests (`cbh_azure::*_in_real_azure`).
 
 ---
 
