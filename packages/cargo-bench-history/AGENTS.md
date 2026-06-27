@@ -522,6 +522,15 @@ marker file is present in the checked-out worktree, so a commit that tracks the
 marker stands in for one that fails to build. Helpers `commit_with_file` /
 `commit_removing_file` / `make_dirty` build the needed histories.
 
+These integration tests are deliberately kept to a small real-adapter smoke
+subset (a clean-object success across a range, a merge-spanning range, and a
+stop-on-failure drive) using **minimal commit ranges**. The planning, skip,
+overwrite, error-handling, and reporting logic is exhaustively covered by the
+fake-driven unit tests in `commands/backfill.rs` (over `FakeBackfillGit` /
+`FakeCommitRunner` / `MemoryStorage`), so do not re-prove that logic with extra
+real-git drives — each one spawns many git subprocesses and is the dominant cost
+under mutation testing. Add coverage at the fake level instead.
+
 ## Engine adapters (Callgrind, Criterion, `alloc_tracker`, `all_the_time`)
 
 Four benchmark engines are supported, each behind a pure parser in `bench/`:
@@ -712,7 +721,10 @@ Criterion's smallest run (10 samples, sub-second warm-up/measurement) and
 Criterion is taken with `default-features = false` to keep the build quick. When
 touching the run/harvest pipeline, do not let this test's gating tempt you to skip
 it locally — run it with plain `cargo test`/`nextest` (it is not Miri- or
-coverage-gated there).
+coverage-gated there). It is additionally `#[cfg_attr(mutants, ignore)]`: the
+mock-engine integration tests and the `resolve_target_root` unit test cover the same
+pipeline under mutation, so this heavyweight build (it recompiles Criterion on every
+mutant) carries no unique mutation signal — see the Mutation testing section.
 
 ## Fixture-golden canaries
 
@@ -844,6 +856,21 @@ round-trip tests — carry `#[cfg_attr(test, mutants::skip)]`, the same pattern
 lean on (`classify`, `map_error`, the `storage::sas` signer, and
 `account_sas_expiry`) has dedicated unit tests and stays under mutation testing,
 so the error-mapping and signing behavior is still mutation-covered.
+
+**Skipping non-discriminating tests under mutation.** cargo-mutants builds with
+`--cfg mutants` set, so a test that carries no mutation signal here can opt out at
+the test site with `#[cfg_attr(mutants, ignore = "<why>")]`. Unlike `mutants::skip`
+on production code, this is self-documenting where the test is defined and leaves
+normal `cargo test`, coverage, and the `test-azurite`/`test-azure` jobs untouched —
+the test still compiles and runs everywhere except under mutation. The Azurite and
+real-Azure network tests (`storage::azure::tests` round-trips and the whole
+`cbh_azure` suite) use this: without an emulator they only self-skip — slowly,
+through a TCP connect timeout — while the IO they would cover is already
+`mutants::skip`. `tests/cbh_real_engine.rs` uses it too: its run/harvest pipeline is
+also driven by the mock-engine integration tests and the `resolve_target_root` unit
+test, so it adds no unique mutation signal yet would recompile Criterion on every
+mutant. The `cfg(mutants)` name is registered in the workspace `unexpected_cfgs`
+`check-cfg` list so the zero-warnings policy still holds.
 
 ## Stress harness (`cargo-bench-history-stress`)
 

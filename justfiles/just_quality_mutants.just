@@ -18,6 +18,15 @@ mutants SHARD="" CAREFUL='false':
         "'" + $s + "'"
     }
 
+    # Two mechanisms keep mutation runs fast and meaningful:
+    #   * Path/package exclusions (the `-e` args below) drop whole files cargo-mutants
+    #     should never mutate.
+    #   * Individual tests that carry no mutation signal opt out at the test site with
+    #     `#[cfg_attr(mutants, ignore = "<why>")]` (cargo-mutants builds with
+    #     `--cfg mutants`). This keeps them running under normal `cargo test`/coverage
+    #     while skipping them under mutation - see packages/cargo-bench-history for
+    #     examples (the Azurite network tests and the real-engine end-to-end test).
+
     # Note: while cargo-mutants does theoretically support specifying these via config file, it
     # does not support merging that static set of entries with the dynamic set of entries we
     # determine based on the platform. So we have to specify them all here.
