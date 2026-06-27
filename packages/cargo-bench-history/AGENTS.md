@@ -515,6 +515,15 @@ marker file is present in the checked-out worktree, so a commit that tracks the
 marker stands in for one that fails to build. Helpers `commit_with_file` /
 `commit_removing_file` / `make_dirty` build the needed histories.
 
+These integration tests are deliberately kept to a small real-adapter smoke
+subset (a clean-object success across a range, a merge-spanning range, and a
+stop-on-failure drive) using **minimal commit ranges**. The planning, skip,
+overwrite, error-handling, and reporting logic is exhaustively covered by the
+fake-driven unit tests in `commands/backfill.rs` (over `FakeBackfillGit` /
+`FakeCommitRunner` / `MemoryStorage`), so do not re-prove that logic with extra
+real-git drives — each one spawns many git subprocesses and is the dominant cost
+under mutation testing. Add coverage at the fake level instead.
+
 ## Engine adapters (Callgrind, Criterion, `alloc_tracker`, `all_the_time`)
 
 Four benchmark engines are supported, each behind a pure parser in `bench/`:
