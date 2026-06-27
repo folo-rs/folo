@@ -22,10 +22,11 @@ mutants SHARD="" CAREFUL='false':
     #   * Path/package exclusions (the `-e` args below) drop whole files cargo-mutants
     #     should never mutate.
     #   * Individual tests that carry no mutation signal opt out at the test site with
-    #     `#[cfg_attr(mutants, ignore = "<why>")]` (cargo-mutants builds with
-    #     `--cfg mutants`). This keeps them running under normal `cargo test`/coverage
-    #     while skipping them under mutation - see packages/cargo-bench-history for
-    #     examples (the Azurite network tests and the real-engine end-to-end test).
+    #     `#[cfg_attr(mutants, ignore = "<why>")]`. This keeps them running under normal
+    #     `cargo test`/coverage while skipping them under mutation - see
+    #     packages/cargo-bench-history for examples (the Azurite network tests and the
+    #     real-engine end-to-end test). cargo-mutants defines no cfg of its own, so this
+    #     recipe exports `RUSTFLAGS=--cfg mutants` below to drive that opt-out.
 
     # Note: while cargo-mutants does theoretically support specifying these via config file, it
     # does not support merging that static set of entries with the dynamic set of entries we
@@ -177,6 +178,16 @@ mutants SHARD="" CAREFUL='false':
     # Set environment variable to disable watchdog during mutation testing.
     # This allows mutations that cause infinite loops to hang as expected.
     $env:MUTATION_TESTING = "1"
+
+    # Enable the `mutants` cfg so tests carrying `#[cfg_attr(mutants, ignore = "<why>")]`
+    # opt out of mutation runs. cargo-mutants defines no cfg of its own, but it preserves
+    # an existing RUSTFLAGS (chaining its own `--cap-lints=warn` onto it), so the flag we
+    # set here reaches rustc in the temporary build. The `cfg(mutants)` name is registered
+    # in the workspace `unexpected_cfgs` check-cfg list, so the zero-warnings policy holds.
+    $existing_rustflags = if ($env:RUSTFLAGS) { $env:RUSTFLAGS } else { "" }
+    if ($existing_rustflags -notlike "*--cfg mutants*") {
+        $env:RUSTFLAGS = ($existing_rustflags, "--cfg mutants" | Where-Object { $_ }) -join " "
+    }
 
     if ($careful) {
         # Force libtest to run a single test at a time within each `cargo test` invocation.
