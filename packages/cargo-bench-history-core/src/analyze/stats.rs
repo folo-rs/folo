@@ -27,15 +27,19 @@ fn same(left: f64, right: f64) -> bool {
 /// The number of unordered pairs `(i, j)` with `i < j` drawn from `count`
 /// elements, i.e. `count·(count−1)/2`.
 ///
-/// Used to size the pairwise-slope buffer in [`theil_sen_line`] exactly up front,
-/// so it never reallocates while filling. The product `count·(count−1)` is always
-/// even, so halving it is exact; the saturating/checked steps keep the workspace
-/// arithmetic lints satisfied without an overflow path (series lengths are far
-/// below the point where the product could wrap a `usize`).
+/// Sizes the pairwise-slope buffer in [`theil_sen_line`] up front so it does not
+/// reallocate while filling. The product `count·(count−1)` is always even, so
+/// halving it is exact. Realistic series lengths keep the product far below
+/// `usize::MAX`; the checked multiply returns 0 if it ever would overflow, so the
+/// buffer just grows on demand rather than requesting an absurd capacity.
+//
+// Mutation-skipped: the result only sizes a capacity hint, never the computed line,
+// so no behavioral test can distinguish one return value from another.
+#[cfg_attr(test, mutants::skip)]
 fn pair_count(count: usize) -> usize {
     count
-        .saturating_mul(count.saturating_sub(1))
-        .checked_div(2)
+        .checked_mul(count.saturating_sub(1))
+        .and_then(|product| product.checked_div(2))
         .unwrap_or(0)
 }
 

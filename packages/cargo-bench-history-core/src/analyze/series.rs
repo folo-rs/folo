@@ -313,7 +313,7 @@ impl<'a> SeriesBuilder<'a> {
             let hash = hasher.hash_one(&record.id);
             let kind_groups = match id_groups.entry(
                 hash,
-                |(existing, _)| *existing == record.id,
+                |(existing, _)| existing == &record.id,
                 |(existing, _)| hasher.hash_one(existing),
             ) {
                 Entry::Occupied(occupied) => &mut occupied.into_mut().1,

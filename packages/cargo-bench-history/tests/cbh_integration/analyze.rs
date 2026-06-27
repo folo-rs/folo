@@ -1862,3 +1862,64 @@ async fn analyze_criterion_feature_branch_admits_dirty_snapshots() {
         "with --no-dirty only the flat clean Criterion series remains: {report}"
     );
 }
+
+/// Loads a history larger than one parse batch so the loader's mid-stream batch
+/// flush actually fires.
+///
+/// `select_dataset` parses fetched objects in bounded batches and only flushes a
+/// batch mid-stream once it fills; a dataset that fits in a single batch never
+/// exercises that path (the final remainder flush handles it instead). A large CI
+/// fleet running the same wall-clock benchmark on many machines produces one
+/// comparable set per machine key, so analyzing all of them (`--machine-key all`)
+/// reaches a multi-batch object count with a handful of commits rather than
+/// hundreds. Every machine's series carries the same rising step, so each is
+/// flagged — proving all the objects were fetched, parsed and folded through the
+/// batched load.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn analyze_loads_a_history_larger_than_one_parse_batch() {
+    let workspace = Workspace::repo(&storage_only_config());
+
+    // 40 machine partitions × 8 commits = 320 stored objects, comfortably above the
+    // loader's 256-object parse batch, so a full batch flushes before the remainder.
+    // The four-flat-then-four-raised shape mirrors `seed_rising_criterion_history`,
+    // the proven wall-clock regression fixture.
+    let machines = 40_usize;
+    for (date, label, value) in [
+        ("2024-02-01", "d1", 20.0),
+        ("2024-02-02", "d2", 20.0),
+        ("2024-02-03", "d3", 20.0),
+        ("2024-02-04", "d4", 20.0),
+        ("2024-02-05", "d5", 30.0),
+        ("2024-02-06", "d6", 30.0),
+        ("2024-02-07", "d7", 30.0),
+        ("2024-02-08", "d8", 30.0),
+    ] {
+        workspace.commit_dated(date, label);
+        for machine in 0..machines {
+            workspace.seed_criterion(label, &format!("mk-{machine}"), value);
+        }
+    }
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace
+        .drive(&[
+            "analyze",
+            "--target-triple",
+            "x86_64-pc-windows-msvc",
+            "--machine-key",
+            "all",
+        ])
+        .await
+        .unwrap()
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(
+        regressions, machines,
+        "every machine partition carries the same rising step, so each one regresses\n{report}"
+    );
+}

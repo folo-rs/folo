@@ -857,34 +857,32 @@ where
         // batch is drained (not consumed) so its allocation is reused for the next
         // batch. `map_parallel` preserves order, so zipping its results back onto the
         // drained objects keeps each parsed run paired with its own key and rank.
-        let mut fold_batch = |batch: &mut Vec<(usize, String, StorageKey, Vec<u8>)>| -> Result<
-            (),
-            RunError,
-        > {
-            let parsed_runs: Vec<Result<Run, RunError>> =
-                map_parallel(batch.as_slice(), |(_, key, _, bytes)| parse(key, bytes));
-            for ((rank, key, parsed, _bytes), run) in batch.drain(..).zip(parsed_runs) {
-                let run = run?;
-                let topo_index = order
-                    .get(&parsed.commit)
-                    .copied()
-                    .expect("phase 1 admitted only commits on the analyzed history");
-                let dirty = parsed.is_dirty();
-                let is_exception = dirty
-                    && dirty_base_exception
-                        .get(parsed.commit.as_str())
+        let mut fold_batch =
+            |batch: &mut Vec<(usize, String, StorageKey, Vec<u8>)>| -> Result<(), RunError> {
+                let parsed_runs: Vec<Result<Run, RunError>> =
+                    map_parallel(batch.as_slice(), |(_, key, _, bytes)| parse(key, bytes));
+                for ((rank, key, parsed, _bytes), run) in batch.drain(..).zip(parsed_runs) {
+                    let run = run?;
+                    let topo_index = order
+                        .get(&parsed.commit)
                         .copied()
-                        .unwrap_or(false);
-                if is_exception {
-                    included_dirty_base_exception = true;
+                        .expect("phase 1 admitted only commits on the analyzed history");
+                    let dirty = parsed.is_dirty();
+                    let is_exception = dirty
+                        && dirty_base_exception
+                            .get(parsed.commit.as_str())
+                            .copied()
+                            .unwrap_or(false);
+                    if is_exception {
+                        included_dirty_base_exception = true;
+                    }
+                    run_index.record(&parsed.set, topo_index, &parsed.commit, dirty);
+                    builder.push(&parsed.set, topo_index, dirty, ordinal_of(rank), &run);
+                    admitted.push((key, is_exception));
+                    // `run` is dropped here; only the extracted (compact) points are kept.
                 }
-                run_index.record(&parsed.set, topo_index, &parsed.commit, dirty);
-                builder.push(&parsed.set, topo_index, dirty, ordinal_of(rank), &run);
-                admitted.push((key, is_exception));
-                // `run` is dropped here; only the extracted (compact) points are kept.
-            }
-            Ok(())
-        };
+                Ok(())
+            };
 
         let mut fetches = futures::stream::iter(to_fetch.into_iter().enumerate())
             .map(move |(rank, (key, parsed))| fetch_bytes_ranked(storage, rank, key, parsed))
@@ -894,6 +892,10 @@ where
         while let Some(fetched) = fetches.next().await {
             batch.push(fetched?);
             if batch.len() >= PARSE_CHUNK {
+                // The batch is flushed the moment it fills and is never grown past
+                // that, so it holds exactly `PARSE_CHUNK` objects here — it can never
+                // overshoot.
+                debug_assert_eq!(batch.len(), PARSE_CHUNK);
                 fold_batch(&mut batch)?;
             }
         }

@@ -17,6 +17,12 @@ use std::{panic, thread};
 /// How many worker threads to split `len` items across: the available parallelism,
 /// capped at `len` so every spawned worker gets at least one item (never an empty
 /// chunk).
+//
+// Mutation-skipped: the return value only selects how the work is partitioned, never
+// the result. Both helpers take a serial pass for `<= 1`, and every worker count
+// yields the same order-preserving output, so no behavioral test can distinguish the
+// values.
+#[cfg_attr(test, mutants::skip)]
 fn worker_count(len: usize) -> usize {
     thread::available_parallelism()
         .map_or(1, NonZero::get)
@@ -118,7 +124,10 @@ mod tests {
         assert!(map_parallel(&empty, |value| *value).is_empty());
 
         let single = [7_usize];
-        assert_eq!(map_parallel(&single, |value| value.saturating_add(1)), vec![8]);
+        assert_eq!(
+            map_parallel(&single, |value| value.saturating_add(1)),
+            vec![8]
+        );
     }
 
     #[test]
