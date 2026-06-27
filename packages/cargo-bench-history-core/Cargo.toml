@@ -19,6 +19,7 @@ nonempty = { workspace = true, features = ["serialize"] }
 rasciigraph = { workspace = true, features = ["color"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+smallvec = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 alloc_tracker = { path = "../alloc_tracker" }
