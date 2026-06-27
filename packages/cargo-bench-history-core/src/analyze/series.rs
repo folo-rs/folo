@@ -383,8 +383,8 @@ impl<'a> SeriesBuilder<'a> {
         });
 
         // Each series' point sort is independent and is the dominant cost once a
-        // series holds millions of points, so the sorts run across a thread pool.
-        // Sorting in place per series leaves the surrounding `series` order — and
+        // series holds millions of points, so the sorts run across scoped fork/join
+        // threads. Sorting in place per series leaves the surrounding `series` order — and
         // therefore the result — identical to sorting each series sequentially.
         for_each_mut_parallel(&mut series, |series| {
             // `sort_unstable_by` orders in place without the scratch buffer a stable

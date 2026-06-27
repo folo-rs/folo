@@ -1007,10 +1007,10 @@ pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Vec<Finding
     let config = &context.config;
 
     // Each series is detected independently — there is no cross-series state in the
-    // detection step — so the per-series work is evaluated across a thread pool. The
-    // collect preserves the input order, so `candidates` is in the same series order a
-    // sequential pass would produce, keeping the false-discovery alignment below and
-    // the deterministic final ordering identical.
+    // detection step — so the per-series work is evaluated across scoped fork/join
+    // threads. The collect preserves the input order, so `candidates` is in the same
+    // series order a sequential pass would produce, keeping the false-discovery
+    // alignment below and the deterministic final ordering identical.
     let candidates: Vec<Candidate> = detect_all(series, context);
 
     // Control the false-discovery rate across the noisy candidates only; the
@@ -1070,10 +1070,10 @@ pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Vec<Finding
 /// Detects every series, returning the raised candidates in series order.
 ///
 /// Each series is independent — there is no cross-series state in the detection step
-/// — so the per-series work is spread across a thread pool by [`map_parallel`], which
-/// preserves input order. That keeps the candidate order identical to a sequential
-/// pass, which both the false-discovery alignment and the deterministic final ranking
-/// in [`find_changes`] rely on.
+/// — so the per-series work is spread across scoped fork/join threads by
+/// [`map_parallel`], which preserves input order. That keeps the candidate order
+/// identical to a sequential pass, which both the false-discovery alignment and the
+/// deterministic final ranking in [`find_changes`] rely on.
 fn detect_all(series: &[Series], context: &AnalysisContext) -> Vec<Candidate> {
     // Pair each series with its global index so a candidate can be stamped with its
     // original position regardless of which worker chunk evaluates it.
@@ -1534,7 +1534,8 @@ mod tests {
 
     #[test]
     fn many_independent_series_are_detected_in_a_stable_order() {
-        // `find_changes` runs the per-series detection across a thread pool. The work
+        // `find_changes` runs the per-series detection across scoped fork/join threads.
+        // The work
         // is embarrassingly parallel — no series depends on another — so this guards
         // the properties the parallel pass must preserve: every independent finding is
         // produced exactly once (the parallel `filter_map`/`collect` neither drops nor

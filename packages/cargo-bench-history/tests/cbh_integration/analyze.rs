@@ -1902,7 +1902,7 @@ async fn analyze_loads_a_history_larger_than_one_parse_batch() {
     // could silently erode. A large CI fleet running one wall-clock benchmark across
     // many machines produces exactly this shape (`--machine-key all`).
     let commits = history.len();
-    let machines = cargo_bench_history::PARSE_CHUNK
+    let machines = cargo_bench_history::__private::PARSE_CHUNK
         .saturating_mul(2)
         .div_ceil(commits)
         .saturating_add(1);
@@ -1954,9 +1954,9 @@ async fn analyze_loads_a_history_larger_than_one_parse_batch() {
         "every seeded object should load through the batched path\n{report}"
     );
     assert!(
-        runs > cargo_bench_history::PARSE_CHUNK,
+        runs > cargo_bench_history::__private::PARSE_CHUNK,
         "the fixture must clear one parse batch so a mid-stream flush fires: {runs} runs vs \
          PARSE_CHUNK {}",
-        cargo_bench_history::PARSE_CHUNK
+        cargo_bench_history::__private::PARSE_CHUNK
     );
 }

@@ -597,7 +597,7 @@ const LOAD_CONCURRENCY: usize = 128;
 ///
 /// Parsing a stored run from JSON is the dominant CPU cost of a load and is
 /// independent per object, so the fold collects the decompressed bytes of up to this
-/// many objects and parses the batch across a thread pool before folding the results
+/// many objects and parses the batch across scoped threads before folding the results
 /// into the series. The batch is bounded rather than unbounded so the load keeps its
 /// streaming memory profile: only this many parsed runs (plus their source bytes) are
 /// ever resident at once, instead of the whole data set, which on a large history is
@@ -864,7 +864,7 @@ where
     );
 
     // Phase 2/3 — fetch the survivors concurrently and fold them into the series in
-    // bounded batches: each batch's runs are parsed across a thread pool (the load's
+    // bounded batches: each batch's runs are parsed across scoped threads (the load's
     // dominant CPU cost) and then folded serially, dropping the parsed runs as soon
     // as their points are extracted so the whole parsed data set is never resident at
     // once (the peak that drove analysis into tens of gigabytes). Each object's

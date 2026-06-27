@@ -72,7 +72,7 @@ flowchart TD
     LOOP["buffer_unordered(LOAD_CONCURRENCY)\nfetch_bytes_ranked → Storage::get"] -->|"bytes, OUT of order"| BATCH{"batch.len ≥ PARSE_CHUNK?"}
     BATCH -->|no| LOOP
     BATCH -->|"yes / stream end"| FOLD["fold_batch()"]
-    FOLD --> PAR["map_parallel: JSON → Run\n★ THREAD-POOL FORK/JOIN ★"]
+    FOLD --> PAR["map_parallel: JSON → Run\n★ SCOPED FORK/JOIN ★"]
     PAR --> SER["serial fold: SeriesBuilder.push per run\nintern commit, hash id, group points"]
     SER --> DROP["drop parsed Runs\nkeep only compact SeriesPoints"]
     DROP --> LOOP
@@ -127,9 +127,9 @@ hence the compactness and interning.
 flowchart TD
   FIN["finish()"] --> FLAT["flatten nested maps → Vec<Series>"]
   FLAT --> SS["sort series by (set,id,kind)\n— SERIAL —"]
-  SS --> PPS["for_each_mut_parallel:\nsort each series' points by topology\n★ THREAD-POOL FORK/JOIN ★"]
+  SS --> PPS["for_each_mut_parallel:\nsort each series' points by topology\n★ SCOPED FORK/JOIN ★"]
   PPS --> SERIES[("Vec<Series>")]
-  SERIES --> DALL["detect_all: map_parallel(detect_one)\n★ THREAD-POOL FORK/JOIN, per-series ★"]
+  SERIES --> DALL["detect_all: map_parallel(detect_one)\n★ SCOPED FORK/JOIN, per-series ★"]
   DALL --> CANDS["Vec<Candidate>"]
   CANDS --> BH["benjamini_hochberg FDR filter\n— SERIAL —"]
   BH --> MAT["materialise surviving findings'\nchart points"]
@@ -140,7 +140,7 @@ flowchart TD
 ### Inside one `detect_one` (`analyze::findings`) — per series, runs on a worker
 
 The detection step has no cross-series state, so every series is evaluated
-independently across the thread pool. The mode selects the detector:
+independently across scoped fork/join threads. The mode selects the detector:
 
 - **History** (long-range trend): project point values once, then run a
   **change-point** detector *and* a **drift** detector and keep the better fit
@@ -170,11 +170,11 @@ reordering them cannot change the median.
 | `storage.list` | single async request | the whole prefix | — |
 | Phase-1 filtering | serial | per candidate key | — |
 | **fetch** | **I/O-concurrent (one task)** | per object, bounded in flight | `buffer_unordered(LOAD_CONCURRENCY)` |
-| **parse** | **CPU-parallel (thread pool)** | one chunk per worker, of a `PARSE_CHUNK` batch | fork at each flush, join before fold |
+| **parse** | **CPU-parallel (scoped threads)** | one chunk per worker, of a `PARSE_CHUNK` batch | fork at each flush, join before fold |
 | fold (`push`) | **serial** | per `Run` | runs between parallel bursts |
 | series sort | serial | the `Vec<Series>` | — |
-| **point sort** | **CPU-parallel (thread pool)** | one chunk of series per worker | single fork/join over all series |
-| **detect** | **CPU-parallel (thread pool)** | one chunk of series per worker | single fork/join over all series |
+| **point sort** | **CPU-parallel (scoped threads)** | one chunk of series per worker | single fork/join over all series |
+| **detect** | **CPU-parallel (scoped threads)** | one chunk of series per worker | single fork/join over all series |
 | BH filter + finding sort + render | serial | the candidate/finding list | — |
 
 `map_parallel` / `for_each_mut_parallel` split the slice into **exactly one balanced

@@ -244,7 +244,12 @@ pub use model::{
 pub use outcome::{RunError, RunOutcome};
 pub use storage::StorageError;
 
-// Exposed only so the in-workspace integration tests can size a dataset against the
-// loader's parse-batch threshold; hidden from the docs as it is not a stable API.
+// Internal surface exposed only for in-workspace integration tests; not a stable
+// public API. The path carries the `__private` keyword per the workspace
+// doc-hidden-visibility convention.
 #[doc(hidden)]
-pub use analyze::PARSE_CHUNK;
+pub mod __private {
+    // Lets the integration tests size a dataset against the loader's parse-batch
+    // threshold without exposing the constant as a stable API.
+    pub use crate::analyze::PARSE_CHUNK;
+}
