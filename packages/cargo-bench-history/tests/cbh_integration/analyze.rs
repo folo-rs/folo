@@ -1880,12 +1880,9 @@ async fn analyze_criterion_feature_branch_admits_dirty_snapshots() {
 async fn analyze_loads_a_history_larger_than_one_parse_batch() {
     let workspace = Workspace::repo(&storage_only_config());
 
-    // 40 machine partitions × 8 commits = 320 stored objects, comfortably above the
-    // loader's 256-object parse batch, so a full batch flushes before the remainder.
     // The four-flat-then-four-raised shape mirrors `seed_rising_criterion_history`,
     // the proven wall-clock regression fixture.
-    let machines = 40_usize;
-    for (date, label, value) in [
+    let history = [
         ("2024-02-01", "d1", 20.0),
         ("2024-02-02", "d2", 20.0),
         ("2024-02-03", "d3", 20.0),
@@ -1894,7 +1891,22 @@ async fn analyze_loads_a_history_larger_than_one_parse_batch() {
         ("2024-02-06", "d6", 30.0),
         ("2024-02-07", "d7", 30.0),
         ("2024-02-08", "d8", 30.0),
-    ] {
+    ];
+
+    // Fan the same rising series across enough machine-key partitions that the
+    // loaded object count clears two full parse batches. Every commit stores one
+    // object per machine, so `machines * commits` objects are fetched, and the loader
+    // only flushes a batch mid-stream once that count exceeds its parse batch
+    // (`PARSE_CHUNK`). Sizing the fan-out from `PARSE_CHUNK` keeps this path covered
+    // even if the batch size is later raised, rather than hard-coding a margin that
+    // could silently erode. A large CI fleet running one wall-clock benchmark across
+    // many machines produces exactly this shape (`--machine-key all`).
+    let commits = history.len();
+    let machines = cargo_bench_history::PARSE_CHUNK
+        .saturating_mul(2)
+        .div_ceil(commits)
+        .saturating_add(1);
+    for (date, label, value) in history {
         workspace.commit_dated(date, label);
         for machine in 0..machines {
             workspace.seed_criterion(label, &format!("mk-{machine}"), value);
@@ -1912,6 +1924,8 @@ async fn analyze_loads_a_history_larger_than_one_parse_batch() {
             "x86_64-pc-windows-msvc",
             "--machine-key",
             "all",
+            "--format",
+            "json",
         ])
         .await
         .unwrap()
@@ -1921,5 +1935,28 @@ async fn analyze_loads_a_history_larger_than_one_parse_batch() {
     assert_eq!(
         regressions, machines,
         "every machine partition carries the same rising step, so each one regresses\n{report}"
+    );
+
+    // Prove the load actually drove the mid-stream flush rather than a single
+    // remainder flush: the report counts every object that entered the analysis, all
+    // of them must have loaded, and that count must exceed one parse batch (which is
+    // exactly when a flush fires).
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    let runs = usize::try_from(
+        parsed["runs"]
+            .as_u64()
+            .expect("the report carries a numeric runs count"),
+    )
+    .unwrap();
+    assert_eq!(
+        runs,
+        machines.saturating_mul(commits),
+        "every seeded object should load through the batched path\n{report}"
+    );
+    assert!(
+        runs > cargo_bench_history::PARSE_CHUNK,
+        "the fixture must clear one parse batch so a mid-stream flush fires: {runs} runs vs \
+         PARSE_CHUNK {}",
+        cargo_bench_history::PARSE_CHUNK
     );
 }

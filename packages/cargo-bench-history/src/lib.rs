@@ -243,3 +243,8 @@ pub use model::{
 };
 pub use outcome::{RunError, RunOutcome};
 pub use storage::StorageError;
+
+// Exposed only so the in-workspace integration tests can size a dataset against the
+// loader's parse-batch threshold; hidden from the docs as it is not a stable API.
+#[doc(hidden)]
+pub use analyze::PARSE_CHUNK;

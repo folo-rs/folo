@@ -579,7 +579,7 @@ const LOAD_CONCURRENCY: usize = 32;
 /// the difference between hundreds of megabytes and tens of gigabytes. It is set well
 /// above the core count so every worker stays busy and the per-batch thread-spawn
 /// overhead is amortized across plenty of parses.
-const PARSE_CHUNK: usize = 256;
+pub const PARSE_CHUNK: usize = 256;
 
 /// Fetches and deserializes the given stored objects with bounded concurrency.
 ///

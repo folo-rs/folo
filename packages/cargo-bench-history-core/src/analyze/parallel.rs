@@ -29,13 +29,36 @@ fn worker_count(len: usize) -> usize {
         .min(len)
 }
 
+/// The lengths of exactly `workers` contiguous chunks that partition `len` items as
+/// evenly as possible: the first `len % workers` chunks hold one extra item, the
+/// rest hold `len / workers`.
+///
+/// Both callers guarantee `1 <= workers <= len` before taking the parallel path (a
+/// single worker, or a slice no longer than the worker count, takes the serial path
+/// instead), so every chunk is non-empty and the sizes differ by at most one.
+fn balanced_chunk_sizes(len: usize, workers: usize) -> impl Iterator<Item = usize> {
+    // `workers >= 1` here, so the divide and remainder are well defined, and
+    // `base + 1 <= len` cannot overflow; the checked operators keep the workspace's
+    // arithmetic lint satisfied without masking a real bug.
+    let base = len.checked_div(workers).unwrap_or(0);
+    let remainder = len.checked_rem(workers).unwrap_or(0);
+    (0..workers).map(move |index| {
+        if index < remainder {
+            base.saturating_add(1)
+        } else {
+            base
+        }
+    })
+}
+
 /// Maps `worker` over `items` in parallel, returning the results in input order.
 ///
-/// The slice is divided into up to one contiguous chunk per worker thread (equal
-/// sized except for a possibly shorter last chunk); each chunk is mapped on its own
-/// scoped thread and the chunk results are concatenated in order, so the output is
-/// identical to `items.iter().map(worker).collect()` — only spread across cores. A
-/// worker panic is propagated to the caller.
+/// The slice is divided into exactly one contiguous chunk per worker thread —
+/// balanced, so the chunk sizes differ by at most one and every worker gets work;
+/// each chunk is mapped on its own scoped thread and the chunk results are
+/// concatenated in order, so the output is identical to
+/// `items.iter().map(worker).collect()` — only spread across cores. A worker panic
+/// is propagated to the caller.
 ///
 /// `worker` must be `Sync` because every chunk shares one reference to it.
 pub fn map_parallel<T, R, F>(items: &[T], worker: F) -> Vec<R>
@@ -50,17 +73,24 @@ where
     }
 
     let worker = &worker;
-    let chunk_size = items.len().div_ceil(workers);
+    let total = items.len();
     thread::scope(|scope| {
-        // Each `chunks` element is an owned subslice with the slice's full lifetime,
-        // so it moves cleanly into its worker thread. The eager `collect` spawns
-        // every worker before the first `join`; a lazy `flat_map` straight onto the
-        // handles would instead spawn and join one chunk at a time, serializing the
-        // work.
-        let handles: Vec<_> = items
-            .chunks(chunk_size)
-            .map(|chunk| scope.spawn(move || chunk.iter().map(worker).collect::<Vec<R>>()))
-            .collect();
+        // Hand each worker one balanced subslice carved off the front with
+        // `split_at`, so every chunk is an owned subslice with the slice's full
+        // lifetime that moves cleanly into its thread. Spawning every worker up front
+        // (before any `join`) is what runs them concurrently; joining one chunk at a
+        // time would serialize the work.
+        let mut remaining = items;
+        let mut handles = Vec::with_capacity(workers);
+        for size in balanced_chunk_sizes(total, workers) {
+            let (chunk, rest) = remaining.split_at(size);
+            remaining = rest;
+            handles.push(scope.spawn(move || chunk.iter().map(worker).collect::<Vec<R>>()));
+        }
+        debug_assert!(
+            remaining.is_empty(),
+            "balanced sizes sum to the slice length"
+        );
         handles
             .into_iter()
             .flat_map(|handle| {
@@ -75,10 +105,10 @@ where
 /// Applies `worker` to every element of `items` in place, in parallel.
 ///
 /// The mutable counterpart of [`map_parallel`] for an in-place pass with nothing to
-/// gather (each element is transformed where it sits). The slice is split into up to
-/// one contiguous chunk per worker via [`chunks_mut`](slice::chunks_mut), so the
-/// chunks are provably disjoint and each worker owns its elements. A worker panic is
-/// propagated to the caller.
+/// gather (each element is transformed where it sits). The slice is split into
+/// exactly one balanced contiguous chunk per worker via repeated
+/// [`split_at_mut`](slice::split_at_mut), so the chunks are provably disjoint and
+/// each worker owns its elements. A worker panic is propagated to the caller.
 pub(crate) fn for_each_mut_parallel<T, F>(items: &mut [T], worker: F)
 where
     T: Send,
@@ -91,12 +121,22 @@ where
     }
 
     let worker = &worker;
-    let chunk_size = items.len().div_ceil(workers);
+    let total = items.len();
     thread::scope(|scope| {
-        let handles: Vec<_> = items
-            .chunks_mut(chunk_size)
-            .map(|chunk| scope.spawn(move || chunk.iter_mut().for_each(worker)))
-            .collect();
+        // Carve one balanced subslice per worker off the front with `split_at_mut`;
+        // the pieces are provably disjoint, so each moves into its own thread. Spawn
+        // them all before joining so they run concurrently.
+        let mut remaining = items;
+        let mut handles = Vec::with_capacity(workers);
+        for size in balanced_chunk_sizes(total, workers) {
+            let (chunk, rest) = remaining.split_at_mut(size);
+            remaining = rest;
+            handles.push(scope.spawn(move || chunk.iter_mut().for_each(worker)));
+        }
+        debug_assert!(
+            remaining.is_empty(),
+            "balanced sizes sum to the slice length"
+        );
         for handle in handles {
             handle
                 .join()
@@ -109,6 +149,49 @@ where
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn balanced_chunk_sizes_splits_into_exactly_workers_balanced_chunks() {
+        // An even split gives every worker the same size.
+        let even: Vec<usize> = balanced_chunk_sizes(12, 4).collect();
+        assert_eq!(even, vec![3, 3, 3, 3]);
+
+        // A remainder is spread one-per-chunk across the leading chunks, so the
+        // larger chunks come first and sizes differ by at most one.
+        let uneven: Vec<usize> = balanced_chunk_sizes(13, 4).collect();
+        assert_eq!(uneven, vec![4, 3, 3, 3]);
+
+        // The "just above the worker count" case the old `div_ceil` chunking got
+        // wrong (len = workers + 1 yielded ~workers/2 chunks): it must still produce
+        // exactly `workers` non-empty chunks — one of size two, the rest size one —
+        // never collapse to fewer and leave cores idle.
+        let just_above: Vec<usize> = balanced_chunk_sizes(33, 32).collect();
+        assert_eq!(just_above.len(), 32);
+        assert_eq!(just_above.iter().filter(|&&size| size == 2).count(), 1);
+        assert_eq!(just_above.iter().filter(|&&size| size == 1).count(), 31);
+
+        // Across many shapes: exactly `workers` chunks, every chunk non-empty, sizes
+        // differ by at most one, and they sum back to `len` (a full, non-overlapping
+        // partition).
+        for len in 1..=64_usize {
+            for workers in 1..=len.min(16) {
+                let sizes: Vec<usize> = balanced_chunk_sizes(len, workers).collect();
+                assert_eq!(sizes.len(), workers, "len={len} workers={workers}");
+                assert_eq!(
+                    sizes.iter().sum::<usize>(),
+                    len,
+                    "len={len} workers={workers}"
+                );
+                let max = *sizes.iter().max().expect("workers >= 1");
+                let min = *sizes.iter().min().expect("workers >= 1");
+                assert!(min >= 1, "len={len} workers={workers}: {sizes:?}");
+                assert!(
+                    max.saturating_sub(min) <= 1,
+                    "len={len} workers={workers}: {sizes:?}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn map_parallel_preserves_order_and_maps_every_element() {
