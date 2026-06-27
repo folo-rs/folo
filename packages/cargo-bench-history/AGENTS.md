@@ -152,6 +152,13 @@ the gzip magic never collides with JSON's first byte.
 
 ## The `analyze` command
 
+> **Data-flow & parallelism reference:** [`docs/analyze.md`](docs/analyze.md) is the
+> canonical map of the `analyze` load and detection path — what loads where, in what
+> order, what is computed/sorted, and exactly where I/O concurrency vs. CPU
+> parallelism happens (with Mermaid diagrams). Keep it in sync whenever you change the
+> fetch/parse/fold batching, the `analyze::parallel` helpers, the detection stages, or
+> the Azure transport.
+
 `analyze::execute` builds the real `SystemGitHistory` (rooted at `--repo` or the
 current directory) and the storage from `build_storage`, then delegates to
 `analyze::analyze_with`, which is generic over both the `GitHistory` and `Storage`
