@@ -26,7 +26,8 @@ mutants SHARD="" CAREFUL='false':
     #     `cargo test`/coverage while skipping them under mutation - see
     #     packages/cargo-bench-history for examples (the Azurite network tests and the
     #     real-engine end-to-end test). cargo-mutants defines no cfg of its own, so this
-    #     recipe exports `RUSTFLAGS=--cfg mutants` below to drive that opt-out.
+    #     recipe ensures `RUSTFLAGS` contains `--cfg mutants` below (preserving any
+    #     existing flags) to drive that opt-out.
 
     # Note: while cargo-mutants does theoretically support specifying these via config file, it
     # does not support merging that static set of entries with the dynamic set of entries we

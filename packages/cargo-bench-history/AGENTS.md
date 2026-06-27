@@ -851,8 +851,9 @@ lean on (`classify`, `map_error`, the `storage::sas` signer, and
 so the error-mapping and signing behavior is still mutation-covered.
 
 **Skipping non-discriminating tests under mutation.** The `just mutants` recipe builds
-with `--cfg mutants` set (it exports `RUSTFLAGS=--cfg mutants`; cargo-mutants itself
-defines no such cfg), so a test that carries no mutation signal here can opt out at
+with `--cfg mutants` set (it ensures `RUSTFLAGS` contains `--cfg mutants`, preserving any
+flags you already set; cargo-mutants itself defines no such cfg), so a test that carries
+no mutation signal here can opt out at
 the test site with `#[cfg_attr(mutants, ignore = "<why>")]`. Unlike `mutants::skip`
 on production code, this is self-documenting where the test is defined and leaves
 normal `cargo test`, coverage, and the `test-azurite`/`test-azure` jobs untouched —
