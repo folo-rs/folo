@@ -1093,7 +1093,10 @@ mod tests {
 
     #[tokio::test]
     #[cfg_attr(miri, ignore)]
-    #[cfg_attr(mutants, ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip")]
+    #[cfg_attr(
+        mutants,
+        ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip"
+    )]
     #[serial]
     async fn put_creates_the_container_then_get_and_list_round_trip() {
         let Some(storage) = azurite_storage_or_skip() else {
@@ -1120,7 +1123,10 @@ mod tests {
 
     #[tokio::test]
     #[cfg_attr(miri, ignore)]
-    #[cfg_attr(mutants, ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip")]
+    #[cfg_attr(
+        mutants,
+        ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip"
+    )]
     #[serial]
     async fn get_missing_blob_in_existing_container_reports_not_found() {
         let Some(storage) = azurite_storage_or_skip() else {
@@ -1136,7 +1142,10 @@ mod tests {
 
     #[tokio::test]
     #[cfg_attr(miri, ignore)]
-    #[cfg_attr(mutants, ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip")]
+    #[cfg_attr(
+        mutants,
+        ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip"
+    )]
     #[serial]
     async fn get_in_missing_container_reports_not_found() {
         let Some(storage) = azurite_storage_or_skip() else {
@@ -1150,7 +1159,10 @@ mod tests {
 
     #[tokio::test]
     #[cfg_attr(miri, ignore)]
-    #[cfg_attr(mutants, ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip")]
+    #[cfg_attr(
+        mutants,
+        ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip"
+    )]
     #[serial]
     async fn delete_removes_a_blob_and_leaves_siblings() {
         let Some(storage) = azurite_storage_or_skip() else {
@@ -1172,7 +1184,10 @@ mod tests {
 
     #[tokio::test]
     #[cfg_attr(miri, ignore)]
-    #[cfg_attr(mutants, ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip")]
+    #[cfg_attr(
+        mutants,
+        ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip"
+    )]
     #[serial]
     async fn delete_missing_blob_reports_not_found() {
         let Some(storage) = azurite_storage_or_skip() else {
@@ -1188,7 +1203,10 @@ mod tests {
 
     #[tokio::test]
     #[cfg_attr(miri, ignore)]
-    #[cfg_attr(mutants, ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip")]
+    #[cfg_attr(
+        mutants,
+        ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip"
+    )]
     #[serial]
     async fn delete_in_missing_container_reports_not_found() {
         let Some(storage) = azurite_storage_or_skip() else {
@@ -1202,7 +1220,10 @@ mod tests {
 
     #[tokio::test]
     #[cfg_attr(miri, ignore)]
-    #[cfg_attr(mutants, ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip")]
+    #[cfg_attr(
+        mutants,
+        ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip"
+    )]
     #[serial]
     async fn put_is_write_once() {
         let Some(storage) = azurite_storage_or_skip() else {
@@ -1224,7 +1245,10 @@ mod tests {
 
     #[tokio::test]
     #[cfg_attr(miri, ignore)]
-    #[cfg_attr(mutants, ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip")]
+    #[cfg_attr(
+        mutants,
+        ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip"
+    )]
     #[serial]
     async fn put_overwrite_replaces_an_existing_blob() {
         let Some(storage) = azurite_storage_or_skip() else {
@@ -1246,7 +1270,10 @@ mod tests {
 
     #[tokio::test]
     #[cfg_attr(miri, ignore)]
-    #[cfg_attr(mutants, ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip")]
+    #[cfg_attr(
+        mutants,
+        ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip"
+    )]
     #[serial]
     async fn put_overwrite_creates_when_absent() {
         let Some(storage) = azurite_storage_or_skip() else {
@@ -1263,7 +1290,10 @@ mod tests {
 
     #[tokio::test]
     #[cfg_attr(miri, ignore)]
-    #[cfg_attr(mutants, ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip")]
+    #[cfg_attr(
+        mutants,
+        ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip"
+    )]
     #[serial]
     async fn list_on_missing_container_is_empty() {
         let Some(storage) = azurite_storage_or_skip() else {
@@ -1276,7 +1306,10 @@ mod tests {
 
     #[tokio::test]
     #[cfg_attr(miri, ignore)]
-    #[cfg_attr(mutants, ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip")]
+    #[cfg_attr(
+        mutants,
+        ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip"
+    )]
     #[serial]
     async fn list_with_a_non_matching_prefix_is_empty() {
         let Some(storage) = azurite_storage_or_skip() else {
