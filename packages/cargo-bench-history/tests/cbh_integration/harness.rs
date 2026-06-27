@@ -1,6 +1,8 @@
 pub(crate) use std::cell::RefCell;
 pub(crate) use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Read, Write};
 pub(crate) use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Stdio};
 use std::sync::LazyLock;
 
 pub(crate) use cargo_bench_history::{
@@ -136,6 +138,224 @@ fn copy_dir_all(src: &Path, dst: &Path) {
         }
     }
 }
+
+/// The first synthetic committer second handed to an undated commit. Undated
+/// commits exist to express topology (branch tips, merge parents) rather than a
+/// timeline, so any distinct, ordered dates suffice — but they must land inside
+/// `analyze`/`list`'s default six-month look-back window (see [`analysis_now`],
+/// anchored at 2024-06-01 with a 2023-12-01 cutoff), or the default window would
+/// silently drop them. Anchoring at 2024-01-01 and advancing one day per commit
+/// keeps an undated history comfortably inside that window with ample headroom.
+///
+/// [`analysis_now`]: super::harness::analysis_now
+const UNDATED_EPOCH_SECONDS: i64 = 1_704_067_200;
+
+/// One day in seconds, the spacing between successive undated commits.
+const SECONDS_PER_DAY: i64 = 86_400;
+
+/// Builds a workspace's commit history through a single long-lived
+/// `git fast-import` process instead of one `git commit` subprocess per commit.
+///
+/// Process startup — amplified by real-time antivirus on Windows — dominates the
+/// integration suite, and a seed-heavy history pays it once per commit. Streaming
+/// the commits into one `fast-import` collapses an N-commit history into a single
+/// spawn: each commit is one buffered write plus a `get-mark` round-trip that
+/// reports the new SHA, so [`Workspace::commit`] and friends stay synchronous and
+/// their call sites read exactly as they would against real `git commit`.
+///
+/// All commits the harness creates this way carry the base template's empty tree,
+/// so `fast-import` advancing a branch ref without touching the index or working
+/// tree leaves `git status` clean — the property that makes `analyze` pick
+/// `history` mode. Operations that genuinely change the tree or the checkout
+/// (merge, branch switch, file commits) stay on real `git`; the workspace
+/// [`finalize`](Self::finalize)s the open stream first so those refs and objects
+/// are on disk before the next real `git` reads them.
+struct GitGraph {
+    /// The repository root, addressed explicitly so streaming never depends on
+    /// the process current directory.
+    root: PathBuf,
+    /// The branch new commits land on, mirroring the working tree's checked-out
+    /// branch. The workspace's `checkout` helpers keep it in step, so each stream
+    /// roots its first commit at this branch's current tip.
+    current_branch: String,
+    /// The open `fast-import` stream, spawned lazily on the first commit and torn
+    /// down by [`finalize`](Self::finalize) before any real `git` command.
+    session: Option<Session>,
+    /// The next `fast-import` mark, used transiently to read back each commit's
+    /// SHA via `get-mark`.
+    next_mark: u32,
+    /// The committer second handed to the next undated commit (see
+    /// [`UNDATED_EPOCH_SECONDS`]).
+    next_undated_second: i64,
+}
+
+/// An open `git fast-import` stream and the pipes used to drive it.
+struct Session {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+    stderr: ChildStderr,
+    /// Whether a commit has already been emitted on this stream. The first commit
+    /// roots the branch with an explicit `from`; later commits append to the tip
+    /// `fast-import` is already tracking.
+    has_commit: bool,
+}
+
+impl GitGraph {
+    fn new(root: PathBuf, current_branch: &str) -> Self {
+        Self {
+            root,
+            current_branch: current_branch.to_owned(),
+            session: None,
+            next_mark: 0,
+            next_undated_second: UNDATED_EPOCH_SECONDS,
+        }
+    }
+
+    /// Records the branch subsequent commits land on, after a real `git checkout`
+    /// has moved the working tree (and created the ref, for a new branch).
+    fn set_current_branch(&mut self, name: &str) {
+        name.clone_into(&mut self.current_branch);
+    }
+
+    /// Streams an empty commit dated `second` (raw committer seconds, UTC) with
+    /// message `message` onto the current branch, returning its full SHA.
+    fn commit(&mut self, message: &str, second: i64) -> String {
+        let mark = self
+            .next_mark
+            .checked_add(1)
+            .expect("mark counter overflow");
+        self.next_mark = mark;
+        let branch = self.current_branch.clone();
+        let session = self.ensure_session();
+
+        let mut stream: Vec<u8> = Vec::new();
+        // `writeln!` emits a bare LF (never CRLF, on any platform), which the stream
+        // requires: `fast-import`'s `data` directive is byte-counted, so a stray CR
+        // would corrupt the following message.
+        writeln!(stream, "commit refs/heads/{branch}").unwrap();
+        writeln!(stream, "mark :{mark}").unwrap();
+        writeln!(
+            stream,
+            "committer Bench History Test <test@example.invalid> {second} +0000"
+        )
+        .unwrap();
+        writeln!(stream, "data {}", message.len()).unwrap();
+        stream.extend_from_slice(message.as_bytes());
+        stream.push(b'\n');
+        if !session.has_commit {
+            // Root this stream at the branch's current on-disk tip. The `^0`
+            // peels the ref to its commit: `from refs/heads/<branch>` (without it)
+            // is rejected as "creating a branch from itself" when the commit
+            // targets that same branch. Later commits append to the tip
+            // `fast-import` tracks, so `from` is implicit for them.
+            writeln!(stream, "from refs/heads/{branch}^0").unwrap();
+            session.has_commit = true;
+        }
+        stream.push(b'\n');
+        writeln!(stream, "get-mark :{mark}").unwrap();
+
+        session.stdin.write_all(&stream).unwrap();
+        session.stdin.flush().unwrap();
+
+        let mut line = String::new();
+        session.stdout.read_line(&mut line).unwrap();
+        let sha = line.trim().to_owned();
+        assert_eq!(
+            sha.len(),
+            40,
+            "git fast-import get-mark returned `{sha}`, not a full SHA"
+        );
+        sha
+    }
+
+    /// Allocates the committer second for the next undated commit, advancing the
+    /// synthetic clock one day so a date-free topology still has distinct, ordered
+    /// timestamps.
+    fn next_undated_second(&mut self) -> i64 {
+        let second = self.next_undated_second;
+        self.next_undated_second = second
+            .checked_add(SECONDS_PER_DAY)
+            .expect("undated commit clock overflow");
+        second
+    }
+
+    /// Returns the open stream, spawning a fresh `fast-import` if none is active.
+    fn ensure_session(&mut self) -> &mut Session {
+        if self.session.is_none() {
+            let mut child = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&self.root)
+                // Match `run_git`'s throughput config: skip the per-object disk
+                // flush and keep a background repack from firing mid-stream.
+                .args([
+                    "-c",
+                    "core.fsync=none",
+                    "-c",
+                    "core.fsyncObjectFiles=false",
+                    "-c",
+                    "gc.auto=0",
+                    "fast-import",
+                    "--quiet",
+                    "--date-format=raw",
+                ])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let stdin = child.stdin.take().unwrap();
+            let stdout = BufReader::new(child.stdout.take().unwrap());
+            let stderr = child.stderr.take().unwrap();
+            self.session = Some(Session {
+                child,
+                stdin,
+                stdout,
+                stderr,
+                has_commit: false,
+            });
+        }
+        self.session.as_mut().unwrap()
+    }
+
+    /// Closes any open stream so `fast-import` updates the branch refs and writes
+    /// its objects, making them visible to the real `git` commands that follow.
+    fn finalize(&mut self) {
+        let Some(session) = self.session.take() else {
+            return;
+        };
+        let Session {
+            mut child,
+            stdin,
+            stdout,
+            mut stderr,
+            ..
+        } = session;
+        // Closing stdin signals end-of-stream; `fast-import` then finalizes the
+        // pack, updates the refs, and exits. Dropping stdout lets it observe the
+        // read end going away too.
+        drop(stdin);
+        drop(stdout);
+        let mut errors = String::new();
+        // Drain any diagnostics fast-import wrote; they are surfaced only when the
+        // exit status below is non-zero. A read failure just leaves a marker.
+        if let Err(read_error) = stderr.read_to_string(&mut errors) {
+            errors = format!("<failed to read fast-import stderr: {read_error}>");
+        }
+        let status = child.wait();
+        // Always wait above so the child releases its `.git` handles before the
+        // workspace tempdir is removed; only assert success when we are not already
+        // unwinding, so a failing test is not masked by a double panic.
+        if !std::thread::panicking() {
+            let status = status.expect("waiting on git fast-import");
+            assert!(
+                status.success(),
+                "git fast-import exited with {status}: {errors}"
+            );
+        }
+    }
+}
+
 /// A hermetic workspace for driving `run` against the real adapters.
 ///
 /// Writes a configuration and (optionally) fake engine output under a temporary
@@ -160,16 +380,34 @@ pub(crate) struct Workspace {
     /// `--summary` / `--criterion` cases, or an `--exit-code`), so each engine's
     /// output tree is produced by the single benchmark command `run` invokes.
     bench: Vec<String>,
+    /// Streams commit creation through one long-lived `git fast-import` rather than
+    /// a `git commit` subprocess per commit (see [`GitGraph`]). The `&self` commit
+    /// helpers drive it through interior mutability; real `git` operations
+    /// [`finalize`](Self::flush_git) it first so its refs and objects are on disk.
+    graph: RefCell<GitGraph>,
+}
+
+impl Drop for Workspace {
+    fn drop(&mut self) {
+        // Close any open `fast-import` stream so the child releases its handles on
+        // the `.git` directory before `TempDir` cleanup removes the repository.
+        // `finalize` only asserts success when the thread is not already panicking,
+        // so a failing test is reported as itself rather than a double panic here.
+        self.flush_git();
+    }
 }
 
 impl Workspace {
     /// Creates a workspace with `config` at the default `.cargo/bench_history.toml`.
     pub(crate) fn new(config: &str) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
         let workspace = Self {
-            dir: tempfile::tempdir().unwrap(),
+            dir,
             commits: RefCell::new(HashMap::new()),
             committer_times: RefCell::new(HashMap::new()),
             bench: Vec::new(),
+            graph: RefCell::new(GitGraph::new(root, "master")),
         };
         let cargo_dir = workspace.root().join(".cargo");
         std::fs::create_dir_all(&cargo_dir).unwrap();
@@ -196,21 +434,27 @@ impl Workspace {
 
     /// Creates an empty workspace with no configuration file written.
     pub(crate) fn empty() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
         Self {
-            dir: tempfile::tempdir().unwrap(),
+            dir,
             commits: RefCell::new(HashMap::new()),
             committer_times: RefCell::new(HashMap::new()),
             bench: Vec::new(),
+            graph: RefCell::new(GitGraph::new(root, "master")),
         }
     }
 
     /// Creates a workspace with `config` at a non-default `relative` path.
     pub(crate) fn with_config_at(relative: &str, config: &str) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
         let workspace = Self {
-            dir: tempfile::tempdir().unwrap(),
+            dir,
             commits: RefCell::new(HashMap::new()),
             committer_times: RefCell::new(HashMap::new()),
             bench: Vec::new(),
+            graph: RefCell::new(GitGraph::new(root, "master")),
         };
         let path = workspace.root().join(relative);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -231,17 +475,35 @@ impl Workspace {
         self.dir.path()
     }
 
+    /// Closes any open [`GitGraph`] stream so its commits' refs and objects are on
+    /// disk before a real `git` command (or a direct `.git` read) observes them.
+    fn flush_git(&self) {
+        self.graph.borrow_mut().finalize();
+    }
+
     /// Runs `git -C <root> <args>` against this workspace, returning its captured
     /// output. Thin wrapper over [`run_git`]; the repository directory is addressed
     /// explicitly so commit creation never depends on the process current directory.
     pub(crate) fn git(&self, args: &[&str]) -> std::process::Output {
+        self.flush_git();
         run_git(self.root(), args)
     }
 
-    /// Like [`git`](Self::git), but sets the given environment variables on the
-    /// invocation — used to pin a commit's author/committer date.
-    pub(crate) fn git_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> std::process::Output {
-        run_git_with_env(self.root(), args, env)
+    /// Runs a real `git` command that creates a commit, stamping its author and
+    /// committer dates with the synthetic committer `second` (raw UTC seconds) so
+    /// merges and file commits stay on the same monotonic, in-window timeline as the
+    /// empty `fast-import` commits, rather than taking the current wall-clock time.
+    fn git_at(&self, args: &[&str], second: i64) -> std::process::Output {
+        self.flush_git();
+        let when = format!("@{second} +0000");
+        run_git_with_env(
+            self.root(),
+            args,
+            &[
+                ("GIT_AUTHOR_DATE", when.as_str()),
+                ("GIT_COMMITTER_DATE", when.as_str()),
+            ],
+        )
     }
 
     /// Initializes a `master`-branch repository with one empty root commit so `HEAD`
@@ -276,6 +538,7 @@ impl Workspace {
     /// branch ref is always loose; a `git rev-parse` fallback covers the unexpected
     /// (packed refs, detached `HEAD`).
     pub(crate) fn head_sha(&self) -> String {
+        self.flush_git();
         let git_dir = self.root().join(".git");
         if let Ok(head) = std::fs::read_to_string(git_dir.join("HEAD")) {
             let head = head.trim();
@@ -305,8 +568,16 @@ impl Workspace {
         if let Some(sha) = self.commits.borrow().get(label) {
             return sha.clone();
         }
-        self.git(&["commit", "--allow-empty", "-m", label]);
-        let sha = self.head_sha();
+        let second = self.graph.borrow_mut().next_undated_second();
+        let sha = self.graph.borrow_mut().commit(label, second);
+        // Cache the committer time from the synthetic second we just stamped, so an
+        // interleaved seed reading this commit's provenance never has to spawn git
+        // (which would finalize the stream mid-history). Git stays the source of
+        // truth: this matches exactly what `fast-import` wrote.
+        let observed = Timestamp::from_second(second).unwrap();
+        self.committer_times
+            .borrow_mut()
+            .insert(sha.clone(), observed);
         self.commits
             .borrow_mut()
             .insert(label.to_owned(), sha.clone());
@@ -326,15 +597,8 @@ impl Workspace {
             return sha.clone();
         }
         let when = format!("{date}T00:00:00+00:00");
-        self.git_with_env(
-            &["commit", "--allow-empty", "-m", label],
-            &[
-                ("GIT_AUTHOR_DATE", when.as_str()),
-                ("GIT_COMMITTER_DATE", when.as_str()),
-            ],
-        );
-        let sha = self.head_sha();
         let observed: Timestamp = when.parse().unwrap();
+        let sha = self.graph.borrow_mut().commit(label, observed.as_second());
         self.committer_times
             .borrow_mut()
             .insert(sha.clone(), observed);
@@ -380,11 +644,13 @@ impl Workspace {
     }
     pub(crate) fn checkout_new_branch(&self, name: &str) {
         self.git(&["checkout", "-b", name]);
+        self.graph.borrow_mut().set_current_branch(name);
     }
 
     /// Checks out an existing branch.
     pub(crate) fn checkout(&self, name: &str) {
         self.git(&["checkout", name]);
+        self.graph.borrow_mut().set_current_branch(name);
     }
 
     /// Merges `branch` into the current branch with an always-materialized merge
@@ -393,9 +659,22 @@ impl Workspace {
     /// parent and `branch`'s tip as its second, so it sits on the current branch's
     /// first-parent line while the merged-in commits stay off it — the topology the
     /// git-aware `analyze`/`backfill` selection must respect.
+    ///
+    /// The merge commit takes the next synthetic committer date so it stays on the
+    /// same monotonic, in-window timeline as the empty `fast-import` commits around
+    /// it; without that, a real `git merge` would stamp it with the current
+    /// wall-clock time, a future-dated point the default analysis window would treat
+    /// inconsistently with its neighbours.
     pub(crate) fn merge(&self, branch: &str, label: &str) -> String {
-        self.git(&["merge", "--no-ff", "--no-edit", "-m", label, branch]);
+        let second = self.graph.borrow_mut().next_undated_second();
+        self.git_at(
+            &["merge", "--no-ff", "--no-edit", "-m", label, branch],
+            second,
+        );
         let sha = self.head();
+        self.committer_times
+            .borrow_mut()
+            .insert(sha.clone(), Timestamp::from_second(second).unwrap());
         self.commits
             .borrow_mut()
             .insert(label.to_owned(), sha.clone());
@@ -405,20 +684,34 @@ impl Workspace {
     /// Commits a tracked file with `contents` at `relative` on the current branch
     /// and returns the new commit's full SHA. Unlike [`commit`](Self::commit), the
     /// commit changes the tree, so the file appears in any worktree checked out to
-    /// it — used to stand in for a "broken" commit the mock engine reacts to.
+    /// it — used to stand in for a "broken" commit the mock engine reacts to. It
+    /// takes the next synthetic committer date, keeping the timeline monotonic and
+    /// in-window like the surrounding empty commits.
     pub(crate) fn commit_with_file(&self, message: &str, relative: &str, contents: &str) -> String {
         std::fs::write(self.root().join(relative), contents).unwrap();
         self.git(&["add", relative]);
-        self.git(&["commit", "-m", message]);
-        self.head()
+        let second = self.graph.borrow_mut().next_undated_second();
+        self.git_at(&["commit", "-m", message], second);
+        let sha = self.head();
+        self.committer_times
+            .borrow_mut()
+            .insert(sha.clone(), Timestamp::from_second(second).unwrap());
+        sha
     }
 
     /// Removes a previously tracked file at `relative`, commits the removal on the
-    /// current branch, and returns the new commit's full SHA.
+    /// current branch, and returns the new commit's full SHA. As with
+    /// [`commit_with_file`](Self::commit_with_file), the removal commit takes the
+    /// next synthetic committer date.
     pub(crate) fn commit_removing_file(&self, message: &str, relative: &str) -> String {
         self.git(&["rm", relative]);
-        self.git(&["commit", "-m", message]);
-        self.head()
+        let second = self.graph.borrow_mut().next_undated_second();
+        self.git_at(&["commit", "-m", message], second);
+        let sha = self.head();
+        self.committer_times
+            .borrow_mut()
+            .insert(sha.clone(), Timestamp::from_second(second).unwrap());
+        sha
     }
 
     /// The full SHA of the current `HEAD`.
@@ -446,6 +739,7 @@ impl Workspace {
 
     /// Drives a command with `args` against this workspace.
     pub(crate) async fn drive(&self, args: &[&str]) -> Result<RunOutcome, RunError> {
+        self.flush_git();
         // Point the harvest at this workspace's own `target/` explicitly, so a
         // shared ambient `CARGO_TARGET_DIR` (as `cargo llvm-cov` sets during
         // coverage runs) cannot make the harvester pick up summaries written by
@@ -471,36 +765,15 @@ impl Workspace {
         .await
     }
 
-    /// Drives a command with an explicit benchmark command, overriding the
-    /// workspace's configured one for this invocation only. This lets a test make
-    /// the engine behave differently across two drives — for example, succeed on a
-    /// first backfill, then exit non-zero if it is invoked at all on a re-run.
-    pub(crate) async fn drive_with_bench(
-        &self,
-        bench: &[&str],
-        args: &[&str],
-    ) -> Result<RunOutcome, RunError> {
-        let target_root = self.root().join("target");
-        let mut bench_command = vec![MOCK_ENGINE.to_owned()];
-        bench_command.extend(bench.iter().map(|arg| (*arg).to_owned()));
-
-        run_with_overrides(
-            &command_from(args),
-            Overrides {
-                workspace_dir: Some(self.root().to_path_buf()),
-                target_root: Some(target_root),
-                bench_command: Some(bench_command),
-                now: Some(analysis_now()),
-            },
-        )
-        .await
-    }
+    /// Like [`drive`], but leaves the target root unset so the harvester resolves
+    /// it the default way, exercising the no-override target-root path.
     ///
     /// [`drive`]: Self::drive
     pub(crate) async fn drive_resolving_target_root(
         &self,
         args: &[&str],
     ) -> Result<RunOutcome, RunError> {
+        self.flush_git();
         let mut bench_command = vec![MOCK_ENGINE.to_owned()];
         bench_command.extend(self.bench.iter().cloned());
 

@@ -525,6 +525,10 @@ async fn scenario_feature_and_dirty(config: &str) {
 /// `run` stores a harvested result set in Azurite.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
+#[cfg_attr(
+    mutants,
+    ignore = "Azure network end-to-end test: self-skips without an emulator (as under mutation), and the azure IO it exercises is already mutants::skip"
+)]
 #[serial]
 async fn run_stores_results_in_azurite() {
     if !azurite_available() {
@@ -536,6 +540,10 @@ async fn run_stores_results_in_azurite() {
 /// A `run` + `analyze` round-trip through Azurite.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
+#[cfg_attr(
+    mutants,
+    ignore = "Azure network end-to-end test: self-skips without an emulator (as under mutation), and the azure IO it exercises is already mutants::skip"
+)]
 #[serial]
 async fn run_then_analyze_round_trips_through_azurite() {
     if !azurite_available() {
@@ -547,6 +555,10 @@ async fn run_then_analyze_round_trips_through_azurite() {
 /// A multi-commit feature/dirty round-trip through Azurite.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
+#[cfg_attr(
+    mutants,
+    ignore = "Azure network end-to-end test: self-skips without an emulator (as under mutation), and the azure IO it exercises is already mutants::skip"
+)]
 #[serial]
 async fn analyze_feature_and_dirty_round_trip_through_azurite() {
     if !azurite_available() {
@@ -561,6 +573,10 @@ async fn analyze_feature_and_dirty_round_trip_through_azurite() {
 /// directly through a SAS-authenticated client.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
+#[cfg_attr(
+    mutants,
+    ignore = "Azure network end-to-end test: self-skips without an emulator (as under mutation), and the azure IO it exercises is already mutants::skip"
+)]
 #[serial]
 async fn stored_blob_declares_gzip_content_encoding_in_azurite() {
     use azure_storage_blob::models::BlobClientGetPropertiesResultHeaders as _;
@@ -606,6 +622,10 @@ async fn stored_blob_declares_gzip_content_encoding_in_azurite() {
 /// `run` stores a harvested result set in a real Azure account via Entra ID.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
+#[cfg_attr(
+    mutants,
+    ignore = "Real-Azure network end-to-end test: self-skips without ENABLE_AZURE (as under mutation), and the azure IO it exercises is already mutants::skip"
+)]
 #[serial]
 async fn run_stores_results_in_real_azure() {
     if !real_azure_enabled() {
@@ -620,6 +640,10 @@ async fn run_stores_results_in_real_azure() {
 /// A `run` + `analyze` round-trip through a real Azure account via Entra ID.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
+#[cfg_attr(
+    mutants,
+    ignore = "Real-Azure network end-to-end test: self-skips without ENABLE_AZURE (as under mutation), and the azure IO it exercises is already mutants::skip"
+)]
 #[serial]
 async fn run_then_analyze_round_trips_through_real_azure() {
     if !real_azure_enabled() {
@@ -634,6 +658,10 @@ async fn run_then_analyze_round_trips_through_real_azure() {
 /// A multi-commit feature/dirty round-trip through a real Azure account via Entra ID.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
+#[cfg_attr(
+    mutants,
+    ignore = "Real-Azure network end-to-end test: self-skips without ENABLE_AZURE (as under mutation), and the azure IO it exercises is already mutants::skip"
+)]
 #[serial]
 async fn analyze_feature_and_dirty_round_trip_through_real_azure() {
     if !real_azure_enabled() {

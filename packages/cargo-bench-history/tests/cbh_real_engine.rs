@@ -125,6 +125,10 @@ const FIXTURE_CONFIG: &str = "[project]\nid = \"e2e\"\n\n[storage.local]\npath =
 #[serial]
 #[cfg_attr(miri, ignore)] // Spawns a real `cargo bench`, which Miri cannot run.
 #[cfg_attr(coverage_nightly, ignore)] // Heavy real build; llvm-cov shares one target dir.
+#[cfg_attr(
+    mutants,
+    ignore = "Heavy real `cargo bench` build (compiles Criterion per run); the run/harvest pipeline it covers is also driven by the mock-engine integration tests and the resolve_target_root unit test, so it carries no unique mutation signal"
+)]
 async fn run_against_real_criterion_bench_stores_wall_time() {
     let fixture = tempfile::tempdir().unwrap();
     let root = fixture.path();
