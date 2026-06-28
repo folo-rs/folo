@@ -192,14 +192,13 @@ pub enum Direction {
     Improvement,
 }
 
-/// One point of a finding's underlying series, exposed in the JSON output.
+/// One point of a finding's underlying series, retained for charting.
 ///
 /// Carries, for charting and provenance, the commit it was measured against, the
 /// value, and whether it came from a dirty (uncommitted-tree) snapshot.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 pub struct SeriesValue {
     /// Abbreviated commit the point was measured against, if known.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
     /// The measured value.
     pub value: f64,
@@ -208,13 +207,11 @@ pub struct SeriesValue {
 }
 
 /// One flagged change: where it is, what moved, by how much, and how sure we are.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 pub struct Finding {
     /// The comparable discriminant set the series belongs to.
-    #[serde(flatten)]
     pub set: DiscriminantSet,
     /// The benchmark identity.
-    #[serde(flatten)]
     pub id: BenchmarkId,
     /// The category of the metric that moved (governs unit and polarity).
     pub kind: MetricKind,
@@ -234,14 +231,12 @@ pub struct Finding {
     /// deterministic step).
     pub confidence: f64,
     /// Abbreviated commit the change is attributed to, if known.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
     /// Where, within a feature branch, the latest regime began — set only in
     /// branch mode when a within-branch flip is located, naming the commit the
     /// move starts at, so a "got worse late in the branch" finding can point at it.
     /// In history mode, an inactive (recovered) finding sets this to the commit at
     /// which the level returned to baseline.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub flipped_at: Option<String>,
     /// Whether the change is still reflected in the latest measured state. An active
     /// finding's current level still differs from baseline; an inactive one has
@@ -251,25 +246,15 @@ pub struct Finding {
     /// Index into `series` at which the active (post-blessing) window begins; points
     /// before it are pre-blessing history, retained for charting but excluded from
     /// detection. `0` when the series is unblessed.
-    #[serde(skip_serializing_if = "is_zero")]
     pub active_from: usize,
     /// Abbreviated commit of the blessing that re-baselined this series, if any.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub blessed_at: Option<String>,
     /// Effective (committer) time of the blessed commit, RFC 3339, if blessed.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub blessed_commit_time: Option<String>,
-    /// The full underlying series, oldest-first, so a consumer can draw a chart.
+    /// The full underlying series, oldest-first. Retained internally so the text and
+    /// Markdown reports can draw a chart; it is not part of the machine-readable JSON
+    /// contract.
     pub series: Vec<SeriesValue>,
-}
-
-/// Whether a count is zero, for `#[serde(skip_serializing_if)]`.
-#[expect(
-    clippy::trivially_copy_pass_by_ref,
-    reason = "serde skip predicate signature"
-)]
-fn is_zero(value: &usize) -> bool {
-    *value == 0
 }
 
 impl Finding {
@@ -2156,16 +2141,11 @@ mod tests {
             finding.blessed_commit_time.as_deref(),
             Some("1970-01-01T00:00:03Z")
         );
-        // A non-zero active window survives serialization (the `is_zero` skip
-        // predicate must keep it); an unblessed finding omits the field.
-        let json = serde_json::to_string(&finding).unwrap();
-        assert!(json.contains("\"active_from\":3"), "{json}");
+        // An unblessed finding has a zero active window.
         let unblessed = only(changes(&[series_of(&[
             10.0, 10.0, 10.0, 10.0, 20.0, 20.0, 20.0, 20.0,
         ])]));
         assert_eq!(unblessed.active_from, 0);
-        let json = serde_json::to_string(&unblessed).unwrap();
-        assert!(!json.contains("active_from"), "{json}");
     }
 
     #[test]

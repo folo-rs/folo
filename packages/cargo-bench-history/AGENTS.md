@@ -311,9 +311,10 @@ being analyzed:
   detail line; in **history mode only** a colored `rasciigraph` line chart of the
   series). `analyze_with` receives an explicit `color: bool` (production computes
   `stdout().is_terminal() && NO_COLOR unset`; tests pass `false`) and `render_text`
-  calls `colored::control::set_override(color)` so both `colored` styling and the
-  chart honor it deterministically (and stay Miri-safe — no isatty syscall). Text
-  and Markdown values are rounded to four significant figures via `format_value`
+  installs a scoped `colored` override (a `ColorOverride` RAII guard) so both
+  `colored` styling and the chart honor it deterministically (and stay Miri-safe — no
+  isatty syscall); the guard restores ambient auto-detection when rendering returns.
+  Text and Markdown values are rounded to four significant figures via `format_value`
   (the integer part is never truncated); the JSON keeps full `f64` precision.
 
 The read-only `git_history::GitHistory` port (`resolve`, `default_branch`,

@@ -1156,7 +1156,10 @@ established level (a bounded window of preceding points) using the same engine g
 and reports regressions only.
 
 **JSON signal (downstream contract).** Because findings never gate the exit code
-(§8.3), the `json` report is the machine-readable output:
+(§8.3), the `json` report is the machine-readable output. It carries exactly the data
+the text and Markdown reports show — no underlying per-commit series (a presentation
+concern the human reports draw a chart from, not data a consumer reconstructs) — at
+full `f64` precision:
 
 ```json
 {
@@ -1174,35 +1177,54 @@ and reports regressions only.
       "kind": "instruction_count",
       "method": "change_point", "direction": "regression",
       "baseline": 100.0, "latest": 130.0,
-      "delta": 30.0, "relative_delta": 0.30, "confidence": 1.0,
+      "relative_delta": 0.30, "confidence": 1.0,
+      "commit": "deadbee",       // commit the change is attributed to, if known
+      "active": true,            // false for a resolved/blessed finding (§9.7)
       "flipped_at": "a1b2c3d",   // branch: where the latest regime began;
                                  // history+inactive: where the level recovered
-      "active": true,            // false for a resolved/blessed finding (§9.7)
       "blessed_at": "9f8e7d6",   // history only: the blessing that re-baselined this series
-      "blessed_commit_time": "2024-03-01T00:00:00Z",
-      "series": [ { "commit": "…", "value": 100.0, "dirty": false }, … ]
+      "blessed_commit_time": "2024-03-01T00:00:00Z"
     }
   ],
-  "sets": [ … ]              // per-discriminant-set breakdown
+  "sets": [                  // per-discriminant-set breakdown: identity + tallies only
+    {
+      "engine": "callgrind",
+      "target_triple": "x86_64-unknown-linux-gnu",
+      "machine_key": "synthetic",
+      "runs": 7, "series": 3,
+      "regressions": 1, "improvements": 0
+    }
+  ]
 }
 ```
 
-A consumer keys off `notable` (post or stay silent), reads each finding's
-`direction`/`relative_delta`/`flipped_at`/`active`, and can render the embedded
-`series` as a chart. `blessed_at`/`blessed_commit_time` are present only when the
-series was re-baselined by a blessing (§9.7); `active_from` (omitted when zero) marks
-where the active window begins. JSON values keep full `f64` precision; only the
-human-readable text and Markdown reports round to four significant figures.
+Each finding is self-describing: it inlines its discriminant set
+(`engine`/`target_triple`/`machine_key`) and benchmark `segments`, so the flat,
+globally-ranked `findings` list is the single source of truth — findings are never
+duplicated under `sets`. A consumer keys off `notable` (post or stay silent), reads
+each finding's `direction`/`relative_delta`/`flipped_at`/`active`, and tallies per
+partition from `sets`. `commit`, `flipped_at`, `blessed_at`, and
+`blessed_commit_time` are present only when known (§9.7). JSON values keep full `f64`
+precision; only the human-readable text and Markdown reports round to four
+significant figures.
 
 **Text report layout.** The text report renders one paragraph per finding: a bold,
 direction-colored headline leading with the relative-change percent and the
 benchmark identifier + metric, a dimmed detail line (`direction via method ·
 confidence · baseline → latest · @ commit`, plus `· flips at <commit>` in branch
 mode), and — in **history mode only** — a small colored line chart of the series
-over commits drawn with `rasciigraph` (regressions red, improvements green). The
-chart is omitted for branch/tip mode and for non-text formats. Color (ANSI styling
-and chart hue) is enabled only when stdout is a terminal and `NO_COLOR` is unset, so
+over commits drawn with `rasciigraph` (regressions red, improvements green). Each set
+header is followed by a one-line tally (`runs: <n>  series: <n>  regressions: <n>
+improvements: <n>`). The chart is omitted for branch/tip mode. Color (ANSI styling and
+chart hue) is enabled only when stdout is a terminal and `NO_COLOR` is unset, so
 piped output and tests stay plain.
+
+**Markdown report layout.** The Markdown report carries the same data as the text
+report with Markdown formatting: a top-level metadata list, an `## Set …` heading per
+partition with its tally as a bullet list, and one block per finding — a bold
+percentage headline (`` **+30.00%** — `pkg/group/case` · kind ``), the same detail
+line, an optional blessing note, and — in history mode — the chart inside a fenced
+` ```text ` block (rendered without ANSI so it survives Markdown viewers).
 
 ### 9.7 Re-baselining: blessings, resolved spikes, and active/inactive segments
 
@@ -1896,3 +1918,19 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      section is — a clear signal to remove it and pass `--local` instead.
      `install`'s template documents the optional cloud block and the `--local` /
      env mechanism for local storage.
+35. **Report formats mirror the text output** — *Decided:* the three report formats
+     carry the **same data**, differing only in presentation. The `text` format is the
+     canonical layout; `markdown` is that data with Markdown formatting (per-finding blocks,
+     not a table; charts as fenced ` ```text ` code blocks rendered without ANSI); and
+     `json` is the machine-readable form of the same fields. The JSON `findings` list is
+     flat and globally ranked, each finding self-describing (inlining its discriminant set
+     and benchmark `segments`), and the `sets` array carries only per-partition identity and
+     tallies (`runs`/`series`/`regressions`/`improvements`) — findings are never duplicated
+     under `sets`. JSON omits the per-commit `series` (a charting/presentation concern the
+     text and Markdown reports draw from internally, not data a consumer reconstructs) and
+     the redundant absolute `delta` (derivable from `baseline`/`latest`). The per-set tally
+     is surfaced in all three formats (a set-counts line in text, a bullet list in Markdown,
+     the `sets` objects in JSON). *(Superseded: the earlier JSON embedded each finding's full
+     per-commit series and serialized every finding twice — once at the top level and once
+     under its set — which on a large history inflated the document to hundreds of MiB; the
+     earlier Markdown rendered a wide findings table per set with no charts.)*

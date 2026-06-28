@@ -107,10 +107,10 @@ async fn analyze_json_format_is_structured() {
     assert_eq!(parsed["findings"][0]["direction"], "regression");
 }
 
-/// `--format markdown` renders a findings table.
+/// `--format markdown` renders per-finding blocks mirroring the text report.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_markdown_format_renders_table() {
+async fn analyze_markdown_format_renders_blocks() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_rising_callgrind_history();
 
@@ -125,7 +125,12 @@ async fn analyze_markdown_format_renders_table() {
         report.contains("# Benchmark history analysis: testproj"),
         "{report}"
     );
-    assert!(report.contains("| Change | Direction |"), "{report}");
+    // A bold percentage headline leads each finding block; there is no table.
+    assert!(!report.contains("| Change | Direction |"), "{report}");
+    // The headline format is a bold signed percentage joined to the benchmark id —
+    // far more specific than a bare `**` that any unrelated bold text would match.
+    assert!(report.contains("%** — `"), "{report}");
+    assert!(report.contains("via change point"), "{report}");
 }
 
 /// `--since` excludes points before the cutoff, so an early spike is dropped and
@@ -391,7 +396,7 @@ async fn analyze_ranks_findings_by_relative_move_across_benchmarks() {
     assert_eq!(findings[0]["segments"][1], "alpha::bench", "{report}");
     assert_eq!(findings[1]["segments"][0], "beta", "{report}");
 
-    // The Markdown rendering preserves the same ranked order in its table rows.
+    // The Markdown rendering preserves the same ranked order in its finding blocks.
     let RunOutcome::Analyzed {
         report: markdown, ..
     } = workspace
@@ -1264,8 +1269,8 @@ async fn analyze_branch_mode_reports_the_latest_regime_with_a_flip() {
         "the flip should name the commit the latest regime began at: {report}"
     );
     assert!(
-        finding["series"].as_array().is_some_and(|s| !s.is_empty()),
-        "the finding should carry the underlying series for charting: {report}"
+        finding.get("series").is_none(),
+        "the JSON finding mirrors the text data and omits the charting series: {report}"
     );
 }
 
