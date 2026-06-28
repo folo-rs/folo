@@ -420,7 +420,7 @@ checksum = "8ae3f5d315924270530207e2a68396c3cc547f6dca3fbdca317cfb1a51edb593"
 
 [[package]]
 name = "cargo-bench-history"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyspawn",
  "async-trait",
@@ -450,7 +450,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-bench-history-core"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "alloc_tracker",
  "anyspawn",
@@ -491,7 +491,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-detect-package"
-version = "1.0.21"
+version = "1.0.22"
 dependencies = [
  "clap",
  "mockall",
@@ -503,7 +503,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-freeze-deps"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clap",
  "mutants",
