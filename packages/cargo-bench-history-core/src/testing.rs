@@ -39,7 +39,6 @@ impl SpawnCustom for SynchronousSpawner {
         }
     }
 
-    #[cfg_attr(test, mutants::skip)] // Unreachable: the analysis never spawns relocatable async tasks.
     fn spawn_anywhere(&self, _task: Box<dyn ThreadAwareAsyncFnOnce<()>>) {
         unreachable!("the analysis never spawns relocatable async tasks")
     }
