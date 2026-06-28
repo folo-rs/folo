@@ -225,11 +225,13 @@ values); adding a new async primitive that needs a reentrancy contract.
 
 The `_impl` crate split pattern for exposing internal surface to in-workspace
 benches and tests: when to apply it, the `private-test-util` Cargo feature
-naming rule, doctest-cycle dev-dependencies, lockstep versioning, and how the
-split differs from the in-crate `__private` macro-visibility convention.
+naming rule, doctest-cycle dev-dependencies, lockstep versioning, how a
+private-use `*-core` package acts as an impl crate with no separate shell, and
+how the split differs from the in-crate `__private` macro-visibility convention.
 
 **Open this when**: deciding whether a crate needs to be split into a shell +
-`_impl` pair; configuring features on an `_impl` crate; setting up
+`_impl` pair (or whether a private-use `-core` package can just be the impl
+crate directly); configuring features on an `_impl` or `-core` crate; setting up
 dev-dependencies for tests or benches that need internal surface.
 
 ### [docs/git-workflow.md](docs/git-workflow.md)

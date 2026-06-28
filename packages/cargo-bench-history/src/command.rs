@@ -60,8 +60,18 @@ pub struct RunOptions {
     /// Restrict the run to these packages (`--package`/`-p`); empty means the
     /// whole workspace.
     pub packages: Vec<String>,
+    /// Exclude these packages from a whole-workspace run (`--exclude`); only
+    /// meaningful when `packages` is empty (the workspace default).
+    pub excludes: Vec<String>,
     /// Restrict the run to these benchmark targets (`--bench`); empty means all.
     pub benches: Vec<String>,
+    /// Cargo features to activate (`--features`), forwarded verbatim; empty means
+    /// none beyond the default set.
+    pub features: Vec<String>,
+    /// Activate all cargo features (`--all-features`).
+    pub all_features: bool,
+    /// Disable the default cargo feature set (`--no-default-features`).
+    pub no_default_features: bool,
     /// Override for the machine fingerprint (hardware-dependent engines), if set.
     pub machine_key: Option<String>,
     /// Harvest and build results without storing them.
@@ -134,7 +144,24 @@ pub struct AnalyzeOptions {
     pub include_inactive: bool,
     /// Emit detailed diagnostic notes to standard error describing each step.
     pub verbose: bool,
+    /// Emit per-stage wall-clock timings to standard error, independent of
+    /// `verbose`. `verbose` implies these as well; this flag exists so a
+    /// programmatic caller (the stress harness) can observe the per-stage load
+    /// breakdown *without* the per-object note flood that would both bury the
+    /// timings and distort them.
+    pub timing: bool,
 }
+
+impl AnalyzeOptions {
+    /// Whether the per-stage wall-clock timings should be emitted to standard
+    /// error. `verbose` implies them; the `timing` flag enables them on its own,
+    /// so a programmatic caller (the stress harness) can observe the per-stage
+    /// load breakdown without the per-object note flood.
+    pub(crate) fn stage_timings_enabled(&self) -> bool {
+        self.verbose || self.timing
+    }
+}
+
 /// The kind of thing a `list` invocation enumerates.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -272,8 +299,18 @@ pub struct BackfillOptions {
     /// Restrict the runs to these packages (`--package`/`-p`); empty means the
     /// whole workspace.
     pub packages: Vec<String>,
+    /// Exclude these packages from a whole-workspace run (`--exclude`); only
+    /// meaningful when `packages` is empty (the workspace default).
+    pub excludes: Vec<String>,
     /// Restrict the runs to these benchmark targets (`--bench`); empty means all.
     pub benches: Vec<String>,
+    /// Cargo features to activate (`--features`), forwarded verbatim; empty means
+    /// none beyond the default set.
+    pub features: Vec<String>,
+    /// Activate all cargo features (`--all-features`).
+    pub all_features: bool,
+    /// Disable the default cargo feature set (`--no-default-features`).
+    pub no_default_features: bool,
     /// Override for the machine fingerprint (hardware-dependent engines), if set.
     pub machine_key: Option<String>,
     /// Replace already-stored results for the backfilled commits instead of
@@ -363,4 +400,26 @@ pub struct UnblessOptions {
     pub machine_key: Vec<String>,
     /// Emit detailed diagnostic notes to standard error describing each step.
     pub verbose: bool,
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stage_timings_enabled_follows_verbose_or_timing() {
+        let options = |verbose, timing| AnalyzeOptions {
+            verbose,
+            timing,
+            ..AnalyzeOptions::default()
+        };
+        // `verbose` implies the timings, the `timing` flag enables them on its
+        // own, and neither flag leaves them off — so the policy is the logical
+        // OR of the two, not their AND.
+        assert!(!options(false, false).stage_timings_enabled());
+        assert!(options(true, false).stage_timings_enabled());
+        assert!(options(false, true).stage_timings_enabled());
+        assert!(options(true, true).stage_timings_enabled());
+    }
 }

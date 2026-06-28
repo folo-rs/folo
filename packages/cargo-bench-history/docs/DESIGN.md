@@ -169,7 +169,8 @@ flowchart LR
 ```
 
 * **BenchmarkId** — stable identity of a series, modeled as an ordered
-  `segments: Vec<String>`. The engine-specific adapter decides what the segments
+  `segments: NonEmpty<String>` (the type enforces the at-least-one-segment
+  invariant). The engine-specific adapter decides what the segments
   are, so the general-purpose type carries no engine-specific assumptions about
   which component is the "group" or "case". Callgrind composes `[package?,
   module_path, function_name, value?]` (the workspace `package` — the Gungraun
@@ -475,6 +476,18 @@ backend-agnostic by holding a `StorageFacade`.
   still covered under Miri by `storage::sas`'s fixed-expiry golden vector.
 * An in-memory `Storage` fake (in `#[cfg(test)]`) backs the Miri-safe
   orchestration tests; it mirrors the same key/prefix semantics as `LocalStorage`.
+* **Connection reuse & on-the-wire compression.** Every per-object blob and
+  container client is built from one shared, pooled `reqwest` transport — an
+  `Arc<dyn HttpClient>` injected through the SDK's transport seam and held on
+  `AzureBlobStorage`, built once in `from_config` — so `analyze`'s
+  high-concurrency object-load burst keeps TCP+TLS connections alive across objects
+  instead of paying a fresh handshake per object (and stops exhausting ephemeral
+  ports at high fetch concurrency). Stored bodies are **gzip-compressed** by the
+  shared `cargo_bench_history_core::codec` both backends call: `put`/`get`
+  compress/decompress at the edge, Azure tags the blob `Content-Encoding: gzip` and
+  leaves SDK auto-decompression off (the storage layer already returns compressed
+  bytes, so turning it on would double-inflate), and a legacy plaintext object fails
+  loudly on `get` because the gzip magic never collides with JSON's first byte.
 
 The blob/key model (flat keys, list-by-prefix, immutable objects) is the lowest
 common denominator of a filesystem and a blob container, so both backends
@@ -527,8 +540,10 @@ rather than one flat list:
 * **Environment and execution** — `--config`, `--repo`, `--verbose`, `--dry-run`
   (on `prune`), and `--help`.
 * **Output** — `--format` (text / json / markdown), on the reporting commands.
-* **Benchmark scope** — `--workspace`, `--package`/`-p`, `--bench`, on the
-  executing commands.
+* **Benchmark scope** — `--workspace`, `--package`/`-p`, `--exclude`, `--bench`,
+  on the executing commands.
+* **Feature selection** — `--features`, `--all-features`, `--no-default-features`,
+  on the executing commands; forwarded verbatim to `cargo bench`.
 * **Discriminant selection** — `--engine`, `--target-triple`, `--machine-key`
   (§4.3): repeatable + `all` in query mode; only `--machine-key` in create mode.
 * **Commit selection** — `--base`, `--context` (the ref the command runs in
@@ -599,9 +614,15 @@ Valgrind off-Linux.
 
 **Scope & filtering.** Scope flags translate directly to `cargo bench` arguments:
 `--workspace` (the default) benches the whole workspace; `--package`/`-p NAME`
-(repeatable) restricts to specific packages (and omits `--workspace`); `--bench
-NAME` (repeatable) restricts to named bench targets. Everything after a `--`
-separator is forwarded **verbatim** to `cargo bench` after the scope flags.
+(repeatable) restricts to specific packages (and omits `--workspace`);
+`--exclude NAME` (repeatable, conflicts with `--package`) drops packages from the
+whole-workspace run; `--bench
+NAME` (repeatable) restricts to named bench targets. Cargo feature selection is
+forwarded too: `--features <FEATURES>` (repeatable), `--all-features`, and
+`--no-default-features` become the matching `cargo bench` flags, so feature-gated
+benchmarks can be reached. Everything after a `--`
+separator is forwarded **verbatim** to `cargo bench` after the scope and feature
+flags.
 Because harvest is scoped by `mtime ≥ run-start`, whatever subset actually ran is
 exactly what gets ingested. Note that two non-overlapping partial runs at the same
 commit (different `--package`/`--bench` subsets) do **not** merge: each stores its
@@ -737,7 +758,8 @@ also the convenient path for ad-hoc evaluation over a span of commits.
 
 ```
 cargo bench-history backfill <from> <to> \
-    [--workspace] [--package NAME] [--bench NAME] \
+    [--workspace] [--package NAME] [--exclude NAME] [--bench NAME] \
+    [--features FEATURES] [--all-features] [--no-default-features] \
     [--overwrite] [--ignore-errors] [--verbose] [-- <passthrough>]
 ```
 
@@ -790,7 +812,8 @@ harvest already excludes stale artifacts). The benches that run are whatever exi
 in each checked-out commit; benches absent at an old commit simply harvest
 nothing.
 
-`--config`, `--workspace`/`--package`/`--bench`, `--target-triple`,
+`--config`, `--workspace`/`--package`/`--exclude`/`--bench`,
+`--features`/`--all-features`/`--no-default-features`, `--target-triple`,
 `--machine-key` and `-- <passthrough>` behave as for `run`. To collect Callgrind
 data, run backfill on Linux/WSL — the worktree path is reachable from WSL exactly
 like the primary checkout.
@@ -1064,7 +1087,8 @@ never gate the exit code (§8.3, §9.6).
 
 ### 9.5 Statistical primitives
 
-All math lives in a pure, deterministic, Miri-safe `analyze/stats.rs`:
+All math lives in a pure, deterministic, Miri-safe `analyze/stats.rs` (in the
+`cargo-bench-history-core` library — §10):
 `median`, `pettitt` (rank-based `U_t`, `K = max|U_t|`, `p ≈ 2·exp(−6K²/(n³+n²))`,
 used only to locate the split), `mann_whitney_u_pvalue` (tie- and
 continuity-corrected normal approximation), `mann_kendall` (`S`, tie-corrected
@@ -1220,23 +1244,59 @@ separated from the inactive context that is kept only for continuity.
 
 ## 10. Crate architecture
 
-`packages/cargo-bench-history/` — binary + library, `clap` (derive) subcommands.
-The other workspace cargo tools (`cargo-detect-package`/`cargo-freeze-deps`) also use
+The tool is **two crates**: the **shell** `packages/cargo-bench-history/` (the
+`clap`-derive binary + its library) and the **core** library
+`packages/cargo-bench-history-core/` it depends on. The split follows the
+workspace's impl-crate pattern — a private-use `-core` extraction treated as the
+impl crate (`docs/impl-crate-split.md`): all **pure, I/O-free** logic (the stored
+data model, comparability/partitioning, the analysis math + rendering, and the
+shared gzip codec) lives in core so it can be exercised by a fast, Miri-friendly,
+cheap-to-mutation-test in-process suite, while everything that touches the outside
+world (storage, git, process, filesystem, the CLI) stays in the shell. The data-flow
+and parallelism map across the two crates is [`docs/analyze.md`](analyze.md). The
+other workspace cargo tools (`cargo-detect-package`/`cargo-freeze-deps`) also use
 `clap`, though their CLIs are trivial enough to need no grouped argument headings.
+
+**`cargo-bench-history-core` (pure, no I/O).** Three flat namespaces, each
+re-exporting its submodule types so consumers write `core::model::Run` /
+`core::analyze::Finding` rather than reaching into private submodules:
+
+```
+src/
+  model/                  # the stored data model (serde)
+    benchmark_id.rs       # BenchmarkId (NonEmpty<String> segments) + BenchmarkIdPrefix
+    metric.rs             # Metric / MetricKind
+    run.rs                # Run / BenchmarkResult
+    context.rs            # RunContext (CI/git/toolchain + observation time)
+    comparability.rs      # DiscriminantSet + commit-centric partition path
+    bless.rs              # BlessingRecord data model
+    constants.rs mod.rs   # schema versions + flat re-exports
+  analyze/
+    discriminant.rs       # parse v1 keys; DiscriminantSet/DiscriminantSetQuery
+    selection.rs          # split the target ancestry at the merge-base
+    series.rs             # per-(BenchmarkId, metric) series in topology order
+    stats.rs              # pure statistical primitives (Pettitt, Mann-Kendall, ...)
+    findings.rs           # engine-aware detectors + Spawner-driven parallel pass (decision 33)
+    parallel.rs           # balanced chunk math for the per-series parallel pass
+    report.rs             # text|json|markdown multi-set renderer
+    mod.rs                # AnalysisContext/AnalysisMode/Finding + flat re-exports
+  codec.rs                # gzip byte format shared by storage + the stress harness
+  testing.rs              # `private-test-util` fixtures (feature-gated; test-only)
+```
+
+**`cargo-bench-history` (the shell: I/O, git, CLI, orchestration).**
 
 ```
 src/
   main.rs                 # #[tokio::main]; strip "bench-history" arg, parse, dispatch
-  lib.rs                  # module wiring + the public re-exports
-  cli.rs / types.rs       # clap subcommands + grouped args + RunOptions/Outcome/Error
+  lib.rs                  # module wiring + public re-exports (incl. core's model)
+  cli.rs                  # clap subcommands + grouped args
+  command.rs              # the parsed Command enum + per-subcommand option structs
+  outcome.rs              # RunOutcome / RunError
   dispatch.rs             # route a parsed Command to its command handler
   wiring.rs               # locate config + project id, build the StorageFacade
   config.rs               # load + generate .cargo/bench_history.toml (toml)
   config_writer.rs        # ConfigWriter port (tokio adapter + fake) for `install`
-  model.rs                # Run/BenchmarkResult/Metric/BenchmarkId/Context (serde)
-  comparability.rs        # DiscriminantSet + commit-centric partition path
-  bless.rs                # BlessingRecord data model + append-only sidecar
-  context.rs              # RunContext (CI/git/toolchain + observation time)
   process.rs              # ProcessRunner port (async) + tokio adapter + fake
   probe.rs                # environment probe port (git/rustc) + shell adapter + fake
   git.rs                  # pure parse of git output -> GitInfo
@@ -1254,23 +1314,19 @@ src/
   bench_output.rs         # BenchOutputSource port: harvest target/ -> fresh cases
   storage/
     mod.rs                # Storage trait (async) + in-memory fake
-    local.rs              # tokio::fs backend
+    local.rs              # tokio::fs backend (gzip via core::codec)
     facade.rs             # StorageFacade enum (Local | Azure), static dispatch
-    azure.rs              # AzureBlobStorage
+    azure.rs              # AzureBlobStorage (one shared pooled reqwest transport, §7)
     sas.rs                # self-signed account-SAS signer
   analyze/
-    mod.rs                # query orchestration (shared selection pipeline)
-    discriminant.rs       # parse v1 keys; DiscriminantSet/DiscriminantSetQuery
-    selection.rs          # split the target ancestry at the merge-base
-    series.rs             # per-(BenchmarkId, metric) series in topology order
-    stats.rs              # pure statistical primitives (Pettitt, Mann-Kendall, ...)
-    findings.rs           # engine-aware change-point + drift detectors
-    report.rs             # text|json|markdown multi-set renderer
+    mod.rs                # query orchestration (concurrent load + Spawner injection)
     list.rs               # `list runs|discriminants|blessings` data-set preview
     prune.rs              # `prune` deletes selected runs (mirrors list selection)
     bless.rs              # `bless`/`unbless` + `list blessings` audit
   commands/
-    mod.rs run.rs install.rs backfill.rs   # the analyze/list/prune/bless/unbless handlers are in analyze/
+    mod.rs run.rs install.rs backfill.rs   # analyze/list/prune/bless/unbless handlers live in analyze/
+  bin/
+    cargo-bench-history-mock-engine.rs     # test-support fake bench engine
 ```
 
 **Async ports & adapters (the testability boundary).** The app is **async by
@@ -1431,7 +1487,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
 ## 13. Decisions & open items
 
 1. **Design-doc home** — *Decided:* committed to
-   `packages/cargo-bench-history/DESIGN.md` (package dir created up front).
+   `packages/cargo-bench-history/docs/DESIGN.md`.
 2. **Scaffold now?** — *Deferred:* design decisions resolved first; creating the
    Phase 0 crate skeleton is the next step when you’re ready.
 3. **Storage granularity** — *Decided:* immutable one-file-per-run.
@@ -1472,7 +1528,9 @@ Each iteration ships with tests and docs and leaves the tool runnable.
    effective time; the stored commit timestamp, the effective-time concept, and
    `--timestamp` are all gone.)*
 10. **Filtering** — *Decided:* `run`/`backfill` expose first-class scope
-    flags — `--workspace` (default), `--package`/`-p NAME`, `--bench NAME` — that
+    flags — `--workspace` (default), `--package`/`-p NAME`, `--exclude NAME`,
+    `--bench NAME` — plus cargo feature-selection flags (`--features`,
+    `--all-features`, `--no-default-features`) that
     translate directly to `cargo bench` arguments; everything after `--` is
     forwarded verbatim after them. The `mtime ≥ run-start` harvest captures exactly
     what ran. `--engine` is not a `run` flag — it is an `analyze` facet over stored
@@ -1619,7 +1677,9 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     `run`/`backfill` run the workspace's benches once with `cargo bench`, inject the
     combined environment every supported engine needs, and detect each engine from
     the output tree it wrote (decision 8). Scope is expressed with first-class
-    `--workspace`/`--package`/`--bench` flags (decision 10). This supersedes the
+    `--workspace`/`--package`/`--exclude`/`--bench` flags plus cargo
+    feature-selection flags (`--features`/`--all-features`/`--no-default-features`)
+    (decision 10). This supersedes the
     per-engine `command`/`os`/`extra_args` config, the `--engine`-on-`run` selector,
     and the `WSLENV` bridging. The bet is that a single `cargo bench` invocation with
     the union of engine env vars yields correct output for every supported engine —
@@ -1696,7 +1756,9 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      list is hard to navigate. Flags are organised into functional groups via clap
      `help_heading`s — **Environment and execution** (`--config`/`--repo`/`--verbose`/
      `--dry-run`), **Output** (`--format`), **Benchmark scope** (`--workspace`/
-     `--package`/`--bench`), **Discriminant selection** (`--engine`/`--target-triple`/
+     `--package`/`--exclude`/`--bench`), **Feature selection** (`--features`/
+     `--all-features`/`--no-default-features`), **Discriminant selection**
+     (`--engine`/`--target-triple`/
      `--machine-key`), **Commit selection** (`--context`/`--base`/`--since`/
      `--until`), and **Data filtering** (`--no-dirty`) — shared across commands via
      flattened arg structs so a given group looks identical everywhere it appears.
@@ -1784,24 +1846,32 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      `tip` and `branch` use cheaper per-series detectors — is now parallelized (decision 33).
 
 33. **Parallel per-series change-point detection** — *Decided:* every mode's per-series
-     detection runs on a pool of scoped worker threads. `analyze::findings::find_changes`
-     splits the series into contiguous chunks — one per worker, where the worker count is
-     the available CPU count (`thread::available_parallelism`) capped at the number of
-     series — evaluates each chunk on a `std::thread::scope` worker via the pure per-series
+     detection is distributed across worker tasks through an injected `anyspawn::Spawner`.
+     `analyze::findings::find_changes_spawned` splits the series into contiguous chunks — one
+     per worker, where the worker count is the available CPU count
+     (`thread::available_parallelism`) capped at the number of series — dispatches each chunk
+     to a blocking task via `Spawner::spawn_blocking` running the pure per-series
      `detect_one`, then concatenates the chunk results **in series order**. Order
      preservation is load-bearing: the downstream false-discovery alignment pairs
      `candidates` with `noisy_p` positionally and the final ranking is a deterministic total
-     order, so the output is byte-identical to the previous serial pass — only the wall time
+     order, so the output is byte-identical to a plain serial scan — only the wall time
      changes (the win is concentrated in `history`, whose change-point/drift tests are the
-     most expensive per-series work; see decision 32's finding). A single CPU or a single
-     series takes a plain serial pass with no thread spawn. *Rejected*
-     `rayon`'s `par_iter` (the issue's original suggestion): its transitive `crossbeam-epoch`
-     dependency trips Miri's Stacked Borrows model (a known, benign, but as-yet-unreleased
-     issue), which would force an ugly `#[cfg(miri)]` serial fallback; `std::thread::scope`
-     is Miri-clean with no conditional compilation (Miri reports one CPU by default, so it
-     exercises the serial path) and adds no dependency. The worker-count and chunking
-     arithmetic never changes the output, so `detect_all` carries `#[mutants::skip]` while
-     the real detection logic in `detect_one` stays under mutation testing.
+     most expensive per-series work; see decision 32's finding). A single available CPU
+     yields a single worker — one chunk, one task over every series — so the one-worker
+     case is just the degenerate partition rather than a separate serial branch. Production
+     injects a Tokio-backed spawner; tests and Miri inject a synchronous spawner that runs
+     each task inline (Miri reports one CPU by default, so it exercises that single-worker
+     path), keeping the core
+     analysis runtime-agnostic and free of a hard Tokio dependency. *Rejected* `rayon`'s
+     `par_iter` (the issue's original suggestion): its transitive `crossbeam-epoch` dependency
+     trips Miri's Stacked Borrows model (a known, benign issue), which would force an ugly
+     `#[cfg(miri)]` serial fallback; the injected spawner is Miri-clean with no conditional
+     compilation. Also *rejected* spawning short-lived `std::thread::scope` workers per call:
+     it litters the profiler with transient threads and ties the core to OS-thread spawning
+     instead of the host's existing runtime. The worker-count and chunking arithmetic never
+     changes the output, so `worker_count` carries `#[mutants::skip]` while the real detection
+     logic in `detect_one` stays under mutation testing. The serial `find_changes` survives
+     only as the test-only oracle that pins the chunked path to a non-chunked reference.
 34. **Storage selection: `--local` flag + cloud-only config** — *Decided:* a local
      storage path is machine-dependent, so it is no longer carried in the shared,
      version-controlled config file. The config file holds only an **optional**

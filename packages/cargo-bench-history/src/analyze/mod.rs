@@ -19,13 +19,16 @@ pub(crate) mod prune;
 pub(crate) use cargo_bench_history_core::analyze::{
     AnalysisConfig, AnalysisContext, AnalysisMode, BlessingPlacement, DiscriminantSetQuery,
     FacetFilter, ReportFormat, ReportInput, Series, SeriesBuilder, SeriesFilter, SetSummary,
-    StorageKey, apply_blessings, find_changes, parse_key, render, select_commits,
+    StorageKey, apply_blessings, find_changes_spawned, parse_key, render, select_commits,
 };
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::IsTerminal;
 use std::path::Path;
+use std::sync::Arc;
+use std::time::Instant;
 
+use anyspawn::Spawner;
 use futures::{StreamExt as _, TryStreamExt as _};
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
@@ -61,7 +64,10 @@ pub(crate) async fn execute(
     workspace_dir: &Path,
     now_override: Option<Timestamp>,
 ) -> Result<RunOutcome, RunError> {
-    let reporter = StderrReporter::new(options.verbose);
+    // Per-object notes follow `--verbose`; stage timings are emitted under either
+    // `--verbose` or the programmatic `timing` flag (the stress harness sets the
+    // latter alone to see the load breakdown without the per-object flood).
+    let reporter = StderrReporter::with_timing(options.verbose, options.stage_timings_enabled());
 
     let config_path = resolve_config_path(workspace_dir, options.config_path.as_deref());
     reporter.note(&format!(
@@ -82,6 +88,10 @@ pub(crate) async fn execute(
         std::io::stdout().is_terminal(),
         std::env::var_os("NO_COLOR").is_some(),
     );
+    // Distribute the compute-bound detection across the runtime's blocking pool, so
+    // the analysis shares the ambient Tokio worker threads rather than spawning its
+    // own short-lived ones.
+    let spawner = Spawner::new_tokio();
     analyze_with(
         &git,
         &storage,
@@ -92,6 +102,7 @@ pub(crate) async fn execute(
         now,
         &reporter,
         color,
+        &spawner,
     )
     .await
 }
@@ -139,6 +150,7 @@ pub(crate) async fn analyze_with<G, S>(
     now: Timestamp,
     reporter: &dyn Reporter,
     color: bool,
+    spawner: &Spawner,
 ) -> Result<RunOutcome, RunError>
 where
     G: GitHistory,
@@ -149,15 +161,25 @@ where
     let filter = SeriesFilter {
         prefixes: &options.prefixes,
     };
+    let load_started = Instant::now();
     let dataset = select_dataset(
         git, storage, project_id, config, &selection, filter, auto, now, reporter,
     )
     .await?;
+    reporter.timing(
+        "select_dataset (full load: list + filter + topology + fetch/parse/fold + build)",
+        load_started.elapsed(),
+    );
 
     let mut series = dataset.series;
     // Re-baseline blessed series before detection (history mode only; branch and
     // tip modes carry an empty blessing map).
+    let rebaseline_started = Instant::now();
     apply_blessings(&mut series, &dataset.blessings);
+    reporter.timing(
+        "re-baseline blessed series (apply_blessings)",
+        rebaseline_started.elapsed(),
+    );
     let context = AnalysisContext {
         mode: dataset.mode,
         config: AnalysisConfig::default(),
@@ -165,7 +187,15 @@ where
         include_improvements: options.include_improvements,
         include_inactive: options.include_inactive,
     };
-    let findings = find_changes(&series, &context);
+    // Share the series across the detection's blocking tasks without copying; the
+    // remaining per-set reporting reads them back through this same handle.
+    let series: Arc<[Series]> = Arc::from(series);
+    let detect_started = Instant::now();
+    let findings = find_changes_spawned(Arc::clone(&series), context, spawner).await;
+    reporter.timing(
+        "change detection (find_changes: per-series detectors + FDR filter)",
+        detect_started.elapsed(),
+    );
     let regressions = findings
         .iter()
         .filter(|finding| finding.is_regression())
@@ -217,7 +247,9 @@ where
         hint: hint.as_deref(),
         warning: warning.as_deref(),
     };
+    let render_started = Instant::now();
     let report = render(&input, format, color);
+    reporter.timing("report render", render_started.elapsed());
 
     Ok(RunOutcome::Analyzed {
         report,
@@ -522,7 +554,9 @@ async fn facet_filtered_candidates<S: Storage>(
     reporter.note(&format!("listing stored objects under prefix {prefix}"));
     reporter.note_with(|| format!("facet filters: {}", describe_facets(facets)));
 
+    let list_started = Instant::now();
     let keys = storage.list(&prefix).await.map_err(RunError::Storage)?;
+    reporter.timing("storage.list(prefix) round-trip", list_started.elapsed());
     reporter.note(&format!(
         "storage returned {}",
         count_noun(keys.len(), "object key")
@@ -567,9 +601,11 @@ async fn facet_filtered_candidates<S: Storage>(
 /// fetches turns that sum into roughly its maximum, cutting the per-mode load
 /// floor (critical for the remote backend, where thousands of sequential
 /// round-trips would otherwise stretch the local floor into minutes). The bound
-/// keeps the remote backend from being hit with an unbounded burst of requests
-/// (which it would throttle) while still keeping enough in flight to hide latency.
-const LOAD_CONCURRENCY: usize = 32;
+/// sits near the knee of the throughput curve: enough fetches are in flight to
+/// saturate the network path and hide per-object latency, while staying below the
+/// point where extra concurrency merely subdivides the fixed path bandwidth among
+/// more requests and lengthens each one's latency without lifting throughput.
+const LOAD_CONCURRENCY: usize = 128;
 
 /// Fetches and deserializes the given stored objects with bounded concurrency.
 ///
@@ -657,7 +693,12 @@ where
     S: Storage,
 {
     let facets = resolve_facets(selection, Some(auto))?;
+    let listing_started = Instant::now();
     let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
+    reporter.timing(
+        "candidate listing + facet filter (includes storage.list)",
+        listing_started.elapsed(),
+    );
 
     // Separate blessing sidecars from run objects: they share the partition prefix
     // but carry a different payload and are loaded into their own map rather than
@@ -672,6 +713,7 @@ where
         ));
     }
 
+    let topology_started = Instant::now();
     let ResolvedHistory {
         target_ref,
         order,
@@ -688,6 +730,10 @@ where
         reporter,
     )
     .await?;
+    reporter.timing(
+        "git topology resolution (resolve_history)",
+        topology_started.elapsed(),
+    );
 
     // Mode auto-detection keys off the *recorded data set*, not the on-disk
     // repository state. The branch view exists to compare a feature branch's runs
@@ -759,6 +805,7 @@ where
     // excluded candidate never costs a round-trip: history membership, base-side
     // dirty admission, and the `--since`/`--until` window (decided from each
     // commit's committer time, which git reports with the topology).
+    let phase1_started = Instant::now();
     let mut to_fetch: Vec<(String, StorageKey)> = Vec::new();
     for (key, parsed) in candidates {
         if !order.contains_key(&parsed.commit) {
@@ -812,6 +859,10 @@ where
         }
         to_fetch.push((key, parsed));
     }
+    reporter.timing(
+        "phase 1 — key-only candidate filtering (no fetches)",
+        phase1_started.elapsed(),
+    );
 
     // Phase 2/3 — fetch the survivors concurrently and fold each into the series as
     // it arrives, dropping the parsed run immediately so the whole parsed data set
@@ -823,6 +874,7 @@ where
     // diagnostics stay byte-identical to a deterministic in-order pass.
     to_fetch.sort_by(|left, right| left.0.cmp(&right.0));
 
+    let fetch_fold_started = Instant::now();
     let mut builder = SeriesBuilder::new(filter);
     let mut run_index = RunIndex::new();
     // (storage key, admitted-by-dirty-base-exception) per folded object, for the
@@ -863,6 +915,10 @@ where
             // `run` is dropped here; only the extracted (compact) points are kept.
         }
     }
+    reporter.timing(
+        "phase 2/3 — concurrent fetch + serial parse + fold into series",
+        fetch_fold_started.elapsed(),
+    );
 
     // Emit the per-object verbose notes in storage-key order — the deterministic
     // order objects were previously admitted in — then the summary.
@@ -879,7 +935,12 @@ where
             reporter.note_with(|| format!("including {key}"));
         }
     }
+    let finish_started = Instant::now();
     let series = builder.finish();
+    reporter.timing(
+        "series build finalization (builder.finish: assemble + serial point sort)",
+        finish_started.elapsed(),
+    );
     reporter.note(&format!(
         "{} entered the analysis ({excluded_outside_history} outside history, \
          {excluded_dirty_base} dirty-on-base, {excluded_since} before --since, \
@@ -893,6 +954,7 @@ where
     // only history mode pays the load.
     let mut blessings: HashMap<DiscriminantSet, Vec<BlessingPlacement>> = HashMap::new();
     if mode == AnalysisMode::History {
+        let blessing_started = Instant::now();
         // Phase 1 — key-only filtering: drop blessings whose commit is not on the
         // analyzed history before fetching, in candidate order.
         let mut to_fetch: Vec<(String, StorageKey)> = Vec::new();
@@ -942,6 +1004,10 @@ where
                 record,
             ));
         }
+        reporter.timing(
+            "blessing sidecar load (history mode: filter + fetch + parse)",
+            blessing_started.elapsed(),
+        );
     }
 
     Ok(SelectedDataSet {
@@ -1124,7 +1190,12 @@ where
     };
 
     let base_sha = resolve_base_ref(git, config, selection.base).await?;
+    let first_parent_started = Instant::now();
     let first_parent = git.first_parent(&target_sha).await.map_err(RunError::Io)?;
+    reporter.timing(
+        "git.first_parent ancestry walk (target's first-parent line)",
+        first_parent_started.elapsed(),
+    );
     // Split the first-parent ancestry into the SHA timeline (for commit selection
     // and the merge-base lookup) and a SHA -> committer-time map (for the window).
     let commit_count = first_parent.len();
@@ -1715,6 +1786,12 @@ mod tests {
         }
     }
 
+    /// An inline spawner that runs the detection's blocking tasks on the calling
+    /// thread, so `analyze_with` needs no Tokio runtime under `block_on` or Miri.
+    fn spawner() -> Spawner {
+        cargo_bench_history_core::testing::synchronous_spawner()
+    }
+
     #[test]
     fn auto_mode_uses_tip_topology_and_recorded_dirty_runs_not_repo_state() {
         // A base branch whose tip is its own merge-base with no dirty run recorded
@@ -1896,6 +1973,7 @@ mod tests {
             now_anchor(),
             &reporter,
             false,
+            &spawner(),
         ))
         .unwrap();
         assert!(
@@ -1983,6 +2061,7 @@ mod tests {
             now_anchor(),
             &reporter,
             false,
+            &spawner(),
         ))
         .unwrap();
         match outcome {
@@ -2010,6 +2089,7 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
+            &spawner(),
         ))
         .unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
@@ -2085,6 +2165,7 @@ mod tests {
             now_anchor(),
             &reporter,
             false,
+            &spawner(),
         ))
         .unwrap();
         assert!(
@@ -2107,6 +2188,7 @@ mod tests {
             now_anchor(),
             &reporter,
             false,
+            &spawner(),
         ))
         .unwrap();
         assert!(
@@ -2114,6 +2196,63 @@ mod tests {
             "{:?}",
             reporter.notes()
         );
+    }
+
+    #[test]
+    fn analyze_records_a_timing_for_each_pipeline_stage() {
+        // Every stage drawn in docs/analyze.md emits a timing on the dedicated
+        // timing channel, so a `--verbose` run can localize a mystery slowdown.
+        // History mode is used because it also exercises the blessing-load stage.
+        let storage = MemoryStorage::new();
+        seed_linear_step(&storage);
+        let record = BlessingRecord::new(
+            "c3".to_owned(),
+            ts(3),
+            vec![BenchmarkIdPrefix::new("nm").unwrap()],
+            "0.0.1".to_owned(),
+        );
+        let bless_key =
+            "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/c3/bless-3.json".to_owned();
+        block_on(storage.put(&bless_key, record.to_json().unwrap().as_bytes())).unwrap();
+
+        let reporter = RecordingReporter::new();
+        block_on(analyze_with(
+            &linear6_git(),
+            &storage,
+            "folo",
+            &config(),
+            &options(),
+            &auto(),
+            now_anchor(),
+            &reporter,
+            false,
+            &spawner(),
+        ))
+        .unwrap();
+
+        for stage in [
+            // analyze_with stages.
+            "select_dataset",
+            "re-baseline",
+            "change detection",
+            "report render",
+            // select_dataset sub-stages.
+            "candidate listing",
+            "storage.list",
+            "git topology",
+            "git.first_parent",
+            "phase 1",
+            "phase 2/3",
+            "series build finalization",
+            // History-mode-only blessing load.
+            "blessing sidecar load",
+        ] {
+            assert!(reporter.timed(stage), "missing timing for {stage:?}");
+        }
+
+        // Timings are a distinct channel: they never leak into the per-object note
+        // stream a `--verbose` run also prints.
+        assert!(!reporter.contains("timing:"), "{:?}", reporter.notes());
     }
 
     /// Drives history-mode analyze expecting the blessing load to fail.
@@ -2128,6 +2267,7 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
+            &spawner(),
         ))
         .unwrap_err()
     }
@@ -2195,6 +2335,7 @@ mod tests {
             now_anchor(),
             &reporter,
             false,
+            &spawner(),
         ))
         .unwrap();
         assert!(
@@ -2396,6 +2537,7 @@ mod tests {
             now_anchor(),
             &reporter,
             false,
+            &spawner(),
         ))
         .unwrap();
         let RunOutcome::Analyzed { report, .. } = outcome else {
@@ -2460,6 +2602,7 @@ mod tests {
             now_anchor(),
             &reporter,
             false,
+            &spawner(),
         ))
         .unwrap();
         let RunOutcome::Analyzed {
@@ -2544,6 +2687,7 @@ mod tests {
             now_anchor(),
             &reporter,
             false,
+            &spawner(),
         ))
         .unwrap();
         let RunOutcome::Analyzed {
@@ -2640,6 +2784,7 @@ mod tests {
             now_anchor(),
             &reporter,
             false,
+            &spawner(),
         ))
         .unwrap();
         let RunOutcome::Analyzed { report, .. } = outcome else {
@@ -2957,6 +3102,7 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
+            &spawner(),
         ))
         .unwrap();
         assert!(outcome.is_success(), "findings must never fail the build");
@@ -3006,6 +3152,7 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
+            &spawner(),
         ))
         .unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
@@ -3027,6 +3174,7 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
+            &spawner(),
         ))
         .unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
@@ -3050,6 +3198,7 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
+            &spawner(),
         ))
         .unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
@@ -3073,6 +3222,7 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
+            &spawner(),
         ))
         .unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
@@ -3097,6 +3247,7 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
+            &spawner(),
         ))
         .unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
@@ -3137,6 +3288,7 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
+            &spawner(),
         ))
         .unwrap();
         let RunOutcome::Analyzed { report, .. } = outcome else {

@@ -5,6 +5,14 @@ logic (parsing, mapping, comparability, key derivation, message formatting)
 synchronous and pushes async only to the IO edges, each modelled as a small
 "port" trait with a real Tokio adapter and an in-`#[cfg(test)]` in-memory fake.
 
+> **Design reference:** [`docs/DESIGN.md`](docs/DESIGN.md) is the canonical design &
+> implementation record — the data model, comparability/storage rules, command
+> semantics, analysis algorithms, the two-crate (shell + `cargo-bench-history-core`)
+> architecture, and the numbered decision log (§13). Keep it up to date whenever you
+> change a design decision, the data model, the crate layout, the storage format, or
+> a command's behaviour, recording non-trivial design changes as a new or amended
+> decision entry.
+
 ## Ports and fakes
 
 The orchestrator (`commands::run::execute_run`) is generic over its ports and is
@@ -58,7 +66,11 @@ prune stay in selection lockstep automatically — see those sections):
 
 * **Environment & execution** — `--config`, `--repo`, `--verbose`.
 * **Output** — `--format`.
-* **Benchmark scope** (`run`/`backfill`) — `--workspace`, `--package`/`-p`, `--bench`.
+* **Benchmark scope** (`run`/`backfill`) — `--workspace`, `--package`/`-p`,
+  `--exclude` (drops packages from a whole-workspace run; conflicts with
+  `--package`), `--bench`.
+* **Feature selection** (`run`/`backfill`) — `--features`, `--all-features`,
+  `--no-default-features`, all forwarded verbatim to `cargo bench`.
 * **Discriminant selection** — `--engine`, `--target-triple`, `--machine-key`. On
   query commands each is **repeatable** (a `Vec`), accepts the widening keyword
   `all`, and auto-detects the current machine when omitted (§4.3). On create commands
@@ -193,12 +205,29 @@ the gzip magic never collides with JSON's first byte.
 
 ## The `analyze` command
 
+> **Data-flow & parallelism reference:** [`docs/analyze.md`](docs/analyze.md) is the
+> canonical map of the `analyze` load and detection path — what loads where, in what
+> order, what is computed/sorted, and exactly where I/O concurrency vs. CPU
+> parallelism happens (with Mermaid diagrams). Keep it in sync whenever you change the
+> concurrent fetch/fold, the detection distribution (`find_changes_spawned` + the
+> `analyze::parallel` chunk math), or the Azure transport.
+
 `analyze::execute` builds the real `SystemGitHistory` (rooted at `--repo` or the
 current directory) and the storage from `build_storage`, then delegates to
 `analyze::analyze_with`, which is generic over both the `GitHistory` and `Storage`
 ports so tests drive it with `FakeGitHistory` + `MemoryStorage` +
 `futures::executor::block_on` (Miri-safe, no Tokio). Everything below the IO ports
 is pure and synchronous.
+
+The one compute pass that fans out across cores is detection: `analyze_with` takes a
+`&anyspawn::Spawner` and calls `find_changes_spawned`, which dispatches per-series
+detection chunks to blocking tasks. `execute` injects `Spawner::new_tokio()` (the
+runtime's blocking pool); tests inject `cargo_bench_history_core::testing::
+synchronous_spawner()` (the shell takes core as a dev-dependency with its
+`private-test-util` feature) so `block_on`/Miri runs need no Tokio runtime. The fold
+and point sort stay serial. Do **not** spawn ad-hoc threads (`std::thread::scope`,
+`map_parallel`-style helpers) for compute — route fan-out through the injected
+`Spawner` so it shares the runtime's threads and stays legible in a profiler.
 
 `analyze` assembles a series by **resolving git topology at query time** rather
 than reading a flat storage prefix — the storage layout cannot pre-assemble a
@@ -298,8 +327,8 @@ commit's committer date so the git-topology `--since`/`--until` window matches.
 ### Analysis modes (`analyze` only)
 
 `analyze` runs in one of three modes, resolved in `analyze/mod.rs` (`auto_mode`,
-`parse_mode`, `resolve_since`) and dispatched in `analyze::findings::find_changes`
-on `AnalysisMode`:
+`parse_mode`, `resolve_since`) and dispatched per series in `analyze::findings`
+(`detect_one`, reached through `find_changes_spawned`) on `AnalysisMode`:
 
 * **history** — auto-selected when the analyzed tip *is* the merge-base with the
   base **and** no dirty run is recorded on top of that tip (the official base-branch
@@ -608,7 +637,10 @@ engines auto-emit JSON on drop and need no env), then harvest every output tree
 `target/all_the_time/*.json`); an engine that produced no cases (for example
 Callgrind off Linux, where the `_cg` benches are `#[cfg(target_os = "linux")]`
 no-ops) is silently skipped. Scope a run with `--workspace` (the default),
-`--package`/`-p NAME` (repeatable), or `--bench NAME` (repeatable) — these
+`--package`/`-p NAME` (repeatable), `--exclude NAME` (repeatable, drops packages
+from the whole-workspace run; conflicts with `--package`), or `--bench NAME`
+(repeatable), and select cargo features with `--features` (repeatable),
+`--all-features`, or `--no-default-features` — these
 translate to the matching `cargo bench` arguments. `--engine` is **not** a
 `run`/`backfill` flag; it is an `analyze` facet over already-stored data.
 `Engine::ALL` enumerates the engines harvested per run.
@@ -661,8 +693,10 @@ mock as the benchmark command via the `run_with_overrides` `bench_command`
 override (`[MOCK_ENGINE] + self.bench`, set with `Workspace::with_bench`), so the
 program path and each fixture-describing argument are passed verbatim as distinct
 argv entries — no shell, no quoting, no config `command`. After the mock's own
-contiguous arguments, `run` appends the cargo scope flags (`--workspace`/
-`--package NAME`/`--bench NAME`) and any `--` passthrough, which the mock ignores
+contiguous arguments, `run` appends the cargo scope flags (`--workspace`,
+`--exclude NAME`, `--package NAME`, `--bench NAME`), the feature-selection flags
+(`--features`, `--all-features`, `--no-default-features`), and any `--`
+passthrough, which the mock ignores
 (it stops at the first argument it does not recognize). Like every other crate
 root that uses `#[cfg_attr(coverage_nightly, coverage(off))]`, the mock engine
 must declare `#![cfg_attr(coverage_nightly, feature(coverage_attribute))]` at its
