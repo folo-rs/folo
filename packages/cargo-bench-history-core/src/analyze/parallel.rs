@@ -38,9 +38,11 @@ pub(crate) fn worker_count(len: usize) -> Option<usize> {
 /// evenly as possible: the first `len % workers` chunks hold one extra item, the
 /// rest hold `len / workers`.
 ///
-/// Callers guarantee `2 <= workers <= len` before taking the parallel path (a single
-/// worker, or a slice no longer than the worker count, takes the serial path
-/// instead), so every chunk is non-empty and the sizes differ by at most one.
+/// Well-defined for any `1 <= workers <= len`: every chunk is non-empty and the sizes
+/// differ by at most one, with `workers == 1` yielding a single chunk of all `len`
+/// items. Production reaches it only with `workers >= 2`, because `worker_count` sends
+/// the single-worker and `len <= 1` cases down the serial path instead; the unit test
+/// still covers the full `workers >= 1` range to pin the arithmetic.
 pub(crate) fn balanced_chunk_sizes(len: usize, workers: usize) -> impl Iterator<Item = usize> {
     // `workers >= 1` here, so the divide and remainder are well defined, and
     // `base + 1 <= len` cannot overflow; the checked operators keep the workspace's
