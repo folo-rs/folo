@@ -39,8 +39,18 @@ pub struct RunOptions {
     /// Restrict the run to these packages (`--package`/`-p`); empty means the
     /// whole workspace.
     pub packages: Vec<String>,
+    /// Exclude these packages from a whole-workspace run (`--exclude`); only
+    /// meaningful when `packages` is empty (the workspace default).
+    pub excludes: Vec<String>,
     /// Restrict the run to these benchmark targets (`--bench`); empty means all.
     pub benches: Vec<String>,
+    /// Cargo features to activate (`--features`), forwarded verbatim; empty means
+    /// none beyond the default set.
+    pub features: Vec<String>,
+    /// Activate all cargo features (`--all-features`).
+    pub all_features: bool,
+    /// Disable the default cargo feature set (`--no-default-features`).
+    pub no_default_features: bool,
     /// Override for the machine fingerprint (hardware-dependent engines), if set.
     pub machine_key: Option<String>,
     /// Harvest and build results without storing them.
@@ -256,8 +266,18 @@ pub struct BackfillOptions {
     /// Restrict the runs to these packages (`--package`/`-p`); empty means the
     /// whole workspace.
     pub packages: Vec<String>,
+    /// Exclude these packages from a whole-workspace run (`--exclude`); only
+    /// meaningful when `packages` is empty (the workspace default).
+    pub excludes: Vec<String>,
     /// Restrict the runs to these benchmark targets (`--bench`); empty means all.
     pub benches: Vec<String>,
+    /// Cargo features to activate (`--features`), forwarded verbatim; empty means
+    /// none beyond the default set.
+    pub features: Vec<String>,
+    /// Activate all cargo features (`--all-features`).
+    pub all_features: bool,
+    /// Disable the default cargo feature set (`--no-default-features`).
+    pub no_default_features: bool,
     /// Override for the machine fingerprint (hardware-dependent engines), if set.
     pub machine_key: Option<String>,
     /// Replace already-stored results for the backfilled commits instead of

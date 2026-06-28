@@ -23,6 +23,7 @@ const HEADING_DISCRIMINANT: &str = "Discriminant selection";
 const HEADING_COMMIT: &str = "Commit selection";
 const HEADING_FILTER: &str = "Data filtering";
 const HEADING_SCOPE: &str = "Benchmark scope";
+const HEADING_FEATURES: &str = "Feature selection";
 const HEADING_ANALYSIS: &str = "Analysis";
 
 /// Maintain a history of benchmark results over time and analyze it for trends.
@@ -220,9 +221,27 @@ struct RunCommand {
     #[arg(long = "package", short = 'p', value_name = "NAME", help_heading = HEADING_SCOPE)]
     package: Vec<String>,
 
+    /// Exclude a package from a whole-workspace run; repeatable, e.g.
+    /// `--exclude nm --exclude many_cpus`. Conflicts with `--package`.
+    #[arg(long, value_name = "NAME", help_heading = HEADING_SCOPE, conflicts_with = "package")]
+    exclude: Vec<String>,
+
     /// Benchmark only this bench target; repeatable (default: every bench target).
     #[arg(long, value_name = "NAME", help_heading = HEADING_SCOPE)]
     bench: Vec<String>,
+
+    /// Activate cargo features for the benchmark build; space- or comma-separated,
+    /// repeatable. Forwarded verbatim to `cargo bench` as `--features`.
+    #[arg(long, value_name = "FEATURES", help_heading = HEADING_FEATURES)]
+    features: Vec<String>,
+
+    /// Activate all cargo features of all selected packages (`--all-features`).
+    #[arg(long, help_heading = HEADING_FEATURES)]
+    all_features: bool,
+
+    /// Do not activate the `default` cargo feature (`--no-default-features`).
+    #[arg(long, help_heading = HEADING_FEATURES)]
+    no_default_features: bool,
 
     /// Harvest and build results without storing them.
     #[arg(long, help_heading = HEADING_ENV)]
@@ -245,7 +264,11 @@ impl RunCommand {
             config_path: self.env.config,
             repo: self.env.repo,
             packages: resolve_packages(self.workspace, self.package),
+            excludes: self.exclude,
             benches: self.bench,
+            features: self.features,
+            all_features: self.all_features,
+            no_default_features: self.no_default_features,
             machine_key: self.machine_key,
             no_store: self.no_store,
             overwrite: self.overwrite,
@@ -562,9 +585,27 @@ struct BackfillCommand {
     #[arg(long = "package", short = 'p', value_name = "NAME", help_heading = HEADING_SCOPE)]
     package: Vec<String>,
 
+    /// Exclude a package from a whole-workspace run; repeatable, e.g.
+    /// `--exclude nm --exclude many_cpus`. Conflicts with `--package`.
+    #[arg(long, value_name = "NAME", help_heading = HEADING_SCOPE, conflicts_with = "package")]
+    exclude: Vec<String>,
+
     /// Benchmark only this bench target; repeatable (default: every bench target).
     #[arg(long, value_name = "NAME", help_heading = HEADING_SCOPE)]
     bench: Vec<String>,
+
+    /// Activate cargo features for the benchmark build; space- or comma-separated,
+    /// repeatable. Forwarded verbatim to `cargo bench` as `--features`.
+    #[arg(long, value_name = "FEATURES", help_heading = HEADING_FEATURES)]
+    features: Vec<String>,
+
+    /// Activate all cargo features of all selected packages (`--all-features`).
+    #[arg(long, help_heading = HEADING_FEATURES)]
+    all_features: bool,
+
+    /// Do not activate the `default` cargo feature (`--no-default-features`).
+    #[arg(long, help_heading = HEADING_FEATURES)]
+    no_default_features: bool,
 
     /// Replace already-stored results for the backfilled commits instead of
     /// skipping them as duplicates.
@@ -589,7 +630,11 @@ impl BackfillCommand {
             from: self.from,
             to: self.to,
             packages: resolve_packages(self.workspace, self.package),
+            excludes: self.exclude,
             benches: self.bench,
+            features: self.features,
+            all_features: self.all_features,
+            no_default_features: self.no_default_features,
             machine_key: self.machine_key,
             overwrite: self.overwrite,
             ignore_errors: self.ignore_errors,
@@ -759,10 +804,126 @@ mod tests {
     }
 
     #[test]
+    fn run_collects_exclude_filters() {
+        let command = parse(&["run", "--exclude", "nm", "--exclude", "many_cpus"]);
+        let Command::Run(options) = command else {
+            panic!("expected run command");
+        };
+        assert!(
+            options.packages.is_empty(),
+            "exclude implies workspace scope"
+        );
+        assert_eq!(
+            options.excludes,
+            vec!["nm".to_owned(), "many_cpus".to_owned()]
+        );
+    }
+
+    #[test]
+    fn run_collects_feature_selection() {
+        let command = parse(&[
+            "run",
+            "--features",
+            "foo,bar",
+            "--features",
+            "baz",
+            "--no-default-features",
+        ]);
+        let Command::Run(options) = command else {
+            panic!("expected run command");
+        };
+        assert_eq!(
+            options.features,
+            vec!["foo,bar".to_owned(), "baz".to_owned()]
+        );
+        assert!(!options.all_features);
+        assert!(options.no_default_features);
+    }
+
+    #[test]
+    fn run_collects_all_features() {
+        let command = parse(&["run", "--all-features"]);
+        let Command::Run(options) = command else {
+            panic!("expected run command");
+        };
+        assert!(options.all_features);
+        assert!(options.features.is_empty());
+    }
+
+    #[test]
+    fn run_exclude_and_package_conflict() {
+        let error = Cli::from_args(
+            &["cargo-bench-history"],
+            &["run", "--exclude", "nm", "-p", "many_cpus"],
+        )
+        .unwrap_err();
+        assert_eq!(error.status, Err(()));
+        assert!(
+            error.output.contains("cannot be used with"),
+            "{}",
+            error.output
+        );
+    }
+
+    #[test]
     fn backfill_workspace_and_package_conflict() {
         let error = Cli::from_args(
             &["cargo-bench-history"],
             &["backfill", "abc", "def", "--workspace", "-p", "nm"],
+        )
+        .unwrap_err();
+        assert_eq!(error.status, Err(()));
+        assert!(
+            error.output.contains("cannot be used with"),
+            "{}",
+            error.output
+        );
+    }
+
+    #[test]
+    fn backfill_collects_exclude_filters() {
+        let command = parse(&["backfill", "abc", "def", "--exclude", "nm"]);
+        let Command::Backfill(options) = command else {
+            panic!("expected backfill command");
+        };
+        assert!(
+            options.packages.is_empty(),
+            "exclude implies workspace scope"
+        );
+        assert_eq!(options.excludes, vec!["nm".to_owned()]);
+    }
+
+    #[test]
+    fn backfill_collects_feature_selection() {
+        let command = parse(&[
+            "backfill",
+            "abc",
+            "def",
+            "--features",
+            "foo",
+            "--all-features",
+        ]);
+        let Command::Backfill(options) = command else {
+            panic!("expected backfill command");
+        };
+        assert_eq!(options.features, vec!["foo".to_owned()]);
+        assert!(options.all_features);
+        assert!(!options.no_default_features);
+    }
+
+    #[test]
+    fn backfill_exclude_and_package_conflict() {
+        let error = Cli::from_args(
+            &["cargo-bench-history"],
+            &[
+                "backfill",
+                "abc",
+                "def",
+                "--exclude",
+                "nm",
+                "-p",
+                "many_cpus",
+            ],
         )
         .unwrap_err();
         assert_eq!(error.status, Err(()));
