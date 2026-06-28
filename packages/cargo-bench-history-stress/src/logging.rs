@@ -52,3 +52,15 @@ impl Logger {
         }
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::Logger;
+
+    #[test]
+    fn verbose_reports_the_constructed_flag() {
+        assert!(Logger::new(true).verbose());
+        assert!(!Logger::new(false).verbose());
+    }
+}

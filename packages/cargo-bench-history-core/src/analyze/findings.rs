@@ -1651,14 +1651,14 @@ mod tests {
 
     #[test]
     fn many_independent_series_are_detected_in_a_stable_order() {
-        // `find_changes` runs the per-series detection across scoped fork/join threads.
-        // The work
-        // is embarrassingly parallel — no series depends on another — so this guards
-        // the properties the parallel pass must preserve: every independent finding is
-        // produced exactly once (the parallel `filter_map`/`collect` neither drops nor
-        // duplicates a candidate), flat series stay silent, and the ranking is
-        // identical across runs (the order-preserving collect plus the deterministic
-        // final sort leave no room for thread timing to reorder the output).
+        // `find_changes` runs the per-series detection sequentially. The work is
+        // embarrassingly parallel — no series depends on another — so this guards
+        // the properties any detection pass must preserve: every independent
+        // finding is produced exactly once (the `filter_map`/`collect` neither
+        // drops nor duplicates a candidate), flat series stay silent, and the
+        // ranking is deterministic across runs (the order-preserving collect plus
+        // the final sort fix the output). `find_changes_spawned_matches_the_serial_pass`
+        // pins the spawner-distributed pass to this same output.
         let mut series = Vec::new();
         let mut stepped_ids = Vec::new();
         for raw in 0_i32..32 {

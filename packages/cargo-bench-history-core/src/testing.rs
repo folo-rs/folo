@@ -2,6 +2,8 @@
 //!
 //! Gated behind the `private-test-util` feature, so end-user builds never see it.
 
+#![cfg_attr(coverage_nightly, coverage(off))]
+
 use anyspawn::{BoxedBlockingTask, BoxedFuture, SpawnCustom, Spawner, ThreadAwareAsyncFnOnce};
 use thread_aware::ThreadAware;
 
