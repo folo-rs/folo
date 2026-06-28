@@ -24,4 +24,4 @@ pub use context::{
     EnvironmentInfo, EnvironmentProvider, GitInfo, RunContext, ToolchainInfo, detect_environment,
 };
 pub use metric::{Metric, MetricKind};
-pub use run::{BenchmarkResult, Run, SCHEMA_VERSION};
+pub use run::{BenchmarkResult, MetricList, Run, SCHEMA_VERSION};
