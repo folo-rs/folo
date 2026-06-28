@@ -141,6 +141,44 @@ Do **not** apply this split when:
   (`#[cfg(test)] mod tests` inside the same file already sees `pub(crate)`
   items).
 
+## Private-use packages need no separate shell
+
+The `foo`/`foo_impl` split exists to keep internal surface out of a *published,
+public* API boundary while still letting out-of-crate benches and tests reach
+it. A package that has no such boundary — a **private-use** package consumed
+only by its siblings in this workspace and never offered as a stable surface
+for external users — has nothing to protect, so there is nothing to split off.
+**By default, treat such a package as an impl crate directly**, rather than
+creating a companion `_impl` crate for it.
+
+The common shape is a `*-core` package: the data-model and pure-logic internals
+extracted out of an application, CLI, or other shell so the fast, I/O-free part
+can be unit- and mutation-tested cheaply. The `-core` package *is* the impl
+crate, and its sibling shell (the binary or facade that wraps it) is the
+consumer. What drops away is the part of the pattern that exists to **wrap and
+hide a companion crate**: the consumer is the application itself, not a thin
+re-export library, so there is no narrow re-export list and no re-export smoke
+test, and the `-core` package need not mark itself `#![doc(hidden)]` /
+`[lib] doc = false` / "do not depend on this directly" (it has no public-shell
+twin to defer documentation to). What carries over is:
+
+- The internal-helper convention: a `private-test-util` Cargo feature (the
+  `private-*` prefix in general) that gates
+  `#[cfg(any(test, feature = "private-test-util"))]` helpers for in-workspace
+  tests and benches, exactly as described in "Internal-only test/bench helpers"
+  below. The sibling shell takes a regular dependency on the `-core` package
+  *without* the feature, so end-user builds never compile those items; the
+  shell's own tests activate it through a separate dev-dependency.
+- Plain `pub` on internal items that out-of-crate benches/tests must reach,
+  without a public feature gate, since the package is not a surface anyone is
+  expected to depend on directly.
+- Lockstep versioning, **if** the `-core` package is published and the shell
+  pins it: the `version_group` in `release-plz.toml` plus the `=X.Y.Z` pin in
+  `[workspace.dependencies]` keep the pair from ever drifting apart, exactly as
+  for a `foo`/`foo_impl` pair (see "Versioning" above).
+
+See `cargo-bench-history-core` under "Canonical examples" for a worked instance.
+
 ## Where each kind of artifact lives
 
 The audience of the artifact is the deciding factor, not what API surface it
@@ -420,7 +458,9 @@ boundary. The two patterns coexist:
 
 ## Canonical examples
 
-The pattern has been applied to three crate pairs in this workspace.
+The full `foo`/`foo_impl` split has been applied to three crate pairs in this
+workspace. A fourth example shows the simplified, shell-less form a private-use
+package takes.
 
 ### `nm` / `nm_impl`
 
@@ -504,4 +544,33 @@ Concrete files to study:
   notice.
 - `release-plz.toml` — `version_group = "many_cpus"` entries for `many_cpus`
   and `many_cpus_impl`.
+
+### `cargo-bench-history-core` (private-use, no shell)
+
+A private-use package treated as an impl crate directly, with no companion
+`_impl` shell (see "Private-use packages need no separate shell"). It holds the
+data model and pure analysis logic for the `cargo-bench-history` CLI, split out
+so that fast, I/O-free part can be unit- and mutation-tested cheaply. Concrete
+files to study:
+
+- `packages/cargo-bench-history-core/Cargo.toml` — declares
+  `private-test-util = ["dep:thread_aware"]`. No `[lib] doc = false` and no
+  re-export list: the CLI consumes it directly, so there is nothing to wrap or
+  hide.
+- `packages/cargo-bench-history-core/src/lib.rs` —
+  `#[cfg(feature = "private-test-util")] pub mod testing;` gates the internal
+  test/bench surface behind the feature.
+- `packages/cargo-bench-history-core/src/testing.rs` — the
+  `synchronous_spawner` helper that in-workspace tests inject in place of the
+  production Tokio spawner.
+- `packages/cargo-bench-history/Cargo.toml` — the consuming shell (a CLI
+  binary, not a thin re-export). Its regular dependency
+  `cargo-bench-history-core = { workspace = true }` omits the feature, so the
+  test-only spawner never reaches production builds; a `[dev-dependencies]`
+  entry with `features = ["private-test-util"]` activates it for the shell's
+  own tests.
+- `Cargo.toml` (workspace) + `release-plz.toml` — the lockstep machinery still
+  applies: `cargo-bench-history-core` is pinned `=0.0.1` in
+  `[workspace.dependencies]` and shares `version_group = "cargo-bench-history"`
+  with the CLI, so the published pair can never drift to mismatched versions.
 
