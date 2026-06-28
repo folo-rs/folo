@@ -88,7 +88,7 @@ impl Default for AnalysisConfig {
     }
 }
 
-/// Which analysis a [`find_changes`] pass performs.
+/// Which analysis a [`find_changes_spawned`] pass performs.
 ///
 /// The mode is auto-detected by the caller from git topology and the recorded data
 /// set (a base branch whose tip is its own merge-base with no dirty run recorded on
@@ -133,7 +133,7 @@ impl AnalysisMode {
     }
 }
 
-/// The context a [`find_changes`] pass runs in.
+/// The context a [`find_changes_spawned`] pass runs in.
 ///
 /// Carries which analysis to perform, the tuned parameters, where the branch forks
 /// from its base (branch mode only), and whether improvements are reported
@@ -871,7 +871,7 @@ fn active_view(series: &Series) -> Series {
 /// the pre-blessing prefix and the report can name the blessing.
 ///
 /// The finding's charting points ([`Finding::series`]) are filled in later, when
-/// the candidate survives filtering (see [`find_changes`]); a dropped candidate
+/// the candidate survives filtering (see [`find_changes_spawned`]); a dropped candidate
 /// never builds them.
 fn stamp_history(finding: &mut Finding, series: &Series) {
     finding.active_from = series.active_start;
@@ -995,8 +995,22 @@ fn evaluate_resolved_spike(
     })
 }
 
+/// Serial reference for the spawner-distributed [`find_changes_spawned`]: detects
+/// every series in one contiguous scan, then runs the shared finalize tail.
+///
+/// Exists only as test scaffolding — the independent oracle for
+/// `find_changes_spawned_matches_the_serial_pass` (the spawned path chunks and
+/// recombines; this one never chunks) and a synchronous convenience for the unit
+/// tests below. Production detection goes through [`find_changes_spawned`].
+#[cfg(test)]
+#[must_use]
+fn find_changes(series: &[Series], context: &AnalysisContext) -> Vec<Finding> {
+    let candidates = detect_all(series, context);
+    finalize_findings(candidates, series, context)
+}
+
 /// Evaluates every series and returns the surviving findings, ranked
-/// most-notable first.
+/// most-notable first — the analysis's detection entry point.
 ///
 /// The [`AnalysisContext`] selects the per-series detector: history mode locates a
 /// change-point and a drift and keeps the better-fitting one; branch mode compares
@@ -1005,18 +1019,12 @@ fn evaluate_resolved_spike(
 /// `config.fdr_q`; deterministic candidates bypass it. Findings are then filtered
 /// to the directions the mode reports and ordered by descending relative move,
 /// then method, then a deterministic identity tie-break.
-#[must_use]
-pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Vec<Finding> {
-    let candidates = detect_all(series, context);
-    finalize_findings(candidates, series, context)
-}
-
-/// The spawner-distributed equivalent of [`find_changes`].
 ///
 /// Detection is per-series independent, so the series are split into one balanced
 /// contiguous chunk per worker and each chunk runs on its own blocking task via
-/// `spawner`; the chunks are then recombined in series order, yielding output
-/// identical to [`find_changes`] but spread across cores. The false-discovery
+/// `spawner`, then recombined in series order; the result is identical to a plain
+/// serial scan but spread across cores. A single available CPU or a single series
+/// takes the serial path directly (also the path Miri exercises). The false-discovery
 /// filtering and final ranking that follow are cheap and stay on the calling thread.
 ///
 /// The series are taken as an `Arc<[Series]>` so each blocking task can share them
@@ -1032,8 +1040,8 @@ pub async fn find_changes_spawned(
 }
 
 /// Applies the false-discovery filter, materialises the surviving findings' charting
-/// points, and ranks them — the cross-series tail shared by [`find_changes`] and
-/// [`find_changes_spawned`].
+/// points, and ranks them — the cross-series tail shared by the serial and
+/// spawner-distributed detection passes.
 ///
 /// `candidates` must be in series order (the order both detection paths produce) so
 /// the Benjamini–Hochberg mask built over the noisy candidates stays aligned.
@@ -1100,11 +1108,12 @@ fn finalize_findings(
 
 /// Detects every series sequentially, returning the raised candidates in series
 /// order — the order [`finalize_findings`] relies on.
+#[cfg(test)]
 fn detect_all(series: &[Series], context: &AnalysisContext) -> Vec<Candidate> {
     detect_range(series, 0..series.len(), context)
 }
 
-/// The spawner-distributed counterpart of [`detect_all`]: splits the series into one
+/// Detects every series, distributed across workers: splits the series into one
 /// balanced contiguous chunk per worker, runs each chunk on its own blocking task via
 /// `spawner`, and recombines the candidates in series order.
 ///
@@ -1159,12 +1168,12 @@ fn detect_range(
 /// Runs the mode-appropriate detector on the series at `index` and returns its
 /// candidate finding, if one is raised.
 ///
-/// This is pure and depends on no other series, so [`find_changes`] evaluates every
-/// series with it in parallel. History mode locates a change-point and a drift and
-/// keeps the better-fitting one (optionally surfacing a recovered spike); branch and
-/// tip modes delegate to their dedicated detectors. `index` is the series' position
-/// in the analysed slice, stamped onto the candidate so [`find_changes`] can
-/// materialise its charting points only if it survives filtering.
+/// This is pure and depends on no other series, which is what lets
+/// [`find_changes_spawned`] evaluate the series across workers. History mode locates a
+/// change-point and a drift and keeps the better-fitting one (optionally surfacing a
+/// recovered spike); branch and tip modes delegate to their dedicated detectors.
+/// `index` is the series' position in the analysed slice, stamped onto the candidate so
+/// the finalize tail can materialise its charting points only if it survives filtering.
 fn detect_one(index: usize, one: &Series, context: &AnalysisContext) -> Option<Candidate> {
     let config = &context.config;
     let candidate = match context.mode {

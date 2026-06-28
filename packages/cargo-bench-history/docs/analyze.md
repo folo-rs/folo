@@ -51,7 +51,7 @@ flowchart TD
 ```
 
 The cost is overwhelmingly in **`select_dataset`** (the load) and secondarily in
-**`find_changes`** (the detect). Everything else is bookkeeping.
+**`find_changes_spawned`** (the detect). Everything else is bookkeeping.
 
 Each analysis **mode** (`history`, `branch`, `tip`) is a *separate* `analyze`
 invocation with its *own* `select_dataset` load — there is no shared dataset cache

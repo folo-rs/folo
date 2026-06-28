@@ -19,7 +19,7 @@ pub(crate) mod stats;
 pub use discriminant::{DiscriminantSetQuery, FacetFilter, StorageKey, parse_key};
 pub use findings::{
     AnalysisConfig, AnalysisContext, AnalysisMode, Direction, Finding, FindingMethod, SeriesValue,
-    find_changes, find_changes_spawned,
+    find_changes_spawned,
 };
 pub use report::{ReportFormat, ReportInput, SetSummary, render};
 pub use selection::{SelectedCommit, select_commits};

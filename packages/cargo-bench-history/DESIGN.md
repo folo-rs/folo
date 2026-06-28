@@ -1748,21 +1748,27 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      `tip` and `branch` use cheaper per-series detectors — is now parallelized (decision 33).
 
 33. **Parallel per-series change-point detection** — *Decided:* every mode's per-series
-     detection runs on a pool of scoped worker threads. `analyze::findings::find_changes`
-     splits the series into contiguous chunks — one per worker, where the worker count is
-     the available CPU count (`thread::available_parallelism`) capped at the number of
-     series — evaluates each chunk on a `std::thread::scope` worker via the pure per-series
+     detection is distributed across worker tasks through an injected `anyspawn::Spawner`.
+     `analyze::findings::find_changes_spawned` splits the series into contiguous chunks — one
+     per worker, where the worker count is the available CPU count
+     (`thread::available_parallelism`) capped at the number of series — dispatches each chunk
+     to a blocking task via `Spawner::spawn_blocking` running the pure per-series
      `detect_one`, then concatenates the chunk results **in series order**. Order
      preservation is load-bearing: the downstream false-discovery alignment pairs
      `candidates` with `noisy_p` positionally and the final ranking is a deterministic total
-     order, so the output is byte-identical to the previous serial pass — only the wall time
+     order, so the output is byte-identical to a plain serial scan — only the wall time
      changes (the win is concentrated in `history`, whose change-point/drift tests are the
      most expensive per-series work; see decision 32's finding). A single CPU or a single
-     series takes a plain serial pass with no thread spawn. *Rejected*
-     `rayon`'s `par_iter` (the issue's original suggestion): its transitive `crossbeam-epoch`
-     dependency trips Miri's Stacked Borrows model (a known, benign, but as-yet-unreleased
-     issue), which would force an ugly `#[cfg(miri)]` serial fallback; `std::thread::scope`
-     is Miri-clean with no conditional compilation (Miri reports one CPU by default, so it
-     exercises the serial path) and adds no dependency. The worker-count and chunking
-     arithmetic never changes the output, so `detect_all` carries `#[mutants::skip]` while
-     the real detection logic in `detect_one` stays under mutation testing.
+     series takes a plain serial pass with no task dispatch. Production injects a Tokio-backed
+     spawner; tests and Miri inject a synchronous spawner that runs each task inline (Miri
+     reports one CPU by default, so it also exercises the serial path), keeping the core
+     analysis runtime-agnostic and free of a hard Tokio dependency. *Rejected* `rayon`'s
+     `par_iter` (the issue's original suggestion): its transitive `crossbeam-epoch` dependency
+     trips Miri's Stacked Borrows model (a known, benign issue), which would force an ugly
+     `#[cfg(miri)]` serial fallback; the injected spawner is Miri-clean with no conditional
+     compilation. Also *rejected* spawning short-lived `std::thread::scope` workers per call:
+     it litters the profiler with transient threads and ties the core to OS-thread spawning
+     instead of the host's existing runtime. The worker-count and chunking arithmetic never
+     changes the output, so `worker_count` carries `#[mutants::skip]` while the real detection
+     logic in `detect_one` stays under mutation testing. The serial `find_changes` survives
+     only as the test-only oracle that pins the chunked path to a non-chunked reference.
