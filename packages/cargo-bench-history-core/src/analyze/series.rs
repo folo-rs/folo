@@ -14,6 +14,7 @@
 //! per-point commit string is interned to a shared `Arc<str>` rather than cloned.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry as MapEntry;
 use std::hash::BuildHasher;
 use std::sync::Arc;
 
@@ -25,6 +26,7 @@ use hashbrown::hash_table::Entry;
 use jiff::Timestamp;
 
 use crate::analyze::StorageKey;
+use crate::analyze::run_points::RunPoints;
 use crate::model::BlessingRecord;
 use crate::model::DiscriminantSet;
 use crate::model::{BenchmarkId, BenchmarkIdPrefix, MetricKind, Run};
@@ -189,7 +191,7 @@ pub fn build_series<S: BuildHasher>(
             topo_index,
             object.key.is_dirty(),
             ordinal,
-            &object.result,
+            &RunPoints::from(&object.result),
         );
     }
     builder.finish()
@@ -217,11 +219,18 @@ fn ordinal_of(rank: usize) -> u32 {
 /// fold each fetched run and drop it immediately, keeping only the (compact) points
 /// resident rather than the whole parsed data set.
 ///
+/// The builder owns its prefix filter (an `Arc<[BenchmarkIdPrefix]>`) and holds no
+/// borrows, so it is `Send + 'static`: a spawned worker can fold a disjoint subset
+/// of the objects into its own builder and hand it back, and [`merge`] folds the
+/// per-worker builders into one before a single [`finish`](SeriesBuilder::finish).
+///
 /// The abbreviated commit of each run is interned, so all points measured against
 /// one commit share a single [`Arc<str>`] instead of cloning the string per point.
+///
+/// [`merge`]: SeriesBuilder::merge
 #[derive(Debug)]
-pub struct SeriesBuilder<'a> {
-    filter: SeriesFilter<'a>,
+pub struct SeriesBuilder {
+    prefixes: Arc<[BenchmarkIdPrefix]>,
     groups: GroupTree,
     commits: HashMap<Box<str>, Arc<str>>,
     /// Hashes benchmark ids for the [`HashTable`] id level. One fixed instance so
@@ -251,12 +260,23 @@ type IdGroups = HashTable<(BenchmarkId, KindGroups)>;
 /// series costs one key clone, not one clone per metric point folded into it.
 type GroupTree = FoldHashMap<DiscriminantSet, IdGroups>;
 
-impl<'a> SeriesBuilder<'a> {
+impl SeriesBuilder {
     /// Starts an empty builder that keeps only series matching `filter`.
     #[must_use]
-    pub fn new(filter: SeriesFilter<'a>) -> Self {
+    pub fn new(filter: SeriesFilter<'_>) -> Self {
+        Self::with_prefixes(Arc::from(filter.prefixes))
+    }
+
+    /// Starts an empty builder that keeps only series whose benchmark id starts
+    /// with one of `prefixes` (an empty list keeps every series).
+    ///
+    /// Takes the prefixes as an owned `Arc<[BenchmarkIdPrefix]>` so the builder
+    /// borrows nothing and stays `Send + 'static`, letting a spawned worker own one
+    /// and a caller share the prefix list across workers with a cheap clone.
+    #[must_use]
+    pub fn with_prefixes(prefixes: Arc<[BenchmarkIdPrefix]>) -> Self {
         Self {
-            filter,
+            prefixes,
             groups: FoldHashMap::new(),
             commits: HashMap::new(),
             hasher: RandomState::default(),
@@ -268,29 +288,25 @@ impl<'a> SeriesBuilder<'a> {
     /// `topo_index` is the run commit's first-parent position and `object_ordinal`
     /// its rank in sorted storage-key order (the final point tie-break); the caller
     /// supplies both because they come from the storage key and git topology, not
-    /// the run payload. Only the matching metrics are retained — the run itself can
-    /// be dropped as soon as this returns.
+    /// the run payload. `run` is the fold-relevant projection of the run (see
+    /// [`RunPoints`]); only the matching metrics are retained — it can be dropped as
+    /// soon as this returns.
     pub fn push(
         &mut self,
         set: &DiscriminantSet,
         topo_index: usize,
         dirty: bool,
         object_ordinal: u32,
-        run: &Run,
+        run: &RunPoints,
     ) {
-        let commit = run
-            .context
-            .git
-            .short_commit
-            .as_deref()
-            .map(|commit| self.intern(commit));
+        let commit = run.short_commit().map(|commit| self.intern(commit));
 
         // The discriminant set is constant for the whole run, so resolve its
         // subtree once and clone the set key only when the set is first seen — not
-        // per record or per metric. Copying the prefix slice and borrowing the
-        // hasher out first keeps the `self.groups` borrow below from entangling
-        // with the other fields.
-        let prefixes = self.filter.prefixes;
+        // per record or per metric. Borrowing the prefix slice and the hasher out
+        // first keeps the `self.groups` borrow below from entangling with the other
+        // fields.
+        let prefixes: &[BenchmarkIdPrefix] = &self.prefixes;
         let hasher = &self.hasher;
         if !self.groups.contains_key(set) {
             self.groups.insert(set.clone(), HashTable::new());
@@ -300,7 +316,7 @@ impl<'a> SeriesBuilder<'a> {
             .get_mut(set)
             .expect("the set's subtree was just inserted when absent");
 
-        for record in &run.results {
+        for record in run.results() {
             if !prefixes_accept(prefixes, &record.id) {
                 continue;
             }
@@ -334,6 +350,58 @@ impl<'a> SeriesBuilder<'a> {
                     interval_high: metric.interval_high,
                 };
                 kind_groups.entry(metric.kind).or_default().push(point);
+            }
+        }
+    }
+
+    /// Folds another builder's accumulated series into this one.
+    ///
+    /// Each `(set, id, kind)` series from `other` is merged into `self`,
+    /// concatenating the points of any series both hold. This is the recombination
+    /// step of the parallel fold: each worker folds a disjoint subset of the objects
+    /// into its own builder, and the main thread merges the per-worker builders
+    /// before a single [`finish`](Self::finish) sorts the combined series. Because
+    /// the partitions are disjoint, the union of their points is exactly the set a
+    /// single-threaded fold would have produced.
+    ///
+    /// The points keep the interned commit [`Arc<str>`] they were folded with in
+    /// `other` (so a commit seen by several workers ends up with one `Arc` per
+    /// worker rather than one overall — a negligible cost). The benchmark ids are
+    /// re-hashed into `self`'s table with `self`'s hasher, so the two builders'
+    /// independent hash seeds need not agree.
+    pub fn merge(&mut self, other: Self) {
+        let hasher = &self.hasher;
+        for (set, other_ids) in other.groups {
+            let id_groups = self.groups.entry(set).or_default();
+            for (id, other_kinds) in other_ids {
+                // Re-probe the id in this builder's table, cloning the id only when
+                // the series is first seen here — mirrors `push`'s single-probe
+                // insert so a hash collision never merges two distinct benchmarks.
+                let hash = hasher.hash_one(&id);
+                let kind_groups = match id_groups.entry(
+                    hash,
+                    |(existing, _)| existing == &id,
+                    |(existing, _)| hasher.hash_one(existing),
+                ) {
+                    Entry::Occupied(occupied) => &mut occupied.into_mut().1,
+                    Entry::Vacant(vacant) => {
+                        &mut vacant.insert((id, FoldHashMap::new())).into_mut().1
+                    }
+                };
+                for (kind, points) in other_kinds {
+                    // Move the whole point vector on first sight of the kind and
+                    // append (a single buffer copy) only when both builders already
+                    // hold points for it, never reallocating per point.
+                    match kind_groups.entry(kind) {
+                        MapEntry::Occupied(mut occupied) => {
+                            let mut points = points;
+                            occupied.get_mut().append(&mut points);
+                        }
+                        MapEntry::Vacant(vacant) => {
+                            vacant.insert(points);
+                        }
+                    }
+                }
             }
         }
     }
@@ -528,6 +596,116 @@ mod tests {
             .enumerate()
             .map(|(index, commit)| ((*commit).to_owned(), index))
             .collect()
+    }
+
+    /// One folded object: its discriminant set, the commit's topological index, the
+    /// dirty flag, the storage-key ordinal, and the lean run projection to push.
+    type FoldInput = (DiscriminantSet, usize, bool, u32, RunPoints);
+
+    /// Builds the fold inputs for a small data set spanning two benchmark ids
+    /// (packages) across three commits, including a clean/dirty pair on one commit,
+    /// so a merge has to combine like series whose points come from both partitions.
+    fn merge_inputs() -> Vec<FoldInput> {
+        let rows = [
+            ("pkga", "c0", 0_usize, false, 0_u32, 10.0),
+            ("pkgb", "c0", 0, false, 1, 20.0),
+            ("pkga", "c1", 1, false, 2, 11.0),
+            ("pkga", "c1", 1, true, 3, 12.0),
+            ("pkgb", "c2", 2, false, 4, 21.0),
+        ];
+        rows.into_iter()
+            .map(|(package, commit, topo_index, dirty, ordinal, value)| {
+                let run = run_for_package(ts(1), commit, value, Some(package));
+                let object_key = format!(
+                    "v1/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json"
+                );
+                let key = parse_key(&object_key).unwrap();
+                (key.set, topo_index, dirty, ordinal, RunPoints::from(&run))
+            })
+            .collect()
+    }
+
+    fn fold_all(builder: &mut SeriesBuilder, inputs: &[FoldInput]) {
+        for (set, topo_index, dirty, ordinal, run) in inputs {
+            builder.push(set, *topo_index, *dirty, *ordinal, run);
+        }
+    }
+
+    /// A comparable projection of one finished series: identity plus each point's
+    /// sort key and value, so two series sets can be checked for byte-for-byte
+    /// agreement.
+    type SeriesSummary = (
+        DiscriminantSet,
+        BenchmarkId,
+        MetricKind,
+        Vec<(usize, bool, u32, f64)>,
+    );
+
+    fn series_summary(series: &[Series]) -> Vec<SeriesSummary> {
+        series
+            .iter()
+            .map(|one| {
+                let points = one
+                    .points
+                    .iter()
+                    .map(|point| {
+                        (
+                            point.topo_index,
+                            point.dirty,
+                            point.object_ordinal,
+                            point.value,
+                        )
+                    })
+                    .collect();
+                (one.set.clone(), one.id.clone(), one.kind, points)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn merge_combines_disjoint_folds_into_one() {
+        // Folding the whole data set into one builder must equal folding two disjoint
+        // halves into separate builders and merging them: the parallel fold partitions
+        // the objects across workers, so the union of the per-worker series has to
+        // reproduce the single-threaded result exactly.
+        let inputs = merge_inputs();
+        let prefixes: Arc<[BenchmarkIdPrefix]> = Arc::from(Vec::new());
+
+        let mut reference = SeriesBuilder::with_prefixes(Arc::clone(&prefixes));
+        fold_all(&mut reference, &inputs);
+        let reference = reference.finish();
+
+        let (left, right) = inputs.split_at(2);
+        let mut first = SeriesBuilder::with_prefixes(Arc::clone(&prefixes));
+        fold_all(&mut first, left);
+        let mut second = SeriesBuilder::with_prefixes(prefixes);
+        fold_all(&mut second, right);
+        first.merge(second);
+        let merged = first.finish();
+
+        // The data really spans more than one series, so the id-level merge is exercised.
+        assert!(reference.len() >= 2);
+        assert_eq!(series_summary(&reference), series_summary(&merged));
+    }
+
+    #[test]
+    fn merge_into_empty_builder_yields_the_other() {
+        // Merging a folded builder into a fresh one (the degenerate single-worker
+        // case, where the main thread merges one partial) reproduces a direct fold.
+        let inputs = merge_inputs();
+        let prefixes: Arc<[BenchmarkIdPrefix]> = Arc::from(Vec::new());
+
+        let mut reference = SeriesBuilder::with_prefixes(Arc::clone(&prefixes));
+        fold_all(&mut reference, &inputs);
+        let reference = reference.finish();
+
+        let mut only = SeriesBuilder::with_prefixes(Arc::clone(&prefixes));
+        fold_all(&mut only, &inputs);
+        let mut empty = SeriesBuilder::with_prefixes(prefixes);
+        empty.merge(only);
+        let merged = empty.finish();
+
+        assert_eq!(series_summary(&reference), series_summary(&merged));
     }
 
     #[test]

@@ -15,7 +15,7 @@ use super::local::LocalStorage;
 use super::{Storage, StorageError};
 
 /// A [`Storage`] backend selected at configuration time.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum StorageFacade {
     /// A local filesystem backend.
     Local(LocalStorage),

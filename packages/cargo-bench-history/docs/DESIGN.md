@@ -1797,12 +1797,14 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      dataset. *Finding (full-scale run, default sizes, ~20000 objects / ~5.7 GiB on
      local FS):* `history` ~240 s, `tip` ~126 s, `branch` ~81 s. All three modes shared
      a multi-second floor spent loading and deserializing the ~20000 stored objects one
-     at a time; `analyze`/`list` now fetch and deserialize them with **bounded
+     at a time; `analyze`/`list` fetch and deserialize them with **bounded
      concurrency** (`analyze/mod.rs`'s `load_objects_concurrently` drives the survivors
      through `futures::stream::…buffer_unordered`, completing out of order then re-sorting
      by storage key for deterministic diagnostics), so the per-mode load floor is roughly
      its slowest fetch rather than the sum — critically so for Azure, where the serial
-     loads were serial network round-trips. The `--since`/`--until` window is applied
+     loads were serial network round-trips. *(The run load was later moved off this path to
+     a chunked parallel fetch+parse+fold — decision 34; `load_objects_concurrently` now
+     serves only the blessing-sidecar load.)* The `--since`/`--until` window is applied
      earlier still: each commit's committer time rides along its SHA on the first-parent
      topology, so out-of-window commits are dropped during selection and their objects are
      never fetched at all (issue #265). The per-series detection that each mode runs
@@ -1836,3 +1838,48 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      changes the output, so `worker_count` carries `#[mutants::skip]` while the real detection
      logic in `detect_one` stays under mutation testing. The serial `find_changes` survives
      only as the test-only oracle that pins the chunked path to a non-chunked reference.
+
+34. **Parallel object load + fold-in-worker + scalable allocator** — *Decided:*
+     `select_dataset`'s survivor load is distributed across worker tasks the same way the
+     detection is (decision 33). `analyze::fold_runs_chunked` splits the storage-key-sorted
+     survivors into one balanced contiguous chunk per worker (`worker_count` from
+     `analyze::parallel` = `thread::available_parallelism` capped at the survivor count) and
+     dispatches each chunk to a task via the injected `Spawner::spawn`. Each task fetches +
+     gzip-inflates + JSON-parses its slice — one object at a time into the lean
+     `analyze::run_points::RunPoints` projection (only what the fold reads: the abbreviated
+     commit and, per result, the id and metric value/interval, not a full `Run`) — and
+     **folds each parsed run into its own `SeriesBuilder` / `RunIndex`, dropping the run the
+     moment its compact points are extracted**, so no worker ever buffers its chunk's parsed
+     runs. The driver awaits the tasks **in spawn order** and merges their per-worker
+     builders (`SeriesBuilder::merge`), run tallies (`RunIndex::merge`) and admission lists
+     into one `WorkerFold`; a single `SeriesBuilder::finish` then sorts the combined series.
+     Ordinals are assigned before chunking and the final sort is global, so the merge is
+     associative and the output stays byte-identical to a deterministic single-threaded fold
+     in storage-key order. This supersedes the streaming `buffer_unordered` fold
+     (decision 32) for the run load. *Speed (measured):* the gzip-inflate + JSON parse **and**
+     the fold now both fan across cores — phase 2/3 went ~18.8 → ~4.0 s and overall `analyze`
+     ~40 → ~21 s on a 32-core box. *Allocator is load-bearing:* serde_json's many small
+     allocations contend on the system allocator's cross-thread lock (acute on the Windows
+     process heap), which made the naive parallel parse *slower* than serial (negative scaling
+     even 1→2 threads); the `cargo-bench-history` binary therefore installs `mimalloc` as its
+     `#[global_allocator]` (the stress harness mirrors it), without which this decision is a
+     regression. *Memory (measured, accepted — fold-in-worker did **not** lower peak):*
+     fold-in-worker was adopted specifically to claw back the peak that parallelizing cost,
+     by never buffering the parsed runs. It did not: against an intermediate buffered-parallel
+     variant (each chunk parsed to a `Vec<RunPoints>` then folded serially on the main
+     thread), back-to-back on the ~20000-object local-FS history, fold-in-worker measured
+     ~19.0 s / ~47% CPU at **~7210 MiB** peak versus buffered-parallel's ~21.1 s / ~40% at
+     **~6880 MiB** — i.e. ~10% *faster* with better core use but ~5% (~330 MiB) *more* peak.
+     The reason: at merge time every worker's finished builder is resident at once alongside
+     the growing combined builder (~2× the compact point output transiently), plus one
+     mimalloc arena per worker thread — which outweighs the single `RunPoints` buffer the
+     buffered variant carried. So the buffered runs were never the dominant peak term; the
+     lean `RunPoints` projection likewise trimmed peak only ~1% in isolation (the repeated
+     ~1000 benchmark ids re-materialized per object, and mimalloc's retention of freed pages,
+     dominate). Fold-in-worker is kept for the wall-time and CPU-efficiency win, accepting the
+     ~5% higher peak; the remaining structural memory levers (bounded merge-as-complete waves
+     so fewer partials coexist, and id interning/dedup) are deferred. *Caveat (Azure):* each
+     worker awaits its chunk's `Storage::get`s sequentially, so the run load's I/O concurrency
+     drops from the `LOAD_CONCURRENCY`-wide streaming pipeline to ≈ the worker count; the win
+     is on the CPU-bound parse, not remote I/O, and the low-volume blessing-sidecar load keeps
+     the `buffer_unordered` path.

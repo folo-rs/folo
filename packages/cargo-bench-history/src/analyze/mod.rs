@@ -18,8 +18,9 @@ pub(crate) mod prune;
 
 pub(crate) use cargo_bench_history_core::analyze::{
     AnalysisConfig, AnalysisContext, AnalysisMode, BlessingPlacement, DiscriminantSetQuery,
-    FacetFilter, ReportFormat, ReportInput, Series, SeriesBuilder, SeriesFilter, SetSummary,
-    StorageKey, apply_blessings, find_changes_spawned, parse_key, render, select_commits,
+    FacetFilter, ReportFormat, ReportInput, RunPoints, Series, SeriesBuilder, SeriesFilter,
+    SetSummary, StorageKey, apply_blessings, balanced_chunk_sizes, find_changes_spawned, parse_key,
+    render, select_commits, worker_count,
 };
 
 use std::collections::{BTreeMap, HashMap};
@@ -39,8 +40,7 @@ use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
 use crate::machine::resolve_machine_key;
 use crate::model::BlessingRecord;
-use crate::model::Run;
-use crate::model::{DiscriminantSet, Engine, STORAGE_VERSION, sanitize_segment};
+use crate::model::{BenchmarkIdPrefix, DiscriminantSet, Engine, STORAGE_VERSION, sanitize_segment};
 use crate::probe::{EnvironmentProbe, SystemProbe};
 use crate::report::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, build_storage};
@@ -151,7 +151,7 @@ pub(crate) async fn analyze_with<G, S>(
 ) -> Result<RunOutcome, RunError>
 where
     G: GitHistory,
-    S: Storage,
+    S: Storage + Clone + 'static,
 {
     let format = parse_format(options.format.as_deref())?;
     let selection = Selection::from_analyze(options)?;
@@ -160,7 +160,7 @@ where
     };
     let load_started = Instant::now();
     let dataset = select_dataset(
-        git, storage, project_id, config, &selection, filter, auto, now, reporter,
+        git, storage, project_id, config, &selection, filter, auto, now, reporter, spawner,
     )
     .await?;
     reporter.timing(
@@ -427,6 +427,29 @@ impl RunIndex {
         }
     }
 
+    /// Folds another index's tallies into this one.
+    ///
+    /// The recombination step of the parallel fold: each worker records the runs of
+    /// its disjoint object chunk into its own index, and the main thread merges the
+    /// per-worker indices. Because the chunks are disjoint, summing the totals and
+    /// the per-`(set, commit)` clean/dirty counts reproduces the single-threaded
+    /// tally exactly, independent of the order the workers' indices are merged.
+    fn merge(&mut self, other: Self) {
+        self.total = self.total.saturating_add(other.total);
+        for (set, by_commit) in other.sets {
+            let dest = self.sets.entry(set).or_default();
+            for (topo_index, counts) in by_commit {
+                let entry = dest.entry(topo_index).or_insert_with(|| CommitCounts {
+                    commit: counts.commit.clone(),
+                    clean: 0,
+                    dirty: 0,
+                });
+                entry.clean = entry.clean.saturating_add(counts.clean);
+                entry.dirty = entry.dirty.saturating_add(counts.dirty);
+            }
+        }
+    }
+
     /// Total runs admitted across every set.
     pub(crate) fn total(&self) -> usize {
         self.total
@@ -647,24 +670,118 @@ where
     Ok((key, parsed, value))
 }
 
-/// Like [`fetch_one`], but carries an arbitrary `rank` through the out-of-order
-/// fetch so the caller can recover each object's position (its storage-key
-/// ordinal). Kept as a named `async fn` for the same reason as [`fetch_one`]: the
-/// stream closure then stays a plain `FnMut` returning this future rather than one
-/// wrapping an `async` block.
-async fn fetch_one_ranked<S, F>(
+/// One worker's (or the merged) folded contribution: the series builder it folded
+/// its object chunk into, the run tally it recorded, and the per-object admission
+/// flags for the key-ordered verbose notes.
+///
+/// Returned from each spawned fold task and merged on the main thread; the merged
+/// value carries the same shape so the caller treats one worker and many uniformly.
+struct WorkerFold {
+    /// Series points folded from this worker's objects (compact; the parsed runs
+    /// are dropped inside the worker as each is folded).
+    builder: SeriesBuilder,
+    /// Per-set, per-commit run tally for this worker's objects.
+    run_index: RunIndex,
+    /// `(storage key, admitted-by-dirty-base-exception)` per folded object, for the
+    /// key-ordered verbose notes the caller emits once every worker has folded.
+    admitted: Vec<(String, bool)>,
+}
+
+/// Loads, parses, and **folds** the in-selection survivors across CPU cores.
+///
+/// `ranked` is the storage-key-sorted survivor list, each carrying its
+/// storage-key ordinal (`rank`). It is split into [`worker_count`] balanced
+/// contiguous chunks ([`balanced_chunk_sizes`]); one spawned task per chunk
+/// fetches, decompresses, parses, and folds its slice into its *own*
+/// [`SeriesBuilder`] / [`RunIndex`], dropping each parsed run the moment its
+/// compact points are extracted. The main thread awaits the chunks in spawn order
+/// and merges their builders, run tallies, and admission lists into one
+/// [`WorkerFold`]; a single [`SeriesBuilder::finish`] then sorts the combined
+/// series. The merge is associative and the final sort is global, so the result is
+/// identical to a single-threaded fold in storage-key order.
+///
+/// Folding inside each worker (rather than buffering every chunk's parsed runs and
+/// folding serially on the main thread) parallelizes the fold as well as the parse:
+/// a worker drops each parsed run the moment its compact points are extracted, so it
+/// never buffers its chunk's parsed runs. This does **not** lower peak memory — at
+/// merge time every worker's finished builder is resident at once alongside the
+/// growing combined builder (~2x the compact point output transiently), which measured
+/// ~5% above the buffered-parallel variant; the win it buys is the ~10% faster wall
+/// time and better core use from moving the fold off the main thread. The decompress +
+/// JSON parse — the CPU-dominated cost — is spread across the runtime's worker threads.
+/// See `docs/DESIGN.md` decision 34.
+async fn fold_runs_chunked<S>(
     storage: &S,
-    rank: usize,
-    key: String,
-    parsed: StorageKey,
-    parse: &F,
-) -> Result<(usize, String, StorageKey, Run), RunError>
+    spawner: &Spawner,
+    ranked: Vec<(usize, String, StorageKey)>,
+    order: &Arc<HashMap<String, usize>>,
+    dirty_base_exception: &Arc<HashMap<String, bool>>,
+    prefixes: Arc<[BenchmarkIdPrefix]>,
+) -> Result<WorkerFold, RunError>
 where
-    S: Storage,
-    F: Fn(&str, Vec<u8>) -> Result<Run, RunError>,
+    S: Storage + Clone + 'static,
 {
-    let (key, parsed, run) = fetch_one(storage, key, parsed, parse).await?;
-    Ok((rank, key, parsed, run))
+    let total = ranked.len();
+    let mut combined = WorkerFold {
+        builder: SeriesBuilder::with_prefixes(Arc::clone(&prefixes)),
+        run_index: RunIndex::new(),
+        admitted: Vec::with_capacity(total),
+    };
+    if total == 0 {
+        return Ok(combined);
+    }
+    let workers = worker_count(total);
+
+    let mut items = ranked.into_iter();
+    let mut handles = Vec::with_capacity(workers);
+    for chunk_len in balanced_chunk_sizes(total, workers) {
+        let chunk: Vec<(usize, String, StorageKey)> = items.by_ref().take(chunk_len).collect();
+        let storage = storage.clone();
+        let order = Arc::clone(order);
+        let dirty_base_exception = Arc::clone(dirty_base_exception);
+        let prefixes = Arc::clone(&prefixes);
+        handles.push(spawner.spawn(async move {
+            let mut builder = SeriesBuilder::with_prefixes(prefixes);
+            let mut run_index = RunIndex::new();
+            let mut admitted: Vec<(String, bool)> = Vec::with_capacity(chunk.len());
+            for (rank, key, parsed) in chunk {
+                let bytes = storage.get(&key).await.map_err(RunError::Storage)?;
+                let text = String::from_utf8(bytes).map_err(|error| RunError::Analyze {
+                    message: format!("stored object {key} is not valid UTF-8: {error}"),
+                })?;
+                let run = RunPoints::from_json(&text).map_err(|error| RunError::Analyze {
+                    message: format!("stored object {key} is not a valid result set: {error}"),
+                })?;
+                let topo_index = order
+                    .get(&parsed.commit)
+                    .copied()
+                    .expect("phase 1 admitted only commits on the analyzed history");
+                let dirty = parsed.is_dirty();
+                let is_exception = dirty
+                    && dirty_base_exception
+                        .get(parsed.commit.as_str())
+                        .copied()
+                        .unwrap_or(false);
+                run_index.record(&parsed.set, topo_index, &parsed.commit, dirty);
+                builder.push(&parsed.set, topo_index, dirty, ordinal_of(rank), &run);
+                admitted.push((key, is_exception));
+                // `run` is dropped here; only the extracted (compact) points are kept.
+            }
+            Ok::<WorkerFold, RunError>(WorkerFold {
+                builder,
+                run_index,
+                admitted,
+            })
+        }));
+    }
+
+    for handle in handles {
+        let fold = handle.await?;
+        combined.builder.merge(fold.builder);
+        combined.run_index.merge(fold.run_index);
+        combined.admitted.extend(fold.admitted);
+    }
+    Ok(combined)
 }
 
 /// Resolves the git topology, selects the comparable commits, and loads the
@@ -684,10 +801,11 @@ async fn select_dataset<G, S>(
     auto: &AutoFacets,
     now: Timestamp,
     reporter: &dyn Reporter,
+    spawner: &Spawner,
 ) -> Result<SelectedDataSet, RunError>
 where
     G: GitHistory,
-    S: Storage,
+    S: Storage + Clone + 'static,
 {
     let facets = resolve_facets(selection, Some(auto))?;
     let listing_started = Instant::now();
@@ -731,6 +849,13 @@ where
         "git topology resolution (resolve_history)",
         topology_started.elapsed(),
     );
+
+    // The topology lookups the parallel fold needs — the commit -> first-parent
+    // index map and the base-branch dirty-tree exceptions — are shared read-only
+    // across every worker, so wrap them in `Arc` once and hand each worker a cheap
+    // clone. Downstream main-thread reads still go through `Deref`.
+    let order = Arc::new(order);
+    let dirty_base_exception = Arc::new(dirty_base_exception);
 
     // Mode auto-detection keys off the *recorded data set*, not the on-disk
     // repository state. The branch view exists to compare a feature branch's runs
@@ -793,9 +918,6 @@ where
     let mut excluded_dirty_base = 0_usize;
     let mut excluded_since = 0_usize;
     let mut excluded_until = 0_usize;
-    // Whether at least one dirty run was admitted solely by the base-branch
-    // dirty-tree exception, so the report can warn that it is ephemeral.
-    let mut included_dirty_base_exception = false;
 
     // Phase 1 — key-only filtering, in candidate order. Every exclusion that does
     // not need the object's payload runs here, before anything is fetched, so an
@@ -861,59 +983,49 @@ where
         phase1_started.elapsed(),
     );
 
-    // Phase 2/3 — fetch the survivors concurrently and fold each into the series as
-    // it arrives, dropping the parsed run immediately so the whole parsed data set
-    // is never resident at once (the peak that drove analysis into tens of
-    // gigabytes). Each object's ordinal — the final point tie-break — is its rank
-    // in storage-key order, assigned up front because `buffer_unordered` completes
-    // out of order. The per-object verbose notes and the run tally are collected
-    // during the fold and emitted in storage-key order afterwards, so the
-    // diagnostics stay byte-identical to a deterministic in-order pass.
+    // Phase 2/3 — fetch the survivors and fold each into the series. The fetch +
+    // decompress + JSON parse (the CPU-dominated cost) is spread across the
+    // runtime's worker threads: the storage-key-sorted survivors are split into
+    // balanced contiguous chunks, and one spawned task fetches, parses, *and folds*
+    // each chunk into its own series builder — dropping each parsed run the instant
+    // its compact points are extracted. The main thread then merges the per-worker
+    // builders, run tallies, and admission lists into one. Each object's ordinal —
+    // the final point tie-break — is its rank in storage-key order, assigned up
+    // front, so the single `builder.finish()` sort reproduces the in-order result.
+    // The per-object verbose notes are collected during the fold and emitted in
+    // storage-key order afterwards, so the diagnostics stay byte-identical to a
+    // deterministic in-order pass.
+    //
+    // Folding inside each worker keeps only the compact per-worker points resident
+    // between fetch and merge — never the whole parsed data set — so the parallel
+    // parse does not buy its throughput with the full-buffer memory peak.
     to_fetch.sort_by(|left, right| left.0.cmp(&right.0));
 
     let fetch_fold_started = Instant::now();
-    let mut builder = SeriesBuilder::new(filter);
-    let mut run_index = RunIndex::new();
-    // (storage key, admitted-by-dirty-base-exception) per folded object, for the
-    // key-ordered verbose notes emitted once the fold completes.
-    let mut admitted: Vec<(String, bool)> = Vec::new();
-    {
-        let parse = |key: &str, bytes: Vec<u8>| -> Result<Run, RunError> {
-            let text = String::from_utf8(bytes).map_err(|error| RunError::Analyze {
-                message: format!("stored object {key} is not valid UTF-8: {error}"),
-            })?;
-            Run::from_json(&text).map_err(|error| RunError::Analyze {
-                message: format!("stored object {key} is not a valid result set: {error}"),
-            })
-        };
-        let parse = &parse;
-        let mut fetches = futures::stream::iter(to_fetch.into_iter().enumerate())
-            .map(move |(rank, (key, parsed))| fetch_one_ranked(storage, rank, key, parsed, parse))
-            .buffer_unordered(LOAD_CONCURRENCY);
-
-        while let Some(fetched) = fetches.next().await {
-            let (rank, key, parsed, run) = fetched?;
-            let topo_index = order
-                .get(&parsed.commit)
-                .copied()
-                .expect("phase 1 admitted only commits on the analyzed history");
-            let dirty = parsed.is_dirty();
-            let is_exception = dirty
-                && dirty_base_exception
-                    .get(parsed.commit.as_str())
-                    .copied()
-                    .unwrap_or(false);
-            if is_exception {
-                included_dirty_base_exception = true;
-            }
-            run_index.record(&parsed.set, topo_index, &parsed.commit, dirty);
-            builder.push(&parsed.set, topo_index, dirty, ordinal_of(rank), &run);
-            admitted.push((key, is_exception));
-            // `run` is dropped here; only the extracted (compact) points are kept.
-        }
-    }
+    let ranked: Vec<(usize, String, StorageKey)> = to_fetch
+        .into_iter()
+        .enumerate()
+        .map(|(rank, (key, parsed))| (rank, key, parsed))
+        .collect();
+    let prefixes: Arc<[BenchmarkIdPrefix]> = Arc::from(filter.prefixes);
+    let WorkerFold {
+        builder,
+        run_index,
+        mut admitted,
+    } = fold_runs_chunked(
+        storage,
+        spawner,
+        ranked,
+        &order,
+        &dirty_base_exception,
+        prefixes,
+    )
+    .await?;
+    // Whether at least one dirty run was admitted solely by the base-branch
+    // dirty-tree exception, so the report can warn that it is ephemeral.
+    let included_dirty_base_exception = admitted.iter().any(|(_, is_exception)| *is_exception);
     reporter.timing(
-        "phase 2/3 — concurrent fetch + serial parse + fold into series",
+        "phase 2/3 — chunked parallel fetch + parse + per-worker fold, then merge",
         fetch_fold_started.elapsed(),
     );
 
@@ -1574,7 +1686,7 @@ mod tests {
     use crate::config::{Config, parse_config};
     use crate::git_history::FakeGitHistory;
     use crate::model::{BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, Metric, MetricKind};
-    use crate::model::{EnvironmentInfo, GitInfo, RunContext, ToolchainInfo};
+    use crate::model::{EnvironmentInfo, GitInfo, Run, RunContext, ToolchainInfo};
     use crate::report::RecordingReporter;
     use crate::storage::{MemoryStorage, Storage};
 
@@ -3381,6 +3493,64 @@ mod tests {
             3,
             "clean and dirty runs both count toward the set tally"
         );
+    }
+
+    #[test]
+    fn run_index_merge_sums_totals_and_per_commit_counts() {
+        // Each worker records its disjoint object chunk into its own index; merging
+        // the per-worker indices must reproduce the single-threaded tally exactly,
+        // summing the totals and the per-(set, commit) clean/dirty counts.
+        let set = DiscriminantSet {
+            engine: "criterion".to_owned(),
+            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
+            machine_key: "synthetic".to_owned(),
+        };
+        let other_set = DiscriminantSet {
+            engine: "callgrind".to_owned(),
+            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
+            machine_key: "synthetic".to_owned(),
+        };
+
+        // The reference index folds every run in one pass.
+        let mut reference = RunIndex::new();
+        reference.record(&set, 0, "c0", false);
+        reference.record(&set, 0, "c0", true);
+        reference.record(&set, 1, "c1", false);
+        reference.record(&other_set, 0, "c0", false);
+
+        // Two workers split the same runs; c0/set is touched by both so the merge has
+        // to sum the per-commit counts rather than overwrite them.
+        let mut first = RunIndex::new();
+        first.record(&set, 0, "c0", false);
+        first.record(&other_set, 0, "c0", false);
+        let mut second = RunIndex::new();
+        second.record(&set, 0, "c0", true);
+        second.record(&set, 1, "c1", false);
+
+        first.merge(second);
+
+        assert_eq!(first.total(), reference.total());
+        assert_eq!(first.runs_in_set(&set), reference.runs_in_set(&set));
+        assert_eq!(
+            first.runs_in_set(&other_set),
+            reference.runs_in_set(&other_set)
+        );
+
+        let summarize = |index: &RunIndex| {
+            index
+                .sets()
+                .map(|(set, by_commit)| {
+                    let counts: Vec<(usize, String, usize, usize)> = by_commit
+                        .iter()
+                        .map(|(topo, counts)| {
+                            (*topo, counts.commit.clone(), counts.clean, counts.dirty)
+                        })
+                        .collect();
+                    (set.clone(), counts)
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(summarize(&first), summarize(&reference));
     }
 
     #[test]

@@ -10,6 +10,16 @@ use std::process::ExitCode;
 
 use cargo_bench_history::{Cli, RunOutcome, run};
 
+// The analyze pipeline fans the per-object gzip-decompress + JSON parse out across
+// worker threads. serde_json makes many small allocations, and the system
+// allocator's cross-thread contention (acute on the Windows process heap) otherwise
+// serializes those threads and erases the parallel win, so the binary installs a
+// scalable allocator process-wide. Miri cannot call mimalloc's FFI, so under Miri the
+// default allocator stands in (Miri runs single-threaded, so the contention is moot).
+#[cfg(not(miri))]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[cfg_attr(test, mutants::skip)]
 #[tokio::main]
 async fn main() -> ExitCode {

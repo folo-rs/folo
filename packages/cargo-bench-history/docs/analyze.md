@@ -22,17 +22,18 @@ The single most important distinction:
 
 | Mechanism | What it is | Where | Threads |
 |---|---|---|---|
-| **I/O concurrency** | `buffer_unordered(LOAD_CONCURRENCY)` multiplexes in-flight `Storage::get` futures on **one** `!Send` task | the fetch loop in `select_dataset` | cooperative on a single task — **not** OS-thread parallelism |
-| **CPU parallelism** | one balanced contiguous chunk per worker is dispatched to a blocking task through an injected `anyspawn::Spawner` (`spawn_blocking`); chunk math in `analyze::parallel` | `find_changes_spawned` (the detection step) | runtime worker threads, not freshly spawned per call |
+| **CPU parallelism (load)** | the storage-key-sorted survivors are split into one balanced contiguous chunk per worker; each chunk is fetched + decompressed + JSON-parsed **and folded** into that worker's own `SeriesBuilder` on a blocking task through an injected `anyspawn::Spawner` (`spawn`) | `fold_runs_chunked` in `select_dataset` | runtime worker threads, not freshly spawned per call |
+| **CPU parallelism (detect)** | one balanced contiguous chunk of series per worker is dispatched to a blocking task through the same `Spawner` (`spawn_blocking`); chunk math in `analyze::parallel` | `find_changes_spawned` (the detection step) | runtime worker threads |
+| **I/O concurrency** | `buffer_unordered(LOAD_CONCURRENCY)` multiplexes in-flight `Storage::get` futures on **one** `!Send` task | the blessing-sidecar load (`load_objects_concurrently`) | cooperative on a single task — **not** OS-thread parallelism |
 
-"Fetching N at once" and "detecting across cores" are *different machines*. The fetch
-is latency-hiding I/O on one logical task; the **detection** stage is the only place
-that fans compute out across cores, and it does so through a `Spawner` so the work
-runs on the runtime's shared blocking pool (production) — or inline on the calling
-thread (tests/Miri) — rather than on anonymous per-call OS threads. The load future
-is `!Send` and reactor-free, so it runs unchanged under the Miri-driven
-`futures::executor::block_on` tests; the production binary runs it under
-`#[tokio::main]`, and that same runtime backs the detection spawner.
+"Folding across cores" and "detecting across cores" are the two stages that fan compute
+out across cores, and both do so through a `Spawner` so the work runs on the runtime's
+shared blocking pool (production) — or inline on the calling thread (tests/Miri) — rather
+than on anonymous per-call OS threads. The low-volume blessing-sidecar load still uses
+the older single-task `buffer_unordered` I/O concurrency. Production runs all of this
+under `#[tokio::main]`; tests drive `select_dataset` through the
+`synchronous_spawner` and `futures::executor::block_on`, so the load stays reactor-free
+and runs unchanged under Miri.
 
 ---
 
@@ -70,13 +71,12 @@ flowchart TD
     WF --> TF["to_fetch: Vec<(key, StorageKey)>"]
     TF --> SK["sort by storage key\n→ each object's rank = object_ordinal"]
   end
-  SK --> LOOP
-  subgraph P23["Phase 2/3 — fetch + fold, streaming"]
-    LOOP["buffer_unordered(LOAD_CONCURRENCY)\nfetch_one_ranked → Storage::get → JSON → Run"] -->|"Run, OUT of order"| FOLD["serial fold: SeriesBuilder.push per run\nintern commit, hash id, group points"]
-    FOLD --> DROP["drop parsed Run\nkeep only compact SeriesPoints"]
-    DROP --> LOOP
+  SK --> LOAD
+  subgraph P23["Phase 2/3 — chunked parallel fetch+parse+fold, then merge"]
+    LOAD["fold_runs_chunked: split survivors into\none balanced contiguous chunk per worker"] -->|"spawn(chunk) ★ BLOCKING TASKS ★"| WORK["each worker: for key in chunk →\nStorage::get → gzip inflate → JSON → RunPoints\n→ push into its OWN SeriesBuilder, drop RunPoints"]
+    WORK -->|"await in spawn order"| MERGE["merge per-worker SeriesBuilders\n+ RunIndexes into one"]
   end
-  DROP --> FIN["SeriesBuilder.finish()"]
+  MERGE --> FIN["SeriesBuilder.finish()"]
 ```
 
 Key properties:
@@ -84,26 +84,54 @@ Key properties:
 - **Phase 1 never fetches a payload.** History-membership, base-side dirty admission
   and the `--since`/`--until` window are all decided from the *key* and git topology
   (`window_excludes`), so an excluded object costs zero round-trips.
-- **Ordinals are assigned up front** by sorting `to_fetch` by key, because
-  `buffer_unordered` completes out of order; this makes the result independent of
-  fetch arrival order. `object_ordinal` is the final point tie-break and stands in for
-  the full storage key to keep points small.
-- **Streaming memory.** Only the objects currently in flight (raw bytes + the one
-  parsed `Run` being folded) are resident; each `Run` is dropped right after its
-  points are extracted. On a large history this is the difference between hundreds of
-  MB and tens of GB.
-- **Fetch is concurrent, parse + fold are serial.** Each completed fetch is parsed
-  (JSON → `Run`) and folded (`SeriesBuilder::push`) inline on the single load task as
-  it arrives, overlapped with the still-in-flight fetches. The fold is a sequential
-  section, but it overlaps the concurrent fetch pipeline, so on the remote backend it
-  hides under fetch latency rather than gating it; an earlier per-batch parallel-parse
-  scheme was dropped because its chunks were too small to beat the fork/join overhead
-  (see §6).
+- **Ordinals are assigned up front** by sorting `to_fetch` by key. Each survivor's rank
+  in that order is its `object_ordinal`, captured before chunking so the result is
+  independent of which worker finishes first. `object_ordinal` is the final point
+  tie-break and stands in for the full storage key to keep points small.
+- **The parse and the fold both run across cores; a serial merge follows.**
+  `fold_runs_chunked` splits the key-sorted survivors into one balanced contiguous chunk
+  per worker (sizes differ by at most one) and spawns one blocking task per chunk; each
+  task fetches, inflates, and JSON-parses each object into a lean `RunPoints` (the
+  projection below) and **folds it straight into that worker's own `SeriesBuilder` /
+  `RunIndex`, dropping the `RunPoints` immediately** — so a worker never buffers its
+  chunk's parsed runs. The driver awaits the tasks **in spawn order** and merges their
+  builders (`SeriesBuilder::merge`), run tallies (`RunIndex::merge`) and admission lists
+  into one. Because ordinals are global and the final `finish()` sort is global, the
+  merge is associative and the result is byte-identical to a single-threaded fold in
+  storage-key order. Both the parse and the fold — the local-backend load's dominant
+  costs — now scale with cores; only the merge and the final sort stay serial.
+- **The parsed element is lean (`RunPoints`).** Each object is parsed into `RunPoints`
+  (`analyze::run_points`), which carries only what `SeriesBuilder::push` reads — the
+  abbreviated commit and, per result, the benchmark id and each metric's
+  `kind`/`value`/`interval_low`/`interval_high` — and `push` consumes that projection
+  rather than a full `Run`. Serde ignores the rest of the run JSON, so the discarded run
+  context (environment, toolchain, timestamps) and per-metric standard deviation are
+  never materialized.
+- **Memory: fold-in-worker did not lower peak (the accepted tradeoff).** Folding in the
+  worker means no chunk's parsed runs are ever buffered — yet this is *not* a memory win.
+  At merge time every worker's finished `SeriesBuilder` is resident at once alongside the
+  growing combined builder (~2× the compact point output transiently), plus one mimalloc
+  arena per worker thread. Measured back-to-back on the ~20000-object local-FS history,
+  fold-in-worker ran ~19.0 s / ~47% CPU at **~7210 MiB** peak versus an intermediate
+  buffered-parallel variant (parse a chunk to `Vec<RunPoints>`, fold serially on the main
+  thread) at ~21.1 s / ~40% / **~6880 MiB** — i.e. ~10% faster with better core use but
+  ~5% (~330 MiB) *more* peak. So the buffered runs were never the dominant peak term, and
+  the lean `RunPoints` projection trims peak only ~1% in isolation (the repeated ~1000
+  benchmark ids re-materialized per object, plus mimalloc's page retention, dominate).
+  Fold-in-worker is kept for the wall-time and CPU win; the remaining memory levers
+  (bounded merge-as-complete waves, id interning) are deferred — see `DESIGN.md`
+  decision 34.
+- **The parallel parse needs a scalable allocator.** serde_json makes many small
+  allocations; on the system allocator their cross-thread contention (acute on the
+  Windows process heap) serializes the worker threads and erases the parallel win — the
+  naive change measured *slower* than serial. The `cargo-bench-history` binary therefore
+  installs `mimalloc` as its `#[global_allocator]` (so does the stress harness, for
+  representative numbers); with it the parse scales cleanly across cores.
 
 ### `SeriesBuilder::push` — what the fold does (`analyze::series`)
 
-Per parsed `Run`: intern the short commit into an `Arc<str>` shared by every point on
-that commit (`intern`); resolve the benchmark id's bucket in a `HashTable` with a
+Per parsed `RunPoints`: intern the short commit into an `Arc<str>` shared by every point
+on that commit (`intern`); resolve the benchmark id's bucket in a `HashTable` with a
 single `entry` probe — hashing `BenchmarkId` with the builder's one fixed hasher
 instance and **cloning the id only on a true cache miss** (one id-clone per distinct
 series, never per point); push a compact `SeriesPoint` (`topo_index`, `dirty`,
@@ -113,10 +141,16 @@ hence the compactness and interning.
 
 ### Tuning constants (`analyze::mod`)
 
-- `LOAD_CONCURRENCY` — how many `Storage::get` round-trips overlap. Hides per-object
-  latency (critical on the remote backend); set near the knee where in-flight fetches
-  saturate the network path, past which extra concurrency only subdivides the fixed
-  path bandwidth and lengthens each request without lifting throughput.
+- **Load worker count** (`worker_count`, from `analyze::parallel`) — how many blocking
+  tasks the run load fans across: `thread::available_parallelism()`, capped at the
+  survivor count so a small data set does not spawn idle workers. This bounds both the
+  parallel parse+fold width and (on the run-load path) the number of concurrent in-flight
+  `Storage::get`s, since each worker awaits its chunk's gets sequentially.
+- `LOAD_CONCURRENCY` — how many `Storage::get` round-trips the **blessing-sidecar** load
+  overlaps on its single `buffer_unordered` task. Hides per-object latency (critical on
+  the remote backend); set near the knee where in-flight fetches saturate the network
+  path, past which extra concurrency only subdivides the fixed path bandwidth and
+  lengthens each request without lifting throughput.
 
 ---
 
@@ -170,38 +204,51 @@ reordering them cannot change the median.
 |---|---|---|---|
 | `storage.list` | single async request | the whole prefix | — |
 | Phase-1 filtering | serial | per candidate key | — |
-| **fetch** | **I/O-concurrent (one task)** | per object, bounded in flight | `buffer_unordered(LOAD_CONCURRENCY)` |
-| parse | **serial** (on the load task) | per object, as it arrives | — |
-| fold (`push`) | **serial** | per `Run` | overlaps the concurrent fetch |
+| **fetch + parse + fold (runs)** | **CPU-parallel (spawned blocking tasks)** | one chunk of survivors per worker | `fold_runs_chunked`: split once, each worker folds its own builder, await + merge in spawn order |
+| merge (`SeriesBuilder::merge`) | **serial** | per worker partial | runs after the parallel load completes |
 | series sort | serial | the `Vec<Series>` | — |
 | point sort | serial | per series | — |
 | **detect** | **CPU-parallel (spawned blocking tasks)** | one chunk of series per worker | split once over all series, await + concat |
+| blessing-sidecar fetch | **I/O-concurrent (one task)** | per object, bounded in flight | `buffer_unordered(LOAD_CONCURRENCY)` |
 | BH filter + finding sort + render | serial | the candidate/finding list | — |
 
-`find_changes_spawned` splits the series into **exactly one balanced chunk per
-worker** (sizes differ by at most one, so a slice just above the worker count still
-uses every worker rather than collapsing to fewer chunks), dispatches each chunk to a
-blocking task through the injected `Spawner`, then awaits and concatenates them in
-series order — identical output to a sequential pass. A single available CPU (Miri
-reports one) yields a single worker: one chunk, one task over every series.
+Both `fold_runs_chunked` and `find_changes_spawned` split their input into **exactly one
+balanced chunk per worker** (sizes differ by at most one, so a slice just above the worker
+count still uses every worker rather than collapsing to fewer chunks), dispatch each chunk
+to a blocking task through the injected `Spawner`, then await them in spawn order —
+`fold_runs_chunked` merges the per-worker partials, `find_changes_spawned` concatenates the
+per-worker results — for output identical to a sequential pass. A single available CPU
+(Miri reports one) yields a single worker: one chunk, one task over the whole input.
 
 ---
 
 ## 6. Where the bottlenecks live (to steer optimization)
 
-- **Local-filesystem backend:** the load is **fetch + serial parse/fold** bound. The
-  fold runs inline as each object arrives, overlapped with the concurrent fetch, so
-  the ceiling is fetch arrival plus the serial fold throughput. Levers: shrink the
-  serial section (cheaper `push`), fewer/larger objects. A previous per-batch
-  parallel-parse scheme was reverted: its chunks were too small to beat the fork/join
-  overhead, and the fold already overlapped the fetch pipeline, so it added complexity
-  for no measurable win.
-- **Azure backend:** network-bound. With the shared connection pool (§7) the per-object
-  TCP+TLS handshake is amortised across a keep-alive pool, leaving two ceilings: the
-  path bandwidth between the client and the storage region, and — for small objects — a
-  per-request round-trip rate, since each object costs one round-trip. Concurrency past
-  the knee (`LOAD_CONCURRENCY`) only subdivides the fixed bandwidth and inflates latency
-  tails, so fewer-larger blobs (and fewer bytes) help more than more concurrency.
+- **Local-filesystem backend:** the load is **parse-bound**, and both the parse and the
+  fold now fan across cores. `fold_runs_chunked` spreads the gzip-inflate + JSON-parse +
+  fold over one blocking task per CPU, so the ceiling is the slowest chunk's parse+fold
+  plus the serial merge throughput. Levers: cheaper `push`, parse into a leaner shape
+  (`RunPoints` already drops the run context and per-metric std-dev — less to
+  allocate/parse), fewer/larger objects. Note folding inside the workers did **not** lower
+  peak memory (every worker's partial builder coexists with the merged builder during the
+  merge — see §3 and `DESIGN.md` decision 34); the open memory levers are bounded
+  merge-as-complete waves and id interning, not a leaner buffered element. This parallel
+  parse only pays off with a scalable global allocator (see the mimalloc note below).
+- **Azure backend:** network-bound, and the run load now drives **at most one in-flight
+  `Storage::get` per worker** (≈ CPU count), because each worker awaits its chunk's gets
+  sequentially. That is well below the `LOAD_CONCURRENCY`-wide pipeline the streaming load
+  used, so on a latency-bound remote path the run load can be *less* I/O-concurrent than
+  before; the win from this change is on the CPU-bound parse+fold, not on remote I/O. With
+  the shared connection pool (§7) the per-object TCP+TLS handshake is amortised across a
+  keep-alive pool, leaving two ceilings: the path bandwidth and — for small objects — a
+  per-request round-trip rate. Fewer-larger blobs (and fewer bytes) help more than more
+  concurrency. (The blessing-sidecar load keeps the `LOAD_CONCURRENCY`-wide path.)
+- **The global allocator is load-bearing for the parallel parse.** serde_json's many
+  small allocations contend on the system allocator's cross-thread lock; on the Windows
+  process heap that contention made the naive parallel parse *slower* than serial
+  (negative scaling even 1→2 threads). The binary installs `mimalloc` as its
+  `#[global_allocator]` so the per-thread heaps eliminate the contention and the parse
+  scales. Do not remove it without re-measuring the parallel load.
 - **Data-structure hot spots:** `SeriesPoint` compactness, `Arc<str>` commit interning
   and single-probe `HashTable` id lookups (clone-on-miss) keep the
   tens-of-millions-of-points fold affordable. Preserve these; do not regress them.
@@ -293,7 +340,7 @@ specific stage of the diagrams above without reading the code. Each line reads
 | `git topology resolution`      | §2/§3 `resolve_history` (commit order + times)    |
 | `git.first_parent ancestry …`  | §3 the first-parent ancestry walk alone (scales with history) |
 | `phase 1 — key-only …`         | §3 Phase 1 filtering loop (no fetches)            |
-| `phase 2/3 — concurrent fetch …` | §3 Phase 2/3 concurrent fetch + serial parse + fold |
+| `phase 2/3 — chunked parallel fetch …` | §3 Phase 2/3 chunked parallel fetch + parse + per-worker fold, then merge |
 | `series build finalization`    | §4 `SeriesBuilder::finish()` (+ serial point sort) |
 | `blessing sidecar load`        | §3 history-mode blessing fetch (history only)     |
 | `re-baseline blessed series`   | §2 `apply_blessings`                              |

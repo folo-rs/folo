@@ -9,6 +9,14 @@
 
 use std::process::ExitCode;
 
+// The harness must measure the same allocator the production binary ships, so its
+// `analyze`-path numbers stay representative: the chunked parallel parse only scales
+// with a per-thread-heap allocator (see `cargo-bench-history`'s `main`). Miri cannot
+// call mimalloc's FFI, so under Miri the default allocator stands in.
+#[cfg(not(miri))]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() -> ExitCode {
     cargo_bench_history_stress::run()
 }

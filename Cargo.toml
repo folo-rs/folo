@@ -70,6 +70,7 @@ linked_macros = { version = "=1.0.14", path = "packages/linked_macros", default-
 linked_macros_impl = { version = "=1.0.14", path = "packages/linked_macros_impl", default-features = false }
 many_cpus = { version = "2.4.9", path = "packages/many_cpus", default-features = false }
 many_cpus_impl = { version = "=2.4.9", path = "packages/many_cpus_impl", default-features = false }
+mimalloc = { version = "0.1.52", default-features = false }
 mockall = { version = "0.14.0", default-features = false }
 mutants = { version = "0.0.4", default-features = false }
 negative-impl = { version = "0.1.0", default-features = false }

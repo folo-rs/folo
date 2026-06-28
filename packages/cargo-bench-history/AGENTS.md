@@ -168,8 +168,9 @@ the gzip magic never collides with JSON's first byte.
 > canonical map of the `analyze` load and detection path — what loads where, in what
 > order, what is computed/sorted, and exactly where I/O concurrency vs. CPU
 > parallelism happens (with Mermaid diagrams). Keep it in sync whenever you change the
-> concurrent fetch/fold, the detection distribution (`find_changes_spawned` + the
-> `analyze::parallel` chunk math), or the Azure transport.
+> chunked parallel fetch+parse+fold (`fold_runs_chunked`), the per-worker builder merge,
+> the detection distribution (`find_changes_spawned` + the `analyze::parallel` chunk
+> math), or the Azure transport.
 
 `analyze::execute` builds the real `SystemGitHistory` (rooted at `--repo` or the
 current directory) and the storage from `build_storage`, then delegates to
@@ -178,15 +179,37 @@ ports so tests drive it with `FakeGitHistory` + `MemoryStorage` +
 `futures::executor::block_on` (Miri-safe, no Tokio). Everything below the IO ports
 is pure and synchronous.
 
-The one compute pass that fans out across cores is detection: `analyze_with` takes a
-`&anyspawn::Spawner` and calls `find_changes_spawned`, which dispatches per-series
-detection chunks to blocking tasks. `execute` injects `Spawner::new_tokio()` (the
-runtime's blocking pool); tests inject `cargo_bench_history_core::testing::
-synchronous_spawner()` (the shell takes core as a dev-dependency with its
-`private-test-util` feature) so `block_on`/Miri runs need no Tokio runtime. The fold
-and point sort stay serial. Do **not** spawn ad-hoc threads (`std::thread::scope`,
-`map_parallel`-style helpers) for compute — route fan-out through the injected
-`Spawner` so it shares the runtime's threads and stays legible in a profiler.
+Two compute passes fan out across cores. The object load (`fold_runs_chunked`) splits
+the storage-key-sorted survivors into balanced contiguous chunks; each spawned task
+fetches, decompresses, JSON-parses **and folds** its chunk into its *own* `SeriesBuilder`
+/ `RunIndex`, dropping each parsed run as it goes, and the driver awaits the tasks in
+spawn order and merges the per-worker builders (`SeriesBuilder::merge`). Each object is
+parsed into the lean `cargo_bench_history_core::analyze::RunPoints` projection — only the
+fields the fold reads (the abbreviated commit and, per result, the id and the metric
+value/interval) — not a full `Run`. Detection (`find_changes_spawned`) then dispatches
+per-series detection chunks to blocking tasks the same way. Both take the
+`&anyspawn::Spawner` `analyze_with` threads through; `execute` injects
+`Spawner::new_tokio()` (the runtime's blocking pool), while tests inject
+`cargo_bench_history_core::testing::synchronous_spawner()` (the shell takes core as a
+dev-dependency with its `private-test-util` feature) so `block_on`/Miri runs need no
+Tokio runtime. The per-worker builder merge and point sort stay serial (the merge is
+associative and `finish` sorts globally, so output equals a single-threaded fold). Do
+**not** spawn ad-hoc threads (`std::thread::scope`, `map_parallel`-style helpers) for
+compute — route fan-out through the injected `Spawner` so it shares the runtime's threads
+and stays legible in a profiler.
+
+Folding in the worker (instead of buffering each chunk's parsed runs and folding serially)
+parallelizes the fold for a ~10% wall-time and CPU win, but it did **not** lower peak
+memory: at merge time every worker's finished builder is resident alongside the growing
+combined builder (~2× the compact point output transiently), which measured ~5% above a
+buffered-parallel variant. The parallel parse is only a net win with a scalable global
+allocator: serde_json's many small allocations contend on the system allocator's
+cross-thread lock (acute on the Windows process heap) and otherwise erase the parallel
+speedup, so the `cargo-bench-history` binary installs `mimalloc` as its
+`#[global_allocator]` (the stress harness does the same for representative numbers). The
+lean `RunPoints` projection only trims peak ~1%; the repeated benchmark ids and the merge
+coexistence dominate peak, so the open memory levers are bounded merge-as-complete waves
+and id interning — see `docs/DESIGN.md` decision 34.
 
 `analyze` assembles a series by **resolving git topology at query time** rather
 than reading a flat storage prefix — the storage layout cannot pre-assemble a

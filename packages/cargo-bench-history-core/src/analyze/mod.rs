@@ -12,6 +12,7 @@ pub(crate) mod discriminant;
 pub(crate) mod findings;
 pub(crate) mod parallel;
 pub(crate) mod report;
+pub(crate) mod run_points;
 pub(crate) mod selection;
 pub(crate) mod series;
 pub(crate) mod stats;
@@ -21,7 +22,9 @@ pub use findings::{
     AnalysisConfig, AnalysisContext, AnalysisMode, Direction, Finding, FindingMethod, SeriesValue,
     find_changes_spawned,
 };
+pub use parallel::{balanced_chunk_sizes, worker_count};
 pub use report::{ReportFormat, ReportInput, SetSummary, render};
+pub use run_points::{MetricPoint, ResultPoints, RunPoints};
 pub use selection::{SelectedCommit, select_commits};
 pub use series::{
     Blessing, BlessingPlacement, LoadedObject, Series, SeriesBuilder, SeriesFilter, SeriesPoint,
