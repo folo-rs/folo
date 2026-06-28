@@ -101,12 +101,13 @@ Key properties:
   storage-key order. Both the parse and the fold — the local-backend load's dominant
   costs — now scale with cores; only the merge and the final sort stay serial.
 - **The parsed element is lean (`RunPoints`).** Each object is parsed into `RunPoints`
-  (`analyze::run_points`), which carries only what `SeriesBuilder::push` reads — the
-  abbreviated commit and, per result, the benchmark id and each metric's
+  (`analyze::run_points`), which carries only what `SeriesBuilder::push` reads from the
+  run payload — per result, the benchmark id and each metric's
   `kind`/`value`/`interval_low`/`interval_high` — and `push` consumes that projection
-  rather than a full `Run`. Serde ignores the rest of the run JSON, so the discarded run
-  context (environment, toolchain, timestamps) and per-metric standard deviation are
-  never materialized.
+  rather than a full `Run` (the commit a point is labelled with comes from the storage
+  key, not the payload, so `RunPoints` holds no git fields). Serde ignores the rest of the
+  run JSON, so the discarded run context (environment, toolchain, timestamps) and
+  per-metric standard deviation are never materialized.
 - **Memory: fold-in-worker did not lower peak (the accepted tradeoff).** Folding in the
   worker means no chunk's parsed runs are ever buffered — yet this is *not* a memory win.
   At merge time every worker's finished `SeriesBuilder` is resident at once alongside the
@@ -130,7 +131,7 @@ Key properties:
 
 ### `SeriesBuilder::push` — what the fold does (`analyze::series`)
 
-Per parsed `RunPoints`: intern the full commit SHA (taken from the storage key, not the
+Per parsed `RunPoints`: intern the commit from the storage key (not the
 run payload) into an `Arc<str>` shared by every point
 on that commit (`intern`); resolve the benchmark id's bucket in a `HashTable` with a
 single `entry` probe — hashing `BenchmarkId` with the builder's one fixed hasher

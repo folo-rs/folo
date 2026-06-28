@@ -35,9 +35,9 @@ use crate::model::{BenchmarkId, BenchmarkIdPrefix, MetricKind, Run};
 ///
 /// Kept compact because a large history materializes tens of millions of these at
 /// once: the provenance storage key is reduced to [`object_ordinal`] (the key's
-/// rank in sorted storage-key order, the final tie-break) and the abbreviated
-/// commit is an interned [`Arc<str>`] shared across every point measured against
-/// the same commit.
+/// rank in sorted storage-key order, the final tie-break) and the commit is an
+/// interned [`Arc<str>`] shared across every point measured against the same
+/// commit.
 ///
 /// [`object_ordinal`]: SeriesPoint::object_ordinal
 #[derive(Clone, Debug)]
@@ -49,8 +49,9 @@ pub struct SeriesPoint {
     /// The object's rank in sorted storage-key order (the final tie-break),
     /// standing in for the full storage key to keep the point small.
     pub object_ordinal: u32,
-    /// Full commit SHA the run was measured against. Interned so all points on one
-    /// commit share a single allocation.
+    /// Commit the run was measured against — the storage key's commit directory
+    /// segment (a full SHA, or `unknown`). Interned so all points on one commit
+    /// share a single allocation.
     pub commit: Option<Arc<str>>,
     /// The measured value.
     pub value: f64,
@@ -225,8 +226,8 @@ fn ordinal_of(rank: usize) -> u32 {
 /// of the objects into its own builder and hand it back, and [`merge`] folds the
 /// per-worker builders into one before a single [`finish`](SeriesBuilder::finish).
 ///
-/// The abbreviated commit of each run is interned, so all points measured against
-/// one commit share a single [`Arc<str>`] instead of cloning the string per point.
+/// The commit of each run is interned, so all points measured against one commit
+/// share a single [`Arc<str>`] instead of cloning the string per point.
 ///
 /// [`merge`]: SeriesBuilder::merge
 #[derive(Debug)]
@@ -288,10 +289,11 @@ impl SeriesBuilder {
     ///
     /// `topo_index` is the run commit's first-parent position, `object_ordinal` its
     /// rank in sorted storage-key order (the final point tie-break), and `commit`
-    /// the full commit SHA; the caller supplies all three because they come from the
-    /// storage key and git topology, not the run payload. `run` is the fold-relevant
-    /// projection of the run (see [`RunPoints`]); only the matching metrics are
-    /// retained — it can be dropped as soon as this returns.
+    /// the storage key's commit directory segment (a full SHA, or `unknown`); the
+    /// caller supplies all three because they come from the storage key and git
+    /// topology, not the run payload. `run` is the fold-relevant projection of the
+    /// run (see [`RunPoints`]); only the matching metrics are retained — it can be
+    /// dropped as soon as this returns.
     pub fn push(
         &mut self,
         set: &DiscriminantSet,
@@ -600,7 +602,7 @@ mod tests {
     }
 
     /// One folded object: its discriminant set, the commit's topological index, the
-    /// dirty flag, the storage-key ordinal, the full commit SHA, and the lean run
+    /// dirty flag, the storage-key ordinal, the storage-key commit, and the lean run
     /// projection to push.
     type FoldInput = (DiscriminantSet, usize, bool, u32, String, RunPoints);
 

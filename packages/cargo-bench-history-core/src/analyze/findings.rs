@@ -198,7 +198,7 @@ pub enum Direction {
 /// value, and whether it came from a dirty (uncommitted-tree) snapshot.
 #[derive(Clone, Debug)]
 pub struct SeriesValue {
-    /// Abbreviated commit the point was measured against, if known.
+    /// Commit the point was measured against, if known.
     pub commit: Option<String>,
     /// The measured value.
     pub value: f64,
@@ -230,7 +230,7 @@ pub struct Finding {
     /// How confident the detector is (`1 - p_value`; `1.0` for an exact
     /// deterministic step).
     pub confidence: f64,
-    /// Abbreviated commit the change is attributed to, if known.
+    /// Commit the change is attributed to, if known.
     pub commit: Option<String>,
     /// Where, within a feature branch, the latest regime began — set only in
     /// branch mode when a within-branch flip is located, naming the commit the
@@ -309,7 +309,7 @@ fn series_values(series: &Series) -> Vec<SeriesValue> {
         .collect()
 }
 
-/// The abbreviated commit of a point as an owned `String`, for the JSON output.
+/// The commit of a point as an owned `String`, for the JSON output.
 ///
 /// Points intern their commit as a shared `Arc<str>`; the public finding fields are
 /// plain owned strings, so a surviving finding pays one allocation here rather than

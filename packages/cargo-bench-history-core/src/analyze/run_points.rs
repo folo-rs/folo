@@ -9,9 +9,10 @@
 //! [`SeriesBuilder::push`](crate::analyze::SeriesBuilder::push) actually folds
 //! into points — dropping the run context (environment, toolchain, commit,
 //! timestamps) and each metric's standard deviation. The commit a point is
-//! labelled with comes from the storage key (the full SHA), not the run payload,
-//! so the projection carries no git fields at all. Serde ignores the unmentioned
-//! JSON fields, so a run still parses unchanged; only the discarded parts are never
+//! labelled with comes from the storage key (its commit directory segment), not
+//! the run payload, so the projection carries no git fields at all. Serde ignores
+//! the unmentioned JSON fields, so a run still parses unchanged; only the discarded
+//! parts are never
 //! materialized. (The leaner element trims overall peak only marginally — peak is
 //! set by the per-worker builders coexisting during the merge — but the lighter
 //! parse is still worth keeping; see `cargo-bench-history`'s `docs/DESIGN.md`
