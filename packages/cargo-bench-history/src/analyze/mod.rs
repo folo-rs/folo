@@ -749,10 +749,10 @@ where
             let mut admitted: Vec<(String, bool)> = Vec::with_capacity(chunk.len());
             for (rank, key, parsed) in chunk {
                 let bytes = storage.get(&key).await.map_err(RunError::Storage)?;
-                let text = String::from_utf8(bytes).map_err(|error| RunError::Analyze {
+                let text = str::from_utf8(&bytes).map_err(|error| RunError::Analyze {
                     message: format!("stored object {key} is not valid UTF-8: {error}"),
                 })?;
-                let run = RunPoints::from_json(&text).map_err(|error| RunError::Analyze {
+                let run = RunPoints::from_json(text).map_err(|error| RunError::Analyze {
                     message: format!("stored object {key} is not a valid result set: {error}"),
                 })?;
                 let topo_index = order
