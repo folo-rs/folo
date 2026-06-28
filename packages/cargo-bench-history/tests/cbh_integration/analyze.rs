@@ -127,7 +127,9 @@ async fn analyze_markdown_format_renders_blocks() {
     );
     // A bold percentage headline leads each finding block; there is no table.
     assert!(!report.contains("| Change | Direction |"), "{report}");
-    assert!(report.contains("**"), "{report}");
+    // The headline format is a bold signed percentage joined to the benchmark id —
+    // far more specific than a bare `**` that any unrelated bold text would match.
+    assert!(report.contains("%** — `"), "{report}");
     assert!(report.contains("via change point"), "{report}");
 }
 

@@ -271,6 +271,12 @@ impl ColorOverride {
 }
 
 impl Drop for ColorOverride {
+    // Restoring `colored`'s process-global override is exercised by every render test
+    // (each builds and drops a guard), but asserting it requires observing that global
+    // state, which races with the rest of the parallel test suite and which `colored`
+    // exposes no override-state getter to read deterministically. Skipped for mutation
+    // only; the restore itself is covered behaviourally.
+    #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
         colored::control::unset_override();
     }
@@ -845,6 +851,39 @@ mod tests {
     }
 
     #[test]
+    fn text_report_shows_per_set_counts_distinct_from_totals() {
+        // Give the set tallies that differ from the top-level aggregate so the per-set
+        // counts line is identifiable on its own — a blanked-out line would no longer
+        // match, unlike when the set and total counts coincide.
+        let set = discriminant_set();
+        let findings = vec![regression()];
+        let summaries = vec![SetSummary {
+            set: &set,
+            runs: 7,
+            series: 5,
+            findings: findings.iter().collect(),
+        }];
+        let input = ReportInput {
+            project: "folo",
+            mode: "history",
+            notable: true,
+            runs: 99,
+            series: 88,
+            findings: &findings,
+            sets: &summaries,
+            hint: None,
+            warning: None,
+        };
+        let report = render(&input, ReportFormat::Text, false);
+        // The per-set counts line carries the set's own tallies, distinct from the
+        // top-level totals (`runs: 99  series: 88`).
+        assert!(
+            report.contains("  runs: 7  series: 5  regressions: 1  improvements: 0"),
+            "{report}"
+        );
+    }
+
+    #[test]
     fn report_renders_direction_labels() {
         let set = discriminant_set();
         let mut improvement = regression();
@@ -954,8 +993,45 @@ mod tests {
             report.contains("**+30.00%** — `nm/nm::observe/pull` · instruction_count"),
             "{report}"
         );
+        // An active finding carries no recovered suffix.
+        assert!(!report.contains("_(recovered)_"), "{report}");
         assert!(
             report.contains("regression via change point · 100% confidence · 100 → 130"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn markdown_report_marks_an_inactive_recovered_finding() {
+        let set = discriminant_set();
+        let mut recovered = regression();
+        recovered.active = false;
+        recovered.flipped_at = Some("c4".to_owned());
+        let findings = vec![recovered];
+        let mut summaries = Vec::new();
+        let input = single_set_input("folo", &set, &findings, &mut summaries);
+        let report = render(&input, ReportFormat::Markdown, false);
+        // The headline suffix flags a recovered finding; the shared detail line names
+        // the recovery commit.
+        assert!(
+            report.contains("· instruction_count _(recovered)_"),
+            "{report}"
+        );
+        assert!(report.contains("recovers at c4"), "{report}");
+    }
+
+    #[test]
+    fn markdown_report_annotates_a_blessed_finding() {
+        let set = discriminant_set();
+        let mut blessed = regression();
+        blessed.blessed_at = Some("c3".to_owned());
+        blessed.blessed_commit_time = Some("2024-01-01T00:00:00Z".to_owned());
+        let findings = vec![blessed];
+        let mut summaries = Vec::new();
+        let input = single_set_input("folo", &set, &findings, &mut summaries);
+        let report = render(&input, ReportFormat::Markdown, false);
+        assert!(
+            report.contains("blessed at c3 (2024-01-01T00:00:00Z)"),
             "{report}"
         );
     }
