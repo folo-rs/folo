@@ -15,7 +15,7 @@ install-tools:
     rustup toolchain install $env:RUST_MSRV
     rustup toolchain install $env:RUST_NIGHTLY --component miri --component rustfmt --component rust-src --component llvm-tools-preview
 
-    cargo install cargo-machete cargo-nextest release-plz cargo-semver-checks cargo-audit cargo-hack cargo-llvm-cov cargo-sort cargo-sort-derives cargo-udeps cargo-careful cargo-ensure-no-default-features cargo-delta --locked
+    cargo install cargo-machete cargo-nextest release-plz cargo-semver-checks cargo-audit cargo-hack cargo-llvm-cov cargo-sort cargo-sort-derives cargo-udeps cargo-careful cargo-ensure-no-default-features cargo-delta cargo-freeze-deps --locked
 
     # cargo-mutants transitively depends on `winapi 0.2.8`, which only defines its
     # types for `target_arch = "x86"` / `"x86_64"` and fails to compile on aarch64
