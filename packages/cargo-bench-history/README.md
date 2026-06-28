@@ -12,19 +12,26 @@ immutable record — on the local filesystem or in an
 Azure Blob container — and reconstructs per-benchmark series in git first-parent
 commit order, so historical trends become analyzable.
 
+Where results are stored is chosen at run time: pass `--local=<path>` for local
+filesystem storage (or a bare `--local` to take the path from the
+`CARGO_BENCH_HISTORY_STORAGE` environment variable), or configure an Azure Blob
+backend in `.cargo/bench_history.toml` and omit `--local`. A local path is
+machine-dependent, so it is never stored in the shared config file.
+
 ```text
-# Write a starter .cargo/bench_history.toml.
+# Write a starter .cargo/bench_history.toml (documents the optional cloud backend).
 cargo bench-history install
 
-# Run the workspace benchmarks for the current commit and store the results.
-cargo bench-history run
+# Run the workspace benchmarks for the current commit and store the results
+# locally. Drop --local to store in the cloud backend from the config file.
+cargo bench-history run --local=./bench-history
 
 # Bootstrap history by benching a range of past commits, so analysis has a
 # trend to work with (a single run on its own has nothing to compare against).
-cargo bench-history backfill <from-commit> <to-commit>
+cargo bench-history backfill --local=./bench-history <from-commit> <to-commit>
 
 # Analyze the recorded history for regressions and drift.
-cargo bench-history analyze
+cargo bench-history analyze --local=./bench-history
 ```
 
 ## See also

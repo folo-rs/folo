@@ -439,8 +439,9 @@ selection is a `StorageFacade` **enum** (`Local` | `Azure`) with static dispatch
 rather than a boxed-future trait object, and `run`/`analyze` stay
 backend-agnostic by holding a `StorageFacade`.
 
-* **LocalStorage** (iteration 1): root from config; create dirs; write/read/walk
-  via `tokio::fs` (iterative directory walk — no boxed async recursion).
+* **LocalStorage** (iteration 1): root selected at run time from `--local` (§7.1);
+  create dirs; write/read/walk via `tokio::fs` (iterative directory walk — no boxed
+  async recursion).
 * **AzureBlobStorage** (iteration 4): `azure_storage_blob` (+ `azure_identity`),
   always compiled in — `cargo-bench-history` is a CLI tool installed without
   feature flags, so a build-time gate would only ever hide a backend the user
@@ -491,6 +492,42 @@ backend-agnostic by holding a `StorageFacade`.
 The blob/key model (flat keys, list-by-prefix, immutable objects) is the lowest
 common denominator of a filesystem and a blob container, so both backends
 implement the same trait with no special-casing upstream.
+
+### 7.1 Selecting a backend
+
+A local-storage path is **machine-dependent**, so it is never carried in the
+shared, version-controlled config file. The configuration file holds only the
+**cloud** backend (an optional, externally-tagged `[storage.<kind>]` table —
+`[storage.azure]` today — of which **at most one** may be configured; two tables
+fail to deserialize). Local storage is chosen at the command line or environment.
+A leftover `[storage.local]` table from an earlier scheme is **rejected** at parse
+time (`unknown variant 'local', expected 'azure'`), nudging the user to remove it
+and select local storage via `--local`.
+
+Every storage-backed command (`run`, `analyze`, `list`, `prune`, `backfill`,
+`bless`/`unbless`) takes a `--local` flag and resolves the backend in this
+precedence:
+
+1. **`--local=<path>`** → local filesystem storage at `<path>` (relative paths are
+   taken relative to the repository base, so they resolve the same regardless of
+   the process current directory).
+2. **bare `--local`** (no value) → local filesystem storage at the path in the
+   `CARGO_BENCH_HISTORY_STORAGE` environment variable; an unset or empty variable
+   is an error. (`--local` uses `require_equals`, so the value form is always
+   `--local=<path>` and the bare form never accidentally swallows a following
+   positional argument.)
+3. **no `--local`** → the single cloud backend configured in the file. `--local`
+   thus always **overrides** a configured cloud backend.
+4. **neither `--local` nor a configured cloud backend** → a storage configuration
+   error telling the user to pass `--local` or configure a cloud backend.
+
+`run --no-store` is the one exception: it skips storage selection entirely (the
+benchmarks run but nothing is written), so it works with no `--local` and no
+configured backend. The path resolution is split for testability and Miri safety:
+a thin edge helper reads the environment variable, and a pure resolver maps the
+`--local` choice plus that value to an optional path, so the decision logic is
+unit-tested without touching the process environment. The chosen backend (and why
+— flag, environment, or cloud config) is reported on the `--verbose` trail.
 
 ## 8. Commands
 
@@ -612,11 +649,13 @@ next steps. Never overwrite an existing file (report and exit success). Honors
 abstracted behind a `ConfigWriter` port (`TokioConfigWriter` in production, an
 in-memory fake in tests) whose `write_new` creates parent directories and uses
 `create_new` so an existing file is reported, never clobbered. The generated
-template configures only the `[storage]` backend (engines are detected from
-output, not configured — §8.1); it carries no machine-key setting (the key is a
-run-time-only `--machine-key` flag, since a committed config would be wrong for
-some checkouts) and the next-steps hint points at `backfill` for seeding an
-existing repository's history.
+template is **fully commented**: it documents the optional `[storage.azure]` cloud
+backend and notes that local storage is *not* configured in the file but selected
+at run time via `--local=<path>` or `CARGO_BENCH_HISTORY_STORAGE` (§7.1). Engines
+are detected from output, not configured (§8.1); the template carries no
+machine-key setting (the key is a run-time-only `--machine-key` flag, since a
+committed config would be wrong for some checkouts) and the next-steps hint points
+at `backfill` for seeding an existing repository's history.
 
 ### 8.3 `cargo bench-history analyze`
 
@@ -1836,3 +1875,24 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      changes the output, so `worker_count` carries `#[mutants::skip]` while the real detection
      logic in `detect_one` stays under mutation testing. The serial `find_changes` survives
      only as the test-only oracle that pins the chunked path to a non-chunked reference.
+34. **Storage selection: `--local` flag + cloud-only config** — *Decided:* a local
+     storage path is machine-dependent, so it is no longer carried in the shared,
+     version-controlled config file. The config file holds only an **optional**
+     cloud backend (`[storage.azure]` today; modelled as
+     `Option<CloudStorageConfig>`, an externally-tagged enum so serde enforces "at
+     most one" — two tables fail to parse), and every storage-backed command takes
+     a `--local` flag. Resolution precedence (§7.1): `--local=<path>` →
+     local at `<path>`; bare `--local` → local at `CARGO_BENCH_HISTORY_STORAGE`
+     (unset/empty is an error); otherwise the configured cloud backend; otherwise a
+     config error. `--local` overrides a configured cloud backend, and `run
+     --no-store` skips selection entirely so it works config-free. `--local` uses
+     `require_equals` so the bare (env) form cannot swallow a following positional.
+     The environment read is isolated at a thin edge helper feeding a pure resolver,
+     keeping the decision logic unit-testable and Miri-safe. *No backward
+     compatibility:* at this early stage a leftover `[storage.local]` table gets no
+     special handling. Because `storage` is a known field whose only variant is
+     `azure`, such a table is **rejected** at parse time (`unknown variant 'local',
+     expected 'azure'`) rather than silently ignored the way a wholly unknown
+     section is — a clear signal to remove it and pass `--local` instead.
+     `install`'s template documents the optional cloud block and the `--local` /
+     env mechanism for local storage.

@@ -154,15 +154,25 @@ impl StorageTarget {
         }
     }
 
-    /// The `.cargo/bench_history.toml` contents pointing `analyze` at this store.
+    /// The `.cargo/bench_history.toml` contents `analyze` loads. Local storage is
+    /// not configured here: it is selected at run time via `--local` (see
+    /// [`local_path`](Self::local_path)), so the local config carries only the
+    /// project section, matching how a real workspace is configured.
     pub(crate) fn config_toml(&self) -> String {
         let project = crate::scenario::PROJECT;
         match &self.kind {
-            Kind::Local => format!(
-                "[project]\nid = \"{project}\"\n\n[storage.local]\npath = {}\n",
-                toml_path(&self.root)
-            ),
+            Kind::Local => format!("[project]\nid = \"{project}\"\n"),
             Kind::Azure { account, container } => azure_config_toml(project, account, container),
+        }
+    }
+
+    /// The `--local` storage path for `analyze`, or `None` for a cloud backend
+    /// (which is configured in the file instead). The local root is absolute, so
+    /// `analyze` rebasing it against its workspace is a no-op.
+    pub(crate) fn local_path(&self) -> Option<&Path> {
+        match &self.kind {
+            Kind::Local => Some(&self.root),
+            Kind::Azure { .. } => None,
         }
     }
 
@@ -323,12 +333,6 @@ fn absolute(path: &Path) -> Result<PathBuf, Error> {
         .map_err(|error| fail(format!("failed to resolve {}: {error}", path.display())))
 }
 
-/// Formats a path as a TOML basic string with backslashes escaped.
-fn toml_path(path: &Path) -> String {
-    let escaped = path.display().to_string().replace('\\', "\\\\");
-    format!("\"{escaped}\"")
-}
-
 /// Quotes a value as a TOML basic string, escaping the backslash and double-quote
 /// characters that would otherwise break the literal.
 fn toml_basic_string(value: &str) -> String {
@@ -471,12 +475,12 @@ mod tests {
 
     #[test]
     fn config_toml_renders_each_backend() {
+        // Local storage is a run-time `--local` selection, so the local config
+        // carries only the project section and no storage table.
         let local = local_target(PathBuf::from("store"));
         let local_config = local.config_toml();
-        assert!(
-            local_config.contains("[storage.local]"),
-            "got: {local_config}"
-        );
+        assert!(local_config.contains("[project]"), "got: {local_config}");
+        assert!(!local_config.contains("[storage"), "got: {local_config}");
 
         let fake = Arc::new(FakeRunner::default());
         let azure = fake_azure_target(&fake, PathBuf::from("staging"));
@@ -489,6 +493,18 @@ mod tests {
             azure_config.contains("account = \"acct\""),
             "got: {azure_config}"
         );
+    }
+
+    #[test]
+    fn local_path_is_set_only_for_local_storage() {
+        // The local backend exposes its store as the `--local` path; the cloud
+        // backend is configured in the file instead, so it has none.
+        let local = local_target(PathBuf::from("store"));
+        assert_eq!(local.local_path(), Some(Path::new("store")));
+
+        let fake = Arc::new(FakeRunner::default());
+        let azure = fake_azure_target(&fake, PathBuf::from("staging"));
+        assert_eq!(azure.local_path(), None);
     }
 
     #[test]

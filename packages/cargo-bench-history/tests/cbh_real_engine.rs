@@ -115,9 +115,10 @@ criterion_group! {
 criterion_main!(benches);
 "#;
 
-/// Storage points at a `store/` directory inside the fixture, keeping the test
-/// hermetic; the explicit project `id` avoids depending on the tempdir basename.
-const FIXTURE_CONFIG: &str = "[project]\nid = \"e2e\"\n\n[storage.local]\npath = \"./store\"\n";
+/// Storage is selected at run time via `--local`, pointing at a `store/`
+/// directory inside the fixture to keep the test hermetic; the explicit project
+/// `id` avoids depending on the tempdir basename.
+const FIXTURE_CONFIG: &str = "[project]\nid = \"e2e\"\n";
 
 /// Drives the production `run` against a real `cargo bench` + Criterion build and
 /// asserts the genuine wall-time output is harvested and stored.
@@ -151,7 +152,9 @@ async fn run_against_real_criterion_bench_stores_wall_time() {
     // assertions and before the tempdir is dropped (required on Windows).
     let outcome = {
         let _cwd = CwdGuard::enter(root);
-        run(&command_from(&["run"])).await.unwrap()
+        run(&command_from(&["run", "--local=./store"]))
+            .await
+            .unwrap()
     };
 
     let RunOutcome::Completed { message } = outcome else {

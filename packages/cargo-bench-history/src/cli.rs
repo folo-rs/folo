@@ -14,7 +14,7 @@ use clap::{ArgGroup, Args, Parser, Subcommand as ClapSubcommand, ValueEnum};
 use crate::model::BenchmarkIdPrefix;
 use crate::{
     AnalyzeOptions, BackfillOptions, BlessOptions, Command, InstallOptions, ListOptions,
-    ListSubject, PruneOptions, RunOptions, UnblessOptions,
+    ListSubject, LocalStorageSelection, PruneOptions, RunOptions, UnblessOptions,
 };
 
 const HEADING_ENV: &str = "Environment and execution";
@@ -148,9 +148,43 @@ struct EnvArgs {
     #[arg(long, value_name = "PATH")]
     repo: Option<PathBuf>,
 
+    /// Use local filesystem storage instead of a configured cloud backend.
+    ///
+    /// `--local=<path>` stores history under `<path>` (a relative path resolves
+    /// against the target repository — the working directory by default, or
+    /// `--repo`). A bare `--local` (no value) reads the path from the
+    /// `CARGO_BENCH_HISTORY_STORAGE` environment variable. Either form overrides
+    /// the cloud backend in the configuration file; without `--local`, the
+    /// configured cloud backend is used.
+    #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
+    #[expect(
+        clippy::option_option,
+        reason = "clap's representation of a three-state optional-value flag: absent (None), bare \
+                  --local (Some(None) -> read the env var), or --local=<path> (Some(Some(path)))"
+    )]
+    local: Option<Option<PathBuf>>,
+
     /// Emit detailed diagnostic notes to standard error describing each step.
     #[arg(long)]
     verbose: bool,
+}
+
+/// Translates the `--local` flag into the typed [`LocalStorageSelection`].
+///
+/// `None` (flag absent) selects the configured cloud backend; `Some(Some(p))`
+/// (`--local=<path>`) selects an explicit local path; `Some(None)` (bare
+/// `--local`) selects the path from `CARGO_BENCH_HISTORY_STORAGE`.
+#[expect(
+    clippy::option_option,
+    reason = "mirrors the clap field's three-state optional-value representation, mapped here to \
+              the typed LocalStorageSelection"
+)]
+fn local_selection(local: Option<Option<PathBuf>>) -> Option<LocalStorageSelection> {
+    match local {
+        None => None,
+        Some(Some(path)) => Some(LocalStorageSelection::Path(path)),
+        Some(None) => Some(LocalStorageSelection::FromEnv),
+    }
 }
 
 /// The repeatable, `all`-aware discriminant facets used by every query command.
@@ -263,6 +297,7 @@ impl RunCommand {
         RunOptions {
             config_path: self.env.config,
             repo: self.env.repo,
+            local: local_selection(self.env.local),
             packages: resolve_packages(self.workspace, self.package),
             excludes: self.exclude,
             benches: self.bench,
@@ -354,6 +389,7 @@ impl AnalyzeCommand {
         AnalyzeOptions {
             config_path: self.env.config,
             repo: self.env.repo,
+            local: local_selection(self.env.local),
             context: self.timeline.context,
             base: self.timeline.base,
             no_dirty: self.no_dirty,
@@ -434,6 +470,7 @@ impl ListCommand {
             subject: self.subject.into(),
             config_path: self.env.config,
             repo: self.env.repo,
+            local: local_selection(self.env.local),
             context: self.timeline.context,
             base: self.timeline.base,
             no_dirty: self.no_dirty,
@@ -536,6 +573,7 @@ impl PruneCommand {
         PruneOptions {
             config_path: self.env.config,
             repo: self.env.repo,
+            local: local_selection(self.env.local),
             context: self.commit_selection.context,
             base: self.commit_selection.base,
             commit: self.commit,
@@ -627,6 +665,7 @@ impl BackfillCommand {
         BackfillOptions {
             config_path: self.env.config,
             repo: self.env.repo,
+            local: local_selection(self.env.local),
             from: self.from,
             to: self.to,
             packages: resolve_packages(self.workspace, self.package),
@@ -678,6 +717,7 @@ impl BlessCommand {
         BlessOptions {
             config_path: self.env.config,
             repo: self.env.repo,
+            local: local_selection(self.env.local),
             context: self.context,
             base: self.base,
             engine: self.facets.engine,
@@ -718,6 +758,7 @@ impl UnblessCommand {
         UnblessOptions {
             config_path: self.env.config,
             repo: self.env.repo,
+            local: local_selection(self.env.local),
             context: self.context,
             base: self.base,
             engine: self.facets.engine,
@@ -950,6 +991,45 @@ mod tests {
             panic!("expected run command");
         };
         assert_eq!(options.repo, Some(PathBuf::from("/work/folo")));
+    }
+
+    #[test]
+    fn local_defaults_to_none() {
+        let Command::Run(options) = parse(&["run"]) else {
+            panic!("expected run command");
+        };
+        assert_eq!(options.local, None);
+    }
+
+    #[test]
+    fn local_with_value_selects_an_explicit_path() {
+        let Command::Run(options) = parse(&["run", "--local=./store"]) else {
+            panic!("expected run command");
+        };
+        assert_eq!(
+            options.local,
+            Some(LocalStorageSelection::Path(PathBuf::from("./store")))
+        );
+    }
+
+    #[test]
+    fn bare_local_selects_the_environment_variable() {
+        let Command::Analyze(options) = parse(&["analyze", "--local"]) else {
+            panic!("expected analyze command");
+        };
+        assert_eq!(options.local, Some(LocalStorageSelection::FromEnv));
+    }
+
+    #[test]
+    fn local_requires_equals_for_its_value() {
+        // Space-separated form is rejected so a trailing positional can never be
+        // mistaken for the `--local` path.
+        let Command::Backfill(options) = parse(&["backfill", "--local", "abc", "def"]) else {
+            panic!("expected backfill command");
+        };
+        assert_eq!(options.local, Some(LocalStorageSelection::FromEnv));
+        assert_eq!(options.from, "abc");
+        assert_eq!(options.to, "def");
     }
 
     #[test]

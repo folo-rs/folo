@@ -25,17 +25,23 @@
 //!
 //! ```text
 //! cargo bench-history install   # write a starter .cargo/bench_history.toml
-//! cargo bench-history run        # bench the current commit and store the results
-//! cargo bench-history backfill <from> <to>   # bootstrap history from past commits
-//! cargo bench-history analyze    # report regressions and drift over history
+//! cargo bench-history run --local=./bench-history        # bench the current commit and store the results
+//! cargo bench-history backfill --local=./bench-history <from> <to>   # bootstrap history from past commits
+//! cargo bench-history analyze --local=./bench-history    # report regressions and drift over history
 //! ```
 //!
-//! `install` writes a configuration file you point at a storage location; `run`
-//! benches the current commit and stores the results there; `backfill` benches a
-//! range of past commits so there is a trend to analyze (a single `run` on its own
-//! has nothing to compare against); `analyze` reads the accumulated history back
-//! and reports what changed. Run these from the repository whose benchmarks you are
-//! tracking.
+//! `run` benches the current commit and stores the results in the selected
+//! storage; `backfill` benches a range of past commits so there is a trend to
+//! analyze (a single `run` on its own has nothing to compare against); `analyze`
+//! reads the accumulated history back and reports what changed. Run these from the
+//! repository whose benchmarks you are tracking.
+//!
+//! Storage is selected at run time: `--local=<path>` (or a bare `--local`, taking
+//! the path from `CARGO_BENCH_HISTORY_STORAGE`) selects local filesystem storage,
+//! while omitting `--local` uses the optional Azure backend configured in
+//! `.cargo/bench_history.toml`. `install` writes that starter config; a local path
+//! is machine-dependent, so it is supplied per command rather than stored in the
+//! shared file.
 //!
 //! # How results are stored
 //!
@@ -191,19 +197,28 @@
 //!
 //! `install` writes a starter `.cargo/bench_history.toml`. It carries an optional
 //! `[project]` id (used to namespace stored data; defaults to the workspace
-//! directory name) and a `[storage]` section selecting either the local filesystem
-//! or an Azure Blob container:
+//! directory name) and an optional `[storage.<kind>]` **cloud** backend
+//! (`[storage.azure]` today). Local filesystem storage is **not** configured here:
+//! a local path is machine-dependent and this file is shared, so local storage is
+//! selected per command with `--local`:
 //!
 //! ```toml
 //! # [project]
 //! # id = "my-project"
 //! # default_branch = "main"   # base branch for `analyze`; auto-detected by default
 //!
-//! [storage.local]
-//! path = "./bench-history"
+//! # Optional: store results in an Azure Blob container. Omit entirely to use
+//! # local storage via --local instead.
+//! # [storage.azure]
+//! # account = "mystorageaccount"
+//! # container = "bench-history"
 //! ```
 //!
-//! Every command accepts `--config PATH` to point at a non-default file, `--repo
+//! Storage is resolved per command: `--local=<path>` selects local filesystem
+//! storage (a bare `--local` takes the path from `CARGO_BENCH_HISTORY_STORAGE`),
+//! otherwise the configured cloud backend is used; with neither, a storage-backed
+//! command errors (except `run --no-store`, which stores nothing). Every command
+//! also accepts `--config PATH` to point at a non-default file, `--repo
 //! PATH` to resolve git state from another directory, and `--verbose` to emit a
 //! step-by-step diagnostic trail to standard error.
 
@@ -233,7 +248,7 @@ pub(crate) use cargo_bench_history_core::model;
 pub use cli::{Cli, EarlyExit};
 pub use command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, Command, InstallOptions, ListOptions,
-    ListSubject, PruneOptions, RunOptions, UnblessOptions,
+    ListSubject, LocalStorageSelection, PruneOptions, RunOptions, UnblessOptions,
 };
 pub use config::{ConfigError, default_template};
 pub use dispatch::{Overrides, run, run_with_overrides};

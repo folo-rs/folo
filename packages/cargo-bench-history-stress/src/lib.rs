@@ -152,6 +152,7 @@ async fn run_harness() -> Result<(), Error> {
                 workspace_dir.path(),
                 repo_dir.path(),
                 *mode,
+                target.local_path(),
                 clock,
                 cli.repeat,
                 logger,
