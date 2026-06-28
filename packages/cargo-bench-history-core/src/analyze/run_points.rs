@@ -13,7 +13,7 @@
 //! materialized. (The leaner element trims overall peak only marginally — peak is
 //! set by the per-worker builders coexisting during the merge — but the lighter
 //! parse is still worth keeping; see `cargo-bench-history`'s `docs/DESIGN.md`
-//! decision 34.)
+//! decision 36.)
 
 use serde::Deserialize;
 use smallvec::SmallVec;

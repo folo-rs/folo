@@ -29,7 +29,7 @@ pub enum ReportFormat {
     Text,
     /// A machine-readable JSON document.
     Json,
-    /// A Markdown summary with a findings table per set.
+    /// A Markdown summary mirroring the text report, with charts as fenced blocks.
     Markdown,
 }
 
@@ -86,6 +86,11 @@ pub struct ReportInput<'a> {
 }
 
 /// The JSON shape of a per-set slice.
+///
+/// Carries only the partition identity and its tallies — the cheap metadata that
+/// mirrors the per-set header the text and Markdown reports print. The findings
+/// themselves live once in the top-level [`JsonReport::findings`] list (each names
+/// its own set), so the document never duplicates a finding per set.
 #[derive(Serialize)]
 struct JsonSet<'a> {
     /// Engine identifier.
@@ -102,8 +107,75 @@ struct JsonSet<'a> {
     regressions: usize,
     /// Flagged improvements in this set.
     improvements: usize,
-    /// This set's findings, ranked most-notable first.
-    findings: Vec<&'a Finding>,
+}
+
+/// The JSON shape of one finding: the machine-readable form of a text-report
+/// finding paragraph.
+///
+/// It carries exactly the data the text and Markdown reports show — the partition,
+/// the benchmark identity, the metric, the detected move, and the provenance — with
+/// no underlying series (the text chart is a presentation concern, not data a
+/// consumer reconstructs) and full `f64` precision (the human reports round).
+#[derive(Serialize)]
+struct JsonFinding<'a> {
+    /// The comparable discriminant set, inlined as `engine`/`target_triple`/
+    /// `machine_key` so the flat list is self-describing.
+    #[serde(flatten)]
+    set: &'a DiscriminantSet,
+    /// The benchmark identity, inlined as `segments`.
+    #[serde(flatten)]
+    id: &'a BenchmarkId,
+    /// The metric kind that moved (its `snake_case` wire name).
+    kind: &'static str,
+    /// Which detector produced the finding.
+    method: FindingMethod,
+    /// Whether the move is a regression or an improvement.
+    direction: Direction,
+    /// The before-regime representative value.
+    baseline: f64,
+    /// The after-regime representative value.
+    latest: f64,
+    /// The change relative to the baseline (`(latest - baseline) / baseline`).
+    relative_delta: f64,
+    /// The detector's confidence (`1 - p_value`; `1.0` for an exact step).
+    confidence: f64,
+    /// Abbreviated commit the change is attributed to, if known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    commit: Option<&'a str>,
+    /// Whether the change is still reflected in the latest measured state.
+    active: bool,
+    /// Where, within a branch, the latest regime began (branch mode) or where the
+    /// level recovered (history + inactive). Present only when located.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    flipped_at: Option<&'a str>,
+    /// Abbreviated commit of the blessing that re-baselined the series, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    blessed_at: Option<&'a str>,
+    /// Effective (committer) time of the blessed commit, RFC 3339, if blessed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    blessed_commit_time: Option<&'a str>,
+}
+
+impl<'a> JsonFinding<'a> {
+    /// Projects a [`Finding`] onto its cheap, series-free JSON shape.
+    fn from_finding(finding: &'a Finding) -> Self {
+        Self {
+            set: &finding.set,
+            id: &finding.id,
+            kind: finding.kind.as_str(),
+            method: finding.method,
+            direction: finding.direction,
+            baseline: finding.baseline,
+            latest: finding.latest,
+            relative_delta: finding.relative_delta,
+            confidence: finding.confidence,
+            commit: finding.commit.as_deref(),
+            active: finding.active,
+            flipped_at: finding.flipped_at.as_deref(),
+            blessed_at: finding.blessed_at.as_deref(),
+            blessed_commit_time: finding.blessed_commit_time.as_deref(),
+        }
+    }
 }
 
 /// The JSON shape of a rendered report.
@@ -129,9 +201,9 @@ struct JsonReport<'a> {
     /// A warning when dirty base-branch-tip runs were admitted.
     #[serde(skip_serializing_if = "Option::is_none")]
     warning: Option<&'a str>,
-    /// Every set's findings, globally ranked.
-    findings: &'a [Finding],
-    /// The per-set breakdown.
+    /// Every finding, globally ranked most-notable first; each names its own set.
+    findings: Vec<JsonFinding<'a>>,
+    /// The per-set breakdown (partition identity and tallies only).
     sets: Vec<JsonSet<'a>>,
 }
 
@@ -184,11 +256,37 @@ fn set_label(set: &DiscriminantSet) -> String {
     set.to_string()
 }
 
+/// Forces `colored`'s process-global override to `value` until dropped, then
+/// restores ambient auto-detection. Bundling the set with the matching restore keeps
+/// the override scoped to a single render call so it can never leak into later output,
+/// even on an early return or panic.
+struct ColorOverride;
+
+impl ColorOverride {
+    #[must_use]
+    fn force(value: bool) -> Self {
+        colored::control::set_override(value);
+        Self
+    }
+}
+
+impl Drop for ColorOverride {
+    // Restoring `colored`'s process-global override is exercised by every render test
+    // (each builds and drops a guard), but asserting it requires observing that global
+    // state, which races with the rest of the parallel test suite and which `colored`
+    // exposes no override-state getter to read deterministically. Skipped for mutation
+    // only; the restore itself is covered behaviourally.
+    #[cfg_attr(test, mutants::skip)]
+    fn drop(&mut self) {
+        colored::control::unset_override();
+    }
+}
+
 fn render_text(input: &ReportInput<'_>, color: bool) -> String {
-    // Force `colored` and `rasciigraph` to honor this explicit decision rather
-    // than their own ambient terminal auto-detection, so tests and pipes are
-    // deterministic regardless of how the process is run.
-    colored::control::set_override(color);
+    // Force `colored` and `rasciigraph` to honor this explicit decision rather than
+    // their own ambient terminal auto-detection, so tests and pipes are deterministic
+    // regardless of how the process is run. The guard restores auto-detection on return.
+    let _color = ColorOverride::force(color);
 
     let regressions = count_top(input.findings, Direction::Regression);
     let improvements = count_top(input.findings, Direction::Improvement);
@@ -220,6 +318,7 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
         }
         lines.push(String::new());
         lines.push(format!("Set {}", set_label(summary.set)));
+        lines.push(set_counts_line(summary));
         for finding in &summary.findings {
             push_finding_block(&mut lines, finding, chart_enabled);
         }
@@ -250,8 +349,40 @@ fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, chart_enabled:
         finding.kind.as_str()
     ));
 
+    lines.push(format!("    {}", detail_text(finding)).dimmed().to_string());
+
+    // Name the blessing that re-baselined the series, so the reader knows the
+    // history before it is intentionally excluded from detection.
+    if let Some(blessing) = blessing_text(finding) {
+        lines.push(format!("    {blessing}").dimmed().to_string());
+    }
+
+    if chart_enabled
+        && let Some(chart) = chart_of(&finding.series, finding.direction, finding.active_from)
+    {
+        lines.push(chart);
+    }
+}
+
+/// The per-set summary line — the cheap tally the JSON `sets` block carries, shown
+/// under each set header so the text and Markdown reports surface it too.
+fn set_counts_line(summary: &SetSummary<'_>) -> String {
+    format!(
+        "  runs: {}  series: {}  regressions: {}  improvements: {}",
+        summary.runs,
+        summary.series,
+        count_direction(&summary.findings, Direction::Regression),
+        count_direction(&summary.findings, Direction::Improvement),
+    )
+}
+
+/// The plain-text detail body shared by the text and Markdown reports: the
+/// direction, detector, confidence, the `baseline → latest` move, the attributed
+/// commit, and — when located — the flip/recovery commit. Carries no styling and no
+/// leading indent; each format applies its own.
+fn detail_text(finding: &Finding) -> String {
     let mut detail = format!(
-        "    {} via {} · {} confidence · {} → {} · @ {}",
+        "{} via {} · {} confidence · {} → {} · @ {}",
         direction_label(finding.direction),
         method_label(finding.method),
         format_confidence(finding.confidence),
@@ -268,27 +399,18 @@ fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, chart_enabled:
         };
         write!(detail, " · {verb} {flipped_at}").expect("writing to a String is infallible");
     }
-    lines.push(detail.dimmed().to_string());
+    detail
+}
 
-    // Name the blessing that re-baselined the series, so the reader knows the
-    // history before it is intentionally excluded from detection.
-    if let Some(blessed_at) = &finding.blessed_at {
-        let date = finding
-            .blessed_commit_time
-            .as_deref()
-            .map_or_else(String::new, |effective| format!(" ({effective})"));
-        lines.push(
-            format!("    blessed at {blessed_at}{date}")
-                .dimmed()
-                .to_string(),
-        );
-    }
-
-    if chart_enabled
-        && let Some(chart) = chart_of(&finding.series, finding.direction, finding.active_from)
-    {
-        lines.push(chart);
-    }
+/// The plain-text blessing/recovery note, when the series was re-baselined by a
+/// blessing. Carries no styling and no leading indent.
+fn blessing_text(finding: &Finding) -> Option<String> {
+    let blessed_at = finding.blessed_at.as_deref()?;
+    let date = finding
+        .blessed_commit_time
+        .as_deref()
+        .map_or_else(String::new, |effective| format!(" ({effective})"));
+    Some(format!("blessed at {blessed_at}{date}"))
 }
 
 /// Whether the active window spans the whole series, so no greyed prefix is drawn.
@@ -367,6 +489,12 @@ fn chart_of(series: &[SeriesValue], direction: Direction, active_from: usize) ->
 }
 
 fn render_markdown(input: &ReportInput<'_>) -> String {
+    // Charts embed ANSI color when `colored` is active; force it off while rendering
+    // so the fenced code blocks carry plain characters that render in any Markdown
+    // viewer. The guard restores ambient auto-detection on return so this override
+    // never leaks into later output in the same process.
+    let _color = ColorOverride::force(false);
+
     let regressions = count_top(input.findings, Direction::Regression);
     let improvements = count_top(input.findings, Direction::Improvement);
 
@@ -391,35 +519,69 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
         return finish(&lines);
     }
 
+    // A per-commit chart is meaningful only for a history timeline, matching the
+    // text report; branch/tip modes compare against a baseline.
+    let chart_enabled = input.mode == "history";
     for summary in input.sets {
         if summary.findings.is_empty() {
             continue;
         }
         lines.push(String::new());
-        lines.push(format!("## {}", summary.set));
+        lines.push(format!("## Set {}", set_label(summary.set)));
         lines.push(String::new());
-        lines.push(
-            "| Change | Direction | Method | Confidence | Engine | Benchmark | Metric | Baseline | Latest |"
-                .to_owned(),
-        );
-        lines.push("| --- | --- | --- | --- | --- | --- | --- | --- | --- |".to_owned());
+        lines.push(format!("- Runs: {}", summary.runs));
+        lines.push(format!("- Series: {}", summary.series));
+        lines.push(format!(
+            "- Regressions: {}",
+            count_direction(&summary.findings, Direction::Regression)
+        ));
+        lines.push(format!(
+            "- Improvements: {}",
+            count_direction(&summary.findings, Direction::Improvement)
+        ));
         for finding in &summary.findings {
-            lines.push(format!(
-                "| {} | {} | {} | {} | {} | {} | {} | {} | {} |",
-                format_percent(finding.relative_delta),
-                direction_label(finding.direction),
-                method_label(finding.method),
-                format_confidence(finding.confidence),
-                finding.set.engine,
-                describe_id(&finding.id),
-                finding.kind.as_str(),
-                format_value(finding.baseline),
-                format_value(finding.latest),
-            ));
+            push_finding_markdown(&mut lines, finding, chart_enabled);
         }
     }
     push_warning(&mut lines, input.warning);
     finish(&lines)
+}
+
+/// Appends one finding as a Markdown block mirroring the text report: a bold
+/// percentage headline naming the benchmark and metric, the shared detail line, an
+/// optional blessing note, and — in history mode — the metric chart in a fenced
+/// `text` block so it survives Markdown rendering.
+fn push_finding_markdown(lines: &mut Vec<String>, finding: &Finding, chart_enabled: bool) {
+    lines.push(String::new());
+
+    let status = if finding.active {
+        String::new()
+    } else {
+        " _(recovered)_".to_owned()
+    };
+    lines.push(format!(
+        "**{}** — `{}` · {}{status}",
+        format_percent(finding.relative_delta),
+        describe_id(&finding.id),
+        finding.kind.as_str(),
+    ));
+
+    lines.push(String::new());
+    lines.push(detail_text(finding));
+
+    if let Some(blessing) = blessing_text(finding) {
+        lines.push(String::new());
+        lines.push(blessing);
+    }
+
+    if chart_enabled
+        && let Some(chart) = chart_of(&finding.series, finding.direction, finding.active_from)
+    {
+        lines.push(String::new());
+        lines.push("```text".to_owned());
+        lines.push(chart);
+        lines.push("```".to_owned());
+    }
 }
 
 // Pure serialization glue, fully exercised by `json_report_is_structured` and
@@ -439,7 +601,6 @@ fn render_json(input: &ReportInput<'_>) -> String {
             series: summary.series,
             regressions: count_direction(&summary.findings, Direction::Regression),
             improvements: count_direction(&summary.findings, Direction::Improvement),
-            findings: summary.findings.clone(),
         })
         .collect();
 
@@ -453,7 +614,11 @@ fn render_json(input: &ReportInput<'_>) -> String {
         improvements: count_top(input.findings, Direction::Improvement),
         hint: input.hint,
         warning: input.warning,
-        findings: input.findings,
+        findings: input
+            .findings
+            .iter()
+            .map(JsonFinding::from_finding)
+            .collect(),
         sets,
     };
     // The report is built from plain structs whose only numbers are finite (or
@@ -686,6 +851,39 @@ mod tests {
     }
 
     #[test]
+    fn text_report_shows_per_set_counts_distinct_from_totals() {
+        // Give the set tallies that differ from the top-level aggregate so the per-set
+        // counts line is identifiable on its own — a blanked-out line would no longer
+        // match, unlike when the set and total counts coincide.
+        let set = discriminant_set();
+        let findings = vec![regression()];
+        let summaries = vec![SetSummary {
+            set: &set,
+            runs: 7,
+            series: 5,
+            findings: findings.iter().collect(),
+        }];
+        let input = ReportInput {
+            project: "folo",
+            mode: "history",
+            notable: true,
+            runs: 99,
+            series: 88,
+            findings: &findings,
+            sets: &summaries,
+            hint: None,
+            warning: None,
+        };
+        let report = render(&input, ReportFormat::Text, false);
+        // The per-set counts line carries the set's own tallies, distinct from the
+        // top-level totals (`runs: 99  series: 88`).
+        assert!(
+            report.contains("  runs: 7  series: 5  regressions: 1  improvements: 0"),
+            "{report}"
+        );
+    }
+
+    #[test]
     fn report_renders_direction_labels() {
         let set = discriminant_set();
         let mut improvement = regression();
@@ -701,8 +899,16 @@ mod tests {
         assert!(text.contains("improvement via change point"), "{text}");
 
         let markdown = render(&input, ReportFormat::Markdown, false);
-        assert!(markdown.contains("| +30.00% | regression |"), "{markdown}");
-        assert!(markdown.contains("| -5.00% | improvement |"), "{markdown}");
+        assert!(
+            markdown.contains("regression via change point"),
+            "{markdown}"
+        );
+        assert!(
+            markdown.contains("improvement via change point"),
+            "{markdown}"
+        );
+        assert!(markdown.contains("**+30.00%**"), "{markdown}");
+        assert!(markdown.contains("**-5.00%**"), "{markdown}");
 
         // The per-set JSON tallies count each direction independently: this set
         // holds one regression and one improvement.
@@ -765,7 +971,7 @@ mod tests {
     }
 
     #[test]
-    fn markdown_report_renders_a_table_per_set() {
+    fn markdown_report_renders_a_block_per_set() {
         let set = discriminant_set();
         let findings = vec![regression()];
         let mut summaries = Vec::new();
@@ -776,11 +982,72 @@ mod tests {
             "{report}"
         );
         assert!(
-            report.contains("## callgrind/x86_64-unknown-linux-gnu/synthetic"),
+            report.contains("## Set callgrind/x86_64-unknown-linux-gnu/synthetic"),
             "{report}"
         );
-        assert!(report.contains("| Change | Direction |"), "{report}");
-        assert!(report.contains("| +30.00% | regression |"), "{report}");
+        // The per-set tally mirrors the JSON metadata and the text header.
+        assert!(report.contains("- Regressions: 1"), "{report}");
+        // Findings render as bold-headline blocks, not a table.
+        assert!(!report.contains("| Change | Direction |"), "{report}");
+        assert!(
+            report.contains("**+30.00%** — `nm/nm::observe/pull` · instruction_count"),
+            "{report}"
+        );
+        // An active finding carries no recovered suffix.
+        assert!(!report.contains("_(recovered)_"), "{report}");
+        assert!(
+            report.contains("regression via change point · 100% confidence · 100 → 130"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn markdown_report_marks_an_inactive_recovered_finding() {
+        let set = discriminant_set();
+        let mut recovered = regression();
+        recovered.active = false;
+        recovered.flipped_at = Some("c4".to_owned());
+        let findings = vec![recovered];
+        let mut summaries = Vec::new();
+        let input = single_set_input("folo", &set, &findings, &mut summaries);
+        let report = render(&input, ReportFormat::Markdown, false);
+        // The headline suffix flags a recovered finding; the shared detail line names
+        // the recovery commit.
+        assert!(
+            report.contains("· instruction_count _(recovered)_"),
+            "{report}"
+        );
+        assert!(report.contains("recovers at c4"), "{report}");
+    }
+
+    #[test]
+    fn markdown_report_annotates_a_blessed_finding() {
+        let set = discriminant_set();
+        let mut blessed = regression();
+        blessed.blessed_at = Some("c3".to_owned());
+        blessed.blessed_commit_time = Some("2024-01-01T00:00:00Z".to_owned());
+        let findings = vec![blessed];
+        let mut summaries = Vec::new();
+        let input = single_set_input("folo", &set, &findings, &mut summaries);
+        let report = render(&input, ReportFormat::Markdown, false);
+        assert!(
+            report.contains("blessed at c3 (2024-01-01T00:00:00Z)"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn markdown_history_mode_draws_a_fenced_chart() {
+        let set = discriminant_set();
+        let findings = vec![regression_with_series()];
+        let mut summaries = Vec::new();
+        let mut input = single_set_input("folo", &set, &findings, &mut summaries);
+        input.mode = "history";
+        let report = render(&input, ReportFormat::Markdown, false);
+        // The chart sits inside a fenced `text` block and carries no ANSI escapes.
+        assert!(report.contains("```text"), "{report}");
+        assert!(report.contains('┤') || report.contains('┼'), "{report}");
+        assert!(!report.contains('\u{1b}'), "{report}");
     }
 
     #[test]
@@ -900,11 +1167,17 @@ mod tests {
         assert_eq!(finding["segments"][0], "nm");
         assert_eq!(finding["segments"][1], "nm::observe");
         assert_eq!(finding["direction"], "regression");
-        // The per-set breakdown carries the partition triple.
+        assert_eq!(finding["kind"], "instruction_count");
+        // The bulky per-commit series is no longer carried: JSON mirrors the text
+        // data, not the chart it draws from.
+        assert!(finding.get("series").is_none(), "{report}");
+        // The per-set breakdown carries the partition triple and tallies only — no
+        // duplicated findings array.
         let set_json = &parsed["sets"][0];
         assert_eq!(set_json["engine"], "callgrind");
         assert_eq!(set_json["target_triple"], "x86_64-unknown-linux-gnu");
         assert_eq!(set_json["regressions"], 1);
+        assert!(set_json.get("findings").is_none(), "{report}");
     }
 
     #[test]
@@ -995,7 +1268,7 @@ mod tests {
     #[test]
     fn chart_of_needs_at_least_two_points() {
         // Deterministic, Miri-safe color state for the rasciigraph plot.
-        colored::control::set_override(false);
+        let _color = ColorOverride::force(false);
         let point = |value: f64| SeriesValue {
             commit: None,
             value,
@@ -1011,7 +1284,7 @@ mod tests {
     #[test]
     fn chart_of_plots_improvements_and_overlays_a_partial_active_window() {
         // Deterministic, Miri-safe color state for the rasciigraph plot.
-        colored::control::set_override(false);
+        let _color = ColorOverride::force(false);
         let point = |value: f64| SeriesValue {
             commit: None,
             value,

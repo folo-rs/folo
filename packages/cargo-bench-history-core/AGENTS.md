@@ -28,7 +28,7 @@ here, alongside the workspace-wide rules in `docs/` (especially
   The lean `RunPoints` element likewise trims peak only ~1%. The repeated benchmark ids
   and merge coexistence dominate peak, so the open memory levers are bounded
   merge-as-complete waves and id interning, not a leaner element — see
-  `docs/DESIGN.md` decision 34.
+  `docs/DESIGN.md` decision 36.
 * **Operate in place; avoid hidden allocations.** Prefer
   [`sort_unstable_by`](slice::sort_unstable_by) over `sort_by` for the statistics
   primitives: the stable sort allocates a scratch buffer of up to `len`

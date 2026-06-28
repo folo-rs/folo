@@ -439,8 +439,9 @@ selection is a `StorageFacade` **enum** (`Local` | `Azure`) with static dispatch
 rather than a boxed-future trait object, and `run`/`analyze` stay
 backend-agnostic by holding a `StorageFacade`.
 
-* **LocalStorage** (iteration 1): root from config; create dirs; write/read/walk
-  via `tokio::fs` (iterative directory walk — no boxed async recursion).
+* **LocalStorage** (iteration 1): root selected at run time from `--local` (§7.1);
+  create dirs; write/read/walk via `tokio::fs` (iterative directory walk — no boxed
+  async recursion).
 * **AzureBlobStorage** (iteration 4): `azure_storage_blob` (+ `azure_identity`),
   always compiled in — `cargo-bench-history` is a CLI tool installed without
   feature flags, so a build-time gate would only ever hide a backend the user
@@ -491,6 +492,42 @@ backend-agnostic by holding a `StorageFacade`.
 The blob/key model (flat keys, list-by-prefix, immutable objects) is the lowest
 common denominator of a filesystem and a blob container, so both backends
 implement the same trait with no special-casing upstream.
+
+### 7.1 Selecting a backend
+
+A local-storage path is **machine-dependent**, so it is never carried in the
+shared, version-controlled config file. The configuration file holds only the
+**cloud** backend (an optional, externally-tagged `[storage.<kind>]` table —
+`[storage.azure]` today — of which **at most one** may be configured; two tables
+fail to deserialize). Local storage is chosen at the command line or environment.
+A leftover `[storage.local]` table from an earlier scheme is **rejected** at parse
+time (`unknown variant 'local', expected 'azure'`), nudging the user to remove it
+and select local storage via `--local`.
+
+Every storage-backed command (`run`, `analyze`, `list`, `prune`, `backfill`,
+`bless`/`unbless`) takes a `--local` flag and resolves the backend in this
+precedence:
+
+1. **`--local=<path>`** → local filesystem storage at `<path>` (relative paths are
+   taken relative to the repository base, so they resolve the same regardless of
+   the process current directory).
+2. **bare `--local`** (no value) → local filesystem storage at the path in the
+   `CARGO_BENCH_HISTORY_STORAGE` environment variable; an unset or empty variable
+   is an error. (`--local` uses `require_equals`, so the value form is always
+   `--local=<path>` and the bare form never accidentally swallows a following
+   positional argument.)
+3. **no `--local`** → the single cloud backend configured in the file. `--local`
+   thus always **overrides** a configured cloud backend.
+4. **neither `--local` nor a configured cloud backend** → a storage configuration
+   error telling the user to pass `--local` or configure a cloud backend.
+
+`run --no-store` is the one exception: it skips storage selection entirely (the
+benchmarks run but nothing is written), so it works with no `--local` and no
+configured backend. The path resolution is split for testability and Miri safety:
+a thin edge helper reads the environment variable, and a pure resolver maps the
+`--local` choice plus that value to an optional path, so the decision logic is
+unit-tested without touching the process environment. The chosen backend (and why
+— flag, environment, or cloud config) is reported on the `--verbose` trail.
 
 ## 8. Commands
 
@@ -612,11 +649,13 @@ next steps. Never overwrite an existing file (report and exit success). Honors
 abstracted behind a `ConfigWriter` port (`TokioConfigWriter` in production, an
 in-memory fake in tests) whose `write_new` creates parent directories and uses
 `create_new` so an existing file is reported, never clobbered. The generated
-template configures only the `[storage]` backend (engines are detected from
-output, not configured — §8.1); it carries no machine-key setting (the key is a
-run-time-only `--machine-key` flag, since a committed config would be wrong for
-some checkouts) and the next-steps hint points at `backfill` for seeding an
-existing repository's history.
+template is **fully commented**: it documents the optional `[storage.azure]` cloud
+backend and notes that local storage is *not* configured in the file but selected
+at run time via `--local=<path>` or `CARGO_BENCH_HISTORY_STORAGE` (§7.1). Engines
+are detected from output, not configured (§8.1); the template carries no
+machine-key setting (the key is a run-time-only `--machine-key` flag, since a
+committed config would be wrong for some checkouts) and the next-steps hint points
+at `backfill` for seeding an existing repository's history.
 
 ### 8.3 `cargo bench-history analyze`
 
@@ -1117,7 +1156,10 @@ established level (a bounded window of preceding points) using the same engine g
 and reports regressions only.
 
 **JSON signal (downstream contract).** Because findings never gate the exit code
-(§8.3), the `json` report is the machine-readable output:
+(§8.3), the `json` report is the machine-readable output. It carries exactly the data
+the text and Markdown reports show — no underlying per-commit series (a presentation
+concern the human reports draw a chart from, not data a consumer reconstructs) — at
+full `f64` precision:
 
 ```json
 {
@@ -1135,35 +1177,54 @@ and reports regressions only.
       "kind": "instruction_count",
       "method": "change_point", "direction": "regression",
       "baseline": 100.0, "latest": 130.0,
-      "delta": 30.0, "relative_delta": 0.30, "confidence": 1.0,
+      "relative_delta": 0.30, "confidence": 1.0,
+      "commit": "deadbee",       // commit the change is attributed to, if known
+      "active": true,            // false for a resolved/blessed finding (§9.7)
       "flipped_at": "a1b2c3d",   // branch: where the latest regime began;
                                  // history+inactive: where the level recovered
-      "active": true,            // false for a resolved/blessed finding (§9.7)
       "blessed_at": "9f8e7d6",   // history only: the blessing that re-baselined this series
-      "blessed_commit_time": "2024-03-01T00:00:00Z",
-      "series": [ { "commit": "…", "value": 100.0, "dirty": false }, … ]
+      "blessed_commit_time": "2024-03-01T00:00:00Z"
     }
   ],
-  "sets": [ … ]              // per-discriminant-set breakdown
+  "sets": [                  // per-discriminant-set breakdown: identity + tallies only
+    {
+      "engine": "callgrind",
+      "target_triple": "x86_64-unknown-linux-gnu",
+      "machine_key": "synthetic",
+      "runs": 7, "series": 3,
+      "regressions": 1, "improvements": 0
+    }
+  ]
 }
 ```
 
-A consumer keys off `notable` (post or stay silent), reads each finding's
-`direction`/`relative_delta`/`flipped_at`/`active`, and can render the embedded
-`series` as a chart. `blessed_at`/`blessed_commit_time` are present only when the
-series was re-baselined by a blessing (§9.7); `active_from` (omitted when zero) marks
-where the active window begins. JSON values keep full `f64` precision; only the
-human-readable text and Markdown reports round to four significant figures.
+Each finding is self-describing: it inlines its discriminant set
+(`engine`/`target_triple`/`machine_key`) and benchmark `segments`, so the flat,
+globally-ranked `findings` list is the single source of truth — findings are never
+duplicated under `sets`. A consumer keys off `notable` (post or stay silent), reads
+each finding's `direction`/`relative_delta`/`flipped_at`/`active`, and tallies per
+partition from `sets`. `commit`, `flipped_at`, `blessed_at`, and
+`blessed_commit_time` are present only when known (§9.7). JSON values keep full `f64`
+precision; only the human-readable text and Markdown reports round to four
+significant figures.
 
 **Text report layout.** The text report renders one paragraph per finding: a bold,
 direction-colored headline leading with the relative-change percent and the
 benchmark identifier + metric, a dimmed detail line (`direction via method ·
 confidence · baseline → latest · @ commit`, plus `· flips at <commit>` in branch
 mode), and — in **history mode only** — a small colored line chart of the series
-over commits drawn with `rasciigraph` (regressions red, improvements green). The
-chart is omitted for branch/tip mode and for non-text formats. Color (ANSI styling
-and chart hue) is enabled only when stdout is a terminal and `NO_COLOR` is unset, so
+over commits drawn with `rasciigraph` (regressions red, improvements green). Each set
+header is followed by a one-line tally (`runs: <n>  series: <n>  regressions: <n>
+improvements: <n>`). The chart is omitted for branch/tip mode. Color (ANSI styling and
+chart hue) is enabled only when stdout is a terminal and `NO_COLOR` is unset, so
 piped output and tests stay plain.
+
+**Markdown report layout.** The Markdown report carries the same data as the text
+report with Markdown formatting: a top-level metadata list, an `## Set …` heading per
+partition with its tally as a bullet list, and one block per finding — a bold
+percentage headline (`` **+30.00%** — `pkg/group/case` · kind ``), the same detail
+line, an optional blessing note, and — in history mode — the chart inside a fenced
+` ```text ` block (rendered without ANSI so it survives Markdown viewers).
 
 ### 9.7 Re-baselining: blessings, resolved spikes, and active/inactive segments
 
@@ -1803,7 +1864,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      by storage key for deterministic diagnostics), so the per-mode load floor is roughly
      its slowest fetch rather than the sum — critically so for Azure, where the serial
      loads were serial network round-trips. *(The run load was later moved off this path to
-     a chunked parallel fetch+parse+fold — decision 34; `load_objects_concurrently` now
+     a chunked parallel fetch+parse+fold — decision 36; `load_objects_concurrently` now
      serves only the blessing-sidecar load.)* The `--since`/`--until` window is applied
      earlier still: each commit's committer time rides along its SHA on the first-parent
      topology, so out-of-window commits are dropped during selection and their objects are
@@ -1838,8 +1899,44 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      changes the output, so `worker_count` carries `#[mutants::skip]` while the real detection
      logic in `detect_one` stays under mutation testing. The serial `find_changes` survives
      only as the test-only oracle that pins the chunked path to a non-chunked reference.
-
-34. **Parallel object load + fold-in-worker + scalable allocator** — *Decided:*
+34. **Storage selection: `--local` flag + cloud-only config** — *Decided:* a local
+     storage path is machine-dependent, so it is no longer carried in the shared,
+     version-controlled config file. The config file holds only an **optional**
+     cloud backend (`[storage.azure]` today; modelled as
+     `Option<CloudStorageConfig>`, an externally-tagged enum so serde enforces "at
+     most one" — two tables fail to parse), and every storage-backed command takes
+     a `--local` flag. Resolution precedence (§7.1): `--local=<path>` →
+     local at `<path>`; bare `--local` → local at `CARGO_BENCH_HISTORY_STORAGE`
+     (unset/empty is an error); otherwise the configured cloud backend; otherwise a
+     config error. `--local` overrides a configured cloud backend, and `run
+     --no-store` skips selection entirely so it works config-free. `--local` uses
+     `require_equals` so the bare (env) form cannot swallow a following positional.
+     The environment read is isolated at a thin edge helper feeding a pure resolver,
+     keeping the decision logic unit-testable and Miri-safe. *No backward
+     compatibility:* at this early stage a leftover `[storage.local]` table gets no
+     special handling. Because `storage` is a known field whose only variant is
+     `azure`, such a table is **rejected** at parse time (`unknown variant 'local',
+     expected 'azure'`) rather than silently ignored the way a wholly unknown
+     section is — a clear signal to remove it and pass `--local` instead.
+     `install`'s template documents the optional cloud block and the `--local` /
+     env mechanism for local storage.
+35. **Report formats mirror the text output** — *Decided:* the three report formats
+     carry the **same data**, differing only in presentation. The `text` format is the
+     canonical layout; `markdown` is that data with Markdown formatting (per-finding blocks,
+     not a table; charts as fenced ` ```text ` code blocks rendered without ANSI); and
+     `json` is the machine-readable form of the same fields. The JSON `findings` list is
+     flat and globally ranked, each finding self-describing (inlining its discriminant set
+     and benchmark `segments`), and the `sets` array carries only per-partition identity and
+     tallies (`runs`/`series`/`regressions`/`improvements`) — findings are never duplicated
+     under `sets`. JSON omits the per-commit `series` (a charting/presentation concern the
+     text and Markdown reports draw from internally, not data a consumer reconstructs) and
+     the redundant absolute `delta` (derivable from `baseline`/`latest`). The per-set tally
+     is surfaced in all three formats (a set-counts line in text, a bullet list in Markdown,
+     the `sets` objects in JSON). *(Superseded: the earlier JSON embedded each finding's full
+     per-commit series and serialized every finding twice — once at the top level and once
+     under its set — which on a large history inflated the document to hundreds of MiB; the
+     earlier Markdown rendered a wide findings table per set with no charts.)*
+36. **Parallel object load + fold-in-worker + scalable allocator** — *Decided:*
      `select_dataset`'s survivor load is distributed across worker tasks the same way the
      detection is (decision 33). `analyze::fold_runs_chunked` splits the storage-key-sorted
      survivors into one balanced contiguous chunk per worker (`worker_count` from

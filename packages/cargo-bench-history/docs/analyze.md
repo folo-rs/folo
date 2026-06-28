@@ -120,7 +120,7 @@ Key properties:
   benchmark ids re-materialized per object, plus mimalloc's page retention, dominate).
   Fold-in-worker is kept for the wall-time and CPU win; the remaining memory levers
   (bounded merge-as-complete waves, id interning) are deferred — see `DESIGN.md`
-  decision 34.
+  decision 36.
 - **The parallel parse needs a scalable allocator.** serde_json makes many small
   allocations; on the system allocator their cross-thread contention (acute on the
   Windows process heap) serializes the worker threads and erases the parallel win — the
@@ -231,7 +231,7 @@ per-worker results — for output identical to a sequential pass. A single avail
   (`RunPoints` already drops the run context and per-metric std-dev — less to
   allocate/parse), fewer/larger objects. Note folding inside the workers did **not** lower
   peak memory (every worker's partial builder coexists with the merged builder during the
-  merge — see §3 and `DESIGN.md` decision 34); the open memory levers are bounded
+  merge — see §3 and `DESIGN.md` decision 36); the open memory levers are bounded
   merge-as-complete waves and id interning, not a leaner buffered element. This parallel
   parse only pays off with a scalable global allocator (see the mimalloc note below).
 - **Azure backend:** network-bound, and the run load now drives **at most one in-flight

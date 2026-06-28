@@ -57,10 +57,11 @@ fn install_message(path: &Path, written: bool) -> String {
         format!(
             "Wrote a starter configuration to {display}.\n\
              Next steps:\n\
-             - Edit it to set the [storage] backend for this workspace.\n\
-             - Run `cargo bench-history run` to record the first benchmark history entry.\n\
-             - To seed history for an existing repository, run `cargo bench-history backfill --from <commit> --to <commit>` to benchmark a range of past commits.\n\
-             - Run `cargo bench-history analyze` once you have a few entries to review trends."
+             - For local storage, no configuration is needed: pass `--local=<path>` (or set CARGO_BENCH_HISTORY_STORAGE and pass a bare `--local`) on any command.\n\
+             - For cloud storage, edit the file to configure one [storage] backend (today: [storage.azure]).\n\
+             - Run `cargo bench-history run --local=./bench-history` to record the first benchmark history entry.\n\
+             - To seed history for an existing repository, run `cargo bench-history backfill --local=./bench-history <from-commit> <to-commit>` to benchmark a range of past commits.\n\
+             - Run `cargo bench-history analyze --local=./bench-history` once you have a few entries to review trends."
         )
     } else {
         format!("Configuration already exists at {display}; leaving it unchanged.")

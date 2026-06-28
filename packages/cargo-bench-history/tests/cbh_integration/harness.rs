@@ -385,6 +385,13 @@ pub(crate) struct Workspace {
     /// helpers drive it through interior mutability; real `git` operations
     /// [`finalize`](Self::flush_git) it first so its refs and objects are on disk.
     graph: RefCell<GitGraph>,
+    /// Whether [`drive`](Self::drive) injects `--local=<root>/store` for
+    /// storage-backed commands. Local-storage paths are a run-time `--local`
+    /// selection rather than configuration, so the standard constructors enable
+    /// this; [`without_local_storage`](Self::without_local_storage) disables it for
+    /// tests that exercise the no-storage-configured error path, and azure tests use
+    /// their own workspace type entirely.
+    inject_local: bool,
 }
 
 impl Drop for Workspace {
@@ -408,6 +415,7 @@ impl Workspace {
             committer_times: RefCell::new(HashMap::new()),
             bench: Vec::new(),
             graph: RefCell::new(GitGraph::new(root, "master")),
+            inject_local: true,
         };
         let cargo_dir = workspace.root().join(".cargo");
         std::fs::create_dir_all(&cargo_dir).unwrap();
@@ -442,6 +450,7 @@ impl Workspace {
             committer_times: RefCell::new(HashMap::new()),
             bench: Vec::new(),
             graph: RefCell::new(GitGraph::new(root, "master")),
+            inject_local: false,
         }
     }
 
@@ -455,6 +464,7 @@ impl Workspace {
             committer_times: RefCell::new(HashMap::new()),
             bench: Vec::new(),
             graph: RefCell::new(GitGraph::new(root, "master")),
+            inject_local: true,
         };
         let path = workspace.root().join(relative);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -469,6 +479,38 @@ impl Workspace {
     pub(crate) fn with_bench(mut self, args: &[&str]) -> Self {
         self.bench = args.iter().map(|arg| (*arg).to_owned()).collect();
         self
+    }
+
+    /// Disables the automatic `--local=<root>/store` injection (consuming builder),
+    /// so a driven command resolves storage exactly as written. Used by tests that
+    /// exercise the no-storage-configured error path.
+    pub(crate) fn without_local_storage(mut self) -> Self {
+        self.inject_local = false;
+        self
+    }
+
+    /// Builds the effective CLI arguments for a drive, injecting
+    /// `--local=<root>/store` for storage-backed commands.
+    ///
+    /// Local-storage paths are a run-time selection rather than configuration, so
+    /// each test stores to its own workspace `store/` directory via `--local`. The
+    /// `install` command takes no storage, and an explicit `--local` already in
+    /// `args` is left untouched, as is every command when injection is disabled.
+    fn effective_args(&self, args: &[&str]) -> Vec<String> {
+        let mut effective: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+        let already_local = effective
+            .iter()
+            .any(|arg| arg == "--local" || arg.starts_with("--local="));
+        let injects = self.inject_local
+            && !already_local
+            && effective
+                .first()
+                .is_some_and(|subcommand| subcommand != "install");
+        if injects {
+            let store = self.root().join("store");
+            effective.insert(1, format!("--local={}", store.display()));
+        }
+        effective
     }
 
     pub(crate) fn root(&self) -> &Path {
@@ -753,8 +795,10 @@ impl Workspace {
         let mut bench_command = vec![MOCK_ENGINE.to_owned()];
         bench_command.extend(self.bench.iter().cloned());
 
+        let effective = self.effective_args(args);
+        let refs: Vec<&str> = effective.iter().map(String::as_str).collect();
         run_with_overrides(
-            &command_from(args),
+            &command_from(&refs),
             Overrides {
                 workspace_dir: Some(self.root().to_path_buf()),
                 target_root: Some(target_root),
@@ -777,8 +821,10 @@ impl Workspace {
         let mut bench_command = vec![MOCK_ENGINE.to_owned()];
         bench_command.extend(self.bench.iter().cloned());
 
+        let effective = self.effective_args(args);
+        let refs: Vec<&str> = effective.iter().map(String::as_str).collect();
         run_with_overrides(
-            &command_from(args),
+            &command_from(&refs),
             Overrides {
                 workspace_dir: Some(self.root().to_path_buf()),
                 target_root: None,
@@ -1228,13 +1274,12 @@ pub(crate) fn toml_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-/// A configuration with local storage but no engines, used by `analyze` tests
-/// that seed history directly and never launch an engine.
+/// A configuration with a project id but no storage section, used by `analyze`
+/// tests that seed history directly and never launch an engine. Local storage is
+/// supplied at run time via the harness's injected `--local`, so it is absent here.
 pub(crate) fn storage_only_config() -> String {
     "[project]\n\
-     id = \"testproj\"\n\n\
-     [storage.local]\n\
-     path = \"./store\"\n"
+     id = \"testproj\"\n"
         .to_owned()
 }
 
@@ -1271,14 +1316,13 @@ pub(crate) fn ir_result_set(effective: i64, commit: &str, value: f64) -> Run {
     )
 }
 
-/// A configuration with local storage under an explicit project `id` (which may
-/// contain characters that require sanitizing for the storage partition).
+/// A configuration with an explicit project `id` (which may contain characters
+/// that require sanitizing for the storage partition) and no storage section.
+/// Local storage is supplied at run time via the harness's injected `--local`.
 pub(crate) fn storage_only_config_with_id(id: &str) -> String {
     format!(
         "[project]\n\
-         id = \"{}\"\n\n\
-         [storage.local]\n\
-         path = \"./store\"\n",
+         id = \"{}\"\n",
         toml_escape(id)
     )
 }

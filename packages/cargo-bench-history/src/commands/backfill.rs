@@ -41,7 +41,9 @@ use crate::process::{TokioBenchRunner, capture};
 use crate::report::StderrReporter;
 use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
-use crate::wiring::{resolve_config_path, resolve_project_id, resolve_repo};
+use crate::wiring::{
+    resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
+};
 use crate::{BackfillOptions, RunError, RunOptions, RunOutcome};
 
 use super::run::{RunDeps, RunSummary, default_bench_command, run_engines};
@@ -121,10 +123,11 @@ pub(crate) async fn execute(
     let base = base.as_path();
 
     let config_path = resolve_config_path(base, options.config_path.as_deref());
-    let config = load_config(&config_path).await?;
+    let config = load_config(&config_path, options.config_path.is_some()).await?;
 
     let project_id = resolve_project_id(&config, base);
-    let storage = build_storage(&config, base)?;
+    let local = resolve_local_path(options.local.as_ref(), storage_env().as_deref())?;
+    let storage = build_storage(local.as_deref(), &config, base)?;
     let bench_command = bench_command.unwrap_or_else(default_bench_command);
 
     let git = SystemBackfillGit::new(base);
@@ -519,6 +522,7 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
         let run_options = RunOptions {
             config_path: None,
             repo: None,
+            local: None,
             packages: self.options.packages.clone(),
             excludes: self.options.excludes.clone(),
             benches: self.options.benches.clone(),
@@ -535,7 +539,7 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
             runner: &runner,
             probe: &probe,
             output: &output,
-            storage: self.storage,
+            storage: Some(self.storage),
             clock: &clock,
             env: &env,
             project_id: self.project_id,
