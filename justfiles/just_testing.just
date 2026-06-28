@@ -347,6 +347,75 @@ test-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_AZURE_ACCOUNT', ''):
     Write-Host "Running real-Azure tests against account '$account' (Microsoft Entra ID; requires az login)."
     cargo +$env:RUST_MSRV nextest run -p cargo-bench-history real_azure --locked --no-fail-fast
 
+# Collect benchmark history for the whole workspace into the long-lived Azure data
+# store, using the in-tree `cargo-bench-history` tool. This is what the nightly
+# `bench-history` GitHub workflow runs; it is also runnable locally for verification.
+#
+# Runs every package's benchmarks EXCEPT the `benchmarks` package, which holds slow,
+# special-purpose benchmarks that are not part of the tracked history. Results are
+# stored under the `bench-history` container of the account named by
+# BENCH_HISTORY_DATA_AZURE_ACCOUNT (constants.env), authenticated via Microsoft Entra
+# ID — local `az login`, or CI OIDC federation through the AZURE_* identity.
+#
+# Unlike `test-azure` (which targets the throwaway *test* account), this writes to the
+# real history store, so it is deliberately a separate recipe with its own account
+# variable; there is no risk of the storage tests clobbering the collected history.
+#
+# `--overwrite` makes a re-run on an unchanged commit idempotent (re-collecting the
+# same HEAD replaces the prior result instead of failing as a duplicate). Set the
+# BENCH_HISTORY_MACHINE_KEY environment variable to pin the hardware partition for
+# noisy (wall-clock) engines to a stable CI machine-pool name (e.g. the runner label);
+# leave it unset locally to auto-detect this machine. Deterministic engines (Callgrind,
+# allocation/time counters) are hardware-independent and ignore it.
+#
+# The real account is NOT baked into the repo's default `.cargo/bench_history.toml`
+# (that would push local developers onto the shared cloud store); instead this recipe
+# writes a throwaway config pointing at it and passes `--config`, removing it afterward.
+[group('testing')]
+[script]
+collect-bench-history ACCOUNT=env_var_or_default('BENCH_HISTORY_DATA_AZURE_ACCOUNT', ''):
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    $account = "{{ ACCOUNT }}"
+    if ([string]::IsNullOrEmpty($account)) {
+        Write-Error "No data storage account specified. Set BENCH_HISTORY_DATA_AZURE_ACCOUNT in constants.env (or pass it as the ACCOUNT argument). Deploy one with infra/azure-bench-history-data/deploy.ps1."
+        exit 1
+    }
+
+    # Throwaway config naming the real history store; removed in the finally block so
+    # the account never leaks into the version-controlled default config.
+    $configPath = Join-Path ([System.IO.Path]::GetTempPath()) "folo-bench-history-config.toml"
+    Write-Verbose "Writing throwaway Azure config to $configPath (account '$account')." -Verbose
+    $configLines = @(
+        '[project]'
+        'id = "folo"'
+        ''
+        '[storage.azure]'
+        "account = `"$account`""
+        'container = "bench-history"'
+    )
+    Set-Content -Path $configPath -Value $configLines -Encoding utf8
+
+    # The hardware partition is a CI concern (the runner pool the job landed on), not a
+    # per-invocation argument, so it travels in an environment variable rather than a
+    # recipe parameter — keeping this recipe's signature identical to `test-azure`.
+    $machineArgs = @()
+    $machineKey = "{{ env_var_or_default('BENCH_HISTORY_MACHINE_KEY', '') }}"
+    if (-not [string]::IsNullOrEmpty($machineKey)) {
+        Write-Verbose "Pinning hardware partition to machine key '$machineKey'." -Verbose
+        $machineArgs += "--machine-key"
+        $machineArgs += $machineKey
+    }
+
+    try {
+        Write-Verbose "Collecting benchmark history for the whole workspace (excluding 'benchmarks') into account '$account'." -Verbose
+        cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- run --workspace --exclude benchmarks --overwrite --verbose --config $configPath $machineArgs
+    } finally {
+        Write-Verbose "Removing throwaway Azure config $configPath." -Verbose
+        Remove-Item -Path $configPath -ErrorAction SilentlyContinue
+    }
+
 # Runs regular tests as well as doing one iteration of benchmarks.
 # We separate it from "test" because benchmarks are quite slow,
 # so we tend to only run them as part of a full validation pass.

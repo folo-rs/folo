@@ -1,0 +1,76 @@
+name: Benchmark history
+
+# Nightly collection of the workspace's benchmark results into the long-lived Azure
+# history store (account BENCH_HISTORY_DATA_AZURE_ACCOUNT, see constants.env and
+# infra/azure-bench-history-data/). Each run benchmarks the whole workspace EXCEPT the
+# slow, special-purpose `benchmarks` package, on every supported OS/architecture, and
+# appends the results keyed by the current `main` commit. Over time this builds the
+# performance history that `cargo-bench-history analyze` reads to spot regressions.
+#
+# Only nightly for now. PR-time collection/validation may follow once this proves out.
+on:
+  schedule:
+    # 03:00 UTC, offset from the 00:00 cache-warmup cron so the two do not contend for
+    # the runner pool (and so this runs against an already-warm Rust cache).
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  collect:
+    # Scheduled workflows also trigger on forks that enable Actions, but only this
+    # repository's identity can federate into Azure, so skip everywhere else.
+    if: github.repository == 'folo-rs/folo'
+
+    strategy:
+      # One platform's benchmarks failing must not abandon the others' history for the
+      # night; each platform stores into its own partition independently.
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, windows-latest, ubuntu-24.04-arm, windows-11-arm]
+
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 120
+
+    # `id-token: write` lets the job mint a short-lived GitHub OIDC token (a signed JWT
+    # proving "this run is repo folo-rs/folo on ref refs/heads/main"). `azure/login@v2`
+    # hands it to Azure, which matches it against the CI managed identity's `main`-branch
+    # federated credential (created by infra/azure-bench-history/, reused here) and issues
+    # an access token — so CI authenticates with no stored secret. `contents: read` is the
+    # minimum the checkout needs.
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      # Surface the non-secret AZURE_* identity values from constants.env (the same
+      # source the recipe reads) as job env vars so the azure/login inputs can reference
+      # them without duplicating values in repo Variables. The data store account name is
+      # NOT needed here: `just collect-bench-history` reads BENCH_HISTORY_DATA_AZURE_ACCOUNT
+      # from constants.env itself (via the justfile's dotenv). Each line is `KEY=value`.
+      - name: Load Azure identifiers from constants.env
+        shell: bash
+        run: grep -E '^(AZURE_CLIENT_ID|AZURE_TENANT_ID|AZURE_SUBSCRIPTION_ID)=' constants.env >> "$GITHUB_ENV"
+
+      - name: Sign in to Azure (OIDC workload identity federation)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      # Pin the hardware partition to the matrix platform so the hardware-dependent
+      # (wall-clock) engines partition by a stable CI machine-pool name instead of an
+      # auto-detected CPU fingerprint that drifts as GitHub rotates the underlying host
+      # hardware. The deterministic engines (Callgrind, allocation/time counters) are
+      # hardware-independent and ignore it. The recipe reads BENCH_HISTORY_MACHINE_KEY
+      # (a CI concern) from the environment rather than taking it as an argument.
+      - name: Collect benchmark history
+        env:
+          BENCH_HISTORY_MACHINE_KEY: ${{ matrix.platform }}
+        run: just collect-bench-history
