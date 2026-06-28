@@ -49,8 +49,8 @@ pub struct SeriesPoint {
     /// The object's rank in sorted storage-key order (the final tie-break),
     /// standing in for the full storage key to keep the point small.
     pub object_ordinal: u32,
-    /// Abbreviated commit the run was measured against, if known. Interned so all
-    /// points on one commit share a single allocation.
+    /// Full commit SHA the run was measured against. Interned so all points on one
+    /// commit share a single allocation.
     pub commit: Option<Arc<str>>,
     /// The measured value.
     pub value: f64,
@@ -191,6 +191,7 @@ pub fn build_series<S: BuildHasher>(
             topo_index,
             object.key.is_dirty(),
             ordinal,
+            &object.key.commit,
             &RunPoints::from(&object.result),
         );
     }
@@ -285,21 +286,22 @@ impl SeriesBuilder {
 
     /// Folds one stored run into the accumulating series.
     ///
-    /// `topo_index` is the run commit's first-parent position and `object_ordinal`
-    /// its rank in sorted storage-key order (the final point tie-break); the caller
-    /// supplies both because they come from the storage key and git topology, not
-    /// the run payload. `run` is the fold-relevant projection of the run (see
-    /// [`RunPoints`]); only the matching metrics are retained — it can be dropped as
-    /// soon as this returns.
+    /// `topo_index` is the run commit's first-parent position, `object_ordinal` its
+    /// rank in sorted storage-key order (the final point tie-break), and `commit`
+    /// the full commit SHA; the caller supplies all three because they come from the
+    /// storage key and git topology, not the run payload. `run` is the fold-relevant
+    /// projection of the run (see [`RunPoints`]); only the matching metrics are
+    /// retained — it can be dropped as soon as this returns.
     pub fn push(
         &mut self,
         set: &DiscriminantSet,
         topo_index: usize,
         dirty: bool,
         object_ordinal: u32,
+        commit: &str,
         run: &RunPoints,
     ) {
-        let commit = run.short_commit().map(|commit| self.intern(commit));
+        let commit = Some(self.intern(commit));
 
         // The discriminant set is constant for the whole run, so resolve its
         // subtree once and clone the set key only when the set is first seen — not
@@ -546,7 +548,6 @@ mod tests {
             observation,
             GitInfo {
                 commit: Some(format!("{commit}full")),
-                short_commit: Some(commit.to_owned()),
                 branch: Some("main".to_owned()),
                 dirty: false,
             },
@@ -599,8 +600,9 @@ mod tests {
     }
 
     /// One folded object: its discriminant set, the commit's topological index, the
-    /// dirty flag, the storage-key ordinal, and the lean run projection to push.
-    type FoldInput = (DiscriminantSet, usize, bool, u32, RunPoints);
+    /// dirty flag, the storage-key ordinal, the full commit SHA, and the lean run
+    /// projection to push.
+    type FoldInput = (DiscriminantSet, usize, bool, u32, String, RunPoints);
 
     /// Builds the fold inputs for a small data set spanning two benchmark ids
     /// (packages) across three commits, including a clean/dirty pair on one commit,
@@ -620,14 +622,21 @@ mod tests {
                     "v1/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json"
                 );
                 let key = parse_key(&object_key).unwrap();
-                (key.set, topo_index, dirty, ordinal, RunPoints::from(&run))
+                (
+                    key.set,
+                    topo_index,
+                    dirty,
+                    ordinal,
+                    key.commit,
+                    RunPoints::from(&run),
+                )
             })
             .collect()
     }
 
     fn fold_all(builder: &mut SeriesBuilder, inputs: &[FoldInput]) {
-        for (set, topo_index, dirty, ordinal, run) in inputs {
-            builder.push(set, *topo_index, *dirty, *ordinal, run);
+        for (set, topo_index, dirty, ordinal, commit, run) in inputs {
+            builder.push(set, *topo_index, *dirty, *ordinal, commit, run);
         }
     }
 

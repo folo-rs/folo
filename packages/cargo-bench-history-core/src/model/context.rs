@@ -57,8 +57,6 @@ impl RunContext {
 pub struct GitInfo {
     /// Full commit hash, if known.
     pub commit: Option<String>,
-    /// Abbreviated commit hash, if known.
-    pub short_commit: Option<String>,
     /// Branch name, if known.
     pub branch: Option<String>,
     /// Whether the working tree had uncommitted changes.

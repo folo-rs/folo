@@ -6,13 +6,11 @@ use crate::model::GitInfo;
 /// Builds the recorded git facts from raw git command outputs (pure).
 ///
 /// * `commit` — output of `git rev-parse HEAD`.
-/// * `short` — output of `git rev-parse --short HEAD`.
 /// * `branch` — output of `git rev-parse --abbrev-ref HEAD`.
 /// * `status` — output of `git status --porcelain` (non-empty ⇒ dirty).
-pub(crate) fn parse_git_info(commit: &str, short: &str, branch: &str, status: &str) -> GitInfo {
+pub(crate) fn parse_git_info(commit: &str, branch: &str, status: &str) -> GitInfo {
     GitInfo {
         commit: non_empty(commit),
-        short_commit: non_empty(short),
         branch: non_empty(branch).filter(|branch| branch != "HEAD"),
         dirty: !status.trim().is_empty(),
     }
@@ -35,37 +33,31 @@ mod tests {
 
     #[test]
     fn builds_clean_info() {
-        let info = parse_git_info(
-            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n",
-            "deadbee\n",
-            "main\n",
-            "",
-        );
+        let info = parse_git_info("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n", "main\n", "");
 
         assert_eq!(
             info.commit.as_deref(),
             Some("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
         );
-        assert_eq!(info.short_commit.as_deref(), Some("deadbee"));
         assert_eq!(info.branch.as_deref(), Some("main"));
         assert!(!info.dirty);
     }
 
     #[test]
     fn detects_dirty_tree() {
-        let info = parse_git_info("c", "c", "main", " M src/lib.rs\n");
+        let info = parse_git_info("c", "main", " M src/lib.rs\n");
         assert!(info.dirty);
     }
 
     #[test]
     fn detached_head_branch_is_dropped() {
-        let info = parse_git_info("c", "c", "HEAD\n", "");
+        let info = parse_git_info("c", "HEAD\n", "");
         assert_eq!(info.branch, None);
     }
 
     #[test]
     fn empty_outputs_yield_defaults() {
-        let info = parse_git_info("", "", "", "");
+        let info = parse_git_info("", "", "");
         assert_eq!(info, GitInfo::default());
     }
 }

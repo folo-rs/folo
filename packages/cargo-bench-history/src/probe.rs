@@ -80,11 +80,10 @@ impl EnvironmentProbe for SystemProbe {
     #[cfg_attr(test, mutants::skip)] // Shells out to `git`; the parsing it delegates to is tested.
     async fn git(&self) -> io::Result<GitInfo> {
         let commit = self.git_field(&["rev-parse", "HEAD"]).await;
-        let short = self.git_field(&["rev-parse", "--short", "HEAD"]).await;
         let branch = self.git_field(&["rev-parse", "--abbrev-ref", "HEAD"]).await;
         let status = self.git_field(&["status", "--porcelain"]).await;
 
-        Ok(parse_git_info(&commit, &short, &branch, &status))
+        Ok(parse_git_info(&commit, &branch, &status))
     }
 
     #[cfg_attr(test, mutants::skip)] // Shells out to `rustc`; the parsing it delegates to is tested.

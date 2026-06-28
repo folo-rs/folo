@@ -18,9 +18,11 @@ here, alongside the workspace-wide rules in `docs/` (especially
   thread merges the per-worker builders (`SeriesBuilder::merge`). No worker buffers its
   chunk's parsed runs. Each object is parsed into the lean
   [`RunPoints`](src/analyze/run_points.rs) projection — only the fields
-  `SeriesBuilder::push` reads (the abbreviated commit and, per result, the id and the
+  `SeriesBuilder::push` reads (per result, the id and the
   metric value/interval), dropping the run context and per-metric standard deviation —
-  and `push` consumes that projection rather than a full `Run`. Keep that projection in
+  and `push` consumes that projection rather than a full `Run`. The full commit SHA a
+  point is labelled with comes from the storage key, not the run payload, so the
+  projection carries no git fields. Keep that projection in
   lockstep with what the fold reads. **Note on memory:** folding in the worker did *not*
   lower peak — at merge time every worker's finished builder is resident alongside the
   growing combined builder (~2× the compact point output transiently), which measured

@@ -4,12 +4,14 @@
 //! worker parses one object at a time into [`RunPoints`] and folds it straight into
 //! its own `SeriesBuilder`, dropping the parsed run before the next. Deserializing
 //! into [`RunPoints`] instead of the full [`Run`](crate::model::Run) shrinks that
-//! transient per-object footprint: it keeps only the abbreviated commit and, per
-//! result, the benchmark id and the metric fields
+//! transient per-object footprint: it keeps only, per result, the benchmark id and
+//! the metric fields
 //! [`SeriesBuilder::push`](crate::analyze::SeriesBuilder::push) actually folds
-//! into points — dropping the run context (environment, toolchain, timestamps)
-//! and each metric's standard deviation. Serde ignores the unmentioned JSON
-//! fields, so a run still parses unchanged; only the discarded parts are never
+//! into points — dropping the run context (environment, toolchain, commit,
+//! timestamps) and each metric's standard deviation. The commit a point is
+//! labelled with comes from the storage key (the full SHA), not the run payload,
+//! so the projection carries no git fields at all. Serde ignores the unmentioned
+//! JSON fields, so a run still parses unchanged; only the discarded parts are never
 //! materialized. (The leaner element trims overall peak only marginally — peak is
 //! set by the per-worker builders coexisting during the merge — but the lighter
 //! parse is still worth keeping; see `cargo-bench-history`'s `docs/DESIGN.md`
@@ -23,10 +25,6 @@ use crate::model::{BenchmarkId, MetricKind, Run};
 /// A stored run reduced to the data the series fold reads.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct RunPoints {
-    /// Only carried to reach the abbreviated commit; every other context field is
-    /// ignored during deserialization.
-    #[serde(default)]
-    context: RunPointsContext,
     /// One entry per benchmark result in the run.
     results: Vec<ResultPoints>,
 }
@@ -46,22 +44,11 @@ impl RunPoints {
     pub fn results(&self) -> &[ResultPoints] {
         &self.results
     }
-
-    /// The abbreviated commit the run was measured against, if known.
-    #[must_use]
-    pub fn short_commit(&self) -> Option<&str> {
-        self.context.git.short_commit.as_deref()
-    }
 }
 
 impl From<&Run> for RunPoints {
     fn from(run: &Run) -> Self {
         Self {
-            context: RunPointsContext {
-                git: RunPointsGit {
-                    short_commit: run.context.git.short_commit.clone(),
-                },
-            },
             results: run
                 .results
                 .iter()
@@ -81,20 +68,6 @@ impl From<&Run> for RunPoints {
                 .collect(),
         }
     }
-}
-
-/// The slice of a run context the fold needs: just the git commit.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-struct RunPointsContext {
-    #[serde(default)]
-    git: RunPointsGit,
-}
-
-/// The slice of git info the fold needs: just the abbreviated commit.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-struct RunPointsGit {
-    #[serde(default)]
-    short_commit: Option<String>,
 }
 
 /// A benchmark result reduced to its identity and fold-relevant metrics.
@@ -148,7 +121,6 @@ mod tests {
             "2024-01-01T00:00:00Z".parse().unwrap(),
             GitInfo {
                 commit: Some("0123456789abcdef".to_owned()),
-                short_commit: Some("0123456789ab".to_owned()),
                 branch: Some("main".to_owned()),
                 dirty: false,
             },
@@ -196,7 +168,6 @@ mod tests {
         let run = sample_run();
         let points = RunPoints::from(&run);
 
-        assert_eq!(points.short_commit(), Some("0123456789ab"));
         assert_eq!(points.results().len(), 1);
         let result = &points.results()[0];
         assert_eq!(result.id, run.results[0].id);
@@ -205,16 +176,5 @@ mod tests {
         assert_eq!(result.metrics[0].value, 26.9);
         assert_eq!(result.metrics[0].interval_low, Some(26.6));
         assert_eq!(result.metrics[0].interval_high, Some(27.2));
-    }
-
-    #[test]
-    fn short_commit_absent_when_unknown() {
-        let mut run = sample_run();
-        run.context.git.short_commit = None;
-        let points = RunPoints::from(&run);
-        assert_eq!(points.short_commit(), None);
-
-        let json = run.to_json().unwrap();
-        assert_eq!(RunPoints::from_json(&json).unwrap().short_commit(), None);
     }
 }

@@ -229,8 +229,9 @@ fetches, decompresses, JSON-parses **and folds** its chunk into its *own* `Serie
 / `RunIndex`, dropping each parsed run as it goes, and the driver awaits the tasks in
 spawn order and merges the per-worker builders (`SeriesBuilder::merge`). Each object is
 parsed into the lean `cargo_bench_history_core::analyze::RunPoints` projection — only the
-fields the fold reads (the abbreviated commit and, per result, the id and the metric
-value/interval) — not a full `Run`. Detection (`find_changes_spawned`) then dispatches
+fields the fold reads (per result, the id and the metric
+value/interval) — not a full `Run`; the full commit SHA a point is labelled with comes
+from the storage key, not the run payload. Detection (`find_changes_spawned`) then dispatches
 per-series detection chunks to blocking tasks the same way. Both take the
 `&anyspawn::Spawner` `analyze_with` threads through; `execute` injects
 `Spawner::new_tokio()` (the runtime's blocking pool), while tests inject

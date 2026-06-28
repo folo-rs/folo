@@ -130,7 +130,8 @@ Key properties:
 
 ### `SeriesBuilder::push` — what the fold does (`analyze::series`)
 
-Per parsed `RunPoints`: intern the short commit into an `Arc<str>` shared by every point
+Per parsed `RunPoints`: intern the full commit SHA (taken from the storage key, not the
+run payload) into an `Arc<str>` shared by every point
 on that commit (`intern`); resolve the benchmark id's bucket in a `HashTable` with a
 single `entry` probe — hashing `BenchmarkId` with the builder's one fixed hasher
 instance and **cloning the id only on a true cache miss** (one id-clone per distinct
