@@ -200,7 +200,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "awaiter_set"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "criterion",
  "futures",
@@ -999,7 +999,7 @@ dependencies = [
 
 [[package]]
 name = "events"
-version = "0.7.8"
+version = "0.7.9"
 dependencies = [
  "alloc_tracker",
  "awaiter_set",
@@ -1019,7 +1019,7 @@ dependencies = [
 
 [[package]]
 name = "events_once"
-version = "0.5.28"
+version = "0.5.29"
 dependencies = [
  "criterion",
  "futures",
@@ -1151,7 +1151,7 @@ checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 
 [[package]]
 name = "future_deque"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "criterion",
  "events_once",
@@ -1805,7 +1805,7 @@ dependencies = [
 
 [[package]]
 name = "linked"
-version = "1.0.14"
+version = "1.0.15"
 dependencies = [
  "criterion",
  "gungraun",
@@ -1823,7 +1823,7 @@ dependencies = [
 
 [[package]]
 name = "linked_macros"
-version = "1.0.14"
+version = "1.0.15"
 dependencies = [
  "linked_macros_impl",
  "proc-macro2",
@@ -1831,7 +1831,7 @@ dependencies = [
 
 [[package]]
 name = "linked_macros_impl"
-version = "1.0.14"
+version = "1.0.15"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2034,7 +2034,7 @@ dependencies = [
 
 [[package]]
 name = "nm_otel"
-version = "0.4.11"
+version = "0.4.12"
 dependencies = [
  "nm",
  "nm_otel_impl",
@@ -2048,7 +2048,7 @@ dependencies = [
 
 [[package]]
 name = "nm_otel_impl"
-version = "0.4.11"
+version = "0.4.12"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -2639,7 +2639,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "region_cached"
-version = "1.0.23"
+version = "1.0.24"
 dependencies = [
  "arc-swap",
  "axum",
@@ -2661,7 +2661,7 @@ dependencies = [
 
 [[package]]
 name = "region_local"
-version = "1.0.23"
+version = "1.0.24"
 dependencies = [
  "arc-swap",
  "axum",
@@ -3676,7 +3676,7 @@ dependencies = [
 
 [[package]]
 name = "vicinal"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "all_the_time",
  "alloc_tracker",

@@ -15,7 +15,7 @@ alloc_tracker = { version = "0.6.2", path = "packages/alloc_tracker", default-fe
 anyspawn = { version = "0.5.4", default-features = false }
 arc-swap = { version = "1.7.0", default-features = false }
 async-trait = { version = "0.1.89", default-features = false }
-awaiter_set = { version = "0.1.7", path = "packages/awaiter_set", default-features = false }
+awaiter_set = { version = "0.1.8", path = "packages/awaiter_set", default-features = false }
 axum = { version = "0.8.0", default-features = false }
 azure_core = { version = "1.0.0", default-features = false }
 azure_identity = { version = "1.0.0", default-features = false }
@@ -33,8 +33,8 @@ derive_more = { version = "2.0.0", default-features = false }
 event-listener = { version = "5.4.0", default-features = false, features = [
     "std",
 ] }
-events = { version = "0.7.8", path = "packages/events", default-features = false }
-events_once = { version = "0.5.28", path = "packages/events_once", default-features = false }
+events = { version = "0.7.9", path = "packages/events", default-features = false }
+events_once = { version = "0.5.29", path = "packages/events_once", default-features = false }
 fake_headers = { version = "0.0.5", default-features = false }
 fast_time = { version = "0.1.24", path = "packages/fast_time", default-features = false }
 flate2 = { version = "1.1.9", default-features = false }
@@ -42,7 +42,7 @@ foldhash = { version = "0.2.0", default-features = false, features = ["std"] }
 folo_ffi = { version = "0.1.15", path = "packages/folo_ffi", default-features = false }
 folo_utils = { version = "0.1.9", path = "packages/folo_utils", default-features = false }
 frozen-collections = { version = "0.9.1", default-features = false }
-future_deque = { version = "0.1.11", path = "packages/future_deque", default-features = false }
+future_deque = { version = "0.1.12", path = "packages/future_deque", default-features = false }
 futures = { version = "0.3.32", default-features = false, features = ["std"] }
 futures-core = { version = "0.3.32", default-features = false }
 # Keep this version in lockstep with the `gungraun-runner` install line in
@@ -65,9 +65,9 @@ itertools = { version = "0.15.0", default-features = false, features = [
 ] }
 jiff = { version = "0.2.28", default-features = false, features = ["std"] }
 libc = { version = "0.2.172", default-features = false }
-linked = { version = "1.0.14", path = "packages/linked", default-features = false }
-linked_macros = { version = "=1.0.14", path = "packages/linked_macros", default-features = false }
-linked_macros_impl = { version = "=1.0.14", path = "packages/linked_macros_impl", default-features = false }
+linked = { version = "1.0.15", path = "packages/linked", default-features = false }
+linked_macros = { version = "=1.0.15", path = "packages/linked_macros", default-features = false }
+linked_macros_impl = { version = "=1.0.15", path = "packages/linked_macros_impl", default-features = false }
 many_cpus = { version = "2.4.9", path = "packages/many_cpus", default-features = false }
 many_cpus_impl = { version = "=2.4.9", path = "packages/many_cpus_impl", default-features = false }
 mimalloc = { version = "0.1.52", default-features = false }
@@ -77,8 +77,8 @@ negative-impl = { version = "0.1.0", default-features = false }
 new_zealand = { version = "1.0.6", path = "packages/new_zealand", default-features = false }
 nm = { version = "0.1.40", path = "packages/nm", default-features = false }
 nm_impl = { version = "=0.1.40", path = "packages/nm_impl", default-features = false }
-nm_otel = { version = "0.4.11", path = "packages/nm_otel", default-features = false }
-nm_otel_impl = { version = "=0.4.11", path = "packages/nm_otel_impl", default-features = false }
+nm_otel = { version = "0.4.12", path = "packages/nm_otel", default-features = false }
+nm_otel_impl = { version = "=0.4.12", path = "packages/nm_otel_impl", default-features = false }
 nonempty = { version = "0.12.0", default-features = false }
 num-integer = { version = "0.1.46", default-features = false }
 num-traits = { version = "0.2.19", default-features = false }
@@ -118,7 +118,7 @@ toml = { version = "1.1.2", default-features = false }
 toml_edit = { version = "0.25.12", default-features = false }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 trybuild = { version = "1.0.0", default-features = false }
-vicinal = { version = "0.1.28", path = "packages/vicinal", default-features = false }
+vicinal = { version = "0.1.29", path = "packages/vicinal", default-features = false }
 windows = { version = "0.62.0", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
