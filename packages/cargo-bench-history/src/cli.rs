@@ -368,6 +368,7 @@ impl AnalyzeCommand {
             include_improvements: self.include_improvements,
             include_inactive: self.include_inactive,
             verbose: self.env.verbose,
+            timing: false,
         }
     }
 }
