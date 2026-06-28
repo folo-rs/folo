@@ -915,4 +915,121 @@ mod tests {
         assert_eq!(series[0].active_start, 3);
         assert_eq!(series[0].blessing.as_ref().unwrap().commit, "c3full");
     }
+
+    #[test]
+    fn apply_blessings_leaves_a_series_whose_set_has_no_blessings() {
+        // The blessings map is keyed by discriminant set; a series whose set is
+        // absent from the map must be left fully active rather than re-baselined.
+        let mut series = four_commit_series();
+        // A blessing recorded only for a *different* set (a different target triple),
+        // so the lookup for this series' set misses.
+        let other_set =
+            parse_key("v1/proj/callgrind/aarch64-unknown-linux-gnu/synthetic/c0/clean.json")
+                .unwrap()
+                .set;
+        let mut map = HashMap::new();
+        map.insert(
+            other_set,
+            vec![(2_usize, Some(ts(300)), blessing(&["group"], "c2full", 301))],
+        );
+
+        apply_blessings(&mut series, &map);
+
+        assert_eq!(
+            series[0].active_start, 0,
+            "an unrelated set leaves the series active from the start"
+        );
+        assert!(series[0].blessing.is_none(), "no blessing recorded");
+    }
+
+    #[test]
+    fn push_and_merge_grow_the_id_table_across_resizes() {
+        // Folding many distinct benchmark ids into one discriminant set forces the
+        // per-set id table to grow and rehash its existing entries; merging a second
+        // builder full of further distinct ids grows it again. A wrong hash in either
+        // rehash closure would silently drop or conflate series, so check that every
+        // distinct id survives as its own series across both resize paths.
+        let prefixes: Arc<[BenchmarkIdPrefix]> = Arc::from(Vec::new());
+        let key = parse_key("v1/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/c0/clean.json")
+            .unwrap();
+
+        let mut first = SeriesBuilder::with_prefixes(Arc::clone(&prefixes));
+        for index in 0_u32..64 {
+            let package = format!("pkg{index:03}");
+            let run = run_for_package(ts(1), "c0", f64::from(index), Some(&package));
+            first.push(
+                &key.set,
+                0,
+                false,
+                index,
+                &key.commit,
+                &RunPoints::from(&run),
+            );
+        }
+
+        let mut second = SeriesBuilder::with_prefixes(prefixes);
+        for index in 64_u32..128 {
+            let package = format!("pkg{index:03}");
+            let run = run_for_package(ts(1), "c0", f64::from(index), Some(&package));
+            second.push(
+                &key.set,
+                0,
+                false,
+                index,
+                &key.commit,
+                &RunPoints::from(&run),
+            );
+        }
+
+        first.merge(second);
+        let series = first.finish();
+
+        assert_eq!(
+            series.len(),
+            128,
+            "every distinct id is its own series, none lost to a botched rehash"
+        );
+    }
+
+    #[test]
+    fn finish_orders_two_metric_kinds_of_one_benchmark_by_kind() {
+        // One benchmark measured with two metric kinds yields two series that share
+        // set and id and differ only by kind. finish must fall through to the kind
+        // tie-break (the innermost series comparator) and order them deterministically.
+        let context = RunContext::new(
+            ts(1),
+            GitInfo {
+                commit: Some("c0full".to_owned()),
+                branch: Some("main".to_owned()),
+                dirty: false,
+            },
+            EnvironmentInfo::default(),
+            ToolchainInfo::default(),
+            "0.0.1".to_owned(),
+        );
+        let record = BenchmarkResult::new(
+            BenchmarkId::new(
+                NonEmpty::from_vec(vec!["group".to_owned(), "case".to_owned()]).unwrap(),
+            ),
+            vec![
+                Metric::new(MetricKind::InstructionCount, 100.0),
+                Metric::new(MetricKind::WallTime, 5.0),
+            ],
+        );
+        let run = Run::new(context, vec![record]);
+        let key = parse_key("v1/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/c0/clean.json")
+            .unwrap();
+
+        let mut builder = SeriesBuilder::new(SeriesFilter::default());
+        builder.push(&key.set, 0, false, 0, &key.commit, &RunPoints::from(&run));
+        let series = builder.finish();
+
+        assert_eq!(series.len(), 2, "two metric kinds of one id are two series");
+        assert_eq!(series[0].id, series[1].id, "same benchmark id");
+        assert_eq!(series[0].set, series[1].set, "same discriminant set");
+        assert!(
+            series[0].kind < series[1].kind,
+            "series sharing set and id are ordered by the kind tie-break"
+        );
+    }
 }

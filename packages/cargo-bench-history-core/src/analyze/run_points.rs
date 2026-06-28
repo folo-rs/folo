@@ -177,4 +177,102 @@ mod tests {
         assert_eq!(result.metrics[0].interval_low, Some(26.6));
         assert_eq!(result.metrics[0].interval_high, Some(27.2));
     }
+
+    #[test]
+    fn projection_keeps_metric_without_interval_bounds() {
+        // The second metric of `sample_run` (instruction count) carries no
+        // dispersion, so its confidence-interval bounds must project as absent
+        // rather than defaulting to a fabricated value.
+        let points = RunPoints::from(&sample_run());
+        let metric = points.results()[0].metrics[1];
+
+        assert_eq!(metric.kind, MetricKind::InstructionCount);
+        assert_eq!(metric.value, 1234.0);
+        assert_eq!(metric.interval_low, None);
+        assert_eq!(metric.interval_high, None);
+    }
+
+    #[test]
+    fn from_json_rejects_invalid_json() {
+        // A payload that is not a serialized run must surface a parse error rather
+        // than silently yielding an empty or partial projection.
+        RunPoints::from_json("not valid json").unwrap_err();
+    }
+
+    #[test]
+    fn projection_handles_a_run_with_no_results() {
+        // An empty run (no benchmark results) projects to an empty point set and
+        // still round-trips through JSON, so the fold simply contributes nothing.
+        let context = RunContext::new(
+            "2024-01-01T00:00:00Z".parse().unwrap(),
+            GitInfo {
+                commit: Some("0123456789abcdef".to_owned()),
+                branch: Some("main".to_owned()),
+                dirty: false,
+            },
+            EnvironmentInfo::default(),
+            ToolchainInfo::default(),
+            "9.9.9".to_owned(),
+        );
+        let run = Run::new(context, Vec::new());
+
+        let from_run = RunPoints::from(&run);
+        assert!(from_run.results().is_empty());
+        assert_eq!(
+            RunPoints::from_json(&run.to_json().unwrap()).unwrap(),
+            from_run
+        );
+    }
+
+    #[test]
+    fn projection_preserves_multiple_results_and_spilled_metrics() {
+        // A run with several results, one of which carries more metrics than the
+        // inline SmallVec capacity, must project every result and every metric
+        // (the spilled tail included) and agree with the from-JSON parse.
+        let context = RunContext::new(
+            "2024-01-01T00:00:00Z".parse().unwrap(),
+            GitInfo {
+                commit: Some("0123456789abcdef".to_owned()),
+                branch: Some("main".to_owned()),
+                dirty: false,
+            },
+            EnvironmentInfo::default(),
+            ToolchainInfo::default(),
+            "9.9.9".to_owned(),
+        );
+        let many_metrics = BenchmarkResult::new(
+            BenchmarkId::new(nonempty!["pkg".to_owned(), "wide".to_owned()]),
+            smallvec![
+                Metric::new(MetricKind::WallTime, 1.0).with_dispersion(
+                    Some(0.1),
+                    Some(0.9),
+                    Some(1.1),
+                ),
+                Metric::new(MetricKind::InstructionCount, 2.0),
+                Metric::new(MetricKind::EstimatedCycles, 3.0),
+                Metric::new(MetricKind::RamHits, 4.0),
+            ],
+        );
+        let single_metric = BenchmarkResult::new(
+            BenchmarkId::new(nonempty!["pkg".to_owned(), "narrow".to_owned()]),
+            smallvec![Metric::new(MetricKind::WallTime, 5.0)],
+        );
+        let run = Run::new(context, vec![many_metrics, single_metric]);
+
+        let from_run = RunPoints::from(&run);
+        assert_eq!(from_run.results().len(), 2);
+        assert_eq!(
+            from_run.results()[0].metrics.len(),
+            4,
+            "the metric list spilled past inline capacity must survive projection"
+        );
+        assert_eq!(from_run.results()[0].metrics[3].kind, MetricKind::RamHits);
+        assert_eq!(from_run.results()[0].metrics[3].value, 4.0);
+        assert_eq!(from_run.results()[1].metrics.len(), 1);
+
+        assert_eq!(
+            RunPoints::from_json(&run.to_json().unwrap()).unwrap(),
+            from_run
+        );
+    }
 }
