@@ -22,7 +22,7 @@ private-test-util = ["dep:thread_aware"]
 [dependencies]
 anyspawn = { workspace = true }
 colored = { workspace = true }
-flate2 = { workspace = true }
+flate2 = { workspace = true, features = ["rust_backend"] }
 foldhash = { workspace = true }
 hashbrown = { workspace = true, features = ["default-hasher", "inline-more"] }
 jiff = { workspace = true, features = ["serde"] }

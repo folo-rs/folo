@@ -28,7 +28,7 @@ colored = { version = "2.2.0", default-features = false }
 cpu-time = { version = "1.0.0", default-features = false }
 cpulist = { version = "1.1.4", path = "packages/cpulist", default-features = false }
 criterion = { version = "0.8.2", default-features = false }
-deranged = { version = "0.5.0", default-features = false }
+deranged = { version = "0.5.2", default-features = false }
 derive_more = { version = "2.0.0", default-features = false }
 event-listener = { version = "5.4.0", default-features = false, features = [
     "std",
@@ -37,14 +37,14 @@ events = { version = "0.7.8", path = "packages/events", default-features = false
 events_once = { version = "0.5.28", path = "packages/events_once", default-features = false }
 fake_headers = { version = "0.0.5", default-features = false }
 fast_time = { version = "0.1.24", path = "packages/fast_time", default-features = false }
-flate2 = { version = "1.1.9", default-features = false, features = ["rust_backend"] }
+flate2 = { version = "1.1.9", default-features = false }
 foldhash = { version = "0.2.0", default-features = false, features = ["std"] }
 folo_ffi = { version = "0.1.15", path = "packages/folo_ffi", default-features = false }
 folo_utils = { version = "0.1.9", path = "packages/folo_utils", default-features = false }
 frozen-collections = { version = "0.9.1", default-features = false }
 future_deque = { version = "0.1.11", path = "packages/future_deque", default-features = false }
-futures = { version = "0.3.11", default-features = false, features = ["std"] }
-futures-core = { version = "0.3.31", default-features = false }
+futures = { version = "0.3.32", default-features = false, features = ["std"] }
+futures-core = { version = "0.3.32", default-features = false }
 # Keep this version in lockstep with the `gungraun-runner` install line in
 # `justfiles/just_setup.just` and the install command in `docs/callgrind-benchmarks.md`.
 # The runner is invoked by the Callgrind bench binaries via an encoded payload and
@@ -92,8 +92,8 @@ opentelemetry-stdout = { version = "0.32.0", default-features = false }
 opentelemetry_sdk = { version = "0.32.1", default-features = false }
 pastey = { version = "0.2.3", default-features = false }
 pin-project = { version = "1.1.0", default-features = false }
-proc-macro2 = { version = "1.0.103", default-features = false }
-quote = { version = "1.0.42", default-features = false }
+proc-macro2 = { version = "1.0.106", default-features = false }
+quote = { version = "1.0.45", default-features = false }
 rand = { version = "0.10.1", default-features = false, features = ["std"] }
 rasciigraph = { version = "0.3.0", default-features = false }
 rsevents = { version = "0.3.1", default-features = false }
@@ -108,15 +108,15 @@ sha2 = { version = "0.11.0", default-features = false }
 simple-mermaid = { version = "0.2.0", default-features = false }
 smallvec = { version = "1.15.0", default-features = false }
 static_assertions = { version = "1.1.0", default-features = false }
-syn = { version = "2.0.111", default-features = false }
+syn = { version = "2.0.117", default-features = false }
 tempfile = { version = "3.20.0", default-features = false }
 thread_aware = { version = "0.7.4", default-features = false }
 threadpool = { version = "1.8.1", default-features = false }
 tick = { version = "0.3.0", default-features = false }
-tokio = { version = "1.48.0", default-features = false }
+tokio = { version = "1.49.0", default-features = false }
 toml = { version = "1.1.2", default-features = false }
 toml_edit = { version = "0.25.12", default-features = false }
-tracing = { version = "0.1.30", default-features = false, features = ["std"] }
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 trybuild = { version = "1.0.0", default-features = false }
 vicinal = { version = "0.1.28", path = "packages/vicinal", default-features = false }
 windows = { version = "0.62.0", default-features = false, features = ["std"] }
