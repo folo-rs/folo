@@ -1098,12 +1098,11 @@ pub(crate) fn command_from(args: &[&str]) -> Command {
         .into_command()
 }
 
-/// Builds a [`GitInfo`] for a committed run: the full hash is `<commit>full`, the
-/// short hash is `commit`, and the branch is `main` (clean working tree).
+/// Builds a [`GitInfo`] for a committed run: the full hash is `<commit>full` and
+/// the branch is `main` (clean working tree).
 pub(crate) fn git_info(commit: &str) -> GitInfo {
     GitInfo {
         commit: Some(format!("{commit}full")),
-        short_commit: Some(commit.to_owned()),
         branch: Some("main".to_owned()),
         dirty: false,
     }
@@ -1111,7 +1110,7 @@ pub(crate) fn git_info(commit: &str) -> GitInfo {
 
 /// Builds a Callgrind result set with two records — `alpha::bench/wide` and
 /// `beta::bench/narrow` — each carrying a single `Ir` metric, stamped with the
-/// effective second and abbreviated `commit`.
+/// effective second and `commit`.
 pub(crate) fn two_benchmark_result_set(effective: i64, commit: &str, alpha: f64, beta: f64) -> Run {
     let time = Timestamp::from_second(effective).unwrap();
     let git = git_info(commit);
@@ -1146,7 +1145,7 @@ pub(crate) fn two_benchmark_result_set(effective: i64, commit: &str, alpha: f64,
 
 /// Builds a Criterion result set for benchmark `time/capture/std_instant`
 /// carrying a single `wall_time` metric at `value` nanoseconds, stamped with the
-/// effective second and abbreviated `commit`.
+/// effective second and `commit`.
 pub(crate) fn criterion_result_set(effective: i64, commit: &str, value: f64) -> Run {
     let time = Timestamp::from_second(effective).unwrap();
     let git = git_info(commit);
@@ -1169,7 +1168,7 @@ pub(crate) fn criterion_result_set(effective: i64, commit: &str, value: f64) -> 
 
 /// Builds an `alloc_tracker` result set for `operation` carrying an
 /// `allocated_bytes` and an `allocation_count` metric, stamped with the effective
-/// second and abbreviated `commit`.
+/// second and `commit`.
 pub(crate) fn alloc_result_set(
     effective: i64,
     commit: &str,
@@ -1198,7 +1197,7 @@ pub(crate) fn alloc_result_set(
 
 /// Builds an `all_the_time` result set for `operation` carrying a single
 /// `processor_time` metric at `value` nanoseconds, stamped with the effective
-/// second and abbreviated `commit`.
+/// second and `commit`.
 pub(crate) fn time_result_set(effective: i64, commit: &str, operation: &str, value: f64) -> Run {
     let time = Timestamp::from_second(effective).unwrap();
     let git = git_info(commit);
@@ -1284,7 +1283,7 @@ pub(crate) fn storage_only_config() -> String {
 }
 
 /// Builds a Callgrind result set for benchmark `nm::observe/pull` carrying the
-/// given `metrics`, stamped with the effective second and abbreviated `commit`.
+/// given `metrics`, stamped with the effective second and `commit`.
 pub(crate) fn result_set_with(effective: i64, commit: &str, metrics: Vec<Metric>) -> Run {
     let time = Timestamp::from_second(effective).unwrap();
     let git = git_info(commit);
@@ -1307,7 +1306,7 @@ pub(crate) fn result_set_with(effective: i64, commit: &str, metrics: Vec<Metric>
 }
 
 /// Builds a Callgrind result set with a single `Ir` metric at `value`, stamped
-/// with the given effective second and abbreviated `commit`.
+/// with the given effective second and `commit`.
 pub(crate) fn ir_result_set(effective: i64, commit: &str, value: f64) -> Run {
     result_set_with(
         effective,

@@ -27,6 +27,7 @@ use crate::wiring::{
 };
 use crate::{ListOptions, ListSubject, RunError, RunOutcome};
 
+use anyspawn::Spawner;
 use jiff::Timestamp;
 
 use super::{
@@ -64,6 +65,9 @@ pub(crate) async fn execute(
     let auto = detect_auto_facets().await?;
 
     let now = now_override.unwrap_or_else(Timestamp::now);
+    // The object-load and detection work shares the ambient Tokio worker threads
+    // (mirrors `analyze::execute`).
+    let spawner = Spawner::new_tokio();
     list_with(
         &git,
         &storage,
@@ -73,6 +77,7 @@ pub(crate) async fn execute(
         &auto,
         now,
         &reporter,
+        &spawner,
     )
     .await
 }
@@ -93,10 +98,11 @@ pub(crate) async fn list_with<G, S>(
     auto: &AutoFacets,
     now: Timestamp,
     reporter: &dyn Reporter,
+    spawner: &Spawner,
 ) -> Result<RunOutcome, RunError>
 where
     G: GitHistory,
-    S: Storage,
+    S: Storage + Clone + 'static,
 {
     let format = parse_format(options.format.as_deref())?;
     if options.all && options.subject != ListSubject::Blessings {
@@ -131,7 +137,7 @@ where
         }
         ListSubject::Blessings => {
             let message = list_blessings(
-                git, storage, project_id, config, options, auto, now, reporter,
+                git, storage, project_id, config, options, auto, now, reporter, spawner,
             )
             .await?;
             Ok(RunOutcome::Completed { message })
@@ -139,7 +145,7 @@ where
         ListSubject::Runs => {
             let filter = SeriesFilter::default();
             let dataset = select_dataset(
-                git, storage, project_id, config, &selection, filter, auto, now, reporter,
+                git, storage, project_id, config, &selection, filter, auto, now, reporter, spawner,
             )
             .await?;
             let series = dataset.series;
@@ -510,17 +516,18 @@ async fn list_blessings<G, S>(
     auto: &AutoFacets,
     now: Timestamp,
     reporter: &dyn Reporter,
+    spawner: &Spawner,
 ) -> Result<String, RunError>
 where
     G: GitHistory,
-    S: Storage,
+    S: Storage + Clone + 'static,
 {
     let format = parse_format(options.format.as_deref())?;
     let selection = Selection::from_list(options);
 
     let (head_label, mut entries) = if options.all {
         blessings_across_window(
-            git, storage, project_id, config, &selection, auto, now, reporter,
+            git, storage, project_id, config, &selection, auto, now, reporter, spawner,
         )
         .await?
     } else {
@@ -613,14 +620,15 @@ async fn blessings_across_window<G, S>(
     auto: &AutoFacets,
     now: Timestamp,
     reporter: &dyn Reporter,
+    spawner: &Spawner,
 ) -> Result<(String, Vec<BlessingEntry>), RunError>
 where
     G: GitHistory,
-    S: Storage,
+    S: Storage + Clone + 'static,
 {
     let filter = SeriesFilter::default();
     let dataset = select_dataset(
-        git, storage, project_id, config, selection, filter, auto, now, reporter,
+        git, storage, project_id, config, selection, filter, auto, now, reporter, spawner,
     )
     .await?;
     let mut series = dataset.series;
@@ -873,6 +881,12 @@ mod tests {
         ListOptions::default()
     }
 
+    /// An inline spawner that runs the load tasks on the calling thread, so the
+    /// list tests need no Tokio runtime under `block_on` or Miri.
+    fn spawner() -> Spawner {
+        cargo_bench_history_core::testing::synchronous_spawner()
+    }
+
     /// A result set with one record carrying two metrics, so its partition
     /// reconstructs two distinct series.
     fn two_metric_set(effective: i64, commit: &str) -> Run {
@@ -881,7 +895,6 @@ mod tests {
             time,
             GitInfo {
                 commit: Some(commit.to_owned()),
-                short_commit: Some(commit.to_owned()),
                 branch: Some("main".to_owned()),
                 dirty: false,
             },
@@ -911,7 +924,6 @@ mod tests {
             time,
             GitInfo {
                 commit: Some(commit.to_owned()),
-                short_commit: Some(commit.to_owned()),
                 branch: Some("main".to_owned()),
                 dirty: false,
             },
@@ -940,7 +952,6 @@ mod tests {
             time,
             GitInfo {
                 commit: Some(commit.to_owned()),
-                short_commit: Some(commit.to_owned()),
                 branch: Some("main".to_owned()),
                 dirty: false,
             },
@@ -1142,6 +1153,7 @@ mod tests {
             &auto(),
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::new(),
+            &spawner(),
         ))
         .unwrap();
         match outcome {
@@ -1240,6 +1252,7 @@ mod tests {
             &auto(),
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::new(),
+            &spawner(),
         ))
         .unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
@@ -1352,6 +1365,7 @@ mod tests {
             &auto(),
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::new(),
+            &spawner(),
         ))
         .unwrap_err();
         match error {
@@ -1566,6 +1580,7 @@ mod tests {
             &auto(),
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::new(),
+            &spawner(),
         ))
         .unwrap_err()
     }

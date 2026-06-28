@@ -17,6 +17,7 @@ cargo-bench-history = { path = "../cargo-bench-history", default-features = fals
 cargo-bench-history-core = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 jiff = { workspace = true, features = ["serde"] }
+mimalloc = { workspace = true }
 nonempty = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

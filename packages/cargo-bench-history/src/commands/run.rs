@@ -985,12 +985,7 @@ mod tests {
 
         fn with_status(status: &str) -> Self {
             Self {
-                git: parse_git_info(
-                    "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-                    "deadbee",
-                    "main",
-                    status,
-                ),
+                git: parse_git_info("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "main", status),
                 rustc: RustcInfo {
                     version: Some("1.91.0".to_owned()),
                     host: Some("x86_64-pc-windows-msvc".to_owned()),

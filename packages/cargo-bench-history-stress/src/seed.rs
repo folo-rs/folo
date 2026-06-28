@@ -314,7 +314,6 @@ fn run_context(
 ) -> RunContext {
     let git = GitInfo {
         commit: Some(sha.to_owned()),
-        short_commit: Some(sha.get(..12).unwrap_or(sha).to_owned()),
         branch: Some(branch.to_owned()),
         dirty,
     };

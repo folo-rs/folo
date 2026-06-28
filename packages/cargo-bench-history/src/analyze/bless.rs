@@ -345,7 +345,6 @@ mod tests {
             time,
             GitInfo {
                 commit: Some(commit.to_owned()),
-                short_commit: Some(commit.to_owned()),
                 branch: Some("master".to_owned()),
                 dirty: false,
             },

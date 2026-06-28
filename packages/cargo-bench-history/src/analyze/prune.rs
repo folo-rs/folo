@@ -699,7 +699,6 @@ mod tests {
             Timestamp::from_second(0).unwrap(),
             GitInfo {
                 commit: Some(commit.to_owned()),
-                short_commit: Some(commit.to_owned()),
                 branch: Some("main".to_owned()),
                 dirty: false,
             },

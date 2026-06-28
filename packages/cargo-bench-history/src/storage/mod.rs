@@ -50,12 +50,15 @@ pub(crate) trait Storage: fmt::Debug + Send + Sync {
 
     /// Reads the object stored at `key`.
     ///
+    /// The returned future is `Send` so loads can run on spawned worker tasks
+    /// (the analyze pipeline fans object decompress + parse out across cores).
+    ///
     /// # Errors
     ///
     /// Returns [`StorageError::InvalidKey`] if `key` is malformed,
     /// [`StorageError::NotFound`] if no object exists at `key`, or
     /// [`StorageError::Io`] if it cannot be read.
-    fn get(&self, key: &str) -> impl Future<Output = Result<Vec<u8>, StorageError>>;
+    fn get(&self, key: &str) -> impl Future<Output = Result<Vec<u8>, StorageError>> + Send;
 
     /// Lists the keys of all objects whose key starts with `prefix`.
     ///

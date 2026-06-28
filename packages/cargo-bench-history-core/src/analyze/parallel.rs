@@ -1,12 +1,14 @@
 //! Chunk-partition math for the spawner-distributed analysis passes.
 //!
 //! Some analysis passes walk a slice whose elements are independent — detecting
-//! each series, for instance — and distribute it across worker tasks dispatched
-//! through an [`anyspawn::Spawner`]. The partition is always the same shape: split
-//! the slice into one balanced, contiguous chunk per worker, process each chunk on
-//! its own blocking task, and recombine in input order. The arithmetic that decides
-//! how many workers to use and how large each chunk is lives here, separate from the
-//! dispatch itself.
+//! each series, or fetching + parsing each stored object, for instance — and
+//! distribute it across worker tasks dispatched through an [`anyspawn::Spawner`].
+//! The partition is always the same shape: split the slice into one balanced,
+//! contiguous chunk per worker, process each chunk on its own blocking task, and
+//! recombine in input order. The arithmetic that decides how many workers to use and
+//! how large each chunk is lives here, separate from the dispatch itself, so the
+//! detection pass (in this crate) and the shell's object loader share one
+//! implementation rather than drifting apart.
 //!
 //! The worker count is the available parallelism capped at the slice length, so a
 //! single available CPU (Miri reports one by default) yields a single worker: one
@@ -18,30 +20,33 @@
 use std::num::NonZero;
 use std::thread;
 
-/// How many worker tasks to split `len` items across: the available parallelism
-/// capped at `len`, so no worker is handed an empty chunk. This is `0` only when `len`
-/// is `0` (nothing to do) and otherwise at least `1` — a single available CPU, or a
-/// single-element slice, yields one worker, i.e. one chunk covering everything.
+/// How many worker tasks to split `len` items across.
+///
+/// The available parallelism capped at `len`, so no worker is handed an empty chunk.
+/// This is `0` only when `len` is `0` (nothing to do) and otherwise at least `1` — a
+/// single available CPU, or a single-element slice, yields one worker, i.e. one chunk
+/// covering everything.
 //
 // Mutation-skipped: the return value only selects how the work is partitioned across
 // workers, never the result. Every worker count yields the same order-preserving
 // output, so no behavioral test can distinguish one partitioning from another.
 #[cfg_attr(test, mutants::skip)]
-pub(crate) fn worker_count(len: usize) -> usize {
+pub fn worker_count(len: usize) -> usize {
     thread::available_parallelism()
         .map_or(1, NonZero::get)
         .min(len)
 }
 
 /// The lengths of exactly `workers` contiguous chunks that partition `len` items as
-/// evenly as possible: the first `len % workers` chunks hold one extra item, the
-/// rest hold `len / workers`.
+/// evenly as possible.
+///
+/// The first `len % workers` chunks hold one extra item, the rest hold `len / workers`.
 ///
 /// For `1 <= workers <= len` every chunk is non-empty and the sizes differ by at most
 /// one, with `workers == 1` yielding a single chunk of all `len` items. The degenerate
 /// `workers == 0` (only ever paired with `len == 0`, the empty slice) yields no chunks.
 /// The unit test covers both.
-pub(crate) fn balanced_chunk_sizes(len: usize, workers: usize) -> impl Iterator<Item = usize> {
+pub fn balanced_chunk_sizes(len: usize, workers: usize) -> impl Iterator<Item = usize> {
     // `workers` may be `0` (the empty-slice case), so the checked divide and remainder
     // fall back to `0`; for `workers >= 1` the division is exact and `base + 1 <= len`
     // cannot overflow. The checked operators keep the workspace's arithmetic lint
