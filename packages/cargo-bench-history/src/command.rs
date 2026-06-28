@@ -4,6 +4,24 @@
 use std::path::PathBuf;
 
 use crate::model::BenchmarkIdPrefix;
+
+/// How a command selects local filesystem storage, from the `--local` flag.
+///
+/// Local storage paths are machine-dependent, so they are never carried in the
+/// shared (version-controlled) configuration file; they are supplied at run time
+/// instead. `None` on a command's `local` field means `--local` was not given, in
+/// which case the configured cloud backend is used.
+#[doc(hidden)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LocalStorageSelection {
+    /// `--local=<path>`: store under this filesystem path (relative paths resolve
+    /// against the workspace directory).
+    Path(PathBuf),
+    /// A bare `--local`: take the path from the `CARGO_BENCH_HISTORY_STORAGE`
+    /// environment variable (an unset or empty variable is an error).
+    FromEnv,
+}
+
 /// A fully parsed command ready to execute.
 #[doc(hidden)]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -36,6 +54,9 @@ pub struct RunOptions {
     /// Repository to run benchmarks in and read git state from; defaults to the
     /// working directory.
     pub repo: Option<PathBuf>,
+    /// Local-storage selection from `--local`; overrides the configured cloud
+    /// backend. `None` means `--local` was not given (use the configured backend).
+    pub local: Option<LocalStorageSelection>,
     /// Restrict the run to these packages (`--package`/`-p`); empty means the
     /// whole workspace.
     pub packages: Vec<String>,
@@ -72,6 +93,9 @@ pub struct AnalyzeOptions {
     pub config_path: Option<PathBuf>,
     /// Repository to resolve git topology from; defaults to the working directory.
     pub repo: Option<PathBuf>,
+    /// Local-storage selection from `--local`; overrides the configured cloud
+    /// backend. `None` means `--local` was not given (use the configured backend).
+    pub local: Option<LocalStorageSelection>,
     /// Target ref whose history is analyzed; defaults to `HEAD`.
     pub context: Option<String>,
     /// Base ref the target's history is split at; defaults to the detected (or
@@ -139,6 +163,9 @@ pub struct ListOptions {
     pub config_path: Option<PathBuf>,
     /// Repository to resolve git topology from; defaults to the working directory.
     pub repo: Option<PathBuf>,
+    /// Local-storage selection from `--local`; overrides the configured cloud
+    /// backend. `None` means `--local` was not given (use the configured backend).
+    pub local: Option<LocalStorageSelection>,
     /// Target ref whose history is listed; defaults to `HEAD`.
     pub context: Option<String>,
     /// Base ref the target's history is split at; defaults to the detected (or
@@ -186,6 +213,9 @@ pub struct PruneOptions {
     pub config_path: Option<PathBuf>,
     /// Repository to resolve git topology from; defaults to the working directory.
     pub repo: Option<PathBuf>,
+    /// Local-storage selection from `--local`; overrides the configured cloud
+    /// backend. `None` means `--local` was not given (use the configured backend).
+    pub local: Option<LocalStorageSelection>,
     /// Target ref whose history is pruned; defaults to `HEAD`.
     pub context: Option<String>,
     /// Base ref the context branched off from; defaults to the detected (or
@@ -232,6 +262,9 @@ pub struct BackfillOptions {
     /// Repository to run benchmarks in and read git history from; defaults to the
     /// working directory.
     pub repo: Option<PathBuf>,
+    /// Local-storage selection from `--local`; overrides the configured cloud
+    /// backend. `None` means `--local` was not given (use the configured backend).
+    pub local: Option<LocalStorageSelection>,
     /// Oldest commit of the range to backfill (inclusive).
     pub from: String,
     /// Newest commit of the range to backfill (inclusive).
@@ -268,6 +301,9 @@ pub struct BlessOptions {
     pub config_path: Option<PathBuf>,
     /// Repository to resolve git topology from; defaults to the working directory.
     pub repo: Option<PathBuf>,
+    /// Local-storage selection from `--local`; overrides the configured cloud
+    /// backend. `None` means `--local` was not given (use the configured backend).
+    pub local: Option<LocalStorageSelection>,
     /// Commit to bless; defaults to `HEAD`. The blessing is recorded against the
     /// `clean.json` stored at this commit.
     pub context: Option<String>,
@@ -306,6 +342,9 @@ pub struct UnblessOptions {
     pub config_path: Option<PathBuf>,
     /// Repository to resolve git topology from; defaults to the working directory.
     pub repo: Option<PathBuf>,
+    /// Local-storage selection from `--local`; overrides the configured cloud
+    /// backend. `None` means `--local` was not given (use the configured backend).
+    pub local: Option<LocalStorageSelection>,
     /// Commit to unbless; defaults to `HEAD`. Only blessings recorded at this
     /// commit are removed.
     pub context: Option<String>,

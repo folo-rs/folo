@@ -12,7 +12,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use all_the_time::Session;
-use cargo_bench_history::{AnalyzeOptions, Command, Overrides, RunOutcome, run_with_overrides};
+use cargo_bench_history::{
+    AnalyzeOptions, Command, LocalStorageSelection, Overrides, RunOutcome, run_with_overrides,
+};
 use jiff::Timestamp;
 use serde::Deserialize;
 
@@ -76,11 +78,12 @@ pub(crate) async fn measure(
     workspace: &Path,
     repo: &Path,
     mode: ModeArg,
+    local: Option<&Path>,
     anchor: Timestamp,
     repeat: usize,
     logger: Logger,
 ) -> Result<MeasureResult, Error> {
-    let options = build_options(workspace, repo, mode);
+    let options = build_options(workspace, repo, mode, local);
     logger.step(&format!("analyzing in {} mode", mode.keyword()));
     logger.detail(&format!(
         "context={}, base={}, facets forced to all (seeded triples and the synthetic machine key \
@@ -189,8 +192,15 @@ fn cpu_efficiency(processor_time: Duration, wall: Duration, cores: usize) -> f64
     }
 }
 
-/// Builds the analyze options for `mode`.
-fn build_options(workspace: &Path, repo: &Path, mode: ModeArg) -> AnalyzeOptions {
+/// Builds the analyze options for `mode`. `local` is the `--local` storage path
+/// for local-filesystem runs, or `None` when a cloud backend is configured in the
+/// seeded config file instead.
+fn build_options(
+    workspace: &Path,
+    repo: &Path,
+    mode: ModeArg,
+    local: Option<&Path>,
+) -> AnalyzeOptions {
     let (context, base, since) = match mode {
         ModeArg::History => (
             BRANCH_MAIN,
@@ -203,6 +213,7 @@ fn build_options(workspace: &Path, repo: &Path, mode: ModeArg) -> AnalyzeOptions
     AnalyzeOptions {
         config_path: Some(config_path(workspace)),
         repo: Some(repo.to_path_buf()),
+        local: local.map(|path| LocalStorageSelection::Path(path.to_path_buf())),
         context: Some(context.to_owned()),
         base: Some(base.to_owned()),
         no_dirty: false,

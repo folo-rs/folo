@@ -28,10 +28,12 @@ driven in tests by fakes, never by real IO:
   `RawCriterionCase` or `RawOperationFile` values.
 * `storage::Storage` — real `LocalStorage` and `AzureBlobStorage`, selected at
   runtime by the `StorageFacade` enum that
-  `build_storage` returns; fake `MemoryStorage`. `put` is **write-once** (an
+  `build_storage(local, config, base)` returns; fake `MemoryStorage`. `put` is
+  **write-once** (an
   existing key yields `StorageError::AlreadyExists`); `put_overwrite` is the
   replacing escape hatch used only by `run --overwrite` (and, later, `backfill
-  --overwrite`).
+  --overwrite`). See [Storage selection](#storage-selection-local--cloud-config)
+  for how a command picks a backend.
 * `config_writer::ConfigWriter` — real `TokioConfigWriter` (creates parent dirs,
   `create_new` so an existing file is never clobbered); fake `MemoryConfigWriter`.
   Used by `commands::install::execute_install`. Its real adapter's IO error paths
@@ -106,6 +108,45 @@ run is recorded) so the logic can be reconstructed from the log.
 stored but none entered the analysis — most commonly when every run is a dirty
 snapshot on a base-side commit (the "config file never committed" trap). The hint
 makes a `0 runs` result self-explanatory without needing `--verbose`.
+
+## Storage selection (`--local` + cloud config)
+
+Where a command reads and writes results is resolved at run time, **not** from the
+shared config file (a local path is machine-dependent and the file is
+version-controlled). The config file carries only an **optional** cloud backend:
+`config.storage` is `Option<CloudStorageConfig>`, an externally-tagged enum
+(`[storage.azure]` today) so serde enforces "at most one" cloud backend. There is
+no local variant in the config — a leftover `[storage.local]` is just an
+unrecognized section (no backward-compat handling).
+
+Every storage-backed command (`run`, `analyze`, `list`, `prune`, `backfill`,
+`bless`/`unbless`) carries a `--local` flag (on the shared `EnvArgs` group) and
+resolves the backend with this precedence:
+
+1. `--local=<path>` → `LocalStorage` at `<path>` (relative paths rebased against
+   the repo base via `wiring::rebase`).
+2. bare `--local` (no value) → `LocalStorage` at `CARGO_BENCH_HISTORY_STORAGE`;
+   unset/empty is a `StorageError::Config`.
+3. no `--local` → the configured cloud backend; none configured is a
+   `StorageError::Config`.
+
+`--local` uses `require_equals` (`Option<Option<PathBuf>>`: `Some(Some(p))`→Path,
+`Some(None)`→FromEnv, `None`→unset), mapped to `LocalStorageSelection` by the free
+`cli::local_selection`. The environment read is isolated: `wiring::storage_env()`
+is the only edge that reads `CARGO_BENCH_HISTORY_STORAGE`, and the pure
+`wiring::resolve_local_path(selection, env)` turns the selection + injected value
+into an `Option<PathBuf>` (Miri-safe, unit-tested without touching the process
+env). `build_storage` then maps that optional path (override) or the config's
+cloud backend into a `StorageFacade`. `run --no-store` is the exception: it skips
+selection entirely, so it runs with no `--local` and no configured backend.
+
+**Testing note:** the `cbh_integration` harness (`Workspace`) auto-injects
+`--local=<root>/store` for storage-backed commands so each test writes to its own
+store; `Workspace::without_local_storage()` disables that to exercise the
+no-storage-configured error path. The bare-`--local`-from-environment and
+missing-environment paths are exercised against the real binary in `cbh_integration`
+(`cli.rs`), each child process getting its own environment rather than mutating the
+test process's.
 
 ## Storage model (commit-centric)
 
@@ -892,8 +933,11 @@ Key facts when touching it:
   or the JSON report's top-level fields, the harness's `seed.rs` / `report.rs` must
   be updated in lockstep.
 * **Storage selection** mirrors the tests: local filesystem by default, Azure Blob
-  under `--storage azure` (the Azure backend is always compiled in). Azure upload
-  uses `azcopy` (installed by `just install-tools`)
+  under `--storage azure` (the Azure backend is always compiled in). Local mode
+  passes the store path to `analyze` as `--local=<abs path>`
+  (`StorageTarget::local_path`) rather than configuring it in the seeded file; the
+  seeded config carries only `[project]` for local and `[storage.azure]` for Azure.
+  Azure upload uses `azcopy` (installed by `just install-tools`)
   for throughput, authenticating as the Entra user via the Azure CLI — same
   `az login` + `BENCH_HISTORY_AZURE_ACCOUNT` contract as `test-azure`. Each run uses
   a fresh `bh-stress-<unix>` container, deleted on exit unless `--keep`.

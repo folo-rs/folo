@@ -42,7 +42,9 @@ use crate::probe::{EnvironmentProbe, SystemProbe};
 use crate::report::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
-use crate::wiring::{resolve_config_path, resolve_project_id, resolve_repo};
+use crate::wiring::{
+    resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
+};
 use crate::{
     AnalyzeOptions, BlessOptions, ListOptions, PruneOptions, RunError, RunOutcome, UnblessOptions,
 };
@@ -66,10 +68,11 @@ pub(crate) async fn execute(
         "loading configuration from {}",
         config_path.display()
     ));
-    let config = load_config(&config_path).await?;
+    let config = load_config(&config_path, options.config_path.is_some()).await?;
 
     let project_id = resolve_project_id(&config, workspace_dir);
-    let storage = build_storage(&config, workspace_dir)?;
+    let local = resolve_local_path(options.local.as_ref(), storage_env().as_deref())?;
+    let storage = build_storage(local.as_deref(), &config, workspace_dir)?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
     let auto = detect_auto_facets().await?;
@@ -1517,7 +1520,7 @@ mod tests {
 
     /// A minimal configuration; `analyze_with` only reads `project.default_branch`.
     fn config() -> Config {
-        parse_config("[storage.local]\npath = \"./data\"\n").unwrap()
+        Config::default()
     }
 
     /// Builds a stored result set carrying one record with one `Ir` metric.
@@ -3118,10 +3121,7 @@ mod tests {
             .branch("master", "c1")
             .branch("feature", "f1")
             .head("feature");
-        let config = parse_config(
-            "[project]\ndefault_branch = \"master\"\n[storage.local]\npath = \"./d\"\n",
-        )
-        .unwrap();
+        let config = parse_config("[project]\ndefault_branch = \"master\"\n").unwrap();
 
         let opts = AnalyzeOptions {
             format: Some("json".to_owned()),

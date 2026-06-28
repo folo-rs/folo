@@ -16,7 +16,7 @@ use crate::bench::{
     parse_callgrind_summary, parse_criterion_case,
 };
 use crate::bench_output::{BenchOutputSource, FsBenchOutputSource, Harvest};
-use crate::config::{StorageConfig, load_config};
+use crate::config::{CloudStorageConfig, Config, load_config};
 use crate::host::RustcInfo;
 use crate::machine::{HardwareProfile, resolve_machine_key};
 use crate::model::{BenchmarkResult, Run};
@@ -27,8 +27,11 @@ use crate::process::{BenchRunner, TokioBenchRunner};
 use crate::report::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, StorageError, build_storage};
 use crate::text::count_noun;
-use crate::wiring::{resolve_config_path, resolve_project_id, resolve_repo};
-use crate::{RunError, RunOptions, RunOutcome};
+use crate::wiring::{
+    STORAGE_ENV_VAR, resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo,
+    storage_env,
+};
+use crate::{LocalStorageSelection, RunError, RunOptions, RunOutcome};
 
 /// The program and base arguments the production tool runs to benchmark the
 /// workspace. The first-class scope flags (`--workspace`/`--package`/`--bench`)
@@ -46,8 +49,9 @@ pub(crate) struct RunDeps<'a, R, P, O, S> {
     pub(crate) probe: &'a P,
     /// Harvests engine output.
     pub(crate) output: &'a O,
-    /// Persists result sets.
-    pub(crate) storage: &'a S,
+    /// Persists result sets. `None` under `--no-store`, where benchmarks run but
+    /// nothing is written; the store path is never reached in that case.
+    pub(crate) storage: Option<&'a S>,
     /// Supplies wall-clock time.
     pub(crate) clock: &'a Clock,
     /// Resolves environment variables (for CI detection).
@@ -95,15 +99,28 @@ pub(crate) async fn execute(
         "loading configuration from {}",
         config_path.display()
     ));
-    let config = load_config(&config_path).await?;
+    let config = load_config(&config_path, options.config_path.is_some()).await?;
 
     let project_id = resolve_project_id(&config, base);
     reporter.note(&format!("project id: {project_id}"));
-    reporter.note(&format!(
-        "storage backend: {}",
-        describe_storage(&config.storage)
-    ));
-    let storage = build_storage(&config, base)?;
+
+    // Under `--no-store` the run produces no stored objects, so storage selection
+    // is skipped entirely: the command works with no `--local` and no configured
+    // cloud backend, which would otherwise be an error.
+    let storage = if options.no_store {
+        reporter.note(
+            "not resolving a storage backend because --no-store was given; \
+             benchmarks will run but no results will be stored",
+        );
+        None
+    } else {
+        let local = resolve_local_path(options.local.as_ref(), storage_env().as_deref())?;
+        reporter.note(&format!(
+            "storage backend: {}",
+            describe_storage(options.local.as_ref(), local.as_deref(), &config)
+        ));
+        Some(build_storage(local.as_deref(), &config, base)?)
+    };
 
     let runner = TokioBenchRunner::in_dir(base);
     let probe = SystemProbe::in_dir(base);
@@ -121,7 +138,7 @@ pub(crate) async fn execute(
         runner: &runner,
         probe: &probe,
         output: &output,
-        storage: &storage,
+        storage: storage.as_ref(),
         clock: &clock,
         env: &env,
         project_id: &project_id,
@@ -136,14 +153,32 @@ pub(crate) async fn execute(
 
 /// A short human-readable description of where results are stored, for the
 /// verbose diagnostic trail.
-fn describe_storage(storage: &StorageConfig) -> String {
-    match storage {
-        StorageConfig::Local { path } => {
-            format!("local filesystem at {}", path.display())
+///
+/// `selection` is the raw `--local` choice and `resolved_local` is the path it
+/// resolved to (if any), so the note can state both the chosen backend and why —
+/// an explicit `--local` path, the environment-variable path behind a bare
+/// `--local`, or the cloud backend configured when no `--local` was given.
+fn describe_storage(
+    selection: Option<&LocalStorageSelection>,
+    resolved_local: Option<&Path>,
+    config: &Config,
+) -> String {
+    match (selection, resolved_local) {
+        (Some(LocalStorageSelection::Path(_)), Some(path)) => {
+            format!("local filesystem at {} (from --local)", path.display())
         }
-        StorageConfig::Azure {
-            account, container, ..
-        } => format!("Azure Blob (account {account}, container {container})"),
+        (Some(LocalStorageSelection::FromEnv), Some(path)) => {
+            format!(
+                "local filesystem at {} (from {STORAGE_ENV_VAR})",
+                path.display()
+            )
+        }
+        _ => match &config.storage {
+            Some(CloudStorageConfig::Azure {
+                account, container, ..
+            }) => format!("Azure Blob (account {account}, container {container})"),
+            None => "none configured".to_owned(),
+        },
     }
 }
 
@@ -445,13 +480,12 @@ where
     let json = run
         .to_json()
         .expect("a freshly built run always serializes to JSON");
-    store_result(
-        deps.storage,
-        &object_key,
-        json.as_bytes(),
-        options.overwrite,
-    )
-    .await?;
+    // The early `--no-store` return above is the only path that leaves storage
+    // unset, so reaching here guarantees a backend was built.
+    let storage = deps
+        .storage
+        .expect("storage is built whenever a run may store results");
+    store_result(storage, &object_key, json.as_bytes(), options.overwrite).await?;
     deps.reporter
         .note(&format!("{engine}: stored {object_key}"));
 
@@ -459,7 +493,7 @@ where
     // blessing sidecars on this commit no longer describe a stored level. Remove
     // them on overwrite so a stale blessing cannot silently re-baseline the new run.
     if options.overwrite && !dirty {
-        invalidate_blessings(deps.storage, &key, deps.project_id, commit, deps.reporter).await?;
+        invalidate_blessings(storage, &key, deps.project_id, commit, deps.reporter).await?;
     }
 
     Ok(EngineSummary {
@@ -640,6 +674,7 @@ mod tests {
 
     use super::*;
     use crate::bench_output::{Harvest, RawCriterionCase, RawOperationFile, RawSummary};
+    use crate::config::parse_config;
     use crate::git::parse_git_info;
     use crate::model::BenchmarkIdPrefix;
     use crate::model::BlessingRecord;
@@ -665,24 +700,39 @@ mod tests {
 
     #[test]
     fn describe_storage_names_the_backend() {
-        let local = StorageConfig::Local {
-            path: PathBuf::from("/tmp/history"),
-        };
-        let described = describe_storage(&local);
+        // An explicit `--local=<path>` describes a local backend and cites the flag.
+        let selection = LocalStorageSelection::Path(PathBuf::from("/tmp/history"));
+        let described = describe_storage(
+            Some(&selection),
+            Some(Path::new("/tmp/history")),
+            &Config::default(),
+        );
         assert!(described.contains("local filesystem"), "{described}");
         assert!(described.contains("history"), "{described}");
+        assert!(described.contains("--local"), "{described}");
 
-        let azure = StorageConfig::Azure {
-            account: "devstoreaccount1".to_owned(),
-            container: "bench".to_owned(),
-            endpoint: None,
-            account_key: None,
-            sas_token: None,
-        };
-        let described = describe_storage(&azure);
+        // A bare `--local` cites the environment variable it resolved from.
+        let described = describe_storage(
+            Some(&LocalStorageSelection::FromEnv),
+            Some(Path::new("/env/history")),
+            &Config::default(),
+        );
+        assert!(described.contains("local filesystem"), "{described}");
+        assert!(described.contains(STORAGE_ENV_VAR), "{described}");
+
+        // With no `--local`, the configured cloud backend is described.
+        let config = parse_config(
+            "[storage.azure]\naccount = \"devstoreaccount1\"\ncontainer = \"bench\"\n",
+        )
+        .unwrap();
+        let described = describe_storage(None, None, &config);
         assert!(described.contains("Azure Blob"), "{described}");
         assert!(described.contains("devstoreaccount1"), "{described}");
         assert!(described.contains("bench"), "{described}");
+
+        // With neither a selection nor a configured backend, it reports none.
+        let described = describe_storage(None, None, &Config::default());
+        assert!(described.contains("none"), "{described}");
     }
 
     #[test]
@@ -1117,7 +1167,7 @@ mod tests {
             runner,
             probe,
             output,
-            storage,
+            storage: Some(storage),
             clock: &clock,
             env: &env,
             project_id: "folo",

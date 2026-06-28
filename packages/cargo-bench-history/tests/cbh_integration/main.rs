@@ -20,3 +20,4 @@ mod install;
 mod list;
 mod prune;
 mod run;
+mod storage;
