@@ -1,6 +1,7 @@
 //! The benchmark run: the immutable unit of storage, one file per invocation.
 
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 
 use crate::model::{BenchmarkId, Metric, RunContext};
 
@@ -53,20 +54,38 @@ impl Run {
     }
 }
 
+/// The metrics carried by a [`BenchmarkResult`].
+///
+/// A result holds at most one metric per [`MetricKind`], and the noisy
+/// single-metric engines (Criterion wall time, `all_the_time` processor time) are
+/// the common case, so a small result is kept inline rather than heap allocated.
+/// This drops an allocation per result on the deserialization-heavy `analyze`
+/// path, where every stored run's results are reconstructed in bulk. Larger
+/// (Callgrind) results spill to the heap as usual.
+///
+/// Its on-disk form is a plain JSON array, identical to a `Vec<Metric>`, so the
+/// change is wire-compatible and needs no [`SCHEMA_VERSION`] bump.
+///
+/// [`MetricKind`]: crate::model::MetricKind
+pub type MetricList = SmallVec<[Metric; 2]>;
+
 /// A single benchmark case: a stable identity plus its measured metrics.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct BenchmarkResult {
     /// Stable identity of the benchmark case (its series key).
     pub id: BenchmarkId,
     /// Metrics captured for this case in this run.
-    pub metrics: Vec<Metric>,
+    pub metrics: MetricList,
 }
 
 impl BenchmarkResult {
     /// Creates a result for `id` carrying `metrics`.
     #[must_use]
-    pub fn new(id: BenchmarkId, metrics: Vec<Metric>) -> Self {
-        Self { id, metrics }
+    pub fn new(id: BenchmarkId, metrics: impl Into<MetricList>) -> Self {
+        Self {
+            id,
+            metrics: metrics.into(),
+        }
     }
 }
 
@@ -111,5 +130,60 @@ mod tests {
         let parsed = Run::from_json(&json).unwrap();
 
         assert_eq!(parsed, run);
+    }
+
+    #[test]
+    fn metrics_serialize_as_a_plain_json_array() {
+        // The on-disk form must stay a JSON array, identical to a `Vec<Metric>`,
+        // so objects written before the field became a `SmallVec` keep
+        // deserializing unchanged.
+        let result = BenchmarkResult::new(
+            BenchmarkId::new(nonempty!["pkg".to_owned(), "case".to_owned()]),
+            vec![
+                Metric::new(MetricKind::InstructionCount, 10.0),
+                Metric::new(MetricKind::L1CacheHits, 20.0),
+            ],
+        );
+
+        let json = serde_json::to_string(&result).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let metrics = value.get("metrics").expect("the metrics field is present");
+        assert!(
+            metrics.is_array(),
+            "metrics must serialize as a JSON array: {json}"
+        );
+        assert_eq!(metrics.as_array().unwrap().len(), 2);
+
+        let parsed: BenchmarkResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, result);
+    }
+
+    #[test]
+    fn result_roundtrips_across_the_inline_capacity_boundary() {
+        // One and two metrics stay inline; three spill to the heap. Serde must
+        // treat all three identically. Each metric uses a distinct kind, as a
+        // result carries at most one metric per `MetricKind`.
+        const KINDS: [MetricKind; 3] = [
+            MetricKind::InstructionCount,
+            MetricKind::L1CacheHits,
+            MetricKind::EstimatedCycles,
+        ];
+        for count in [1_usize, 2, 3] {
+            let metrics: Vec<Metric> = KINDS
+                .iter()
+                .take(count)
+                .map(|&kind| Metric::new(kind, 1.0))
+                .collect();
+            let result = BenchmarkResult::new(
+                BenchmarkId::new(nonempty!["pkg".to_owned(), "case".to_owned()]),
+                metrics,
+            );
+
+            let json = serde_json::to_string(&result).unwrap();
+            let parsed: BenchmarkResult = serde_json::from_str(&json).unwrap();
+
+            assert_eq!(parsed, result);
+            assert_eq!(parsed.metrics.len(), count);
+        }
     }
 }
