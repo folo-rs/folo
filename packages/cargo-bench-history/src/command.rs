@@ -110,7 +110,24 @@ pub struct AnalyzeOptions {
     pub include_inactive: bool,
     /// Emit detailed diagnostic notes to standard error describing each step.
     pub verbose: bool,
+    /// Emit per-stage wall-clock timings to standard error, independent of
+    /// `verbose`. `verbose` implies these as well; this flag exists so a
+    /// programmatic caller (the stress harness) can observe the per-stage load
+    /// breakdown *without* the per-object note flood that would both bury the
+    /// timings and distort them.
+    pub timing: bool,
 }
+
+impl AnalyzeOptions {
+    /// Whether the per-stage wall-clock timings should be emitted to standard
+    /// error. `verbose` implies them; the `timing` flag enables them on its own,
+    /// so a programmatic caller (the stress harness) can observe the per-stage
+    /// load breakdown without the per-object note flood.
+    pub(crate) fn stage_timings_enabled(&self) -> bool {
+        self.verbose || self.timing
+    }
+}
+
 /// The kind of thing a `list` invocation enumerates.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -324,4 +341,26 @@ pub struct UnblessOptions {
     pub machine_key: Vec<String>,
     /// Emit detailed diagnostic notes to standard error describing each step.
     pub verbose: bool,
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stage_timings_enabled_follows_verbose_or_timing() {
+        let options = |verbose, timing| AnalyzeOptions {
+            verbose,
+            timing,
+            ..AnalyzeOptions::default()
+        };
+        // `verbose` implies the timings, the `timing` flag enables them on its
+        // own, and neither flag leaves them off — so the policy is the logical
+        // OR of the two, not their AND.
+        assert!(!options(false, false).stage_timings_enabled());
+        assert!(options(true, false).stage_timings_enabled());
+        assert!(options(false, true).stage_timings_enabled());
+        assert!(options(true, true).stage_timings_enabled());
+    }
 }
