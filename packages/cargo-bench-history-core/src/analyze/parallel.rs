@@ -8,45 +8,44 @@
 //! how many workers to use and how large each chunk is lives here, separate from the
 //! dispatch itself.
 //!
-//! A single available CPU (Miri reports one by default) or a single-element slice
-//! needs no parallelism and the caller takes a plain serial pass — which is also the
-//! path Miri exercises, so the callers' logic stays under Miri's checks without
-//! dispatching tasks Miri does not model.
+//! The worker count is the available parallelism capped at the slice length, so a
+//! single available CPU (Miri reports one by default) yields a single worker: one
+//! chunk covering the whole slice, dispatched as one task. There is no separate serial
+//! code path to keep in step — the one-worker case is just the degenerate partition,
+//! and the synchronous spawner that tests and Miri inject runs that one task inline on
+//! the calling thread, so the dispatch stays under Miri's checks.
 
 use std::num::NonZero;
 use std::thread;
 
-/// How many worker tasks to split `len` items across, or `None` when a serial pass
-/// is the right choice — a single available CPU, or a slice short enough (`len <= 1`)
-/// that splitting it would gain nothing. When `Some`, the count is the available
-/// parallelism capped at `len`, so every worker task gets at least one item (never
-/// an empty chunk).
+/// How many worker tasks to split `len` items across: the available parallelism
+/// capped at `len`, so no worker is handed an empty chunk. This is `0` only when `len`
+/// is `0` (nothing to do) and otherwise at least `1` — a single available CPU, or a
+/// single-element slice, yields one worker, i.e. one chunk covering everything.
 //
-// Mutation-skipped: the return value only selects how the work is partitioned, never
-// the result. A `None` takes the serial pass and every `Some(workers)` count yields
-// the same order-preserving output, so no behavioral test can distinguish them — that
-// includes the serial-vs-parallel threshold folded in here.
+// Mutation-skipped: the return value only selects how the work is partitioned across
+// workers, never the result. Every worker count yields the same order-preserving
+// output, so no behavioral test can distinguish one partitioning from another.
 #[cfg_attr(test, mutants::skip)]
-pub(crate) fn worker_count(len: usize) -> Option<usize> {
-    let workers = thread::available_parallelism()
+pub(crate) fn worker_count(len: usize) -> usize {
+    thread::available_parallelism()
         .map_or(1, NonZero::get)
-        .min(len);
-    (workers > 1).then_some(workers)
+        .min(len)
 }
 
 /// The lengths of exactly `workers` contiguous chunks that partition `len` items as
 /// evenly as possible: the first `len % workers` chunks hold one extra item, the
 /// rest hold `len / workers`.
 ///
-/// Well-defined for any `1 <= workers <= len`: every chunk is non-empty and the sizes
-/// differ by at most one, with `workers == 1` yielding a single chunk of all `len`
-/// items. Production reaches it only with `workers >= 2`, because `worker_count` sends
-/// the single-worker and `len <= 1` cases down the serial path instead; the unit test
-/// still covers the full `workers >= 1` range to pin the arithmetic.
+/// For `1 <= workers <= len` every chunk is non-empty and the sizes differ by at most
+/// one, with `workers == 1` yielding a single chunk of all `len` items. The degenerate
+/// `workers == 0` (only ever paired with `len == 0`, the empty slice) yields no chunks.
+/// The unit test covers both.
 pub(crate) fn balanced_chunk_sizes(len: usize, workers: usize) -> impl Iterator<Item = usize> {
-    // `workers >= 1` here, so the divide and remainder are well defined, and
-    // `base + 1 <= len` cannot overflow; the checked operators keep the workspace's
-    // arithmetic lint satisfied without masking a real bug.
+    // `workers` may be `0` (the empty-slice case), so the checked divide and remainder
+    // fall back to `0`; for `workers >= 1` the division is exact and `base + 1 <= len`
+    // cannot overflow. The checked operators keep the workspace's arithmetic lint
+    // satisfied without masking a real bug.
     let base = len.checked_div(workers).unwrap_or(0);
     let remainder = len.checked_rem(workers).unwrap_or(0);
     (0..workers).map(move |index| {
@@ -82,6 +81,11 @@ mod tests {
         assert_eq!(just_above.len(), 32);
         assert_eq!(just_above.iter().filter(|&&size| size == 2).count(), 1);
         assert_eq!(just_above.iter().filter(|&&size| size == 1).count(), 31);
+
+        // The empty slice partitions into no chunks: `worker_count` returns `0` for
+        // `len == 0`, and zero workers must yield an empty iterator (not panic on the
+        // divide-by-zero).
+        assert_eq!(balanced_chunk_sizes(0, 0).count(), 0);
 
         // Across many shapes: exactly `workers` chunks, every chunk non-empty, sizes
         // differ by at most one, and they sum back to `len` (a full, non-overlapping

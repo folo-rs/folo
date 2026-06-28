@@ -37,8 +37,9 @@ here, alongside the workspace-wide rules in `docs/` (especially
   the runtime's blocking pool); tests and Miri inject
   [`testing::synchronous_spawner`](src/testing.rs), which runs each task inline on the
   calling thread, so the analysis needs no runtime and stays deterministic under
-  `block_on`/Miri. A single available CPU (the Miri default) or a single series takes
-  the serial path, dispatching no task. New per-series logic must stay
+  `block_on`/Miri. A single available CPU (the Miri default) yields a single worker —
+  one chunk, one task over every series — not a separate serial branch. New per-series
+  logic must stay
   side-effect-free so it can run on any worker; do not introduce shared mutable state
   into a distributed pass. The series fold (`SeriesBuilder::push`) and per-series point
   sort (`SeriesBuilder::finish`) stay **serial** — their work is dominated by task

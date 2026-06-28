@@ -1804,10 +1804,12 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      `candidates` with `noisy_p` positionally and the final ranking is a deterministic total
      order, so the output is byte-identical to a plain serial scan — only the wall time
      changes (the win is concentrated in `history`, whose change-point/drift tests are the
-     most expensive per-series work; see decision 32's finding). A single CPU or a single
-     series takes a plain serial pass with no task dispatch. Production injects a Tokio-backed
-     spawner; tests and Miri inject a synchronous spawner that runs each task inline (Miri
-     reports one CPU by default, so it also exercises the serial path), keeping the core
+     most expensive per-series work; see decision 32's finding). A single available CPU
+     yields a single worker — one chunk, one task over every series — so the one-worker
+     case is just the degenerate partition rather than a separate serial branch. Production
+     injects a Tokio-backed spawner; tests and Miri inject a synchronous spawner that runs
+     each task inline (Miri reports one CPU by default, so it exercises that single-worker
+     path), keeping the core
      analysis runtime-agnostic and free of a hard Tokio dependency. *Rejected* `rayon`'s
      `par_iter` (the issue's original suggestion): its transitive `crossbeam-epoch` dependency
      trips Miri's Stacked Borrows model (a known, benign issue), which would force an ugly

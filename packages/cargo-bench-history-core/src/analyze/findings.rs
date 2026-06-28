@@ -1023,9 +1023,10 @@ fn find_changes(series: &[Series], context: &AnalysisContext) -> Vec<Finding> {
 /// Detection is per-series independent, so the series are split into one balanced
 /// contiguous chunk per worker and each chunk runs on its own blocking task via
 /// `spawner`, then recombined in series order; the result is identical to a plain
-/// serial scan but spread across cores. A single available CPU or a single series
-/// takes the serial path directly (also the path Miri exercises). The false-discovery
-/// filtering and final ranking that follow are cheap and stay on the calling thread.
+/// serial scan but spread across cores. A single available CPU (which is what Miri
+/// reports) yields a single worker — one chunk, one task over every series. The
+/// false-discovery filtering and final ranking that follow are cheap and stay on the
+/// calling thread.
 ///
 /// The series are taken as an `Arc<[Series]>` so each blocking task can share them
 /// without copying. Production passes a Tokio-backed spawner; tests and Miri pass an
@@ -1114,20 +1115,21 @@ fn detect_all(series: &[Series], context: &AnalysisContext) -> Vec<Candidate> {
 }
 
 /// Detects every series, distributed across workers: splits the series into one
-/// balanced contiguous chunk per worker, runs each chunk on its own blocking task via
-/// `spawner`, and recombines the candidates in series order.
+/// balanced contiguous chunk per worker (the worker count is the available
+/// parallelism capped at the series count), runs each chunk on its own blocking task
+/// via `spawner`, and recombines the candidates in series order.
 ///
-/// A single available CPU or a single series takes the serial path (also the path
-/// Miri exercises), so no blocking task is dispatched when there is nothing to gain.
+/// A single available CPU (which is what Miri reports) yields a single worker — one
+/// chunk, one task covering every series — so the one-worker case is just the
+/// degenerate partition rather than a separate serial branch. An empty slice yields no
+/// workers and dispatches no task.
 async fn detect_all_spawned(
     series: &Arc<[Series]>,
     context: AnalysisContext,
     spawner: &Spawner,
 ) -> Vec<Candidate> {
     let len = series.len();
-    let Some(workers) = worker_count(len) else {
-        return detect_range(series, 0..len, &context);
-    };
+    let workers = worker_count(len);
 
     // Spawn every chunk before awaiting any, so the blocking tasks run concurrently;
     // each owns a shared `Arc` handle to the series and a `Copy` of the context.
@@ -1351,9 +1353,10 @@ mod tests {
     }
 
     /// The spawner-distributed [`find_changes_spawned`] must produce exactly the same
-    /// findings as the serial [`find_changes`]. On a multi-core host this exercises
-    /// the chunked spawn-and-recombine path (the inline spawner runs each chunk on the
-    /// calling thread); under Miri, which reports one CPU, both take the serial path.
+    /// findings as the serial [`find_changes`] oracle. On a multi-core host this
+    /// exercises the chunked spawn-and-recombine path across several chunks; under
+    /// Miri, which reports one CPU, it exercises the single-worker chunk. Either way
+    /// the synchronous spawner runs each chunk inline on the calling thread.
     #[cfg(feature = "private-test-util")]
     #[test]
     fn find_changes_spawned_matches_the_serial_pass() {

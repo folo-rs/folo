@@ -183,7 +183,7 @@ worker** (sizes differ by at most one, so a slice just above the worker count st
 uses every worker rather than collapsing to fewer chunks), dispatches each chunk to a
 blocking task through the injected `Spawner`, then awaits and concatenates them in
 series order — identical output to a sequential pass. A single available CPU (Miri
-reports one) or a single series takes the serial path, dispatching no task.
+reports one) yields a single worker: one chunk, one task over every series.
 
 ---
 
