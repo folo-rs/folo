@@ -304,8 +304,9 @@ where
 /// scope flags translated from the run options, then any `--` passthrough.
 ///
 /// Scope follows cargo's own conventions: with no `--package` filters the whole
-/// workspace is benched (`--workspace`); otherwise each requested package is
-/// passed with `--package`. Any `--bench` filters are appended next. Passthrough
+/// workspace is benched (`--workspace`), optionally minus any `--exclude`d
+/// packages; otherwise each requested package is passed with `--package`. Any
+/// `--bench` filters are appended next. Passthrough
 /// arguments are forwarded to the benchmark binary, so they follow a `--`
 /// separator that splits them from cargo's own arguments (Criterion's `--noplot`
 /// or Gungraun's `--output-format`, for example, are harness flags cargo would
@@ -326,6 +327,12 @@ fn build_bench_argv(
     let mut argv = bench_command.to_vec();
     if options.packages.is_empty() {
         argv.push("--workspace".to_owned());
+        // `--exclude` is only valid alongside `--workspace`, so it lives in this
+        // branch — the CLI already rejects combining it with `--package`.
+        for exclude in &options.excludes {
+            argv.push("--exclude".to_owned());
+            argv.push(exclude.clone());
+        }
     } else {
         for package in &options.packages {
             argv.push("--package".to_owned());
@@ -1839,6 +1846,38 @@ mod tests {
     }
 
     #[test]
+    fn exclude_arguments_reach_the_runner_verbatim() {
+        let runner = FakeRunner::succeeding();
+        let options = RunOptions {
+            excludes: vec!["nm".to_owned(), "many_cpus".to_owned()],
+            ..RunOptions::default()
+        };
+
+        drive(
+            &options,
+            &runner,
+            &FakeProbe::new(),
+            &FakeOutput::default(),
+            &MemoryStorage::new(),
+        )
+        .unwrap();
+
+        // Excludes ride alongside the implicit `--workspace`, each forwarded to
+        // cargo as an `--exclude` pair.
+        assert_eq!(
+            runner.last_command().unwrap(),
+            [
+                "mock",
+                "--workspace",
+                "--exclude",
+                "nm",
+                "--exclude",
+                "many_cpus"
+            ]
+        );
+    }
+
+    #[test]
     fn bench_environment_pins_the_target_directory() {
         let runner = FakeRunner::succeeding();
 
@@ -1904,6 +1943,28 @@ mod tests {
         let argv = build_bench_argv(&mock_bench_command(), &options).unwrap();
         // Packages omit `--workspace` and each becomes a `--package` pair.
         assert_eq!(argv, ["mock", "--package", "nm", "--package", "many_cpus"]);
+    }
+
+    #[test]
+    fn build_bench_argv_translates_exclude_filters() {
+        let options = RunOptions {
+            excludes: vec!["nm".to_owned(), "many_cpus".to_owned()],
+            ..RunOptions::default()
+        };
+        let argv = build_bench_argv(&mock_bench_command(), &options).unwrap();
+        // Excludes ride alongside the implicit `--workspace`, each an
+        // `--exclude` pair, so the whole workspace minus those packages is run.
+        assert_eq!(
+            argv,
+            [
+                "mock",
+                "--workspace",
+                "--exclude",
+                "nm",
+                "--exclude",
+                "many_cpus"
+            ]
+        );
     }
 
     #[test]

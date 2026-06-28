@@ -220,6 +220,11 @@ struct RunCommand {
     #[arg(long = "package", short = 'p', value_name = "NAME", help_heading = HEADING_SCOPE)]
     package: Vec<String>,
 
+    /// Exclude a package from a whole-workspace run; repeatable, e.g.
+    /// `--exclude nm --exclude many_cpus`. Conflicts with `--package`.
+    #[arg(long, value_name = "NAME", help_heading = HEADING_SCOPE, conflicts_with = "package")]
+    exclude: Vec<String>,
+
     /// Benchmark only this bench target; repeatable (default: every bench target).
     #[arg(long, value_name = "NAME", help_heading = HEADING_SCOPE)]
     bench: Vec<String>,
@@ -245,6 +250,7 @@ impl RunCommand {
             config_path: self.env.config,
             repo: self.env.repo,
             packages: resolve_packages(self.workspace, self.package),
+            excludes: self.exclude,
             benches: self.bench,
             machine_key: self.machine_key,
             no_store: self.no_store,
@@ -561,6 +567,11 @@ struct BackfillCommand {
     #[arg(long = "package", short = 'p', value_name = "NAME", help_heading = HEADING_SCOPE)]
     package: Vec<String>,
 
+    /// Exclude a package from a whole-workspace run; repeatable, e.g.
+    /// `--exclude nm --exclude many_cpus`. Conflicts with `--package`.
+    #[arg(long, value_name = "NAME", help_heading = HEADING_SCOPE, conflicts_with = "package")]
+    exclude: Vec<String>,
+
     /// Benchmark only this bench target; repeatable (default: every bench target).
     #[arg(long, value_name = "NAME", help_heading = HEADING_SCOPE)]
     bench: Vec<String>,
@@ -588,6 +599,7 @@ impl BackfillCommand {
             from: self.from,
             to: self.to,
             packages: resolve_packages(self.workspace, self.package),
+            excludes: self.exclude,
             benches: self.bench,
             machine_key: self.machine_key,
             overwrite: self.overwrite,
@@ -758,10 +770,63 @@ mod tests {
     }
 
     #[test]
+    fn run_collects_exclude_filters() {
+        let command = parse(&["run", "--exclude", "nm", "--exclude", "many_cpus"]);
+        let Command::Run(options) = command else {
+            panic!("expected run command");
+        };
+        assert!(options.packages.is_empty(), "exclude implies workspace scope");
+        assert_eq!(
+            options.excludes,
+            vec!["nm".to_owned(), "many_cpus".to_owned()]
+        );
+    }
+
+    #[test]
+    fn run_exclude_and_package_conflict() {
+        let error = Cli::from_args(
+            &["cargo-bench-history"],
+            &["run", "--exclude", "nm", "-p", "many_cpus"],
+        )
+        .unwrap_err();
+        assert_eq!(error.status, Err(()));
+        assert!(
+            error.output.contains("cannot be used with"),
+            "{}",
+            error.output
+        );
+    }
+
+    #[test]
     fn backfill_workspace_and_package_conflict() {
         let error = Cli::from_args(
             &["cargo-bench-history"],
             &["backfill", "abc", "def", "--workspace", "-p", "nm"],
+        )
+        .unwrap_err();
+        assert_eq!(error.status, Err(()));
+        assert!(
+            error.output.contains("cannot be used with"),
+            "{}",
+            error.output
+        );
+    }
+
+    #[test]
+    fn backfill_collects_exclude_filters() {
+        let command = parse(&["backfill", "abc", "def", "--exclude", "nm"]);
+        let Command::Backfill(options) = command else {
+            panic!("expected backfill command");
+        };
+        assert!(options.packages.is_empty(), "exclude implies workspace scope");
+        assert_eq!(options.excludes, vec!["nm".to_owned()]);
+    }
+
+    #[test]
+    fn backfill_exclude_and_package_conflict() {
+        let error = Cli::from_args(
+            &["cargo-bench-history"],
+            &["backfill", "abc", "def", "--exclude", "nm", "-p", "many_cpus"],
         )
         .unwrap_err();
         assert_eq!(error.status, Err(()));

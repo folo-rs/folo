@@ -56,7 +56,9 @@ prune stay in selection lockstep automatically — see those sections):
 
 * **Environment & execution** — `--config`, `--repo`, `--verbose`.
 * **Output** — `--format`.
-* **Benchmark scope** (`run`/`backfill`) — `--workspace`, `--package`/`-p`, `--bench`.
+* **Benchmark scope** (`run`/`backfill`) — `--workspace`, `--package`/`-p`,
+  `--exclude` (drops packages from a whole-workspace run; conflicts with
+  `--package`), `--bench`.
 * **Discriminant selection** — `--engine`, `--target-triple`, `--machine-key`. On
   query commands each is **repeatable** (a `Vec`), accepts the widening keyword
   `all`, and auto-detects the current machine when omitted (§4.3). On create commands
@@ -567,7 +569,9 @@ engines auto-emit JSON on drop and need no env), then harvest every output tree
 `target/all_the_time/*.json`); an engine that produced no cases (for example
 Callgrind off Linux, where the `_cg` benches are `#[cfg(target_os = "linux")]`
 no-ops) is silently skipped. Scope a run with `--workspace` (the default),
-`--package`/`-p NAME` (repeatable), or `--bench NAME` (repeatable) — these
+`--package`/`-p NAME` (repeatable), `--exclude NAME` (repeatable, drops packages
+from the whole-workspace run; conflicts with `--package`), or `--bench NAME`
+(repeatable) — these
 translate to the matching `cargo bench` arguments. `--engine` is **not** a
 `run`/`backfill` flag; it is an `analyze` facet over already-stored data.
 `Engine::ALL` enumerates the engines harvested per run.
@@ -621,7 +625,7 @@ override (`[MOCK_ENGINE] + self.bench`, set with `Workspace::with_bench`), so th
 program path and each fixture-describing argument are passed verbatim as distinct
 argv entries — no shell, no quoting, no config `command`. After the mock's own
 contiguous arguments, `run` appends the cargo scope flags (`--workspace`/
-`--package NAME`/`--bench NAME`) and any `--` passthrough, which the mock ignores
+`--exclude NAME`/`--package NAME`/`--bench NAME`) and any `--` passthrough, which the mock ignores
 (it stops at the first argument it does not recognize). Like every other crate
 root that uses `#[cfg_attr(coverage_nightly, coverage(off))]`, the mock engine
 must declare `#![cfg_attr(coverage_nightly, feature(coverage_attribute))]` at its

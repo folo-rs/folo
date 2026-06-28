@@ -520,6 +520,7 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
             config_path: None,
             repo: None,
             packages: self.options.packages.clone(),
+            excludes: self.options.excludes.clone(),
             benches: self.options.benches.clone(),
             machine_key: self.options.machine_key.clone(),
             no_store: false,

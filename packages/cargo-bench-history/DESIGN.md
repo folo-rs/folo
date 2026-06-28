@@ -565,7 +565,9 @@ Valgrind off-Linux.
 
 **Scope & filtering.** Scope flags translate directly to `cargo bench` arguments:
 `--workspace` (the default) benches the whole workspace; `--package`/`-p NAME`
-(repeatable) restricts to specific packages (and omits `--workspace`); `--bench
+(repeatable) restricts to specific packages (and omits `--workspace`);
+`--exclude NAME` (repeatable, conflicts with `--package`) drops packages from the
+whole-workspace run; `--bench
 NAME` (repeatable) restricts to named bench targets. Everything after a `--`
 separator is forwarded **verbatim** to `cargo bench` after the scope flags.
 Because harvest is scoped by `mtime ≥ run-start`, whatever subset actually ran is
