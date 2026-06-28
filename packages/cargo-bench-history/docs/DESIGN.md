@@ -1214,8 +1214,8 @@ benchmark identifier + metric, a dimmed detail line (`direction via method ·
 confidence · baseline → latest · @ commit`, plus `· flips at <commit>` in branch
 mode), and — in **history mode only** — a small colored line chart of the series
 over commits drawn with `rasciigraph` (regressions red, improvements green). Each set
-header is followed by a one-line tally (`runs · series · regressions ·
-improvements`). The chart is omitted for branch/tip mode. Color (ANSI styling and
+header is followed by a one-line tally (`runs: <n>  series: <n>  regressions: <n>
+improvements: <n>`). The chart is omitted for branch/tip mode. Color (ANSI styling and
 chart hue) is enabled only when stdout is a terminal and `NO_COLOR` is unset, so
 piped output and tests stay plain.
 
