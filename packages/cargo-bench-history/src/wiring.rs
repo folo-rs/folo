@@ -48,12 +48,12 @@ pub(crate) fn resolve_repo(workspace_dir: &Path, repo: Option<&Path>) -> PathBuf
     )
 }
 
-/// Reads the local-storage path environment variable, if set and non-empty-ish.
+/// Reads the local-storage path environment variable, if set.
 ///
 /// This is the single environment read behind `--local`; it lives at the IO edge
 /// so the pure [`resolve_local_path`] resolver stays testable and Miri-safe. An
-/// unset variable yields `None`; the empty/non-empty distinction is left to the
-/// resolver.
+/// unset variable yields `None`; a set-but-empty value yields `Some("")`, leaving
+/// the empty/non-empty distinction to the resolver.
 pub(crate) fn storage_env() -> Option<String> {
     std::env::var(STORAGE_ENV_VAR).ok()
 }

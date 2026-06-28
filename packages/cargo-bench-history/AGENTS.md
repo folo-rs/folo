@@ -128,8 +128,11 @@ shared config file (a local path is machine-dependent and the file is
 version-controlled). The config file carries only an **optional** cloud backend:
 `config.storage` is `Option<CloudStorageConfig>`, an externally-tagged enum
 (`[storage.azure]` today) so serde enforces "at most one" cloud backend. There is
-no local variant in the config — a leftover `[storage.local]` is just an
-unrecognized section (no backward-compat handling).
+no local variant in the config: because `storage` is a known field whose only
+variant is `azure`, a leftover `[storage.local]` table is **rejected** at parse
+time (`unknown variant 'local', expected 'azure'`) rather than silently ignored
+the way a wholly unknown section is. There is no backward-compat handling — remove
+`[storage.local]` and select local storage via `--local` instead.
 
 Every storage-backed command (`run`, `analyze`, `list`, `prune`, `backfill`,
 `bless`/`unbless`) carries a `--local` flag (on the shared `EnvArgs` group) and

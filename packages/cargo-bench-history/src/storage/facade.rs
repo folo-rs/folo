@@ -102,9 +102,9 @@ pub(crate) fn build_storage(
             sas_token.clone(),
         )?)),
         None => Err(StorageError::Config {
-            message: "no storage configured: pass --local <path> (or set \
-                      CARGO_BENCH_HISTORY_STORAGE) or configure a cloud storage \
-                      backend in the configuration file"
+            message: "no storage configured: pass --local=<path> (or set \
+                      CARGO_BENCH_HISTORY_STORAGE and pass a bare --local) or \
+                      configure a cloud storage backend in the configuration file"
                 .to_owned(),
         }),
     }

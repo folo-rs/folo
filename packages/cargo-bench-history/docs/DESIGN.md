@@ -500,6 +500,9 @@ shared, version-controlled config file. The configuration file holds only the
 **cloud** backend (an optional, externally-tagged `[storage.<kind>]` table —
 `[storage.azure]` today — of which **at most one** may be configured; two tables
 fail to deserialize). Local storage is chosen at the command line or environment.
+A leftover `[storage.local]` table from an earlier scheme is **rejected** at parse
+time (`unknown variant 'local', expected 'azure'`), nudging the user to remove it
+and select local storage via `--local`.
 
 Every storage-backed command (`run`, `analyze`, `list`, `prune`, `backfill`,
 `bless`/`unbless`) takes a `--local` flag and resolves the backend in this
@@ -1887,6 +1890,9 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      The environment read is isolated at a thin edge helper feeding a pure resolver,
      keeping the decision logic unit-testable and Miri-safe. *No backward
      compatibility:* at this early stage a leftover `[storage.local]` table gets no
-     special handling — it is just an unrecognized section (the config no longer has
-     a local variant). `install`'s template documents the optional cloud block and
-     the `--local` / env mechanism for local storage.
+     special handling. Because `storage` is a known field whose only variant is
+     `azure`, such a table is **rejected** at parse time (`unknown variant 'local',
+     expected 'azure'`) rather than silently ignored the way a wholly unknown
+     section is — a clear signal to remove it and pass `--local` instead.
+     `install`'s template documents the optional cloud block and the `--local` /
+     env mechanism for local storage.

@@ -335,6 +335,21 @@ key = \"ci-pool-a\"
     }
 
     #[test]
+    fn leftover_storage_local_table_is_rejected() {
+        // `storage` is a known field whose only cloud variant is `azure`, so a
+        // leftover `[storage.local]` table is not silently ignored the way a wholly
+        // unknown section is: it fails to parse, pointing the user at `--local`.
+        let error = parse_config("[storage.local]\npath = \"x\"\n").unwrap_err();
+        let ConfigError::Parse(message) = error else {
+            panic!("expected a parse error, got {error:?}");
+        };
+        assert!(
+            message.contains("unknown variant `local`"),
+            "unexpected parse error: {message}"
+        );
+    }
+
+    #[test]
     fn config_error_display_includes_message() {
         let error = ConfigError::Parse("boom".to_owned());
         assert_eq!(error.to_string(), "failed to parse configuration: boom");
