@@ -4,7 +4,13 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::command::LocalStorageSelection;
 use crate::config::Config;
+use crate::storage::StorageError;
+
+/// The environment variable that supplies the local-storage path for a bare
+/// `--local` (given with no value): `CARGO_BENCH_HISTORY_STORAGE`.
+pub(crate) const STORAGE_ENV_VAR: &str = "CARGO_BENCH_HISTORY_STORAGE";
 
 /// The default configuration path, relative to the working directory.
 pub(crate) fn default_config_path() -> PathBuf {
@@ -42,6 +48,46 @@ pub(crate) fn resolve_repo(workspace_dir: &Path, repo: Option<&Path>) -> PathBuf
     )
 }
 
+/// Reads the local-storage path environment variable, if set.
+///
+/// This is the single environment read behind `--local`; it lives at the IO edge
+/// so the pure [`resolve_local_path`] resolver stays testable and Miri-safe. An
+/// unset variable yields `None`; a set-but-empty value yields `Some("")`, leaving
+/// the empty/non-empty distinction to the resolver.
+pub(crate) fn storage_env() -> Option<String> {
+    std::env::var(STORAGE_ENV_VAR).ok()
+}
+
+/// Resolves the `--local` selection into a concrete local-storage path.
+///
+/// `env` is the value of [`STORAGE_ENV_VAR`], read at the IO edge via
+/// [`storage_env`]. Returns `Ok(None)` when `--local` was not given (the caller
+/// then uses the configured cloud backend), `Ok(Some(path))` for an explicit
+/// `--local=<path>` or a bare `--local` backed by a non-empty environment value,
+/// and an error when a bare `--local` has no usable environment value.
+///
+/// # Errors
+///
+/// Returns [`StorageError::Config`] if a bare `--local` was given but
+/// [`STORAGE_ENV_VAR`] is unset or empty.
+pub(crate) fn resolve_local_path(
+    selection: Option<&LocalStorageSelection>,
+    env: Option<&str>,
+) -> Result<Option<PathBuf>, StorageError> {
+    match selection {
+        None => Ok(None),
+        Some(LocalStorageSelection::Path(path)) => Ok(Some(path.clone())),
+        Some(LocalStorageSelection::FromEnv) => match env {
+            Some(value) if !value.is_empty() => Ok(Some(PathBuf::from(value))),
+            _ => Err(StorageError::Config {
+                message: format!(
+                    "--local was given without a path and {STORAGE_ENV_VAR} is not set"
+                ),
+            }),
+        },
+    }
+}
+
 /// Resolves the project identity: explicit config value, else the directory name.
 pub(crate) fn resolve_project_id(config: &Config, workspace_dir: &Path) -> String {
     if let Some(id) = &config.project.id {
@@ -62,8 +108,46 @@ mod tests {
     use super::*;
 
     fn config_with(extra: &str) -> Config {
-        let text = format!("[storage.local]\npath = \"./data\"\n\n{extra}");
+        let text = format!("[storage.azure]\naccount = \"a\"\ncontainer = \"c\"\n\n{extra}");
         parse_config(&text).unwrap()
+    }
+
+    #[test]
+    fn resolve_local_path_returns_none_when_not_selected() {
+        assert_eq!(resolve_local_path(None, Some("/env/store")).unwrap(), None);
+    }
+
+    #[test]
+    fn resolve_local_path_uses_explicit_path() {
+        let selection = LocalStorageSelection::Path(PathBuf::from("./store"));
+        assert_eq!(
+            resolve_local_path(Some(&selection), None).unwrap(),
+            Some(PathBuf::from("./store"))
+        );
+    }
+
+    #[test]
+    fn resolve_local_path_reads_env_for_bare_local() {
+        assert_eq!(
+            resolve_local_path(Some(&LocalStorageSelection::FromEnv), Some("/env/store")).unwrap(),
+            Some(PathBuf::from("/env/store"))
+        );
+    }
+
+    #[test]
+    fn resolve_local_path_errors_when_env_unset() {
+        let error = resolve_local_path(Some(&LocalStorageSelection::FromEnv), None).unwrap_err();
+        let StorageError::Config { message } = error else {
+            panic!("expected a config error, got {error:?}");
+        };
+        assert!(message.contains(STORAGE_ENV_VAR), "{message}");
+    }
+
+    #[test]
+    fn resolve_local_path_treats_empty_env_as_unset() {
+        let error =
+            resolve_local_path(Some(&LocalStorageSelection::FromEnv), Some("")).unwrap_err();
+        assert!(matches!(error, StorageError::Config { .. }), "{error:?}");
     }
 
     #[test]

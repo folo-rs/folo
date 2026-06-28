@@ -27,7 +27,9 @@ use crate::model::BlessingRecord;
 use crate::report::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
-use crate::wiring::{resolve_config_path, resolve_project_id, resolve_repo};
+use crate::wiring::{
+    resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
+};
 use crate::{BlessOptions, RunError, RunOutcome, UnblessOptions};
 
 use super::StorageKey;
@@ -53,10 +55,11 @@ pub(crate) async fn bless(
         "loading configuration from {}",
         config_path.display()
     ));
-    let config = load_config(&config_path).await?;
+    let config = load_config(&config_path, options.config_path.is_some()).await?;
 
     let project_id = resolve_project_id(&config, workspace_dir);
-    let storage = build_storage(&config, workspace_dir)?;
+    let local = resolve_local_path(options.local.as_ref(), storage_env().as_deref())?;
+    let storage = build_storage(local.as_deref(), &config, workspace_dir)?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
     let auto = detect_auto_facets().await?;
@@ -89,10 +92,11 @@ pub(crate) async fn unbless(
         "loading configuration from {}",
         config_path.display()
     ));
-    let config = load_config(&config_path).await?;
+    let config = load_config(&config_path, options.config_path.is_some()).await?;
 
     let project_id = resolve_project_id(&config, workspace_dir);
-    let storage = build_storage(&config, workspace_dir)?;
+    let local = resolve_local_path(options.local.as_ref(), storage_env().as_deref())?;
+    let storage = build_storage(local.as_deref(), &config, workspace_dir)?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
     let auto = detect_auto_facets().await?;
@@ -319,7 +323,7 @@ mod tests {
     use super::*;
 
     fn config() -> Config {
-        crate::config::parse_config("[storage.local]\npath = \"./data\"\n").unwrap()
+        Config::default()
     }
 
     /// The auto-detected facets for the default synthetic partition the tests seed.
