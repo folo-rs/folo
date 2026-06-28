@@ -392,7 +392,7 @@ Captured once per stored run and attached to the `Run`:
   the timeline is its committer date, read from the git graph at analyze time
   (§8.3) and never copied onto the run, so a rebase or an amended date can never
   leave a stale timestamp behind.
-* **Git:** commit SHA + short SHA, branch, dirty flag (`git`).
+* **Git:** commit SHA, branch, dirty flag (`git`).
   Branch is metadata only — query-time topology, not this field, decides series
   membership (§8.3). Parent lineage and committer date are **not** recorded:
   `analyze` resolves topology *and* each commit's committer date from a live repo
@@ -1365,7 +1365,7 @@ adapter plus an in-lib `#[cfg(test)]` in-memory fake:
   injected env; return exit status. Real = `tokio::process::Command`; fake records
   the invocation and can drop fixture `summary.json` files to simulate a bench run.
 * `EnvProbe` (async, `probe.rs`) — discover the run-time git facts
-  (commit/short/branch/dirty) and toolchain facts; the real adapter
+  (commit/branch/dirty) and toolchain facts; the real adapter
   shells `git` and `rustc` (PARSE pure in `git.rs`/`host.rs`), the fake returns
   canned facts.
 * `GitHistory` (async, `git_history.rs`) — the read-only history query
@@ -1943,8 +1943,9 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      `analyze::parallel` = `thread::available_parallelism` capped at the survivor count) and
      dispatches each chunk to a task via the injected `Spawner::spawn`. Each task fetches +
      gzip-inflates + JSON-parses its slice — one object at a time into the lean
-     `analyze::run_points::RunPoints` projection (only what the fold reads: the abbreviated
-     commit and, per result, the id and metric value/interval, not a full `Run`) — and
+     `analyze::run_points::RunPoints` projection (only what the fold reads: per result, the
+     id and metric value/interval, not a full `Run`; the full commit SHA a point is labelled
+     with comes from the storage key, not the run payload) — and
      **folds each parsed run into its own `SeriesBuilder` / `RunIndex`, dropping the run the
      moment its compact points are extracted**, so no worker ever buffers its chunk's parsed
      runs. The driver awaits the tasks **in spawn order** and merges their per-worker
@@ -1980,3 +1981,19 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      drops from the `LOAD_CONCURRENCY`-wide streaming pipeline to ≈ the worker count; the win
      is on the CPU-bound parse, not remote I/O, and the low-volume blessing-sidecar load keeps
      the `buffer_unordered` path.
+
+37. **Full commit SHA only — no recorded abbreviation** — *Decided:* a run records only the
+     full commit SHA (`GitInfo.commit`); the previously stored `GitInfo.short_commit` is
+     removed from the data model entirely (and its `git rev-parse --short HEAD` capture
+     dropped). The analysis already has the full SHA in hand for every object — it is the
+     storage-key commit directory segment (`{…}/{commit}/{file}`) that drives topology and
+     ordinals — so the run payload's abbreviation was redundant *and* carried a (small) 48-bit
+     collision risk the full SHA does not. `analyze::SeriesBuilder::push` now labels each
+     `SeriesPoint` from the storage key's full SHA rather than the payload, and `RunPoints`
+     drops its git projection (it carries only `results`). This is a `SCHEMA_VERSION` 2 → 3
+     bump on the same backward-compatible footing as the v2 commit-timestamp removal: reads
+     are not gated on it, so older objects still deserialize (the removed field is ignored).
+     *Display:* a point's commit is now shown as the full SHA. Abbreviating purely for display
+     (e.g. the blessing `blessed_at`, which still calls a `short_commit` render helper on the
+     full SHA) is a separate, deferred concern — display abbreviation is questionable but not a
+     priority, so it is left as-is for now.

@@ -35,9 +35,9 @@ use crate::model::{BenchmarkId, BenchmarkIdPrefix, MetricKind, Run};
 ///
 /// Kept compact because a large history materializes tens of millions of these at
 /// once: the provenance storage key is reduced to [`object_ordinal`] (the key's
-/// rank in sorted storage-key order, the final tie-break) and the abbreviated
-/// commit is an interned [`Arc<str>`] shared across every point measured against
-/// the same commit.
+/// rank in sorted storage-key order, the final tie-break) and the commit is an
+/// interned [`Arc<str>`] shared across every point measured against the same
+/// commit.
 ///
 /// [`object_ordinal`]: SeriesPoint::object_ordinal
 #[derive(Clone, Debug)]
@@ -49,8 +49,9 @@ pub struct SeriesPoint {
     /// The object's rank in sorted storage-key order (the final tie-break),
     /// standing in for the full storage key to keep the point small.
     pub object_ordinal: u32,
-    /// Abbreviated commit the run was measured against, if known. Interned so all
-    /// points on one commit share a single allocation.
+    /// Commit the run was measured against — the storage key's commit directory
+    /// segment (a full SHA, or `unknown`). Interned so all points on one commit
+    /// share a single allocation.
     pub commit: Option<Arc<str>>,
     /// The measured value.
     pub value: f64,
@@ -191,6 +192,7 @@ pub fn build_series<S: BuildHasher>(
             topo_index,
             object.key.is_dirty(),
             ordinal,
+            &object.key.commit,
             &RunPoints::from(&object.result),
         );
     }
@@ -224,8 +226,8 @@ fn ordinal_of(rank: usize) -> u32 {
 /// of the objects into its own builder and hand it back, and [`merge`] folds the
 /// per-worker builders into one before a single [`finish`](SeriesBuilder::finish).
 ///
-/// The abbreviated commit of each run is interned, so all points measured against
-/// one commit share a single [`Arc<str>`] instead of cloning the string per point.
+/// The commit of each run is interned, so all points measured against one commit
+/// share a single [`Arc<str>`] instead of cloning the string per point.
 ///
 /// [`merge`]: SeriesBuilder::merge
 #[derive(Debug)]
@@ -285,21 +287,23 @@ impl SeriesBuilder {
 
     /// Folds one stored run into the accumulating series.
     ///
-    /// `topo_index` is the run commit's first-parent position and `object_ordinal`
-    /// its rank in sorted storage-key order (the final point tie-break); the caller
-    /// supplies both because they come from the storage key and git topology, not
-    /// the run payload. `run` is the fold-relevant projection of the run (see
-    /// [`RunPoints`]); only the matching metrics are retained — it can be dropped as
-    /// soon as this returns.
+    /// `topo_index` is the run commit's first-parent position, `object_ordinal` its
+    /// rank in sorted storage-key order (the final point tie-break), and `commit`
+    /// the storage key's commit directory segment (a full SHA, or `unknown`); the
+    /// caller supplies all three because they come from the storage key and git
+    /// topology, not the run payload. `run` is the fold-relevant projection of the
+    /// run (see [`RunPoints`]); only the matching metrics are retained — it can be
+    /// dropped as soon as this returns.
     pub fn push(
         &mut self,
         set: &DiscriminantSet,
         topo_index: usize,
         dirty: bool,
         object_ordinal: u32,
+        commit: &str,
         run: &RunPoints,
     ) {
-        let commit = run.short_commit().map(|commit| self.intern(commit));
+        let commit = Some(self.intern(commit));
 
         // The discriminant set is constant for the whole run, so resolve its
         // subtree once and clone the set key only when the set is first seen — not
@@ -546,7 +550,6 @@ mod tests {
             observation,
             GitInfo {
                 commit: Some(format!("{commit}full")),
-                short_commit: Some(commit.to_owned()),
                 branch: Some("main".to_owned()),
                 dirty: false,
             },
@@ -599,8 +602,9 @@ mod tests {
     }
 
     /// One folded object: its discriminant set, the commit's topological index, the
-    /// dirty flag, the storage-key ordinal, and the lean run projection to push.
-    type FoldInput = (DiscriminantSet, usize, bool, u32, RunPoints);
+    /// dirty flag, the storage-key ordinal, the storage-key commit, and the lean run
+    /// projection to push.
+    type FoldInput = (DiscriminantSet, usize, bool, u32, String, RunPoints);
 
     /// Builds the fold inputs for a small data set spanning two benchmark ids
     /// (packages) across three commits, including a clean/dirty pair on one commit,
@@ -620,14 +624,21 @@ mod tests {
                     "v1/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json"
                 );
                 let key = parse_key(&object_key).unwrap();
-                (key.set, topo_index, dirty, ordinal, RunPoints::from(&run))
+                (
+                    key.set,
+                    topo_index,
+                    dirty,
+                    ordinal,
+                    key.commit,
+                    RunPoints::from(&run),
+                )
             })
             .collect()
     }
 
     fn fold_all(builder: &mut SeriesBuilder, inputs: &[FoldInput]) {
-        for (set, topo_index, dirty, ordinal, run) in inputs {
-            builder.push(set, *topo_index, *dirty, *ordinal, run);
+        for (set, topo_index, dirty, ordinal, commit, run) in inputs {
+            builder.push(set, *topo_index, *dirty, *ordinal, commit, run);
         }
     }
 
@@ -905,5 +916,122 @@ mod tests {
 
         assert_eq!(series[0].active_start, 3);
         assert_eq!(series[0].blessing.as_ref().unwrap().commit, "c3full");
+    }
+
+    #[test]
+    fn apply_blessings_leaves_a_series_whose_set_has_no_blessings() {
+        // The blessings map is keyed by discriminant set; a series whose set is
+        // absent from the map must be left fully active rather than re-baselined.
+        let mut series = four_commit_series();
+        // A blessing recorded only for a *different* set (a different target triple),
+        // so the lookup for this series' set misses.
+        let other_set =
+            parse_key("v1/proj/callgrind/aarch64-unknown-linux-gnu/synthetic/c0/clean.json")
+                .unwrap()
+                .set;
+        let mut map = HashMap::new();
+        map.insert(
+            other_set,
+            vec![(2_usize, Some(ts(300)), blessing(&["group"], "c2full", 301))],
+        );
+
+        apply_blessings(&mut series, &map);
+
+        assert_eq!(
+            series[0].active_start, 0,
+            "an unrelated set leaves the series active from the start"
+        );
+        assert!(series[0].blessing.is_none(), "no blessing recorded");
+    }
+
+    #[test]
+    fn push_and_merge_grow_the_id_table_across_resizes() {
+        // Folding many distinct benchmark ids into one discriminant set forces the
+        // per-set id table to grow and rehash its existing entries; merging a second
+        // builder full of further distinct ids grows it again. A wrong hash in either
+        // rehash closure would silently drop or conflate series, so check that every
+        // distinct id survives as its own series across both resize paths.
+        let prefixes: Arc<[BenchmarkIdPrefix]> = Arc::from(Vec::new());
+        let key = parse_key("v1/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/c0/clean.json")
+            .unwrap();
+
+        let mut first = SeriesBuilder::with_prefixes(Arc::clone(&prefixes));
+        for index in 0_u32..64 {
+            let package = format!("pkg{index:03}");
+            let run = run_for_package(ts(1), "c0", f64::from(index), Some(&package));
+            first.push(
+                &key.set,
+                0,
+                false,
+                index,
+                &key.commit,
+                &RunPoints::from(&run),
+            );
+        }
+
+        let mut second = SeriesBuilder::with_prefixes(prefixes);
+        for index in 64_u32..128 {
+            let package = format!("pkg{index:03}");
+            let run = run_for_package(ts(1), "c0", f64::from(index), Some(&package));
+            second.push(
+                &key.set,
+                0,
+                false,
+                index,
+                &key.commit,
+                &RunPoints::from(&run),
+            );
+        }
+
+        first.merge(second);
+        let series = first.finish();
+
+        assert_eq!(
+            series.len(),
+            128,
+            "every distinct id is its own series, none lost to a botched rehash"
+        );
+    }
+
+    #[test]
+    fn finish_orders_two_metric_kinds_of_one_benchmark_by_kind() {
+        // One benchmark measured with two metric kinds yields two series that share
+        // set and id and differ only by kind. finish must fall through to the kind
+        // tie-break (the innermost series comparator) and order them deterministically.
+        let context = RunContext::new(
+            ts(1),
+            GitInfo {
+                commit: Some("c0full".to_owned()),
+                branch: Some("main".to_owned()),
+                dirty: false,
+            },
+            EnvironmentInfo::default(),
+            ToolchainInfo::default(),
+            "0.0.1".to_owned(),
+        );
+        let record = BenchmarkResult::new(
+            BenchmarkId::new(
+                NonEmpty::from_vec(vec!["group".to_owned(), "case".to_owned()]).unwrap(),
+            ),
+            vec![
+                Metric::new(MetricKind::InstructionCount, 100.0),
+                Metric::new(MetricKind::WallTime, 5.0),
+            ],
+        );
+        let run = Run::new(context, vec![record]);
+        let key = parse_key("v1/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/c0/clean.json")
+            .unwrap();
+
+        let mut builder = SeriesBuilder::new(SeriesFilter::default());
+        builder.push(&key.set, 0, false, 0, &key.commit, &RunPoints::from(&run));
+        let series = builder.finish();
+
+        assert_eq!(series.len(), 2, "two metric kinds of one id are two series");
+        assert_eq!(series[0].id, series[1].id, "same benchmark id");
+        assert_eq!(series[0].set, series[1].set, "same discriminant set");
+        assert!(
+            series[0].kind < series[1].kind,
+            "series sharing set and id are ordered by the kind tie-break"
+        );
     }
 }

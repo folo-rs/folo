@@ -139,7 +139,7 @@ struct JsonFinding<'a> {
     relative_delta: f64,
     /// The detector's confidence (`1 - p_value`; `1.0` for an exact step).
     confidence: f64,
-    /// Abbreviated commit the change is attributed to, if known.
+    /// Commit the change is attributed to, if known.
     #[serde(skip_serializing_if = "Option::is_none")]
     commit: Option<&'a str>,
     /// Whether the change is still reflected in the latest measured state.

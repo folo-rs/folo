@@ -766,7 +766,14 @@ where
                         .copied()
                         .unwrap_or(false);
                 run_index.record(&parsed.set, topo_index, &parsed.commit, dirty);
-                builder.push(&parsed.set, topo_index, dirty, ordinal_of(rank), &run);
+                builder.push(
+                    &parsed.set,
+                    topo_index,
+                    dirty,
+                    ordinal_of(rank),
+                    &parsed.commit,
+                    &run,
+                );
                 admitted.push((key, is_exception));
                 // `run` is dropped here; only the extracted (compact) points are kept.
             }
@@ -1713,7 +1720,6 @@ mod tests {
             time,
             GitInfo {
                 commit: Some(commit.to_owned()),
-                short_commit: Some(commit.to_owned()),
                 branch: Some("main".to_owned()),
                 dirty: false,
             },
@@ -1750,7 +1756,6 @@ mod tests {
             time,
             GitInfo {
                 commit: Some(commit.to_owned()),
-                short_commit: Some(commit.to_owned()),
                 branch: Some("main".to_owned()),
                 dirty: false,
             },

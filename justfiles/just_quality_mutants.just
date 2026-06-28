@@ -81,6 +81,14 @@ mutants SHARD="" CAREFUL='false':
         "-e"
         (Escape-Wildcards "packages/cargo-bench-history/src/bin/**")
 
+        # `testing.rs` is an in-workspace test utility (gated behind the `private-test-util`
+        # feature, consumed only by the shell crate's tests). It is scaffolding with no public
+        # API contract, so mutating it yields no production coverage signal. A source-level
+        # `mutants::skip` cannot apply to a file module (inner/file-module proc-macro attributes
+        # are unstable Rust), so it is excluded here instead.
+        "-e"
+        (Escape-Wildcards "packages/cargo-bench-history-core/src/testing.rs")
+
         # Some of our systems are single-processor, yet the code may only be meaningfully testable
         # on multi-processor systems. As a "good enough" approximation, we skip mutation testing
         # of code that is only testable in a multi-processor system.

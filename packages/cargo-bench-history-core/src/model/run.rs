@@ -10,8 +10,10 @@ use crate::model::{BenchmarkId, Metric, RunContext};
 /// Records which on-disk format a file was written with. Reads are not gated on
 /// it: version 2 dropped the redundant per-object `commit` timestamp (a run's
 /// timeline position is resolved from git topology, keyed by its commit SHA), and
-/// older records still deserialize because the removed field is simply ignored.
-pub const SCHEMA_VERSION: u32 = 2;
+/// version 3 dropped the redundant `short_commit` (an abbreviation of the full
+/// commit SHA the analysis already has from the storage key). Older records still
+/// deserialize because the removed fields are simply ignored.
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// A complete benchmark run: the unit of storage (one immutable file per run).
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
