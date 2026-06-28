@@ -5,7 +5,7 @@
 //! its own `SeriesBuilder`, dropping the parsed run before the next. Deserializing
 //! into [`RunPoints`] instead of the full [`Run`](crate::model::Run) shrinks that
 //! transient per-object footprint: it keeps only, per result, the benchmark id and
-//! the metric fields
+//! the metric fields that
 //! [`SeriesBuilder::push`](crate::analyze::SeriesBuilder::push) actually folds
 //! into points — dropping the run context (environment, toolchain, commit,
 //! timestamps) and each metric's standard deviation. The commit a point is
