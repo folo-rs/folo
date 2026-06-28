@@ -256,11 +256,31 @@ fn set_label(set: &DiscriminantSet) -> String {
     set.to_string()
 }
 
+/// Forces `colored`'s process-global override to `value` until dropped, then
+/// restores ambient auto-detection. Bundling the set with the matching restore keeps
+/// the override scoped to a single render call so it can never leak into later output,
+/// even on an early return or panic.
+struct ColorOverride;
+
+impl ColorOverride {
+    #[must_use]
+    fn force(value: bool) -> Self {
+        colored::control::set_override(value);
+        Self
+    }
+}
+
+impl Drop for ColorOverride {
+    fn drop(&mut self) {
+        colored::control::unset_override();
+    }
+}
+
 fn render_text(input: &ReportInput<'_>, color: bool) -> String {
-    // Force `colored` and `rasciigraph` to honor this explicit decision rather
-    // than their own ambient terminal auto-detection, so tests and pipes are
-    // deterministic regardless of how the process is run.
-    colored::control::set_override(color);
+    // Force `colored` and `rasciigraph` to honor this explicit decision rather than
+    // their own ambient terminal auto-detection, so tests and pipes are deterministic
+    // regardless of how the process is run. The guard restores auto-detection on return.
+    let _color = ColorOverride::force(color);
 
     let regressions = count_top(input.findings, Direction::Regression);
     let improvements = count_top(input.findings, Direction::Improvement);
@@ -465,15 +485,10 @@ fn chart_of(series: &[SeriesValue], direction: Direction, active_from: usize) ->
 fn render_markdown(input: &ReportInput<'_>) -> String {
     // Charts embed ANSI color when `colored` is active; force it off while rendering
     // so the fenced code blocks carry plain characters that render in any Markdown
-    // viewer, then return `colored` to its ambient auto-detection so this override
+    // viewer. The guard restores ambient auto-detection on return so this override
     // never leaks into later output in the same process.
-    colored::control::set_override(false);
-    let report = render_markdown_body(input);
-    colored::control::unset_override();
-    report
-}
+    let _color = ColorOverride::force(false);
 
-fn render_markdown_body(input: &ReportInput<'_>) -> String {
     let regressions = count_top(input.findings, Direction::Regression);
     let improvements = count_top(input.findings, Direction::Improvement);
 
@@ -1177,7 +1192,7 @@ mod tests {
     #[test]
     fn chart_of_needs_at_least_two_points() {
         // Deterministic, Miri-safe color state for the rasciigraph plot.
-        colored::control::set_override(false);
+        let _color = ColorOverride::force(false);
         let point = |value: f64| SeriesValue {
             commit: None,
             value,
@@ -1193,7 +1208,7 @@ mod tests {
     #[test]
     fn chart_of_plots_improvements_and_overlays_a_partial_active_window() {
         // Deterministic, Miri-safe color state for the rasciigraph plot.
-        colored::control::set_override(false);
+        let _color = ColorOverride::force(false);
         let point = |value: f64| SeriesValue {
             commit: None,
             value,
