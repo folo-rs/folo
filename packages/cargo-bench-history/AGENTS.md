@@ -59,6 +59,8 @@ prune stay in selection lockstep automatically — see those sections):
 * **Benchmark scope** (`run`/`backfill`) — `--workspace`, `--package`/`-p`,
   `--exclude` (drops packages from a whole-workspace run; conflicts with
   `--package`), `--bench`.
+* **Feature selection** (`run`/`backfill`) — `--features`, `--all-features`,
+  `--no-default-features`, all forwarded verbatim to `cargo bench`.
 * **Discriminant selection** — `--engine`, `--target-triple`, `--machine-key`. On
   query commands each is **repeatable** (a `Vec`), accepts the widening keyword
   `all`, and auto-detects the current machine when omitted (§4.3). On create commands
@@ -571,7 +573,8 @@ Callgrind off Linux, where the `_cg` benches are `#[cfg(target_os = "linux")]`
 no-ops) is silently skipped. Scope a run with `--workspace` (the default),
 `--package`/`-p NAME` (repeatable), `--exclude NAME` (repeatable, drops packages
 from the whole-workspace run; conflicts with `--package`), or `--bench NAME`
-(repeatable) — these
+(repeatable), and select cargo features with `--features` (repeatable),
+`--all-features`, or `--no-default-features` — these
 translate to the matching `cargo bench` arguments. `--engine` is **not** a
 `run`/`backfill` flag; it is an `analyze` facet over already-stored data.
 `Engine::ALL` enumerates the engines harvested per run.
@@ -624,8 +627,10 @@ mock as the benchmark command via the `run_with_overrides` `bench_command`
 override (`[MOCK_ENGINE] + self.bench`, set with `Workspace::with_bench`), so the
 program path and each fixture-describing argument are passed verbatim as distinct
 argv entries — no shell, no quoting, no config `command`. After the mock's own
-contiguous arguments, `run` appends the cargo scope flags (`--workspace`/
-`--exclude NAME`/`--package NAME`/`--bench NAME`) and any `--` passthrough, which the mock ignores
+contiguous arguments, `run` appends the cargo scope flags (`--workspace`,
+`--exclude NAME`, `--package NAME`, `--bench NAME`), the feature-selection flags
+(`--features`, `--all-features`, `--no-default-features`), and any `--`
+passthrough, which the mock ignores
 (it stops at the first argument it does not recognize). Like every other crate
 root that uses `#[cfg_attr(coverage_nightly, coverage(off))]`, the mock engine
 must declare `#![cfg_attr(coverage_nightly, feature(coverage_attribute))]` at its

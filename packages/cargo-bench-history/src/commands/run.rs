@@ -306,7 +306,8 @@ where
 /// Scope follows cargo's own conventions: with no `--package` filters the whole
 /// workspace is benched (`--workspace`), optionally minus any `--exclude`d
 /// packages; otherwise each requested package is passed with `--package`. Any
-/// `--bench` filters are appended next. Passthrough
+/// `--bench` filters are appended next, then the cargo feature-selection flags
+/// (`--features`/`--all-features`/`--no-default-features`). Passthrough
 /// arguments are forwarded to the benchmark binary, so they follow a `--`
 /// separator that splits them from cargo's own arguments (Criterion's `--noplot`
 /// or Gungraun's `--output-format`, for example, are harness flags cargo would
@@ -342,6 +343,16 @@ fn build_bench_argv(
     for bench in &options.benches {
         argv.push("--bench".to_owned());
         argv.push(bench.clone());
+    }
+    for features in &options.features {
+        argv.push("--features".to_owned());
+        argv.push(features.clone());
+    }
+    if options.all_features {
+        argv.push("--all-features".to_owned());
+    }
+    if options.no_default_features {
+        argv.push("--no-default-features".to_owned());
     }
     if !options.passthrough.is_empty() {
         // The CLI strips the `--` that separates passthrough from the tool's own
@@ -1878,6 +1889,32 @@ mod tests {
     }
 
     #[test]
+    fn feature_selection_reaches_the_runner_verbatim() {
+        let runner = FakeRunner::succeeding();
+        let options = RunOptions {
+            features: vec!["foo".to_owned()],
+            all_features: true,
+            ..RunOptions::default()
+        };
+
+        drive(
+            &options,
+            &runner,
+            &FakeProbe::new(),
+            &FakeOutput::default(),
+            &MemoryStorage::new(),
+        )
+        .unwrap();
+
+        // Feature flags follow the implicit `--workspace` scope, forwarded to
+        // cargo in declaration order.
+        assert_eq!(
+            runner.last_command().unwrap(),
+            ["mock", "--workspace", "--features", "foo", "--all-features"]
+        );
+    }
+
+    #[test]
     fn bench_environment_pins_the_target_directory() {
         let runner = FakeRunner::succeeding();
 
@@ -1965,6 +2002,42 @@ mod tests {
                 "many_cpus"
             ]
         );
+    }
+
+    #[test]
+    fn build_bench_argv_translates_feature_selection() {
+        let options = RunOptions {
+            packages: vec!["nm".to_owned()],
+            features: vec!["foo".to_owned(), "bar baz".to_owned()],
+            no_default_features: true,
+            ..RunOptions::default()
+        };
+        let argv = build_bench_argv(&mock_bench_command(), &options).unwrap();
+        // Feature flags follow the scope flags, each `--features` value forwarded
+        // verbatim (so a space-separated set survives as one argument).
+        assert_eq!(
+            argv,
+            [
+                "mock",
+                "--package",
+                "nm",
+                "--features",
+                "foo",
+                "--features",
+                "bar baz",
+                "--no-default-features"
+            ]
+        );
+    }
+
+    #[test]
+    fn build_bench_argv_translates_all_features() {
+        let options = RunOptions {
+            all_features: true,
+            ..RunOptions::default()
+        };
+        let argv = build_bench_argv(&mock_bench_command(), &options).unwrap();
+        assert_eq!(argv, ["mock", "--workspace", "--all-features"]);
     }
 
     #[test]

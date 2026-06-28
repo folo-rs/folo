@@ -493,8 +493,10 @@ rather than one flat list:
 * **Environment and execution** — `--config`, `--repo`, `--verbose`, `--dry-run`
   (on `prune`), and `--help`.
 * **Output** — `--format` (text / json / markdown), on the reporting commands.
-* **Benchmark scope** — `--workspace`, `--package`/`-p`, `--bench`, on the
-  executing commands.
+* **Benchmark scope** — `--workspace`, `--package`/`-p`, `--exclude`, `--bench`,
+  on the executing commands.
+* **Feature selection** — `--features`, `--all-features`, `--no-default-features`,
+  on the executing commands; forwarded verbatim to `cargo bench`.
 * **Discriminant selection** — `--engine`, `--target-triple`, `--machine-key`
   (§4.3): repeatable + `all` in query mode; only `--machine-key` in create mode.
 * **Commit selection** — `--base`, `--context` (the ref the command runs in
@@ -568,8 +570,12 @@ Valgrind off-Linux.
 (repeatable) restricts to specific packages (and omits `--workspace`);
 `--exclude NAME` (repeatable, conflicts with `--package`) drops packages from the
 whole-workspace run; `--bench
-NAME` (repeatable) restricts to named bench targets. Everything after a `--`
-separator is forwarded **verbatim** to `cargo bench` after the scope flags.
+NAME` (repeatable) restricts to named bench targets. Cargo feature selection is
+forwarded too: `--features <FEATURES>` (repeatable), `--all-features`, and
+`--no-default-features` become the matching `cargo bench` flags, so feature-gated
+benchmarks can be reached. Everything after a `--`
+separator is forwarded **verbatim** to `cargo bench` after the scope and feature
+flags.
 Because harvest is scoped by `mtime ≥ run-start`, whatever subset actually ran is
 exactly what gets ingested. Note that two non-overlapping partial runs at the same
 commit (different `--package`/`--bench` subsets) do **not** merge: each stores its
@@ -703,7 +709,8 @@ also the convenient path for ad-hoc evaluation over a span of commits.
 
 ```
 cargo bench-history backfill <from> <to> \
-    [--workspace] [--package NAME] [--bench NAME] \
+    [--workspace] [--package NAME] [--exclude NAME] [--bench NAME] \
+    [--features FEATURES] [--all-features] [--no-default-features] \
     [--overwrite] [--ignore-errors] [--verbose] [-- <passthrough>]
 ```
 
@@ -756,7 +763,8 @@ harvest already excludes stale artifacts). The benches that run are whatever exi
 in each checked-out commit; benches absent at an old commit simply harvest
 nothing.
 
-`--config`, `--workspace`/`--package`/`--bench`, `--target-triple`,
+`--config`, `--workspace`/`--package`/`--exclude`/`--bench`,
+`--features`/`--all-features`/`--no-default-features`, `--target-triple`,
 `--machine-key` and `-- <passthrough>` behave as for `run`. To collect Callgrind
 data, run backfill on Linux/WSL — the worktree path is reachable from WSL exactly
 like the primary checkout.
@@ -1438,7 +1446,9 @@ Each iteration ships with tests and docs and leaves the tool runnable.
    effective time; the stored commit timestamp, the effective-time concept, and
    `--timestamp` are all gone.)*
 10. **Filtering** — *Decided:* `run`/`backfill` expose first-class scope
-    flags — `--workspace` (default), `--package`/`-p NAME`, `--bench NAME` — that
+    flags — `--workspace` (default), `--package`/`-p NAME`, `--exclude NAME`,
+    `--bench NAME` — plus cargo feature-selection flags (`--features`,
+    `--all-features`, `--no-default-features`) that
     translate directly to `cargo bench` arguments; everything after `--` is
     forwarded verbatim after them. The `mtime ≥ run-start` harvest captures exactly
     what ran. `--engine` is not a `run` flag — it is an `analyze` facet over stored
@@ -1585,7 +1595,9 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     `run`/`backfill` run the workspace's benches once with `cargo bench`, inject the
     combined environment every supported engine needs, and detect each engine from
     the output tree it wrote (decision 8). Scope is expressed with first-class
-    `--workspace`/`--package`/`--bench` flags (decision 10). This supersedes the
+    `--workspace`/`--package`/`--exclude`/`--bench` flags plus cargo
+    feature-selection flags (`--features`/`--all-features`/`--no-default-features`)
+    (decision 10). This supersedes the
     per-engine `command`/`os`/`extra_args` config, the `--engine`-on-`run` selector,
     and the `WSLENV` bridging. The bet is that a single `cargo bench` invocation with
     the union of engine env vars yields correct output for every supported engine —
@@ -1662,7 +1674,9 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      list is hard to navigate. Flags are organised into functional groups via clap
      `help_heading`s — **Environment and execution** (`--config`/`--repo`/`--verbose`/
      `--dry-run`), **Output** (`--format`), **Benchmark scope** (`--workspace`/
-     `--package`/`--bench`), **Discriminant selection** (`--engine`/`--target-triple`/
+     `--package`/`--exclude`/`--bench`), **Feature selection** (`--features`/
+     `--all-features`/`--no-default-features`), **Discriminant selection**
+     (`--engine`/`--target-triple`/
      `--machine-key`), **Commit selection** (`--context`/`--base`/`--since`/
      `--until`), and **Data filtering** (`--no-dirty`) — shared across commands via
      flattened arg structs so a given group looks identical everywhere it appears.
