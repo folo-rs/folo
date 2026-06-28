@@ -5,6 +5,14 @@ logic (parsing, mapping, comparability, key derivation, message formatting)
 synchronous and pushes async only to the IO edges, each modelled as a small
 "port" trait with a real Tokio adapter and an in-`#[cfg(test)]` in-memory fake.
 
+> **Design reference:** [`docs/DESIGN.md`](docs/DESIGN.md) is the canonical design &
+> implementation record — the data model, comparability/storage rules, command
+> semantics, analysis algorithms, the two-crate (shell + `cargo-bench-history-core`)
+> architecture, and the numbered decision log (§13). Keep it up to date whenever you
+> change a design decision, the data model, the crate layout, the storage format, or
+> a command's behaviour, recording non-trivial design changes as a new or amended
+> decision entry.
+
 ## Ports and fakes
 
 The orchestrator (`commands::run::execute_run`) is generic over its ports and is

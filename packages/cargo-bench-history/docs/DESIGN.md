@@ -169,7 +169,8 @@ flowchart LR
 ```
 
 * **BenchmarkId** — stable identity of a series, modeled as an ordered
-  `segments: Vec<String>`. The engine-specific adapter decides what the segments
+  `segments: NonEmpty<String>` (the type enforces the at-least-one-segment
+  invariant). The engine-specific adapter decides what the segments
   are, so the general-purpose type carries no engine-specific assumptions about
   which component is the "group" or "case". Callgrind composes `[package?,
   module_path, function_name, value?]` (the workspace `package` — the Gungraun
@@ -474,6 +475,18 @@ backend-agnostic by holding a `StorageFacade`.
   still covered under Miri by `storage::sas`'s fixed-expiry golden vector.
 * An in-memory `Storage` fake (in `#[cfg(test)]`) backs the Miri-safe
   orchestration tests; it mirrors the same key/prefix semantics as `LocalStorage`.
+* **Connection reuse & on-the-wire compression.** Every per-object blob and
+  container client is built from one shared, pooled `reqwest` transport — an
+  `Arc<dyn HttpClient>` injected through the SDK's transport seam and held on
+  `AzureBlobStorage`, built once in `from_config` — so `analyze`'s
+  high-concurrency object-load burst keeps TCP+TLS connections alive across objects
+  instead of paying a fresh handshake per object (and stops exhausting ephemeral
+  ports at high fetch concurrency). Stored bodies are **gzip-compressed** by the
+  shared `cargo_bench_history_core::codec` both backends call: `put`/`get`
+  compress/decompress at the edge, Azure tags the blob `Content-Encoding: gzip` and
+  leaves SDK auto-decompression off (the storage layer already returns compressed
+  bytes, so turning it on would double-inflate), and a legacy plaintext object fails
+  loudly on `get` because the gzip magic never collides with JSON's first byte.
 
 The blob/key model (flat keys, list-by-prefix, immutable objects) is the lowest
 common denominator of a filesystem and a blob container, so both backends
@@ -1028,7 +1041,8 @@ never gate the exit code (§8.3, §9.6).
 
 ### 9.5 Statistical primitives
 
-All math lives in a pure, deterministic, Miri-safe `analyze/stats.rs`:
+All math lives in a pure, deterministic, Miri-safe `analyze/stats.rs` (in the
+`cargo-bench-history-core` library — §10):
 `median`, `pettitt` (rank-based `U_t`, `K = max|U_t|`, `p ≈ 2·exp(−6K²/(n³+n²))`,
 used only to locate the split), `mann_whitney_u_pvalue` (tie- and
 continuity-corrected normal approximation), `mann_kendall` (`S`, tie-corrected
@@ -1184,23 +1198,59 @@ separated from the inactive context that is kept only for continuity.
 
 ## 10. Crate architecture
 
-`packages/cargo-bench-history/` — binary + library, `clap` (derive) subcommands.
-The other workspace cargo tools (`cargo-detect-package`/`cargo-freeze-deps`) also use
+The tool is **two crates**: the **shell** `packages/cargo-bench-history/` (the
+`clap`-derive binary + its library) and the **core** library
+`packages/cargo-bench-history-core/` it depends on. The split follows the
+workspace's impl-crate pattern — a private-use `-core` extraction treated as the
+impl crate (`docs/impl-crate-split.md`): all **pure, I/O-free** logic (the stored
+data model, comparability/partitioning, the analysis math + rendering, and the
+shared gzip codec) lives in core so it can be exercised by a fast, Miri-friendly,
+cheap-to-mutation-test in-process suite, while everything that touches the outside
+world (storage, git, process, filesystem, the CLI) stays in the shell. The data-flow
+and parallelism map across the two crates is [`docs/analyze.md`](analyze.md). The
+other workspace cargo tools (`cargo-detect-package`/`cargo-freeze-deps`) also use
 `clap`, though their CLIs are trivial enough to need no grouped argument headings.
+
+**`cargo-bench-history-core` (pure, no I/O).** Three flat namespaces, each
+re-exporting its submodule types so consumers write `core::model::Run` /
+`core::analyze::Finding` rather than reaching into private submodules:
+
+```
+src/
+  model/                  # the stored data model (serde)
+    benchmark_id.rs       # BenchmarkId (NonEmpty<String> segments) + BenchmarkIdPrefix
+    metric.rs             # Metric / MetricKind
+    run.rs                # Run / BenchmarkResult
+    context.rs            # RunContext (CI/git/toolchain + observation time)
+    comparability.rs      # DiscriminantSet + commit-centric partition path
+    bless.rs              # BlessingRecord data model
+    constants.rs mod.rs   # schema versions + flat re-exports
+  analyze/
+    discriminant.rs       # parse v1 keys; DiscriminantSet/DiscriminantSetQuery
+    selection.rs          # split the target ancestry at the merge-base
+    series.rs             # per-(BenchmarkId, metric) series in topology order
+    stats.rs              # pure statistical primitives (Pettitt, Mann-Kendall, ...)
+    findings.rs           # engine-aware detectors + Spawner-driven parallel pass (decision 33)
+    parallel.rs           # balanced chunk math for the per-series parallel pass
+    report.rs             # text|json|markdown multi-set renderer
+    mod.rs                # AnalysisContext/AnalysisMode/Finding + flat re-exports
+  codec.rs                # gzip byte format shared by storage + the stress harness
+  testing.rs              # `private-test-util` fixtures (feature-gated; test-only)
+```
+
+**`cargo-bench-history` (the shell: I/O, git, CLI, orchestration).**
 
 ```
 src/
   main.rs                 # #[tokio::main]; strip "bench-history" arg, parse, dispatch
-  lib.rs                  # module wiring + the public re-exports
-  cli.rs / types.rs       # clap subcommands + grouped args + RunOptions/Outcome/Error
+  lib.rs                  # module wiring + public re-exports (incl. core's model)
+  cli.rs                  # clap subcommands + grouped args
+  command.rs              # the parsed Command enum + per-subcommand option structs
+  outcome.rs              # RunOutcome / RunError
   dispatch.rs             # route a parsed Command to its command handler
   wiring.rs               # locate config + project id, build the StorageFacade
   config.rs               # load + generate .cargo/bench_history.toml (toml)
   config_writer.rs        # ConfigWriter port (tokio adapter + fake) for `install`
-  model.rs                # Run/BenchmarkResult/Metric/BenchmarkId/Context (serde)
-  comparability.rs        # DiscriminantSet + commit-centric partition path
-  bless.rs                # BlessingRecord data model + append-only sidecar
-  context.rs              # RunContext (CI/git/toolchain + observation time)
   process.rs              # ProcessRunner port (async) + tokio adapter + fake
   probe.rs                # environment probe port (git/rustc) + shell adapter + fake
   git.rs                  # pure parse of git output -> GitInfo
@@ -1218,23 +1268,19 @@ src/
   bench_output.rs         # BenchOutputSource port: harvest target/ -> fresh cases
   storage/
     mod.rs                # Storage trait (async) + in-memory fake
-    local.rs              # tokio::fs backend
+    local.rs              # tokio::fs backend (gzip via core::codec)
     facade.rs             # StorageFacade enum (Local | Azure), static dispatch
-    azure.rs              # AzureBlobStorage
+    azure.rs              # AzureBlobStorage (one shared pooled reqwest transport, §7)
     sas.rs                # self-signed account-SAS signer
   analyze/
-    mod.rs                # query orchestration (shared selection pipeline)
-    discriminant.rs       # parse v1 keys; DiscriminantSet/DiscriminantSetQuery
-    selection.rs          # split the target ancestry at the merge-base
-    series.rs             # per-(BenchmarkId, metric) series in topology order
-    stats.rs              # pure statistical primitives (Pettitt, Mann-Kendall, ...)
-    findings.rs           # engine-aware change-point + drift detectors
-    report.rs             # text|json|markdown multi-set renderer
+    mod.rs                # query orchestration (concurrent load + Spawner injection)
     list.rs               # `list runs|discriminants|blessings` data-set preview
     prune.rs              # `prune` deletes selected runs (mirrors list selection)
     bless.rs              # `bless`/`unbless` + `list blessings` audit
   commands/
-    mod.rs run.rs install.rs backfill.rs   # the analyze/list/prune/bless/unbless handlers are in analyze/
+    mod.rs run.rs install.rs backfill.rs   # analyze/list/prune/bless/unbless handlers live in analyze/
+  bin/
+    cargo-bench-history-mock-engine.rs     # test-support fake bench engine
 ```
 
 **Async ports & adapters (the testability boundary).** The app is **async by
@@ -1395,7 +1441,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
 ## 13. Decisions & open items
 
 1. **Design-doc home** — *Decided:* committed to
-   `packages/cargo-bench-history/DESIGN.md` (package dir created up front).
+   `packages/cargo-bench-history/docs/DESIGN.md`.
 2. **Scaffold now?** — *Deferred:* design decisions resolved first; creating the
    Phase 0 crate skeleton is the next step when you’re ready.
 3. **Storage granularity** — *Decided:* immutable one-file-per-run.
