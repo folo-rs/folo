@@ -251,7 +251,9 @@ pub struct Finding {
     pub blessed_at: Option<String>,
     /// Effective (committer) time of the blessed commit, RFC 3339, if blessed.
     pub blessed_commit_time: Option<String>,
-    /// The full underlying series, oldest-first, so a consumer can draw a chart.
+    /// The full underlying series, oldest-first. Retained internally so the text and
+    /// Markdown reports can draw a chart; it is not part of the machine-readable JSON
+    /// contract.
     pub series: Vec<SeriesValue>,
 }
 

@@ -463,10 +463,17 @@ fn chart_of(series: &[SeriesValue], direction: Direction, active_from: usize) ->
 }
 
 fn render_markdown(input: &ReportInput<'_>) -> String {
-    // Charts embed ANSI color when `colored` is active; force it off so the fenced
-    // code blocks carry plain characters that render in any Markdown viewer.
+    // Charts embed ANSI color when `colored` is active; force it off while rendering
+    // so the fenced code blocks carry plain characters that render in any Markdown
+    // viewer, then return `colored` to its ambient auto-detection so this override
+    // never leaks into later output in the same process.
     colored::control::set_override(false);
+    let report = render_markdown_body(input);
+    colored::control::unset_override();
+    report
+}
 
+fn render_markdown_body(input: &ReportInput<'_>) -> String {
     let regressions = count_top(input.findings, Direction::Regression);
     let improvements = count_top(input.findings, Direction::Improvement);
 
