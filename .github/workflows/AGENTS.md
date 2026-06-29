@@ -123,7 +123,10 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
     reads the account from the job's `BENCH_HISTORY_TEST_AZURE_ACCOUNT` env and runs the
     `*_in_real_azure` tests). Each test deletes its own container, even on panic; a
     final `if: always()` step runs `infra/azure-bench-history-test/cleanup-containers.ps1`
-    as a backstop for a container a crashed run might leave.
+    as a backstop for a container a crashed run might leave. Because `test-azure` and
+    `test-azure-gh` run concurrently against this one account, that backstop passes
+    `-MinAgeMinutes 180` so it only sweeps older, genuinely leaked containers and never
+    deletes a container the sibling job is still writing to.
   - Collects **no coverage** (`test-azurite` already covers `azure.rs`); its value
     is proving the real Entra + real Blob endpoint round-trip end to end. The
     account, identity and federated credentials are scripted/Bicep'd in

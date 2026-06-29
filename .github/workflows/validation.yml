@@ -749,12 +749,17 @@ jobs:
       - name: Run real-Azure storage tests
         run: just test-azure
 
-      - name: Delete any leftover test containers
+      - name: Delete leaked test containers
         if: always()
         shell: pwsh
         # cleanup-containers.ps1 defaults its account to BENCH_HISTORY_TEST_AZURE_ACCOUNT,
-        # which the load step above put into the job env.
-        run: ./infra/azure-bench-history-test/cleanup-containers.ps1
+        # which the load step above put into the job env. Each test already deletes its
+        # own container when it finishes, so this backstop only needs to sweep containers
+        # leaked by a crashed or timed-out run. test-azure and test-azure-gh run
+        # concurrently against the same account, so -MinAgeMinutes keeps this sweep from
+        # deleting the sibling job's still-in-use (freshly written) containers; a genuine
+        # leak is older than the cutoff and gets swept here or on a later run.
+        run: ./infra/azure-bench-history-test/cleanup-containers.ps1 -MinAgeMinutes 180
 
   # Variant of test-azure that exercises cargo-bench-history's SELF-MINTING GitHub
   # OIDC credential — the exact credential the nightly prod collection (bench-history.yml)
@@ -815,9 +820,14 @@ jobs:
       - name: Run real-Azure storage tests via the self-minting OIDC credential
         run: just test-azure
 
-      - name: Delete any leftover test containers
+      - name: Delete leaked test containers
         if: always()
         shell: pwsh
         # cleanup-containers.ps1 defaults its account to BENCH_HISTORY_TEST_AZURE_ACCOUNT,
-        # which the load step above put into the job env.
-        run: ./infra/azure-bench-history-test/cleanup-containers.ps1
+        # which the load step above put into the job env. Each test already deletes its
+        # own container when it finishes, so this backstop only needs to sweep containers
+        # leaked by a crashed or timed-out run. test-azure and test-azure-gh run
+        # concurrently against the same account, so -MinAgeMinutes keeps this sweep from
+        # deleting the sibling job's still-in-use (freshly written) containers; a genuine
+        # leak is older than the cutoff and gets swept here or on a later run.
+        run: ./infra/azure-bench-history-test/cleanup-containers.ps1 -MinAgeMinutes 180
