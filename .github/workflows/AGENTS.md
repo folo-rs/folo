@@ -51,6 +51,15 @@ Split from the monolithic `just validate-local` into individual jobs:
   - check-release
   - clippy-release
   - build-release
+  - **check-frozen** — verifies the workspace compiles at the minimum dependency versions
+    declared in `Cargo.toml` (our published minimum-version promises) rather than the
+    higher versions pinned in `Cargo.lock`. Runs the `check-frozen` just recipe, which
+    uses the `cargo-freeze-deps` subcommand to rewrite every workspace dependency
+    requirement to its declared minimum (`=X.Y.Z`), regenerates the lockfile so the
+    resolver selects those minimums, and then runs `check`. A failure means a declared
+    minimum is too low to actually compile. Multi-platform because target-specific
+    dependencies and conditional compilation can make minimum-version resolution differ
+    per platform.
   - careful
 
 Split from the monolithic `just validate-extra-local` into individual jobs, all multi-platform:
@@ -151,6 +160,9 @@ for manual cache warming after toolchain updates.
    - `clippy-release` depends on `clippy-dev`
    - `build-release` depends on `check-dev` (no point linking a release binary if the
      dev `cargo check` already failed)
+   - `check-frozen` depends on `check-dev` (checking the frozen minimum dependency
+     versions is pointless if the code does not even build with the normal lockfile
+     versions)
    - `miri-x64` and `miri-arm` depend on `check-dev` (Miri is much slower than `cargo check`;
      if the code does not even compile in dev mode, there is nothing for Miri to interpret)
    - `miri-x64` also depends on `test-more-x64`, and `miri-arm` also depends on

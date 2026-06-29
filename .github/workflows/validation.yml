@@ -485,6 +485,32 @@ jobs:
       - name: Run build release on ${{ matrix.platform }}
         run: just package="${{ needs.delta.outputs.packages }}" build release
 
+  # Verifies the workspace still compiles at the minimum dependency versions declared in
+  # Cargo.toml (our published minimum-version promises), rather than the higher versions
+  # pinned in Cargo.lock. The `check-frozen` recipe freezes every workspace dependency to
+  # its declared minimum, regenerates the lockfile, and runs `check`. Gated behind check-dev
+  # because checking the frozen minimums is pointless if the code does not even build with
+  # the normal lockfile versions.
+  check-frozen:
+    needs: [delta, check-dev]
+    if: needs.delta.outputs.skip_all != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run check-frozen on ${{ matrix.platform }}
+        run: just package="${{ needs.delta.outputs.packages }}" check-frozen
+
   mutants:
     needs: [delta, test-more-x64]
     if: needs.delta.outputs.skip_all != 'true'
