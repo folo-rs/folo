@@ -67,6 +67,12 @@ const ENV_TENANT_ID: &str = "AZURE_TENANT_ID";
 /// connection pool. A `Some(Err(..))` result means the job *is* in the federation
 /// context but the credential could not be constructed (for example an invalid
 /// tenant ID), which the caller surfaces rather than silently falling back.
+// Thin adapter: its only behavior is injecting the real process environment into
+// `credential_from` (unit-tested with an injected getter). Returning `None` here is
+// observable only in a live GitHub Actions job, which the `test-azure-gh` integration
+// job verifies but unit tests cannot reproduce without mutating the global process
+// environment (which this crate's tests avoid).
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn from_env(
     http_client: &Arc<dyn HttpClient>,
 ) -> Option<Result<Arc<dyn TokenCredential>, StorageError>> {
