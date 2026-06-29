@@ -103,6 +103,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        # Full history: analyze walks first-parent commits to map stored runs to
+        # committer timestamps; a shallow clone would hide most commits and skew it.
+        with:
+          fetch-depth: 0
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
