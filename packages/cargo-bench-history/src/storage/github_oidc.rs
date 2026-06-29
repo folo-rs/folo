@@ -70,8 +70,7 @@ const ENV_TENANT_ID: &str = "AZURE_TENANT_ID";
 pub(crate) fn from_env(
     http_client: &Arc<dyn HttpClient>,
 ) -> Option<Result<Arc<dyn TokenCredential>, StorageError>> {
-    let params = params_from_env()?;
-    Some(build_credential(params, Arc::clone(http_client)))
+    credential_from(|key| env::var(key).ok(), http_client)
 }
 
 /// The four values that together opt a job into GitHub OIDC federation.
@@ -82,9 +81,17 @@ struct GithubOidcParams {
     tenant_id: String,
 }
 
-/// Reads the GitHub OIDC parameters from the process environment.
-fn params_from_env() -> Option<GithubOidcParams> {
-    params_from(|key| env::var(key).ok())
+/// Resolves a self-minting credential from an arbitrary env getter, so the wiring
+/// from detected parameters to a built credential is testable without mutating the
+/// global process environment. Returns `None` when the job is not in the federation
+/// context (the caller then falls back to the developer credential), mirroring
+/// [`from_env`] which delegates here with the real process environment.
+fn credential_from(
+    get: impl Fn(&str) -> Option<String>,
+    http_client: &Arc<dyn HttpClient>,
+) -> Option<Result<Arc<dyn TokenCredential>, StorageError>> {
+    let params = params_from(get)?;
+    Some(build_credential(params, Arc::clone(http_client)))
 }
 
 /// Resolves the parameters from an arbitrary getter, so the detection rule is
@@ -464,5 +471,33 @@ mod tests {
         };
         let error = build_credential(params, http_client).expect_err("error");
         assert!(matches!(error, StorageError::Config { .. }), "{error:?}");
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "builds a real HTTP pipeline (reqwest) that Miri cannot run"
+    )]
+    fn credential_from_builds_a_credential_when_all_params_present() {
+        let http_client: Arc<dyn HttpClient> =
+            Arc::new(StubHttpClient::new(StatusCode::Ok, b"{}".to_vec()));
+        // The tenant and client IDs must be legal GUIDs so the assertion credential
+        // actually constructs (the env getter's strings flow straight through).
+        let present = vec![
+            (ENV_REQUEST_URL, "https://example.test/token"),
+            (ENV_REQUEST_TOKEN, "secret"),
+            (ENV_CLIENT_ID, "11111111-1111-1111-1111-111111111111"),
+            (ENV_TENANT_ID, "22222222-2222-2222-2222-222222222222"),
+        ];
+        let result =
+            credential_from(getter(present), &http_client).expect("params present yields Some");
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn credential_from_absent_when_a_var_is_missing() {
+        let http_client: Arc<dyn HttpClient> =
+            Arc::new(StubHttpClient::new(StatusCode::Ok, b"{}".to_vec()));
+        assert!(credential_from(getter(Vec::new()), &http_client).is_none());
     }
 }
