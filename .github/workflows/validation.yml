@@ -704,7 +704,7 @@ jobs:
   # round-trip end to end.
   #
   # The account, managed identity and federated credentials are scripted/Bicep'd in
-  # infra/azure-bench-history/ — see that directory's README to deploy or re-create.
+  # infra/azure-bench-history-test/ — see that directory's README to deploy or re-create.
   test-azure:
     needs: [delta]
     if: >-
@@ -715,7 +715,7 @@ jobs:
     # `id-token: write` lets the job mint a short-lived GitHub OIDC token (a signed
     # JWT proving "this run is repo folo-rs/folo on ref X"). `azure/login@v2` hands
     # that token to Azure, which matches it against the managed identity's federated
-    # credentials (see infra/azure-bench-history/main.bicep) and issues an access
+    # credentials (see infra/azure-bench-history-test/main.bicep) and issues an access
     # token — so CI authenticates with no stored secret. The default GITHUB_TOKEN
     # cannot request an OIDC token unless this permission is granted explicitly (and
     # fork PRs cannot get it at all, hence the same-repo gate above). `contents: read`
@@ -737,12 +737,12 @@ jobs:
       # duplicating values in repo Variables. Each line is `KEY=value`; comments skip.
       - name: Load Azure identifiers from constants.env
         shell: bash
-        run: grep -E '^(AZURE_CLIENT_ID|AZURE_TENANT_ID|AZURE_SUBSCRIPTION_ID|BENCH_HISTORY_AZURE_ACCOUNT)=' constants.env >> "$GITHUB_ENV"
+        run: grep -E '^(AZURE_TEST_CLIENT_ID|AZURE_TENANT_ID|AZURE_SUBSCRIPTION_ID|BENCH_HISTORY_TEST_AZURE_ACCOUNT)=' constants.env >> "$GITHUB_ENV"
 
       - name: Sign in to Azure (OIDC workload identity federation)
         uses: azure/login@v2
         with:
-          client-id: ${{ env.AZURE_CLIENT_ID }}
+          client-id: ${{ env.AZURE_TEST_CLIENT_ID }}
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
@@ -752,6 +752,6 @@ jobs:
       - name: Delete any leftover test containers
         if: always()
         shell: pwsh
-        # cleanup-containers.ps1 defaults its account to BENCH_HISTORY_AZURE_ACCOUNT,
+        # cleanup-containers.ps1 defaults its account to BENCH_HISTORY_TEST_AZURE_ACCOUNT,
         # which the load step above put into the job env.
-        run: ./infra/azure-bench-history/cleanup-containers.ps1
+        run: ./infra/azure-bench-history-test/cleanup-containers.ps1

@@ -173,20 +173,20 @@ bench-history-stress *ARGS:
 # Requires `az login` (the harness and azcopy authenticate as your Entra user via
 # the Azure CLI) and the `azcopy` binary on PATH for the bulk upload — both are
 # installed by `just install-tools`. The account defaults to
-# BENCH_HISTORY_AZURE_ACCOUNT from constants.env (shared with the test-azure job);
+# BENCH_HISTORY_TEST_AZURE_ACCOUNT from constants.env (shared with the test-azure job);
 # override it by passing a name as the first argument. Any further harness flags
 # follow, e.g.:
 #   just bench-history-stress-azure                       # default account, full scenario
 #   just bench-history-stress-azure mystorageacct --keep  # custom account, keep the container
 [group('testing')]
 [script]
-bench-history-stress-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_AZURE_ACCOUNT', '') *ARGS:
+bench-history-stress-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_TEST_AZURE_ACCOUNT', '') *ARGS:
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
     $account = "{{ ACCOUNT }}"
     if ([string]::IsNullOrEmpty($account)) {
-        Write-Error "No storage account specified. Pass it (just bench-history-stress-azure <account> ...) or set BENCH_HISTORY_AZURE_ACCOUNT in constants.env. Deploy one with infra/azure-bench-history/deploy.ps1."
+        Write-Error "No storage account specified. Pass it (just bench-history-stress-azure <account> ...) or set BENCH_HISTORY_TEST_AZURE_ACCOUNT in constants.env. Deploy one with infra/azure-bench-history-test/deploy.ps1."
         exit 1
     }
 
@@ -321,8 +321,8 @@ test-azurite:
 #
 # Requires `az login` (the tests authenticate as your Entra user via the Azure
 # CLI) and a deployed storage account that grants your user the `Storage Blob
-# Data Contributor` role — see infra/azure-bench-history/ to deploy one. The
-# account defaults to BENCH_HISTORY_AZURE_ACCOUNT from constants.env (shared with
+# Data Contributor` role — see infra/azure-bench-history-test/ to deploy one. The
+# account defaults to BENCH_HISTORY_TEST_AZURE_ACCOUNT from constants.env (shared with
 # CI); override it by passing a name: `just test-azure <account>`.
 #
 # Setting ENABLE_AZURE is what actually runs the real-Azure tests: without it they
@@ -331,17 +331,17 @@ test-azurite:
 # ENABLE_AZURE only here, so the real-Azure tests run for real only through it.
 [group('testing')]
 [script]
-test-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_AZURE_ACCOUNT', ''):
+test-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_TEST_AZURE_ACCOUNT', ''):
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
     $account = "{{ ACCOUNT }}"
     if ([string]::IsNullOrEmpty($account)) {
-        Write-Error "No storage account specified. Pass it (just test-azure <account>) or set BENCH_HISTORY_AZURE_ACCOUNT in constants.env. Deploy one with infra/azure-bench-history/deploy.ps1."
+        Write-Error "No storage account specified. Pass it (just test-azure <account>) or set BENCH_HISTORY_TEST_AZURE_ACCOUNT in constants.env. Deploy one with infra/azure-bench-history-test/deploy.ps1."
         exit 1
     }
 
-    $env:BENCH_HISTORY_AZURE_ACCOUNT = $account
+    $env:BENCH_HISTORY_TEST_AZURE_ACCOUNT = $account
     $env:ENABLE_AZURE = "1"
 
     Write-Host "Running real-Azure tests against account '$account' (Microsoft Entra ID; requires az login)."

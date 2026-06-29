@@ -51,7 +51,10 @@ param localPrincipalType string = 'User'
 // `Storage Blob Data Contributor`: read/write/delete blobs AND create/delete
 // containers via the data plane, so the tool's `run` (which creates the
 // container) and the tests' container cleanup both work with this single role.
-var blobDataContributorRoleId = 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b'
+// Data Owner additionally grants POSIX ACL/ownership management that a flat blob
+// container never needs, so Contributor is the least-privilege fit (matching the
+// prod stack).
+var blobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 
 // GitHub's OIDC issuer and the audience Azure expects for the token exchange.
 var githubIssuer = 'https://token.actions.githubusercontent.com'
@@ -153,13 +156,13 @@ resource localPrincipalBlobRole 'Microsoft.Authorization/roleAssignments@2022-04
   }
 }
 
-@description('Storage account name (record as BENCH_HISTORY_AZURE_ACCOUNT in constants.env).')
+@description('Storage account name (record as BENCH_HISTORY_TEST_AZURE_ACCOUNT in constants.env).')
 output storageAccountName string = storageAccount.name
 
 @description('Blob service endpoint (https://<account>.blob.core.windows.net/).')
 output blobEndpoint string = storageAccount.properties.primaryEndpoints.blob
 
-@description('Client id of the managed identity (record as AZURE_CLIENT_ID in constants.env).')
+@description('Client id of the managed identity (record as AZURE_TEST_CLIENT_ID in constants.env).')
 output managedIdentityClientId string = managedIdentity.properties.clientId
 
 @description('Principal (object) id of the managed identity.')

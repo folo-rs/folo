@@ -54,8 +54,8 @@ the values the deploy script printed:
 
 | Key | Source |
 | --- | --- |
-| `BENCH_HISTORY_AZURE_ACCOUNT` | storage account name |
-| `AZURE_CLIENT_ID` | managed identity client id |
+| `BENCH_HISTORY_TEST_AZURE_ACCOUNT` | storage account name |
+| `AZURE_TEST_CLIENT_ID` | managed identity client id |
 | `AZURE_TENANT_ID` | tenant id |
 | `AZURE_SUBSCRIPTION_ID` | subscription id |
 
@@ -69,7 +69,7 @@ forks cannot mint a token for the tenant and so the CI job skips for them.
 
 ```powershell
 az login                       # sign in as your Entra user
-just test-azure                # uses BENCH_HISTORY_AZURE_ACCOUNT from constants.env
+just test-azure                # uses BENCH_HISTORY_TEST_AZURE_ACCOUNT from constants.env
 ```
 
 `just test-azure` sets `ENABLE_AZURE=1` (which opts the real-Azure tests in and makes
@@ -79,7 +79,7 @@ tests. Pass a name to target a different account: `just test-azure <storage-acco
 Without `ENABLE_AZURE` (for example under a plain `just test`) the real-Azure tests
 self-skip regardless of the account, so they never target the cloud unintentionally;
 the Azurite tests are unaffected. With `ENABLE_AZURE` set (as `just test-azure` does)
-a missing `BENCH_HISTORY_AZURE_ACCOUNT` is instead a hard failure, not a skip. Each
+a missing `BENCH_HISTORY_TEST_AZURE_ACCOUNT` is instead a hard failure, not a skip. Each
 test creates a unique `bh-it-*` container and deletes it when it finishes.
 
 ## Clean up leftover containers

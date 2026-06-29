@@ -41,7 +41,7 @@ pub(crate) struct Cli {
     #[arg(long)]
     pub(crate) dir: Option<PathBuf>,
 
-    /// Azure storage account name. Defaults to the `BENCH_HISTORY_AZURE_ACCOUNT`
+    /// Azure storage account name. Defaults to the `BENCH_HISTORY_TEST_AZURE_ACCOUNT`
     /// environment variable. Required for `--storage azure`.
     #[arg(long)]
     pub(crate) account: Option<String>,

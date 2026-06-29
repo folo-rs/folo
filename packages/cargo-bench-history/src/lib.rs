@@ -221,6 +221,45 @@
 //! also accepts `--config PATH` to point at a non-default file, `--repo
 //! PATH` to resolve git state from another directory, and `--verbose` to emit a
 //! step-by-step diagnostic trail to standard error.
+//!
+//! ## Azure Blob storage
+//!
+//! The Azure backend authenticates in priority order: from a shared account key
+//! (set `account_key` to the base64 account key — the tool signs a short-lived
+//! account SAS from it), a pre-made SAS token (set `sas_token`), or **Microsoft
+//! Entra ID** (set neither — the recommended mode for
+//! shared and CI use, as it stores no secret). Entra ID requires an HTTPS endpoint
+//! (the default `https://<account>.blob.core.windows.net`), so the account may have
+//! shared-key access disabled entirely.
+//!
+//! To stand up an Entra-ID-backed store:
+//!
+//! 1. **Deploy a Storage account** reachable over HTTPS. Entra-only accounts
+//!    (shared-key access disabled) are supported and preferred — there is then no
+//!    account key to leak. The `bench-history` container does not need to pre-exist;
+//!    `run` creates it on first use.
+//! 2. **Grant the identity that runs the tool the `Storage Blob Data Contributor`
+//!    role** on the account. This data-plane role covers both the blob read/write
+//!    the tool performs and the container creation `run` does on first use; the
+//!    broader `Storage Blob Data Owner` is not needed for a flat blob container.
+//!    Locally, that identity is your `az login` user; in CI it is the federated
+//!    managed identity below.
+//! 3. **For CI, authenticate with GitHub OIDC workload identity federation** instead
+//!    of a stored secret: create a user-assigned managed identity, add a federated
+//!    credential whose subject matches the workflow's OIDC token (for a scheduled run
+//!    on the default branch that is `repo:<owner>/<repo>:ref:refs/heads/main`), grant
+//!    it the role from step 2, then sign in with `azure/login@v2` from a job that has
+//!    `permissions: { id-token: write }`. The signed-in Azure CLI session is what the
+//!    tool's Entra credential picks up.
+//!
+//! Worked, runnable examples of all of the above live in the folo repository as Bicep
+//! templates with PowerShell deploy wrappers: the long-lived store with its own
+//! dedicated managed identity at
+//! <https://github.com/folo-rs/folo/tree/main/infra/azure-bench-history-prod> and a
+//! separate test account/identity at
+//! <https://github.com/folo-rs/folo/tree/main/infra/azure-bench-history-test>, with the
+//! account name baked into the committed `.cargo/bench_history.toml` and the nightly
+//! consumer at <https://github.com/folo-rs/folo/blob/main/.github/workflows/bench-history.yml>.
 
 mod analyze;
 mod bench;

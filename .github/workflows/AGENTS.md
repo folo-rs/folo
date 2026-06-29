@@ -115,19 +115,19 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
     account into a hard failure, so a job that does run can never silently skip every
     test.
   - Reads its Azure identifiers from the repository-root `constants.env` (the same
-    non-secret `BENCH_HISTORY_AZURE_ACCOUNT`, `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
+    non-secret `BENCH_HISTORY_TEST_AZURE_ACCOUNT`, `AZURE_TEST_CLIENT_ID`, `AZURE_TENANT_ID`,
     `AZURE_SUBSCRIPTION_ID` that `just test-azure` reads locally, so local and CI
     target the same account). A `bash` step `grep`s those keys into `$GITHUB_ENV` so
     the `azure/login` inputs and the cleanup step can reference them. It then runs the
     tests via the `just test-azure` recipe (the same one developers use locally; it
-    reads the account from the job's `BENCH_HISTORY_AZURE_ACCOUNT` env and runs the
+    reads the account from the job's `BENCH_HISTORY_TEST_AZURE_ACCOUNT` env and runs the
     `*_in_real_azure` tests). Each test deletes its own container, even on panic; a
-    final `if: always()` step runs `infra/azure-bench-history/cleanup-containers.ps1`
+    final `if: always()` step runs `infra/azure-bench-history-test/cleanup-containers.ps1`
     as a backstop for a container a crashed run might leave.
   - Collects **no coverage** (`test-azurite` already covers `azure.rs`); its value
     is proving the real Entra + real Blob endpoint round-trip end to end. The
     account, identity and federated credentials are scripted/Bicep'd in
-    `infra/azure-bench-history/` (see its README to deploy or re-create).
+    `infra/azure-bench-history-test/` (see its README to deploy or re-create).
 
 ### cache-warmup.yml
 
@@ -139,14 +139,67 @@ macos-latest, ubuntu-24.04-arm, windows-11-arm) to ensure the
 `shared-key: prerequisites` Rust cache is always populated for both x86_64 and ARM64. It also supports `workflow_dispatch`
 for manual cache warming after toolchain updates.
 
+### bench-history.yml
+
+A scheduled workflow that collects the workspace's benchmark results into the
+long-lived Azure history store every night, building the performance history that
+`cargo-bench-history analyze` reads to detect regressions. Only nightly collection
+exists today; PR-time collection/validation may follow once this proves out.
+
+- **Multi-platform matrix** (ubuntu-latest, windows-latest, ubuntu-24.04-arm,
+  windows-11-arm) with `fail-fast: false`: each OS/architecture is a distinct
+  measurement target, and a failure on one platform must not abandon the others'
+  history for that night. macOS is omitted — there is no macOS-hosted history store
+  consumer yet; add it to the matrix if/when macOS performance tracking is wanted.
+- **Whole workspace except the `benchmarks` package**, via the
+  `just gh-collect-bench-history` recipe (`cargo-bench-history run --workspace --exclude
+  benchmarks --overwrite`). The `benchmarks` package holds slow, special-purpose
+  benchmarks that are not part of the tracked history. `--overwrite` makes a re-run on
+  an unchanged `main` commit idempotent rather than failing as a duplicate.
+- **Uses a dedicated prod managed identity** (`id-folo-bench-history-prod`, provisioned
+  by `infra/azure-bench-history-prod/` alongside the account), not the test identity: a
+  scheduled run on `main` produces the OIDC subject
+  `repo:folo-rs/folo:ref:refs/heads/main`, which matches that identity's `main`-branch
+  federated credential. The prod stack is self-contained so the data store never depends
+  on test infrastructure. So this workflow needs only `permissions: { id-token: write,
+  contents: read }`, an `azure/login@v2` step, and the `AZURE_PROD_CLIENT_ID` /
+  `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` from `constants.env` (a `bash` step
+  `grep`s them into `$GITHUB_ENV`).
+- **Writes to a SEPARATE storage account** from the test jobs — the real history store
+  `folohistory` (provisioned by `infra/azure-bench-history-prod/`), distinct from the
+  throwaway `BENCH_HISTORY_TEST_AZURE_ACCOUNT` the `test-azure`/`test-azurite` jobs
+  target. The prod account is baked into the committed `.cargo/bench_history.toml` (where
+  cargo-bench-history config belongs), so no account name is surfaced into `$GITHUB_ENV`;
+  only the `azure/login` inputs need the grep step.
+- **Same-repo gate** (`if: github.repository == 'folo-rs/folo'`): scheduled workflows
+  also trigger on forks that enable Actions, but only this repository's identity can
+  federate into Azure, so the job skips everywhere else.
+- **Auto-detected machine key**: the wall-clock engines partition by the runner's
+  auto-detected machine fingerprint (no override) — the `target-triple` already separates
+  OS/arch, and an explicit key would risk merging dissimilar hosts under one partition.
+- `timeout-minutes: 360`; schedule offset to 03:00 UTC so it does not contend with the
+  00:00 `cache-warmup` cron (and runs against an already-warm Rust cache). Like
+  `cache-warmup`, it is schedule-triggered and so carries no `concurrency` cancel key.
+- **`analyze` job** (`needs: collect`, `if: always()` + same main-only gate) — after
+  collection it runs `just gh-analyze-bench-history` (`analyze --engine all --target-triple
+  all --machine-key all` across every platform's history) which writes a Markdown report
+  plus `bench-history-notable.txt`. When the JSON report's `notable` is `true`, it files
+  **one rolling regression issue** via `JasonEtco/create-an-issue` (`update_existing` +
+  `search_existing: open`, fixed title = dedup key). Findings never fail the job —
+  the tool always exits 0; the issue is advisory. Needs `issues: write`. It checks out
+  with `fetch-depth: 0` so the first-parent history resolves.
+- **`alert` job** (`needs: [collect, analyze]`, `if: failure()` + main-only) — opens a
+  deduplicated `.github/bench-history-failure-issue.md` when any prior job fails, so a
+  broken nightly is noticed. Closed by hand once the workflow is green again.
+
 ## Design Decisions
 
 1. **Concurrency control** — Workflows triggered by push or pull request use the `concurrency`
    key with `group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}` and
    `cancel-in-progress: true`. This automatically cancels in-progress runs when new commits
    are pushed to the same PR branch or to main, avoiding wasted runner time on outdated code.
-   The `cache-warmup` workflow is excluded because it is schedule-triggered and not
-   commit-driven.
+   The `cache-warmup` and `bench-history` workflows are excluded because they are
+   schedule-triggered and not commit-driven.
 
 2. **Parallelization over sequential execution** — Individual jobs provide:
    - Faster CI feedback (first failure visible immediately)

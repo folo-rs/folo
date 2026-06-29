@@ -15,7 +15,7 @@
     session the tests use.
 
 .PARAMETER AccountName
-    Storage account name. Defaults to the BENCH_HISTORY_AZURE_ACCOUNT env var.
+    Storage account name. Defaults to the BENCH_HISTORY_TEST_AZURE_ACCOUNT env var.
 
 .PARAMETER Prefix
     Container name prefix to match. Defaults to 'bh-it-'.
@@ -30,7 +30,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string] $AccountName = $env:BENCH_HISTORY_AZURE_ACCOUNT,
+    [string] $AccountName = $env:BENCH_HISTORY_TEST_AZURE_ACCOUNT,
 
     [string] $Prefix = 'bh-it-',
 
@@ -42,7 +42,7 @@ $PSNativeCommandUseErrorActionPreference = $true
 $VerbosePreference = 'Continue'
 
 if ([string]::IsNullOrEmpty($AccountName)) {
-    Write-Error 'No storage account specified. Pass -AccountName or set BENCH_HISTORY_AZURE_ACCOUNT.'
+    Write-Error 'No storage account specified. Pass -AccountName or set BENCH_HISTORY_TEST_AZURE_ACCOUNT.'
     exit 1
 }
 

@@ -19,6 +19,12 @@ target/
 # MSVC Windows builds of rustc generate these, which store debugging information
 *.pdb
 
+# Working-dir artefacts from `just gh-analyze-bench-history` (rendered report and the
+# notable flag); CI consumes them in-place, never commit them.
+bench-history-report.md
+bench-history-notable.txt
+bench-history-issue.md
+
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore

@@ -2,16 +2,20 @@
 
 <#
 .SYNOPSIS
-    Deploys (or updates) the Azure resources backing the cargo-bench-history
-    real-Azure storage tests.
+    Deploys (or updates) the Azure resources that hold the nightly
+    cargo-bench-history benchmark history.
 
 .DESCRIPTION
     Idempotently provisions a resource group, an Entra-only Storage account, a
-    user-assigned managed identity with GitHub OIDC federated credentials, and the
-    `Storage Blob Data Contributor` role assignments needed by CI and (optionally) a
-    local developer principal. Re-running it converges to the same state, so the
-    paired `teardown.ps1` + this script let you delete and re-create everything at
-    will.
+    dedicated user-assigned managed identity with a GitHub OIDC federated credential
+    for `main`, and the `Storage Blob Data Contributor` role assignments needed by
+    the nightly workflow and (optionally) a local developer principal. Re-running it
+    converges to the same state, so the paired `teardown.ps1` + this script let you
+    delete and re-create everything at will.
+
+    This prod data store is fully self-contained: it owns its own identity and shares
+    nothing with infra/azure-bench-history-test/ except the tenant. There is no need
+    to deploy the test infra first.
 
     Requires the Azure CLI (`az`) and an authenticated session (`az login`) for an
     account with rights to create the resources and role assignments.
@@ -20,13 +24,18 @@
     Target subscription id.
 
 .PARAMETER ResourceGroup
-    Resource group to create/use. Defaults to 'rg-folo-bench-history'.
+    Resource group to create/use. Defaults to 'folohistory'.
 
 .PARAMETER Location
     Azure region. Defaults to 'swedencentral'.
 
 .PARAMETER StorageAccountName
-    Globally-unique Storage account name (3-24 lowercase alphanumerics).
+    Globally-unique Storage account name (3-24 lowercase alphanumerics). Defaults to
+    'folohistory'.
+
+.PARAMETER ManagedIdentityName
+    Name of the user-assigned managed identity used by the nightly workflow. Defaults
+    to 'id-folo-bench-history-prod'.
 
 .PARAMETER LocalPrincipalId
     Object id of a local developer principal (user or group) to grant data access.
@@ -38,7 +47,6 @@
 
 .EXAMPLE
     ./deploy.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 `
-        -StorageAccountName stfolobenchhist `
         -LocalPrincipalId (az ad signed-in-user show --query id -o tsv)
 #>
 [CmdletBinding()]
@@ -46,15 +54,14 @@ param(
     [Parameter(Mandatory)]
     [string] $SubscriptionId,
 
-    [string] $ResourceGroup = 'rg-folo-bench-history',
+    [string] $ResourceGroup = 'folohistory',
 
     [string] $Location = 'swedencentral',
 
-    [Parameter(Mandatory)]
     [ValidatePattern('^[a-z0-9]{3,24}$')]
-    [string] $StorageAccountName,
+    [string] $StorageAccountName = 'folohistory',
 
-    [string] $ManagedIdentityName = 'id-folo-bench-history-ci',
+    [string] $ManagedIdentityName = 'id-folo-bench-history-prod',
 
     [string] $GithubOrg = 'folo-rs',
 
@@ -96,7 +103,7 @@ else {
 
 $bicepFile = Join-Path $scriptDir 'main.bicep'
 $paramFile = Join-Path $scriptDir 'main.bicepparam'
-$deploymentName = "bench-history-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
+$deploymentName = "bench-history-prod-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
 
 Write-Verbose "Deploying '$bicepFile' as '$deploymentName'."
 $outputJson = az deployment group create `
@@ -111,14 +118,13 @@ $outputs = $outputJson | ConvertFrom-Json
 Write-Host ''
 Write-Host 'Deployment complete.' -ForegroundColor Green
 Write-Host ''
-Write-Host 'These identifiers are committed (non-secret) in constants.env, shared by' -ForegroundColor Cyan
-Write-Host 'local `just test-azure` runs and the CI `test-azure` job. If you re-created' -ForegroundColor Cyan
-Write-Host 'the resources, update constants.env to match:' -ForegroundColor Cyan
-Write-Host "  BENCH_HISTORY_AZURE_ACCOUNT=$($outputs.storageAccountName.value)"
-Write-Host "  AZURE_CLIENT_ID=$($outputs.managedIdentityClientId.value)"
+Write-Host 'The account name belongs in .cargo/bench_history.toml; the identity values are' -ForegroundColor Cyan
+Write-Host 'committed (non-secret) in constants.env. The nightly bench-history workflow signs' -ForegroundColor Cyan
+Write-Host 'in with the PROD client id; tenant/subscription are shared with the test identity.' -ForegroundColor Cyan
+Write-Host 'If you re-created the resources, update:' -ForegroundColor Cyan
+Write-Host "  .cargo/bench_history.toml -> [storage.azure] account = `"$($outputs.storageAccountName.value)`""
+Write-Host "  AZURE_PROD_CLIENT_ID=$($outputs.managedIdentityClientId.value)"
 Write-Host "  AZURE_TENANT_ID=$($outputs.tenantId.value)"
 Write-Host "  AZURE_SUBSCRIPTION_ID=$($outputs.subscriptionId.value)"
-Write-Host ''
-Write-Host 'Then run the tests with `az login` followed by `just test-azure`.' -ForegroundColor Cyan
 Write-Host ''
 Write-Host "Blob endpoint: $($outputs.blobEndpoint.value)"

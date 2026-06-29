@@ -4,6 +4,18 @@ This document codifies naming conventions for files and identifiers across the
 workspace. See `AGENTS.md` for the broader set of conventions; this file focuses
 on naming patterns that need to be consistent across packages.
 
+## Disambiguating names must be distinctive, not merely different
+
+When two related things need different names, choose names that are *distinctive*
+— each name states what makes that variant special — rather than names that are
+just technically different. A reader should be able to tell the variants apart
+without already knowing the system. For example, a test account and a production
+account should be `..._TEST_...` and `..._PROD_...`, not `..._ACCOUNT` and
+`..._DATA_ACCOUNT` (different, but neither says "test" nor "prod"); two infra
+directories should be `azure-bench-history-test` and `azure-bench-history-prod`,
+not `azure-bench-history` and `azure-bench-history-data`. Apply this to
+variables, files, directories, and any other paired identifiers.
+
 ## Benchmark naming
 
 The workspace contains both Criterion (wall-clock) and Callgrind/Gungraun

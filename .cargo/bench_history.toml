@@ -1,0 +1,16 @@
+# cargo-bench-history configuration for this workspace. Benchmark history is stored
+# in the long-lived prod Azure account (folohistory, infra/azure-bench-history-prod/)
+# and authenticated via Microsoft Entra ID — local `az login`, or CI OIDC federation.
+# This is the prod account by design: this file is exactly where the shared store
+# belongs. Override with `--local` for a throwaway local run that never touches Azure.
+[project]
+# Pinned so every checkout agrees on one history partition. The id otherwise
+# defaults to the checkout directory name, which is incidental and varies (e.g.
+# "folo" on a CI runner but "folo3" in a local worktree); since it is the top-level
+# storage partition key, leaving it implicit would fragment the stored history.
+# default_branch is intentionally omitted: it auto-detects to "main" anyway.
+id = "folo"
+
+[storage.azure]
+account = "folohistory"
+container = "bench-history"
