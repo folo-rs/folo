@@ -106,19 +106,19 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
     account into a hard failure, so a job that does run can never silently skip every
     test.
   - Reads its Azure identifiers from the repository-root `constants.env` (the same
-    non-secret `BENCH_HISTORY_AZURE_ACCOUNT`, `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
+    non-secret `BENCH_HISTORY_TEST_AZURE_ACCOUNT`, `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
     `AZURE_SUBSCRIPTION_ID` that `just test-azure` reads locally, so local and CI
     target the same account). A `bash` step `grep`s those keys into `$GITHUB_ENV` so
     the `azure/login` inputs and the cleanup step can reference them. It then runs the
     tests via the `just test-azure` recipe (the same one developers use locally; it
-    reads the account from the job's `BENCH_HISTORY_AZURE_ACCOUNT` env and runs the
+    reads the account from the job's `BENCH_HISTORY_TEST_AZURE_ACCOUNT` env and runs the
     `*_in_real_azure` tests). Each test deletes its own container, even on panic; a
-    final `if: always()` step runs `infra/azure-bench-history/cleanup-containers.ps1`
+    final `if: always()` step runs `infra/azure-bench-history-test/cleanup-containers.ps1`
     as a backstop for a container a crashed run might leave.
   - Collects **no coverage** (`test-azurite` already covers `azure.rs`); its value
     is proving the real Entra + real Blob endpoint round-trip end to end. The
     account, identity and federated credentials are scripted/Bicep'd in
-    `infra/azure-bench-history/` (see its README to deploy or re-create).
+    `infra/azure-bench-history-test/` (see its README to deploy or re-create).
 
 ### cache-warmup.yml
 
@@ -148,7 +148,7 @@ exists today; PR-time collection/validation may follow once this proves out.
   benchmarks that are not part of the tracked history. `--overwrite` makes a re-run on
   an unchanged `main` commit idempotent rather than failing as a duplicate.
 - **Reuses the existing CI managed identity** (the one
-  `infra/azure-bench-history/` provisions for `test-azure`), not a new one: a
+  `infra/azure-bench-history-test/` provisions for `test-azure`), not a new one: a
   scheduled run on `main` produces the OIDC subject
   `repo:folo-rs/folo:ref:refs/heads/main`, which matches that identity's `main`-branch
   federated credential. So this workflow needs only `permissions: { id-token: write,
@@ -156,9 +156,9 @@ exists today; PR-time collection/validation may follow once this proves out.
   `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` from `constants.env` (a `bash` step
   `grep`s them into `$GITHUB_ENV`).
 - **Writes to a SEPARATE storage account** from the test jobs — the real history store
-  `BENCH_HISTORY_DATA_AZURE_ACCOUNT` (account `folohistory`, provisioned by
-  `infra/azure-bench-history-data/`), distinct from the throwaway
-  `BENCH_HISTORY_AZURE_ACCOUNT` the `test-azure`/`test-azurite` jobs target. The
+  `BENCH_HISTORY_PROD_AZURE_ACCOUNT` (account `folohistory`, provisioned by
+  `infra/azure-bench-history-prod/`), distinct from the throwaway
+  `BENCH_HISTORY_TEST_AZURE_ACCOUNT` the `test-azure`/`test-azurite` jobs target. The
   account name is not surfaced into `$GITHUB_ENV` here because the recipe reads it from
   `constants.env` itself (via the justfile's dotenv); only the `azure/login` inputs need
   the grep step.

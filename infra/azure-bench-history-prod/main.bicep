@@ -10,7 +10,7 @@
 //     existing CI managed identity (reused, not created here) and (optionally) a
 //     local developer principal.
 //
-// Unlike `infra/azure-bench-history/` (which provisions the *test* account and the
+// Unlike `infra/azure-bench-history-test/` (which provisions the *test* account and the
 // shared CI managed identity together), this template does NOT create an identity
 // or federated credentials. It reuses the CI identity created by that template —
 // whose `main`-branch federated credential already matches the scheduled-run OIDC
@@ -27,7 +27,7 @@ param location string = resourceGroup().location
 @maxLength(24)
 param storageAccountName string
 
-@description('Principal (object) id of the existing CI managed identity to grant data access (reused from infra/azure-bench-history).')
+@description('Principal (object) id of the existing CI managed identity to grant data access (reused from infra/azure-bench-history-test).')
 param ciPrincipalId string
 
 @description('Object id of a local developer principal (user or group) to grant data access. Empty skips the grant.')
@@ -101,7 +101,7 @@ resource localPrincipalBlobRole 'Microsoft.Authorization/roleAssignments@2022-04
   }
 }
 
-@description('Storage account name (record as BENCH_HISTORY_DATA_AZURE_ACCOUNT in constants.env).')
+@description('Storage account name (record as BENCH_HISTORY_PROD_AZURE_ACCOUNT in constants.env).')
 output storageAccountName string = storageAccount.name
 
 @description('Blob service endpoint (https://<account>.blob.core.windows.net/).')

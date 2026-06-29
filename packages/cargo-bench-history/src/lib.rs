@@ -251,8 +251,8 @@
 //!    `permissions: { id-token: write }`. The signed-in Azure CLI session is what the
 //!    tool's Entra credential picks up.
 //!
-//! In this repository, `infra/azure-bench-history-data/` deploys the long-lived
-//! history store and `infra/azure-bench-history/` deploys the CI managed identity
+//! In this repository, `infra/azure-bench-history-prod/` deploys the long-lived
+//! history store and `infra/azure-bench-history-test/` deploys the CI managed identity
 //! (with its federated credential) and the test account; both are Bicep templates
 //! with PowerShell deploy wrappers that serve as worked, runnable examples of the
 //! steps above. The nightly `.github/workflows/bench-history.yml` workflow is the

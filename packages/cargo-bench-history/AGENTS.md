@@ -910,7 +910,7 @@ make a plain test run target the cloud. Each test uses a fresh container that is
 deleted when it finishes, even on panic.
 
 One-time: deploy the account, managed identity and federated credentials with the
-Bicep + scripts in [`infra/azure-bench-history/`](../../infra/azure-bench-history/)
+Bicep + scripts in [`infra/azure-bench-history-test/`](../../infra/azure-bench-history-test/)
 (see its README) and record the identifiers in the repository-root `constants.env`.
 Then, signing in as your own Entra user, the `just test-azure` recipe wraps the run
 (it sets `ENABLE_AZURE` and reads the account from `constants.env` for you):
@@ -919,19 +919,19 @@ Then, signing in as your own Entra user, the `just test-azure` recipe wraps the 
 az login
 just test-azure
 # tidy up any container a crashed run left behind:
-./infra/azure-bench-history/cleanup-containers.ps1
+./infra/azure-bench-history-test/cleanup-containers.ps1
 ```
 
-`just test-azure` reads the account from `BENCH_HISTORY_AZURE_ACCOUNT` (committed in
+`just test-azure` reads the account from `BENCH_HISTORY_TEST_AZURE_ACCOUNT` (committed in
 `constants.env`); pass a name to target a different account
 (`just test-azure <storage-account-name>`). The equivalent raw command is
 `cargo test -p cargo-bench-history real_azure` with `ENABLE_AZURE`
-and `BENCH_HISTORY_AZURE_ACCOUNT` set.
+and `BENCH_HISTORY_TEST_AZURE_ACCOUNT` set.
 
 * `BENCH_HISTORY_AZURE_ENDPOINT` overrides the default
   `https://<account>.blob.core.windows.net` endpoint.
 * `ENABLE_AZURE` is the gate: when set, the real-Azure tests run, and a then-missing
-  `BENCH_HISTORY_AZURE_ACCOUNT` is a hard failure instead of a skip. `just test-azure`
+  `BENCH_HISTORY_TEST_AZURE_ACCOUNT` is a hard failure instead of a skip. `just test-azure`
   sets it locally; CI sets it (via that recipe) in the dedicated `test-azure` job,
   which signs in via GitHub OIDC workload identity federation, so it can never
   silently skip. It is deliberately NOT in `constants.env`, so a plain `just test`
@@ -1001,7 +1001,7 @@ Key facts when touching it:
   seeded config carries only `[project]` for local and `[storage.azure]` for Azure.
   Azure upload uses `azcopy` (installed by `just install-tools`)
   for throughput, authenticating as the Entra user via the Azure CLI — same
-  `az login` + `BENCH_HISTORY_AZURE_ACCOUNT` contract as `test-azure`. Each run uses
+  `az login` + `BENCH_HISTORY_TEST_AZURE_ACCOUNT` contract as `test-azure`. Each run uses
   a fresh `bh-stress-<unix>` container, deleted on exit unless `--keep`.
 * **Run it** with `just bench-history-stress` (local) or `just bench-history-stress-azure`
   (real Azure); both pass extra flags through to the binary, e.g.

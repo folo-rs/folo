@@ -4,7 +4,7 @@ This directory provisions the Azure storage account that holds the **real,
 long-lived benchmark history** collected by the `bench-history` GitHub workflow
 (and by local `just collect-bench-history` runs). It is the production data store,
 as opposed to the throwaway test account in
-[`infra/azure-bench-history/`](../azure-bench-history/).
+[`infra/azure-bench-history-test/`](../azure-bench-history-test/).
 
 Everything is described in Bicep and driven by idempotent PowerShell scripts, so
 the environment can be deleted and re-created with one command.
@@ -23,7 +23,7 @@ the environment can be deleted and re-created with one command.
 
 It deliberately does **not** create a managed identity or federated credentials.
 The nightly workflow reuses the CI identity (`id-folo-bench-history-ci`) created by
-[`infra/azure-bench-history/`](../azure-bench-history/): that identity's
+[`infra/azure-bench-history-test/`](../azure-bench-history-test/): that identity's
 `main`-branch federated credential already matches a scheduled run's OIDC subject
 (`repo:folo-rs/folo:ref:refs/heads/main`), so the workflow signs in with the same
 non-secret `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` as the
@@ -35,7 +35,7 @@ non-secret `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` as th
 - `az login` as an account allowed to create these resources and assign roles
   (Owner or User Access Administrator on the target scope).
 - The CI managed identity must already exist — deploy
-  [`infra/azure-bench-history/`](../azure-bench-history/) first if you have not.
+  [`infra/azure-bench-history-test/`](../azure-bench-history-test/) first if you have not.
 
 ## Deploy
 
@@ -60,7 +60,7 @@ On success the script prints the account name to record in `constants.env`.
 ## Configure the repository
 
 The account name is committed (non-secret) in `constants.env` at the repository
-root as `BENCH_HISTORY_DATA_AZURE_ACCOUNT`, read by `just collect-bench-history` and
+root as `BENCH_HISTORY_PROD_AZURE_ACCOUNT`, read by `just collect-bench-history` and
 loaded into the workflow env. The identity values it signs in with
 (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`) are the **same**
 ones already in `constants.env` for the `test-azure` job — the nightly workflow
@@ -68,7 +68,7 @@ reuses that identity, so there is nothing new to add there.
 
 | Key | Source |
 | --- | --- |
-| `BENCH_HISTORY_DATA_AZURE_ACCOUNT` | storage account name (this deployment) |
+| `BENCH_HISTORY_PROD_AZURE_ACCOUNT` | storage account name (this deployment) |
 | `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` | the shared CI identity (already present) |
 
 ## Collect history locally
@@ -80,7 +80,7 @@ just collect-bench-history      # benches the workspace and stores into Azure
 
 `just collect-bench-history` benches every workspace package except `benchmarks`
 (the slow, special-purpose one) and stores the results in the
-`BENCH_HISTORY_DATA_AZURE_ACCOUNT` account. It requires your user to hold the
+`BENCH_HISTORY_PROD_AZURE_ACCOUNT` account. It requires your user to hold the
 `Storage Blob Data Contributor` role on the account (deploy with `-LocalPrincipalId`
 as above). Pass an account name to target a different one:
 `just collect-bench-history <storage-account-name>`.

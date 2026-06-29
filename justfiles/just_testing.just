@@ -173,20 +173,20 @@ bench-history-stress *ARGS:
 # Requires `az login` (the harness and azcopy authenticate as your Entra user via
 # the Azure CLI) and the `azcopy` binary on PATH for the bulk upload — both are
 # installed by `just install-tools`. The account defaults to
-# BENCH_HISTORY_AZURE_ACCOUNT from constants.env (shared with the test-azure job);
+# BENCH_HISTORY_TEST_AZURE_ACCOUNT from constants.env (shared with the test-azure job);
 # override it by passing a name as the first argument. Any further harness flags
 # follow, e.g.:
 #   just bench-history-stress-azure                       # default account, full scenario
 #   just bench-history-stress-azure mystorageacct --keep  # custom account, keep the container
 [group('testing')]
 [script]
-bench-history-stress-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_AZURE_ACCOUNT', '') *ARGS:
+bench-history-stress-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_TEST_AZURE_ACCOUNT', '') *ARGS:
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
     $account = "{{ ACCOUNT }}"
     if ([string]::IsNullOrEmpty($account)) {
-        Write-Error "No storage account specified. Pass it (just bench-history-stress-azure <account> ...) or set BENCH_HISTORY_AZURE_ACCOUNT in constants.env. Deploy one with infra/azure-bench-history/deploy.ps1."
+        Write-Error "No storage account specified. Pass it (just bench-history-stress-azure <account> ...) or set BENCH_HISTORY_TEST_AZURE_ACCOUNT in constants.env. Deploy one with infra/azure-bench-history-test/deploy.ps1."
         exit 1
     }
 
@@ -321,8 +321,8 @@ test-azurite:
 #
 # Requires `az login` (the tests authenticate as your Entra user via the Azure
 # CLI) and a deployed storage account that grants your user the `Storage Blob
-# Data Contributor` role — see infra/azure-bench-history/ to deploy one. The
-# account defaults to BENCH_HISTORY_AZURE_ACCOUNT from constants.env (shared with
+# Data Contributor` role — see infra/azure-bench-history-test/ to deploy one. The
+# account defaults to BENCH_HISTORY_TEST_AZURE_ACCOUNT from constants.env (shared with
 # CI); override it by passing a name: `just test-azure <account>`.
 #
 # Setting ENABLE_AZURE is what actually runs the real-Azure tests: without it they
@@ -331,17 +331,17 @@ test-azurite:
 # ENABLE_AZURE only here, so the real-Azure tests run for real only through it.
 [group('testing')]
 [script]
-test-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_AZURE_ACCOUNT', ''):
+test-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_TEST_AZURE_ACCOUNT', ''):
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
     $account = "{{ ACCOUNT }}"
     if ([string]::IsNullOrEmpty($account)) {
-        Write-Error "No storage account specified. Pass it (just test-azure <account>) or set BENCH_HISTORY_AZURE_ACCOUNT in constants.env. Deploy one with infra/azure-bench-history/deploy.ps1."
+        Write-Error "No storage account specified. Pass it (just test-azure <account>) or set BENCH_HISTORY_TEST_AZURE_ACCOUNT in constants.env. Deploy one with infra/azure-bench-history-test/deploy.ps1."
         exit 1
     }
 
-    $env:BENCH_HISTORY_AZURE_ACCOUNT = $account
+    $env:BENCH_HISTORY_TEST_AZURE_ACCOUNT = $account
     $env:ENABLE_AZURE = "1"
 
     Write-Host "Running real-Azure tests against account '$account' (Microsoft Entra ID; requires az login)."
@@ -354,7 +354,7 @@ test-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_AZURE_ACCOUNT', ''):
 # Runs every package's benchmarks EXCEPT the `benchmarks` package, which holds slow,
 # special-purpose benchmarks that are not part of the tracked history. Results are
 # stored under the `bench-history` container of the account named by
-# BENCH_HISTORY_DATA_AZURE_ACCOUNT (constants.env), authenticated via Microsoft Entra
+# BENCH_HISTORY_PROD_AZURE_ACCOUNT (constants.env), authenticated via Microsoft Entra
 # ID — local `az login`, or CI OIDC federation through the AZURE_* identity.
 #
 # Unlike `test-azure` (which targets the throwaway *test* account), this writes to the
@@ -373,19 +373,20 @@ test-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_AZURE_ACCOUNT', ''):
 # writes a throwaway config pointing at it and passes `--config`, removing it afterward.
 [group('testing')]
 [script]
-collect-bench-history ACCOUNT=env_var_or_default('BENCH_HISTORY_DATA_AZURE_ACCOUNT', ''):
+collect-bench-history ACCOUNT=env_var_or_default('BENCH_HISTORY_PROD_AZURE_ACCOUNT', ''):
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
     $account = "{{ ACCOUNT }}"
     if ([string]::IsNullOrEmpty($account)) {
-        Write-Error "No data storage account specified. Set BENCH_HISTORY_DATA_AZURE_ACCOUNT in constants.env (or pass it as the ACCOUNT argument). Deploy one with infra/azure-bench-history-data/deploy.ps1."
+        Write-Error "No data storage account specified. Set BENCH_HISTORY_PROD_AZURE_ACCOUNT in constants.env (or pass it as the ACCOUNT argument). Deploy one with infra/azure-bench-history-prod/deploy.ps1."
         exit 1
     }
 
     # Throwaway config naming the real history store; removed in the finally block so
-    # the account never leaks into the version-controlled default config.
-    $configPath = Join-Path ([System.IO.Path]::GetTempPath()) "folo-bench-history-config.toml"
+    # the account never leaks into the version-controlled default config. The filename
+    # is randomized so concurrent invocations (e.g. two terminals) never race on it.
+    $configPath = Join-Path ([System.IO.Path]::GetTempPath()) "folo-bench-history-config-$(Get-Random).toml"
     Write-Verbose "Writing throwaway Azure config to $configPath (account '$account')." -Verbose
     $configLines = @(
         '[project]'

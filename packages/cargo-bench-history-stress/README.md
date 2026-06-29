@@ -80,14 +80,14 @@ Real Azure Blob storage (a fresh `bh-stress-<unix>` container, deleted on exit u
 ```powershell
 az login
 just install-tools          # one-time: installs azcopy, used for the bulk upload
-just bench-history-stress-azure           # account from BENCH_HISTORY_AZURE_ACCOUNT in constants.env
+just bench-history-stress-azure           # account from BENCH_HISTORY_TEST_AZURE_ACCOUNT in constants.env
 just bench-history-stress-azure myacct --keep   # custom account; keep the container afterwards
 ```
 
 `just bench-history-stress-azure` requires `az login` (the harness and `azcopy` authenticate as
 your Entra user via the Azure CLI) and the `azcopy` binary on `PATH`. It uses the same
 account contract as the `test-azure` job; provision the account with the Bicep in
-[`infra/azure-bench-history/`](../../infra/azure-bench-history/).
+[`infra/azure-bench-history-test/`](../../infra/azure-bench-history-test/).
 
 The equivalent raw invocations are:
 
@@ -109,7 +109,7 @@ distorts the timings badly.
 | `--branch-commits <N>` | `6` | Commits on the synthetic feature branch. |
 | `--dirty-runs <N>` | `3` | Dirty (uncommitted-tree) snapshots on the feature tip. |
 | `--dir <PATH>` | temp dir | Local-storage root (local only). |
-| `--account <NAME>` | `$BENCH_HISTORY_AZURE_ACCOUNT` | Azure storage account (Azure only). |
+| `--account <NAME>` | `$BENCH_HISTORY_TEST_AZURE_ACCOUNT` | Azure storage account (Azure only). |
 | `--container <NAME>` | `bh-stress-<unix>` | Azure container (Azure only). |
 | `--modes <list>` | `history,branch,tip` | Modes to measure (comma-separated). |
 | `--repeat <N>` | `1` | Runs per mode (fastest is reported). |

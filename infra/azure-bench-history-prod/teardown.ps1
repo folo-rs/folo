@@ -9,7 +9,7 @@
     Deletes the whole resource group (the storage account and its role assignments)
     so the environment can be re-created from scratch with `deploy.ps1`. The CI
     managed identity is NOT affected — it lives in the test infra's resource group
-    (infra/azure-bench-history) and is only referenced here. Requires the Azure CLI
+    (infra/azure-bench-history-test) and is only referenced here. Requires the Azure CLI
     (`az`) and an authenticated session.
 
     Note: this permanently deletes the collected benchmark history. The data is

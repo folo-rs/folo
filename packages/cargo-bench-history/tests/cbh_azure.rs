@@ -16,8 +16,8 @@
 //!   `constants.env` does not by itself make a plain test run target the cloud);
 //!   CI provides one in the `test-azure` job, signing in via GitHub OIDC workload
 //!   identity federation, and locally `just test-azure` sets it after `az login`
-//!   (see the package AGENTS.md and `infra/azure-bench-history/`). The account name
-//!   comes from `BENCH_HISTORY_AZURE_ACCOUNT`. Each test uses a fresh container
+//!   (see the package AGENTS.md and `infra/azure-bench-history-test/`). The account name
+//!   comes from `BENCH_HISTORY_TEST_AZURE_ACCOUNT`. Each test uses a fresh container
 //!   that is deleted when the test finishes, even on panic.
 //!
 //! Each scenario uses its own container so they never share state, and they are
@@ -170,7 +170,7 @@ fn azurite_container_client(container: &str) -> BlobContainerClient {
 
 /// The real Storage account name to target, or `None` when none is configured.
 fn real_azure_account() -> Option<String> {
-    std::env::var("BENCH_HISTORY_AZURE_ACCOUNT")
+    std::env::var("BENCH_HISTORY_TEST_AZURE_ACCOUNT")
         .ok()
         .filter(|account| !account.is_empty())
 }
@@ -184,10 +184,10 @@ fn real_azure_endpoint(account: &str) -> String {
 /// Whether the real-Azure tests are enabled.
 ///
 /// They run only when `ENABLE_AZURE` is set, so a plain test run self-skips them
-/// even though `BENCH_HISTORY_AZURE_ACCOUNT` may be in scope. `ENABLE_AZURE` is an
+/// even though `BENCH_HISTORY_TEST_AZURE_ACCOUNT` may be in scope. `ENABLE_AZURE` is an
 /// explicit opt-in — set by the `just test-azure` recipe and the CI `test-azure`
 /// job — that says "really run these", so a then-missing
-/// `BENCH_HISTORY_AZURE_ACCOUNT` is a hard failure rather than a silent skip,
+/// `BENCH_HISTORY_TEST_AZURE_ACCOUNT` is a hard failure rather than a silent skip,
 /// mirroring how `BENCH_HISTORY_REQUIRE_AZURITE` guards Azurite.
 fn real_azure_enabled() -> bool {
     if std::env::var_os("ENABLE_AZURE").is_none_or(|value| value.is_empty()) {
@@ -196,7 +196,7 @@ fn real_azure_enabled() -> bool {
     }
     assert!(
         real_azure_account().is_some(),
-        "ENABLE_AZURE is set but BENCH_HISTORY_AZURE_ACCOUNT names no account"
+        "ENABLE_AZURE is set but BENCH_HISTORY_TEST_AZURE_ACCOUNT names no account"
     );
     true
 }

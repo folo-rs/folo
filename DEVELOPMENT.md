@@ -92,5 +92,5 @@ There are two flavours:
   authentication path that the emulator does not cover. Run them with `just test-azure` after
   `az login`. They are opt-in and self-skip unless explicitly enabled.
 
-For account provisioning and the gating environment variables, see `infra/azure-bench-history/` and
+For account provisioning and the gating environment variables, see `infra/azure-bench-history-test/` and
 the `packages/cargo-bench-history/AGENTS.md` testing notes.

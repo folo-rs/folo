@@ -47,7 +47,7 @@ use crate::scenario::Scenario;
 use crate::target::StorageTarget;
 
 /// Environment variable supplying the default Azure storage account name.
-const ACCOUNT_ENV: &str = "BENCH_HISTORY_AZURE_ACCOUNT";
+const ACCOUNT_ENV: &str = "BENCH_HISTORY_TEST_AZURE_ACCOUNT";
 
 /// Seconds added after the newest commit to anchor the analysis clock, so no
 /// seeded commit sits in the analysis's "future" relative to `now`.

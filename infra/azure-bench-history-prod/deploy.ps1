@@ -7,14 +7,14 @@
 
 .DESCRIPTION
     Idempotently provisions a resource group and an Entra-only Storage account, then
-    grants the existing CI managed identity (reused from infra/azure-bench-history)
+    grants the existing CI managed identity (reused from infra/azure-bench-history-test)
     and an optional local developer principal the `Storage Blob Data Contributor`
     role on it. Re-running it converges to the same state, so the paired
     `teardown.ps1` + this script let you delete and re-create everything at will.
 
     This script does NOT create a managed identity or federated credentials: the
     nightly `bench-history` workflow reuses the CI identity that
-    infra/azure-bench-history/deploy.ps1 created, whose `main`-branch federated
+    infra/azure-bench-history-test/deploy.ps1 created, whose `main`-branch federated
     credential already matches a scheduled run's OIDC subject. This script only
     resolves that identity's principal id and grants it data access here. Deploy the
     test infra first (so the identity exists) if you have not already.
@@ -92,7 +92,7 @@ $ciPrincipalId = az identity show `
     --query principalId `
     --output tsv
 if ([string]::IsNullOrWhiteSpace($ciPrincipalId)) {
-    Write-Error "Could not resolve the CI managed identity '$CiIdentityName' in '$CiIdentityResourceGroup'. Deploy infra/azure-bench-history/deploy.ps1 first so the identity exists."
+    Write-Error "Could not resolve the CI managed identity '$CiIdentityName' in '$CiIdentityResourceGroup'. Deploy infra/azure-bench-history-test/deploy.ps1 first so the identity exists."
 }
 Write-Verbose "CI principal id: $ciPrincipalId."
 
@@ -133,6 +133,6 @@ Write-Host ''
 Write-Host 'Record the account name (non-secret) in constants.env; the nightly' -ForegroundColor Cyan
 Write-Host 'bench-history workflow reuses the existing AZURE_CLIENT_ID / AZURE_TENANT_ID /' -ForegroundColor Cyan
 Write-Host 'AZURE_SUBSCRIPTION_ID for OIDC sign-in:' -ForegroundColor Cyan
-Write-Host "  BENCH_HISTORY_DATA_AZURE_ACCOUNT=$($outputs.storageAccountName.value)"
+Write-Host "  BENCH_HISTORY_PROD_AZURE_ACCOUNT=$($outputs.storageAccountName.value)"
 Write-Host ''
 Write-Host "Blob endpoint: $($outputs.blobEndpoint.value)"

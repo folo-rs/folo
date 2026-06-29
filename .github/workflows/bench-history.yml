@@ -1,8 +1,8 @@
 name: Benchmark history
 
 # Nightly collection of the workspace's benchmark results into the long-lived Azure
-# history store (account BENCH_HISTORY_DATA_AZURE_ACCOUNT, see constants.env and
-# infra/azure-bench-history-data/). Each run benchmarks the whole workspace EXCEPT the
+# history store (account BENCH_HISTORY_PROD_AZURE_ACCOUNT, see constants.env and
+# infra/azure-bench-history-prod/). Each run benchmarks the whole workspace EXCEPT the
 # slow, special-purpose `benchmarks` package, on every supported OS/architecture, and
 # appends the results keyed by the current `main` commit. Over time this builds the
 # performance history that `cargo-bench-history analyze` reads to spot regressions.
@@ -17,9 +17,12 @@ on:
 
 jobs:
   collect:
-    # Scheduled workflows also trigger on forks that enable Actions, but only this
-    # repository's identity can federate into Azure, so skip everywhere else.
-    if: github.repository == 'folo-rs/folo'
+    # Skip everywhere the OIDC sign-in cannot work: forks (only this repository's
+    # identity can federate into Azure) and any ref other than main (the federated
+    # credential is scoped to refs/heads/main, so a workflow_dispatch from a feature
+    # branch would mint a non-matching subject and fail at azure/login). Gating here
+    # makes such manual runs skip cleanly instead of failing red.
+    if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
 
     strategy:
       # One platform's benchmarks failing must not abandon the others' history for the
@@ -29,12 +32,15 @@ jobs:
         platform: [ubuntu-latest, windows-latest, ubuntu-24.04-arm, windows-11-arm]
 
     runs-on: ${{ matrix.platform }}
-    timeout-minutes: 120
+    # Generous ceiling: the suite already takes a while and grows as benchmarks are
+    # added; the matrix runs in parallel, so a high cap only bounds a genuinely stuck
+    # run rather than the expected duration.
+    timeout-minutes: 360
 
     # `id-token: write` lets the job mint a short-lived GitHub OIDC token (a signed JWT
     # proving "this run is repo folo-rs/folo on ref refs/heads/main"). `azure/login@v2`
     # hands it to Azure, which matches it against the CI managed identity's `main`-branch
-    # federated credential (created by infra/azure-bench-history/, reused here) and issues
+    # federated credential (created by infra/azure-bench-history-test/, reused here) and issues
     # an access token — so CI authenticates with no stored secret. `contents: read` is the
     # minimum the checkout needs.
     permissions:
@@ -51,7 +57,7 @@ jobs:
       # Surface the non-secret AZURE_* identity values from constants.env (the same
       # source the recipe reads) as job env vars so the azure/login inputs can reference
       # them without duplicating values in repo Variables. The data store account name is
-      # NOT needed here: `just collect-bench-history` reads BENCH_HISTORY_DATA_AZURE_ACCOUNT
+      # NOT needed here: `just collect-bench-history` reads BENCH_HISTORY_PROD_AZURE_ACCOUNT
       # from constants.env itself (via the justfile's dotenv). Each line is `KEY=value`.
       - name: Load Azure identifiers from constants.env
         shell: bash

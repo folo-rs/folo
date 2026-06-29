@@ -153,7 +153,7 @@ resource localPrincipalBlobRole 'Microsoft.Authorization/roleAssignments@2022-04
   }
 }
 
-@description('Storage account name (record as BENCH_HISTORY_AZURE_ACCOUNT in constants.env).')
+@description('Storage account name (record as BENCH_HISTORY_TEST_AZURE_ACCOUNT in constants.env).')
 output storageAccountName string = storageAccount.name
 
 @description('Blob service endpoint (https://<account>.blob.core.windows.net/).')

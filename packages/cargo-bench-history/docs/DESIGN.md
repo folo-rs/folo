@@ -1616,17 +1616,17 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     a crashed run might leave. The tests **self-skip** unless `ENABLE_AZURE` is set —
     an explicit opt-in (set by the `just test-azure` recipe the job invokes), so the
     account name living in `constants.env` does not by itself make a plain test run
-    target the cloud; when set, a then-missing `BENCH_HISTORY_AZURE_ACCOUNT` is a hard
+    target the cloud; when set, a then-missing `BENCH_HISTORY_TEST_AZURE_ACCOUNT` is a hard
     failure rather than a silent skip. The job is gated to same-repo runs (fork PRs
     cannot mint an OIDC token for our tenant). Its Azure identifiers
-    (`BENCH_HISTORY_AZURE_ACCOUNT`, `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
+    (`BENCH_HISTORY_TEST_AZURE_ACCOUNT`, `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
     `AZURE_SUBSCRIPTION_ID`) are committed, non-secret, in the repository-root
     `constants.env` (the same source `just test-azure` reads), so local and CI target
     the same account; a `grep` step surfaces them into `$GITHUB_ENV` for the
     `azure/login` inputs. It collects no coverage — `test-azurite` already covers
     `azure.rs`; its value is the real Entra + real Blob round-trip. The account,
     identity and federated credentials are scripted/Bicep'd in
-    `infra/azure-bench-history/` (decision 31).
+    `infra/azure-bench-history-test/` (decision 31).
 18. **Integration testing** — *Decided:* integration tests invoke the **library
     entry** (`Cli::from_args(argv).into_command()` → `run()`), matching the
     workspace pattern (no `assert_cmd`); a table-driven CLI-flag matrix runs over
@@ -1802,7 +1802,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      their flat CLIs need no grouped argument headings.
 31. **Real-Azure test infrastructure (Bicep + UAMI federation)** — *Decided:* the
      Azure resources backing the `test-azure` job are fully scripted in
-     `infra/azure-bench-history/` so the account and identity can be torn down and
+     `infra/azure-bench-history-test/` so the account and identity can be torn down and
      re-created with one command. `main.bicep` (resource-group scope) provisions an
      **Entra-only** Storage account (`allowSharedKeyAccess: false`, HTTPS/TLS1.2,
      container + blob soft-delete disabled so a deleted test container's name is
@@ -1818,7 +1818,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      their federated credentials are natively Bicep-able (no Graph extension) and
      `azure/login@v2` accepts a UAMI `client-id` for OIDC sign-in. The Bicep outputs
      map one-to-one to the Azure identifiers committed (non-secret) in the
-     repository-root `constants.env` (`BENCH_HISTORY_AZURE_ACCOUNT`/`AZURE_CLIENT_ID`/
+     repository-root `constants.env` (`BENCH_HISTORY_TEST_AZURE_ACCOUNT`/`AZURE_CLIENT_ID`/
      `AZURE_TENANT_ID`/`AZURE_SUBSCRIPTION_ID`), the single source both `just
      test-azure` and the CI `test-azure` job read so local and CI target the same
      account. `deploy.ps1`/`teardown.ps1`/`cleanup-containers.ps1` wrap deploy,
