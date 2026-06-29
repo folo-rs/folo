@@ -118,10 +118,11 @@ $outputs = $outputJson | ConvertFrom-Json
 Write-Host ''
 Write-Host 'Deployment complete.' -ForegroundColor Green
 Write-Host ''
-Write-Host 'These identifiers are committed (non-secret) in constants.env. The nightly' -ForegroundColor Cyan
-Write-Host 'bench-history workflow signs in with the PROD client id; tenant/subscription' -ForegroundColor Cyan
-Write-Host 'are shared with the test identity. If you re-created the resources, update:' -ForegroundColor Cyan
-Write-Host "  BENCH_HISTORY_PROD_AZURE_ACCOUNT=$($outputs.storageAccountName.value)"
+Write-Host 'The account name belongs in .cargo/bench_history.toml; the identity values are' -ForegroundColor Cyan
+Write-Host 'committed (non-secret) in constants.env. The nightly bench-history workflow signs' -ForegroundColor Cyan
+Write-Host 'in with the PROD client id; tenant/subscription are shared with the test identity.' -ForegroundColor Cyan
+Write-Host 'If you re-created the resources, update:' -ForegroundColor Cyan
+Write-Host "  .cargo/bench_history.toml -> [storage.azure] account = `"$($outputs.storageAccountName.value)`""
 Write-Host "  AZURE_PROD_CLIENT_ID=$($outputs.managedIdentityClientId.value)"
 Write-Host "  AZURE_TENANT_ID=$($outputs.tenantId.value)"
 Write-Host "  AZURE_SUBSCRIPTION_ID=$($outputs.subscriptionId.value)"

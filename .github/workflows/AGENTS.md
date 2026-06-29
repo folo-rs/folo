@@ -143,7 +143,7 @@ exists today; PR-time collection/validation may follow once this proves out.
   history for that night. macOS is omitted — there is no macOS-hosted history store
   consumer yet; add it to the matrix if/when macOS performance tracking is wanted.
 - **Whole workspace except the `benchmarks` package**, via the
-  `just collect-bench-history` recipe (`cargo-bench-history run --workspace --exclude
+  `just gh-collect-bench-history` recipe (`cargo-bench-history run --workspace --exclude
   benchmarks --overwrite`). The `benchmarks` package holds slow, special-purpose
   benchmarks that are not part of the tracked history. `--overwrite` makes a re-run on
   an unchanged `main` commit idempotent rather than failing as a duplicate.
@@ -157,33 +157,28 @@ exists today; PR-time collection/validation may follow once this proves out.
   `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` from `constants.env` (a `bash` step
   `grep`s them into `$GITHUB_ENV`).
 - **Writes to a SEPARATE storage account** from the test jobs — the real history store
-  `BENCH_HISTORY_PROD_AZURE_ACCOUNT` (account `folohistory`, provisioned by
-  `infra/azure-bench-history-prod/`), distinct from the throwaway
-  `BENCH_HISTORY_TEST_AZURE_ACCOUNT` the `test-azure`/`test-azurite` jobs target. The
-  account name is not surfaced into `$GITHUB_ENV` here because the recipe reads it from
-  `constants.env` itself (via the justfile's dotenv); only the `azure/login` inputs need
-  the grep step.
+  `folohistory` (provisioned by `infra/azure-bench-history-prod/`), distinct from the
+  throwaway `BENCH_HISTORY_TEST_AZURE_ACCOUNT` the `test-azure`/`test-azurite` jobs
+  target. The prod account is baked into the committed `.cargo/bench_history.toml` (where
+  cargo-bench-history config belongs), so no account name is surfaced into `$GITHUB_ENV`;
+  only the `azure/login` inputs need the grep step.
 - **Same-repo gate** (`if: github.repository == 'folo-rs/folo'`): scheduled workflows
   also trigger on forks that enable Actions, but only this repository's identity can
   federate into Azure, so the job skips everywhere else.
-- **Stable per-platform machine key**: the collect step sets
-  `BENCH_HISTORY_MACHINE_KEY` to `matrix.platform`, which the recipe forwards as
-  `--machine-key`, so the hardware-dependent (wall-clock) engines partition by a stable
-  CI machine-pool name instead of an auto-detected CPU fingerprint that drifts as GitHub
-  rotates the underlying host hardware. The deterministic engines (Callgrind,
-  allocation/time counters) are hardware-independent and ignore it. It travels as an
-  environment variable rather than a recipe argument so the recipe's signature stays
-  identical to `test-azure`.
+- **Auto-detected machine key**: the wall-clock engines partition by the runner's
+  auto-detected machine fingerprint (no override) — the `target-triple` already separates
+  OS/arch, and an explicit key would risk merging dissimilar hosts under one partition.
 - `timeout-minutes: 360`; schedule offset to 03:00 UTC so it does not contend with the
   00:00 `cache-warmup` cron (and runs against an already-warm Rust cache). Like
   `cache-warmup`, it is schedule-triggered and so carries no `concurrency` cancel key.
 - **`analyze` job** (`needs: collect`, `if: always()` + same main-only gate) — after
-  collection it runs `just analyze-bench-history` (`analyze --engine all --target-triple
+  collection it runs `just gh-analyze-bench-history` (`analyze --engine all --target-triple
   all --machine-key all` across every platform's history) which writes a Markdown report
   plus `bench-history-notable.txt`. When the JSON report's `notable` is `true`, it files
   **one rolling regression issue** via `JasonEtco/create-an-issue` (`update_existing` +
   `search_existing: open`, fixed title = dedup key). Findings never fail the job —
-  the tool always exits 0; the issue is advisory. Needs `issues: write`.
+  the tool always exits 0; the issue is advisory. Needs `issues: write`. It checks out
+  with `fetch-depth: 0` so the first-parent history resolves.
 - **`alert` job** (`needs: [collect, analyze]`, `if: failure()` + main-only) — opens a
   deduplicated `.github/bench-history-failure-issue.md` when any prior job fails, so a
   broken nightly is noticed. Closed by hand once the workflow is green again.

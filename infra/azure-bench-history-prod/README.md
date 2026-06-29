@@ -2,7 +2,7 @@
 
 This directory provisions the Azure storage account that holds the **real,
 long-lived benchmark history** collected by the `bench-history` GitHub workflow
-(and by local `just collect-bench-history` runs). It is the production data store,
+(and by local `cargo run -p cargo-bench-history -- run` invocations). It is the production data store,
 as opposed to the throwaway test account in
 [`infra/azure-bench-history-test/`](../azure-bench-history-test/).
 
@@ -58,30 +58,31 @@ On success the script prints the identifiers to record in `constants.env`.
 
 ## Configure the repository
 
-The account name and the prod identity's client id are committed (non-secret) in
-`constants.env` at the repository root. The tenant and subscription are shared with
-the test identity. If you re-created the resources, update these lines to match the
-values the deploy script printed:
+The storage account name is committed in `.cargo/bench_history.toml` (where
+cargo-bench-history config belongs). The prod identity's client id is committed
+(non-secret) in `constants.env`; tenant and subscription are shared with the test
+identity. If you re-created the resources, update these to match the values the deploy
+script printed:
 
-| Key | Source |
+| Setting | Source |
 | --- | --- |
-| `BENCH_HISTORY_PROD_AZURE_ACCOUNT` | storage account name (this deployment) |
-| `AZURE_PROD_CLIENT_ID` | this deployment's managed identity client id |
-| `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` | shared tenant/subscription (already present) |
+| `.cargo/bench_history.toml` → `[storage.azure].account` | storage account name (this deployment) |
+| `AZURE_PROD_CLIENT_ID` (constants.env) | this deployment's managed identity client id |
+| `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` (constants.env) | shared tenant/subscription (already present) |
 
 ## Collect history locally
 
 ```powershell
-az login                        # sign in as your Entra user
-just collect-bench-history      # benches the workspace and stores into Azure
+az login                                          # sign in as your Entra user
+cargo run -p cargo-bench-history --bin cargo-bench-history -- run --workspace --exclude benchmarks
 ```
 
-`just collect-bench-history` benches every workspace package except `benchmarks`
-(the slow, special-purpose one) and stores the results in the
-`BENCH_HISTORY_PROD_AZURE_ACCOUNT` account. It requires your user to hold the
-`Storage Blob Data Contributor` role on the account (deploy with `-LocalPrincipalId`
-as above). Pass an account name to target a different one:
-`just collect-bench-history <storage-account-name>`.
+This benches every workspace package except `benchmarks` (the slow, special-purpose
+one) and stores into the account from `.cargo/bench_history.toml`. It requires your
+user to hold the `Storage Blob Data Contributor` role on the account (deploy with
+`-LocalPrincipalId` as above). For a throwaway run that never touches Azure, add
+`--local <path>`. The nightly automation uses the dedicated `just gh-collect-bench-history`
+recipe instead.
 
 ## Tear down / re-create
 

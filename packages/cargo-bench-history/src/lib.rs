@@ -251,12 +251,14 @@
 //!    `permissions: { id-token: write }`. The signed-in Azure CLI session is what the
 //!    tool's Entra credential picks up.
 //!
-//! In this repository, `infra/azure-bench-history-prod/` deploys the long-lived
-//! history store together with its own dedicated managed identity, and
-//! `infra/azure-bench-history-test/` deploys the separate test account and identity;
-//! both are Bicep templates with PowerShell deploy wrappers that serve as worked,
-//! runnable examples of the steps above. The nightly `.github/workflows/bench-history.yml`
-//! workflow is the corresponding CI consumer.
+//! Worked, runnable examples of all of the above live in the folo repository as Bicep
+//! templates with PowerShell deploy wrappers: the long-lived store with its own
+//! dedicated managed identity at
+//! <https://github.com/folo-rs/folo/tree/main/infra/azure-bench-history-prod> and a
+//! separate test account/identity at
+//! <https://github.com/folo-rs/folo/tree/main/infra/azure-bench-history-test>, with the
+//! account name baked into the committed `.cargo/bench_history.toml` and the nightly
+//! consumer at <https://github.com/folo-rs/folo/blob/main/.github/workflows/bench-history.yml>.
 
 mod analyze;
 mod bench;
