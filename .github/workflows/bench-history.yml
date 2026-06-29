@@ -37,12 +37,14 @@ jobs:
     # run rather than the expected duration.
     timeout-minutes: 360
 
-    # `id-token: write` lets the job mint a short-lived GitHub OIDC token (a signed JWT
-    # proving "this run is repo folo-rs/folo on ref refs/heads/main"). `azure/login@v2`
-    # hands it to Azure, which matches it against the dedicated prod managed identity's
-    # `main`-branch federated credential (created by infra/azure-bench-history-prod/) and
-    # issues an access token — so CI authenticates with no stored secret. `contents: read`
-    # is the minimum the checkout needs.
+    # `id-token: write` lets cargo-bench-history mint short-lived GitHub OIDC tokens
+    # (each a signed JWT proving "this run is repo folo-rs/folo on ref refs/heads/main").
+    # The tool exchanges them directly with Entra, which matches each against the
+    # dedicated prod managed identity's `main`-branch federated credential (created by
+    # infra/azure-bench-history-prod/) and issues an access token — so CI authenticates
+    # with no stored secret. Minting on demand (rather than once up front via
+    # `azure/login`) is what keeps a multi-hour run authenticated past the ~1h
+    # access-token lifetime. `contents: read` is the minimum the checkout needs.
     permissions:
       id-token: write
       contents: read
@@ -54,21 +56,22 @@ jobs:
       - name: Setup environment
         uses: ./.github/actions/setup-environment
 
-      # Surface the non-secret AZURE_* identity values from constants.env as job env vars
-      # so the azure/login inputs can reference them without duplicating values in repo
-      # Variables. The data store account name is NOT needed here: it is baked into the
-      # committed .cargo/bench_history.toml that cargo-bench-history reads. Each line is
-      # `KEY=value`.
-      - name: Load Azure identifiers from constants.env
+      # cargo-bench-history self-federates with GitHub OIDC: given the managed identity's
+      # client id and tenant — plus the ACTIONS_ID_TOKEN_* values GitHub injects because
+      # of id-token: write — it mints a fresh OIDC assertion each time Entra needs a new
+      # access token, so a long run never re-submits an expired assertion. Export those
+      # two identifiers from constants.env under the standard names the tool reads
+      # (AZURE_PROD_CLIENT_ID is the prod identity's client id). The data store account
+      # name is NOT needed here: it is baked into the committed .cargo/bench_history.toml.
+      - name: Configure Azure federation identity from constants.env
         shell: bash
-        run: grep -E '^(AZURE_PROD_CLIENT_ID|AZURE_TENANT_ID|AZURE_SUBSCRIPTION_ID)=' constants.env >> "$GITHUB_ENV"
-
-      - name: Sign in to Azure (OIDC workload identity federation)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ env.AZURE_PROD_CLIENT_ID }}
-          tenant-id: ${{ env.AZURE_TENANT_ID }}
-          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+          source constants.env
+          {
+            echo "AZURE_CLIENT_ID=$AZURE_PROD_CLIENT_ID"
+            echo "AZURE_TENANT_ID=$AZURE_TENANT_ID"
+          } >> "$GITHUB_ENV"
 
       # The deterministic engines (Callgrind, allocation/time counters) are
       # hardware-independent; the wall-clock engines auto-detect a per-machine partition.
@@ -87,8 +90,8 @@ jobs:
     # far faster than benchmarking.
     timeout-minutes: 60
 
-    # id-token for OIDC sign-in (read history), contents for checkout, issues to file
-    # the rolling regression issue.
+    # id-token to self-federate with Entra (reads the history; see collect's note),
+    # contents for checkout, issues to file the rolling regression issue.
     permissions:
       id-token: write
       contents: read
@@ -105,16 +108,18 @@ jobs:
       - name: Setup environment
         uses: ./.github/actions/setup-environment
 
-      - name: Load Azure identifiers from constants.env
+      # Same self-federation as collect: export the prod identity's client id and tenant
+      # under the standard names cargo-bench-history reads, then let the tool mint OIDC
+      # assertions on demand (no azure/login). The account name is baked into config.
+      - name: Configure Azure federation identity from constants.env
         shell: bash
-        run: grep -E '^(AZURE_PROD_CLIENT_ID|AZURE_TENANT_ID|AZURE_SUBSCRIPTION_ID)=' constants.env >> "$GITHUB_ENV"
-
-      - name: Sign in to Azure (OIDC workload identity federation)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ env.AZURE_PROD_CLIENT_ID }}
-          tenant-id: ${{ env.AZURE_TENANT_ID }}
-          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+          source constants.env
+          {
+            echo "AZURE_CLIENT_ID=$AZURE_PROD_CLIENT_ID"
+            echo "AZURE_TENANT_ID=$AZURE_TENANT_ID"
+          } >> "$GITHUB_ENV"
 
       # Renders bench-history-report.md and bench-history-notable.txt. Findings never
       # fail the recipe (the tool always exits 0); the issue is advisory, not a gate.

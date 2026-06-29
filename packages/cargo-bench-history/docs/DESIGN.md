@@ -454,14 +454,18 @@ backend-agnostic by holding a `StorageFacade`.
      client passes **no credential** and Azurite's plain-HTTP endpoint is
      accepted.
   2. **verbatim `sas_token`** — a pre-signed SAS supplied in config, used as-is.
-  3. **Microsoft Entra ID** (`DeveloperToolsCredential`) — the secret-free
-     production default (CI managed identity / workload-identity federation,
-     local `az login`, env service principals); requires an **HTTPS** endpoint.
-     The credential is wrapped in a `CachingCredential` decorator that serializes
-     token acquisition and caches the token per scope, so `analyze`'s concurrent
-     object-load burst shares one acquisition instead of driving that many
-     simultaneous `az account get-access-token` calls — which on Windows collide
-     on the exclusive MSAL token-cache lockfile and fail the whole read.
+  3. **Microsoft Entra ID** — the secret-free production default (CI managed
+     identity / workload-identity federation, local `az login`, env service
+     principals); requires an **HTTPS** endpoint. The concrete credential is picked
+     by `entra_credential`: in a GitHub Actions job configured for federation it is a
+     `ClientAssertionCredential` whose assertion self-mints a fresh GitHub OIDC JWT on
+     demand (`storage::github_oidc`); otherwise it is `DeveloperToolsCredential`
+     (which discovers the local `az login` session). Either way it is wrapped in a
+     `CachingCredential` decorator that serializes token acquisition and caches the
+     token per scope, so `analyze`'s concurrent object-load burst shares one
+     acquisition instead of driving that many simultaneous token fetches — which on
+     Windows collide on the exclusive MSAL token-cache lockfile and fail the whole
+     read.
 
   The shipped azure-sdk-for-rust v1.0.0 removed connection-string parsing,
   `StorageSharedKeyCredential`, and `DefaultAzureCredential`, which is why the
@@ -1523,9 +1527,10 @@ Each iteration ships with tests and docs and leaves the tool runnable.
    change-point and drift plug in afterward.
 6. **Azure auth** — *Decided:* resolved in priority order — self-signed account
    SAS (`account_key`, the Azurite/CI and SAS-production path, HMAC-signed by
-   `storage::sas`), verbatim `sas_token`, then Microsoft Entra ID
-   (`DeveloperToolsCredential`, the secret-free production default). The account
-   SAS is self-signed because azure-sdk-for-rust v1.0.0 dropped connection
+   `storage::sas`), verbatim `sas_token`, then Microsoft Entra ID (the secret-free
+   production default; a self-minting GitHub OIDC `ClientAssertionCredential` in a
+   federated CI job, otherwise `DeveloperToolsCredential` — see decision 38). The
+   account SAS is self-signed because azure-sdk-for-rust v1.0.0 dropped connection
    strings, `StorageSharedKeyCredential`, and `DefaultAzureCredential` (§7).
 7. **Date/time dependency** — *Decided:* `jiff` for timestamps and `--since`
    parsing.
@@ -1623,7 +1628,11 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     `AZURE_SUBSCRIPTION_ID`) are committed, non-secret, in the repository-root
     `constants.env` (the same source `just test-azure` reads), so local and CI target
     the same account; a `grep` step surfaces them into `$GITHUB_ENV` for the
-    `azure/login` inputs. It collects no coverage — `test-azurite` already covers
+    `azure/login` inputs. Because that job exports the client id as
+    `AZURE_TEST_CLIENT_ID` (not `AZURE_CLIENT_ID`), it does **not** trip the
+    self-minting OIDC path (decision 38) and stays on `DeveloperToolsCredential` via
+    the `azure/login` CLI session — exactly what this job exists to exercise. It
+    collects no coverage — `test-azurite` already covers
     `azure.rs`; its value is the real Entra + real Blob round-trip. The account,
     identity and federated credentials are scripted/Bicep'd in
     `infra/azure-bench-history-test/` (decision 31).
@@ -1997,3 +2006,27 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      (e.g. the blessing `blessed_at`, which still calls a `short_commit` render helper on the
      full SHA) is a separate, deferred concern — display abbreviation is questionable but not a
      priority, so it is left as-is for now.
+38. **Self-minting GitHub OIDC credential for long CI runs** — *Decided:* in a
+     GitHub Actions job configured for Azure federation, the Entra path resolves to a
+     `ClientAssertionCredential` whose assertion (`storage::github_oidc::GithubOidcAssertion`)
+     fetches a **fresh** GitHub OIDC JWT on demand — `GET`ting
+     `${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=api://AzureADTokenExchange` with the
+     `ACTIONS_ID_TOKEN_REQUEST_TOKEN` bearer — for each Entra token exchange. The
+     `entra_credential` helper activates it only when `from_env` finds all four of
+     `ACTIONS_ID_TOKEN_REQUEST_URL`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, `AZURE_CLIENT_ID`
+     and `AZURE_TENANT_ID` non-empty; otherwise it falls back to
+     `DeveloperToolsCredential` (local `az login`; the `test-azure` job, which exports
+     `AZURE_TEST_CLIENT_ID` rather than `AZURE_CLIENT_ID`, decision 17). *Why:* a
+     federated `azure/login` session yields a ~1h access token but caches a single OIDC
+     assertion that lives only minutes; a multi-hour collection run outlives the access
+     token, and the first refresh re-submits the long-dead assertion, which Entra
+     rejects (`AADSTS700024`). `ClientAssertionCredential` has its own `TokenCache`, so
+     it calls the assertion only when its access token is stale (~hourly) — and the
+     job-lifetime request token always yields a still-valid assertion, so the run never
+     re-submits an expired one. This needs `permissions: { id-token: write }`, no
+     `azure/login` step, and no stored secret. `GithubOidcAssertion` reuses the
+     backend's shared `HttpClient` for the token `GET`, redacts the request token in
+     `Debug`, and maps every failure to `ErrorKind::Credential`; it is unit-tested with
+     a stub `HttpClient` (no network, Miri-safe) covering success, HTTP-error status,
+     malformed/empty JSON, the audience-append and bearer header, `Debug` redaction, the
+     four-var env detection, and credential construction.

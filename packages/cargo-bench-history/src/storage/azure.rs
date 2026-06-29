@@ -38,7 +38,7 @@ use jiff::tz::TimeZone;
 use jiff::{Timestamp, ToSpan as _};
 
 use super::sas::{AccountSasParams, account_sas_query};
-use super::{Storage, StorageError, validate_key};
+use super::{Storage, StorageError, github_oidc, validate_key};
 
 /// The SAS permissions a self-signed token grants: read, write, delete, list,
 /// add, create — everything the backend needs to create the container on demand
@@ -125,6 +125,33 @@ impl AzureBlobStorage {
             .pop_if_empty()
             .push(container);
 
+        // Reject Entra-over-HTTP before building anything else, so this validation
+        // error never depends on first constructing the HTTP client (which would pull
+        // in `reqwest` and make the check un-runnable under Miri). The SAS modes set a
+        // credential-bearing query and so accept the emulator's plain-HTTP endpoint;
+        // only the Entra path (neither key nor token) demands HTTPS.
+        let is_entra = account_key.is_none() && sas_token.is_none();
+        if is_entra && container_endpoint.scheme() != "https" {
+            return Err(config_error(
+                "Azure Entra ID authentication requires an https endpoint",
+            ));
+        }
+
+        // Build one HTTP client up front and share it across every per-object blob
+        // and container client (via the transport seam in `shared_client_options`),
+        // so all operations reuse a single connection pool and keep TCP+TLS
+        // connections alive instead of paying a fresh handshake per object.
+        // `automatic_decompression` is left off to match the SDK's own per-client
+        // default: the storage layer stores gzip and inflates it itself in `get`, so
+        // the transport must hand back the raw compressed bytes (turning
+        // auto-decompression on would double-inflate). The Entra OIDC credential
+        // reuses the same client for its token `GET`; that endpoint is never gzipped
+        // (the request advertises no `Accept-Encoding`), so decompression staying off
+        // is correct there too.
+        let http_client = new_http_client(Some(HttpClientOptions {
+            automatic_decompression: false,
+        }));
+
         let credential = if let Some(account_key) = account_key {
             let query = account_sas_query(&AccountSasParams {
                 account,
@@ -141,33 +168,14 @@ impl AzureBlobStorage {
             container_endpoint.set_query(Some(sas_token.trim_start_matches('?')));
             None
         } else {
-            if container_endpoint.scheme() != "https" {
-                return Err(config_error(
-                    "Azure Entra ID authentication requires an https endpoint",
-                ));
-            }
-            let credential: Arc<dyn TokenCredential> = DeveloperToolsCredential::new(None)
-                .map_err(|error| {
-                    config_error(format!("could not initialize Entra ID credential: {error}"))
-                })?;
+            // The endpoint was already confirmed to be HTTPS above.
+            let credential = entra_credential(&http_client)?;
             // Wrap the credential so a burst of concurrent reads shares one token
-            // instead of each driving its own Azure CLI token acquisition (see
+            // instead of each driving its own token acquisition (see
             // `CachingCredential`).
             let caching: Arc<dyn TokenCredential> = Arc::new(CachingCredential::new(credential));
             Some(caching)
         };
-
-        // Build one HTTP client up front and share it across every per-object
-        // blob and container client (via the transport seam in
-        // `shared_client_options`), so all operations reuse a single connection
-        // pool and keep TCP+TLS connections alive instead of paying a fresh
-        // handshake per object. `automatic_decompression` is left off to match
-        // the SDK's own per-client default: the storage layer stores gzip and
-        // inflates it itself in `get`, so the transport must hand back the raw
-        // compressed bytes (turning auto-decompression on would double-inflate).
-        let http_client = new_http_client(Some(HttpClientOptions {
-            automatic_decompression: false,
-        }));
 
         Ok(Self {
             container_endpoint,
@@ -354,6 +362,28 @@ impl Storage for AzureBlobStorage {
             Err(error) => Err(azure_io(&error)),
         }
     }
+}
+
+/// Resolves the Entra ID token credential used against the HTTPS Blob endpoint.
+///
+/// In a GitHub Actions job configured for Azure federation it self-mints fresh OIDC
+/// assertions (see [`github_oidc`]), which keeps a long collection run authenticated
+/// past the first hourly access-token refresh — a single `azure/login` session
+/// cannot, because the assertion it caches expires within minutes. Everywhere else
+/// (local development, and the `test-azure` CI job that signs in with `azure/login`)
+/// it falls back to [`DeveloperToolsCredential`], which discovers the existing
+/// Azure CLI session.
+fn entra_credential(
+    http_client: &Arc<dyn HttpClient>,
+) -> Result<Arc<dyn TokenCredential>, StorageError> {
+    if let Some(result) = github_oidc::from_env(http_client) {
+        return result;
+    }
+    let credential: Arc<dyn TokenCredential> =
+        DeveloperToolsCredential::new(None).map_err(|error| {
+            config_error(format!("could not initialize Entra ID credential: {error}"))
+        })?;
+    Ok(credential)
 }
 
 /// How long before a cached token's stated expiry it is treated as stale and
