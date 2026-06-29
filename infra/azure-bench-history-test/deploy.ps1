@@ -115,7 +115,7 @@ Write-Host 'These identifiers are committed (non-secret) in constants.env, share
 Write-Host 'local `just test-azure` runs and the CI `test-azure` job. If you re-created' -ForegroundColor Cyan
 Write-Host 'the resources, update constants.env to match:' -ForegroundColor Cyan
 Write-Host "  BENCH_HISTORY_TEST_AZURE_ACCOUNT=$($outputs.storageAccountName.value)"
-Write-Host "  AZURE_CLIENT_ID=$($outputs.managedIdentityClientId.value)"
+Write-Host "  AZURE_TEST_CLIENT_ID=$($outputs.managedIdentityClientId.value)"
 Write-Host "  AZURE_TENANT_ID=$($outputs.tenantId.value)"
 Write-Host "  AZURE_SUBSCRIPTION_ID=$($outputs.subscriptionId.value)"
 Write-Host ''

@@ -6,11 +6,10 @@
     benchmark history by removing its resource group.
 
 .DESCRIPTION
-    Deletes the whole resource group (the storage account and its role assignments)
-    so the environment can be re-created from scratch with `deploy.ps1`. The CI
-    managed identity is NOT affected — it lives in the test infra's resource group
-    (infra/azure-bench-history-test) and is only referenced here. Requires the Azure CLI
-    (`az`) and an authenticated session.
+    Deletes the whole resource group (the storage account, its dedicated managed
+    identity and federated credential, and the role assignments) so the environment
+    can be re-created from scratch with `deploy.ps1`. The test infra's identity and
+    account are unaffected. Requires the Azure CLI (`az`) and an authenticated session.
 
     Note: this permanently deletes the collected benchmark history. The data is
     reconstructible (`cargo bench-history backfill` can re-bench past commits), but

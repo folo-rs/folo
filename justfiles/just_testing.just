@@ -417,6 +417,61 @@ collect-bench-history ACCOUNT=env_var_or_default('BENCH_HISTORY_PROD_AZURE_ACCOU
         Remove-Item -Path $configPath -ErrorAction SilentlyContinue
     }
 
+# Analyzes the collected benchmark history for regressions across ALL engines, target
+# triples and machine keys, and writes a Markdown regression report. Findings are
+# advisory and never fail the recipe (cargo-bench-history always exits 0); the nightly
+# workflow files a rolling issue when findings exist. Reads BENCH_HISTORY_PROD_AZURE_ACCOUNT.
+#
+# Writes two artefacts to the working directory: the rendered Markdown report and a
+# `bench-history-notable.txt` holding `true`/`false` (whether any finding survived,
+# from the JSON report's top-level `notable`), so a workflow can decide whether to act.
+# `--engine all --target-triple all --machine-key all` widen past this machine so a
+# single run surveys every platform's history; `auto` mode on a clean `main` checkout
+# resolves to long-range history-trend detection.
+[group('testing')]
+[script]
+analyze-bench-history ACCOUNT=env_var_or_default('BENCH_HISTORY_PROD_AZURE_ACCOUNT', ''):
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    $account = "{{ ACCOUNT }}"
+    if ([string]::IsNullOrEmpty($account)) {
+        Write-Error "No data storage account specified. Set BENCH_HISTORY_PROD_AZURE_ACCOUNT in constants.env (or pass it as the ACCOUNT argument). Deploy one with infra/azure-bench-history-prod/deploy.ps1."
+        exit 1
+    }
+
+    $reportPath = Join-Path (Get-Location) "bench-history-report.md"
+    $notablePath = Join-Path (Get-Location) "bench-history-notable.txt"
+
+    # Throwaway config naming the real history store; removed in the finally block so
+    # the account never leaks into the version-controlled default config. The filename
+    # is randomized so concurrent invocations (e.g. two terminals) never race on it.
+    $configPath = Join-Path ([System.IO.Path]::GetTempPath()) "folo-bench-history-config-$(Get-Random).toml"
+    Write-Verbose "Writing throwaway Azure config to $configPath (account '$account')." -Verbose
+    $configLines = @(
+        '[project]'
+        'id = "folo"'
+        ''
+        '[storage.azure]'
+        "account = `"$account`""
+        'container = "bench-history"'
+    )
+    Set-Content -Path $configPath -Value $configLines -Encoding utf8
+
+    try {
+        $common = @('--engine', 'all', '--target-triple', 'all', '--machine-key', 'all', '--config', $configPath)
+        Write-Verbose "Rendering Markdown regression report to $reportPath." -Verbose
+        cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- analyze @common --format markdown | Set-Content -Path $reportPath -Encoding utf8
+        Write-Verbose "Computing the notable flag from the JSON report." -Verbose
+        $json = cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- analyze @common --format json | ConvertFrom-Json
+        $notable = if ($json.notable) { 'true' } else { 'false' }
+        Set-Content -Path $notablePath -Value $notable -Encoding utf8
+        Write-Verbose "Analysis complete: notable=$notable (report at $reportPath)." -Verbose
+    } finally {
+        Write-Verbose "Removing throwaway Azure config $configPath." -Verbose
+        Remove-Item -Path $configPath -ErrorAction SilentlyContinue
+    }
+
 # Runs regular tests as well as doing one iteration of benchmarks.
 # We separate it from "test" because benchmarks are quite slow,
 # so we tend to only run them as part of a full validation pass.

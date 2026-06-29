@@ -39,10 +39,10 @@ jobs:
 
     # `id-token: write` lets the job mint a short-lived GitHub OIDC token (a signed JWT
     # proving "this run is repo folo-rs/folo on ref refs/heads/main"). `azure/login@v2`
-    # hands it to Azure, which matches it against the CI managed identity's `main`-branch
-    # federated credential (created by infra/azure-bench-history-test/, reused here) and issues
-    # an access token — so CI authenticates with no stored secret. `contents: read` is the
-    # minimum the checkout needs.
+    # hands it to Azure, which matches it against the dedicated prod managed identity's
+    # `main`-branch federated credential (created by infra/azure-bench-history-prod/) and
+    # issues an access token — so CI authenticates with no stored secret. `contents: read`
+    # is the minimum the checkout needs.
     permissions:
       id-token: write
       contents: read
@@ -61,12 +61,12 @@ jobs:
       # from constants.env itself (via the justfile's dotenv). Each line is `KEY=value`.
       - name: Load Azure identifiers from constants.env
         shell: bash
-        run: grep -E '^(AZURE_CLIENT_ID|AZURE_TENANT_ID|AZURE_SUBSCRIPTION_ID)=' constants.env >> "$GITHUB_ENV"
+        run: grep -E '^(AZURE_PROD_CLIENT_ID|AZURE_TENANT_ID|AZURE_SUBSCRIPTION_ID)=' constants.env >> "$GITHUB_ENV"
 
       - name: Sign in to Azure (OIDC workload identity federation)
         uses: azure/login@v2
         with:
-          client-id: ${{ env.AZURE_CLIENT_ID }}
+          client-id: ${{ env.AZURE_PROD_CLIENT_ID }}
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
@@ -80,3 +80,99 @@ jobs:
         env:
           BENCH_HISTORY_MACHINE_KEY: ${{ matrix.platform }}
         run: just collect-bench-history
+
+  analyze:
+    # Survey the freshly-updated history for regressions and post a rolling issue when
+    # any finding survives. Runs after every platform finishes (even partially:
+    # fail-fast is off) so the night's analysis reflects whatever did land, and only on
+    # main (where OIDC sign-in works), matching collect's gate.
+    needs: collect
+    if: always() && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Analysis loads the whole store and reduces it; generous like collect, though it is
+    # far faster than benchmarking.
+    timeout-minutes: 60
+
+    # id-token for OIDC sign-in (read history), contents for checkout, issues to file
+    # the rolling regression issue.
+    permissions:
+      id-token: write
+      contents: read
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Load Azure identifiers from constants.env
+        shell: bash
+        run: grep -E '^(AZURE_PROD_CLIENT_ID|AZURE_TENANT_ID|AZURE_SUBSCRIPTION_ID)=' constants.env >> "$GITHUB_ENV"
+
+      - name: Sign in to Azure (OIDC workload identity federation)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_PROD_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      # Renders bench-history-report.md and bench-history-notable.txt. Findings never
+      # fail the recipe (the tool always exits 0); the issue is advisory, not a gate.
+      - name: Analyze benchmark history
+        run: just analyze-bench-history
+
+      - name: Read notable flag
+        id: notable
+        shell: bash
+        run: echo "value=$(cat bench-history-notable.txt)" >> "$GITHUB_OUTPUT"
+
+      # JasonEtco/create-an-issue derives the issue title/labels from the file's YAML
+      # front matter; the report the tool renders has none, so prepend a fixed header.
+      # The fixed title is also the dedup key that turns nightly findings into one
+      # rolling issue.
+      - name: Compose regression issue
+        if: steps.notable.outputs.value == 'true'
+        shell: bash
+        run: |
+          { printf -- '---\ntitle: Benchmark regressions detected (nightly)\nlabels: bench-history, regression\n---\n\n'; cat bench-history-report.md; } > bench-history-issue.md
+
+      # One rolling issue, updated rather than duplicated each night (the fixed title is
+      # the dedup key), so a regression that persists does not spam new issues. Opened
+      # only when findings exist; nights with none touch nothing.
+      - name: File rolling regression issue
+        if: steps.notable.outputs.value == 'true'
+        uses: JasonEtco/create-an-issue@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          filename: bench-history-issue.md
+          update_existing: true
+          search_existing: open
+
+  alert:
+    # Open a deduplicated issue whenever collection or analysis fails, so a broken
+    # nightly is noticed instead of silently rotting. Same main-only gate as the others.
+    needs: [collect, analyze]
+    if: failure() && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Open or update failure issue
+        uses: JasonEtco/create-an-issue@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          filename: .github/bench-history-failure-issue.md
+          update_existing: true
+          search_existing: open

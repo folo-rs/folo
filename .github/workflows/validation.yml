@@ -711,12 +711,12 @@ jobs:
       # duplicating values in repo Variables. Each line is `KEY=value`; comments skip.
       - name: Load Azure identifiers from constants.env
         shell: bash
-        run: grep -E '^(AZURE_CLIENT_ID|AZURE_TENANT_ID|AZURE_SUBSCRIPTION_ID|BENCH_HISTORY_TEST_AZURE_ACCOUNT)=' constants.env >> "$GITHUB_ENV"
+        run: grep -E '^(AZURE_TEST_CLIENT_ID|AZURE_TENANT_ID|AZURE_SUBSCRIPTION_ID|BENCH_HISTORY_TEST_AZURE_ACCOUNT)=' constants.env >> "$GITHUB_ENV"
 
       - name: Sign in to Azure (OIDC workload identity federation)
         uses: azure/login@v2
         with:
-          client-id: ${{ env.AZURE_CLIENT_ID }}
+          client-id: ${{ env.AZURE_TEST_CLIENT_ID }}
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 

@@ -1619,7 +1619,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     target the cloud; when set, a then-missing `BENCH_HISTORY_TEST_AZURE_ACCOUNT` is a hard
     failure rather than a silent skip. The job is gated to same-repo runs (fork PRs
     cannot mint an OIDC token for our tenant). Its Azure identifiers
-    (`BENCH_HISTORY_TEST_AZURE_ACCOUNT`, `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
+    (`BENCH_HISTORY_TEST_AZURE_ACCOUNT`, `AZURE_TEST_CLIENT_ID`, `AZURE_TENANT_ID`,
     `AZURE_SUBSCRIPTION_ID`) are committed, non-secret, in the repository-root
     `constants.env` (the same source `just test-azure` reads), so local and CI target
     the same account; a `grep` step surfaces them into `$GITHUB_ENV` for the
@@ -1818,7 +1818,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      their federated credentials are natively Bicep-able (no Graph extension) and
      `azure/login@v2` accepts a UAMI `client-id` for OIDC sign-in. The Bicep outputs
      map one-to-one to the Azure identifiers committed (non-secret) in the
-     repository-root `constants.env` (`BENCH_HISTORY_TEST_AZURE_ACCOUNT`/`AZURE_CLIENT_ID`/
+     repository-root `constants.env` (`BENCH_HISTORY_TEST_AZURE_ACCOUNT`/`AZURE_TEST_CLIENT_ID`/
      `AZURE_TENANT_ID`/`AZURE_SUBSCRIPTION_ID`), the single source both `just
      test-azure` and the CI `test-azure` job read so local and CI target the same
      account. `deploy.ps1`/`teardown.ps1`/`cleanup-containers.ps1` wrap deploy,

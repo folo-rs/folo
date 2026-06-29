@@ -16,26 +16,25 @@ the environment can be deleted and re-created with one command.
 - A **Storage account** — `StorageV2`, HTTPS-only, TLS 1.2, **shared-key access
   disabled** (Entra ID only, so there is no account key to leak). Container and blob
   soft-delete are disabled, matching the test account.
-- **`Storage Blob Data Contributor`** role assignments on the account for the
-  existing CI managed identity and (optionally) a local developer principal. That
-  single role covers container create/delete and blob read/write/delete via the data
-  plane, which is all the tool's `run` (and any later `prune`) need.
+- A **dedicated user-assigned managed identity** (`id-folo-bench-history-prod`) with a
+  **GitHub OIDC federated credential** for `main`. The nightly workflow signs in with
+  no stored secret. Only `main` is trusted — there is no pull-request credential —
+  because collection only ever runs on `main` (schedule + gated dispatch).
+- **`Storage Blob Data Contributor`** role assignments on the account for that managed
+  identity and (optionally) a local developer principal. That single role covers
+  container create/delete and blob read/write/delete via the data plane, which is all
+  the tool's `run` (and any later `prune`) need.
 
-It deliberately does **not** create a managed identity or federated credentials.
-The nightly workflow reuses the CI identity (`id-folo-bench-history-ci`) created by
-[`infra/azure-bench-history-test/`](../azure-bench-history-test/): that identity's
-`main`-branch federated credential already matches a scheduled run's OIDC subject
-(`repo:folo-rs/folo:ref:refs/heads/main`), so the workflow signs in with the same
-non-secret `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` as the
-`test-azure` job. This script only grants that identity data access to this account.
+This stack is **fully self-contained**: it owns its own identity and shares nothing
+with [`infra/azure-bench-history-test/`](../azure-bench-history-test/) except the
+tenant and subscription. Either can be deployed, torn down, and re-created
+independently — keeping the prod data store from depending on test infrastructure.
 
 ## Prerequisites
 
 - Azure CLI (`az`) and PowerShell 7+.
 - `az login` as an account allowed to create these resources and assign roles
   (Owner or User Access Administrator on the target scope).
-- The CI managed identity must already exist — deploy
-  [`infra/azure-bench-history-test/`](../azure-bench-history-test/) first if you have not.
 
 ## Deploy
 
@@ -52,24 +51,23 @@ $me = az ad signed-in-user show --query id -o tsv
 Key parameters (see `deploy.ps1 -?` for all): `-ResourceGroup` (default
 `folohistory`), `-Location` (default `swedencentral`), `-StorageAccountName`
 (default `folohistory`; 3-24 lowercase alphanumerics, globally unique),
-`-CiIdentityResourceGroup` / `-CiIdentityName` (where to find the existing CI
-identity), `-LocalPrincipalId` / `-LocalPrincipalType`.
+`-ManagedIdentityName` (default `id-folo-bench-history-prod`),
+`-LocalPrincipalId` / `-LocalPrincipalType`.
 
-On success the script prints the account name to record in `constants.env`.
+On success the script prints the identifiers to record in `constants.env`.
 
 ## Configure the repository
 
-The account name is committed (non-secret) in `constants.env` at the repository
-root as `BENCH_HISTORY_PROD_AZURE_ACCOUNT`, read by `just collect-bench-history` and
-loaded into the workflow env. The identity values it signs in with
-(`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`) are the **same**
-ones already in `constants.env` for the `test-azure` job — the nightly workflow
-reuses that identity, so there is nothing new to add there.
+The account name and the prod identity's client id are committed (non-secret) in
+`constants.env` at the repository root. The tenant and subscription are shared with
+the test identity. If you re-created the resources, update these lines to match the
+values the deploy script printed:
 
 | Key | Source |
 | --- | --- |
 | `BENCH_HISTORY_PROD_AZURE_ACCOUNT` | storage account name (this deployment) |
-| `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` | the shared CI identity (already present) |
+| `AZURE_PROD_CLIENT_ID` | this deployment's managed identity client id |
+| `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` | shared tenant/subscription (already present) |
 
 ## Collect history locally
 

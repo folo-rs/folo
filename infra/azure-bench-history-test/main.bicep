@@ -159,7 +159,7 @@ output storageAccountName string = storageAccount.name
 @description('Blob service endpoint (https://<account>.blob.core.windows.net/).')
 output blobEndpoint string = storageAccount.properties.primaryEndpoints.blob
 
-@description('Client id of the managed identity (record as AZURE_CLIENT_ID in constants.env).')
+@description('Client id of the managed identity (record as AZURE_TEST_CLIENT_ID in constants.env).')
 output managedIdentityClientId string = managedIdentity.properties.clientId
 
 @description('Principal (object) id of the managed identity.')

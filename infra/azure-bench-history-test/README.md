@@ -55,7 +55,7 @@ the values the deploy script printed:
 | Key | Source |
 | --- | --- |
 | `BENCH_HISTORY_TEST_AZURE_ACCOUNT` | storage account name |
-| `AZURE_CLIENT_ID` | managed identity client id |
+| `AZURE_TEST_CLIENT_ID` | managed identity client id |
 | `AZURE_TENANT_ID` | tenant id |
 | `AZURE_SUBSCRIPTION_ID` | subscription id |
 

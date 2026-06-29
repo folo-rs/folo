@@ -2,22 +2,20 @@
 
 <#
 .SYNOPSIS
-    Deploys (or updates) the Azure storage account that holds the nightly
+    Deploys (or updates) the Azure resources that hold the nightly
     cargo-bench-history benchmark history.
 
 .DESCRIPTION
-    Idempotently provisions a resource group and an Entra-only Storage account, then
-    grants the existing CI managed identity (reused from infra/azure-bench-history-test)
-    and an optional local developer principal the `Storage Blob Data Contributor`
-    role on it. Re-running it converges to the same state, so the paired
-    `teardown.ps1` + this script let you delete and re-create everything at will.
+    Idempotently provisions a resource group, an Entra-only Storage account, a
+    dedicated user-assigned managed identity with a GitHub OIDC federated credential
+    for `main`, and the `Storage Blob Data Contributor` role assignments needed by
+    the nightly workflow and (optionally) a local developer principal. Re-running it
+    converges to the same state, so the paired `teardown.ps1` + this script let you
+    delete and re-create everything at will.
 
-    This script does NOT create a managed identity or federated credentials: the
-    nightly `bench-history` workflow reuses the CI identity that
-    infra/azure-bench-history-test/deploy.ps1 created, whose `main`-branch federated
-    credential already matches a scheduled run's OIDC subject. This script only
-    resolves that identity's principal id and grants it data access here. Deploy the
-    test infra first (so the identity exists) if you have not already.
+    This prod data store is fully self-contained: it owns its own identity and shares
+    nothing with infra/azure-bench-history-test/ except the tenant. There is no need
+    to deploy the test infra first.
 
     Requires the Azure CLI (`az`) and an authenticated session (`az login`) for an
     account with rights to create the resources and role assignments.
@@ -35,12 +33,9 @@
     Globally-unique Storage account name (3-24 lowercase alphanumerics). Defaults to
     'folohistory'.
 
-.PARAMETER CiIdentityResourceGroup
-    Resource group holding the existing CI managed identity. Defaults to
-    'rg-folo-bench-history'.
-
-.PARAMETER CiIdentityName
-    Name of the existing CI managed identity. Defaults to 'id-folo-bench-history-ci'.
+.PARAMETER ManagedIdentityName
+    Name of the user-assigned managed identity used by the nightly workflow. Defaults
+    to 'id-folo-bench-history-prod'.
 
 .PARAMETER LocalPrincipalId
     Object id of a local developer principal (user or group) to grant data access.
@@ -66,9 +61,11 @@ param(
     [ValidatePattern('^[a-z0-9]{3,24}$')]
     [string] $StorageAccountName = 'folohistory',
 
-    [string] $CiIdentityResourceGroup = 'rg-folo-bench-history',
+    [string] $ManagedIdentityName = 'id-folo-bench-history-prod',
 
-    [string] $CiIdentityName = 'id-folo-bench-history-ci',
+    [string] $GithubOrg = 'folo-rs',
+
+    [string] $GithubRepo = 'folo',
 
     [string] $LocalPrincipalId = '',
 
@@ -85,24 +82,15 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Write-Verbose "Selecting subscription $SubscriptionId."
 az account set --subscription $SubscriptionId
 
-Write-Verbose "Resolving the principal id of CI identity '$CiIdentityName' in '$CiIdentityResourceGroup'."
-$ciPrincipalId = az identity show `
-    --resource-group $CiIdentityResourceGroup `
-    --name $CiIdentityName `
-    --query principalId `
-    --output tsv
-if ([string]::IsNullOrWhiteSpace($ciPrincipalId)) {
-    Write-Error "Could not resolve the CI managed identity '$CiIdentityName' in '$CiIdentityResourceGroup'. Deploy infra/azure-bench-history-test/deploy.ps1 first so the identity exists."
-}
-Write-Verbose "CI principal id: $ciPrincipalId."
-
 Write-Verbose "Ensuring resource group '$ResourceGroup' exists in '$Location'."
 az group create --name $ResourceGroup --location $Location --output none
 
 Write-Verbose 'Exporting parameters for main.bicepparam (readEnvironmentVariable).'
 $env:AZURE_STORAGE_ACCOUNT_NAME = $StorageAccountName
 $env:AZURE_LOCATION = $Location
-$env:AZURE_CI_PRINCIPAL_ID = $ciPrincipalId
+$env:AZURE_MANAGED_IDENTITY_NAME = $ManagedIdentityName
+$env:GITHUB_ORG = $GithubOrg
+$env:GITHUB_REPO = $GithubRepo
 $env:AZURE_LOCAL_PRINCIPAL_ID = $LocalPrincipalId
 $env:AZURE_LOCAL_PRINCIPAL_TYPE = $LocalPrincipalType
 
@@ -115,7 +103,7 @@ else {
 
 $bicepFile = Join-Path $scriptDir 'main.bicep'
 $paramFile = Join-Path $scriptDir 'main.bicepparam'
-$deploymentName = "bench-history-data-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
+$deploymentName = "bench-history-prod-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
 
 Write-Verbose "Deploying '$bicepFile' as '$deploymentName'."
 $outputJson = az deployment group create `
@@ -130,9 +118,12 @@ $outputs = $outputJson | ConvertFrom-Json
 Write-Host ''
 Write-Host 'Deployment complete.' -ForegroundColor Green
 Write-Host ''
-Write-Host 'Record the account name (non-secret) in constants.env; the nightly' -ForegroundColor Cyan
-Write-Host 'bench-history workflow reuses the existing AZURE_CLIENT_ID / AZURE_TENANT_ID /' -ForegroundColor Cyan
-Write-Host 'AZURE_SUBSCRIPTION_ID for OIDC sign-in:' -ForegroundColor Cyan
+Write-Host 'These identifiers are committed (non-secret) in constants.env. The nightly' -ForegroundColor Cyan
+Write-Host 'bench-history workflow signs in with the PROD client id; tenant/subscription' -ForegroundColor Cyan
+Write-Host 'are shared with the test identity. If you re-created the resources, update:' -ForegroundColor Cyan
 Write-Host "  BENCH_HISTORY_PROD_AZURE_ACCOUNT=$($outputs.storageAccountName.value)"
+Write-Host "  AZURE_PROD_CLIENT_ID=$($outputs.managedIdentityClientId.value)"
+Write-Host "  AZURE_TENANT_ID=$($outputs.tenantId.value)"
+Write-Host "  AZURE_SUBSCRIPTION_ID=$($outputs.subscriptionId.value)"
 Write-Host ''
 Write-Host "Blob endpoint: $($outputs.blobEndpoint.value)"

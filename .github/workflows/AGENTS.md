@@ -106,7 +106,7 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
     account into a hard failure, so a job that does run can never silently skip every
     test.
   - Reads its Azure identifiers from the repository-root `constants.env` (the same
-    non-secret `BENCH_HISTORY_TEST_AZURE_ACCOUNT`, `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
+    non-secret `BENCH_HISTORY_TEST_AZURE_ACCOUNT`, `AZURE_TEST_CLIENT_ID`, `AZURE_TENANT_ID`,
     `AZURE_SUBSCRIPTION_ID` that `just test-azure` reads locally, so local and CI
     target the same account). A `bash` step `grep`s those keys into `$GITHUB_ENV` so
     the `azure/login` inputs and the cleanup step can reference them. It then runs the
@@ -147,12 +147,13 @@ exists today; PR-time collection/validation may follow once this proves out.
   benchmarks --overwrite`). The `benchmarks` package holds slow, special-purpose
   benchmarks that are not part of the tracked history. `--overwrite` makes a re-run on
   an unchanged `main` commit idempotent rather than failing as a duplicate.
-- **Reuses the existing CI managed identity** (the one
-  `infra/azure-bench-history-test/` provisions for `test-azure`), not a new one: a
+- **Uses a dedicated prod managed identity** (`id-folo-bench-history-prod`, provisioned
+  by `infra/azure-bench-history-prod/` alongside the account), not the test identity: a
   scheduled run on `main` produces the OIDC subject
   `repo:folo-rs/folo:ref:refs/heads/main`, which matches that identity's `main`-branch
-  federated credential. So this workflow needs only `permissions: { id-token: write,
-  contents: read }`, an `azure/login@v2` step, and the same `AZURE_CLIENT_ID` /
+  federated credential. The prod stack is self-contained so the data store never depends
+  on test infrastructure. So this workflow needs only `permissions: { id-token: write,
+  contents: read }`, an `azure/login@v2` step, and the `AZURE_PROD_CLIENT_ID` /
   `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` from `constants.env` (a `bash` step
   `grep`s them into `$GITHUB_ENV`).
 - **Writes to a SEPARATE storage account** from the test jobs — the real history store
@@ -173,9 +174,19 @@ exists today; PR-time collection/validation may follow once this proves out.
   allocation/time counters) are hardware-independent and ignore it. It travels as an
   environment variable rather than a recipe argument so the recipe's signature stays
   identical to `test-azure`.
-- `timeout-minutes: 120`; schedule offset to 03:00 UTC so it does not contend with the
+- `timeout-minutes: 360`; schedule offset to 03:00 UTC so it does not contend with the
   00:00 `cache-warmup` cron (and runs against an already-warm Rust cache). Like
   `cache-warmup`, it is schedule-triggered and so carries no `concurrency` cancel key.
+- **`analyze` job** (`needs: collect`, `if: always()` + same main-only gate) — after
+  collection it runs `just analyze-bench-history` (`analyze --engine all --target-triple
+  all --machine-key all` across every platform's history) which writes a Markdown report
+  plus `bench-history-notable.txt`. When the JSON report's `notable` is `true`, it files
+  **one rolling regression issue** via `JasonEtco/create-an-issue` (`update_existing` +
+  `search_existing: open`, fixed title = dedup key). Findings never fail the job —
+  the tool always exits 0; the issue is advisory. Needs `issues: write`.
+- **`alert` job** (`needs: [collect, analyze]`, `if: failure()` + main-only) — opens a
+  deduplicated `.github/bench-history-failure-issue.md` when any prior job fails, so a
+  broken nightly is noticed. Closed by hand once the workflow is green again.
 
 ## Design Decisions
 
