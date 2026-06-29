@@ -224,9 +224,10 @@
 //!
 //! ## Azure Blob storage
 //!
-//! The Azure backend authenticates in priority order: a self-signed account SAS
-//! (set `account_key` to a base64 account key), a pre-made SAS token (set
-//! `sas_token`), or **Microsoft Entra ID** (set neither — the recommended mode for
+//! The Azure backend authenticates in priority order: from a shared account key
+//! (set `account_key` to the base64 account key — the tool signs a short-lived
+//! account SAS from it), a pre-made SAS token (set `sas_token`), or **Microsoft
+//! Entra ID** (set neither — the recommended mode for
 //! shared and CI use, as it stores no secret). Entra ID requires an HTTPS endpoint
 //! (the default `https://<account>.blob.core.windows.net`), so the account may have
 //! shared-key access disabled entirely.
