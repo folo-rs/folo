@@ -129,6 +129,30 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
     account, identity and federated credentials are scripted/Bicep'd in
     `infra/azure-bench-history-test/` (see its README to deploy or re-create).
 
+- **test-azure-gh** — single-platform (Linux) by choice, package-gated to `cargo-bench-history`
+  - Variant of `test-azure` that exercises cargo-bench-history's **self-minting GitHub
+    OIDC credential** — the credential the nightly prod collection (`bench-history.yml`)
+    depends on — against the real test account. The `storage/github_oidc.rs` unit tests
+    stub the HTTP exchange and `test-azure` takes the local-`az`
+    `DeveloperToolsCredential` fallback, so without this job nothing proves the
+    self-minting path actually round-trips real GitHub OIDC → Entra → Blob until the
+    post-merge nightly run.
+  - **Only difference from `test-azure`**: an extra step exports `AZURE_CLIENT_ID`
+    (= `AZURE_TEST_CLIENT_ID`). Setting `AZURE_CLIENT_ID` is the switch that makes
+    `from_config` build a `ClientAssertionCredential` (which GETs a fresh OIDC JWT,
+    audience `api://AzureADTokenExchange`, per Entra token exchange) instead of the
+    `DeveloperToolsCredential` it uses otherwise. `permissions: { id-token: write }`
+    injects the `ACTIONS_ID_TOKEN_REQUEST_URL`/`TOKEN` values the tool reads to mint
+    those assertions, and the test identity's `pull_request` federated credential lets
+    same-repo PR runs federate in.
+  - `azure/login@v2` is **retained only for harness cleanup**: the per-test
+    `delete_container` and the `if: always()` backstop both shell out to `az`, so they
+    need a session. The code under test ignores the `az` session entirely once
+    `AZURE_CLIENT_ID` is set, so the login does not undermine what the job proves.
+  - **Same double-gating** as `test-azure` (package-gated + same-repo only); collects no
+    coverage. Together the two jobs cover both credential branches: `test-azure` the
+    local-`az` fallback, `test-azure-gh` the CI self-minting path.
+
 ### cache-warmup.yml
 
 A scheduled workflow that keeps GitHub Actions caches warm. GitHub evicts caches after

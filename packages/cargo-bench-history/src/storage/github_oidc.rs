@@ -225,6 +225,9 @@ mod tests {
     struct StubHttpClient {
         status: StatusCode,
         body: Vec<u8>,
+        /// When set, `execute_request` returns this as an `Io`-kind transport error
+        /// instead of a response, exercising `secret`'s request-failure branch.
+        fail: Option<String>,
         seen: Mutex<Option<SeenRequest>>,
     }
 
@@ -233,6 +236,18 @@ mod tests {
             Self {
                 status,
                 body: body.into(),
+                fail: None,
+                seen: Mutex::new(None),
+            }
+        }
+
+        /// A client whose `execute_request` fails with a transport error carrying
+        /// `message`, so a test can assert that `secret` surfaces it unchanged.
+        fn failing(message: impl Into<String>) -> Self {
+            Self {
+                status: StatusCode::Ok,
+                body: Vec::new(),
+                fail: Some(message.into()),
                 seen: Mutex::new(None),
             }
         }
@@ -257,6 +272,9 @@ mod tests {
                 url: request.url().to_string(),
                 authorization,
             });
+            if let Some(message) = &self.fail {
+                return Err(Error::with_message(ErrorKind::Io, message.clone()));
+            }
             Ok(AsyncRawResponse::from_bytes(
                 self.status,
                 Headers::default(),
@@ -304,6 +322,16 @@ mod tests {
         let client = Arc::new(StubHttpClient::new(StatusCode::Forbidden, b"nope".to_vec()));
         let error = block_on(assertion(client).secret(None)).expect_err("error");
         assert!(matches!(error.kind(), ErrorKind::Credential), "{error:?}");
+    }
+
+    #[test]
+    fn secret_propagates_a_transport_error_unchanged() {
+        let client = Arc::new(StubHttpClient::failing("connection reset by peer"));
+        let error = block_on(assertion(client).secret(None)).expect_err("error");
+        // A failure to even send the request is surfaced as-is (an `Io` transport
+        // error), not remapped to a credential error like the HTTP-status, JSON, and
+        // empty-value branches are.
+        assert!(matches!(error.kind(), ErrorKind::Io), "{error:?}");
     }
 
     #[test]

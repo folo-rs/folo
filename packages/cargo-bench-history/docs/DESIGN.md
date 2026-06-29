@@ -1636,6 +1636,22 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     `azure.rs`; its value is the real Entra + real Blob round-trip. The account,
     identity and federated credentials are scripted/Bicep'd in
     `infra/azure-bench-history-test/` (decision 31).
+
+    **Real Azure account via self-minting OIDC** (`test-azure-gh` job): a second
+    additive job, identical to `test-azure` except it also exports `AZURE_CLIENT_ID`
+    (= `AZURE_TEST_CLIENT_ID`). That single switch routes `from_config` through the
+    **self-minting `ClientAssertionCredential`** (decision 38) — the exact credential
+    the nightly prod collection depends on — so PR-time CI proves the real GitHub OIDC →
+    Entra → Blob round-trip works, instead of only discovering a regression after merge
+    on the next nightly run. `permissions: id-token: write` provides the
+    `ACTIONS_ID_TOKEN_REQUEST_*` values the tool reads to mint assertions, and the test
+    identity's `pull_request` federated credential lets same-repo PR runs federate in.
+    `azure/login@v2` is retained **only** so the harness's `az`-based container cleanup
+    has a session; the code under test ignores that session once `AZURE_CLIENT_ID` is
+    set. Together the pair covers both branches of `entra_credential`: `test-azure` the
+    local-`az` `DeveloperToolsCredential` fallback, `test-azure-gh` the CI self-minting
+    path.
+
 18. **Integration testing** — *Decided:* integration tests invoke the **library
     entry** (`Cli::from_args(argv).into_command()` → `run()`), matching the
     workspace pattern (no `assert_cmd`); a table-driven CLI-flag matrix runs over
