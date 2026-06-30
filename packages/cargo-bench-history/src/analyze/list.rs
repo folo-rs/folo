@@ -1363,6 +1363,38 @@ mod tests {
     }
 
     #[test]
+    fn list_rejects_when_no_output_is_selected() {
+        // Suppressing the text report without requesting a Markdown or JSON file
+        // leaves nothing to produce, so the selection is rejected up front —
+        // before any data is loaded or the subject is dispatched.
+        let storage = MemoryStorage::new();
+        let git = linear_git();
+        let opts = ListOptions {
+            no_text: true,
+            ..options()
+        };
+        let error = block_on(list_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &opts,
+            &auto(),
+            Timestamp::from_second(0).unwrap(),
+            &RecordingReporter::new(),
+            &writer(),
+            &spawner(),
+        ))
+        .unwrap_err();
+        match error {
+            RunError::Analyze { message } => {
+                assert!(message.contains("no output selected"), "{message}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
     fn list_discriminants_shows_all_sets_by_default_and_facets_narrow() {
         // The discriminants index never requires a repository.
         let storage = MemoryStorage::new();

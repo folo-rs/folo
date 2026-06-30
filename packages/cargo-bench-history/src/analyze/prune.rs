@@ -1113,6 +1113,41 @@ mod tests {
     }
 
     #[test]
+    fn prune_rejects_when_no_output_is_selected() {
+        // Suppressing the text report without requesting a Markdown or JSON file
+        // leaves nothing to produce, so the selection is rejected before any
+        // pruning work — even with an otherwise-valid scope.
+        let storage = MemoryStorage::new();
+        store(&storage, &clean_key("f1"), &set("f1"));
+        let git = feature_git();
+
+        let opts = PruneOptions {
+            no_text: true,
+            dirty: true,
+            ..PruneOptions::default()
+        };
+        let error = block_on(prune_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &opts,
+            &auto(),
+            &RecordingReporter::new(),
+            &writer(),
+        ))
+        .unwrap_err();
+        match error {
+            RunError::Analyze { message } => {
+                assert!(message.contains("no output selected"), "{message}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        // Nothing was deleted.
+        assert!(keys(&storage).contains(&clean_key("f1")));
+    }
+
+    #[test]
     fn all_scope_keeps_base_side_history_on_a_feature_branch() {
         let storage = MemoryStorage::new();
         for commit in ["c0", "c1", "f1", "f2"] {
