@@ -4,13 +4,17 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::command::LocalStorageSelection;
+use crate::command::{CacheSelection, LocalStorageSelection};
 use crate::config::Config;
 use crate::storage::StorageError;
 
 /// The environment variable that supplies the local-storage path for a bare
 /// `--local` (given with no value): `CARGO_BENCH_HISTORY_STORAGE`.
 pub(crate) const STORAGE_ENV_VAR: &str = "CARGO_BENCH_HISTORY_STORAGE";
+
+/// The environment variable that supplies the cache directory for a bare
+/// `--cache` (given with no value): `CARGO_BENCH_HISTORY_CACHE`.
+pub(crate) const CACHE_ENV_VAR: &str = "CARGO_BENCH_HISTORY_CACHE";
 
 /// The default configuration path, relative to the working directory.
 pub(crate) fn default_config_path() -> PathBuf {
@@ -88,6 +92,44 @@ pub(crate) fn resolve_local_path(
     }
 }
 
+/// Reads the cache-directory environment variable, if set.
+///
+/// The cache-side counterpart of [`storage_env`]: the single environment read
+/// behind a bare `--cache`, kept at the IO edge so the pure [`resolve_cache_path`]
+/// resolver stays testable and Miri-safe.
+pub(crate) fn cache_env() -> Option<String> {
+    std::env::var(CACHE_ENV_VAR).ok()
+}
+
+/// Resolves the `--cache` selection into a concrete cache directory.
+///
+/// The cache-side counterpart of [`resolve_local_path`]. `env` is the value of
+/// [`CACHE_ENV_VAR`], read at the IO edge via [`cache_env`]. Returns `Ok(None)`
+/// when `--cache` was not given (the caller then reads the cloud directly),
+/// `Ok(Some(path))` for an explicit `--cache=<path>` or a bare `--cache` backed by
+/// a non-empty environment value, and an error when a bare `--cache` has no usable
+/// environment value.
+///
+/// # Errors
+///
+/// Returns [`StorageError::Config`] if a bare `--cache` was given but
+/// [`CACHE_ENV_VAR`] is unset or empty.
+pub(crate) fn resolve_cache_path(
+    selection: Option<&CacheSelection>,
+    env: Option<&str>,
+) -> Result<Option<PathBuf>, StorageError> {
+    match selection {
+        None => Ok(None),
+        Some(CacheSelection::Path(path)) => Ok(Some(path.clone())),
+        Some(CacheSelection::FromEnv) => match env {
+            Some(value) if !value.is_empty() => Ok(Some(PathBuf::from(value))),
+            _ => Err(StorageError::Config {
+                message: format!("--cache was given without a path and {CACHE_ENV_VAR} is not set"),
+            }),
+        },
+    }
+}
+
 /// Resolves the project identity: explicit config value, else the directory name.
 pub(crate) fn resolve_project_id(config: &Config, workspace_dir: &Path) -> String {
     if let Some(id) = &config.project.id {
@@ -147,6 +189,43 @@ mod tests {
     fn resolve_local_path_treats_empty_env_as_unset() {
         let error =
             resolve_local_path(Some(&LocalStorageSelection::FromEnv), Some("")).unwrap_err();
+        assert!(matches!(error, StorageError::Config { .. }), "{error:?}");
+    }
+
+    #[test]
+    fn resolve_cache_path_returns_none_when_not_selected() {
+        assert_eq!(resolve_cache_path(None, Some("/env/cache")).unwrap(), None);
+    }
+
+    #[test]
+    fn resolve_cache_path_uses_explicit_path() {
+        let selection = CacheSelection::Path(PathBuf::from("./cache"));
+        assert_eq!(
+            resolve_cache_path(Some(&selection), None).unwrap(),
+            Some(PathBuf::from("./cache"))
+        );
+    }
+
+    #[test]
+    fn resolve_cache_path_reads_env_for_bare_cache() {
+        assert_eq!(
+            resolve_cache_path(Some(&CacheSelection::FromEnv), Some("/env/cache")).unwrap(),
+            Some(PathBuf::from("/env/cache"))
+        );
+    }
+
+    #[test]
+    fn resolve_cache_path_errors_when_env_unset() {
+        let error = resolve_cache_path(Some(&CacheSelection::FromEnv), None).unwrap_err();
+        let StorageError::Config { message } = error else {
+            panic!("expected a config error, got {error:?}");
+        };
+        assert!(message.contains(CACHE_ENV_VAR), "{message}");
+    }
+
+    #[test]
+    fn resolve_cache_path_treats_empty_env_as_unset() {
+        let error = resolve_cache_path(Some(&CacheSelection::FromEnv), Some("")).unwrap_err();
         assert!(matches!(error, StorageError::Config { .. }), "{error:?}");
     }
 

@@ -29,7 +29,8 @@ use crate::report::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
 use crate::wiring::{
-    resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
+    cache_env, resolve_cache_path, resolve_config_path, resolve_local_path, resolve_project_id,
+    resolve_repo, storage_env,
 };
 use crate::{PruneOptions, RunError, RunOutcome};
 
@@ -98,13 +99,27 @@ pub(crate) async fn execute(
 
     let project_id = resolve_project_id(&config, workspace_dir);
     let local = resolve_local_path(options.local.as_ref(), storage_env().as_deref())?;
-    let storage = build_storage(local.as_deref(), &config, workspace_dir)?;
+    let cache = resolve_cache_path(options.cache.as_ref(), cache_env().as_deref())?;
+    if local.is_some() && cache.is_some() {
+        reporter.note(
+            "cache: --cache was given, but --local selects filesystem storage whose reads are \
+             already local, so the read-through cache is ignored",
+        );
+    }
+    let storage = build_storage(
+        local.as_deref(),
+        &config,
+        workspace_dir,
+        cache.as_deref(),
+        &project_id,
+    )?;
+    storage.synchronize_cache(&project_id, &reporter).await?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
     let auto = detect_auto_facets().await?;
 
     let writer = TokioOutputWriter::new(workspace_dir.to_path_buf());
-    prune_with(
+    let result = prune_with(
         &git,
         &storage,
         &project_id,
@@ -114,7 +129,17 @@ pub(crate) async fn execute(
         &reporter,
         &writer,
     )
-    .await
+    .await;
+    // Flush the cache-invalidation marker even on a partial failure: any delete that
+    // already reached the cloud must invalidate *other* machines' caches, so this
+    // bump cannot be skipped just because a later step failed.
+    let flush = storage
+        .flush_pending_invalidation(&project_id, &reporter)
+        .await;
+    storage.report_cache_tally(&reporter);
+    let outcome = result?;
+    flush?;
+    Ok(outcome)
 }
 
 /// Storage- and git-generic `prune`: resolve the selected commit topology, choose

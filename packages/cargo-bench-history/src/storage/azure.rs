@@ -39,7 +39,10 @@ use jiff::tz::TimeZone;
 use jiff::{Timestamp, ToSpan as _};
 
 use super::sas::{AccountSasParams, account_sas_query};
-use super::{Storage, StorageError, github_oidc, validate_key};
+use super::{
+    PendingInvalidation, Storage, StorageError, cache_epoch_key, github_oidc, validate_key,
+};
+use crate::report::Reporter;
 
 /// The SAS permissions a self-signed token grants: read, write, delete, list,
 /// add, create — everything the backend needs to create the container on demand
@@ -75,6 +78,14 @@ pub(crate) struct AzureBlobStorage {
     /// [`shared_client_options`]: AzureBlobStorage::shared_client_options
     /// [`from_config`]: AzureBlobStorage::from_config
     http_client: Arc<dyn HttpClient>,
+    /// One-shot flag, shared across clones, that records whether this backend has
+    /// removed or overwritten an existing object since the last flush. A read
+    /// command's [`flush_pending_invalidation`] consults it to decide whether to
+    /// bump this project's cache-invalidation marker. Held behind an [`Arc`] so a
+    /// clone made deeper in the stack still arms the same flag.
+    ///
+    /// [`flush_pending_invalidation`]: AzureBlobStorage::flush_pending_invalidation
+    invalidation: Arc<PendingInvalidation>,
 }
 
 impl fmt::Debug for AzureBlobStorage {
@@ -182,6 +193,7 @@ impl AzureBlobStorage {
             container_endpoint,
             credential,
             http_client,
+            invalidation: Arc::new(PendingInvalidation::default()),
         })
     }
 
@@ -275,6 +287,38 @@ impl AzureBlobStorage {
             Err(error) => Err(map_error(&error, key)),
         }
     }
+
+    /// Writes a fresh cache-invalidation marker for `project` if this backend has
+    /// removed or overwritten an object since the last flush, coalescing every
+    /// mutation in the command into a single marker write.
+    ///
+    /// The marker carries an opaque epoch token (the flush instant rendered
+    /// RFC 3339); only whether the token *differs* matters to a reader, so reading
+    /// the wall clock here — rather than threading a clock down — is harmless (the
+    /// worst case under skew is one extra cache wipe). The write goes through the
+    /// internal upload path, so writing the marker does not itself re-arm the flag.
+    #[cfg_attr(test, mutants::skip)] // Delegates to the Azure SDK; verified by the Azurite round-trip tests, which mutation testing cannot run.
+    pub(crate) async fn flush_pending_invalidation(
+        &self,
+        project: &str,
+        reporter: &dyn Reporter,
+    ) -> Result<(), StorageError> {
+        if !self.invalidation.take() {
+            return Ok(());
+        }
+        let key = cache_epoch_key(project);
+        let token = Timestamp::now().to_string();
+        if reporter.enabled() {
+            reporter.note(&format!(
+                "cache: a delete or overwrite reached the cloud this command, so caches keyed on \
+                 older data are now stale; bumping the invalidation marker {key} to epoch {token}"
+            ));
+        }
+        let client = self.blob_client(&key)?;
+        let compressed = codec::compress(token.as_bytes());
+        self.upload_with_retry(&client, &compressed, &key, false)
+            .await
+    }
 }
 
 impl Storage for AzureBlobStorage {
@@ -293,7 +337,12 @@ impl Storage for AzureBlobStorage {
         let client = self.blob_client(key)?;
         let compressed = codec::compress(bytes);
         self.upload_with_retry(&client, &compressed, key, false)
-            .await
+            .await?;
+        // Overwriting an object breaks per-key immutability, so any local cache
+        // mirroring it is now stale: arm the flag a later flush consults to bump
+        // this project's cache-invalidation marker.
+        self.invalidation.arm();
+        Ok(())
     }
 
     #[cfg_attr(test, mutants::skip)] // Delegates to the Azure SDK; verified by the Azurite round-trip tests, which mutation testing cannot run.
@@ -354,7 +403,13 @@ impl Storage for AzureBlobStorage {
         validate_key(key)?;
         let client = self.blob_client(key)?;
         match client.delete(None).await {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                // Removing an object breaks per-key immutability, so any local
+                // cache mirroring it is now stale: arm the flag a later flush
+                // consults to bump this project's cache-invalidation marker.
+                self.invalidation.arm();
+                Ok(())
+            }
             Err(error) if matches!(classify(&error), Fault::NotFound | Fault::ContainerMissing) => {
                 Err(StorageError::NotFound {
                     key: key.to_owned(),

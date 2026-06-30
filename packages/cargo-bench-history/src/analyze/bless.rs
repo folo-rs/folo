@@ -59,13 +59,13 @@ pub(crate) async fn bless(
 
     let project_id = resolve_project_id(&config, workspace_dir);
     let local = resolve_local_path(options.local.as_ref(), storage_env().as_deref())?;
-    let storage = build_storage(local.as_deref(), &config, workspace_dir)?;
+    let storage = build_storage(local.as_deref(), &config, workspace_dir, None, &project_id)?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
     let auto = detect_auto_facets().await?;
 
     let now = now_override.unwrap_or_else(Timestamp::now);
-    bless_with(
+    let result = bless_with(
         &git,
         &storage,
         &project_id,
@@ -76,7 +76,16 @@ pub(crate) async fn bless(
         env!("CARGO_PKG_VERSION"),
         &reporter,
     )
-    .await
+    .await;
+    // Flush the cache-invalidation marker after success: a re-bless that overwrites
+    // an existing sidecar arms the backend, so the bump invalidates other machines'
+    // caches. A first-time bless is additive and never arms it (a cheap no-op).
+    let flush = storage
+        .flush_pending_invalidation(&project_id, &reporter)
+        .await;
+    let outcome = result?;
+    flush?;
+    Ok(outcome)
 }
 
 /// The real `unbless`: load configuration, wire the configured storage and git
@@ -96,12 +105,12 @@ pub(crate) async fn unbless(
 
     let project_id = resolve_project_id(&config, workspace_dir);
     let local = resolve_local_path(options.local.as_ref(), storage_env().as_deref())?;
-    let storage = build_storage(local.as_deref(), &config, workspace_dir)?;
+    let storage = build_storage(local.as_deref(), &config, workspace_dir, None, &project_id)?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
     let auto = detect_auto_facets().await?;
 
-    unbless_with(
+    let result = unbless_with(
         &git,
         &storage,
         &project_id,
@@ -110,7 +119,15 @@ pub(crate) async fn unbless(
         &auto,
         &reporter,
     )
-    .await
+    .await;
+    // Unblessing deletes sidecars, which arms the backend, so flush the marker to
+    // invalidate other machines' caches.
+    let flush = storage
+        .flush_pending_invalidation(&project_id, &reporter)
+        .await;
+    let outcome = result?;
+    flush?;
+    Ok(outcome)
 }
 
 /// Storage- and git-generic `bless`: validate the preconditions, then write a

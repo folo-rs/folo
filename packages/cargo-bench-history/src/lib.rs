@@ -294,8 +294,8 @@ pub(crate) use cargo_bench_history_core::model;
 
 pub use cli::{Cli, EarlyExit};
 pub use command::{
-    AnalyzeOptions, BackfillOptions, BlessOptions, Command, InstallOptions, ListOptions,
-    ListSubject, LocalStorageSelection, PruneOptions, RunOptions, UnblessOptions,
+    AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, Command, InstallOptions,
+    ListOptions, ListSubject, LocalStorageSelection, PruneOptions, RunOptions, UnblessOptions,
 };
 pub use config::{ConfigError, default_template};
 pub use dispatch::{Overrides, run, run_with_overrides};

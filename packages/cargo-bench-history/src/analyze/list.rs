@@ -23,7 +23,8 @@ use crate::report::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, build_storage};
 use crate::text::count_noun;
 use crate::wiring::{
-    resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
+    cache_env, resolve_cache_path, resolve_config_path, resolve_local_path, resolve_project_id,
+    resolve_repo, storage_env,
 };
 use crate::{ListOptions, ListSubject, RunError, RunOutcome};
 
@@ -60,7 +61,21 @@ pub(crate) async fn execute(
 
     let project_id = resolve_project_id(&config, workspace_dir);
     let local = resolve_local_path(options.local.as_ref(), storage_env().as_deref())?;
-    let storage = build_storage(local.as_deref(), &config, workspace_dir)?;
+    let cache = resolve_cache_path(options.cache.as_ref(), cache_env().as_deref())?;
+    if local.is_some() && cache.is_some() {
+        reporter.note(
+            "cache: --cache was given, but --local selects filesystem storage whose reads are \
+             already local, so the read-through cache is ignored",
+        );
+    }
+    let storage = build_storage(
+        local.as_deref(),
+        &config,
+        workspace_dir,
+        cache.as_deref(),
+        &project_id,
+    )?;
+    storage.synchronize_cache(&project_id, &reporter).await?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
     let auto = detect_auto_facets().await?;
@@ -70,7 +85,7 @@ pub(crate) async fn execute(
     // (mirrors `analyze::execute`).
     let spawner = Spawner::new_tokio();
     let writer = TokioOutputWriter::new(workspace_dir.to_path_buf());
-    list_with(
+    let outcome = list_with(
         &git,
         &storage,
         &project_id,
@@ -82,7 +97,9 @@ pub(crate) async fn execute(
         &writer,
         &spawner,
     )
-    .await
+    .await;
+    storage.report_cache_tally(&reporter);
+    outcome
 }
 
 /// Storage- and git-generic `list`: either list the discriminant sets present in

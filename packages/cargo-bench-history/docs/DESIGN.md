@@ -552,8 +552,8 @@ unit-tested without touching the process environment. The chosen backend (and wh
 
 ### 7.2 Read-through cache for the cloud backend (issue #262)
 
-> Status: **designed, not yet implemented** (like decision 2's deferred scaffold). This
-> section is the implementation contract; decision 40 logs the rationale.
+> Status: **implemented** (PR #291). This section is the implementation contract; decision
+> 40 logs the rationale.
 
 `analyze`/`list`/`prune` load the *whole* in-selection history before reconstructing the
 series. Against the Azure backend that is one network round-trip per object, and the
@@ -714,10 +714,10 @@ meaningful **only with the cloud backend**: a relative path rebases against the 
 directory like `--local`; with a `--local` filesystem backend the cache is a no-op (reads are
 already local) and is ignored with a `--verbose` note. `run`/`backfill` take no `--cache` —
 they do not read the bulk history — but still maintain the marker through the backend
-automatically. `build_storage` grows a cache parameter: when a cache directory is set and the
-selected backend is `Azure`, it wraps the backend in `CachingStorage`; otherwise it returns
-the backend unwrapped (so `StorageFacade` gains a `CachedAzure` variant, or `build_storage`
-returns the decorator behind the same enum — an implementation choice deferred to the PR).
+automatically. `build_storage` grows a cache parameter (plus the project id, so the mirror
+roots at `<cache>/<project>`): when a cache directory is set and the selected backend is
+`Azure`, it wraps the backend in `CachingStorage` behind a new `StorageFacade::CachedAzure`
+variant; otherwise it returns the backend unwrapped.
 
 #### Verbose diagnostics
 

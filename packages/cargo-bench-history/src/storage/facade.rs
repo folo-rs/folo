@@ -8,10 +8,14 @@
 
 use std::path::Path;
 
+use cargo_bench_history_core::model::sanitize_segment;
+
 use crate::config::{CloudStorageConfig, Config};
+use crate::report::Reporter;
 use crate::wiring::rebase;
 
 use super::azure::AzureBlobStorage;
+use super::caching::CachingStorage;
 use super::local::LocalStorage;
 use super::{Storage, StorageError};
 
@@ -22,6 +26,9 @@ pub(crate) enum StorageFacade {
     Local(LocalStorage),
     /// An Azure Blob Storage backend.
     Azure(AzureBlobStorage),
+    /// An Azure Blob Storage backend behind a local read-through cache, selected
+    /// when a `--cache` directory is set against the cloud backend.
+    CachedAzure(CachingStorage<AzureBlobStorage, LocalStorage>),
 }
 
 impl Storage for StorageFacade {
@@ -29,6 +36,7 @@ impl Storage for StorageFacade {
         match self {
             Self::Local(storage) => storage.put(key, bytes).await,
             Self::Azure(storage) => storage.put(key, bytes).await,
+            Self::CachedAzure(storage) => storage.put(key, bytes).await,
         }
     }
 
@@ -36,6 +44,7 @@ impl Storage for StorageFacade {
         match self {
             Self::Local(storage) => storage.put_overwrite(key, bytes).await,
             Self::Azure(storage) => storage.put_overwrite(key, bytes).await,
+            Self::CachedAzure(storage) => storage.put_overwrite(key, bytes).await,
         }
     }
 
@@ -43,6 +52,7 @@ impl Storage for StorageFacade {
         match self {
             Self::Local(storage) => storage.get(key).await,
             Self::Azure(storage) => storage.get(key).await,
+            Self::CachedAzure(storage) => storage.get(key).await,
         }
     }
 
@@ -50,6 +60,7 @@ impl Storage for StorageFacade {
         match self {
             Self::Local(storage) => storage.list(prefix).await,
             Self::Azure(storage) => storage.list(prefix).await,
+            Self::CachedAzure(storage) => storage.list(prefix).await,
         }
     }
 
@@ -57,6 +68,66 @@ impl Storage for StorageFacade {
         match self {
             Self::Local(storage) => storage.delete(key).await,
             Self::Azure(storage) => storage.delete(key).await,
+            Self::CachedAzure(storage) => storage.delete(key).await,
+        }
+    }
+}
+
+impl StorageFacade {
+    /// Reconciles a read-through cache with the cloud before a load.
+    ///
+    /// A no-op for a backend with no cache (`Local`, or `Azure` without `--cache`);
+    /// for `CachedAzure` it delegates to the decorator, which reads `project`'s
+    /// invalidation marker and wipes the mirror if it has gone stale.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any [`StorageError`] from the underlying synchronization.
+    pub(crate) async fn synchronize_cache(
+        &self,
+        project: &str,
+        reporter: &dyn Reporter,
+    ) -> Result<(), StorageError> {
+        match self {
+            Self::Local(_) | Self::Azure(_) => Ok(()),
+            Self::CachedAzure(storage) => storage.synchronize(project, reporter).await,
+        }
+    }
+
+    /// Writes a fresh cache-invalidation marker if this command removed or
+    /// overwrote a cloud object since the backend was built.
+    ///
+    /// A pure local backend has no marker and is a no-op; both cloud variants flush
+    /// the underlying [`AzureBlobStorage`]'s pending-invalidation flag, so *other*
+    /// machines' caches (e.g. the CI runner's) invalidate even when this writer
+    /// holds no local cache of its own.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any [`StorageError`] from writing the marker.
+    pub(crate) async fn flush_pending_invalidation(
+        &self,
+        project: &str,
+        reporter: &dyn Reporter,
+    ) -> Result<(), StorageError> {
+        match self {
+            Self::Local(_) => Ok(()),
+            Self::Azure(storage) => storage.flush_pending_invalidation(project, reporter).await,
+            Self::CachedAzure(storage) => {
+                storage
+                    .inner()
+                    .flush_pending_invalidation(project, reporter)
+                    .await
+            }
+        }
+    }
+
+    /// Notes the read-through cache hit/miss tally at the end of a load, so a slow
+    /// load can be diagnosed as a cold or invalidated mirror. A no-op unless a
+    /// cache is in use.
+    pub(crate) fn report_cache_tally(&self, reporter: &dyn Reporter) {
+        if let Self::CachedAzure(storage) = self {
+            storage.report_tally(reporter);
         }
     }
 }
@@ -71,6 +142,15 @@ impl Storage for StorageFacade {
 /// current directory. When `local` is `None`, the single cloud backend configured
 /// in `config` is used; if none is configured, that is an error.
 ///
+/// `cache` is the resolved `--cache` directory (from
+/// [`resolve_cache_path`](crate::wiring::resolve_cache_path)). It is meaningful
+/// **only with the cloud backend**: when set against an Azure backend the backend
+/// is wrapped in a [`CachingStorage`] whose mirror roots at
+/// `<cache>/<project>` (so distinct projects keep distinct mirrors, each with its
+/// own recorded epoch). With a `--local` backend a cache is pointless — reads are
+/// already local — so it is ignored here (the caller emits a `--verbose` note).
+/// A relative cache path rebases against `base` exactly like `local`.
+///
 /// # Errors
 ///
 /// Returns [`StorageError::Config`] if no storage is selected (no `--local` and no
@@ -80,6 +160,8 @@ pub(crate) fn build_storage(
     local: Option<&Path>,
     config: &Config,
     base: &Path,
+    cache: Option<&Path>,
+    project: &str,
 ) -> Result<StorageFacade, StorageError> {
     if let Some(path) = local {
         return Ok(StorageFacade::Local(LocalStorage::new(rebase(
@@ -94,13 +176,29 @@ pub(crate) fn build_storage(
             endpoint,
             account_key,
             sas_token,
-        }) => Ok(StorageFacade::Azure(AzureBlobStorage::from_config(
-            account,
-            container,
-            endpoint.clone(),
-            account_key.clone(),
-            sas_token.clone(),
-        )?)),
+        }) => {
+            let azure = AzureBlobStorage::from_config(
+                account,
+                container,
+                endpoint.clone(),
+                account_key.clone(),
+                sas_token.clone(),
+            )?;
+            match cache {
+                Some(cache_dir) => {
+                    // Root the mirror at <cache>/<project> so distinct projects do
+                    // not share one mirror (and one recorded epoch); object keys are
+                    // already project-qualified, but the recorded-epoch marker is not.
+                    let mirror_root =
+                        rebase(base, cache_dir.to_path_buf()).join(sanitize_segment(project));
+                    Ok(StorageFacade::CachedAzure(CachingStorage::new(
+                        azure,
+                        LocalStorage::new(mirror_root),
+                    )))
+                }
+                None => Ok(StorageFacade::Azure(azure)),
+            }
+        }
         None => Err(StorageError::Config {
             message: "no storage configured: pass --local=<path> (or set \
                       CARGO_BENCH_HISTORY_STORAGE and pass a bare --local) or \
@@ -155,8 +253,14 @@ mod tests {
     #[test]
     fn build_storage_for_local_yields_a_local_backend() {
         let config = Config::default();
-        let storage =
-            build_storage(Some(Path::new("./data")), &config, Path::new("/work")).unwrap();
+        let storage = build_storage(
+            Some(Path::new("./data")),
+            &config,
+            Path::new("/work"),
+            None,
+            "proj",
+        )
+        .unwrap();
         assert!(matches!(storage, StorageFacade::Local(_)));
         assert!(format!("{storage:?}").contains("data"), "{storage:?}");
     }
@@ -164,15 +268,21 @@ mod tests {
     #[test]
     fn build_storage_local_overrides_a_configured_cloud_backend() {
         let config = config_with_storage("[storage.azure]\naccount = \"a\"\ncontainer = \"c\"\n");
-        let storage =
-            build_storage(Some(Path::new("./data")), &config, Path::new("/work")).unwrap();
+        let storage = build_storage(
+            Some(Path::new("./data")),
+            &config,
+            Path::new("/work"),
+            None,
+            "proj",
+        )
+        .unwrap();
         assert!(matches!(storage, StorageFacade::Local(_)), "{storage:?}");
     }
 
     #[test]
     fn build_storage_without_selection_or_config_is_a_config_error() {
         let config = Config::default();
-        let error = build_storage(None, &config, Path::new("/work")).unwrap_err();
+        let error = build_storage(None, &config, Path::new("/work"), None, "proj").unwrap_err();
         assert!(matches!(error, StorageError::Config { .. }), "{error:?}");
     }
 
@@ -184,8 +294,46 @@ mod tests {
              endpoint = \"http://127.0.0.1:10000/devstoreaccount1\"\n\
              account_key = \"Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==\"\n",
         );
-        let storage = build_storage(None, &config, Path::new("/work")).unwrap();
+        let storage = build_storage(None, &config, Path::new("/work"), None, "proj").unwrap();
         assert!(matches!(storage, StorageFacade::Azure(_)));
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "reads the wall clock to compute the SAS expiry")]
+    fn build_storage_for_azure_with_a_cache_yields_a_cached_backend() {
+        let config = config_with_storage(
+            "[storage.azure]\naccount = \"devstoreaccount1\"\ncontainer = \"bench-history\"\n\
+             endpoint = \"http://127.0.0.1:10000/devstoreaccount1\"\n\
+             account_key = \"Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==\"\n",
+        );
+        let storage = build_storage(
+            None,
+            &config,
+            Path::new("/work"),
+            Some(Path::new("./cache")),
+            "proj",
+        )
+        .unwrap();
+        assert!(
+            matches!(storage, StorageFacade::CachedAzure(_)),
+            "{storage:?}"
+        );
+    }
+
+    #[test]
+    fn build_storage_local_ignores_a_cache_directory() {
+        // A cache is pointless with a local backend (reads are already local), so a
+        // `--local` selection yields a plain local backend even with `--cache` set.
+        let config = Config::default();
+        let storage = build_storage(
+            Some(Path::new("./data")),
+            &config,
+            Path::new("/work"),
+            Some(Path::new("./cache")),
+            "proj",
+        )
+        .unwrap();
+        assert!(matches!(storage, StorageFacade::Local(_)), "{storage:?}");
     }
 
     #[test]
@@ -194,7 +342,7 @@ mod tests {
             "[storage.azure]\naccount = \"a\"\ncontainer = \"c\"\n\
              account_key = \"a2V5\"\nsas_token = \"sig=x\"\n",
         );
-        let error = build_storage(None, &config, Path::new("/work")).unwrap_err();
+        let error = build_storage(None, &config, Path::new("/work"), None, "proj").unwrap_err();
         assert!(matches!(error, StorageError::Config { .. }), "{error:?}");
     }
 }

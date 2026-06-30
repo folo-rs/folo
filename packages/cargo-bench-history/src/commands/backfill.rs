@@ -127,7 +127,7 @@ pub(crate) async fn execute(
 
     let project_id = resolve_project_id(&config, base);
     let local = resolve_local_path(options.local.as_ref(), storage_env().as_deref())?;
-    let storage = build_storage(local.as_deref(), &config, base)?;
+    let storage = build_storage(local.as_deref(), &config, base, None, &project_id)?;
     let bench_command = bench_command.unwrap_or_else(default_bench_command);
 
     let git = SystemBackfillGit::new(base);
@@ -140,7 +140,18 @@ pub(crate) async fn execute(
     };
     let worktree = worktree_path();
 
-    execute_backfill(options, &git, &runner, &worktree).await
+    let result = execute_backfill(options, &git, &runner, &worktree).await;
+    // Flush the cache-invalidation marker once for the whole range: a
+    // `backfill --overwrite` replaces stored objects across every commit (arming the
+    // shared backend), and a single coalesced bump invalidates other machines'
+    // caches. An append-only backfill never arms it, so this is a cheap no-op.
+    let reporter = StderrReporter::new(options.verbose);
+    let flush = storage
+        .flush_pending_invalidation(&project_id, &reporter)
+        .await;
+    let outcome = result?;
+    flush?;
+    Ok(outcome)
 }
 
 /// Plans and runs the backfill against injected ports.
@@ -532,6 +543,7 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
             machine_key: self.options.machine_key.clone(),
             no_store: false,
             overwrite: self.options.overwrite,
+            skip_existing: false,
             passthrough: self.options.passthrough.clone(),
             verbose: self.options.verbose,
         };

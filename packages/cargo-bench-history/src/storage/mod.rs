@@ -2,6 +2,7 @@
 //! local filesystem and an Azure Blob container implement identically.
 
 mod azure;
+mod caching;
 mod facade;
 mod github_oidc;
 mod local;
@@ -14,6 +15,9 @@ use std::fmt;
 use std::future::Future;
 use std::io;
 use std::path::{Component, Path};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use cargo_bench_history_core::model::{STORAGE_VERSION, sanitize_segment};
 
 /// An object store of immutable, key-addressed result sets.
 ///
@@ -39,6 +43,11 @@ pub(crate) trait Storage: fmt::Debug + Send + Sync {
     /// `run --overwrite` and `backfill --overwrite` use to regenerate a data
     /// point. Intermediate structure is created as needed.
     ///
+    /// The returned future is `Send` for the same reason [`get`](Self::get)'s is:
+    /// the read-through cache populates its mirror with this method *inside* a
+    /// (spawnable) `get`, so the populate future must be sendable across worker
+    /// threads too.
+    ///
     /// # Errors
     ///
     /// Returns [`StorageError::InvalidKey`] if `key` is malformed, or
@@ -47,7 +56,7 @@ pub(crate) trait Storage: fmt::Debug + Send + Sync {
         &self,
         key: &str,
         bytes: &[u8],
-    ) -> impl Future<Output = Result<(), StorageError>>;
+    ) -> impl Future<Output = Result<(), StorageError>> + Send;
 
     /// Reads the object stored at `key`.
     ///
@@ -163,6 +172,58 @@ pub(crate) fn validate_key(key: &str) -> Result<(), StorageError> {
     Ok(())
 }
 
+/// The reserved file-name segment of the per-project cache-invalidation marker.
+///
+/// It occupies the **engine** position under `{STORAGE_VERSION}/<project>/`, where
+/// the real values are a controlled vocabulary (`criterion`/`callgrind`/…) that
+/// never begins with `_`, so it can never collide with a real engine segment.
+/// Even if it is enumerated, the loaders' non-`.json`/unparsable-key filter skips
+/// it before it can be mistaken for data.
+const CACHE_EPOCH_SEGMENT: &str = "_cache-epoch";
+
+/// The storage key of a project's cache-invalidation marker:
+/// `{STORAGE_VERSION}/<project>/_cache-epoch`.
+///
+/// A cloud writer overwrites it with a fresh opaque epoch token whenever it
+/// removes or rewrites an existing object (`delete`/`put_overwrite`); the
+/// read-through cache compares it against its own recorded token to decide whether
+/// to reuse or wipe its mirror. The `project` segment is sanitized identically to
+/// [`DiscriminantSet::partition_prefix`](cargo_bench_history_core::model::DiscriminantSet::partition_prefix)
+/// so the marker lands in the same partition as that project's data.
+pub(crate) fn cache_epoch_key(project: &str) -> String {
+    format!(
+        "{STORAGE_VERSION}/{project}/{CACHE_EPOCH_SEGMENT}",
+        project = sanitize_segment(project)
+    )
+}
+
+/// A one-shot "a cloud object was removed or overwritten" flag.
+///
+/// A cloud writer [`arm`](Self::arm)s it on every `delete`/`put_overwrite` — the
+/// only operations that break the storage model's per-key immutability — and a
+/// single flush at the end of a command [`take`](Self::take)s it and, when set,
+/// writes one fresh [`cache_epoch_key`] marker. Coalescing every mutation in a
+/// command into a single marker write keeps the bump to one round-trip. Write-once
+/// `put` (the additive path the nightly collection uses) never arms it, so an
+/// append-only night never invalidates the cache.
+#[derive(Debug, Default)]
+pub(crate) struct PendingInvalidation {
+    armed: AtomicBool,
+}
+
+impl PendingInvalidation {
+    /// Arms the flag so a later [`take`](Self::take) reports a pending bump.
+    pub(crate) fn arm(&self) {
+        self.armed.store(true, Ordering::Release);
+    }
+
+    /// Returns whether the flag was armed and clears it, so a second flush in the
+    /// same process performs no further marker write.
+    pub(crate) fn take(&self) -> bool {
+        self.armed.swap(false, Ordering::AcqRel)
+    }
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -219,6 +280,46 @@ mod tests {
         assert!(error.to_string().contains("both keys set"), "{error}");
         assert!(error.to_string().contains("configuration"), "{error}");
         assert!(error.source().is_none());
+    }
+
+    #[test]
+    fn cache_epoch_key_lands_in_the_project_partition() {
+        // The marker is a sibling of the engine directories under v1/<project>/,
+        // in the engine position (a controlled vocabulary that never starts with
+        // `_`), so it cannot collide with a real engine segment.
+        assert_eq!(cache_epoch_key("folo"), "v1/folo/_cache-epoch");
+        // The project is sanitized identically to the data partition, so the
+        // marker always lands beside that project's objects.
+        assert_eq!(cache_epoch_key("a b"), "v1/a_b/_cache-epoch");
+    }
+
+    #[test]
+    fn pending_invalidation_starts_unarmed() {
+        let pending = PendingInvalidation::default();
+        assert!(!pending.take(), "a fresh flag is not armed");
+    }
+
+    #[test]
+    fn pending_invalidation_arms_and_takes_once() {
+        let pending = PendingInvalidation::default();
+        pending.arm();
+        assert!(pending.take(), "an armed flag reports a pending bump");
+        assert!(
+            !pending.take(),
+            "taking clears the flag so a second flush is a no-op"
+        );
+    }
+
+    #[test]
+    fn pending_invalidation_arming_is_idempotent() {
+        let pending = PendingInvalidation::default();
+        pending.arm();
+        pending.arm();
+        assert!(
+            pending.take(),
+            "repeated arming still reports one pending bump"
+        );
+        assert!(!pending.take());
     }
 
     #[test]
