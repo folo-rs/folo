@@ -11,13 +11,7 @@ async fn list_discriminants_lists_present_sets() {
     workspace.seed_callgrind_in("x86_64-unknown-linux-gnu", "synthetic", "c1", 100.0);
     workspace.seed_callgrind_in("x86_64-pc-windows-msvc", "synthetic", "c1", 100.0);
 
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "discriminants", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace.drive_json(&["list", "discriminants"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     let sets = parsed.as_array().unwrap();
     assert_eq!(sets.len(), 2, "exactly the two present sets: {message}");
@@ -42,13 +36,7 @@ async fn list_previews_the_analyzed_data_set() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_rising_callgrind_history();
 
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "runs", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace.drive_json(&["list", "runs"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(parsed["totals"]["runs"], 6, "{message}");
     assert_eq!(parsed["totals"]["series"], 1, "{message}");
@@ -81,20 +69,14 @@ async fn list_facet_selection_mirrors_analyze() {
     workspace.seed_callgrind_in("x86_64-unknown-linux-gnu", "synthetic", "c1", 100.0);
     workspace.seed_callgrind_in("x86_64-pc-windows-msvc", "synthetic", "c1", 50.0);
 
-    let RunOutcome::Completed { message } = workspace
-        .drive(&[
+    let message = workspace
+        .drive_json(&[
             "list",
             "runs",
             "--target-triple",
             "x86_64-unknown-linux-gnu",
-            "--format",
-            "json",
         ])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(parsed["totals"]["discriminant_sets"], 1, "{message}");
     assert_eq!(
@@ -119,13 +101,7 @@ async fn list_admits_and_excludes_dirty_like_analyze() {
 
     // By default the dirty snapshot on the target side is included: f1 hosts both a
     // clean and a dirty run, for three runs across two commits.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "runs", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace.drive_json(&["list", "runs"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(parsed["totals"]["runs"], 3, "{message}");
     let commits = parsed["sets"][0]["commits"].as_array().unwrap();
@@ -135,13 +111,7 @@ async fn list_admits_and_excludes_dirty_like_analyze() {
     assert_eq!(f1["dirty"], 1, "{message}");
 
     // `--no-dirty` drops the dirty snapshot, leaving only the two clean runs.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "runs", "--no-dirty", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace.drive_json(&["list", "runs", "--no-dirty"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(parsed["totals"]["runs"], 2, "{message}");
 }

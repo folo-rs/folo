@@ -39,13 +39,7 @@ async fn backfill_stores_one_clean_object_per_commit_and_restores_checkout() {
     assert_eq!(workspace.head(), head_before);
 
     // The backfilled points are now visible to `analyze` along the master line.
-    let RunOutcome::Analyzed { report, .. } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
         parsed["runs"], 2,

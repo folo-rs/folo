@@ -32,11 +32,12 @@ use jiff::Timestamp;
 
 use super::{
     AutoFacets, Selection, detect_auto_facets, dirty_base_exception_warning, empty_history_hint,
-    facet_filtered_candidates, parse_format, resolve_facets, select_dataset,
+    facet_filtered_candidates, resolve_facets, select_dataset,
 };
 use super::{ReportFormat, RunIndex, Series, SeriesFilter, apply_blessings};
 use crate::model::BlessingRecord;
 use crate::model::DiscriminantSet;
+use crate::output::{OutputSelection, OutputWriter, TokioOutputWriter, emit};
 
 /// The real `list`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
@@ -68,6 +69,7 @@ pub(crate) async fn execute(
     // The object-load and detection work shares the ambient Tokio worker threads
     // (mirrors `analyze::execute`).
     let spawner = Spawner::new_tokio();
+    let writer = TokioOutputWriter::new(workspace_dir.to_path_buf());
     list_with(
         &git,
         &storage,
@@ -77,6 +79,7 @@ pub(crate) async fn execute(
         &auto,
         now,
         &reporter,
+        &writer,
         &spawner,
     )
     .await
@@ -89,7 +92,7 @@ pub(crate) async fn execute(
     clippy::too_many_arguments,
     reason = "mirrors the analyze selection pipeline, which threads the same injected ports"
 )]
-pub(crate) async fn list_with<G, S>(
+pub(crate) async fn list_with<G, S, W>(
     git: &G,
     storage: &S,
     project_id: &str,
@@ -98,13 +101,19 @@ pub(crate) async fn list_with<G, S>(
     auto: &AutoFacets,
     now: Timestamp,
     reporter: &dyn Reporter,
+    writer: &W,
     spawner: &Spawner,
 ) -> Result<RunOutcome, RunError>
 where
     G: GitHistory,
     S: Storage + Clone + 'static,
+    W: OutputWriter,
 {
-    let format = parse_format(options.format.as_deref())?;
+    let output = OutputSelection::resolve(
+        options.no_text,
+        options.markdown.as_deref(),
+        options.json.as_deref(),
+    )?;
     if options.all && options.subject != ListSubject::Blessings {
         return Err(RunError::Analyze {
             message: "--all applies only to `list blessings`, where it widens the view from \
@@ -131,14 +140,20 @@ where
                 .collect();
             sets.sort();
             sets.dedup();
-            Ok(RunOutcome::Completed {
-                message: render_discriminants(&sets, format),
+            let message = emit(&output, writer, reporter, |format| {
+                render_discriminants(&sets, format)
             })
+            .await?;
+            Ok(RunOutcome::Completed { message })
         }
         ListSubject::Blessings => {
-            let message = list_blessings(
+            let (head_label, entries) = list_blessings(
                 git, storage, project_id, config, options, auto, now, reporter, spawner,
             )
+            .await?;
+            let message = emit(&output, writer, reporter, |format| {
+                render_blessings(project_id, options.all, &head_label, &entries, format)
+            })
             .await?;
             Ok(RunOutcome::Completed { message })
         }
@@ -165,7 +180,10 @@ where
                 .included_dirty_base_exception
                 .then(dirty_base_exception_warning);
 
-            let message = render_listing(&listing, format, hint.as_deref(), warning.as_deref());
+            let message = emit(&output, writer, reporter, |format| {
+                render_listing(&listing, format, hint.as_deref(), warning.as_deref())
+            })
+            .await?;
             Ok(RunOutcome::Completed { message })
         }
     }
@@ -517,12 +535,11 @@ async fn list_blessings<G, S>(
     now: Timestamp,
     reporter: &dyn Reporter,
     spawner: &Spawner,
-) -> Result<String, RunError>
+) -> Result<(String, Vec<BlessingEntry>), RunError>
 where
     G: GitHistory,
     S: Storage + Clone + 'static,
 {
-    let format = parse_format(options.format.as_deref())?;
     let selection = Selection::from_list(options);
 
     let (head_label, mut entries) = if options.all {
@@ -540,13 +557,7 @@ where
             .then_with(|| left.commit.cmp(&right.commit))
     });
 
-    Ok(render_blessings(
-        project_id,
-        options.all,
-        &head_label,
-        &entries,
-        format,
-    ))
+    Ok((head_label, entries))
 }
 
 /// Collects the blessings recorded at the current commit (HEAD) in the
@@ -861,6 +872,9 @@ mod tests {
     use crate::report::RecordingReporter;
     use crate::storage::{MemoryStorage, Storage};
 
+    use crate::output::MemoryOutputWriter;
+    use std::path::PathBuf;
+
     use nonempty::nonempty;
 
     use super::*;
@@ -1142,6 +1156,12 @@ mod tests {
         git
     }
 
+    /// A throwaway in-memory output writer for list tests that assert on the
+    /// returned text message rather than on written files.
+    fn writer() -> MemoryOutputWriter {
+        MemoryOutputWriter::new()
+    }
+
     /// Drives `list_with` and unwraps the rendered message.
     fn list(storage: &MemoryStorage, git: &FakeGitHistory, options: &ListOptions) -> String {
         let outcome = block_on(list_with(
@@ -1153,6 +1173,7 @@ mod tests {
             &auto(),
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::new(),
+            &writer(),
             &spawner(),
         ))
         .unwrap();
@@ -1160,6 +1181,63 @@ mod tests {
             RunOutcome::Completed { message } => message,
             RunOutcome::Analyzed { .. } => panic!("list returns a Completed outcome"),
         }
+    }
+
+    /// Drives `list_with` requesting the JSON report into an in-memory writer and
+    /// returns the JSON text. The text report is suppressed so the JSON file is
+    /// the only rendered output.
+    fn list_json(storage: &MemoryStorage, git: &FakeGitHistory, options: &ListOptions) -> String {
+        let mut options = options.clone();
+        options.no_text = true;
+        options.markdown = None;
+        options.json = Some(PathBuf::from("report.json"));
+        let writer = MemoryOutputWriter::new();
+        block_on(list_with(
+            git,
+            storage,
+            "folo",
+            &config(),
+            &options,
+            &auto(),
+            Timestamp::from_second(0).unwrap(),
+            &RecordingReporter::new(),
+            &writer,
+            &spawner(),
+        ))
+        .unwrap();
+        writer
+            .written(Path::new("report.json"))
+            .expect("the JSON report was written to the requested path")
+    }
+
+    /// Drives `list_with` requesting the Markdown report into an in-memory writer
+    /// and returns the Markdown text.
+    fn list_markdown(
+        storage: &MemoryStorage,
+        git: &FakeGitHistory,
+        options: &ListOptions,
+    ) -> String {
+        let mut options = options.clone();
+        options.no_text = true;
+        options.json = None;
+        options.markdown = Some(PathBuf::from("report.md"));
+        let writer = MemoryOutputWriter::new();
+        block_on(list_with(
+            git,
+            storage,
+            "folo",
+            &config(),
+            &options,
+            &auto(),
+            Timestamp::from_second(0).unwrap(),
+            &RecordingReporter::new(),
+            &writer,
+            &spawner(),
+        ))
+        .unwrap();
+        writer
+            .written(Path::new("report.md"))
+            .expect("the Markdown report was written to the requested path")
     }
 
     #[test]
@@ -1175,11 +1253,7 @@ mod tests {
         }
         let git = linear_git();
 
-        let opts = ListOptions {
-            format: Some("json".to_owned()),
-            ..options()
-        };
-        let report = list(&storage, &git, &opts);
+        let report = list_json(&storage, &git, &options());
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
 
         assert_eq!(parsed["totals"]["runs"], 3);
@@ -1225,11 +1299,7 @@ mod tests {
         store(&storage, &clean_key("c0"), &two_metric_set(0, "c0"));
         let git = linear_git();
 
-        let opts = ListOptions {
-            format: Some("markdown".to_owned()),
-            ..options()
-        };
-        let report = list(&storage, &git, &opts);
+        let report = list_markdown(&storage, &git, &options());
         assert!(report.contains("# Data set for folo"), "{report}");
         assert!(
             report.contains("| Commit | Runs | Clean | Dirty |"),
@@ -1252,6 +1322,7 @@ mod tests {
             &auto(),
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::new(),
+            &writer(),
             &spawner(),
         ))
         .unwrap_err();
@@ -1272,10 +1343,9 @@ mod tests {
 
         let opts = ListOptions {
             engine: vec!["callgrind".to_owned()],
-            format: Some("json".to_owned()),
             ..options()
         };
-        let report = list(&storage, &git, &opts);
+        let report = list_json(&storage, &git, &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["totals"]["discriminant_sets"], 1, "{report}");
         assert_eq!(parsed["sets"][0]["engine"], "callgrind");
@@ -1309,10 +1379,9 @@ mod tests {
         // so a user can discover triples and machine keys they do not already know.
         let opts = ListOptions {
             subject: ListSubject::Discriminants,
-            format: Some("json".to_owned()),
             ..options()
         };
-        let report = list(&storage, &git, &opts);
+        let report = list_json(&storage, &git, &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         let sets = parsed.as_array().unwrap();
         assert_eq!(
@@ -1333,10 +1402,9 @@ mod tests {
         let opts = ListOptions {
             subject: ListSubject::Discriminants,
             engine: vec!["criterion".to_owned()],
-            format: Some("json".to_owned()),
             ..options()
         };
-        let report = list(&storage, &git, &opts);
+        let report = list_json(&storage, &git, &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         let sets = parsed.as_array().unwrap();
         assert_eq!(
@@ -1365,6 +1433,7 @@ mod tests {
             &auto(),
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::new(),
+            &writer(),
             &spawner(),
         ))
         .unwrap_err();
@@ -1401,10 +1470,9 @@ mod tests {
         let git = FakeGitHistory::new();
         let opts = ListOptions {
             subject: ListSubject::Discriminants,
-            format: Some("markdown".to_owned()),
             ..options()
         };
-        let report = list(&storage, &git, &opts);
+        let report = list_markdown(&storage, &git, &opts);
         assert!(report.contains("# Discriminant sets"), "{report}");
         assert!(
             report.contains("| Engine | Target triple | Machine key |"),
@@ -1422,10 +1490,9 @@ mod tests {
         let git = FakeGitHistory::new();
         let opts = ListOptions {
             subject: ListSubject::Discriminants,
-            format: Some("markdown".to_owned()),
             ..options()
         };
-        let report = list(&storage, &git, &opts);
+        let report = list_markdown(&storage, &git, &opts);
         assert!(report.contains("# Discriminant sets"), "{report}");
         assert!(report.contains("No discriminant sets found."), "{report}");
         // The empty markdown body has no table.
@@ -1448,11 +1515,7 @@ mod tests {
     fn list_runs_markdown_empty_selection_reports_no_match() {
         let storage = MemoryStorage::new();
         let git = linear_git();
-        let opts = ListOptions {
-            format: Some("markdown".to_owned()),
-            ..options()
-        };
-        let report = list(&storage, &git, &opts);
+        let report = list_markdown(&storage, &git, &options());
         assert!(report.contains("# Data set for folo"), "{report}");
         assert!(
             report.contains("No stored run matches the selection."),
@@ -1488,10 +1551,9 @@ mod tests {
 
         let opts = ListOptions {
             subject: ListSubject::Blessings,
-            format: Some("json".to_owned()),
             ..options()
         };
-        let report = list(&storage, &git, &opts);
+        let report = list_json(&storage, &git, &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["scope"], "head");
         assert_eq!(parsed["commit"], "c3");
@@ -1535,10 +1597,9 @@ mod tests {
 
         let opts = ListOptions {
             subject: ListSubject::Blessings,
-            format: Some("markdown".to_owned()),
             ..options()
         };
-        let report = list(&storage, &git, &opts);
+        let report = list_markdown(&storage, &git, &opts);
         assert!(report.contains("nm/nm::observe"), "{report}");
         assert!(
             report.contains('|'),
@@ -1554,10 +1615,9 @@ mod tests {
 
         let opts = ListOptions {
             subject: ListSubject::Blessings,
-            format: Some("markdown".to_owned()),
             ..options()
         };
-        let report = list(&storage, &git, &opts);
+        let report = list_markdown(&storage, &git, &opts);
         assert!(
             report.contains("No blessings recorded at this commit."),
             "{report}"
@@ -1568,7 +1628,6 @@ mod tests {
     fn list_blessings_error(storage: &MemoryStorage, git: &FakeGitHistory) -> RunError {
         let opts = ListOptions {
             subject: ListSubject::Blessings,
-            format: Some("json".to_owned()),
             ..options()
         };
         block_on(list_with(
@@ -1580,6 +1639,7 @@ mod tests {
             &auto(),
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::new(),
+            &writer(),
             &spawner(),
         ))
         .unwrap_err()
@@ -1649,10 +1709,9 @@ mod tests {
         let opts = ListOptions {
             subject: ListSubject::Blessings,
             all: true,
-            format: Some("json".to_owned()),
             ..options()
         };
-        let report = list(&storage, &git, &opts);
+        let report = list_json(&storage, &git, &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["scope"], "window");
         // No HEAD anchor in the window view.
@@ -1690,10 +1749,9 @@ mod tests {
         let opts = ListOptions {
             subject: ListSubject::Blessings,
             all: true,
-            format: Some("json".to_owned()),
             ..options()
         };
-        let report = list(&storage, &git, &opts);
+        let report = list_json(&storage, &git, &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         let blessings = parsed["blessings"].as_array().unwrap();
         assert_eq!(blessings.len(), 1, "{report}");
@@ -1719,7 +1777,6 @@ mod tests {
         let opts = ListOptions {
             subject: ListSubject::Blessings,
             all: true,
-            format: Some("text".to_owned()),
             ..options()
         };
         let report = list(&storage, &git, &opts);
@@ -1754,10 +1811,9 @@ mod tests {
         let opts = ListOptions {
             subject: ListSubject::Blessings,
             all: true,
-            format: Some("json".to_owned()),
             ..options()
         };
-        let report = list(&storage, &git, &opts);
+        let report = list_json(&storage, &git, &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         let blessings = parsed["blessings"].as_array().unwrap();
         assert_eq!(blessings.len(), 2, "{report}");

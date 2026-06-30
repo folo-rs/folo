@@ -4,6 +4,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 pub(crate) use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Stdio};
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) use cargo_bench_history::{
     BenchmarkId, BenchmarkResult, Cli, Command, EnvironmentInfo, GitInfo, Metric, MetricKind,
@@ -34,6 +35,11 @@ pub(crate) const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// and kept alive for the whole test binary (its `TempDir` is never dropped, so the
 /// source `.git` outlives every copy).
 static BASE_TEMPLATE: LazyLock<tempfile::TempDir> = LazyLock::new(build_base_template);
+
+/// A process-global counter handing each `drive_json`/`drive_markdown` call a
+/// unique report filename, so concurrent tests writing into their own workspaces
+/// never collide on a shared name.
+static OUTPUT_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Runs `git -C <root> <args>`, returning its captured output and asserting success.
 ///
@@ -833,6 +839,37 @@ impl Workspace {
             },
         )
         .await
+    }
+
+    /// Drives a reporting command (`analyze`/`list`/`prune`) requesting the JSON
+    /// report into a file and returns its contents. Appends
+    /// `--no-text --json <unique path>`, so the JSON file is the only rendered
+    /// output, and reads it back. Panics if the command fails.
+    pub(crate) async fn drive_json(&self, args: &[&str]) -> String {
+        let name = format!(
+            "cbh-report-{}.json",
+            OUTPUT_SEQ.fetch_add(1, Ordering::Relaxed)
+        );
+        let mut full: Vec<&str> = args.to_vec();
+        full.extend_from_slice(&["--no-text", "--json", &name]);
+        self.drive(&full).await.unwrap();
+        self.read(&name)
+            .expect("the JSON report was written to the requested path")
+    }
+
+    /// Drives a reporting command requesting the Markdown report into a file and
+    /// returns its contents. Appends `--no-text --markdown <unique path>`, so the
+    /// Markdown file is the only rendered output. Panics if the command fails.
+    pub(crate) async fn drive_markdown(&self, args: &[&str]) -> String {
+        let name = format!(
+            "cbh-report-{}.md",
+            OUTPUT_SEQ.fetch_add(1, Ordering::Relaxed)
+        );
+        let mut full: Vec<&str> = args.to_vec();
+        full.extend_from_slice(&["--no-text", "--markdown", &name]);
+        self.drive(&full).await.unwrap();
+        self.read(&name)
+            .expect("the Markdown report was written to the requested path")
     }
 
     /// All stored objects as `(object key, parsed result set)` pairs, sorted by key.

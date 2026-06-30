@@ -87,40 +87,28 @@ async fn analyze_with_regression_is_always_successful() {
     );
 }
 
-/// `--format json` renders a structured, parseable report.
+/// `--json <path>` writes a structured, parseable report.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_json_format_is_structured() {
+async fn analyze_json_output_is_structured() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_rising_callgrind_history();
 
-    let outcome = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap();
-    let RunOutcome::Analyzed { report, .. } = outcome else {
-        panic!("expected an analyzed outcome, got {outcome:?}");
-    };
+    let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["project"], "testproj");
     assert_eq!(parsed["regressions"], 1);
     assert_eq!(parsed["findings"][0]["direction"], "regression");
 }
 
-/// `--format markdown` renders per-finding blocks mirroring the text report.
+/// `--markdown <path>` writes per-finding blocks mirroring the text report.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_markdown_format_renders_blocks() {
+async fn analyze_markdown_output_renders_blocks() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_rising_callgrind_history();
 
-    let outcome = workspace
-        .drive(&["analyze", "--format", "markdown"])
-        .await
-        .unwrap();
-    let RunOutcome::Analyzed { report, .. } = outcome else {
-        panic!("expected an analyzed outcome, got {outcome:?}");
-    };
+    let report = workspace.drive_markdown(&["analyze"]).await;
     assert!(
         report.contains("# Benchmark history analysis: testproj"),
         "{report}"
@@ -131,6 +119,91 @@ async fn analyze_markdown_format_renders_blocks() {
     // far more specific than a bare `**` that any unrelated bold text would match.
     assert!(report.contains("%** — `"), "{report}");
     assert!(report.contains("via change point"), "{report}");
+}
+
+/// Markdown and JSON files can be rendered from one analysis pass while text is suppressed.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn analyze_writes_markdown_and_json_from_one_suppressed_text_pass() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_rising_callgrind_history();
+
+    let outcome = workspace
+        .drive(&[
+            "analyze",
+            "--no-text",
+            "--markdown",
+            "report.md",
+            "--json",
+            "report.json",
+        ])
+        .await
+        .unwrap();
+    let RunOutcome::Analyzed { report, .. } = outcome else {
+        panic!("expected an analyzed outcome, got {outcome:?}");
+    };
+    assert!(report.is_empty(), "{report}");
+
+    let markdown = workspace.read("report.md");
+    let json = workspace.read("report.json");
+    assert!(markdown.is_some(), "the Markdown report should be written");
+    assert!(json.is_some(), "the JSON report should be written");
+
+    let markdown = markdown.unwrap();
+    assert!(
+        markdown.contains("# Benchmark history analysis: testproj"),
+        "{markdown}"
+    );
+    let json = json.unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed["project"], "testproj");
+}
+
+/// `--no-text` suppresses stdout text while still writing a JSON report.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn analyze_no_text_suppresses_stdout_alongside_json_file() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_rising_callgrind_history();
+
+    let outcome = workspace
+        .drive(&["analyze", "--no-text", "--json", "report.json"])
+        .await
+        .unwrap();
+    let RunOutcome::Analyzed { report, .. } = outcome else {
+        panic!("expected an analyzed outcome, got {outcome:?}");
+    };
+    assert!(report.is_empty(), "{report}");
+
+    let json = workspace
+        .read("report.json")
+        .expect("the JSON report should be written");
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed["project"], "testproj");
+}
+
+/// Text remains on by default when a JSON file is also requested.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn analyze_default_text_coexists_with_json_file() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_rising_callgrind_history();
+
+    let outcome = workspace
+        .drive(&["analyze", "--json", "report.json"])
+        .await
+        .unwrap();
+    let RunOutcome::Analyzed { report, .. } = outcome else {
+        panic!("expected an analyzed outcome, got {outcome:?}");
+    };
+    assert!(!report.is_empty(), "text should be rendered by default");
+    assert!(report.contains("regression"), "{report}");
+
+    let json = workspace
+        .read("report.json")
+        .expect("the JSON report should be written");
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed["project"], "testproj");
 }
 
 /// `--since` excludes points before the cutoff, so an early spike is dropped and
@@ -149,13 +222,9 @@ async fn analyze_since_filters_old_points() {
     workspace.commit_dated("2024-01-03", "c3");
     workspace.seed_callgrind("c3", 100.0);
 
-    let outcome = workspace
-        .drive(&["analyze", "--since", "2024-01-01", "--format", "json"])
-        .await
-        .unwrap();
-    let RunOutcome::Analyzed { report, .. } = outcome else {
-        panic!("expected an analyzed outcome, got {outcome:?}");
-    };
+    let report = workspace
+        .drive_json(&["analyze", "--since", "2024-01-01"])
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
         parsed["runs"], 3,
@@ -178,13 +247,9 @@ async fn analyze_engine_filters_partition() {
         &ir_result_set(1, "c1", 100.0),
     );
 
-    let outcome = workspace
-        .drive(&["analyze", "--engine", "callgrind", "--format", "json"])
-        .await
-        .unwrap();
-    let RunOutcome::Analyzed { report, .. } = outcome else {
-        panic!("expected an analyzed outcome, got {outcome:?}");
-    };
+    let report = workspace
+        .drive_json(&["analyze", "--engine", "callgrind"])
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
         parsed["runs"], 1,
@@ -192,20 +257,20 @@ async fn analyze_engine_filters_partition() {
     );
 }
 
-/// An unknown `--format` is reported as an analysis error.
+/// Selecting no output for `analyze` is reported as an analysis error.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_rejects_unknown_format() {
+async fn analyze_rejects_no_output_selected() {
     let workspace = Workspace::repo(&storage_only_config());
 
     let error = workspace
-        .drive(&["analyze", "--format", "yaml"])
+        .drive(&["analyze", "--no-text"])
         .await
         .unwrap_err();
     let RunError::Analyze { message } = error else {
         panic!("expected an analyze error, got {error:?}");
     };
-    assert!(message.contains("unknown report format"), "{message}");
+    assert!(message.contains("no output selected"), "{message}");
 }
 
 /// A benchmark-id prefix narrows analysis to the matching benchmarks: a
@@ -265,19 +330,12 @@ async fn analyze_falling_cache_hits_is_a_regression() {
         workspace.seed_metrics(commit, vec![Metric::new(MetricKind::L1CacheHits, hits)]);
     }
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
-    assert_eq!(regressions, 1, "fewer cache hits is a regression: {report}");
+    let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(
+        parsed["regressions"], 1,
+        "fewer cache hits is a regression: {report}"
+    );
     assert_eq!(parsed["findings"][0]["direction"], "regression");
     assert_eq!(parsed["findings"][0]["kind"], "l1_cache_hits");
 }
@@ -299,22 +357,14 @@ async fn analyze_rising_l1_cache_hits_is_an_improvement() {
         workspace.seed_metrics(commit, vec![Metric::new(MetricKind::L1CacheHits, hits)]);
     }
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&["analyze", "--format", "json", "--include-improvements"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace
+        .drive_json(&["analyze", "--include-improvements"])
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
-        regressions, 0,
+        parsed["regressions"], 0,
         "more L1 cache hits is not a regression: {report}"
     );
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["findings"][0]["direction"], "improvement");
 }
 
@@ -337,19 +387,12 @@ async fn analyze_rising_ram_hits_is_a_regression() {
         workspace.seed_metrics(commit, vec![Metric::new(MetricKind::RamHits, hits)]);
     }
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
-    assert_eq!(regressions, 1, "more RAM hits is a regression: {report}");
+    let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(
+        parsed["regressions"], 1,
+        "more RAM hits is a regression: {report}"
+    );
     assert_eq!(parsed["findings"][0]["direction"], "regression");
     assert_eq!(parsed["findings"][0]["kind"], "ram_hits");
 }
@@ -375,20 +418,13 @@ async fn analyze_ranks_findings_by_relative_move_across_benchmarks() {
     workspace.commit_dated("2024-01-06", "c6");
     workspace.seed_two_benchmarks("c6", 200.0, 102.0);
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
-    assert_eq!(regressions, 2, "both benchmarks regress: {report}");
-
+    let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(
+        parsed["regressions"], 2,
+        "both benchmarks regress: {report}"
+    );
+
     let findings = parsed["findings"].as_array().unwrap();
     assert_eq!(findings.len(), 2, "{report}");
     // The larger relative move (alpha, +100%) ranks ahead of the smaller (beta, +2%).
@@ -397,15 +433,7 @@ async fn analyze_ranks_findings_by_relative_move_across_benchmarks() {
     assert_eq!(findings[1]["segments"][0], "beta", "{report}");
 
     // The Markdown rendering preserves the same ranked order in its finding blocks.
-    let RunOutcome::Analyzed {
-        report: markdown, ..
-    } = workspace
-        .drive(&["analyze", "--format", "markdown"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let markdown = workspace.drive_markdown(&["analyze"]).await;
     let alpha_row = markdown.find("alpha::bench").unwrap();
     let beta_row = markdown.find("beta::bench").unwrap();
     assert!(
@@ -431,22 +459,14 @@ async fn analyze_reports_improvement_without_regression() {
     workspace.commit_dated("2024-01-06", "c6");
     workspace.seed_callgrind("c6", 70.0);
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&["analyze", "--format", "json", "--include-improvements"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace
+        .drive_json(&["analyze", "--include-improvements"])
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
-        regressions, 0,
+        parsed["regressions"], 0,
         "a drop in instructions is not a regression: {report}"
     );
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["findings"][0]["direction"], "improvement");
 }
 
@@ -474,30 +494,20 @@ async fn analyze_criterion_jitter_is_not_flagged() {
         workspace.seed_criterion(label, "mk", value);
     }
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&[
+    let report = workspace
+        .drive_json(&[
             "analyze",
             "--target-triple",
             "x86_64-pc-windows-msvc",
             "--machine-key",
             "mk",
-            "--format",
-            "json",
         ])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
-        regressions, 0,
+        parsed["regressions"], 0,
         "jitter must not read as a regression: {report}"
     );
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert!(
         parsed["findings"].as_array().unwrap().is_empty(),
         "noisy jitter around a flat mean produces no findings at all: {report}"
@@ -528,27 +538,20 @@ async fn analyze_criterion_slow_drift_is_flagged_as_drift() {
         workspace.seed_criterion(label, "mk", value);
     }
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&[
+    let report = workspace
+        .drive_json(&[
             "analyze",
             "--target-triple",
             "x86_64-pc-windows-msvc",
             "--machine-key",
             "mk",
-            "--format",
-            "json",
         ])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
-    assert_eq!(regressions, 1, "the upward drift is a regression: {report}");
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(
+        parsed["regressions"], 1,
+        "the upward drift is a regression: {report}"
+    );
     assert_eq!(parsed["findings"][0]["method"], "drift", "{report}");
     assert_eq!(parsed["findings"][0]["direction"], "regression", "{report}");
 }
@@ -575,22 +578,12 @@ async fn analyze_callgrind_tiny_deterministic_step_is_flagged() {
     workspace.commit_dated("2024-01-06", "c6");
     workspace.seed_callgrind("c6", 1001.0);
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace.drive_json(&["analyze"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
-        regressions, 1,
+        parsed["regressions"], 1,
         "a one-count deterministic step is real and must flag below the noise floor: {report}"
     );
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["findings"][0]["method"], "change_point", "{report}");
     assert_eq!(parsed["findings"][0]["direction"], "regression", "{report}");
 }
@@ -618,22 +611,12 @@ async fn analyze_alloc_tracker_step_is_flagged_as_change_point() {
     workspace.commit_dated("2024-03-06", "a6");
     workspace.seed_alloc_tracker("a6", "allocate_vec", 201.0, 2.0);
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace.drive_json(&["analyze"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
-        regressions, 1,
+        parsed["regressions"], 1,
         "a one-byte deterministic step is real and must flag: {report}"
     );
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["findings"][0]["method"], "change_point", "{report}");
     assert_eq!(parsed["findings"][0]["direction"], "regression", "{report}");
     assert_eq!(parsed["findings"][0]["kind"], "allocated_bytes", "{report}");
@@ -663,24 +646,14 @@ async fn analyze_alloc_tracker_ignores_gaps_in_a_sparse_history() {
     workspace.commit_dated("2024-04-06", "g6");
     workspace.seed_alloc_tracker("g6", "allocate_vec", 260.0, 2.0);
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace.drive_json(&["analyze"]).await;
     // Only `allocate_vec`'s allocated-bytes step is a finding. A gap read as a drop
     // to zero would manufacture wild swings; instead the series is contiguous.
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
-        regressions, 1,
+        parsed["regressions"], 1,
         "the gapped series' real step flags: {report}"
     );
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["findings"][0]["method"], "change_point", "{report}");
     assert_eq!(parsed["findings"][0]["direction"], "regression", "{report}");
     assert!(report.contains("allocate_vec"), "{report}");
@@ -714,27 +687,20 @@ async fn analyze_all_the_time_slow_drift_is_flagged_as_drift() {
         workspace.seed_all_the_time(label, "mk", "read_cell", value);
     }
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&[
+    let report = workspace
+        .drive_json(&[
             "analyze",
             "--target-triple",
             "x86_64-unknown-linux-gnu",
             "--machine-key",
             "mk",
-            "--format",
-            "json",
         ])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
-    assert_eq!(regressions, 1, "the upward drift is a regression: {report}");
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(
+        parsed["regressions"], 1,
+        "the upward drift is a regression: {report}"
+    );
     assert_eq!(parsed["findings"][0]["method"], "drift", "{report}");
     assert_eq!(parsed["findings"][0]["direction"], "regression", "{report}");
     assert_eq!(parsed["findings"][0]["kind"], "processor_time", "{report}");
@@ -762,30 +728,20 @@ async fn analyze_all_the_time_jitter_is_not_flagged() {
         workspace.seed_all_the_time(label, "mk", "read_cell", value);
     }
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&[
+    let report = workspace
+        .drive_json(&[
             "analyze",
             "--target-triple",
             "x86_64-unknown-linux-gnu",
             "--machine-key",
             "mk",
-            "--format",
-            "json",
         ])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
-        regressions, 0,
+        parsed["regressions"], 0,
         "jitter must not read as a regression: {report}"
     );
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert!(
         parsed["findings"].as_array().unwrap().is_empty(),
         "noisy jitter around a flat mean produces no findings at all: {report}"
@@ -819,30 +775,20 @@ async fn analyze_all_the_time_step_with_disjoint_intervals_is_a_regression() {
         workspace.seed_all_the_time_with_interval(label, "mk", "read_cell", value, 2.0);
     }
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&[
+    let report = workspace
+        .drive_json(&[
             "analyze",
             "--target-triple",
             "x86_64-unknown-linux-gnu",
             "--machine-key",
             "mk",
-            "--format",
-            "json",
         ])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
-        regressions, 1,
+        parsed["regressions"], 1,
         "a sustained step with disjoint intervals is a regression: {report}"
     );
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["findings"][0]["method"], "change_point", "{report}");
     assert_eq!(parsed["findings"][0]["direction"], "regression", "{report}");
     assert_eq!(parsed["findings"][0]["kind"], "processor_time", "{report}");
@@ -874,30 +820,20 @@ async fn analyze_all_the_time_step_with_overlapping_intervals_is_suppressed() {
         workspace.seed_all_the_time_with_interval(label, "mk", "read_cell", value, 60.0);
     }
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&[
+    let report = workspace
+        .drive_json(&[
             "analyze",
             "--target-triple",
             "x86_64-unknown-linux-gnu",
             "--machine-key",
             "mk",
-            "--format",
-            "json",
         ])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
-        regressions, 0,
+        parsed["regressions"], 0,
         "an overlapping-interval step is suppressed by the CI gate: {report}"
     );
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert!(
         parsed["findings"].as_array().unwrap().is_empty(),
         "wide overlapping intervals suppress the step entirely: {report}"
@@ -937,19 +873,12 @@ async fn analyze_official_view_excludes_dirty_runs() {
     // A dirty snapshot on the tip commit that would spike the series if admitted.
     workspace.seed_dirty_callgrind("2024-01-05", "c4", 200.0);
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
-    assert_eq!(regressions, 0, "the dirty spike must be excluded: {report}");
+    let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(
+        parsed["regressions"], 0,
+        "the dirty spike must be excluded: {report}"
+    );
     assert_eq!(
         parsed["runs"], 4,
         "only the four clean runs are loaded, not the dirty snapshot: {report}"
@@ -974,13 +903,7 @@ async fn analyze_hints_when_every_run_is_a_dirty_snapshot_on_the_base() {
     workspace.commit_dated("2024-01-02", "c2");
     workspace.seed_dirty_callgrind("2024-01-02", "c2", 130.0);
 
-    let RunOutcome::Analyzed { report, .. } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
         parsed["runs"], 0,
@@ -1021,22 +944,12 @@ async fn analyze_dirty_tree_on_the_base_admits_the_tip_with_a_warning() {
     // matching the "evaluating the tool" / "working on the base branch" scenario.
     workspace.make_dirty("uncommitted.txt");
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace.drive_json(&["analyze"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
-        regressions, 1,
+        parsed["regressions"], 1,
         "the dirty tip regression is admitted: {report}"
     );
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
         parsed["runs"], 5,
         "the dirty tip snapshots join the three clean runs: {report}"
@@ -1048,13 +961,7 @@ async fn analyze_dirty_tree_on_the_base_admits_the_tip_with_a_warning() {
     );
 
     // `--no-dirty` skips the probe and the exception, so the dirty tip is dropped.
-    let RunOutcome::Analyzed { report, .. } = workspace
-        .drive(&["analyze", "--format", "json", "--no-dirty"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace.drive_json(&["analyze", "--no-dirty"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
         parsed["runs"], 3,
@@ -1093,24 +1000,14 @@ async fn analyze_dirty_tree_without_recorded_dirty_runs_stays_history_mode() {
     // Dirty the working tree, even though no dirty run was ever stored.
     workspace.make_dirty("uncommitted.txt");
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
         parsed["mode"], "history",
         "a dirty tree with only clean runs is still the official history view: {report}"
     );
     assert_eq!(
-        regressions, 1,
+        parsed["regressions"], 1,
         "history mode flags the sustained clean step: {report}"
     );
     assert_eq!(
@@ -1191,22 +1088,12 @@ async fn analyze_orders_by_topology_not_commit_time() {
     workspace.commit_dated("2024-04-01", "c6");
     workspace.seed_callgrind("c6", 130.0);
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace.drive_json(&["analyze"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
-        regressions, 1,
+        parsed["regressions"], 1,
         "topology order must place the 130 step last and flag it: {report}"
     );
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["findings"][0]["baseline"], 100.0, "{report}");
     assert_eq!(parsed["findings"][0]["latest"], 130.0, "{report}");
 }
@@ -1242,22 +1129,12 @@ async fn analyze_branch_mode_reports_the_latest_regime_with_a_flip() {
     workspace.commit_dated("2024-01-09", "f6");
     workspace.seed_callgrind("f6", 130.0);
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace.drive_json(&["analyze"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
-        regressions, 1,
+        parsed["regressions"], 1,
         "the latest (worse) regime must be reported, not the intermediate improvement: {report}"
     );
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["mode"], "branch", "{report}");
     assert_eq!(parsed["notable"], true, "{report}");
     let finding = &parsed["findings"][0];
@@ -1295,19 +1172,12 @@ async fn analyze_branch_mode_stays_silent_on_a_flat_branch() {
     workspace.commit_dated("2024-01-06", "f3");
     workspace.seed_callgrind("f3", 100.0);
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
-    assert_eq!(regressions, 0, "a flat branch must not flag: {report}");
+    let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(
+        parsed["regressions"], 0,
+        "a flat branch must not flag: {report}"
+    );
     assert_eq!(parsed["mode"], "branch", "{report}");
     assert_eq!(parsed["notable"], false, "{report}");
     assert!(
@@ -1338,13 +1208,7 @@ async fn analyze_history_mode_suppresses_improvements_by_default() {
     workspace.seed_callgrind("c6", 70.0);
 
     // By default history mode stays silent about the improvement.
-    let RunOutcome::Analyzed { report, .. } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["mode"], "history", "{report}");
     assert_eq!(parsed["notable"], false, "{report}");
@@ -1355,13 +1219,9 @@ async fn analyze_history_mode_suppresses_improvements_by_default() {
     );
 
     // Opting in surfaces the very same improvement.
-    let RunOutcome::Analyzed { report, .. } = workspace
-        .drive(&["analyze", "--format", "json", "--include-improvements"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace
+        .drive_json(&["analyze", "--include-improvements"])
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["improvements"], 1, "{report}");
     assert_eq!(
@@ -1389,19 +1249,12 @@ async fn analyze_tip_mode_flags_only_a_tip_regression() {
     regressing.commit_dated("2024-01-05", "c5");
     regressing.seed_callgrind("c5", 130.0);
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = regressing
-        .drive(&["analyze", "--mode", "tip", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
-    assert_eq!(regressions, 1, "the tip step up must flag: {report}");
+    let report = regressing.drive_json(&["analyze", "--mode", "tip"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(
+        parsed["regressions"], 1,
+        "the tip step up must flag: {report}"
+    );
     assert_eq!(parsed["mode"], "tip", "the override must win: {report}");
 
     let improving = Workspace::repo(&storage_only_config());
@@ -1416,22 +1269,12 @@ async fn analyze_tip_mode_flags_only_a_tip_regression() {
     improving.commit_dated("2024-01-05", "c5");
     improving.seed_callgrind("c5", 70.0);
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = improving
-        .drive(&["analyze", "--mode", "tip", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = improving.drive_json(&["analyze", "--mode", "tip"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
-        regressions, 0,
+        parsed["regressions"], 0,
         "tip mode reports regressions only, so a drop stays silent: {report}"
     );
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["improvements"], 0, "{report}");
 }
 
@@ -1521,22 +1364,14 @@ async fn analyze_branch_selects_official_line_from_a_feature_checkout() {
     workspace.commit_dated("2024-01-07", "f1");
     workspace.seed_dirty_callgrind("2024-01-07", "f1", 10.0);
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&["analyze", "--context", "master", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace
+        .drive_json(&["analyze", "--context", "master"])
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
-        regressions, 1,
+        parsed["regressions"], 1,
         "the master regression is selected, the feature snapshot ignored: {report}"
     );
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["findings"][0]["latest"], 130.0, "{report}");
 }
 
@@ -1575,17 +1410,7 @@ async fn analyze_official_line_follows_first_parent_across_a_merge() {
     workspace.seed_callgrind("sf1", 999.0);
     workspace.seed_callgrind("sf2", 999.0);
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
         parsed["runs"], 6,
@@ -1593,7 +1418,7 @@ async fn analyze_official_line_follows_first_parent_across_a_merge() {
          the side branch: {report}"
     );
     assert_eq!(
-        regressions, 1,
+        parsed["regressions"], 1,
         "the regression on the tip commit flags once the merge commit is on the line: {report}"
     );
     assert_eq!(parsed["findings"][0]["latest"], 130.0, "{report}");
@@ -1636,13 +1461,7 @@ async fn analyze_feature_that_merged_master_admits_dirty_off_chain_merge_base() 
     workspace.seed_callgrind("c2", 999.0);
     workspace.seed_callgrind("c3", 999.0);
 
-    let RunOutcome::Analyzed { report, .. } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     // Loaded: c1 clean, c1 dirty, f1 clean, f2 clean = 4. The dirty c1 being
     // counted proves the off-chain merge-base admitted it; c2/c3 being absent
@@ -1674,25 +1493,15 @@ async fn analyze_criterion_machine_keys_stay_isolated() {
     workspace.commit_dated("2024-02-04", "d4");
     workspace.seed_criterion("d4", "mk-flat", 20.0);
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&[
+    let report = workspace
+        .drive_json(&[
             "analyze",
             "--target-triple",
             "x86_64-pc-windows-msvc",
             "--machine-key",
             "all",
-            "--format",
-            "json",
         ])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     let sets = parsed["sets"].as_array().unwrap();
     assert_eq!(
@@ -1701,7 +1510,7 @@ async fn analyze_criterion_machine_keys_stay_isolated() {
         "the two machine keys form two comparable sets: {report}"
     );
     assert_eq!(
-        regressions, 1,
+        parsed["regressions"], 1,
         "only the rising machine regresses; the machines do not cross-compare: {report}"
     );
 }

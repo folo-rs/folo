@@ -36,10 +36,11 @@ use crate::{PruneOptions, RunError, RunOutcome};
 use super::ReportFormat;
 use super::{
     AutoFacets, DirtyTipPolicy, ResolvedHistory, Selection, WindowEdge, detect_auto_facets,
-    facet_filtered_candidates, parse_format, parse_since, parse_until, resolve_base_name,
-    resolve_facets, resolve_history, window_excludes,
+    facet_filtered_candidates, parse_since, parse_until, resolve_base_name, resolve_facets,
+    resolve_history, window_excludes,
 };
 use crate::model::DiscriminantSet;
+use crate::output::{OutputSelection, OutputWriter, TokioOutputWriter, emit};
 
 /// Which objects a prune pass deletes.
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -102,6 +103,7 @@ pub(crate) async fn execute(
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
     let auto = detect_auto_facets().await?;
 
+    let writer = TokioOutputWriter::new(workspace_dir.to_path_buf());
     prune_with(
         &git,
         &storage,
@@ -110,6 +112,7 @@ pub(crate) async fn execute(
         options,
         &auto,
         &reporter,
+        &writer,
     )
     .await
 }
@@ -117,7 +120,11 @@ pub(crate) async fn execute(
 /// Storage- and git-generic `prune`: resolve the selected commit topology, choose
 /// the objects to delete per the scope and filters, then either preview them
 /// (`--dry-run`) or delete them.
-pub(crate) async fn prune_with<G, S>(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "prune orchestration wires several injected ports alongside its options and facets"
+)]
+pub(crate) async fn prune_with<G, S, W>(
     git: &G,
     storage: &S,
     project_id: &str,
@@ -125,12 +132,18 @@ pub(crate) async fn prune_with<G, S>(
     options: &PruneOptions,
     auto: &AutoFacets,
     reporter: &dyn Reporter,
+    writer: &W,
 ) -> Result<RunOutcome, RunError>
 where
     G: GitHistory,
     S: Storage,
+    W: OutputWriter,
 {
-    let format = parse_format(options.format.as_deref())?;
+    let output = OutputSelection::resolve(
+        options.no_text,
+        options.markdown.as_deref(),
+        options.json.as_deref(),
+    )?;
     let since = parse_since(options.since.as_deref())?;
     let until = parse_until(options.until.as_deref())?;
     let scope = Scope::from_options(options)?;
@@ -321,7 +334,10 @@ where
         }
     }
 
-    let message = render_plan(&plan, format, options.dry_run);
+    let message = emit(&output, writer, reporter, |format| {
+        render_plan(&plan, format, options.dry_run)
+    })
+    .await?;
     Ok(RunOutcome::Completed { message })
 }
 
@@ -665,6 +681,9 @@ mod tests {
     use crate::report::RecordingReporter;
     use crate::storage::{MemoryStorage, Storage};
 
+    use crate::output::MemoryOutputWriter;
+    use std::path::PathBuf;
+
     use nonempty::nonempty;
 
     use super::*;
@@ -807,6 +826,12 @@ mod tests {
         git
     }
 
+    /// A throwaway in-memory output writer for prune tests that assert on the
+    /// returned text message rather than on written files.
+    fn writer() -> MemoryOutputWriter {
+        MemoryOutputWriter::new()
+    }
+
     /// Drives `prune_with` and unwraps the rendered message.
     fn prune(storage: &MemoryStorage, git: &FakeGitHistory, options: &PruneOptions) -> String {
         let outcome = block_on(prune_with(
@@ -817,12 +842,66 @@ mod tests {
             options,
             &auto(),
             &RecordingReporter::new(),
+            &writer(),
         ))
         .unwrap();
         match outcome {
             RunOutcome::Completed { message } => message,
             RunOutcome::Analyzed { .. } => panic!("prune returns a Completed outcome"),
         }
+    }
+
+    /// Drives `prune_with` requesting the JSON report into an in-memory writer and
+    /// returns the JSON text. The text report is suppressed so the JSON file is
+    /// the only rendered output.
+    fn prune_json(storage: &MemoryStorage, git: &FakeGitHistory, options: &PruneOptions) -> String {
+        let mut options = options.clone();
+        options.no_text = true;
+        options.markdown = None;
+        options.json = Some(PathBuf::from("report.json"));
+        let writer = MemoryOutputWriter::new();
+        block_on(prune_with(
+            git,
+            storage,
+            "folo",
+            &config(),
+            &options,
+            &auto(),
+            &RecordingReporter::new(),
+            &writer,
+        ))
+        .unwrap();
+        writer
+            .written(Path::new("report.json"))
+            .expect("the JSON report was written to the requested path")
+    }
+
+    /// Drives `prune_with` requesting the Markdown report into an in-memory writer
+    /// and returns the Markdown text.
+    fn prune_markdown(
+        storage: &MemoryStorage,
+        git: &FakeGitHistory,
+        options: &PruneOptions,
+    ) -> String {
+        let mut options = options.clone();
+        options.no_text = true;
+        options.json = None;
+        options.markdown = Some(PathBuf::from("report.md"));
+        let writer = MemoryOutputWriter::new();
+        block_on(prune_with(
+            git,
+            storage,
+            "folo",
+            &config(),
+            &options,
+            &auto(),
+            &RecordingReporter::new(),
+            &writer,
+        ))
+        .unwrap();
+        writer
+            .written(Path::new("report.md"))
+            .expect("the Markdown report was written to the requested path")
     }
 
     #[test]
@@ -839,6 +918,7 @@ mod tests {
             &dirty_options(),
             &auto(),
             &reporter,
+            &writer(),
         ))
         .unwrap();
         assert!(
@@ -863,11 +943,7 @@ mod tests {
         store(&storage, &dirty_key("f2", 300), &set("f2"));
         let git = feature_git();
 
-        let opts = PruneOptions {
-            format: Some("json".to_owned()),
-            ..dirty_options()
-        };
-        let report = prune(&storage, &git, &opts);
+        let report = prune_json(&storage, &git, &dirty_options());
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(
             parsed["totals"]["runs"], 2,
@@ -933,10 +1009,9 @@ mod tests {
             clean: true,
             dirty: true,
             commit: vec!["f1".to_owned()],
-            format: Some("json".to_owned()),
             ..PruneOptions::default()
         };
-        let report = prune(&storage, &git, &opts);
+        let report = prune_json(&storage, &git, &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["totals"]["runs"], 2, "clean + dirty: {report}");
         assert_eq!(parsed["totals"]["blessings"], 1, "{report}");
@@ -1022,6 +1097,7 @@ mod tests {
             &PruneOptions::default(),
             &auto(),
             &RecordingReporter::new(),
+            &writer(),
         ))
         .unwrap_err();
         match error {
@@ -1084,6 +1160,7 @@ mod tests {
             &opts,
             &auto(),
             &RecordingReporter::new(),
+            &writer(),
         ))
         .unwrap_err();
         match error {
@@ -1130,10 +1207,9 @@ mod tests {
         let before = keys(&storage);
         let opts = PruneOptions {
             dry_run: true,
-            format: Some("json".to_owned()),
             ..dirty_options()
         };
-        let report = prune(&storage, &git, &opts);
+        let report = prune_json(&storage, &git, &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["dry_run"], true);
         assert_eq!(parsed["totals"]["runs"], 1, "{report}");
@@ -1187,6 +1263,7 @@ mod tests {
             &dirty_options(),
             &auto(),
             &RecordingReporter::new(),
+            &writer(),
         ))
         .unwrap_err();
         match error {
@@ -1320,10 +1397,9 @@ mod tests {
 
         let opts = PruneOptions {
             dry_run: true,
-            format: Some("json".to_owned()),
             ..dirty_options()
         };
-        let report = prune(&storage, &git, &opts);
+        let report = prune_json(&storage, &git, &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         let commits = parsed["sets"][0]["commits"].as_array().unwrap();
         assert_eq!(commits[0]["commit"], "f1", "oldest first: {report}");
@@ -1339,10 +1415,9 @@ mod tests {
 
         let opts = PruneOptions {
             dry_run: true,
-            format: Some("markdown".to_owned()),
             ..dirty_options()
         };
-        let report = prune(&storage, &git, &opts);
+        let report = prune_markdown(&storage, &git, &opts);
         assert!(report.contains("# Prune plan for"), "{report}");
         assert!(report.contains("| Commit | Runs | Blessings |"), "{report}");
         assert!(report.contains("| f1 |"), "{report}");
@@ -1357,11 +1432,7 @@ mod tests {
         }
         let git = feature_git();
 
-        let opts = PruneOptions {
-            format: Some("markdown".to_owned()),
-            ..dirty_options()
-        };
-        let report = prune(&storage, &git, &opts);
+        let report = prune_markdown(&storage, &git, &dirty_options());
         assert!(report.contains("# Prune plan for"), "{report}");
         assert!(report.contains("No run matches the selection."), "{report}");
     }

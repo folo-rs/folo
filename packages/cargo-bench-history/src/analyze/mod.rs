@@ -41,6 +41,7 @@ use crate::git_history::{GitHistory, SystemGitHistory};
 use crate::machine::resolve_machine_key;
 use crate::model::BlessingRecord;
 use crate::model::{BenchmarkIdPrefix, DiscriminantSet, Engine, STORAGE_VERSION, sanitize_segment};
+use crate::output::{OutputSelection, OutputWriter, TokioOutputWriter, emit};
 use crate::probe::{EnvironmentProbe, SystemProbe};
 use crate::report::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, build_storage};
@@ -92,6 +93,9 @@ pub(crate) async fn execute(
     // the analysis shares the ambient Tokio worker threads rather than spawning its
     // own short-lived ones.
     let spawner = Spawner::new_tokio();
+    // Relative `--markdown`/`--json` paths resolve against the workspace directory
+    // (the working directory in production), the same base as `--config`.
+    let writer = TokioOutputWriter::new(workspace_dir.to_path_buf());
     analyze_with(
         &git,
         &storage,
@@ -102,6 +106,7 @@ pub(crate) async fn execute(
         now,
         &reporter,
         color,
+        &writer,
         &spawner,
     )
     .await
@@ -140,7 +145,7 @@ async fn detect_auto_facets() -> Result<AutoFacets, RunError> {
     clippy::too_many_arguments,
     reason = "analyze orchestration wires several injected ports plus the rendering color flag"
 )]
-pub(crate) async fn analyze_with<G, S>(
+pub(crate) async fn analyze_with<G, S, W>(
     git: &G,
     storage: &S,
     project_id: &str,
@@ -150,13 +155,19 @@ pub(crate) async fn analyze_with<G, S>(
     now: Timestamp,
     reporter: &dyn Reporter,
     color: bool,
+    writer: &W,
     spawner: &Spawner,
 ) -> Result<RunOutcome, RunError>
 where
     G: GitHistory,
     S: Storage + Clone + 'static,
+    W: OutputWriter,
 {
-    let format = parse_format(options.format.as_deref())?;
+    let output = OutputSelection::resolve(
+        options.no_text,
+        options.markdown.as_deref(),
+        options.json.as_deref(),
+    )?;
     let selection = Selection::from_analyze(options)?;
     let filter = SeriesFilter {
         prefixes: &options.prefixes,
@@ -248,7 +259,10 @@ where
         warning: warning.as_deref(),
     };
     let render_started = Instant::now();
-    let report = render(&input, format, color);
+    let report = emit(&output, writer, reporter, |format| {
+        render(&input, format, color)
+    })
+    .await?;
     reporter.timing("report render", render_started.elapsed());
 
     Ok(RunOutcome::Analyzed {
@@ -1469,16 +1483,6 @@ async fn resolve_base_name<G: GitHistory>(
     git.default_branch().await.map_err(RunError::Io)
 }
 
-/// Parses the `--format` option, defaulting to text.
-fn parse_format(name: Option<&str>) -> Result<ReportFormat, RunError> {
-    match name {
-        None => Ok(ReportFormat::Text),
-        Some(name) => ReportFormat::from_name(name).ok_or_else(|| RunError::Analyze {
-            message: format!("unknown report format {name:?}; expected text, json, or markdown"),
-        }),
-    }
-}
-
 /// A human-readable summary of the active facet filters, for `--verbose` notes.
 fn describe_facets(facets: &DiscriminantSetQuery) -> String {
     let parts = [
@@ -1697,8 +1701,11 @@ mod tests {
     use crate::git_history::FakeGitHistory;
     use crate::model::{BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, Metric, MetricKind};
     use crate::model::{EnvironmentInfo, GitInfo, Run, RunContext, ToolchainInfo};
+    use crate::output::MemoryOutputWriter;
     use crate::report::RecordingReporter;
     use crate::storage::{MemoryStorage, Storage};
+
+    use std::path::{Path, PathBuf};
 
     use nonempty::nonempty;
 
@@ -1909,6 +1916,53 @@ mod tests {
         cargo_bench_history_core::testing::synchronous_spawner()
     }
 
+    /// A throwaway in-memory output writer for tests that assert on the returned
+    /// text report (or on the verbose trail) rather than on written files.
+    fn writer() -> MemoryOutputWriter {
+        MemoryOutputWriter::new()
+    }
+
+    /// Runs `analyze_with` requesting the JSON report into an in-memory writer,
+    /// returning the JSON text, the regression count, and the recording reporter so
+    /// a test can assert on the machine-readable report and the verbose trail
+    /// together. The text report is suppressed, so the JSON is the only rendered
+    /// output.
+    fn analyze_json(
+        git: &FakeGitHistory,
+        storage: &MemoryStorage,
+        project: &str,
+        options: &AnalyzeOptions,
+    ) -> (String, usize, RecordingReporter) {
+        let mut options = options.clone();
+        options.no_text = true;
+        options.markdown = None;
+        options.json = Some(PathBuf::from("report.json"));
+        let reporter = RecordingReporter::new();
+        let writer = MemoryOutputWriter::new();
+        let outcome = block_on(analyze_with(
+            git,
+            storage,
+            project,
+            &config(),
+            &options,
+            &auto(),
+            now_anchor(),
+            &reporter,
+            false,
+            &writer,
+            &spawner(),
+        ))
+        .unwrap();
+        let regressions = match outcome {
+            RunOutcome::Analyzed { regressions, .. } => regressions,
+            RunOutcome::Completed { .. } => 0,
+        };
+        let report = writer
+            .written(Path::new("report.json"))
+            .expect("the JSON report was written to the requested path");
+        (report, regressions, reporter)
+    }
+
     #[test]
     fn auto_mode_uses_tip_topology_and_recorded_dirty_runs_not_repo_state() {
         // A base branch whose tip is its own merge-base with no dirty run recorded
@@ -2090,6 +2144,7 @@ mod tests {
             now_anchor(),
             &reporter,
             false,
+            &writer(),
             &spawner(),
         ))
         .unwrap();
@@ -2168,6 +2223,7 @@ mod tests {
         options: &AnalyzeOptions,
     ) -> (String, usize) {
         let reporter = RecordingReporter::new();
+        let writer = writer();
         let outcome = block_on(analyze_with(
             git,
             storage,
@@ -2178,6 +2234,7 @@ mod tests {
             now_anchor(),
             &reporter,
             false,
+            &writer,
             &spawner(),
         ))
         .unwrap();
@@ -2206,6 +2263,7 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
+            &writer(),
             &spawner(),
         ))
         .unwrap_err();
@@ -2241,17 +2299,14 @@ mod tests {
     fn json_notable_flag_reflects_whether_findings_survived() {
         // The `notable` signal appears only in the JSON report (the text report
         // keys off the finding list directly), so assert it there.
-        let mut json = options();
-        json.format = Some("json".to_owned());
-
         let storage = MemoryStorage::new();
         seed_linear_step(&storage);
-        let (report, regressions) = analyze(&linear6_git(), &storage, "folo", &json);
+        let (report, regressions, _) = analyze_json(&linear6_git(), &storage, "folo", &options());
         assert_eq!(regressions, 1);
         assert!(report.contains("\"notable\": true"), "{report}");
 
         let empty = MemoryStorage::new();
-        let (report, _) = analyze(&linear_git(), &empty, "folo", &json);
+        let (report, _, _) = analyze_json(&linear_git(), &empty, "folo", &options());
         assert!(report.contains("\"notable\": false"), "{report}");
     }
 
@@ -2282,6 +2337,7 @@ mod tests {
             now_anchor(),
             &reporter,
             false,
+            &writer(),
             &spawner(),
         ))
         .unwrap();
@@ -2305,6 +2361,7 @@ mod tests {
             now_anchor(),
             &reporter,
             false,
+            &writer(),
             &spawner(),
         ))
         .unwrap();
@@ -2343,6 +2400,7 @@ mod tests {
             now_anchor(),
             &reporter,
             false,
+            &writer(),
             &spawner(),
         ))
         .unwrap();
@@ -2384,6 +2442,7 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
+            &writer(),
             &spawner(),
         ))
         .unwrap_err()
@@ -2452,6 +2511,7 @@ mod tests {
             now_anchor(),
             &reporter,
             false,
+            &writer(),
             &spawner(),
         ))
         .unwrap();
@@ -2490,9 +2550,7 @@ mod tests {
         }
 
         let git = linear_git();
-        let mut options = options();
-        options.format = Some("json".to_owned());
-        let (report, _) = analyze(&git, &storage, "folo", &options);
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &options());
 
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         let sets = parsed["sets"].as_array().unwrap();
@@ -2556,11 +2614,7 @@ mod tests {
         store(&storage, &dirty_key("c3", 500), &ir_set(500, "c3", 999.0));
         let git = linear_git();
 
-        let opts = AnalyzeOptions {
-            format: Some("json".to_owned()),
-            ..options()
-        };
-        let (report, regressions) = analyze(&git, &storage, "folo", &opts);
+        let (report, regressions, _) = analyze_json(&git, &storage, "folo", &options());
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 3, "the dirty tip run is excluded");
         assert_eq!(regressions, 0);
@@ -2579,11 +2633,7 @@ mod tests {
         store(&storage, &dirty_key("f2", 3), &ir_set(3, "f2", 130.0));
         let git = feature_git();
 
-        let opts = AnalyzeOptions {
-            format: Some("json".to_owned()),
-            ..options()
-        };
-        let (report, regressions) = analyze(&git, &storage, "folo", &opts);
+        let (report, regressions, _) = analyze_json(&git, &storage, "folo", &options());
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 4, "the dirty f2 snapshot is admitted");
         assert_eq!(regressions, 1, "the admitted dirty f2 completes the step");
@@ -2600,10 +2650,9 @@ mod tests {
 
         let opts = AnalyzeOptions {
             no_dirty: true,
-            format: Some("json".to_owned()),
             ..options()
         };
-        let (report, _) = analyze(&git, &storage, "folo", &opts);
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 3, "--no-dirty drops the dirty snapshot");
     }
@@ -2619,11 +2668,7 @@ mod tests {
         store(&storage, &clean_key("f1"), &ir_set(2, "f1", 100.0));
         let git = feature_git();
 
-        let opts = AnalyzeOptions {
-            format: Some("json".to_owned()),
-            ..options()
-        };
-        let (report, _) = analyze(&git, &storage, "folo", &opts);
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &options());
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 3, "the base-side dirty c1 run is excluded");
     }
@@ -2639,27 +2684,7 @@ mod tests {
         store(&storage, &dirty_key("c3", 200), &ir_set(200, "c3", 130.0));
         let git = linear_git();
 
-        let opts = AnalyzeOptions {
-            format: Some("json".to_owned()),
-            ..options()
-        };
-        let reporter = RecordingReporter::new();
-        let outcome = block_on(analyze_with(
-            &git,
-            &storage,
-            "folo",
-            &config(),
-            &opts,
-            &auto(),
-            now_anchor(),
-            &reporter,
-            false,
-            &spawner(),
-        ))
-        .unwrap();
-        let RunOutcome::Analyzed { report, .. } = outcome else {
-            panic!("expected an analysis outcome");
-        };
+        let (report, _, reporter) = analyze_json(&git, &storage, "folo", &options());
 
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(
@@ -2704,32 +2729,7 @@ mod tests {
         let mut git = linear_git();
         git.mark_dirty();
 
-        let opts = AnalyzeOptions {
-            format: Some("json".to_owned()),
-            ..options()
-        };
-        let reporter = RecordingReporter::new();
-        let outcome = block_on(analyze_with(
-            &git,
-            &storage,
-            "folo",
-            &config(),
-            &opts,
-            &auto(),
-            now_anchor(),
-            &reporter,
-            false,
-            &spawner(),
-        ))
-        .unwrap();
-        let RunOutcome::Analyzed {
-            report,
-            regressions,
-            ..
-        } = outcome
-        else {
-            panic!("expected an analysis outcome");
-        };
+        let (report, regressions, reporter) = analyze_json(&git, &storage, "folo", &options());
 
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 5, "both dirty tip snapshots are admitted");
@@ -2763,11 +2763,7 @@ mod tests {
         store(&storage, &dirty_key("c3", 300), &ir_set(300, "c3", 999.0));
         let git = linear_git(); // Clean working tree (the default).
 
-        let opts = AnalyzeOptions {
-            format: Some("json".to_owned()),
-            ..options()
-        };
-        let (report, _) = analyze(&git, &storage, "folo", &opts);
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &options());
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 3, "the dirty tip run stays excluded");
         assert!(
@@ -2789,32 +2785,7 @@ mod tests {
         let mut git = linear6_git();
         git.mark_dirty();
 
-        let opts = AnalyzeOptions {
-            format: Some("json".to_owned()),
-            ..options()
-        };
-        let reporter = RecordingReporter::new();
-        let outcome = block_on(analyze_with(
-            &git,
-            &storage,
-            "folo",
-            &config(),
-            &opts,
-            &auto(),
-            now_anchor(),
-            &reporter,
-            false,
-            &spawner(),
-        ))
-        .unwrap();
-        let RunOutcome::Analyzed {
-            report,
-            regressions,
-            ..
-        } = outcome
-        else {
-            panic!("expected an analysis outcome");
-        };
+        let (report, regressions, reporter) = analyze_json(&git, &storage, "folo", &options());
 
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(
@@ -2857,10 +2828,9 @@ mod tests {
 
         let opts = AnalyzeOptions {
             no_dirty: true,
-            format: Some("json".to_owned()),
             ..options()
         };
-        let (report, _) = analyze(&git, &storage, "folo", &opts);
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 3, "--no-dirty drops the dirty tip snapshot");
         assert!(parsed["warning"].is_null(), "no warning under --no-dirty");
@@ -2886,27 +2856,7 @@ mod tests {
         let mut git = linear_git();
         git.mark_dirty();
 
-        let opts = AnalyzeOptions {
-            format: Some("json".to_owned()),
-            ..options()
-        };
-        let reporter = RecordingReporter::new();
-        let outcome = block_on(analyze_with(
-            &git,
-            &storage,
-            "folo",
-            &config(),
-            &opts,
-            &auto(),
-            now_anchor(),
-            &reporter,
-            false,
-            &spawner(),
-        ))
-        .unwrap();
-        let RunOutcome::Analyzed { report, .. } = outcome else {
-            panic!("expected an analysis outcome");
-        };
+        let (report, _, reporter) = analyze_json(&git, &storage, "folo", &options());
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(
             parsed["runs"], 5,
@@ -2935,11 +2885,7 @@ mod tests {
         store(&storage, &clean_key("f1"), &ir_set(4, "f1", 100.0));
         let git = feature_git();
 
-        let opts = AnalyzeOptions {
-            format: Some("json".to_owned()),
-            ..options()
-        };
-        let (report, _) = analyze(&git, &storage, "folo", &opts);
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &options());
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 3, "c2 and c3 are off the feature mainline");
     }
@@ -2965,10 +2911,9 @@ mod tests {
 
         let opts = AnalyzeOptions {
             context: Some("master".to_owned()),
-            format: Some("json".to_owned()),
             ..options()
         };
-        let (report, regressions) = analyze(&git, &storage, "folo", &opts);
+        let (report, regressions, _) = analyze_json(&git, &storage, "folo", &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 6, "master's six commits");
         assert_eq!(regressions, 1);
@@ -2988,11 +2933,7 @@ mod tests {
         store(&storage, &dirty_key("f2", 5), &ir_set(5, "f2", 130.0));
         let git = feature_git();
 
-        let opts = AnalyzeOptions {
-            format: Some("json".to_owned()),
-            ..options()
-        };
-        let (_, regressions) = analyze(&git, &storage, "folo", &opts);
+        let (_, regressions, _) = analyze_json(&git, &storage, "folo", &options());
         assert_eq!(regressions, 1, "the dirty f2 values are the latest points");
     }
 
@@ -3011,10 +2952,9 @@ mod tests {
 
         let opts = AnalyzeOptions {
             target_triple: vec!["x86_64-pc-windows-msvc".to_owned()],
-            format: Some("json".to_owned()),
             ..options()
         };
-        let (report, _) = analyze(&git, &storage, "folo", &opts);
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 1, "only the windows set is loaded");
         assert_eq!(parsed["sets"].as_array().unwrap().len(), 1, "{report}");
@@ -3038,10 +2978,9 @@ mod tests {
 
         let opts = AnalyzeOptions {
             target_triple: vec!["x86_64-unknown-linux-gnu".to_owned()],
-            format: Some("json".to_owned()),
             ..options()
         };
-        let (report, _) = analyze(&git, &storage, "folo", &opts);
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 1, "only the linux-gnu triple is loaded");
         assert_eq!(parsed["sets"].as_array().unwrap().len(), 1, "{report}");
@@ -3062,11 +3001,7 @@ mod tests {
         );
         let git = linear_git();
 
-        let opts = AnalyzeOptions {
-            format: Some("json".to_owned()),
-            ..options()
-        };
-        let (report, _) = analyze(&git, &storage, "folo", &opts);
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &options());
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["sets"].as_array().unwrap().len(), 2, "{report}");
     }
@@ -3086,10 +3021,9 @@ mod tests {
 
         let opts = AnalyzeOptions {
             engine: vec!["callgrind".to_owned()],
-            format: Some("json".to_owned()),
             ..options()
         };
-        let (report, _) = analyze(&git, &storage, "folo", &opts);
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 1, "only the callgrind object is loaded");
     }
@@ -3111,10 +3045,9 @@ mod tests {
 
         let opts = AnalyzeOptions {
             since: Some("1970-01-01T00:00:02Z".to_owned()),
-            format: Some("json".to_owned()),
             ..options()
         };
-        let (report, _) = analyze(&git, &storage, "folo", &opts);
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 2, "only c2 and c3 are within the window");
     }
@@ -3136,10 +3069,9 @@ mod tests {
 
         let opts = AnalyzeOptions {
             until: Some("1970-01-01T00:00:01Z".to_owned()),
-            format: Some("json".to_owned()),
             ..options()
         };
-        let (report, _) = analyze(&git, &storage, "folo", &opts);
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 2, "only c0 and c1 are within the window");
     }
@@ -3161,11 +3093,7 @@ mod tests {
             .commit("c5", Some("c4"))
             .branch("master", "c5")
             .head("master"); // No `.mark_default(...)`.
-        let opts = AnalyzeOptions {
-            format: Some("json".to_owned()),
-            ..options()
-        };
-        let (report, _) = analyze(&git, &storage, "folo", &opts);
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &options());
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(
             parsed["runs"], 6,
@@ -3219,6 +3147,7 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
+            &writer(),
             &spawner(),
         ))
         .unwrap();
@@ -3231,11 +3160,7 @@ mod tests {
         store(&storage, &clean_key("c0"), &ir_set(0, "c0", 10.0));
         let git = linear_git();
 
-        let opts = AnalyzeOptions {
-            format: Some("json".to_owned()),
-            ..options()
-        };
-        let (report, _) = analyze(&git, &storage, "folo", &opts);
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &options());
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["project"], "folo");
         assert_eq!(parsed["runs"], 1);
@@ -3269,6 +3194,7 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
+            &writer(),
             &spawner(),
         ))
         .unwrap_err();
@@ -3291,6 +3217,7 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
+            &writer(),
             &spawner(),
         ))
         .unwrap_err();
@@ -3298,11 +3225,13 @@ mod tests {
     }
 
     #[test]
-    fn unknown_format_is_rejected() {
+    fn no_output_selected_is_rejected() {
+        // Suppressing the text report without requesting any file output leaves
+        // nothing to produce, which is a usage error rather than a silent no-op.
         let storage = MemoryStorage::new();
         let git = linear_git();
         let opts = AnalyzeOptions {
-            format: Some("yaml".to_owned()),
+            no_text: true,
             ..options()
         };
         let error = block_on(analyze_with(
@@ -3315,10 +3244,12 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
+            &writer(),
             &spawner(),
         ))
         .unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
+        assert!(error.to_string().contains("no output selected"), "{error}");
     }
 
     #[test]
@@ -3339,6 +3270,7 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
+            &writer(),
             &spawner(),
         ))
         .unwrap_err();
@@ -3364,6 +3296,7 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
+            &writer(),
             &spawner(),
         ))
         .unwrap_err();
@@ -3392,10 +3325,12 @@ mod tests {
         let config = parse_config("[project]\ndefault_branch = \"master\"\n").unwrap();
 
         let opts = AnalyzeOptions {
-            format: Some("json".to_owned()),
+            no_text: true,
+            json: Some(PathBuf::from("report.json")),
             ..options()
         };
-        let outcome = block_on(analyze_with(
+        let writer = writer();
+        block_on(analyze_with(
             &git,
             &storage,
             "folo",
@@ -3405,12 +3340,13 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
+            &writer,
             &spawner(),
         ))
         .unwrap();
-        let RunOutcome::Analyzed { report, .. } = outcome else {
-            panic!("expected an analyzed outcome");
-        };
+        let report = writer
+            .written(Path::new("report.json"))
+            .expect("the JSON report was written");
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         // c1's dirty run is base-side (excluded); c0, c1 clean and f1 clean load.
         assert_eq!(

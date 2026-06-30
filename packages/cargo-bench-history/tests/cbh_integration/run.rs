@@ -475,13 +475,7 @@ async fn run_then_analyze_round_trips_a_sanitizing_project_id() {
     );
 
     // The reader must sanitize the same way; otherwise it lists an empty history.
-    let RunOutcome::Analyzed { report, .. } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
         parsed["runs"], 1,
@@ -530,13 +524,9 @@ async fn run_then_analyze_preserves_unusual_identity_characters() {
 
     // The reader reconstructs the series, proving the unusual identity is a stable
     // series key end to end.
-    let RunOutcome::Analyzed { report, .. } = workspace
-        .drive(&["analyze", "--machine-key", "pool", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace
+        .drive_json(&["analyze", "--machine-key", "pool"])
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["runs"], 1, "{report}");
     assert_eq!(parsed["series"], 1, "{report}");

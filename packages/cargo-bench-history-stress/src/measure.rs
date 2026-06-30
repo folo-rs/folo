@@ -27,6 +27,12 @@ use crate::scenario::{BRANCH_FEATURE, BRANCH_MAIN};
 /// history-mode analysis (whose default look-back is only six months).
 const FULL_HISTORY_SINCE: &str = "2000-01-01";
 
+/// Where each analysis writes its JSON report inside the seeded workspace. The
+/// harness reads the structured counts back from this file (text output is
+/// suppressed); a relative path resolves against the workspace directory, and
+/// each attempt overwrites the previous one in place.
+const ANALYZE_REPORT_FILE: &str = "stress-analyze-report.json";
+
 /// The timed result of analyzing one mode.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct MeasureResult {
@@ -99,6 +105,14 @@ pub(crate) async fn measure(
     // saturates the cores it asked for. A fresh in-process session per attempt
     // (no stdout table, no JSON file) holds exactly that attempt's one span; the
     // harness renders the result itself and the tests stay free of target files.
+    //
+    // The measured span is the full production `run_with_overrides`, which writes
+    // the JSON report to the workspace as part of producing it. That write stays
+    // inside the span deliberately — it is the production output path being
+    // measured — and is a fixed, sub-percent cost: the lean report is bounded by
+    // the finding count, not the history size. The structured counts are read
+    // back from that file only after the span closes, so the read never distorts
+    // the timing.
     let cores = thread::available_parallelism().map_or(1, NonZero::get);
 
     let mut best: Option<(Duration, Duration)> = None;
@@ -115,9 +129,11 @@ pub(crate) async fn measure(
         drop(span);
         let elapsed = started.elapsed();
         let attempt_cpu = recorded_cpu(&session);
-        let RunOutcome::Analyzed { report, .. } = outcome else {
+        if !matches!(outcome, RunOutcome::Analyzed { .. }) {
             return Err(fail("analyze did not return an Analyzed outcome"));
-        };
+        }
+        let report = std::fs::read_to_string(workspace.join(ANALYZE_REPORT_FILE))
+            .map_err(|error| fail(format!("failed to read the analyze report: {error}")))?;
         let parsed: ReportCounts = serde_json::from_str(&report)
             .map_err(|error| fail(format!("failed to parse the analyze report: {error}")))?;
 
@@ -230,7 +246,9 @@ fn build_options(
         target_triple: vec!["all".to_owned()],
         machine_key: vec!["all".to_owned()],
         prefixes: Vec::new(),
-        format: Some("json".to_owned()),
+        no_text: true,
+        markdown: None,
+        json: Some(PathBuf::from(ANALYZE_REPORT_FILE)),
         mode: Some(mode.keyword().to_owned()),
         include_improvements: true,
         include_inactive: false,

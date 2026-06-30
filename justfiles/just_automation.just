@@ -19,8 +19,8 @@ gh-collect-bench-history:
 # Markdown report) and bench-history-notable.txt (`true`/`false`, the JSON `notable`
 # flag). Findings never fail the recipe (the tool always exits 0); the workflow files a
 # rolling issue when notable. `auto` mode on a clean `main` checkout resolves to
-# long-range history-trend detection. The double analyze run (markdown + json) collapses
-# to one pass once per-format toggles land (folo-rs/folo#285).
+# long-range history-trend detection. A single analyze pass emits both the Markdown and
+# JSON reports via the per-format output toggles (`--no-text --markdown --json`).
 [group('automation')]
 [script]
 gh-analyze-bench-history:
@@ -28,13 +28,14 @@ gh-analyze-bench-history:
     $PSNativeCommandUseErrorActionPreference = $true
 
     $reportPath = Join-Path (Get-Location) "bench-history-report.md"
+    $jsonPath = Join-Path (Get-Location) "bench-history-report.json"
     $notablePath = Join-Path (Get-Location) "bench-history-notable.txt"
     $common = @('--engine', 'all', '--target-triple', 'all', '--machine-key', 'all')
 
-    Write-Verbose "Rendering Markdown regression report to $reportPath." -Verbose
-    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- analyze @common --format markdown | Set-Content -Path $reportPath -Encoding utf8
+    Write-Verbose "Analyzing benchmark history in a single pass; writing Markdown to $reportPath and JSON to $jsonPath." -Verbose
+    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- analyze @common --no-text --markdown $reportPath --json $jsonPath
     Write-Verbose "Computing the notable flag from the JSON report." -Verbose
-    $json = cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- analyze @common --format json | ConvertFrom-Json
+    $json = Get-Content -Path $jsonPath -Raw | ConvertFrom-Json
     $notable = if ($json.notable) { 'true' } else { 'false' }
     Set-Content -Path $notablePath -Value $notable -Encoding utf8
     Write-Verbose "Analysis complete: notable=$notable (report at $reportPath)." -Verbose

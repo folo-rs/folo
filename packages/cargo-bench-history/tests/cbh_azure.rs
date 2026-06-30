@@ -405,6 +405,21 @@ impl AzureWorkspace {
         )
         .await
     }
+
+    /// Drives `analyze` requesting the JSON report into a file and returns its contents.
+    async fn drive_json(&self, args: &[&str]) -> String {
+        static OUTPUT_SEQ: AtomicU64 = AtomicU64::new(0);
+
+        let name = format!(
+            "cbh-azure-report-{}.json",
+            OUTPUT_SEQ.fetch_add(1, Ordering::Relaxed)
+        );
+        let mut full = args.to_vec();
+        full.extend_from_slice(&["--no-text", "--json", &name]);
+        self.drive(&full).await.unwrap();
+        std::fs::read_to_string(self.dir.path().join(&name))
+            .expect("the JSON report was written to the requested path")
+    }
 }
 
 /// Scenario: a single `run` stores one harvested result set.
@@ -429,24 +444,12 @@ async fn scenario_run_then_analyze(config: &str) {
     workspace.commit("second");
     workspace.drive(&["run"]).await.unwrap();
 
-    let outcome = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap();
-    let RunOutcome::Analyzed {
-        report,
-        regressions,
-        ..
-    } = outcome
-    else {
-        panic!("expected an analyzed outcome, got {outcome:?}");
-    };
+    let report = workspace.drive_json(&["analyze"]).await;
 
     // The report parsing proves `analyze` listed and fetched both stored objects.
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["project"], "azureproj");
     // A flat two-point series is not a regression.
-    assert_eq!(regressions, 0);
     assert_eq!(parsed["regressions"], 0);
 }
 
@@ -472,13 +475,7 @@ async fn scenario_feature_and_dirty(config: &str) {
 
     // The feature view admits the dirty snapshot on the target-side commit, so all
     // four stored objects are loaded from the backend.
-    let RunOutcome::Analyzed { report, .. } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
         parsed["runs"], 4,
@@ -494,21 +491,9 @@ async fn scenario_feature_and_dirty(config: &str) {
     // off the data, not the on-disk tree. `--since 2020-01-01` is a generous lower
     // bound that keeps the freshly-committed runs inside the window history mode
     // would otherwise default to (six months back).
-    let RunOutcome::Analyzed { report, .. } = workspace
-        .drive(&[
-            "analyze",
-            "--context",
-            "master",
-            "--since",
-            "2020-01-01",
-            "--format",
-            "json",
-        ])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace
+        .drive_json(&["analyze", "--context", "master", "--since", "2020-01-01"])
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
         parsed["mode"], "history",

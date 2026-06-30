@@ -11,14 +11,12 @@ async fn analyze_does_not_reflag_a_blessed_regression() {
     workspace.seed_rising_callgrind_history();
 
     // Before blessing, the sustained upward step is a regression.
-    let RunOutcome::Analyzed { regressions, .. } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
-    assert_eq!(regressions, 1, "the rising history should flag once");
+    let report = workspace.drive_json(&["analyze"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(
+        parsed["regressions"], 1,
+        "the rising history should flag once"
+    );
 
     // Accept the current level at the base-branch tip.
     let RunOutcome::Completed { message } =
@@ -29,22 +27,12 @@ async fn analyze_does_not_reflag_a_blessed_regression() {
     assert!(message.contains("Blessed"), "{message}");
 
     // The same data is no longer flagged: the blessing re-baselined the series.
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace.drive_json(&["analyze"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
-        regressions, 0,
+        parsed["regressions"], 0,
         "a blessed regression must not be re-flagged: {report}"
     );
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["notable"], false, "{report}");
     assert!(
         parsed["findings"].as_array().is_some_and(Vec::is_empty),
@@ -74,14 +62,12 @@ async fn bless_on_a_dirty_base_branch_warns_but_succeeds() {
     assert!(message.contains("Blessed"), "{message}");
 
     // The blessing still took effect: the same data is no longer flagged.
-    let RunOutcome::Analyzed { regressions, .. } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
-    assert_eq!(regressions, 0, "the dirty-tree blessing must still apply");
+    let report = workspace.drive_json(&["analyze"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(
+        parsed["regressions"], 0,
+        "the dirty-tree blessing must still apply"
+    );
 }
 
 /// `list blessings` reports the sidecar a `bless` just recorded at the current
@@ -95,13 +81,7 @@ async fn list_blessings_reports_the_blessing_recorded_at_head() {
 
     workspace.drive(&["bless", "nm/nm::observe"]).await.unwrap();
 
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "blessings", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace.drive_json(&["list", "blessings"]).await;
     let short_head = head.get(..12).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(parsed["scope"], "head", "{message}");
@@ -134,15 +114,10 @@ async fn unbless_restores_a_previously_blessed_regression() {
     workspace.drive(&["bless", "nm/nm::observe"]).await.unwrap();
 
     // The blessing currently suppresses the regression.
-    let RunOutcome::Analyzed { regressions, .. } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace.drive_json(&["analyze"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
-        regressions, 0,
+        parsed["regressions"], 0,
         "the blessing should suppress the regression"
     );
 
@@ -152,19 +127,10 @@ async fn unbless_restores_a_previously_blessed_regression() {
     };
     assert!(message.contains("Removed"), "{message}");
 
-    let RunOutcome::Analyzed {
-        regressions,
-        report,
-        ..
-    } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace.drive_json(&["analyze"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
-        regressions, 1,
+        parsed["regressions"], 1,
         "the regression returns once the blessing is revoked: {report}"
     );
 }
@@ -227,13 +193,7 @@ async fn analyze_include_inactive_surfaces_a_recovered_spike() {
     workspace.seed_callgrind("c10", 10.0);
 
     // By default, a fully recovered spike is not reported.
-    let RunOutcome::Analyzed { report, .. } = workspace
-        .drive(&["analyze", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["mode"], "history", "{report}");
     assert!(
@@ -242,13 +202,9 @@ async fn analyze_include_inactive_surfaces_a_recovered_spike() {
     );
 
     // Opting in surfaces it as an inactive finding.
-    let RunOutcome::Analyzed { report, .. } = workspace
-        .drive(&["analyze", "--format", "json", "--include-inactive"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected an analyzed outcome");
-    };
+    let report = workspace
+        .drive_json(&["analyze", "--include-inactive"])
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     let finding = &parsed["findings"][0];
     assert_eq!(finding["direction"], "regression", "{report}");

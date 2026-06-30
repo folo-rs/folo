@@ -234,6 +234,31 @@ struct TimelineArgs {
     until: Option<String>,
 }
 
+/// Per-format report output shared by `analyze`/`list`/`prune`.
+///
+/// The text report prints to standard output by default; `--no-text` suppresses
+/// it, while `--markdown` and `--json` each write that format to a file. A single
+/// analysis pass backs every requested format. At least one output must remain
+/// selected, so `--no-text` requires at least one of `--markdown`/`--json`.
+#[derive(Args, Debug)]
+#[command(next_help_heading = HEADING_OUTPUT)]
+struct OutputArgs {
+    /// Suppress the text report on standard output. Pair with `--markdown` and/or
+    /// `--json` to direct the report to files instead.
+    #[arg(long)]
+    no_text: bool,
+
+    /// Also write the Markdown report to this path (a relative path resolves
+    /// against the working directory).
+    #[arg(long, value_name = "PATH")]
+    markdown: Option<PathBuf>,
+
+    /// Also write the JSON report to this path (a relative path resolves against
+    /// the working directory).
+    #[arg(long, value_name = "PATH")]
+    json: Option<PathBuf>,
+}
+
 /// Run the workspace benchmarks (`cargo bench`) and store the results.
 #[derive(Args, Debug)]
 struct RunCommand {
@@ -347,9 +372,8 @@ struct AnalyzeCommand {
     #[command(flatten)]
     env: EnvArgs,
 
-    /// Output format: text, json, or markdown (default: text).
-    #[arg(long, value_name = "FORMAT", help_heading = HEADING_OUTPUT)]
-    format: Option<String>,
+    #[command(flatten)]
+    output: OutputArgs,
 
     #[command(flatten)]
     facets: QueryFacetArgs,
@@ -399,7 +423,9 @@ impl AnalyzeCommand {
             target_triple: self.facets.target_triple,
             machine_key: self.facets.machine_key,
             prefixes: self.prefixes,
-            format: self.format,
+            no_text: self.output.no_text,
+            markdown: self.output.markdown,
+            json: self.output.json,
             mode: self.mode,
             include_improvements: self.include_improvements,
             include_inactive: self.include_inactive,
@@ -443,9 +469,8 @@ struct ListCommand {
     #[command(flatten)]
     env: EnvArgs,
 
-    /// Output format: text, json, or markdown (default: text).
-    #[arg(long, value_name = "FORMAT", help_heading = HEADING_OUTPUT)]
-    format: Option<String>,
+    #[command(flatten)]
+    output: OutputArgs,
 
     #[command(flatten)]
     facets: QueryFacetArgs,
@@ -479,7 +504,9 @@ impl ListCommand {
             engine: self.facets.engine,
             target_triple: self.facets.target_triple,
             machine_key: self.facets.machine_key,
-            format: self.format,
+            no_text: self.output.no_text,
+            markdown: self.output.markdown,
+            json: self.output.json,
             all: self.all,
             verbose: self.env.verbose,
         }
@@ -516,9 +543,8 @@ struct PruneCommand {
     #[arg(long, help_heading = HEADING_ENV)]
     prune_base: bool,
 
-    /// Output format: text, json, or markdown (default: text).
-    #[arg(long, value_name = "FORMAT", help_heading = HEADING_OUTPUT)]
-    format: Option<String>,
+    #[command(flatten)]
+    output: OutputArgs,
 
     #[command(flatten)]
     facets: QueryFacetArgs,
@@ -586,7 +612,9 @@ impl PruneCommand {
             dirty,
             prune_base: self.prune_base,
             dry_run: self.dry_run,
-            format: self.format,
+            no_text: self.output.no_text,
+            markdown: self.output.markdown,
+            json: self.output.json,
             verbose: self.env.verbose,
         }
     }
@@ -1158,6 +1186,33 @@ mod tests {
     }
 
     #[test]
+    fn analyze_output_defaults_to_text_only() {
+        let Command::Analyze(options) = parse(&["analyze"]) else {
+            panic!("expected analyze command");
+        };
+        assert!(!options.no_text);
+        assert!(options.markdown.is_none());
+        assert!(options.json.is_none());
+    }
+
+    #[test]
+    fn analyze_collects_output_toggles() {
+        let Command::Analyze(options) = parse(&[
+            "analyze",
+            "--no-text",
+            "--markdown",
+            "out/report.md",
+            "--json",
+            "out/report.json",
+        ]) else {
+            panic!("expected analyze command");
+        };
+        assert!(options.no_text);
+        assert_eq!(options.markdown, Some(PathBuf::from("out/report.md")));
+        assert_eq!(options.json, Some(PathBuf::from("out/report.json")));
+    }
+
+    #[test]
     fn analyze_parses_include_inactive_switch() {
         let Command::Analyze(options) = parse(&["analyze", "--include-inactive"]) else {
             panic!("expected analyze command");
@@ -1202,8 +1257,11 @@ mod tests {
             "x86_64-unknown-linux-gnu",
             "--machine-key",
             "ci-pool",
-            "--format",
-            "json",
+            "--no-text",
+            "--markdown",
+            "list.md",
+            "--json",
+            "list.json",
             "--verbose",
         ]);
         let Command::List(options) = command else {
@@ -1220,7 +1278,9 @@ mod tests {
             vec!["x86_64-unknown-linux-gnu".to_owned()]
         );
         assert_eq!(options.machine_key, vec!["ci-pool".to_owned()]);
-        assert_eq!(options.format.as_deref(), Some("json"));
+        assert!(options.no_text);
+        assert_eq!(options.markdown, Some(PathBuf::from("list.md")));
+        assert_eq!(options.json, Some(PathBuf::from("list.json")));
         assert!(options.verbose);
     }
 
@@ -1350,8 +1410,9 @@ mod tests {
             "ci-pool",
             "--dirty",
             "--dry-run",
-            "--format",
-            "json",
+            "--no-text",
+            "--json",
+            "prune.json",
             "--verbose",
         ]);
         let Command::Prune(options) = command else {
@@ -1375,7 +1436,8 @@ mod tests {
         assert!(options.dirty);
         assert!(!options.clean);
         assert!(options.dry_run);
-        assert_eq!(options.format.as_deref(), Some("json"));
+        assert!(options.no_text);
+        assert_eq!(options.json, Some(PathBuf::from("prune.json")));
         assert!(options.verbose);
     }
 

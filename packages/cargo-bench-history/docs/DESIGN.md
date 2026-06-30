@@ -542,7 +542,9 @@ rather than one flat list:
 
 * **Environment and execution** — `--config`, `--repo`, `--verbose`, `--dry-run`
   (on `prune`), and `--help`.
-* **Output** — `--format` (text / json / markdown), on the reporting commands.
+* **Output** — `--no-text` / `--markdown <path>` / `--json <path>`, on the
+  reporting commands (text on stdout by default; the two file toggles add
+  Markdown / JSON files; all rendered from one analysis pass).
 * **Benchmark scope** — `--workspace`, `--package`/`-p`, `--exclude`, `--bench`,
   on the executing commands.
 * **Feature selection** — `--features`, `--all-features`, `--no-default-features`,
@@ -738,7 +740,13 @@ order, runs the finding algorithms (§9), and prints a report.
   (§8.7). Omitting them analyzes every benchmark. There is no `--metric` filter:
   metrics are an internal detail users are not expected to know; scope by benchmark
   prefix instead.
-* `--format text|json|markdown`.
+* **Output toggles** select which renderings a single analysis pass emits. The
+  text report goes to **stdout by default**; `--no-text` suppresses it,
+  `--markdown <path>` also writes the Markdown report to a file, and `--json
+  <path>` also writes the JSON report. The toggles compose — one pass can emit
+  all three — and relative file paths resolve against the workspace directory.
+  Requesting no output at all (`--no-text` with neither file) is an error, since
+  the pass would produce nothing.
 * **Findings never affect the exit code.** The process exits non-zero only when the
   analysis fails to *run* (no repo, storage error, …); a finding is advisory. The
   machine-readable signal lives in the `json` report (§9.6): `mode`, the boolean
@@ -832,7 +840,7 @@ cargo bench-history list <runs|discriminants|blessings> [--all] \
     [--repo PATH] [--context REF] [--base REF] \
     [--engine NAME …] [--target-triple TRIPLE …] [--machine-key KEY …] \
     [--no-dirty] [--since DATE] [--until DATE] \
-    [--format text|json|markdown] [--verbose] [--config PATH]
+    [--no-text] [--markdown PATH] [--json PATH] [--verbose] [--config PATH]
 ```
 
 `list` requires a **subject** — `runs`, `discriminants`, or `blessings`; a bare
@@ -879,7 +887,7 @@ cargo bench-history prune (--clean | --dirty | --all) [<commit> …] \
     [--repo PATH] [--context REF] [--base REF] \
     [--engine NAME …] [--target-triple TRIPLE …] [--machine-key KEY …] \
     [--since DATE] [--until DATE] \
-    [--format text|json|markdown] [--verbose] [--config PATH]
+    [--no-text] [--markdown PATH] [--json PATH] [--verbose] [--config PATH]
 ```
 
 **Deletion scope is required.** The user must say which kinds of run to delete:
@@ -1780,7 +1788,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      headings and the command surface is wide enough that an ungrouped flat help
      list is hard to navigate. Flags are organised into functional groups via clap
      `help_heading`s — **Environment and execution** (`--config`/`--repo`/`--verbose`/
-     `--dry-run`), **Output** (`--format`), **Benchmark scope** (`--workspace`/
+     `--dry-run`), **Output** (`--no-text`/`--markdown`/`--json`), **Benchmark scope** (`--workspace`/
      `--package`/`--exclude`/`--bench`), **Feature selection** (`--features`/
      `--all-features`/`--no-default-features`), **Discriminant selection**
      (`--engine`/`--target-triple`/
@@ -1997,3 +2005,24 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      (e.g. the blessing `blessed_at`, which still calls a `short_commit` render helper on the
      full SHA) is a separate, deferred concern — display abbreviation is questionable but not a
      priority, so it is left as-is for now.
+
+38. **Composable per-format output toggles (single pass)** — *Decided:* the reporting
+     commands (`analyze`/`list`/`prune`) replace the single mutually-exclusive
+     `--format text|json|markdown` selector with **composable output toggles** rendered
+     from **one** analysis pass: the text report goes to stdout by default, `--no-text`
+     suppresses it, `--markdown <path>` also writes the Markdown report to a file, and
+     `--json <path>` also writes the JSON report. One invocation can therefore emit every
+     format at once (the automation that wanted both a Markdown report *and* the JSON
+     `notable` flag previously paid for two full analysis passes; it now runs one). The
+     toggles share a flattened `Output` clap group so the three commands stay in selection
+     lockstep, and an `OutputSelection` validates the request up front — `--no-text` with
+     neither file selected is an error (`RunError::Analyze`, "no output selected"), caught
+     before any storage/git work. File writes go through an injected `OutputWriter` IO-port
+     (mirroring the `ConfigWriter` port used by `install`): the real `TokioOutputWriter`
+     rebases relative paths against the workspace directory, creates parent directories, and
+     truncate-overwrites; a `MemoryOutputWriter` fake keeps the orchestrators Miri-drivable
+     in unit tests. The `RunOutcome` text string is unchanged — it is the stdout text, empty
+     when `--no-text`, and `main.rs` skips printing an empty string. *(Breaking change:
+     `--format` is removed entirely; JSON and Markdown reports now go to files rather than
+     stdout. Decision 35 still holds — the three renderings carry the same data — but they
+     are now selected independently rather than one-at-a-time.)*

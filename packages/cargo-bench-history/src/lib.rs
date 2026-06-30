@@ -275,6 +275,7 @@ mod git_history;
 mod host;
 mod machine;
 mod outcome;
+mod output;
 mod probe;
 mod process;
 mod report;

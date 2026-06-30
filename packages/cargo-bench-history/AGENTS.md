@@ -65,7 +65,9 @@ arg structs so a group looks identical everywhere it appears (and so analyze/lis
 prune stay in selection lockstep automatically — see those sections):
 
 * **Environment & execution** — `--config`, `--repo`, `--verbose`.
-* **Output** — `--format`.
+* **Output** (reporting commands) — `--no-text` / `--markdown <path>` /
+  `--json <path>`. Text on stdout by default; the file toggles compose and one
+  analysis pass renders every requested format. See `src/output.rs`.
 * **Benchmark scope** (`run`/`backfill`) — `--workspace`, `--package`/`-p`,
   `--exclude` (drops packages from a whole-workspace run; conflicts with
   `--package`), `--bench`.
@@ -456,7 +458,7 @@ requirement — keep them in lockstep). It takes a required **subject** — `run
 `discriminants`, or `blessings` — and a bare `list` is an error that names the
 three. `list runs` and `list blessings` accept the same selection flags
 (`--repo`/`--context`/`--base`/`--engine`/`--target-triple`/`--machine-key`/
-`--no-dirty`/`--since`/`--until`/`--format`/`--config`) but, instead of
+`--no-dirty`/`--since`/`--until`/`--no-text`/`--markdown`/`--json`/`--config`) but, instead of
 analyzing, only *preview* which data set an `analyze` pass would consume: `list
 runs` reports, per discriminant set, the run, series, and per-commit counts of the
 selected runs (each commit's clean/dirty split), ordered oldest-first by git
@@ -482,7 +484,7 @@ with `runs` or `discriminants` rather than silently ignoring it.
 fields, built via `from_analyze`/`from_list`), `parsed_facets`,
 `facet_filtered_candidates` (shared by both the discriminants index and the
 topology query), `select_dataset` (git topology + commit selection + object load),
-and `dirty_base_exception_warning`. `list_with` parses the format and subject, builds a
+and `dirty_base_exception_warning`. `list_with` resolves the output selection and subject, builds a
 `Selection`, then either renders the discriminants index (no repo) or runs
 `select_dataset` → `build_listing` → `render_listing`, returning a
 `RunOutcome::Completed { message }`. `count_noun` (text.rs) appends `s` when the
@@ -492,7 +494,7 @@ count ≠ 1, so list.rs uses a local `series_noun` to avoid "seriess".
 
 **`prune` mirrors `analyze`'s/`list`'s data-set-selection parameters** (the same
 hard lockstep requirement) — it accepts `--repo`/`--context`/`--base`/`--engine`/
-`--target-triple`/`--machine-key`/`--since`/`--until`/`--format`/
+`--target-triple`/`--machine-key`/`--since`/`--until`/`--no-text`/`--markdown`/`--json`/
 `--config`/`--verbose`, plus its own deletion-shaping flags: `--dirty`/`--clean`/
 `--all` (scope, **required** — exactly one kind of run must be named), `--prune-base`
 (base-branch confirmation), `--dry-run`, and `<commit>` subjects (repeatable bare
