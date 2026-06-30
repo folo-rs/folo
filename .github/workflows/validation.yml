@@ -831,3 +831,43 @@ jobs:
         # deleting the sibling job's still-in-use (freshly written) containers; a genuine
         # leak is older than the cutoff and gets swept here or on a later run.
         run: ./infra/azure-bench-history-test/cleanup-containers.ps1 -MinAgeMinutes 180
+
+  # Releases Codecov's coverage notifications once every coverage upload for this
+  # commit has landed.
+  #
+  # Coverage data arrives from several jobs: one upload per platform from the
+  # `coverage` matrix, plus a conditional `azure`-flagged upload from `test-azurite`
+  # when cargo-bench-history is affected. The per-commit upload count is therefore
+  # variable. codecov.yml sets `codecov.notify.manual_trigger: true`, so Codecov posts
+  # NO coverage status or PR comment until this job runs the CLI `send-notifications`
+  # command — which it does only after every coverage-producing job has finished. That
+  # way Codecov computes the status from the complete set of uploads instead of
+  # reporting a misleadingly low figure off a partial set (see codecov.yml for the
+  # full rationale and why this is preferred over a hardcoded `after_n_builds`).
+  #
+  # It depends on `coverage` and `test-azurite` (the only coverage producers;
+  # `test-azure` / `test-azure-gh` upload none). `!cancelled()` lets it run even when
+  # `test-azurite` is skipped (cargo-bench-history not affected) — without a status
+  # function the skipped dependency would skip this job too. It triggers only when the
+  # `coverage` matrix succeeded: if coverage itself failed the build is already red and
+  # some platform uploads are missing, so there is nothing complete to notify about
+  # (and when the whole run is skipped via `skip_all`, no coverage was uploaded at all).
+  #
+  # Like the upload jobs, this runs for fork PRs too: the token is empty there and the
+  # action falls back to tokenless notification (this is a public repository), so
+  # external-contributor PRs get the same gated, complete-data coverage status.
+  coverage-notify:
+    needs: [coverage, test-azurite]
+    if: ${{ !cancelled() && needs.coverage.result == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Release Codecov coverage notifications
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          run_command: send-notifications
+          fail_ci_if_error: true

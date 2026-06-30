@@ -156,6 +156,32 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
     coverage. Together the two jobs cover both credential branches: `test-azure` the
     local-`az` fallback, `test-azure-gh` the CI self-minting path.
 
+- **coverage-notify** — single-platform gate that releases Codecov's coverage
+  notifications once every coverage upload for the commit has landed.
+  - Coverage for one commit is uploaded by several jobs: one upload per platform from
+    the `coverage` matrix, plus a conditional `azure`-flagged upload from `test-azurite`
+    when `cargo-bench-history` is affected. The per-commit upload count is therefore
+    variable. (`test-azure` / `test-azure-gh` upload no coverage.)
+  - By default Codecov re-posts its commit status / PR comment after every upload, so an
+    early upload makes it report a misleadingly low "coverage decreased" figure just
+    because the remaining uploads have not arrived yet. The repo-root `codecov.yml` sets
+    `codecov.notify.manual_trigger: true`, which holds ALL coverage notifications until
+    the CLI `send-notifications` command runs; this job (`codecov/codecov-action@v7` with
+    `run_command: send-notifications`) issues it once, so the status is computed from the
+    complete set of uploads. `manual_trigger` is preferred over `after_n_builds` because
+    the latter would need a hardcoded count that the conditional `test-azurite` upload
+    breaks. `codecov.yml` also disables `wait_for_ci` / `require_ci_to_pass` so the status
+    posts as soon as coverage data is complete rather than waiting on unrelated slow jobs
+    (`mutants`, etc.); those jobs gate merges through their own checks.
+  - `needs: [coverage, test-azurite]`; `if: !cancelled() && needs.coverage.result ==
+    'success'`. The `!cancelled()` status function lets it run even when `test-azurite`
+    is skipped (without it, the skipped dependency would skip this job too). It triggers
+    only when the `coverage` matrix succeeded: if coverage failed the build is already
+    red with missing uploads, and a `skip_all` run uploads no coverage at all.
+  - Runs for fork PRs too: the token is empty there and the action falls back to
+    tokenless notification (public repository), so external-contributor PRs get the same
+    gated, complete-data coverage status.
+
 ### cache-warmup.yml
 
 A scheduled workflow that keeps GitHub Actions caches warm. GitHub evicts caches after
@@ -277,6 +303,14 @@ exists today; PR-time collection/validation may follow once this proves out.
      subtly depend on image-specific dylibs and system tools, even when the
      lockfile and rust toolchain are identical)
    - `fail-fast: false` ensures all platform checks complete even if one fails
+
+6. **Codecov notification gating** — Coverage is uploaded by a variable number of jobs
+   per commit (the `coverage` platform matrix plus the conditional `test-azurite` azure
+   upload). To stop Codecov posting a misleading status off a partial set of uploads,
+   the repo-root `codecov.yml` enables `codecov.notify.manual_trigger` and the
+   `coverage-notify` job releases notifications via the CLI `send-notifications` command
+   only once all coverage-producing jobs have finished. See the `coverage-notify` job
+   description above for details.
 
 ## Maintenance Notes
 
