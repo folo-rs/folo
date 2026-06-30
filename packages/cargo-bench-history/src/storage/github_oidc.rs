@@ -23,7 +23,6 @@
 //! sidesteps that entirely, and needs neither an `azure/login` step nor a stored
 //! secret.
 
-use std::env;
 use std::fmt;
 use std::sync::Arc;
 
@@ -59,27 +58,7 @@ const ENV_CLIENT_ID: &str = "AZURE_CLIENT_ID";
 /// authenticate against.
 const ENV_TENANT_ID: &str = "AZURE_TENANT_ID";
 
-/// Builds a self-refreshing GitHub OIDC credential when the process is running in a
-/// GitHub Actions job configured for Azure federation, or returns `None` otherwise
-/// so the caller falls back to the Azure CLI / developer credential.
-///
-/// `http_client` is reused for the on-demand OIDC token `GET`, sharing the backend's
-/// connection pool. A `Some(Err(..))` result means the job *is* in the federation
-/// context but the credential could not be constructed (for example an invalid
-/// tenant ID), which the caller surfaces rather than silently falling back.
-// Thin adapter: its only behavior is injecting the real process environment into
-// `credential_from` (unit-tested with an injected getter). Returning `None` here is
-// observable only in a live GitHub Actions job, which the `test-azure-gh` integration
-// job verifies but unit tests cannot reproduce without mutating the global process
-// environment (which this crate's tests avoid).
-#[cfg_attr(test, mutants::skip)]
-pub(crate) fn from_env(
-    http_client: &Arc<dyn HttpClient>,
-) -> Option<Result<Arc<dyn TokenCredential>, StorageError>> {
-    credential_from(|key| env::var(key).ok(), http_client)
-}
-
-/// The four values that together opt a job into GitHub OIDC federation.
+/// The values that together opt a job into GitHub OIDC federation.
 struct GithubOidcParams {
     request_url: String,
     request_token: String,
@@ -87,12 +66,19 @@ struct GithubOidcParams {
     tenant_id: String,
 }
 
-/// Resolves a self-minting credential from an arbitrary env getter, so the wiring
-/// from detected parameters to a built credential is testable without mutating the
-/// global process environment. Returns `None` when the job is not in the federation
-/// context (the caller then falls back to the developer credential), mirroring
-/// [`from_env`] which delegates here with the real process environment.
-fn credential_from(
+/// Builds a self-refreshing GitHub OIDC credential when the process is running in a
+/// GitHub Actions job configured for Azure federation, or returns `None` otherwise so
+/// the caller falls back to the Azure CLI / developer credential.
+///
+/// The federation parameters are read through `get`; the caller passes a real
+/// process-environment lookup, while tests pass a getter over an explicit set, so the
+/// wiring from detected parameters to a built credential is exercised without mutating
+/// the global process environment. A `Some(Err(..))` result means the job *is* in the
+/// federation context but the credential could not be constructed (for example an
+/// invalid tenant ID), which the caller surfaces rather than silently falling back.
+/// `http_client` is reused for the on-demand OIDC token `GET`, sharing the backend's
+/// connection pool.
+pub(crate) fn credential_from(
     get: impl Fn(&str) -> Option<String>,
     http_client: &Arc<dyn HttpClient>,
 ) -> Option<Result<Arc<dyn TokenCredential>, StorageError>> {

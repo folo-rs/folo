@@ -850,7 +850,7 @@ Microsoft Entra ID. SAS modes carry the token in the endpoint URL's query and pa
 no credential, so the emulator's plain-HTTP endpoint is accepted; Entra mode passes
 a token credential and requires HTTPS. The Entra credential is chosen by the
 `entra_credential` helper: in a GitHub Actions job configured for Azure federation
-(detected by `github_oidc::from_env` finding `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`
+(detected by `github_oidc::credential_from` finding `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`
 and the `ACTIONS_ID_TOKEN_REQUEST_*` pair) it builds a `ClientAssertionCredential`
 whose assertion (`storage::github_oidc::GithubOidcAssertion`) mints a **fresh**
 GitHub OIDC JWT on demand for each Entra token exchange; everywhere else (local

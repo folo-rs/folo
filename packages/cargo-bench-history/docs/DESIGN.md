@@ -2028,7 +2028,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      fetches a **fresh** GitHub OIDC JWT on demand — `GET`ting
      `${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=api://AzureADTokenExchange` with the
      `ACTIONS_ID_TOKEN_REQUEST_TOKEN` bearer — for each Entra token exchange. The
-     `entra_credential` helper activates it only when `from_env` finds all four of
+     `entra_credential` helper activates it only when `credential_from` finds all of
      `ACTIONS_ID_TOKEN_REQUEST_URL`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, `AZURE_CLIENT_ID`
      and `AZURE_TENANT_ID` non-empty; otherwise it falls back to
      `DeveloperToolsCredential` (local `az login`; the `test-azure` job, which exports
@@ -2042,7 +2042,12 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      re-submits an expired one. This needs `permissions: { id-token: write }`, no
      `azure/login` step, and no stored secret. `GithubOidcAssertion` reuses the
      backend's shared `HttpClient` for the token `GET`, redacts the request token in
-     `Debug`, and maps every failure to `ErrorKind::Credential`; it is unit-tested with
-     a stub `HttpClient` (no network, Miri-safe) covering success, HTTP-error status,
-     malformed/empty JSON, the audience-append and bearer header, `Debug` redaction, the
-     four-var env detection, and credential construction.
+     `Debug`, and maps its own failures (a malformed request URL, a non-success HTTP
+     status, malformed/empty JSON) to `ErrorKind::Credential`, while a transport error
+     from the `GET` itself propagates unchanged (it stays `ErrorKind::Io`). It is
+     unit-tested with a stub `HttpClient` (no network, Miri-safe) covering success,
+     HTTP-error status, malformed/empty JSON, transport-error passthrough, the
+     audience-append and bearer header, `Debug` redaction, the federation-variable
+     detection, and credential construction; `entra_credential_from` (the getter-seam
+     under `entra_credential`) is unit-tested for both the self-minting and fallback
+     branches.

@@ -14,6 +14,7 @@
 //! Entra mode passes a token credential and requires HTTPS.
 
 use std::collections::HashMap;
+use std::env;
 use std::fmt;
 use std::io;
 use std::sync::Arc;
@@ -373,12 +374,44 @@ impl Storage for AzureBlobStorage {
 /// (local development, and the `test-azure` CI job that signs in with `azure/login`)
 /// it falls back to [`DeveloperToolsCredential`], which discovers the existing
 /// Azure CLI session.
+///
+/// This thin wrapper only supplies the live process environment to the testable
+/// [`entra_credential_from`] seam; it is coverage- and mutation-excluded because its
+/// sole behavior — reading ambient OS environment variables — cannot be driven from a
+/// unit test without mutating the global process environment (which this crate's tests
+/// avoid). The `test-azure-gh` job exercises it end to end in a real federated job.
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(test, mutants::skip)]
 fn entra_credential(
     http_client: &Arc<dyn HttpClient>,
 ) -> Result<Arc<dyn TokenCredential>, StorageError> {
-    if let Some(result) = github_oidc::from_env(http_client) {
+    entra_credential_from(|key| env::var(key).ok(), http_client)
+}
+
+/// Resolves the Entra credential from an arbitrary environment getter, so both the
+/// self-minting and fallback branches are unit-testable without mutating the global
+/// process environment. With all GitHub OIDC federation variables present it returns
+/// the self-minting assertion credential; otherwise it falls back to the developer
+/// credential.
+fn entra_credential_from(
+    get: impl Fn(&str) -> Option<String>,
+    http_client: &Arc<dyn HttpClient>,
+) -> Result<Arc<dyn TokenCredential>, StorageError> {
+    if let Some(result) = github_oidc::credential_from(get, http_client) {
         return result;
     }
+    developer_tools_credential()
+}
+
+/// Discovers the ambient Azure CLI / developer credential.
+///
+/// Coverage-excluded because both of its outcomes depend on the host: it succeeds only
+/// where a developer or CI Azure session exists and reports an error only where the
+/// developer-tooling discovery itself fails, neither of which a unit test can stage. It
+/// is isolated to a single call so the surrounding [`entra_credential_from`] resolution
+/// logic stays testable.
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn developer_tools_credential() -> Result<Arc<dyn TokenCredential>, StorageError> {
     let credential: Arc<dyn TokenCredential> =
         DeveloperToolsCredential::new(None).map_err(|error| {
             config_error(format!("could not initialize Entra ID credential: {error}"))
@@ -1137,7 +1170,7 @@ mod tests {
 
     /// The Azurite blob endpoint, overridable for a non-default emulator.
     fn azurite_endpoint() -> String {
-        std::env::var("AZURITE_BLOB_ENDPOINT")
+        env::var("AZURITE_BLOB_ENDPOINT")
             .unwrap_or_else(|_| "http://127.0.0.1:10000/devstoreaccount1".to_owned())
     }
 
@@ -1178,7 +1211,7 @@ mod tests {
     fn azurite_storage_or_skip() -> Option<AzureBlobStorage> {
         if !azurite_reachable() {
             assert!(
-                std::env::var_os("BENCH_HISTORY_REQUIRE_AZURITE").is_none(),
+                env::var_os("BENCH_HISTORY_REQUIRE_AZURITE").is_none(),
                 "BENCH_HISTORY_REQUIRE_AZURITE is set but no Azurite emulator is reachable at {}",
                 azurite_endpoint()
             );
@@ -1425,5 +1458,42 @@ mod tests {
         };
         storage.put("v1/proj/a.json", b"x").await.unwrap();
         assert!(storage.list("v1/other/").await.unwrap().is_empty());
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "builds a real HTTP pipeline (reqwest) that Miri cannot run"
+    )]
+    fn entra_credential_uses_the_self_minting_oidc_path_when_all_vars_present() {
+        let http_client = new_http_client(None);
+        // With every GitHub OIDC federation variable present the self-minting branch
+        // builds and returns the assertion credential without falling through to the
+        // developer credential. Construction performs no network I/O; the tenant and
+        // client IDs must be legal GUIDs so the assertion credential constructs. The
+        // names are GitHub's and Azure's fixed federation-variable contract.
+        let get = |key: &str| match key {
+            "ACTIONS_ID_TOKEN_REQUEST_URL" => Some("https://example.test/token".to_owned()),
+            "ACTIONS_ID_TOKEN_REQUEST_TOKEN" => Some("request-token".to_owned()),
+            "AZURE_CLIENT_ID" => Some("11111111-1111-1111-1111-111111111111".to_owned()),
+            "AZURE_TENANT_ID" => Some("22222222-2222-2222-2222-222222222222".to_owned()),
+            _ => None,
+        };
+        entra_credential_from(get, &http_client).expect("self-minting OIDC credential builds");
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "constructs the developer credential chain (reqwest) that Miri cannot run"
+    )]
+    fn entra_credential_falls_back_to_the_developer_credential_without_oidc_vars() {
+        let http_client = new_http_client(None);
+        // Absent the federation variables the self-minting branch is skipped and
+        // resolution falls back to the ambient developer/CLI credential. Constructing
+        // it assembles the discovery chain without authenticating, so the fallback
+        // wiring is exercised whether or not an Azure session exists on the host.
+        entra_credential_from(|_| None, &http_client)
+            .expect("developer credential chain constructs");
     }
 }
