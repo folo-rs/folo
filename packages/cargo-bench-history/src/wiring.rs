@@ -85,7 +85,7 @@ pub(crate) fn resolve_local_path(
             Some(value) if !value.is_empty() => Ok(Some(PathBuf::from(value))),
             _ => Err(StorageError::Config {
                 message: format!(
-                    "--local was given without a path and {STORAGE_ENV_VAR} is not set"
+                    "--local was given without a path and {STORAGE_ENV_VAR} is unset or empty"
                 ),
             }),
         },
@@ -124,7 +124,9 @@ pub(crate) fn resolve_cache_path(
         Some(CacheSelection::FromEnv) => match env {
             Some(value) if !value.is_empty() => Ok(Some(PathBuf::from(value))),
             _ => Err(StorageError::Config {
-                message: format!("--cache was given without a path and {CACHE_ENV_VAR} is not set"),
+                message: format!(
+                    "--cache was given without a path and {CACHE_ENV_VAR} is unset or empty"
+                ),
             }),
         },
     }

@@ -28,6 +28,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::{Storage, StorageError, cache_epoch_key};
 use crate::report::Reporter;
+use crate::text::count_noun;
 
 /// The mirror key under which the decorator records the cloud epoch token it last
 /// synchronized against.
@@ -170,8 +171,9 @@ where
         let hits = self.hits.load(Ordering::Relaxed);
         let misses = self.misses.load(Ordering::Relaxed);
         reporter.note(&format!(
-            "cache: served {hits} object(s) from the local mirror and fetched {misses} from the \
-             cloud this load"
+            "cache: served {} from the local mirror and fetched {} from the cloud this load",
+            count_noun(hits, "object"),
+            count_noun(misses, "object"),
         ));
     }
 
@@ -371,7 +373,7 @@ mod tests {
 
         storage.report_tally(&reporter);
         assert!(
-            reporter.contains("served 1 object(s) from the local mirror and fetched 1"),
+            reporter.contains("served 1 object from the local mirror and fetched 1 object"),
             "{:?}",
             reporter.notes()
         );

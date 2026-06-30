@@ -552,7 +552,7 @@ unit-tested without touching the process environment. The chosen backend (and wh
 
 ### 7.2 Read-through cache for the cloud backend (issue #262)
 
-> Status: **implemented** (PR #291). This section is the implementation contract; decision
+> Status: **implemented**. This section is the implementation contract; decision
 > 40 logs the rationale.
 
 `analyze`/`list`/`prune` load the *whole* in-selection history before reconstructing the
@@ -646,9 +646,10 @@ case is one extra, unnecessary cache wipe).
 
 **Reader side** (when `--cache` is set). Before loading, the decorator reads the marker once
 (`inner.get("v1/<project>/_cache-epoch")`; a `NotFound` means "no mutation ever recorded" = a
-fixed genesis token) and compares it to the token recorded in the cache directory (a
-`.epoch` metadata file alongside the mirrored objects). On a mismatch — or a cache with no
-recorded token — it **wipes the entire cache directory** and records the freshly read token,
+fixed genesis token) and compares it to the token recorded in the cache directory (stored in
+the mirror's reserved `_epoch` key alongside the mirrored objects). On a mismatch — or a cache
+with no recorded token — it **wipes the entire cache directory** and records the freshly read
+token,
 then proceeds. Whole-cache invalidation is intentionally coarse: deletes and rewrites are
 rare, so a blunt "throw it all away and re-download" is simpler and obviously correct, and
 re-recording the token immediately means the wipe happens at most once per process.
@@ -2334,8 +2335,8 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      real discriminant, and skipped by the loaders' existing non-`.json`/unparsable-key filter
      so it is never mistaken for data), holding an opaque epoch token
      (an observation timestamp — only *difference* matters, so clock skew is harmless; an absent
-     marker is genesis). The reader reads it once, compares it to a `.epoch` file in the cache
-     dir, and **wipes the whole cache on mismatch** (coarse but correct — deletes/rewrites are
+     marker is genesis). The reader reads it once, compares it to the recorded `_epoch` key in
+     the cache dir, and **wipes the whole cache on mismatch** (coarse but correct — deletes/rewrites are
      rare). The marker is bumped on `delete` and `put_overwrite` (both unconditional — no
      create-vs-replace probe needed), coalesced to one marker write per command via an interior
      "mutated" flag flushed by the dispatcher. Marker maintenance lives in `AzureBlobStorage`
