@@ -64,7 +64,18 @@ fn resolve(env_override: Option<OsString>, build: impl FnOnce() -> BuildOutput) 
     if let Some(path) = env_override {
         let path = PathBuf::from(path);
         if path.is_file() {
-            return path.to_string_lossy().into_owned();
+            // `binary_path` promises an absolute path, but the override may be relative.
+            // Resolve it to absolute now — while the working directory is still the one
+            // the override was written against — so the cached value keeps naming the
+            // same file after a later directory change (the mock honors `--chdir` and the
+            // integration harness drives commands from various directories). The build
+            // path Cargo reports is already absolute, so this keeps both resolution paths
+            // consistent. `std::path::absolute` is preferred over `canonicalize` to avoid
+            // the Windows `\\?\` verbatim prefix, which need not appear in spawn argv or logs.
+            return std::path::absolute(&path)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .into_owned();
         }
     }
 
@@ -262,13 +273,41 @@ mod tests {
 
     #[cfg(not(miri))]
     #[test]
-    fn env_override_naming_an_existing_file_is_used_verbatim() {
-        // This crate's own manifest is a file that is guaranteed to exist.
+    fn env_override_naming_an_existing_absolute_file_is_returned_unchanged() {
+        // This crate's own manifest is an absolute path that is guaranteed to exist;
+        // making an already-absolute path absolute leaves it unchanged, so the override
+        // passes through without a build.
         let existing = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
         let resolved = resolve(Some(existing.clone().into_os_string()), || {
             panic!("must not build when the env override names an existing file")
         });
         assert_eq!(resolved, existing.to_string_lossy());
+    }
+
+    #[cfg(not(miri))]
+    #[test]
+    fn env_override_with_a_relative_path_is_resolved_to_absolute() {
+        // A bare manifest name resolves against the test's working directory (the package
+        // root cargo sets). `binary_path` promises an absolute path, so a relative override
+        // must be made absolute now — otherwise the cached value would break once a later
+        // `--chdir` moves the working directory.
+        let relative = PathBuf::from("Cargo.toml");
+        assert!(
+            relative.is_file(),
+            "expected the package manifest relative to the test working directory"
+        );
+        let resolved = resolve(Some(relative.into_os_string()), || {
+            panic!("must not build when the env override names an existing file")
+        });
+        let resolved = Path::new(&resolved);
+        assert!(
+            resolved.is_absolute(),
+            "a relative override should resolve to an absolute path, got {resolved:?}"
+        );
+        assert!(
+            resolved.ends_with("Cargo.toml"),
+            "the resolved path should still name the manifest, got {resolved:?}"
+        );
     }
 
     #[cfg(not(miri))]

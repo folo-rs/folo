@@ -2105,15 +2105,16 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      so filtering on a present `executable` selects the bin — caching it per process in a
      `LazyLock<String>`. *(Shared library, not `#[path]`: common test-support code lives
      in a proper library crate, never an `#[path]`-included source file.)* Cargo owns
-     freshness, so plain `cargo test`/`cargo nextest` need no setup. Because nextest runs
-     one process per test and each no-op build costs ~190 ms, every `just` recipe that runs
-     the suite under nextest (`test`, `test-azurite`, `test-azure`, `test-more`,
-     `coverage-measure`) — plus `careful` — pre-builds the mock once (`_mock-engine-path`)
-     and passes its path in `MOCK_BENCH_ENGINE`; the resolver trusts that env var when it
-     points at an existing file and skips the per-process build (~8 s saved on the suite).
-     Under nextest this also avoids the per-test processes racing concurrent `cargo build`
-     invocations over the shared target tree (transient engine-spawn `NotFound` failures
-     surfaced on macOS coverage runs). The two Gungraun fixtures the mock `include_str!`s
+     freshness, so a plain `cargo test` run needs no setup. nextest, however, runs one
+     process per test, so each would run its own on-demand `cargo build` — which costs
+     ~190 ms per process and, worse, races the other processes' concurrent builds over the
+     shared target tree (transient engine-spawn `NotFound` failures surfaced on macOS
+     coverage runs). So every `just` recipe that runs the suite under nextest (`test`,
+     `test-azurite`, `test-azure`, `test-more`, `coverage-measure`) — plus `careful` —
+     pre-builds the mock once (`_mock-engine-path`) and passes its path in
+     `MOCK_BENCH_ENGINE`; the resolver trusts that env var when it points at an existing
+     file (resolving it to an absolute path) and skips the per-process build (~8 s saved on
+     the suite). The two Gungraun fixtures the mock `include_str!`s
      stay in `cargo-bench-history/tests/fixtures/` — they double as schema-drift canaries
      for the parser tests — and are referenced cross-package by relative path rather than
      duplicated.

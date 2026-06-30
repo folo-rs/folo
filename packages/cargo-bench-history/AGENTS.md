@@ -731,17 +731,17 @@ demand (`cargo build --manifest-path <own Cargo.toml> --locked
 --message-format=json-render-diagnostics`, cwd-independent), reads the `executable`
 path Cargo reports for the bin artifact (the lib artifact reports none, so filtering
 on a present `executable` selects the bin), and caches it in a `LazyLock<String>`.
-Cargo handles freshness, so the path is always present and up to date after edits, and
-plain `cargo test`/`cargo nextest` work with no extra setup. A no-op build still costs
-~190 ms, and nextest runs one process per test, so every `just` recipe that runs the
-suite under nextest (`test`, `test-azurite`, `test-azure`, `test-more`,
-`coverage-measure`) — plus `careful`, which runs it under libtest — pre-builds the mock
-once via the `_mock-engine-path` recipe and passes its path in the `MOCK_BENCH_ENGINE`
-env var; when that points at an existing file the resolver trusts it and skips the
-per-process build. Under nextest this is also a correctness matter, not just a speed one:
-the per-test processes would otherwise each run `cargo build` concurrently against the
-shared target tree, and those builds race (transient "No such file or directory"
-engine-spawn failures were observed on macOS coverage runs). The two fixtures the mock `include_str!`s stay in
+Cargo handles freshness, so the path is always present and up to date after edits, and a
+plain `cargo test` run needs no extra setup. nextest, however, runs one process per test,
+so each would run its own on-demand `cargo build` — which both costs ~190 ms per process
+and, worse, races the other processes' concurrent builds over the shared target tree
+(transient "No such file or directory" engine-spawn failures were observed on macOS
+coverage runs). So every `just` recipe that runs the suite under nextest (`test`,
+`test-azurite`, `test-azure`, `test-more`, `coverage-measure`) — plus `careful`, which
+runs it under libtest — pre-builds the mock once via the `_mock-engine-path` recipe and
+passes its path in the `MOCK_BENCH_ENGINE` env var; when that points at an existing file
+the resolver trusts it (resolving it to an absolute path) and skips the per-process build.
+The two fixtures the mock `include_str!`s stay in
 `packages/cargo-bench-history/tests/fixtures/callgrind/` (they double as schema-drift
 canaries for the parser tests) and are referenced cross-package by relative path.
 
