@@ -733,10 +733,15 @@ path Cargo reports for the bin artifact (the lib artifact reports none, so filte
 on a present `executable` selects the bin), and caches it in a `LazyLock<String>`.
 Cargo handles freshness, so the path is always present and up to date after edits, and
 plain `cargo test`/`cargo nextest` work with no extra setup. A no-op build still costs
-~190 ms, and nextest runs one process per test, so the `just` test recipes pre-build
-the mock once via the `_mock-engine-path` recipe and pass its path in the
-`MOCK_BENCH_ENGINE` env var; when that points at an existing file the resolver trusts
-it and skips the per-process build. The two fixtures the mock `include_str!`s stay in
+~190 ms, and nextest runs one process per test, so every `just` recipe that runs the
+suite under nextest (`test`, `test-azurite`, `test-azure`, `test-more`,
+`coverage-measure`) — plus `careful`, which runs it under libtest — pre-builds the mock
+once via the `_mock-engine-path` recipe and passes its path in the `MOCK_BENCH_ENGINE`
+env var; when that points at an existing file the resolver trusts it and skips the
+per-process build. Under nextest this is also a correctness matter, not just a speed one:
+the per-test processes would otherwise each run `cargo build` concurrently against the
+shared target tree, and those builds race (transient "No such file or directory"
+engine-spawn failures were observed on macOS coverage runs). The two fixtures the mock `include_str!`s stay in
 `packages/cargo-bench-history/tests/fixtures/callgrind/` (they double as schema-drift
 canaries for the parser tests) and are referenced cross-package by relative path.
 
