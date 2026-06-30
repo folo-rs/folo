@@ -14,7 +14,8 @@
 //! ships, and `cargo install cargo-bench-history` places only the real tool on a
 //! user's PATH (issue #289).
 
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 /// Returns the absolute path to the freshly built `mock_bench_engine` binary.
@@ -26,41 +27,86 @@ use std::sync::LazyLock;
 /// build — the value is trusted only when it names an existing file.
 #[must_use]
 pub fn binary_path() -> &'static str {
-    static PATH: LazyLock<String> = LazyLock::new(resolve);
+    static PATH: LazyLock<String> = LazyLock::new(|| {
+        let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        resolve(std::env::var_os("MOCK_BENCH_ENGINE"), || {
+            run_cargo_build(&manifest_path)
+        })
+    });
     PATH.as_str()
 }
 
-/// Builds this crate's binary and returns the absolute path to it, as reported by
-/// Cargo's JSON build messages.
-fn resolve() -> String {
-    if let Some(path) = std::env::var_os("MOCK_BENCH_ENGINE") {
-        let path = std::path::PathBuf::from(path);
+/// The outcome of spawning `cargo build`, reduced to the fields the resolver inspects.
+///
+/// Modeling it as a plain struct rather than [`std::process::Output`] keeps
+/// [`interpret_build`] unit-testable: an `ExitStatus` cannot be constructed portably,
+/// but these fields can be filled in directly to exercise every branch without
+/// spawning a real process.
+struct BuildOutput {
+    /// Whether the build process exited successfully.
+    success: bool,
+    /// The process exit code, if it terminated normally with one.
+    code: Option<i32>,
+    /// The captured standard output (Cargo's JSON build messages).
+    stdout: Vec<u8>,
+    /// The captured standard error (Cargo's rendered diagnostics).
+    stderr: Vec<u8>,
+}
+
+/// Resolves the mock-engine binary path: trust an existing file named by
+/// `env_override`, otherwise build the crate via `build` and read the path Cargo
+/// reports for the binary artifact.
+fn resolve(env_override: Option<OsString>, build: impl FnOnce() -> BuildOutput) -> String {
+    if let Some(path) = env_override {
+        let path = PathBuf::from(path);
         if path.is_file() {
             return path.to_string_lossy().into_owned();
         }
     }
 
+    interpret_build(&build())
+}
+
+/// Spawns `cargo build` for this crate and captures its outcome.
+fn run_cargo_build(manifest_path: &Path) -> BuildOutput {
     // `--manifest-path` (absolute, derived from this crate's own manifest directory)
     // makes the build independent of the current working directory, which some tests
-    // change before first touching the engine.
-    let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    // change before first touching the engine. `--locked` matches the
+    // `just _mock-engine-path` recipe and refuses to silently rewrite the lockfile.
     let output = std::process::Command::new(env!("CARGO"))
         .args([
             "build",
+            "--locked",
             "--message-format=json-render-diagnostics",
             "--manifest-path",
         ])
-        .arg(&manifest_path)
+        .arg(manifest_path)
         .output()
         .expect("spawning `cargo build` for mock_bench_engine should succeed");
+    BuildOutput {
+        success: output.status.success(),
+        code: output.status.code(),
+        stdout: output.stdout,
+        stderr: output.stderr,
+    }
+}
+
+/// Reads the built binary's path from Cargo's JSON build output, panicking with the
+/// captured diagnostics (exit code, stdout, and stderr) when the build failed or
+/// reported no executable.
+fn interpret_build(output: &BuildOutput) -> String {
     assert!(
-        output.status.success(),
-        "building mock_bench_engine failed:\n{}",
+        output.success,
+        "building mock_bench_engine failed (exit code: {}):\nstdout:\n{}\nstderr:\n{}",
+        output
+            .code
+            .map_or_else(|| "unknown".to_owned(), |code| code.to_string()),
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
 
     let stdout =
-        String::from_utf8(output.stdout).expect("cargo build JSON output should be valid UTF-8");
+        std::str::from_utf8(&output.stdout).expect("cargo build JSON output should be valid UTF-8");
     for line in stdout.lines() {
         let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
@@ -82,4 +128,151 @@ fn resolve() -> String {
         }
     }
     panic!("cargo build did not report an executable path for mock_bench_engine");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A single `compiler-artifact` JSON line for the named target with the given
+    /// executable path, matching the shape Cargo emits.
+    fn artifact_line(target_name: &str, executable: &str) -> String {
+        serde_json::json!({
+            "reason": "compiler-artifact",
+            "target": { "name": target_name },
+            "executable": executable,
+        })
+        .to_string()
+    }
+
+    /// A successful build whose stdout is `stdout`.
+    fn ok_build(stdout: String) -> BuildOutput {
+        BuildOutput {
+            success: true,
+            code: Some(0),
+            stdout: stdout.into_bytes(),
+            stderr: Vec::new(),
+        }
+    }
+
+    /// A failed build carrying a known exit code and stderr, for the failure-path
+    /// assertions.
+    fn failed_build() -> BuildOutput {
+        BuildOutput {
+            success: false,
+            code: Some(101),
+            stdout: b"some compiler chatter".to_vec(),
+            stderr: b"error: linker exploded".to_vec(),
+        }
+    }
+
+    #[test]
+    fn picks_the_executable_of_the_bin_artifact() {
+        let resolved = interpret_build(&ok_build(artifact_line(
+            "mock_bench_engine",
+            "/tmp/mock_bench_engine",
+        )));
+        assert_eq!(resolved, "/tmp/mock_bench_engine");
+    }
+
+    #[test]
+    fn ignores_non_json_lines_other_packages_and_the_lib_artifact() {
+        // The lib artifact has no executable; an unrelated package and a stray
+        // non-JSON line must both be skipped before the mock bin is found.
+        let lib_artifact = serde_json::json!({
+            "reason": "compiler-artifact",
+            "target": { "name": "mock_bench_engine" },
+            "executable": serde_json::Value::Null,
+        })
+        .to_string();
+        let stdout = format!(
+            "{}\n{lib_artifact}\nthis is not json\n{}\n",
+            artifact_line("serde_json", "/tmp/serde_json"),
+            artifact_line("mock_bench_engine", "/tmp/mock_bench_engine"),
+        );
+
+        assert_eq!(interpret_build(&ok_build(stdout)), "/tmp/mock_bench_engine");
+    }
+
+    #[test]
+    #[should_panic(expected = "did not report an executable path")]
+    fn panics_when_no_executable_is_reported() {
+        let lib_only = serde_json::json!({
+            "reason": "compiler-artifact",
+            "target": { "name": "mock_bench_engine" },
+            "executable": serde_json::Value::Null,
+        })
+        .to_string();
+        drop(interpret_build(&ok_build(lib_only)));
+    }
+
+    #[test]
+    #[should_panic(expected = "exit code: 101")]
+    fn build_failure_reports_the_exit_code() {
+        drop(interpret_build(&failed_build()));
+    }
+
+    #[test]
+    #[should_panic(expected = "error: linker exploded")]
+    fn build_failure_reports_stderr() {
+        drop(interpret_build(&failed_build()));
+    }
+
+    #[test]
+    #[should_panic(expected = "exit code: unknown")]
+    fn build_failure_without_an_exit_code_reports_unknown() {
+        let signalled = BuildOutput {
+            success: false,
+            code: None,
+            stdout: Vec::new(),
+            stderr: b"killed by signal".to_vec(),
+        };
+        drop(interpret_build(&signalled));
+    }
+
+    #[test]
+    #[should_panic(expected = "valid UTF-8")]
+    fn panics_on_non_utf8_output() {
+        let garbled = BuildOutput {
+            success: true,
+            code: Some(0),
+            stdout: vec![0xff, 0xfe, 0xfd],
+            stderr: Vec::new(),
+        };
+        drop(interpret_build(&garbled));
+    }
+
+    #[test]
+    fn no_env_override_falls_through_to_building() {
+        // `None` skips the file check entirely, so this exercises `resolve`'s build
+        // path without touching the filesystem (and stays Miri-safe).
+        let resolved = resolve(None, || {
+            ok_build(artifact_line("mock_bench_engine", "/tmp/mock_bench_engine"))
+        });
+        assert_eq!(resolved, "/tmp/mock_bench_engine");
+    }
+
+    // The remaining cases consult the filesystem (`Path::is_file`), which Miri's
+    // isolation does not support, so they are native-only.
+
+    #[cfg(not(miri))]
+    #[test]
+    fn env_override_naming_an_existing_file_is_used_verbatim() {
+        // This crate's own manifest is a file that is guaranteed to exist.
+        let existing = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        let resolved = resolve(Some(existing.clone().into_os_string()), || {
+            panic!("must not build when the env override names an existing file")
+        });
+        assert_eq!(resolved, existing.to_string_lossy());
+    }
+
+    #[cfg(not(miri))]
+    #[test]
+    fn env_override_naming_a_missing_file_falls_through_to_building() {
+        let missing = Path::new(env!("CARGO_MANIFEST_DIR")).join("does-not-exist.invalid");
+        let resolved = resolve(Some(missing.into_os_string()), || {
+            ok_build(artifact_line("mock_bench_engine", "/tmp/mock_bench_engine"))
+        });
+        assert_eq!(resolved, "/tmp/mock_bench_engine");
+    }
 }

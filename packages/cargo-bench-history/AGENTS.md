@@ -727,7 +727,7 @@ way. The `mock_bench_engine` crate therefore ships **both** a binary (`src/main.
 the mock itself) and a library (`src/lib.rs`, a locator helper); `cargo-bench-history`
 takes a normal `dev-dependency` on it (`mock_bench_engine = { path = "..." }`) and the
 tests call `mock_bench_engine::binary_path()`. That helper builds its own crate on
-demand (`cargo build --manifest-path <own Cargo.toml>
+demand (`cargo build --manifest-path <own Cargo.toml> --locked
 --message-format=json-render-diagnostics`, cwd-independent), reads the `executable`
 path Cargo reports for the bin artifact (the lib artifact reports none, so filtering
 on a present `executable` selects the bin), and caches it in a `LazyLock<String>`.

@@ -2099,7 +2099,8 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      crate: the binary (`src/main.rs`) is the mock, and the library (`src/lib.rs`)
      exposes a `binary_path()` locator that `cargo-bench-history` consumes as a normal
      path `dev-dependency`. The locator builds its own crate on demand
-     (`cargo build --manifest-path <own Cargo.toml> --message-format=json`) and reads the
+     (`cargo build --manifest-path <own Cargo.toml> --locked
+     --message-format=json-render-diagnostics`) and reads the
      executable path Cargo reports for the bin artifact — the lib artifact reports none,
      so filtering on a present `executable` selects the bin — caching it per process in a
      `LazyLock<String>`. *(Shared library, not `#[path]`: common test-support code lives
