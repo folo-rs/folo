@@ -217,7 +217,16 @@ exists today; PR-time collection/validation may follow once this proves out.
   with `fetch-depth: 0` so the first-parent history resolves.
 - **`alert` job** (`needs: [collect, analyze]`, `if: failure()` + main-only) — opens a
   deduplicated `.github/bench-history-failure-issue.md` when any prior job fails, so a
-  broken nightly is noticed. Closed by hand once the workflow is green again.
+  broken nightly is noticed. Its companion `resolve` job closes that issue automatically
+  once the workflow is green again.
+- **`resolve` job** (`needs: [collect, analyze]`, `if: success()` + main-only) — mirror of
+  `alert`: when collection and analysis both pass, it finds any still-open failure issue
+  (matched by the `ci-failure` label + the fixed title the `alert` template sets) and closes
+  it via the `gh` CLI with a comment linking the green run, so a fixed nightly does not leave
+  a stale alert open. A no-op on nights when no failure issue is open. `success()` (not
+  `always()`) ensures it never closes the alert when `collect` or `analyze` actually failed —
+  those cases fall to `alert` instead. The advisory regression issue (label `regression`) is
+  out of scope and stays manual.
 
 ## Design Decisions
 
