@@ -74,12 +74,13 @@ mutants SHARD="" CAREFUL='false':
         "-e"
         (Escape-Wildcards "packages/benchmarks/**")
 
-        # The mock benchmark engine is a test-support binary (a `[[bin]]` so the
-        # integration tests can spawn it). It is scaffolding, not shipped code, so mutating it
-        # yields no production coverage signal - it only spawns extra subprocess-heavy test runs
-        # that time out on slower runners. Its own behavior is covered by the integration tests.
+        # The mock benchmark engine is a test-support binary (its own never-published
+        # `mock_bench_engine` package, which the integration tests spawn). It is scaffolding,
+        # not shipped code, so mutating it yields no production coverage signal - it only spawns
+        # extra subprocess-heavy test runs that time out on slower runners. Its own behavior is
+        # covered by the integration tests.
         "-e"
-        (Escape-Wildcards "packages/cargo-bench-history/src/bin/**")
+        (Escape-Wildcards "packages/mock_bench_engine/**")
 
         # `testing.rs` is an in-workspace test utility (gated behind the `private-test-util`
         # feature, consumed only by the shell crate's tests). It is scaffolding with no public

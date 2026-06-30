@@ -1362,9 +1362,12 @@ src/
     bless.rs              # `bless`/`unbless` + `list blessings` audit
   commands/
     mod.rs run.rs install.rs backfill.rs   # analyze/list/prune/bless/unbless handlers live in analyze/
-  bin/
-    cargo-bench-history-mock-engine.rs     # test-support fake bench engine
 ```
+
+The fake benchmark engine the integration tests launch is **not** in this crate: it
+is the sibling `mock_bench_engine` package (`packages/mock_bench_engine/`), a
+`publish = false` crate so `cargo install cargo-bench-history` ships only the one
+real binary (decision 40).
 
 **Async ports & adapters (the testability boundary).** The app is **async by
 default on the Tokio runtime** (`main` = `#[tokio::main]`, lib entry
@@ -2081,3 +2084,32 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      `--format` is removed entirely; JSON and Markdown reports now go to files rather than
      stdout. Decision 35 still holds — the three renderings carry the same data — but they
      are now selected independently rather than one-at-a-time.)*
+
+40. **Mock benchmark engine is its own `publish = false` package** — *Decided:* the
+     fake engine the integration tests launch lives in a standalone `mock_bench_engine`
+     package (`packages/mock_bench_engine/`), not as a `[[bin]]` inside
+     `cargo-bench-history`. *Why:* an auto-discovered binary in the published crate is
+     installed onto every user's PATH by `cargo install cargo-bench-history` — pure
+     test scaffolding leaking into the shipped tool (issue #289). A separate
+     `publish = false` package keeps it structurally out of the published artifact and
+     off users' PATHs, with no feature-flag gymnastics. *Cost:* Cargo only sets
+     `CARGO_BIN_EXE_*` for binaries of the package **under test**, so the tests can no
+     longer reference the mock that way (and artifact dependencies, which would set the
+     var cross-package, are nightly-only). Instead `mock_bench_engine` is a **lib + bin**
+     crate: the binary (`src/main.rs`) is the mock, and the library (`src/lib.rs`)
+     exposes a `binary_path()` locator that `cargo-bench-history` consumes as a normal
+     path `dev-dependency`. The locator builds its own crate on demand
+     (`cargo build --manifest-path <own Cargo.toml> --message-format=json`) and reads the
+     executable path Cargo reports for the bin artifact — the lib artifact reports none,
+     so filtering on a present `executable` selects the bin — caching it per process in a
+     `LazyLock<String>`. *(Shared library, not `#[path]`: common test-support code lives
+     in a proper library crate, never an `#[path]`-included source file.)* Cargo owns
+     freshness, so plain `cargo test`/`cargo nextest` need no setup. Because nextest runs
+     one process per test and each no-op build costs ~190 ms, the `just` test recipes
+     pre-build the mock once (`_mock-engine-path`) and pass its path in
+     `MOCK_BENCH_ENGINE`; the resolver trusts that env var when it
+     points at an existing file and skips the per-process build (~8 s saved on the
+     suite). The two Gungraun fixtures the mock `include_str!`s stay in
+     `cargo-bench-history/tests/fixtures/` — they double as schema-drift canaries for the
+     parser tests — and are referenced cross-package by relative path rather than
+     duplicated.
