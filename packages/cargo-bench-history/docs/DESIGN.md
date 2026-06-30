@@ -740,9 +740,11 @@ key (`bench-history-cache-<run_id>`) with `restore-keys: bench-history-cache-` s
 restores the most recent prior cache, the load tops it up with the night's new objects, and
 the run saves a fresh key (GitHub cache entries are immutable per key). The cache path is the
 `--cache` directory passed to `gh-analyze-bench-history`. **Scaling caveat:** a repo's total
-Actions cache is capped at 10 GiB and the stored history is gzip (~5.7 GiB at the ~20 000
+Actions cache has a **default 10 GiB quota** (raisable with paid GitHub billing) and the
+stored history is gzip (~5.7 GiB at the ~20 000
 synthetic objects of decision 32); well within budget today, but if the history ever outgrows
-the cap the cache degrades to a partial restore (still correct, just less effective), at which
+the available quota the cache degrades to a partial restore (still correct, just less
+effective), at which
 point a server-side cache or a pruned look-back window would be the next step.
 
 #### Testing
@@ -2352,10 +2354,14 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      no-op under `--local`); `build_storage` wraps the backend when a cache dir is set. CI: the
      `collect` recipe switches `--overwrite` → `--skip-existing`, and the `analyze` job in
      `bench-history.yml` adds an `actions/cache` step with a rolling key + `restore-keys` prefix
-     (10 GiB Actions-cache cap is the scaling ceiling — degrades to a partial restore, still
+     (the default 10 GiB Actions-cache quota — raisable with paid billing — is the scaling
+     ceiling; beyond it the cache degrades to a partial restore, still
      correct). *Rejected:* (a) caching `list` — would hide newly stored objects; (b) keeping the
      nightly on `--overwrite` and **detecting create-vs-replace** at the Azure backend (a
-     conditional `If-None-Match: *` probe — `201` = add/no-bump, `409` = replace/bump) to spare
+     conditional `If-None-Match: *` create probe — a `201 Created` means the key was new
+     (no bump), while an already-exists failure means it was a replace (bump); Azure
+     surfaces that failure as `409 Conflict` *or* `412 Precondition Failed`, both of which the
+     backend already classifies as `AlreadyExists`) to spare
      the cache — works, but adds an extra round-trip per replace and a create-vs-replace rule
      that the append-only `--skip-existing` nightly makes unnecessary, and it leaves history
      mutable; (c) building the cache into `AzureBlobStorage` to cache raw gzip wire bytes —
