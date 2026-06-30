@@ -17,8 +17,10 @@ the environment can be deleted and re-created with one command.
   disabled** (Entra ID only, so there is no account key to leak). Container and blob
   soft-delete are disabled, matching the test account.
 - A **dedicated user-assigned managed identity** (`id-folo-bench-history-prod`) with a
-  **GitHub OIDC federated credential** for `main`. The nightly workflow signs in with
-  no stored secret. Only `main` is trusted — there is no pull-request credential —
+  **GitHub OIDC federated credential** for `main`. The nightly workflow federates into
+  it with no stored secret: `cargo-bench-history` mints a fresh GitHub OIDC token on
+  demand and exchanges it with Entra for each access token (so a multi-hour run stays
+  authenticated). Only `main` is trusted — there is no pull-request credential —
   because collection only ever runs on `main` (schedule + gated dispatch).
 - **`Storage Blob Data Contributor`** role assignments on the account for that managed
   identity and (optionally) a local developer principal. That single role covers

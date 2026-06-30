@@ -749,9 +749,85 @@ jobs:
       - name: Run real-Azure storage tests
         run: just test-azure
 
-      - name: Delete any leftover test containers
+      - name: Delete leaked test containers
         if: always()
         shell: pwsh
         # cleanup-containers.ps1 defaults its account to BENCH_HISTORY_TEST_AZURE_ACCOUNT,
-        # which the load step above put into the job env.
-        run: ./infra/azure-bench-history-test/cleanup-containers.ps1
+        # which the load step above put into the job env. Each test already deletes its
+        # own container when it finishes, so this backstop only needs to sweep containers
+        # leaked by a crashed or timed-out run. test-azure and test-azure-gh run
+        # concurrently against the same account, so -MinAgeMinutes keeps this sweep from
+        # deleting the sibling job's still-in-use (freshly written) containers; a genuine
+        # leak is older than the cutoff and gets swept here or on a later run.
+        run: ./infra/azure-bench-history-test/cleanup-containers.ps1 -MinAgeMinutes 180
+
+  # Variant of test-azure that exercises cargo-bench-history's SELF-MINTING GitHub
+  # OIDC credential — the exact credential the nightly prod collection (bench-history.yml)
+  # depends on — against the real test account. The unit tests in storage/github_oidc.rs
+  # stub the HTTP exchange, and test-azure above takes the local-az DeveloperToolsCredential
+  # fallback, so without this job nothing would prove the self-minting path actually
+  # round-trips real GitHub OIDC -> Entra -> Blob until the post-merge nightly run.
+  #
+  # The only difference from test-azure is exporting AZURE_CLIENT_ID: setting it is the
+  # switch that makes from_config build a ClientAssertionCredential (which mints a fresh
+  # OIDC JWT per token exchange) instead of the DeveloperToolsCredential it would use
+  # otherwise. azure/login is retained ONLY so the test harness's container cleanup
+  # (which shells out to `az`) works; the code under test ignores the az session once
+  # AZURE_CLIENT_ID is set.
+  test-azure-gh:
+    needs: [delta]
+    if: >-
+      needs.delta.outputs.skip_all != 'true'
+      && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'cargo-bench-history'))
+      && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    # `id-token: write` injects the ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN values that the
+    # tool itself reads to mint OIDC assertions on demand (the prod-critical path), and
+    # the test identity's `pull_request` federated credential lets same-repo PR runs
+    # federate in. Fork PRs cannot get an OIDC token for our tenant, hence the same-repo
+    # gate above. `contents: read` is the minimum the checkout needs.
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Load Azure identifiers from constants.env
+        shell: bash
+        run: grep -E '^(AZURE_TEST_CLIENT_ID|AZURE_TENANT_ID|AZURE_SUBSCRIPTION_ID|BENCH_HISTORY_TEST_AZURE_ACCOUNT)=' constants.env >> "$GITHUB_ENV"
+
+      # Setting AZURE_CLIENT_ID (to the test identity's client id) is what makes
+      # cargo-bench-history take its self-minting OIDC path. AZURE_TEST_CLIENT_ID was
+      # placed in the job env by the previous step, so it is readable here.
+      - name: Select the self-minting OIDC credential
+        shell: bash
+        run: echo "AZURE_CLIENT_ID=$AZURE_TEST_CLIENT_ID" >> "$GITHUB_ENV"
+
+      # The tool self-mints regardless of this login; it exists only so the test
+      # harness's `az`-based container cleanup has a session to use.
+      - name: Sign in to Azure (for harness container cleanup only)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_TEST_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run real-Azure storage tests via the self-minting OIDC credential
+        run: just test-azure
+
+      - name: Delete leaked test containers
+        if: always()
+        shell: pwsh
+        # cleanup-containers.ps1 defaults its account to BENCH_HISTORY_TEST_AZURE_ACCOUNT,
+        # which the load step above put into the job env. Each test already deletes its
+        # own container when it finishes, so this backstop only needs to sweep containers
+        # leaked by a crashed or timed-out run. test-azure and test-azure-gh run
+        # concurrently against the same account, so -MinAgeMinutes keeps this sweep from
+        # deleting the sibling job's still-in-use (freshly written) containers; a genuine
+        # leak is older than the cutoff and gets swept here or on a later run.
+        run: ./infra/azure-bench-history-test/cleanup-containers.ps1 -MinAgeMinutes 180
