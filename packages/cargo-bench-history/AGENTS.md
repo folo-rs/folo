@@ -848,16 +848,27 @@ Object keys map 1:1 to `/`-separated blob names, so the key model is identical t
 
 Authentication is resolved once in `AzureBlobStorage::from_config`, in priority
 order: a self-signed account SAS (`account_key`), a verbatim `sas_token`, or
-Microsoft Entra ID (`DeveloperToolsCredential`). SAS modes carry the token in the
-endpoint URL's query and pass no credential, so the emulator's plain-HTTP
-endpoint is accepted; Entra mode passes a token credential and requires HTTPS.
-The Entra credential is wrapped in a `CachingCredential` decorator that holds a
-cache lock across the inner acquisition, so a concurrent read burst collapses to
-one `az account get-access-token` call rather than racing the Windows MSAL
-token-cache lockfile (which fails the read with a permission error).
-`CachingCredential` implements the azure SDK's `#[async_trait]` `TokenCredential`
-trait, so it is the one place the crate pulls in `async_trait` — the crate's own
-IO ports still use RPITIT (`impl Future`), as the external trait leaves no choice.
+Microsoft Entra ID. SAS modes carry the token in the endpoint URL's query and pass
+no credential, so the emulator's plain-HTTP endpoint is accepted; Entra mode passes
+a token credential and requires HTTPS. The Entra credential is chosen by the
+`entra_credential` helper: in a GitHub Actions job configured for Azure federation
+(detected by `github_oidc::credential_from` finding `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`
+and the `ACTIONS_ID_TOKEN_REQUEST_*` pair) it builds a `ClientAssertionCredential`
+whose assertion (`storage::github_oidc::GithubOidcAssertion`) mints a **fresh**
+GitHub OIDC JWT on demand for each Entra token exchange; everywhere else (local
+`az login`, the `test-azure` CI job) it falls back to `DeveloperToolsCredential`.
+Self-minting is what keeps a multi-hour collection run authenticated: a single
+`azure/login` session caches one OIDC assertion that expires within minutes, so the
+first access-token refresh after it lapses re-submits a dead assertion and Entra
+rejects it (`AADSTS700024`).
+The chosen Entra credential is then wrapped in a `CachingCredential` decorator that
+holds a cache lock across the inner acquisition, so a concurrent read burst collapses
+to one token acquisition rather than racing the Windows MSAL token-cache lockfile
+(which fails the read with a permission error).
+`CachingCredential` and `GithubOidcAssertion` implement the azure SDK's
+`#[async_trait]` `TokenCredential`/`ClientAssertion` traits, so they are where the
+crate pulls in `async_trait` — the crate's own IO ports still use RPITIT
+(`impl Future`), as the external traits leave no choice.
 The account-SAS signer lives in `storage::sas` and is verified against a pinned
 golden signature — do not "fix" that test by editing the expected value.
 

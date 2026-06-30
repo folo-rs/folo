@@ -8,7 +8,12 @@
     Each real-Azure test creates a uniquely-named container (prefix `bh-it-`) and
     deletes it when it finishes. A crashed or timed-out test can leave one behind;
     this script sweeps them up. It is used both locally (manual cleanup) and as the
-    CI `test-azure` job's `if: always()` backstop.
+    `if: always()` backstop of the concurrent CI jobs `test-azure` and
+    `test-azure-gh`, which share one storage account.
+
+    Because those two jobs run at the same time, pass a non-zero -MinAgeMinutes in
+    CI so the backstop never deletes a container the sibling job is still writing to;
+    only older, genuinely leaked containers are swept.
 
     Authenticates with Microsoft Entra ID (`--auth-mode login`), matching the
     Entra-only storage account, so it works with the same `az login` / federated

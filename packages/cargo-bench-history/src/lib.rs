@@ -247,10 +247,17 @@
 //! 3. **For CI, authenticate with GitHub OIDC workload identity federation** instead
 //!    of a stored secret: create a user-assigned managed identity, add a federated
 //!    credential whose subject matches the workflow's OIDC token (for a scheduled run
-//!    on the default branch that is `repo:<owner>/<repo>:ref:refs/heads/main`), grant
-//!    it the role from step 2, then sign in with `azure/login@v2` from a job that has
-//!    `permissions: { id-token: write }`. The signed-in Azure CLI session is what the
-//!    tool's Entra credential picks up.
+//!    on the default branch that is `repo:<owner>/<repo>:ref:refs/heads/main`) and
+//!    whose audience is `api://AzureADTokenExchange`, then grant it the role from
+//!    step 2. Run the tool from a job that has `permissions: { id-token: write }`,
+//!    with the managed identity's client ID and your Entra tenant ID exported as the
+//!    `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` environment variables. The tool then
+//!    mints a fresh OIDC assertion straight from GitHub's per-job token endpoint for
+//!    each Entra token exchange, so it stays authenticated even across the hourly
+//!    access-token refresh of a multi-hour benchmark run — no `azure/login` step and
+//!    no stored secret are involved. (When those variables are absent — locally, or in
+//!    a short job that runs `azure/login` — the tool instead picks up the ambient
+//!    Azure CLI session.)
 //!
 //! Worked, runnable examples of all of the above live in the folo repository as Bicep
 //! templates with PowerShell deploy wrappers: the long-lived store with its own

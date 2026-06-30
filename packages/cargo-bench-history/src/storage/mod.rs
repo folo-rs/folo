@@ -3,6 +3,7 @@
 
 mod azure;
 mod facade;
+mod github_oidc;
 mod local;
 mod sas;
 

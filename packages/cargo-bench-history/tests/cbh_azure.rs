@@ -300,13 +300,24 @@ async fn delete_container(endpoint: &str, container: &str) {
 struct AzureWorkspace {
     dir: tempfile::TempDir,
     bench: Vec<String>,
+    /// The synthetic UTC second stamped on the next commit. It starts a few minutes
+    /// before construction and advances one second per commit, so consecutive commits
+    /// never share a wall-clock second (git's commit-date resolution). Sharing a
+    /// second would make `analyze`'s first-parent, date-ordered window resolution
+    /// non-deterministic in fast CI; starting only minutes back keeps every commit
+    /// inside the default (six-month) analyze window.
+    next_second: std::cell::Cell<i64>,
 }
 
 impl AzureWorkspace {
     fn new(config: &str) -> Self {
+        // Start a few minutes back so every pinned commit date stays inside the
+        // default analyze window while remaining strictly in the past.
+        let base_second = jiff::Timestamp::now().as_second().saturating_sub(300);
         let workspace = Self {
             dir: tempfile::tempdir().unwrap(),
             bench: Vec::new(),
+            next_second: std::cell::Cell::new(base_second),
         };
         let cargo_dir = workspace.dir.path().join(".cargo");
         std::fs::create_dir_all(&cargo_dir).unwrap();
@@ -318,7 +329,7 @@ impl AzureWorkspace {
         .unwrap();
         workspace.git(&["init", "-b", "master"]);
         workspace.git(&["add", ".gitignore"]);
-        workspace.git(&["commit", "-m", "root"]);
+        workspace.git_commit(&["commit", "-m", "root"]);
         workspace
     }
 
@@ -336,6 +347,12 @@ impl AzureWorkspace {
     /// background repack fires; this keeps a throwaway repository to `init`/`add`/
     /// `commit` rather than several extra `git config` spawns.
     fn git(&self, args: &[&str]) -> std::process::Output {
+        self.git_with_env(args, &[])
+    }
+
+    /// Like [`git`](Self::git) but also exports `env` to the `git` process, used to
+    /// pin commit dates via `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE`.
+    fn git_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> std::process::Output {
         let root = self.dir.path().to_string_lossy().into_owned();
         let mut full: Vec<&str> = vec![
             "-c",
@@ -356,6 +373,7 @@ impl AzureWorkspace {
         full.extend_from_slice(args);
         let output = std::process::Command::new("git")
             .args(&full)
+            .envs(env.iter().copied())
             .output()
             .unwrap();
         assert!(
@@ -367,11 +385,29 @@ impl AzureWorkspace {
         output
     }
 
+    /// Runs a `git` sub-command that creates a commit, pinning its author and
+    /// committer dates to a distinct, monotonically increasing synthetic second so
+    /// consecutive commits never share a wall-clock second. Sharing a second would
+    /// make `analyze`'s first-parent, date-ordered window resolution non-deterministic
+    /// when commits are created in quick succession (as they are in CI).
+    fn git_commit(&self, args: &[&str]) -> std::process::Output {
+        let second = self.next_second.get();
+        self.next_second.set(second.saturating_add(1));
+        let when = format!("@{second} +0000");
+        self.git_with_env(
+            args,
+            &[
+                ("GIT_AUTHOR_DATE", when.as_str()),
+                ("GIT_COMMITTER_DATE", when.as_str()),
+            ],
+        )
+    }
+
     /// Creates an empty commit so a subsequent clean run lands on a fresh commit
     /// directory (a clean run is keyed solely by its commit, so each point in a
     /// history needs its own commit).
     fn commit(&self, message: &str) {
-        self.git(&["commit", "--allow-empty", "-m", message]);
+        self.git_commit(&["commit", "--allow-empty", "-m", message]);
     }
 
     /// Creates and checks out a new branch off the current `HEAD`.
