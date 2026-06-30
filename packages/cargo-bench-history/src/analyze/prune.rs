@@ -100,12 +100,6 @@ pub(crate) async fn execute(
     let project_id = resolve_project_id(&config, workspace_dir);
     let local = resolve_local_path(options.local.as_ref(), storage_env().as_deref())?;
     let cache = resolve_cache_path(options.cache.as_ref(), cache_env().as_deref())?;
-    if local.is_some() && cache.is_some() {
-        reporter.note(
-            "cache: --cache was given, but --local selects filesystem storage whose reads are \
-             already local, so the read-through cache is ignored",
-        );
-    }
     let storage = build_storage(
         local.as_deref(),
         &config,

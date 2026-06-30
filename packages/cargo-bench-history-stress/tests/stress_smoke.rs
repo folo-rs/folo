@@ -163,6 +163,20 @@ fn rejects_an_empty_scenario() {
 
 #[test]
 #[cfg_attr(miri, ignore)]
+fn rejects_a_cache_against_local_storage() {
+    // The read-through cache only applies to the cloud backend, so pairing it with
+    // the default `--storage local` is a usage error rather than a silent no-op.
+    let output = run_stress(&["--cache", "cache-dir", "--modes", "history"]);
+    assert!(!output.status.success(), "a cache against local must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--cache only applies to --storage azure"),
+        "{stderr}"
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore)]
 fn reports_progress_and_explains_only_under_verbose() {
     // Always-on phase markers go to stderr; explanatory detail lines appear there
     // only when --verbose is set.

@@ -5,13 +5,20 @@ logic (parsing, mapping, comparability, key derivation, message formatting)
 synchronous and pushes async only to the IO edges, each modelled as a small
 "port" trait with a real Tokio adapter and an in-`#[cfg(test)]` in-memory fake.
 
-> **Design reference:** [`docs/DESIGN.md`](docs/DESIGN.md) is the canonical design &
-> implementation record — the data model, comparability/storage rules, command
-> semantics, analysis algorithms, the two-crate (shell + `cargo-bench-history-core`)
-> architecture, and the numbered decision log (§13). Keep it up to date whenever you
-> change a design decision, the data model, the crate layout, the storage format, or
-> a command's behaviour, recording non-trivial design changes as a new or amended
-> decision entry.
+> **Design reference:** [`docs/DESIGN.md`](docs/DESIGN.md) is the canonical, **high-level**
+> design document — the data model, comparability/storage rules, command semantics,
+> analysis algorithms, the two-crate (shell + `cargo-bench-history-core`) architecture,
+> and the numbered decision log (§13). Keep it up to date whenever you change a design
+> decision, the data model, the crate layout, the storage format, or a command's
+> behaviour, recording non-trivial design changes as a new or amended decision entry.
+>
+> **Keep it a design document, not an implementation record.** Describe the patterns,
+> concepts, and relationships — *what* exists and *why* — never *how* it is coded. Do
+> not name private types, methods, fields, or flags, and do not transcribe control flow,
+> data structures, or wire-protocol mechanics. Spell out implementation detail only for
+> a genuinely exceptional corner case that cannot be understood otherwise. When in
+> doubt, cut detail: the code and its tests are the record of *how*; the design document
+> is the record of *what* and *why*.
 
 ## Ports and fakes
 
@@ -168,13 +175,15 @@ env edge is `wiring::cache_env()` and the pure resolver `wiring::resolve_cache_p
 (mirroring the `--local` split). It is meaningful **only with the cloud backend**:
 `build_storage` wraps an `Azure` backend in `storage::caching::CachingStorage`
 (`StorageFacade::CachedAzure`) rooted at `<cache>/<project>`, mirroring every fetched
-object so the bulk history downloads at most once across runs; with a `--local`
-backend it is ignored (reads are already local) with a `--verbose` note. The mirror
-is invalidated wholesale by a cloud-side marker (`storage::cache_epoch_key`,
-`v1/<project>/_cache-epoch`) that `put_overwrite`/`delete` arm and a per-command
-flush bumps; `synchronize_cache` (before a load) wipes a stale mirror, and
-`report_cache_tally` notes hits/misses after. Append-only `put` never arms it, so the
-nightly `run --skip-existing` collection never wipes the cache it feeds.
+object so the bulk history downloads at most once across runs. A cache is pointless
+with a `--local` backend (reads are already local), so the two **conflict**: the CLI
+rejects `--cache` together with `--local` (clap `conflicts_with`). Each mirror holds
+one project's objects, so invalidation is **per project**: a cloud-side marker
+(`storage::cache_epoch_key`, `v1/<project>/_cache-epoch`) that `put_overwrite`/`delete`
+arm and a per-command flush bumps; `synchronize_cache` (before a load) wipes that
+project's stale mirror, and `report_cache_tally` notes hits/misses after. Append-only
+`put` never arms it, so the nightly `run --skip-existing` collection never wipes the
+cache it feeds.
 
 **Testing note:** the `cbh_integration` harness (`Workspace`) auto-injects
 `--local=<root>/store` for storage-backed commands so each test writes to its own

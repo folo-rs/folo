@@ -552,215 +552,70 @@ unit-tested without touching the process environment. The chosen backend (and wh
 
 ### 7.2 Read-through cache for the cloud backend (issue #262)
 
-> Status: **implemented**. This section is the implementation contract; decision
-> 40 logs the rationale.
+> Status: **implemented.** Decision 40 logs the rationale and the alternatives weighed.
 
-`analyze`/`list`/`prune` load the *whole* in-selection history before reconstructing the
-series. Against the Azure backend that is one network round-trip per object, and the
-nightly `analyze` job re-downloads everything every night even though almost all of it is
-byte-for-byte identical to the night before. The cache turns that re-download into a local
-read by persisting fetched object bodies on disk between runs (via the GitHub
-[`actions/cache`](https://github.com/actions/cache) action), so each run pays the network
-cost only for objects it has never seen.
+`analyze`/`list`/`prune` load the whole in-selection history before reconstructing the
+series, and against the cloud backend that is one download per object. The nightly
+`analyze` re-fetches everything even though almost all of it is identical to the night
+before. An optional on-disk **read-through cache** removes that waste: each run pays
+the network cost only for objects it has never seen, and the cache survives between CI
+runs via the GitHub [`actions/cache`](https://github.com/actions/cache) action.
 
-#### What is cached, and why it is correct
+**What is cached, and why it stays correct.** The cache mirrors fetched **object
+bodies**, keyed by storage key. It never caches the **listing**: discovering the
+current key set is one cheap round-trip whose whole purpose is to see what is new, so
+it always goes to the cloud and a freshly stored object is still found (its body simply
+misses the cache and falls through). Trusting a cached body forever is sound because
+the storage model is **immutable per key** — the write-once `put` refuses to change an
+existing key, so clean runs, dirty snapshots, and blessing sidecars never change once
+written. Only two operations break that immutability, and both are rare, deliberate
+administrative actions never reached on the nightly hot path: a `delete` (used by
+`prune`/`unbless`, and by `--overwrite` dropping a stale blessing) and a `put_overwrite`
+(the explicit `--overwrite` escape hatch). A cache must be discarded whenever either
+happens; a brand-new key never invalidates anything, because it was never cached.
 
-The cache stores **object bodies** (the `Storage::get` result for a key), keyed by storage
-key. It deliberately does **not** cache `Storage::list`: the listing is one cheap metadata
-round-trip whose whole job is to discover the *current* key set, so it always goes to the
-cloud. Caching `list` would hide newly stored objects; caching bodies does not, because the
-live listing still surfaces every new key and the body fetch for a new key simply misses the
-cache and falls through to the cloud.
+**Per-project invalidation.** Invalidation is signalled by a small **marker object**
+stored per project, holding an opaque epoch token. It lives inside that project's own
+versioned partition, alongside the data it guards, so a future storage-format version
+can redefine the cache contract in lockstep with the layout it caches. The cache and
+the marker are both scoped to a single project, so a mutation in one project only ever
+discards **that project's** mirror — other projects keep their caches. Before a load,
+the reader compares the project's cloud marker against the epoch its mirror last
+recorded; on a mismatch it discards that project's mirror and re-records the new epoch,
+then reloads. The wipe is deliberately coarse — drop the project's whole mirror rather
+than reason about which objects a deletion touched — because mutations are rare, so
+"throw it away and re-download once" is simpler and obviously correct. Only whether the
+token *differs* matters, never its value or ordering, so clock skew between runners is
+harmless. The marker is maintained by the cloud backend itself, not by the cache, so
+**every** writer — including a developer's cache-less `prune` — invalidates *other*
+machines' caches: the local cache is a read-side optimization, the marker a cloud-side
+correctness contract, and the two are independent.
 
-Correctness rests on the storage model's **per-key immutability**: a key's bytes are fixed
-once written. Write-once `put` *refuses* to change an existing key, so the bulk of history —
-clean runs, dirty snapshots, blessing sidecars — is immutable, and a cached body can be
-trusted forever. Only two operations break per-key immutability, and both are **rare,
-deliberate administrative actions** — never part of the nightly hot path (see
-[the append-only production write path](#append-only-production-write-path) below):
+**The nightly must stay append-only.** The cache only survives a nightly run if that
+run never mutates an existing object. The collection previously used `--overwrite`
+purely so a re-run on an unchanged commit was idempotent rather than a duplicate
+failure — but overwriting routes every write (even the first write of a new commit)
+through the mutating path and would invalidate the cache every night. A
+`run --skip-existing` mode fixes this: a write-once collision becomes a **soft skip**
+(the run still benchmarks every engine, so a broken benchmark is still caught, but
+writes nothing) instead of a failure. The nightly switches to it, keeping the
+production write path **purely additive** so it never bumps the marker. This is also
+better history hygiene — a stored measurement becomes immutable, so a re-run can never
+silently rewrite past data — while still meeting the original "a re-run must not fail
+red" goal. Regenerating data after a harness change stays a deliberate, manual
+`--overwrite`, which legitimately invalidates caches.
 
-* **`delete`** (used by `prune`, `unbless`, and `run/backfill --overwrite` dropping stale
-  blessings) — and crucially a *later* write-once `put` to the now-absent key can store
-  **different** bytes than the cache holds (e.g. `prune` a commit's `clean.json`, then a
-  fresh `run` re-creates it with new measurements).
-* **`put_overwrite`** (the explicit `run/backfill --overwrite` escape hatch) — directly
-  rewrites an existing object's bytes.
-
-A cache must therefore be invalidated whenever either happens. New keys never invalidate
-anything (they were never cached): the live `list` surfaces them and the body fetch simply
-misses and falls through to the cloud. Keeping the **production write path purely additive**
-(write-once `put` only) is what keeps the nightly cache alive across runs, so the nightly
-never bumps the marker — see the dedicated subsection below.
-
-#### Caching decorator over a reused `LocalStorage`
-
-The cache is a `CachingStorage<Inner: Storage>` **decorator**, generic over the wrapped
-backend, following the same ports-and-fakes shape as the rest of the storage layer (so it is
-driven in tests by `MemoryStorage` as the inner and stays Miri-safe). Its **backing store is
-itself a `LocalStorage`** rooted at the cache directory: that reuse is deliberate, because
-`LocalStorage` already stores gzip-on-disk through the shared `codec`, validates keys
-identically, and lays objects out by the same `/`-separated keys — so the cache directory is
-just a partial mirror of the container, and one compact gzip body per cached object with no
-new on-disk format to maintain.
-
-* **`get(key)`** — `cache.get(key)`; on hit, return the inflated body (one local read +
-  inflate, the same inflate the cloud path would do). On `NotFound`, `inner.get(key)` (cloud
-  download + inflate), then `cache.put_overwrite(key, &body)` to populate, and return the
-  body. `put_overwrite` (not write-once `put`) makes population idempotent and race-free; the
-  chunked parallel loader fans disjoint key ranges across workers, so two workers never
-  populate the same key, but a stray re-populate across runs is harmless.
-* **`list` / `put` / `delete` / `put_overwrite`** — delegate straight to `inner` (the cloud
-  is the source of truth for the key set and for all writes). The decorator does not try to
-  keep the local mirror in lockstep on writes; staleness is handled wholesale by the
-  invalidation marker, not incrementally.
-
-The cold-path cost of reusing `LocalStorage` is that a missed body is inflated by the cloud
-backend and then re-compressed by the cache's `LocalStorage::put_overwrite`. That redundant
-compress is paid **only on a miss** (cold runs, which are rare) and never on the warm path
-the cache exists to speed up (a hit is read-from-disk + inflate). A future optimization could
-add raw-bytes `get`/`put` to the `Storage` trait to pass the gzip wire bytes through
-untouched, but it is not the bottleneck and is deferred.
-
-#### Invalidation marker (cloud-side)
-
-Invalidation is signalled by a single small **marker object** the issue calls a
-"last_delete_timestamp", stored per project at `v1/<project>/_cache-epoch` — a reserved,
-**version-scoped** control key that lives *inside* the project's own partition, as a sentinel
-sibling of the engine directories. It deliberately shares the project's `v1/…` namespace
-rather than sitting in a separate top-level prefix: the marker is metadata *about this
-project's data*, so versioning it together with that data is its natural home — a future `v2`
-that reworks the storage model can redefine the marker's format and placement in lockstep
-(decision 40). Two facts keep this safe and free of the listing-collision worry an earlier
-draft over-stated. First, the sentinel sits in the **engine** position, a controlled
-vocabulary (`criterion`/`callgrind`/…) that never begins with `_`, so `_cache-epoch` can never
-collide with a real discriminant segment. Second — and this is what the earlier draft got
-wrong — a marker under `v1/<project>/` would **not** be mistaken for data even if it were
-listed: `facet_filtered_candidates` (shared by `analyze` and `prune`) already **skips any
-non-`.json` or unparsable key** before it ever becomes a candidate, so the marker is simply
-ignored (one skipped key with a `--verbose` note), never fetched as a data candidate, never
-folded into a series. It holds an
-opaque **epoch token** — the run's observation
-timestamp from the injected `tick::Clock`, rendered RFC 3339. Only whether the token
-*differs* matters, never its ordering, so clock skew between CI runners is harmless (the worst
-case is one extra, unnecessary cache wipe).
-
-**Reader side** (when `--cache` is set). Before loading, the decorator reads the marker once
-(`inner.get("v1/<project>/_cache-epoch")`; a `NotFound` means "no mutation ever recorded" = a
-fixed genesis token) and compares it to the token recorded in the cache directory (stored in
-the mirror's reserved `_epoch` key alongside the mirrored objects). On a mismatch — or a cache
-with no recorded token — it **wipes the entire cache directory** and records the freshly read
-token,
-then proceeds. Whole-cache invalidation is intentionally coarse: deletes and rewrites are
-rare, so a blunt "throw it all away and re-download" is simpler and obviously correct, and
-re-recording the token immediately means the wipe happens at most once per process.
-
-**Writer side.** The marker is bumped whenever a writer **removes or overwrites an existing
-object** — i.e. on `delete` and on `put_overwrite`. Both are rare, deliberate operations
-(`prune`/`unbless`, and the explicit `--overwrite` escape hatch), and the nightly collection
-calls neither (see the next subsection), so a normal night never bumps the marker and the
-cache survives untouched. The bump deliberately does **not** try to distinguish a
-`put_overwrite` that truly replaced pre-existing bytes from one that did not: because the
-additive nightly path never overwrites, any `put_overwrite` reaching the backend is a
-deliberate "regenerate this data" action that *should* invalidate caches. So `put_overwrite`
-stays a single unconditional PUT — no conditional-create probe, no extra round-trip — and it
-always arms the marker, as does `delete`.
-
-The bump is **coalesced to at most one marker write per command**: the backend holds an
-interior "mutated" flag (an `Arc<AtomicBool>`), armed by `delete`/`put_overwrite` and flushed
-once — via `flush_pending_invalidation`, called by the dispatcher after a mutating command
-succeeds — which writes the marker through an internal path that does **not** re-arm the flag
-(so writing the marker is not itself seen as a mutation). Marker maintenance lives in
-`AzureBlobStorage`, **not** in `CachingStorage`, because the bump must happen for *every*
-writer against the cloud — including a developer's `prune` with no local cache — so that
-*other* machines' caches (the CI runner's) invalidate. The local cache is a read-side
-optimization; the marker is a cloud-side correctness contract, and they are independent.
-
-#### Append-only production write path
-
-The cache only survives across nightly runs if the nightly collection never mutates an
-existing object. Today the nightly `collect` recipe (`gh-collect-bench-history` =
-`run --workspace --exclude benchmarks --overwrite`) passes `--overwrite` purely so a re-run on
-an *unchanged* `main` commit is idempotent rather than failing as a duplicate — but
-`--overwrite` routes **every** write through `put_overwrite`, including the first-ever write of
-a brand-new commit, which would bump the marker (and wipe the cache) every single night.
-
-The fix is to make the nightly **skip-if-exists** instead of overwrite: a new
-`run --skip-existing` mode (mutually exclusive with `--overwrite`) turns a write-once `put`
-collision (`StorageError::AlreadyExists`) into a **soft skip** — the run still executes and
-harvests every engine (so a broken benchmark is still caught), but an object that already
-exists is left untouched rather than rewritten and is not a `RunError::Duplicate` failure. The
-`gh-collect-bench-history` recipe switches from `--overwrite` to `--skip-existing`, so:
-
-* a **new** `main` commit → write-once `put` of new keys → cache stays valid (the new keys are
-  discovered by the live `list` and fetched fresh on the next analyze);
-* a **same-commit** re-run (the case `--overwrite` existed for) → every key already exists →
-  every write is skipped → no mutation, no marker bump, no cache wipe.
-
-This is not just cache-friendly, it is **better history hygiene**: a stored commit's data
-point becomes immutable, so a re-run can never silently rewrite a historical measurement and
-destabilize past analyses, and it still satisfies the original reason the nightly used
-`--overwrite` (a re-run on an unchanged commit must not fail red). The per-`(partition, commit)`
-key granularity makes this safe — the nightly only ever writes the current tip, so
-skip-existing only skips a literal re-run of the very same commit, exactly where "the first
-measurement is as good as a later one" holds. Regenerating a commit's data after a harness
-change stays a **deliberate, manual** `run --overwrite` / `backfill --overwrite`, which
-legitimately bumps the marker and invalidates caches.
-
-#### CLI and selection
-
-A new `--cache <dir>` flag (with a `CARGO_BENCH_HISTORY_CACHE` environment fallback, resolved
-through the same edge-helper-plus-pure-resolver split as `--local`) joins the **Environment
-and execution** argument group on the read commands `analyze`, `list`, and `prune`. It is
-meaningful **only with the cloud backend**: a relative path rebases against the workspace
-directory like `--local`; with a `--local` filesystem backend the cache is a no-op (reads are
-already local) and is ignored with a `--verbose` note. `run`/`backfill` take no `--cache` —
-they do not read the bulk history — but still maintain the marker through the backend
-automatically. `build_storage` grows a cache parameter (plus the project id, so the mirror
-roots at `<cache>/<project>`): when a cache directory is set and the selected backend is
-`Azure`, it wraps the backend in `CachingStorage` behind a new `StorageFacade::CachedAzure`
-variant; otherwise it returns the backend unwrapped.
-
-#### Verbose diagnostics
-
-Per `docs/standalone-binaries.md`, the `--verbose` trail is explanatory, not conclusion-only:
-the cache layer notes the resolved cache directory, the marker key and the epoch token it read
-from the cloud, the token recorded locally, the **decision** (reuse vs. wipe) **and the rule
-behind it** (tokens equal/differ), and a hit/miss tally at the end of the load so a "slow
-analyze" can be diagnosed as a cold or invalidated cache. A writer notes each
-`delete`/`put_overwrite` that armed the marker and the single marker write at flush;
-`run --skip-existing` notes each object skipped because it already exists (and therefore why
-the marker was *not* armed).
-
-#### CI integration
-
-The `collect` job's recipe switches from `run --overwrite` to `run --skip-existing` (see
-[the append-only production write path](#append-only-production-write-path)), so the nightly
-collection never invalidates the cache it feeds. The `analyze` job in `bench-history.yml`
-gains an `actions/cache` step keyed on a rolling
-key (`bench-history-cache-<run_id>`) with `restore-keys: bench-history-cache-` so each run
-restores the most recent prior cache, the load tops it up with the night's new objects, and
-the run saves a fresh key (GitHub cache entries are immutable per key). The cache path is the
-`--cache` directory passed to `gh-analyze-bench-history`. **Scaling caveat:** a repo's total
-Actions cache has a **default 10 GiB quota** (raisable with paid GitHub billing) and the
-stored history is gzip (~5.7 GiB at the ~20 000
-synthetic objects of decision 32); well within budget today, but if the history ever outgrows
-the available quota the cache degrades to a partial restore (still correct, just less
-effective), at which
-point a server-side cache or a pruned look-back window would be the next step.
-
-#### Testing
-
-`CachingStorage` is unit-tested over `MemoryStorage` as the inner backend under Miri:
-hit-after-miss, populate-on-miss, `list` staleness immunity (a key added to the inner after a
-load is still listed), epoch-match reuse, epoch-mismatch wipe, and genesis (absent marker).
-The marker arming is unit-tested at the storage layer: `delete` and `put_overwrite` arm the
-flag and a single flush writes the marker exactly once, while write-once `put` (the additive
-path) leaves it untouched. `run --skip-existing` is covered by the existing fake-driven `run`
-orchestration tests (a pre-seeded `MemoryStorage` key yields a soft skip, not a
-`RunError::Duplicate`). The real `LocalStorage` backing store and the Azure round-trips stay
-covered by the existing filesystem and Azurite suites (`#[cfg_attr(miri, ignore)]`); the
-marker's pure arm/flush logic stays under mutation testing while the SDK-delegating I/O keeps
-its `mutants::skip`.
+**CLI and CI.** A `--cache <dir>` flag (with a `CARGO_BENCH_HISTORY_CACHE` environment
+fallback, resolved like `--local`) on `analyze`/`list`/`prune` selects the cache
+directory. It applies only to the cloud backend, so it **conflicts with `--local`** —
+a local backend's reads are already on disk. `run`/`backfill` take no `--cache` (they
+do not read the bulk history) but still maintain the marker through the backend
+automatically. In CI the nightly `collect` switches to `--skip-existing`, and the
+`analyze` job restores and saves the cache directory through `actions/cache`. The one
+scaling limit is the repository's Actions-cache quota (a default 10 GiB, raisable with
+paid billing); beyond it the cache degrades to a partial restore — still correct, just
+less effective — at which point a server-side cache or a pruned look-back window would
+be the next step.
 
 ## 8. Commands
 
@@ -2317,59 +2172,35 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      stdout. Decision 35 still holds — the three renderings carry the same data — but they
      are now selected independently rather than one-at-a-time.)*
 
-40. **Read-through cache for the cloud backend (issue #262)** — *Designed (pending
-     implementation; see §7.2):* the cloud-backed read commands (`analyze`/`list`/`prune`)
-     gain an optional on-disk **body cache** so a run pays the network cost only for objects it
-     has never seen, persisted between CI runs via `actions/cache`. The cache is a
-     `CachingStorage<Inner>` **decorator** whose backing store is a reused `LocalStorage` (same
-     gzip-on-disk `codec`, same key validation, so the cache dir is a partial mirror of the
-     container): `get` reads through (hit → local read+inflate; miss → cloud fetch then populate
-     via `put_overwrite`), while `list` and all writes delegate to the cloud so the live key set
-     and source of truth are never cached. Correctness rests on the model's **per-key
-     immutability** — write-once `put` cannot change an existing key, so a cached body is valid
-     forever; only `delete` and `put_overwrite` break it, and both are **rare, deliberate
-     administrative ops** (`prune`/`unbless`, the manual `--overwrite` escape hatch), never part
-     of the nightly hot path. Invalidation is a single per-project **marker object**, a
-     **version-scoped** sentinel control key at `v1/<project>/_cache-epoch` (inside the
-     project's partition, in the controlled engine-name position so it cannot collide with a
-     real discriminant, and skipped by the loaders' existing non-`.json`/unparsable-key filter
-     so it is never mistaken for data), holding an opaque epoch token
-     (an observation timestamp — only *difference* matters, so clock skew is harmless; an absent
-     marker is genesis). The reader reads it once, compares it to the recorded `_epoch` key in
-     the cache dir, and **wipes the whole cache on mismatch** (coarse but correct — deletes/rewrites are
-     rare). The marker is bumped on `delete` and `put_overwrite` (both unconditional — no
-     create-vs-replace probe needed), coalesced to one marker write per command via an interior
-     "mutated" flag flushed by the dispatcher. Marker maintenance lives in `AzureBlobStorage`
-     (not the decorator) so **every** cloud writer — including a developer's cache-less `prune`
-     — invalidates other machines' caches; the cache is a read-side optimization, the marker a
-     cloud-side correctness contract, kept independent. *Key enabler the issue did not consider:*
-     the nightly `collect` currently uses `run --overwrite` purely for same-commit idempotency,
-     which would route every write (including new-commit creates) through `put_overwrite` and
-     wipe the cache **every night**; instead the nightly switches to a new **`run --skip-existing`**
-     mode (a write-once `put` collision becomes a soft skip, not a `RunError::Duplicate`), making
-     the **production write path purely append-only** so it never bumps the marker. This is also
-     better history hygiene: a stored commit's measurement becomes immutable (no silent rewrites
-     of past data points), while still satisfying the original "a re-run must not fail red" goal.
-     CLI: a new `--cache <dir>` (+ `CARGO_BENCH_HISTORY_CACHE` env) in the **Environment and
-     execution** group on the three read commands, meaningful only with the cloud backend (a
-     no-op under `--local`); `build_storage` wraps the backend when a cache dir is set. CI: the
-     `collect` recipe switches `--overwrite` → `--skip-existing`, and the `analyze` job in
-     `bench-history.yml` adds an `actions/cache` step with a rolling key + `restore-keys` prefix
-     (the default 10 GiB Actions-cache quota — raisable with paid billing — is the scaling
-     ceiling; beyond it the cache degrades to a partial restore, still
-     correct). *Rejected:* (a) caching `list` — would hide newly stored objects; (b) keeping the
-     nightly on `--overwrite` and **detecting create-vs-replace** at the Azure backend (a
-     conditional `If-None-Match: *` create probe — a `201 Created` means the key was new
-     (no bump), while an already-exists failure means it was a replace (bump); Azure
-     surfaces that failure as `409 Conflict` *or* `412 Precondition Failed`, both of which the
-     backend already classifies as `AlreadyExists`) to spare
-     the cache — works, but adds an extra round-trip per replace and a create-vs-replace rule
-     that the append-only `--skip-existing` nightly makes unnecessary, and it leaves history
-     mutable; (c) building the cache into `AzureBlobStorage` to cache raw gzip wire bytes —
-     cheaper cold path but not Miri-testable and couples concerns, whereas the decorator over
-     `MemoryStorage` is. The accepted cost is one redundant re-compress per **cold-path** miss
-     (never on the warm hit the cache optimizes); a raw-bytes `Storage::get`/`put` to elide it is
-     deferred.
+40. **Read-through cache for the cloud backend (issue #262)** — *Implemented (§7.2).*
+     The cloud-backed read commands (`analyze`/`list`/`prune`) gain an optional on-disk
+     **body cache** so a run pays the network cost only for objects it has never seen,
+     persisted between CI runs via `actions/cache`. Correctness rests on the model's
+     **per-key immutability**: a cached body is valid forever because write-once `put`
+     cannot change an existing key; only `delete` and `put_overwrite` — rare, deliberate
+     administrative ops (`prune`/`unbless`, the manual `--overwrite` escape hatch) —
+     break it, and the listing is never cached, so newly stored objects are always
+     discovered. Invalidation is a small **per-project marker** holding an opaque epoch
+     token, kept inside that project's own versioned partition so a future
+     storage-format version can redefine the cache contract in lockstep with the layout
+     it caches. The reader discards only **that project's** mirror when the token changes
+     (coarse but correct, since mutations are rare); the marker is maintained by the
+     cloud backend, so every writer invalidates other machines' caches even when it holds
+     no cache itself. *Key enabler the issue did not consider:* the nightly `collect`
+     used `--overwrite` for same-commit idempotency, which would mutate objects and wipe
+     the cache nightly; a new **`run --skip-existing`** mode keeps the production write
+     path append-only — and makes stored measurements immutable, which is better history
+     hygiene — so the nightly never invalidates the cache it feeds. CLI: a `--cache <dir>`
+     (+ `CARGO_BENCH_HISTORY_CACHE` env) on the three read commands, applicable only to
+     the cloud backend, so it **conflicts with `--local`**. CI: the `collect` recipe
+     switches to `--skip-existing`, and the `analyze` job restores/saves the cache via
+     `actions/cache`. *Rejected:* (a) caching the listing — would hide newly stored
+     objects; (b) keeping the nightly on `--overwrite` and detecting create-vs-replace at
+     the backend to spare the cache — works, but adds a round-trip per write and leaves
+     history mutable, which `--skip-existing` avoids outright; (c) building the cache into
+     the Azure backend to cache raw wire bytes — cheaper on a miss, but not testable with
+     in-memory fakes and couples concerns, whereas a storage decorator is fake-driven and
+     reactor-free.
 
 41. **Type-segmented (`v2`) blob layout — deferred, not adopted (§4.2)** — a forward-looking
      idea to hoist the run *kind* into the key path

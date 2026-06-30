@@ -147,9 +147,11 @@ impl StorageFacade {
 /// **only with the cloud backend**: when set against an Azure backend the backend
 /// is wrapped in a [`CachingStorage`] whose mirror roots at
 /// `<cache>/<project>` (so distinct projects keep distinct mirrors, each with its
-/// own recorded epoch). With a `--local` backend a cache is pointless — reads are
-/// already local — so it is ignored here (the caller emits a `--verbose` note).
-/// A relative cache path rebases against `base` exactly like `local`.
+/// own recorded epoch). A cache is pointless with a `--local` backend — reads are
+/// already local — so the CLI rejects that combination outright (`--cache`
+/// conflicts with `--local`); a programmatic caller that sets both still gets the
+/// local backend, with the cache ignored. A relative cache path rebases against
+/// `base` exactly like `local`.
 ///
 /// # Errors
 ///

@@ -13,7 +13,8 @@ use std::time::{Duration, Instant};
 
 use all_the_time::Session;
 use cargo_bench_history::{
-    AnalyzeOptions, Command, LocalStorageSelection, Overrides, RunOutcome, run_with_overrides,
+    AnalyzeOptions, CacheSelection, Command, LocalStorageSelection, Overrides, RunOutcome,
+    run_with_overrides,
 };
 use jiff::Timestamp;
 use serde::Deserialize;
@@ -32,6 +33,18 @@ const FULL_HISTORY_SINCE: &str = "2000-01-01";
 /// suppressed); a relative path resolves against the workspace directory, and
 /// each attempt overwrites the previous one in place.
 const ANALYZE_REPORT_FILE: &str = "stress-analyze-report.json";
+
+/// The optional storage selections forwarded into each analysis: a `--local`
+/// store root and a read-through `--cache` directory. Both are `Option<&Path>`
+/// (each meaningful only against its respective backend) and are grouped so the
+/// per-mode measurement signature stays compact.
+#[derive(Clone, Copy)]
+pub(crate) struct StorageInputs<'a> {
+    /// Root of a `--local` filesystem store, when the run targets local storage.
+    pub(crate) local: Option<&'a Path>,
+    /// Read-through cache directory, when the run targets cloud storage with a cache.
+    pub(crate) cache: Option<&'a Path>,
+}
 
 /// The timed result of analyzing one mode.
 #[derive(Clone, Copy, Debug)]
@@ -84,12 +97,12 @@ pub(crate) async fn measure(
     workspace: &Path,
     repo: &Path,
     mode: ModeArg,
-    local: Option<&Path>,
+    storage: StorageInputs<'_>,
     anchor: Timestamp,
     repeat: usize,
     logger: Logger,
 ) -> Result<MeasureResult, Error> {
-    let options = build_options(workspace, repo, mode, local, logger.verbose());
+    let options = build_options(workspace, repo, mode, storage, logger.verbose());
     logger.step(&format!("analyzing in {} mode", mode.keyword()));
     logger.detail(&format!(
         "context={}, base={}, facets forced to all (seeded triples and the synthetic machine key \
@@ -208,9 +221,10 @@ fn cpu_efficiency(processor_time: Duration, wall: Duration, cores: usize) -> f64
     }
 }
 
-/// Builds the analyze options for `mode`. `local` is the `--local` storage path
-/// for local-filesystem runs, or `None` when a cloud backend is configured in the
-/// seeded config file instead.
+/// Builds the analyze options for `mode`. `storage.local` is the `--local` storage
+/// path for local-filesystem runs (`None` when a cloud backend is configured in the
+/// seeded config file instead), and `storage.cache` is the `--cache` mirror
+/// directory, set only for cloud runs that opted into the read-through cache.
 ///
 /// `timing` requests the analyze pipeline's per-stage wall-clock breakdown
 /// (under the harness's `--verbose`). The per-object note stream stays off
@@ -221,7 +235,7 @@ fn build_options(
     workspace: &Path,
     repo: &Path,
     mode: ModeArg,
-    local: Option<&Path>,
+    storage: StorageInputs<'_>,
     timing: bool,
 ) -> AnalyzeOptions {
     let (context, base, since) = match mode {
@@ -236,7 +250,12 @@ fn build_options(
     AnalyzeOptions {
         config_path: Some(config_path(workspace)),
         repo: Some(repo.to_path_buf()),
-        local: local.map(|path| LocalStorageSelection::Path(path.to_path_buf())),
+        local: storage
+            .local
+            .map(|path| LocalStorageSelection::Path(path.to_path_buf())),
+        cache: storage
+            .cache
+            .map(|path| CacheSelection::Path(path.to_path_buf())),
         context: Some(context.to_owned()),
         base: Some(base.to_owned()),
         no_dirty: false,
@@ -300,6 +319,43 @@ mod tests {
             "{}",
             path.display()
         );
+    }
+
+    #[test]
+    fn build_options_carries_the_cache_only_when_requested() {
+        let workspace = Path::new("/tmp/stress-ws");
+        let repo = Path::new("/tmp/stress-repo");
+
+        // A cloud run with a cache directory threads it into the analyze options as
+        // an explicit path selection, so the measured load exercises the mirror.
+        let cached = build_options(
+            workspace,
+            repo,
+            ModeArg::History,
+            StorageInputs {
+                local: None,
+                cache: Some(Path::new("/tmp/cache")),
+            },
+            false,
+        );
+        assert_eq!(
+            cached.cache,
+            Some(CacheSelection::Path(PathBuf::from("/tmp/cache")))
+        );
+
+        // Without a cache directory the field stays unset, so analyze reads the
+        // cloud directly (the harness's default, uncached measurement).
+        let uncached = build_options(
+            workspace,
+            repo,
+            ModeArg::History,
+            StorageInputs {
+                local: None,
+                cache: None,
+            },
+            false,
+        );
+        assert_eq!(uncached.cache, None);
     }
 
     #[test]

@@ -219,9 +219,16 @@ struct CacheArg {
     /// `--cache=<path>` mirrors under `<path>` (a relative path resolves against
     /// the target repository — the working directory by default, or `--repo`). A
     /// bare `--cache` (no value) reads the directory from the
-    /// `CARGO_BENCH_HISTORY_CACHE` environment variable. The cache is meaningful
-    /// only with the cloud backend; with a `--local` backend it is ignored.
-    #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
+    /// `CARGO_BENCH_HISTORY_CACHE` environment variable. The cache applies only to
+    /// the cloud backend, so it conflicts with `--local` (a local backend's reads
+    /// are already on disk).
+    #[arg(
+        long,
+        value_name = "PATH",
+        num_args = 0..=1,
+        require_equals = true,
+        conflicts_with = "local"
+    )]
     #[expect(
         clippy::option_option,
         reason = "clap's representation of a three-state optional-value flag: absent (None), bare \
@@ -1194,6 +1201,43 @@ mod tests {
         assert_eq!(
             options.prefixes,
             vec![BenchmarkIdPrefix::new("all_the_time/read_cell").unwrap()]
+        );
+    }
+
+    #[test]
+    fn cache_conflicts_with_local() {
+        // The read-through cache applies only to the cloud backend, so pairing
+        // `--cache` with `--local` is a usage error rather than a silent ignore.
+        let parsed = Cli::from_args(
+            &["cargo-bench-history"],
+            &["analyze", "--local=./store", "--cache=./mirror"],
+        );
+        assert!(
+            parsed.is_err(),
+            "--cache and --local are mutually exclusive"
+        );
+
+        // The same conflict holds for the other read commands that carry both flags.
+        assert!(
+            Cli::from_args(
+                &["cargo-bench-history"],
+                &[
+                    "list",
+                    "discriminants",
+                    "--local=./store",
+                    "--cache=./mirror"
+                ],
+            )
+            .is_err(),
+            "list must reject --cache with --local"
+        );
+        assert!(
+            Cli::from_args(
+                &["cargo-bench-history"],
+                &["prune", "--clean", "--local=./store", "--cache=./mirror"],
+            )
+            .is_err(),
+            "prune must reject --cache with --local"
         );
     }
 

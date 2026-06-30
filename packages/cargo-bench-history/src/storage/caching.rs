@@ -18,10 +18,11 @@
 //!   consults the mirror first and populates it on a miss; `list` always goes to
 //!   the cloud, so an object stored after the mirror was populated is still
 //!   discovered (the mirror can lag the cloud but never hides newer keys).
-//! * **A cloud-side marker drives whole-cache invalidation.** Deletes and
-//!   overwrites (rare, deliberate) bump a per-project marker; on the next
-//!   [`synchronize`](CachingStorage::synchronize) a changed marker wipes the entire
-//!   mirror and re-records the new epoch, so a stale object can never be served.
+//! * **A cloud-side marker drives per-project invalidation.** Each mirror holds
+//!   one project's objects, and deletes and overwrites (rare, deliberate) bump
+//!   that project's marker; on the next [`synchronize`](CachingStorage::synchronize)
+//!   a changed marker wipes that project's mirror and re-records the new epoch, so
+//!   a stale object can never be served. Other projects' mirrors are untouched.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -46,8 +47,10 @@ const RECORDED_EPOCH_KEY: &str = "_epoch";
 const GENESIS_EPOCH: &[u8] = b"genesis";
 
 /// A read-through cache over an inner [`Storage`], mirroring fetched objects into a
-/// local backing store and invalidating the whole mirror when a cloud-side marker
-/// changes. See the [module docs](self) for the invalidation contract.
+/// local backing store and invalidating that mirror when its project's cloud-side
+/// marker changes. Each instance mirrors exactly one project (the backing store is
+/// rooted per project), so invalidation only ever discards that project's objects.
+/// See the [module docs](self) for the invalidation contract.
 ///
 /// `Clone` shares all interior state (the mirror via the backends' own `Arc`
 /// fields, and the tally counters here), so the parallel-load fan-out — which
@@ -92,13 +95,13 @@ where
 
     /// Reconciles the mirror with the cloud before a load: reads `project`'s
     /// invalidation marker, and if it differs from the epoch the mirror last
-    /// recorded (or the mirror has none), wipes the entire mirror and records the
-    /// freshly read epoch. A matching epoch leaves the mirror untouched.
+    /// recorded (or the mirror has none), wipes this project's mirror and records
+    /// the freshly read epoch. A matching epoch leaves the mirror untouched.
     ///
-    /// Whole-cache invalidation is intentionally coarse: deletes and overwrites are
-    /// rare, so "throw it all away and re-download" is simpler and obviously
-    /// correct, and re-recording the epoch immediately bounds the wipe to once per
-    /// process.
+    /// Per-project mirror invalidation is intentionally coarse: deletes and
+    /// overwrites are rare, so "throw this project's mirror away and re-download"
+    /// is simpler and obviously correct, and re-recording the epoch immediately
+    /// bounds the wipe to once per process.
     ///
     /// # Errors
     ///

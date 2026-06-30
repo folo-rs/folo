@@ -31,7 +31,7 @@ mod scenario;
 mod seed;
 mod target;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
@@ -109,6 +109,17 @@ async fn run_harness() -> Result<(), Error> {
     let mut target = build_target(&cli)?;
     logger.step(&format!("storage backend: {}", target.label()));
 
+    // The read-through cache only applies to the cloud backend; a local store is
+    // already on disk, so a `--cache` there would measure nothing. Reject the
+    // combination rather than silently ignoring it.
+    let cache = resolve_cache(&cli)?;
+    if let Some(cache) = &cache {
+        logger.detail(&format!(
+            "measuring analyze against a read-through cache rooted at {}",
+            cache.display()
+        ));
+    }
+
     // The git repository and the workspace (config + import marks) live in
     // separate temporary directories from the storage root: the repository must
     // present a clean working tree to `analyze`, and local storage uses its own
@@ -152,7 +163,10 @@ async fn run_harness() -> Result<(), Error> {
                 workspace_dir.path(),
                 repo_dir.path(),
                 *mode,
-                target.local_path(),
+                measure::StorageInputs {
+                    local: target.local_path(),
+                    cache: cache.as_deref(),
+                },
                 clock,
                 cli.repeat,
                 logger,
@@ -228,6 +242,32 @@ fn build_target(cli: &Cli) -> Result<StorageTarget, Error> {
 /// runs do not collide and cleanup can delete the whole container.
 fn default_container() -> String {
     format!("bh-stress-{}", Timestamp::now().as_second())
+}
+
+/// Resolves the optional `--cache` directory the measured `analyze` mirrors into.
+///
+/// The cache is meaningful only against the cloud backend, so it is rejected with
+/// `--storage local` rather than silently ignored. A relative path is made
+/// absolute so it is independent of the throwaway workspace `analyze` rebases
+/// against, letting the same directory back repeated (warm-cache) runs.
+///
+/// # Errors
+///
+/// Returns an error if `--cache` is combined with `--storage local`, or if the
+/// path cannot be made absolute.
+fn resolve_cache(cli: &Cli) -> Result<Option<PathBuf>, Error> {
+    match &cli.cache {
+        None => Ok(None),
+        Some(_) if matches!(cli.storage, StorageKind::Local) => Err(fail(
+            "--cache only applies to --storage azure: a local backend's reads are already local",
+        )),
+        Some(path) => Ok(Some(std::path::absolute(path).map_err(|error| {
+            fail(format!(
+                "failed to resolve --cache {}: {error}",
+                path.display()
+            ))
+        })?)),
+    }
 }
 
 /// Writes the seeded configuration into the workspace's `.cargo/` directory. A
