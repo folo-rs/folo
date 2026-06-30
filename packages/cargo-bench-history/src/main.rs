@@ -8,7 +8,7 @@
 
 use std::process::ExitCode;
 
-use cargo_bench_history::{Cli, RunOutcome, run};
+use cargo_bench_history::{Cli, run};
 
 // The analyze pipeline fans the per-object gzip-decompress + JSON parse out across
 // worker threads. serde_json makes many small allocations, and the system
@@ -72,9 +72,11 @@ async fn main() -> ExitCode {
         }
     };
 
-    match &outcome {
-        RunOutcome::Completed { message } => println!("{message}"),
-        RunOutcome::Analyzed { report, .. } => println!("{report}"),
+    // `--no-text` suppresses the text report, so `stdout_text` is `None`; emit
+    // nothing in that case rather than a blank line (the requested files carry
+    // the result).
+    if let Some(text) = outcome.stdout_text() {
+        println!("{text}");
     }
 
     if outcome.is_success() {

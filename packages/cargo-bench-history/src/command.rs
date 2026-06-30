@@ -130,8 +130,14 @@ pub struct AnalyzeOptions {
     /// Restrict analysis to benchmarks whose qualified identity starts with one of
     /// these prefixes (repeatable). Empty means every benchmark.
     pub prefixes: Vec<BenchmarkIdPrefix>,
-    /// Output format selector, if set.
-    pub format: Option<String>,
+    /// Suppress the default text report on standard output (`--no-text`).
+    pub no_text: bool,
+    /// Write the Markdown report to this path, if set (`--markdown <path>`). A
+    /// relative path resolves against the working directory.
+    pub markdown: Option<PathBuf>,
+    /// Write the JSON report to this path, if set (`--json <path>`). A relative
+    /// path resolves against the working directory.
+    pub json: Option<PathBuf>,
     /// Analysis-mode selector (`auto`, `history`, `branch`, or `tip`), if set.
     /// `auto` (the default) infers history vs branch mode from the git topology.
     pub mode: Option<String>,
@@ -214,8 +220,14 @@ pub struct ListOptions {
     /// auto-detects the current machine's fingerprint; `all` matches every
     /// machine.
     pub machine_key: Vec<String>,
-    /// Output format selector, if set.
-    pub format: Option<String>,
+    /// Suppress the default text report on standard output (`--no-text`).
+    pub no_text: bool,
+    /// Write the Markdown report to this path, if set (`--markdown <path>`). A
+    /// relative path resolves against the working directory.
+    pub markdown: Option<PathBuf>,
+    /// Write the JSON report to this path, if set (`--json <path>`). A relative
+    /// path resolves against the working directory.
+    pub json: Option<PathBuf>,
     /// With `blessings`, list the most recent blessing of every benchmark across
     /// the whole analysis window rather than only those at the current commit.
     pub all: bool,
@@ -274,8 +286,14 @@ pub struct PruneOptions {
     pub prune_base: bool,
     /// Preview what would be removed without deleting anything.
     pub dry_run: bool,
-    /// Output format selector, if set.
-    pub format: Option<String>,
+    /// Suppress the default text report on standard output (`--no-text`).
+    pub no_text: bool,
+    /// Write the Markdown report to this path, if set (`--markdown <path>`). A
+    /// relative path resolves against the working directory.
+    pub markdown: Option<PathBuf>,
+    /// Write the JSON report to this path, if set (`--json <path>`). A relative
+    /// path resolves against the working directory.
+    pub json: Option<PathBuf>,
     /// Emit detailed diagnostic notes to standard error describing each step.
     pub verbose: bool,
 }

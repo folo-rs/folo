@@ -16,36 +16,18 @@ async fn prune_dirty_removes_dirty_runs_on_a_feature_branch() {
     workspace.seed_dirty_callgrind("2024-01-03", "f1", 200.0);
 
     // Before: the target-side dirty snapshot is part of the data set.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "runs", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace.drive_json(&["list", "runs"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(parsed["totals"]["runs"], 3, "{message}");
 
     // `prune --dirty` removes exactly the one dirty run.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["prune", "--dirty", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace.drive_json(&["prune", "--dirty"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(parsed["dry_run"], false, "{message}");
     assert_eq!(parsed["totals"]["runs"], 1, "{message}");
 
     // After: only the two clean runs remain; the dirty snapshot is gone.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "runs", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace.drive_json(&["list", "runs"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(parsed["totals"]["runs"], 2, "{message}");
     let commits = parsed["sets"][0]["commits"].as_array().unwrap();
@@ -67,13 +49,7 @@ async fn prune_dirty_removes_the_base_branch_tip_dirty_with_a_clean_tree() {
     workspace.seed_dirty_callgrind("2024-01-02", "c1", 200.0);
 
     // With a clean working tree, `list` excludes the base-tip dirty snapshot.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "runs", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace.drive_json(&["list", "runs"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(
         parsed["totals"]["runs"], 1,
@@ -81,31 +57,16 @@ async fn prune_dirty_removes_the_base_branch_tip_dirty_with_a_clean_tree() {
     );
 
     // `prune --dirty` removes it anyway (with the base-branch guard confirmed).
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["prune", "--dirty", "--prune-base", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace
+        .drive_json(&["prune", "--dirty", "--prune-base"])
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(parsed["totals"]["runs"], 1, "{message}");
 
     // A second pass finds nothing left to remove.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&[
-            "prune",
-            "--dirty",
-            "--prune-base",
-            "--dry-run",
-            "--format",
-            "json",
-        ])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace
+        .drive_json(&["prune", "--dirty", "--prune-base", "--dry-run"])
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(
         parsed["totals"]["runs"], 0,
@@ -125,25 +86,15 @@ async fn prune_dry_run_reports_without_deleting() {
     workspace.commit_dated("2024-01-02", "f1");
     workspace.seed_dirty_callgrind("2024-01-02", "f1", 200.0);
 
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["prune", "--dirty", "--dry-run", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace
+        .drive_json(&["prune", "--dirty", "--dry-run"])
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(parsed["dry_run"], true, "{message}");
     assert_eq!(parsed["totals"]["runs"], 1, "{message}");
 
     // The dry run deleted nothing: a real prune still removes the same run.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["prune", "--dirty", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace.drive_json(&["prune", "--dirty"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(parsed["dry_run"], false, "{message}");
     assert_eq!(parsed["totals"]["runs"], 1, "{message}");
@@ -163,20 +114,9 @@ async fn prune_dirty_scopes_by_engine() {
     workspace.seed_dirty_criterion("2024-01-02", "f1", "m1", 20.0);
 
     // Prune only the callgrind set.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&[
-            "prune",
-            "--dirty",
-            "--engine",
-            "callgrind",
-            "--format",
-            "json",
-        ])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace
+        .drive_json(&["prune", "--dirty", "--engine", "callgrind"])
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(
         parsed["totals"]["runs"], 1,
@@ -186,8 +126,8 @@ async fn prune_dirty_scopes_by_engine() {
 
     // The criterion dirty snapshot survives: a criterion-scoped prune still finds it
     // once the windows triple and its non-host machine key are named explicitly.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&[
+    let message = workspace
+        .drive_json(&[
             "prune",
             "--dirty",
             "--engine",
@@ -197,14 +137,8 @@ async fn prune_dirty_scopes_by_engine() {
             "--machine-key",
             "m1",
             "--dry-run",
-            "--format",
-            "json",
         ])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(
         parsed["totals"]["runs"], 1,
@@ -228,20 +162,14 @@ async fn prune_dirty_scopes_by_target_triple_facet() {
     workspace.seed_dirty_criterion("2024-01-02", "f1", "m1", 20.0);
 
     // The Linux triple removes only the callgrind (linux) dirty run.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&[
+    let message = workspace
+        .drive_json(&[
             "prune",
             "--dirty",
             "--target-triple",
             "x86_64-unknown-linux-gnu",
-            "--format",
-            "json",
         ])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(parsed["totals"]["runs"], 1, "{message}");
     assert_eq!(
@@ -252,8 +180,8 @@ async fn prune_dirty_scopes_by_target_triple_facet() {
 
     // The Windows (criterion) dirty run survives: a Windows-triple pass still finds
     // it once the machine facet is widened to its non-host machine key.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&[
+    let message = workspace
+        .drive_json(&[
             "prune",
             "--dirty",
             "--target-triple",
@@ -261,14 +189,8 @@ async fn prune_dirty_scopes_by_target_triple_facet() {
             "--machine-key",
             "m1",
             "--dry-run",
-            "--format",
-            "json",
         ])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(
         parsed["totals"]["runs"], 1,
@@ -306,8 +228,6 @@ async fn prune_dirty_removes_runs_across_multiple_discriminant_sets() {
             "all",
             "--machine-key",
             "all",
-            "--format",
-            "text",
         ])
         .await
         .unwrap()
@@ -320,8 +240,8 @@ async fn prune_dirty_removes_runs_across_multiple_discriminant_sets() {
     );
 
     // Both sets are now empty: a second pass finds nothing to remove.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&[
+    let message = workspace
+        .drive_json(&[
             "prune",
             "--dirty",
             "--target-triple",
@@ -329,14 +249,8 @@ async fn prune_dirty_removes_runs_across_multiple_discriminant_sets() {
             "--machine-key",
             "all",
             "--dry-run",
-            "--format",
-            "json",
         ])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(parsed["totals"]["runs"], 0, "{message}");
 }
@@ -357,52 +271,25 @@ async fn prune_dirty_since_only_removes_runs_on_or_after_the_cutoff() {
     workspace.seed_dirty_callgrind("2024-01-05", "f2", 200.0);
 
     // Only the 2024-01-05 run is on or after the cutoff.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&[
-            "prune",
-            "--dirty",
-            "--since",
-            "2024-01-04",
-            "--format",
-            "json",
-        ])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace
+        .drive_json(&["prune", "--dirty", "--since", "2024-01-04"])
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(parsed["totals"]["runs"], 1, "{message}");
 
     // The on-or-after run is gone; the earlier run survives the cutoff.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&[
-            "prune",
-            "--dirty",
-            "--since",
-            "2024-01-04",
-            "--dry-run",
-            "--format",
-            "json",
-        ])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace
+        .drive_json(&["prune", "--dirty", "--since", "2024-01-04", "--dry-run"])
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(
         parsed["totals"]["runs"], 0,
         "the late run was removed: {message}"
     );
 
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["prune", "--dirty", "--dry-run", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace
+        .drive_json(&["prune", "--dirty", "--dry-run"])
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(
         parsed["totals"]["runs"], 1,
@@ -425,31 +312,16 @@ async fn prune_dirty_until_only_removes_runs_on_or_before_the_cutoff() {
     workspace.seed_dirty_callgrind("2024-01-05", "f2", 200.0);
 
     // Only the 2024-01-02 run is on or before the cutoff.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&[
-            "prune",
-            "--dirty",
-            "--until",
-            "2024-01-03",
-            "--format",
-            "json",
-        ])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace
+        .drive_json(&["prune", "--dirty", "--until", "2024-01-03"])
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(parsed["totals"]["runs"], 1, "{message}");
 
     // The later run survives the cutoff; only the on-or-before run was removed.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["prune", "--dirty", "--dry-run", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace
+        .drive_json(&["prune", "--dirty", "--dry-run"])
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(
         parsed["totals"]["runs"], 1,
@@ -473,24 +345,14 @@ async fn prune_all_removes_clean_and_dirty_for_a_commit() {
     let f1 = workspace.commit("f1");
 
     // Narrowed to f1, the `--all` scope removes its clean and dirty runs.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["prune", &f1, "--all", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace.drive_json(&["prune", &f1, "--all"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(parsed["totals"]["runs"], 2, "clean + dirty f1: {message}");
 
     // Only the base-branch clean run remains.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "runs", "--context", "feature", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace
+        .drive_json(&["list", "runs", "--context", "feature"])
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(parsed["totals"]["runs"], 1, "{message}");
 }
@@ -523,13 +385,9 @@ async fn prune_all_removes_only_the_feature_side() {
     workspace.commit_dated("2024-01-02", "f1");
     workspace.seed_callgrind("f1", 100.0);
 
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["prune", "--all", "--context", "feature", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace
+        .drive_json(&["prune", "--all", "--context", "feature"])
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(
         parsed["totals"]["runs"], 1,
@@ -537,13 +395,9 @@ async fn prune_all_removes_only_the_feature_side() {
     );
 
     // The base commit survives; only the base-branch baseline remains.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "runs", "--context", "feature", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace
+        .drive_json(&["list", "runs", "--context", "feature"])
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(
         parsed["totals"]["runs"], 1,
@@ -566,13 +420,7 @@ async fn prune_clean_scope_removes_clean_and_keeps_dirty() {
     let f1 = workspace.commit("f1");
 
     // `--clean` narrowed to f1 removes only its clean run.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["prune", &f1, "--clean", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace.drive_json(&["prune", &f1, "--clean"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(
         parsed["totals"]["runs"], 1,
@@ -580,13 +428,9 @@ async fn prune_clean_scope_removes_clean_and_keeps_dirty() {
     );
 
     // The dirty f1 snapshot survives: a `--dirty` pass still finds it.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["prune", "--dirty", "--dry-run", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace
+        .drive_json(&["prune", "--dirty", "--dry-run"])
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(parsed["totals"]["runs"], 1, "dirty f1 survived: {message}");
 }
@@ -603,13 +447,7 @@ async fn prune_removes_a_blessing_with_its_clean_run() {
     workspace.drive(&["bless", "nm/nm::observe"]).await.unwrap();
 
     // The blessing is recorded at HEAD.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "blessings", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace.drive_json(&["list", "blessings"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(
         parsed["blessings"].as_array().unwrap().len(),
@@ -619,25 +457,15 @@ async fn prune_removes_a_blessing_with_its_clean_run() {
 
     // Pruning HEAD's clean run also deletes the blessing that rode on it. The
     // checkout is the base branch tip, so the base-branch guard must be confirmed.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["prune", &head, "--all", "--prune-base", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace
+        .drive_json(&["prune", &head, "--all", "--prune-base"])
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(parsed["totals"]["runs"], 1, "the clean HEAD run: {message}");
     assert_eq!(parsed["totals"]["blessings"], 1, "{message}");
 
     // The blessing is gone.
-    let RunOutcome::Completed { message } = workspace
-        .drive(&["list", "blessings", "--format", "json"])
-        .await
-        .unwrap()
-    else {
-        panic!("expected a completed outcome");
-    };
+    let message = workspace.drive_json(&["list", "blessings"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert!(
         parsed["blessings"].as_array().unwrap().is_empty(),

@@ -44,6 +44,22 @@ impl RunOutcome {
             Self::Completed { .. } | Self::Analyzed { .. } => true,
         }
     }
+
+    /// The text to print to standard output, or `None` when there is nothing to
+    /// print.
+    ///
+    /// `--no-text` suppresses the text report, leaving the message/report empty;
+    /// in that case this returns `None` so the caller emits no output at all
+    /// rather than a blank line (the requested Markdown/JSON files carry the
+    /// result instead).
+    #[must_use]
+    pub fn stdout_text(&self) -> Option<&str> {
+        let text = match self {
+            Self::Completed { message } => message,
+            Self::Analyzed { report, .. } => report,
+        };
+        (!text.is_empty()).then_some(text.as_str())
+    }
 }
 
 /// An error from [`run`](crate::run).
@@ -308,6 +324,46 @@ mod tests {
                 regressions: 0,
             }
             .is_success()
+        );
+    }
+
+    #[test]
+    fn stdout_text_returns_nonempty_message_and_report() {
+        assert_eq!(
+            RunOutcome::Completed {
+                message: "done".to_owned(),
+            }
+            .stdout_text(),
+            Some("done")
+        );
+        assert_eq!(
+            RunOutcome::Analyzed {
+                report: "report body".to_owned(),
+                regressions: 2,
+            }
+            .stdout_text(),
+            Some("report body")
+        );
+    }
+
+    #[test]
+    fn stdout_text_is_suppressed_when_the_report_is_empty() {
+        // `--no-text` leaves the message/report empty; the caller must print
+        // nothing rather than a blank line.
+        assert_eq!(
+            RunOutcome::Completed {
+                message: String::new(),
+            }
+            .stdout_text(),
+            None
+        );
+        assert_eq!(
+            RunOutcome::Analyzed {
+                report: String::new(),
+                regressions: 0,
+            }
+            .stdout_text(),
+            None
         );
     }
 }
