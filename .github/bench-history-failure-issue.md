@@ -1,5 +1,5 @@
 ---
-title: Nightly benchmark-history workflow failed
+title: "{{ env.FAILURE_ISSUE_TITLE }}"
 labels: bench-history, ci-failure
 ---
 
