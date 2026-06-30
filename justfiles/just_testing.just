@@ -347,18 +347,28 @@ test-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_TEST_AZURE_ACCOUNT', ''):
     Write-Host "Running real-Azure tests against account '$account' (Microsoft Entra ID; requires az login)."
     cargo +$env:RUST_MSRV nextest run -p cargo-bench-history real_azure --locked --no-fail-fast
 
-# Runs regular tests as well as doing one iteration of benchmarks.
-# We separate it from "test" because benchmarks are quite slow,
-# so we tend to only run them as part of a full validation pass.
+# Run the benchmark targets once to verify they do not panic. Their measurements are not
+# consumed here; this is purely a "the benches still build and run" smoke check, separated
+# from "test" because benchmarks are quite slow.
 #
-# Tests go through nextest (parallel execution, junit reporting, retries, etc.). Benches
-# go through `cargo test --benches` instead: nextest's per-test discover-then-dispatch
-# model is incompatible with the Callgrind (`*_cg`) benches, whose `harness =
-# false` main() spawns Valgrind for the entire suite in one shot. `cargo test --benches`
-# invokes each bench binary's main() once with `--test`, which Criterion treats as
-# "run each bench once" and Gungraun treats as its normal one-shot Valgrind run. We only
-# care that the benches do not panic; their measurements are not consumed here.
+# Benches go through `cargo test --benches` rather than nextest: nextest's per-test
+# discover-then-dispatch model is incompatible with the Callgrind (`*_cg`) benches, whose
+# `harness = false` main() spawns Valgrind for the entire suite in one shot. `cargo test
+# --benches` invokes each bench binary's main() once with `--test`, which Criterion treats
+# as "run each bench once" and Gungraun treats as its normal one-shot Valgrind run.
 # Upstream tracking: https://github.com/gungraun/gungraun/pull/644.
+[group('testing')]
+[script]
+test-benches FILTER="":
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    cargo +$env:RUST_MSRV test {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast --benches
+
+# Runs regular tests as well as doing one iteration of benchmarks (the latter via
+# `test-benches`). We separate it from "test" because benchmarks are quite slow, so we tend
+# to only run them as part of a full validation pass. Tests go through nextest (parallel
+# execution, junit reporting, retries, etc.).
 [group('testing')]
 [script]
 test-more FILTER="":

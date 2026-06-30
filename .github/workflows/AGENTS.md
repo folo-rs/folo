@@ -26,15 +26,27 @@ Split from the monolithic `just validate-local` into individual jobs:
 - **Multi-platform jobs** (run on ubuntu-latest, macos-latest, windows-latest):
   - check-dev
   - clippy-dev
-  - test-more-x64
+  - **test-x64** — the x86_64 test pass (ubuntu-latest, macos-latest, windows-latest)
+    - Runs the full test suite (unit, integration and example tests) **with coverage
+      instrumentation**, plus the benchmark targets once (`test-benches`) to verify they
+      do not panic. Coverage is therefore a *side effect* of the regular test run, not a
+      separately re-executed pass — there is intentionally no standalone `coverage` job.
+    - Runs on the **nightly** toolchain because coverage needs `llvm-tools-preview`, which
+      `just install-tools` installs only for nightly. The **MSRV** test pass lives on
+      `test-arm`, and MSRV compilation of every target is covered by `check-dev`.
+    - Uploads both the coverage report (lcov) and the test results (junit) to Codecov.
+    - Paired with `test-arm`; both carry an explicit `-x64`/`-arm` suffix for symmetry.
   - test-docs
   - **docs** — Multi-platform because conditional compilation affects generated documentation
   - miri-x64
-  - **test-more-arm** — ARM64 coverage (ubuntu-24.04-arm, windows-11-arm)
+  - **test-arm** — the ARM64 test pass (ubuntu-24.04-arm, windows-11-arm)
     - Exercises ARM-specific code paths (anything gated behind
       `cfg(target_arch = "aarch64")` or similar) which x86_64 runners never compile
-      or execute. Platform-neutral code is already validated by the x86_64 matrix.
-    - Paired with `test-more-x64`; both carry an explicit `-x64`/`-arm` suffix for
+      or execute, and doubles as the **MSRV** test pass (`test-x64` runs on nightly so it
+      can collect coverage). Platform-neutral code is already validated by the x86_64 matrix.
+    - Collects no coverage: `llvm-tools-preview`-based instrumentation is gathered on
+      x86_64 only (the `test-x64` job).
+    - Paired with `test-x64`; both carry an explicit `-x64`/`-arm` suffix for
       symmetry. Other jobs that have no ARM counterpart remain unsuffixed.
   - **miri-arm** — ARM64 coverage for Miri (ubuntu-24.04-arm, windows-11-arm)
     - Miri is an interpreter with its own memory model and is architecture-agnostic
@@ -86,11 +98,11 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
     fully covers it and Linux is the cheapest runner.
   - The Azure backend's network paths **self-skip** when
     no emulator is reachable, so the multi-platform test jobs
-    (`test-more`, `coverage`) stay green without one. They run for real only in
+    (`test-x64`, `test-arm`) stay green without one. They run for real only in
     this job: Azurite is provisioned on the runner host (via the `start-azurite`
     composite action) and `BENCH_HISTORY_REQUIRE_AZURITE=1` turns an unreachable
     emulator into a hard failure so it can never silently skip every test.
-  - The multi-platform `coverage` job runs without an emulator and therefore
+  - The multi-platform `test-x64` job runs without an emulator and therefore
     cannot cover `azure.rs`; this job uploads an `azure`-flagged lcov report that
     Codecov merges with it (a line covered in any upload counts as covered).
   - Linux-only because Azurite runs directly on the host: GitHub service
@@ -245,11 +257,11 @@ exists today; PR-time collection/validation may follow once this proves out.
      versions)
    - `miri-x64` and `miri-arm` depend on `check-dev` (Miri is much slower than `cargo check`;
      if the code does not even compile in dev mode, there is nothing for Miri to interpret)
-   - `miri-x64` also depends on `test-more-x64`, and `miri-arm` also depends on
-     `test-more-arm` (there is no point running the slow Miri interpreter unless the tests
+   - `miri-x64` also depends on `test-x64`, and `miri-arm` also depends on
+     `test-arm` (there is no point running the slow Miri interpreter unless the tests
      already pass in their base configuration)
-   - `mutants` depends on `test-more-x64` (mutation testing is meaningless if base tests fail)
-   - `careful` depends on `test-more-x64` (running the slow `cargo careful` test pass is
+   - `mutants` depends on `test-x64` (mutation testing is meaningless if base tests fail)
+   - `careful` depends on `test-x64` (running the slow `cargo careful` test pass is
      pointless unless the tests already pass in their base configuration)
    - `miri-harder-*` depend on both `miri-x64` and `miri-arm` (many-seeds runs are
      orders of magnitude slower than a single Miri pass)
@@ -259,7 +271,7 @@ exists today; PR-time collection/validation may follow once this proves out.
    - `docs` and `machete` remain multi-platform due to conditional compilation differences
    - `miri-harder-*` jobs are Windows-only due to high cost; sharded across parallel runners
    - Most checks run on the 3 x86_64 platforms (ubuntu, macos, windows)
-   - `test-more-arm` and `miri-arm` extend coverage to ARM64 (ubuntu-24.04-arm,
+   - `test-arm` and `miri-arm` extend coverage to ARM64 (ubuntu-24.04-arm,
      windows-11-arm) solely to exercise ARM-gated code paths
      (`cfg(target_arch = "aarch64")` and similar). Platform-neutral code is already
      covered by the x86_64 matrices — Miri in particular is an interpreter with its
@@ -289,10 +301,11 @@ exists today; PR-time collection/validation may follow once this proves out.
 The `setup-environment` action installs Valgrind on Linux runners and `gungraun-runner` (via
 `just install-tools`). Both are required for the Callgrind `*_cg` bench targets that
 live in `packages/*/benches/`. Even when those targets are not executed, `cargo test
---benches` (which `test-more` uses) invokes each bench binary's `main()` once, which forwards
+--benches` (which `test-x64` and `test-arm` use, via the `test-benches` and `test-more`
+recipes) invokes each bench binary's `main()` once, which forwards
 its args to `gungraun-runner`. Without `gungraun-runner` on `$PATH` the call fails with
-`Failed to run benchmarks: No such file or directory`, which breaks `test-more` and
-`coverage`. The Callgrind bench binaries are compiled to no-op stubs on Windows and macOS via
+`Failed to run benchmarks: No such file or directory`, which breaks `test-x64` and
+`test-arm`. The Callgrind bench binaries are compiled to no-op stubs on Windows and macOS via
 `#[cfg(not(target_os = "linux"))] fn main() {}`, so neither tool is required there.
 
 The `start-azurite` composite action (`.github/actions/start-azurite`) installs the Azurite

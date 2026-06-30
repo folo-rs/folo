@@ -165,7 +165,17 @@ jobs:
       - name: Run clippy dev on ${{ matrix.platform }}
         run: just package="${{ needs.delta.outputs.packages }}" clippy dev
 
-  test-more-x64:
+  # The x86_64 test pass. Runs the full test suite (unit, integration and example tests)
+  # with coverage instrumentation, so the coverage report is a side effect of the regular
+  # test run rather than a second, separately re-executed pass. Also runs the benchmark
+  # targets once to verify they do not panic. Uploads both the coverage report and the
+  # test results to Codecov.
+  #
+  # Coverage requires the nightly toolchain (llvm-tools-preview is installed only there via
+  # `just install-tools`), so this is the nightly test pass. The MSRV test pass runs on the
+  # ARM runners (`test-arm`), and MSRV compilation of every target is covered by `check-dev`.
+  # Paired with `test-arm`; both carry an explicit `-x64`/`-arm` suffix for symmetry.
+  test-x64:
     needs: [delta]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
@@ -182,8 +192,17 @@ jobs:
       - name: Setup environment
         uses: ./.github/actions/setup-environment
 
-      - name: Run test-more on ${{ matrix.platform }}
-        run: just package="${{ needs.delta.outputs.packages }}" test-more
+      - name: Run tests with coverage on ${{ matrix.platform }}
+        run: |
+          just package="${{ needs.delta.outputs.packages }}" coverage-measure
+          just coverage-report-ci
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info
+          fail_ci_if_error: true
 
       - name: Upload test results to Codecov
         if: ${{ !cancelled() }}
@@ -193,6 +212,9 @@ jobs:
           files: target/nextest/default/junit.xml
           flags: ${{ matrix.platform }}
           report_type: test_results
+
+      - name: Run benchmark targets on ${{ matrix.platform }}
+        run: just package="${{ needs.delta.outputs.packages }}" test-benches
 
   test-docs:
     needs: [delta]
@@ -238,7 +260,7 @@ jobs:
         run: just package="${{ needs.delta.outputs.packages }}" docs-default-features
 
   miri-x64:
-    needs: [delta, check-dev, test-more-x64]
+    needs: [delta, check-dev, test-x64]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
@@ -257,10 +279,12 @@ jobs:
       - name: Run miri on ${{ matrix.platform }}
         run: just package="${{ needs.delta.outputs.packages }}" miri
 
-  # ARM64 coverage for test-more. Exercises ARM-specific code paths (anything gated
-  # behind cfg(target_arch = "aarch64") or similar) which x86_64 runners never compile
-  # or execute.
-  test-more-arm:
+  # The ARM64 test pass. Exercises ARM-specific code paths (anything gated behind
+  # cfg(target_arch = "aarch64") or similar) which x86_64 runners never compile or execute,
+  # and serves as the MSRV test pass (the x86_64 `test-x64` job runs on nightly so it can
+  # collect coverage). No coverage here: llvm-tools-preview-based instrumentation is gathered
+  # on x86_64 only. Paired with `test-x64`; both carry an explicit `-x64`/`-arm` suffix.
+  test-arm:
     needs: [delta]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
@@ -293,7 +317,7 @@ jobs:
   # architecture-agnostic for platform-neutral code; we run it on ARM purely to exercise
   # cfg(target_arch = "aarch64") (and similar) code paths under Miri's UB detection.
   miri-arm:
-    needs: [delta, check-dev, test-more-arm]
+    needs: [delta, check-dev, test-arm]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
@@ -512,7 +536,7 @@ jobs:
         run: just package="${{ needs.delta.outputs.packages }}" check-frozen
 
   mutants:
-    needs: [delta, test-more-x64]
+    needs: [delta, test-x64]
     if: needs.delta.outputs.skip_all != 'true'
     timeout-minutes: 90
     strategy:
@@ -576,7 +600,7 @@ jobs:
         run: just package="${{ needs.delta.outputs.packages }}" hack
 
   careful:
-    needs: [delta, test-more-x64]
+    needs: [delta, test-x64]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
@@ -595,35 +619,6 @@ jobs:
       - name: Run careful on ${{ matrix.platform }}
         run: just package="${{ needs.delta.outputs.packages }}" careful
 
-  coverage:
-    needs: [delta]
-    if: needs.delta.outputs.skip_all != 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [ubuntu-latest, macos-latest, windows-latest]
-
-    runs-on: ${{ matrix.platform }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Setup environment
-        uses: ./.github/actions/setup-environment
-
-      - name: Generate coverage on ${{ matrix.platform }}
-        run: |
-          just package="${{ needs.delta.outputs.packages }}" coverage-measure
-          just coverage-report-ci
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v7
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: lcov.info
-          fail_ci_if_error: true
-
   # Azure Blob storage backend tests against the Azurite emulator.
   #
   # The Azure backend's network paths self-skip when no
@@ -632,7 +627,7 @@ jobs:
   # and BENCH_HISTORY_REQUIRE_AZURITE turns an unreachable emulator into a hard
   # failure, so a misconfigured emulator can never silently degrade into skipping
   # every test. This job also collects coverage so the azure.rs network paths
-  # reach Codecov — the multi-platform `coverage` job runs without an emulator and
+  # reach Codecov — the multi-platform `test-x64` job runs without an emulator and
   # therefore cannot cover them; Codecov merges this azure-flagged upload with it.
   #
   # Runs on a single platform (Linux) by choice, not by limitation: the Azure Blob
