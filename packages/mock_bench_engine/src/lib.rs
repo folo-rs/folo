@@ -31,13 +31,17 @@ use std::sync::LazyLock;
 /// build — the value is trusted only when it names an existing file.
 #[must_use]
 pub fn binary_path() -> &'static str {
-    static PATH: LazyLock<String> = LazyLock::new(|| {
-        let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
-        resolve(std::env::var_os("MOCK_BENCH_ENGINE"), || {
-            run_cargo_build(&manifest_path)
-        })
-    });
+    static PATH: LazyLock<String> = LazyLock::new(locate_or_build);
     PATH.as_str()
+}
+
+/// Resolves the path [`binary_path`] caches: trust `MOCK_BENCH_ENGINE` when it names an
+/// existing file, otherwise build this crate and read the path Cargo reports. Split out
+/// from the `LazyLock` initializer so it can be exercised directly, and passing
+/// [`run_cargo_build`] by name (rather than wrapping it in a closure) keeps the build seam
+/// a single named function the tests can call on its own.
+fn locate_or_build() -> String {
+    resolve(std::env::var_os("MOCK_BENCH_ENGINE"), run_cargo_build)
 }
 
 /// The outcome of spawning `cargo build`, reduced to the fields the resolver inspects.
@@ -83,11 +87,12 @@ fn resolve(env_override: Option<OsString>, build: impl FnOnce() -> BuildOutput) 
 }
 
 /// Spawns `cargo build` for this crate and captures its outcome.
-fn run_cargo_build(manifest_path: &Path) -> BuildOutput {
+fn run_cargo_build() -> BuildOutput {
     // `--manifest-path` (absolute, derived from this crate's own manifest directory)
     // makes the build independent of the current working directory, which some tests
     // change before first touching the engine. `--locked` matches the
     // `just _mock-engine-path` recipe and refuses to silently rewrite the lockfile.
+    let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
     let output = std::process::Command::new(env!("CARGO"))
         .args([
             "build",
@@ -95,7 +100,7 @@ fn run_cargo_build(manifest_path: &Path) -> BuildOutput {
             "--message-format=json-render-diagnostics",
             "--manifest-path",
         ])
-        .arg(manifest_path)
+        .arg(&manifest_path)
         .output()
         .expect("spawning `cargo build` for mock_bench_engine should succeed");
     BuildOutput {
@@ -318,5 +323,50 @@ mod tests {
             ok_build(artifact_line("mock_bench_engine", "/tmp/mock_bench_engine"))
         });
         assert_eq!(resolved, "/tmp/mock_bench_engine");
+    }
+
+    // The two cases below drive the real build seam (not the injected fakes): they spawn
+    // `cargo build` and read the filesystem, so they are native-only. Cargo's freshness
+    // check makes the build a fast no-op once the crate is already compiled.
+
+    #[cfg(not(miri))]
+    #[test]
+    fn run_cargo_build_reports_an_existing_executable() {
+        // Exercises the real spawn-and-capture path and feeds its output through the real
+        // `interpret_build`, proving the resolver actually builds and locates this crate's
+        // own binary end to end.
+        let output = run_cargo_build();
+        assert!(
+            output.success,
+            "building mock_bench_engine should succeed; stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let resolved = interpret_build(&output);
+        let resolved = Path::new(&resolved);
+        assert!(
+            resolved.is_file(),
+            "the reported executable should exist: {resolved:?}"
+        );
+        assert!(
+            resolved.to_string_lossy().contains("mock_bench_engine"),
+            "the reported executable should be the mock engine: {resolved:?}"
+        );
+    }
+
+    #[cfg(not(miri))]
+    #[test]
+    fn binary_path_returns_an_existing_absolute_file() {
+        // Drives `binary_path` (and thus `locate_or_build`) through whichever branch the
+        // ambient environment selects — `MOCK_BENCH_ENGINE` when a test runner pre-built
+        // the engine, an on-demand build otherwise — and confirms the contract either way.
+        let resolved = Path::new(binary_path());
+        assert!(
+            resolved.is_absolute(),
+            "binary_path should be absolute: {resolved:?}"
+        );
+        assert!(
+            resolved.is_file(),
+            "binary_path should name an existing file: {resolved:?}"
+        );
     }
 }
