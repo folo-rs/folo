@@ -846,19 +846,26 @@ jobs:
   # full rationale and why this is preferred over a hardcoded `after_n_builds`).
   #
   # It depends on `coverage` and `test-azurite` (the only coverage producers;
-  # `test-azure` / `test-azure-gh` upload none). `!cancelled()` lets it run even when
-  # `test-azurite` is skipped (cargo-bench-history not affected) — without a status
-  # function the skipped dependency would skip this job too. It triggers only when the
-  # `coverage` matrix succeeded: if coverage itself failed the build is already red and
-  # some platform uploads are missing, so there is nothing complete to notify about
-  # (and when the whole run is skipped via `skip_all`, no coverage was uploaded at all).
+  # `test-azure` / `test-azure-gh` upload none). The `!cancelled()` status function lets
+  # it run even when `test-azurite` is skipped — without a status function a skipped
+  # dependency would skip this job too. It releases notifications only when every expected
+  # upload actually landed: `coverage` must have succeeded, and `test-azurite` must have
+  # either succeeded (its azure upload landed) or been skipped (cargo-bench-history not
+  # affected, so no azure upload was expected). If `coverage` failed, or `test-azurite`
+  # ran and failed, an expected upload is missing and the build is already red — so we do
+  # NOT release a status off an incomplete set, which would post the very "coverage
+  # decreased" result this gate exists to prevent. A `skip_all` run uploads no coverage at
+  # all, so `coverage` is skipped and this job does not run.
   #
   # Like the upload jobs, this runs for fork PRs too: the token is empty there and the
   # action falls back to tokenless notification (this is a public repository), so
   # external-contributor PRs get the same gated, complete-data coverage status.
   coverage-notify:
     needs: [coverage, test-azurite]
-    if: ${{ !cancelled() && needs.coverage.result == 'success' }}
+    if: >-
+      !cancelled()
+      && needs.coverage.result == 'success'
+      && (needs.test-azurite.result == 'success' || needs.test-azurite.result == 'skipped')
     runs-on: ubuntu-latest
 
     steps:

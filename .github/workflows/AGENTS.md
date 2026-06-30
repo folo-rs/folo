@@ -174,10 +174,15 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
     posts as soon as coverage data is complete rather than waiting on unrelated slow jobs
     (`mutants`, etc.); those jobs gate merges through their own checks.
   - `needs: [coverage, test-azurite]`; `if: !cancelled() && needs.coverage.result ==
-    'success'`. The `!cancelled()` status function lets it run even when `test-azurite`
-    is skipped (without it, the skipped dependency would skip this job too). It triggers
-    only when the `coverage` matrix succeeded: if coverage failed the build is already
-    red with missing uploads, and a `skip_all` run uploads no coverage at all.
+    'success' && (needs.test-azurite.result == 'success' || needs.test-azurite.result ==
+    'skipped')`. The `!cancelled()` status function lets it run even when `test-azurite`
+    is skipped (without it, the skipped dependency would skip this job too). It releases
+    notifications only when every expected upload landed: `coverage` succeeded, and
+    `test-azurite` either succeeded (azure upload landed) or was skipped (cargo-bench-history
+    not affected, so no azure upload was expected). If `coverage` failed, or `test-azurite`
+    ran and failed, an expected upload is missing and the build is already red, so the gate
+    does not release a status off an incomplete set. A `skip_all` run uploads no coverage at
+    all, so `coverage` is skipped and this job does not run.
   - Runs for fork PRs too: the token is empty there and the action falls back to
     tokenless notification (public repository), so external-contributor PRs get the same
     gated, complete-data coverage status.
