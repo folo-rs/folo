@@ -162,7 +162,12 @@ _mock-engine-path:
 
     $messages = cargo +$env:RUST_MSRV build -p mock_bench_engine --message-format=json-render-diagnostics --locked
     $exe = $messages |
-        ForEach-Object { $_ | ConvertFrom-Json } |
+        ForEach-Object {
+            # Tolerate non-JSON lines (e.g. rendered diagnostics or blank lines), just
+            # as the Rust-side resolver does; only parsed objects flow downstream.
+            if ([string]::IsNullOrWhiteSpace($_)) { return }
+            try { $_ | ConvertFrom-Json -ErrorAction Stop } catch { return }
+        } |
         Where-Object { $_.reason -eq "compiler-artifact" -and $_.target.name -eq "mock_bench_engine" -and $_.executable } |
         Select-Object -Last 1 -ExpandProperty executable
     if (-not $exe) { throw "could not resolve the mock_bench_engine executable from cargo output" }

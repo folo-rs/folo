@@ -13,6 +13,10 @@
 //! The whole crate is `publish = false`, so neither the binary nor this locator ever
 //! ships, and `cargo install cargo-bench-history` places only the real tool on a
 //! user's PATH (issue #289).
+// The `coverage(off)` opt-out below lives only on the test module, so the feature is
+// gated to test builds; declaring it unconditionally would be unused (and warn) when
+// the library is compiled as a non-test dependency under coverage instrumentation.
+#![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -131,6 +135,7 @@ fn interpret_build(output: &BuildOutput) -> String {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 
