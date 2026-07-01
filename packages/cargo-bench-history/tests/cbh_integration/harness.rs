@@ -946,7 +946,7 @@ impl Workspace {
     pub(crate) fn seed_callgrind_in(&self, triple: &str, machine: &str, label: &str, value: f64) {
         let sha = self.sha(label);
         let observed = self.committer_time(&sha);
-        let key = format!("v1/testproj/callgrind/{triple}/{machine}/{sha}/clean.json");
+        let key = format!("v1/testproj/objects/callgrind/{triple}/{machine}/{sha}/clean.json");
         self.seed(&key, &ir_result_set(observed.as_second(), &sha, value));
     }
 
@@ -959,7 +959,7 @@ impl Workspace {
         let sha = self.sha(label);
         let effective: Timestamp = format!("{observed}T00:00:00Z").parse().unwrap();
         let key = format!(
-            "v1/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{sha}/dirty-{}.json",
+            "v1/testproj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{sha}/dirty-{}.json",
             effective.as_second()
         );
         self.seed(&key, &ir_result_set(effective.as_second(), &sha, value));
@@ -970,8 +970,9 @@ impl Workspace {
     pub(crate) fn seed_metrics(&self, label: &str, metrics: Vec<Metric>) {
         let sha = self.sha(label);
         let observed = self.committer_time(&sha);
-        let key =
-            format!("v1/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{sha}/clean.json");
+        let key = format!(
+            "v1/testproj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{sha}/clean.json"
+        );
         self.seed(&key, &result_set_with(observed.as_second(), &sha, metrics));
     }
 
@@ -998,8 +999,9 @@ impl Workspace {
     pub(crate) fn seed_criterion(&self, label: &str, machine: &str, value: f64) {
         let sha = self.sha(label);
         let observed = self.committer_time(&sha);
-        let key =
-            format!("v1/testproj/criterion/x86_64-pc-windows-msvc/{machine}/{sha}/clean.json");
+        let key = format!(
+            "v1/testproj/objects/criterion/x86_64-pc-windows-msvc/{machine}/{sha}/clean.json"
+        );
         self.seed(
             &key,
             &criterion_result_set(observed.as_second(), &sha, value),
@@ -1020,7 +1022,7 @@ impl Workspace {
         let sha = self.sha(label);
         let effective: Timestamp = format!("{observed}T00:00:00Z").parse().unwrap();
         let key = format!(
-            "v1/testproj/criterion/x86_64-pc-windows-msvc/{machine}/{sha}/dirty-{}.json",
+            "v1/testproj/objects/criterion/x86_64-pc-windows-msvc/{machine}/{sha}/dirty-{}.json",
             effective.as_second()
         );
         self.seed(
@@ -1057,8 +1059,9 @@ impl Workspace {
     pub(crate) fn seed_two_benchmarks(&self, label: &str, alpha: f64, beta: f64) {
         let sha = self.sha(label);
         let observed = self.committer_time(&sha);
-        let key =
-            format!("v1/testproj/callgrind/x86_64-unknown-linux-gnu/synthetic/{sha}/clean.json");
+        let key = format!(
+            "v1/testproj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{sha}/clean.json"
+        );
         self.seed(
             &key,
             &two_benchmark_result_set(observed.as_second(), &sha, alpha, beta),
@@ -1073,7 +1076,7 @@ impl Workspace {
         let sha = self.sha(label);
         let observed = self.committer_time(&sha);
         let key = format!(
-            "v1/testproj/alloc_tracker/x86_64-unknown-linux-gnu/synthetic/{sha}/clean.json"
+            "v1/testproj/objects/alloc_tracker/x86_64-unknown-linux-gnu/synthetic/{sha}/clean.json"
         );
         self.seed(
             &key,
@@ -1094,8 +1097,9 @@ impl Workspace {
     ) {
         let sha = self.sha(label);
         let observed = self.committer_time(&sha);
-        let key =
-            format!("v1/testproj/all_the_time/x86_64-unknown-linux-gnu/{machine}/{sha}/clean.json");
+        let key = format!(
+            "v1/testproj/objects/all_the_time/x86_64-unknown-linux-gnu/{machine}/{sha}/clean.json"
+        );
         self.seed(
             &key,
             &time_result_set(observed.as_second(), &sha, operation, nanos),
@@ -1116,8 +1120,9 @@ impl Workspace {
     ) {
         let sha = self.sha(label);
         let observed = self.committer_time(&sha);
-        let key =
-            format!("v1/testproj/all_the_time/x86_64-unknown-linux-gnu/{machine}/{sha}/clean.json");
+        let key = format!(
+            "v1/testproj/objects/all_the_time/x86_64-unknown-linux-gnu/{machine}/{sha}/clean.json"
+        );
         self.seed(
             &key,
             &time_result_set_with_dispersion(

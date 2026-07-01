@@ -100,13 +100,7 @@ pub(crate) async fn execute(
     let project_id = resolve_project_id(&config, workspace_dir);
     let local = resolve_local_path(options.local.as_ref(), storage_env().as_deref())?;
     let cache = resolve_cache_path(options.cache.as_ref(), cache_env().as_deref())?;
-    let storage = build_storage(
-        local.as_deref(),
-        &config,
-        workspace_dir,
-        cache.as_deref(),
-        &project_id,
-    )?;
+    let storage = build_storage(local.as_deref(), &config, workspace_dir, cache.as_deref())?;
     storage.synchronize_cache(&project_id, &reporter).await?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
@@ -754,15 +748,19 @@ mod tests {
     }
 
     fn clean_key(commit: &str) -> String {
-        format!("v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
+        format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
     }
 
     fn dirty_key(commit: &str, unix: i64) -> String {
-        format!("v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/dirty-{unix}.json")
+        format!(
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/dirty-{unix}.json"
+        )
     }
 
     fn bless_key(commit: &str, unix: i64) -> String {
-        format!("v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/bless-{unix}.json")
+        format!(
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/bless-{unix}.json"
+        )
     }
 
     fn store(storage: &MemoryStorage, key: &str, value: &Run) {
@@ -1334,7 +1332,7 @@ mod tests {
         // A criterion dirty run on the same commit must survive an engine-scoped
         // callgrind prune.
         let criterion_dirty =
-            "v1/folo/criterion/x86_64-unknown-linux-gnu/synthetic/f1/dirty-200.json";
+            "v1/folo/objects/criterion/x86_64-unknown-linux-gnu/synthetic/f1/dirty-200.json";
         store(&storage, criterion_dirty, &set("f1"));
         let git = feature_git();
 

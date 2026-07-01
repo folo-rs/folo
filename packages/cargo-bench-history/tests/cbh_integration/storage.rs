@@ -39,7 +39,7 @@ async fn run_local_flag_with_a_relative_path_rebases_against_the_workspace() {
     // `stored_objects` reads `<workspace>/store`, so a result there proves the
     // relative path resolved against the workspace, not the process cwd.
     let (key, _) = workspace.single_object();
-    assert!(key.starts_with("v1/testproj/"), "{key}");
+    assert!(key.starts_with("v1/testproj/objects/"), "{key}");
 }
 
 /// `--local` overrides a configured cloud backend: with both present the local
@@ -59,7 +59,7 @@ async fn run_local_flag_overrides_a_configured_cloud_backend() {
     // The object landed in the local store, proving the cloud backend was not
     // used despite being configured.
     let (key, _) = workspace.single_object();
-    assert!(key.starts_with("v1/testproj/"), "{key}");
+    assert!(key.starts_with("v1/testproj/objects/"), "{key}");
 }
 
 /// With neither `--local` nor a configured cloud backend, a storage-backed

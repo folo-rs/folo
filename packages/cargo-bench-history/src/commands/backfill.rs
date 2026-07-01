@@ -35,11 +35,10 @@ use tick::Clock;
 use crate::bench_output::FsBenchOutputSource;
 use crate::config::load_config;
 use crate::git_history::{GitHistory, SystemGitHistory};
-use crate::model::{STORAGE_VERSION, sanitize_segment};
 use crate::probe::SystemProbe;
 use crate::process::{TokioBenchRunner, capture};
 use crate::report::StderrReporter;
-use crate::storage::{Storage, build_storage};
+use crate::storage::{Storage, build_storage, project_objects_prefix};
 use crate::text::count_noun;
 use crate::wiring::{
     resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
@@ -127,7 +126,7 @@ pub(crate) async fn execute(
 
     let project_id = resolve_project_id(&config, base);
     let local = resolve_local_path(options.local.as_ref(), storage_env().as_deref())?;
-    let storage = build_storage(local.as_deref(), &config, base, None, &project_id)?;
+    let storage = build_storage(local.as_deref(), &config, base, None)?;
     let bench_command = bench_command.unwrap_or_else(default_bench_command);
 
     let git = SystemBackfillGit::new(base);
@@ -504,11 +503,11 @@ struct SystemCommitRunner<'a, S> {
 
 impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
     async fn recorded_commits(&self) -> Result<HashSet<String>, RunError> {
-        // Every stored object lives under the project's partitions, so one list of
-        // the project prefix yields the full history; the clean objects' commit
-        // segments are the commits already backfilled. A dirty snapshot does not
-        // count as a backfilled commit, so only clean objects contribute.
-        let prefix = format!("{STORAGE_VERSION}/{}/", sanitize_segment(self.project_id));
+        // Every stored object lives under the project's objects subtree, so one list
+        // of that prefix yields the full history; the clean objects' commit segments
+        // are the commits already backfilled. A dirty snapshot does not count as a
+        // backfilled commit, so only clean objects contribute.
+        let prefix = project_objects_prefix(self.project_id);
         let keys = self.storage.list(&prefix).await?;
         Ok(keys
             .iter()
@@ -913,12 +912,12 @@ mod tests {
     #[test]
     fn commit_of_clean_key_extracts_the_commit_only_for_clean_objects() {
         assert_eq!(
-            commit_of_clean_key("v1/proj/callgrind/triple/synthetic/abc123/clean.json"),
+            commit_of_clean_key("v1/proj/objects/callgrind/triple/synthetic/abc123/clean.json"),
             Some("abc123")
         );
         // A dirty snapshot is not a backfilled commit.
         assert_eq!(
-            commit_of_clean_key("v1/proj/criterion/triple/mk/abc123/dirty-42.json"),
+            commit_of_clean_key("v1/proj/objects/criterion/triple/mk/abc123/dirty-42.json"),
             None
         );
         // An unrelated key contributes nothing.
@@ -995,22 +994,22 @@ mod tests {
         // Two engines record c0 (under different partitions); c1 has only a dirty
         // snapshot; a different project's clean run must not leak in.
         block_on(storage.put(
-            "v1/proj/callgrind/x86_64-unknown-linux-gnu/synthetic/c0/clean.json",
+            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/c0/clean.json",
             b"{}",
         ))
         .unwrap();
         block_on(storage.put(
-            "v1/proj/criterion/x86_64-unknown-linux-gnu/mk/c0/clean.json",
+            "v1/proj/objects/criterion/x86_64-unknown-linux-gnu/mk/c0/clean.json",
             b"{}",
         ))
         .unwrap();
         block_on(storage.put(
-            "v1/proj/criterion/x86_64-unknown-linux-gnu/mk/c1/dirty-7.json",
+            "v1/proj/objects/criterion/x86_64-unknown-linux-gnu/mk/c1/dirty-7.json",
             b"{}",
         ))
         .unwrap();
         block_on(storage.put(
-            "v1/other/callgrind/x86_64-unknown-linux-gnu/synthetic/c9/clean.json",
+            "v1/other/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/c9/clean.json",
             b"{}",
         ))
         .unwrap();
@@ -1179,7 +1178,7 @@ mod tests {
         assert_eq!(empty, CommitOutcome::SkippedEmpty);
 
         let duplicate = map_run_result(Err(RunError::Duplicate {
-            key: "v1/p/callgrind/t/synthetic/abc/clean.json".to_owned(),
+            key: "v1/p/objects/callgrind/t/synthetic/abc/clean.json".to_owned(),
         }))
         .unwrap();
         assert_eq!(duplicate, CommitOutcome::SkippedExisting);

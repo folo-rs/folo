@@ -260,14 +260,14 @@ mod tests {
     #[test]
     fn duplicate_error_mentions_overwrite_and_has_no_source() {
         let error = RunError::Duplicate {
-            key: "v1/folo/callgrind/t/synthetic/abc/clean.json".to_owned(),
+            key: "v1/folo/objects/callgrind/t/synthetic/abc/clean.json".to_owned(),
         };
         assert!(error.to_string().contains("already stored"), "{error}");
         assert!(error.to_string().contains("--overwrite"), "{error}");
         assert!(
             error
                 .to_string()
-                .contains("v1/folo/callgrind/t/synthetic/abc/clean.json"),
+                .contains("v1/folo/objects/callgrind/t/synthetic/abc/clean.json"),
             "{error}"
         );
         assert!(error.source().is_none());

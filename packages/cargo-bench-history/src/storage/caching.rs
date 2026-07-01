@@ -18,26 +18,23 @@
 //!   consults the mirror first and populates it on a miss; `list` always goes to
 //!   the cloud, so an object stored after the mirror was populated is still
 //!   discovered (the mirror can lag the cloud but never hides newer keys).
-//! * **A cloud-side marker drives per-project invalidation.** Each mirror holds
-//!   one project's objects, and deletes and overwrites (rare, deliberate) bump
-//!   that project's marker; on the next [`synchronize`](CachingStorage::synchronize)
-//!   a changed marker wipes that project's mirror and re-records the new epoch, so
-//!   a stale object can never be served. Other projects' mirrors are untouched.
+//! * **A cloud-side marker drives per-project invalidation.** The mirror is a
+//!   faithful image of the cloud namespace under identical keys, so it may hold
+//!   several projects' objects at once. Deletes and overwrites (rare, deliberate)
+//!   bump the mutated project's marker
+//!   ([`cache_epoch_key`](super::cache_epoch_key)); on the next
+//!   [`synchronize`](CachingStorage::synchronize) a changed marker wipes only
+//!   *that* project's objects subtree
+//!   ([`project_objects_prefix`](super::project_objects_prefix)) and re-records the
+//!   new epoch under the same marker key, so a stale object can never be served and
+//!   other projects' cached objects are untouched.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::{Storage, StorageError, cache_epoch_key};
+use super::{Storage, StorageError, cache_epoch_key, project_objects_prefix};
 use crate::report::{Reporter, ReporterExt};
 use crate::text::count_noun;
-
-/// The mirror key under which the decorator records the cloud epoch token it last
-/// synchronized against.
-///
-/// A reserved single-segment name: every real data key begins with the version
-/// segment (`v1/…`), so this can never collide with a mirrored object, and it is
-/// itself wiped and rewritten on each invalidation.
-const RECORDED_EPOCH_KEY: &str = "_epoch";
 
 /// The epoch a project that has never recorded a mutation reports.
 ///
@@ -47,10 +44,11 @@ const RECORDED_EPOCH_KEY: &str = "_epoch";
 const GENESIS_EPOCH: &[u8] = b"genesis";
 
 /// A read-through cache over an inner [`Storage`], mirroring fetched objects into a
-/// local backing store and invalidating that mirror when its project's cloud-side
-/// marker changes. Each instance mirrors exactly one project (the backing store is
-/// rooted per project), so invalidation only ever discards that project's objects.
-/// See the [module docs](self) for the invalidation contract.
+/// local backing store under their exact cloud keys and invalidating a project's
+/// mirrored objects when that project's cloud-side marker changes. The mirror
+/// faithfully images the cloud namespace, so it can hold several projects at once;
+/// invalidation is scoped to one project's objects subtree at a time. See the
+/// [module docs](self) for the invalidation contract.
 ///
 /// `Clone` shares all interior state (the mirror via the backends' own `Arc`
 /// fields, and the tally counters here), so the parallel-load fan-out — which
@@ -94,19 +92,21 @@ where
     }
 
     /// Reconciles the mirror with the cloud before a load: reads `project`'s
-    /// invalidation marker, and if it differs from the epoch the mirror last
-    /// recorded (or the mirror has none), wipes this project's mirror and records
-    /// the freshly read epoch. A matching epoch leaves the mirror untouched.
+    /// invalidation marker, and if it differs from the epoch the mirror recorded
+    /// under the same marker key (or the mirror has none), wipes this project's
+    /// mirrored objects and records the freshly read epoch. A matching epoch leaves
+    /// the mirror untouched.
     ///
-    /// Per-project mirror invalidation is intentionally coarse: deletes and
-    /// overwrites are rare, so "throw this project's mirror away and re-download"
-    /// is simpler and obviously correct, and re-recording the epoch immediately
-    /// bounds the wipe to once per process.
+    /// Per-project invalidation is intentionally coarse: deletes and overwrites are
+    /// rare, so "throw this project's objects away and re-download" is simpler and
+    /// obviously correct, and re-recording the epoch immediately bounds the wipe to
+    /// once per process. Only this project's objects subtree is touched, so any
+    /// other project the mirror also holds keeps its cached objects.
     ///
     /// # Errors
     ///
     /// Returns any [`StorageError`] from reading the marker, listing or deleting the
-    /// mirror, or recording the new epoch.
+    /// mirrored objects, or recording the new epoch.
     pub(crate) async fn synchronize(
         &self,
         project: &str,
@@ -120,7 +120,10 @@ where
             Err(StorageError::NotFound { .. }) => GENESIS_EPOCH.to_vec(),
             Err(other) => return Err(other),
         };
-        let recorded_epoch = match self.cache.get(RECORDED_EPOCH_KEY).await {
+        // The mirror records the epoch it last synced under the *same* key the cloud
+        // holds it at, so freshness is a direct local-vs-cloud comparison of one
+        // marker object rather than a separate bookkeeping slot.
+        let recorded_epoch = match self.cache.get(&marker_key).await {
             Ok(bytes) => Some(bytes),
             Err(StorageError::NotFound { .. }) => None,
             Err(other) => return Err(other),
@@ -147,8 +150,8 @@ where
                 );
             } else {
                 reporter.note(
-                    "cache: epochs differ, so the mirror is wiped and the cloud epoch re-recorded \
-                     before reloading",
+                    "cache: epochs differ, so this project's mirrored objects are wiped and the \
+                     cloud epoch re-recorded before reloading",
                 );
             }
         });
@@ -157,10 +160,8 @@ where
             return Ok(());
         }
 
-        self.wipe().await?;
-        self.cache
-            .put_overwrite(RECORDED_EPOCH_KEY, &cloud_epoch)
-            .await?;
+        self.wipe_objects(project).await?;
+        self.cache.put_overwrite(&marker_key, &cloud_epoch).await?;
         Ok(())
     }
 
@@ -179,10 +180,13 @@ where
         });
     }
 
-    /// Deletes every object in the mirror, including the recorded-epoch marker (it
-    /// is rewritten by the caller immediately afterwards).
-    async fn wipe(&self) -> Result<(), StorageError> {
-        for key in self.cache.list("").await? {
+    /// Deletes `project`'s mirrored **data** objects (everything under its
+    /// [`project_objects_prefix`]). The project's marker is left in place and
+    /// re-recorded by the caller; any other project's objects are outside this
+    /// prefix and so are untouched.
+    async fn wipe_objects(&self, project: &str) -> Result<(), StorageError> {
+        let prefix = project_objects_prefix(project);
+        for key in self.cache.list(&prefix).await? {
             self.cache.delete(&key).await?;
         }
         Ok(())
@@ -253,14 +257,19 @@ mod tests {
     #[test]
     fn get_populates_the_mirror_on_a_miss() {
         let storage = caching();
-        block_on(storage.inner().put("v1/p/criterion/abc.json", b"body")).unwrap();
+        block_on(
+            storage
+                .inner()
+                .put("v1/p/objects/criterion/abc.json", b"body"),
+        )
+        .unwrap();
 
         // First read is a miss served from the cloud and mirrored.
-        let bytes = block_on(storage.get("v1/p/criterion/abc.json")).unwrap();
+        let bytes = block_on(storage.get("v1/p/objects/criterion/abc.json")).unwrap();
         assert_eq!(bytes, b"body");
         assert_eq!(
             storage.cache.keys(),
-            vec!["v1/p/criterion/abc.json".to_owned()],
+            vec!["v1/p/objects/criterion/abc.json".to_owned()],
             "the fetched object is mirrored"
         );
     }
@@ -268,37 +277,42 @@ mod tests {
     #[test]
     fn get_serves_a_hit_from_the_mirror_even_when_the_cloud_diverges() {
         let storage = caching();
-        block_on(storage.inner().put("v1/p/criterion/abc.json", b"body")).unwrap();
+        block_on(
+            storage
+                .inner()
+                .put("v1/p/objects/criterion/abc.json", b"body"),
+        )
+        .unwrap();
         // Populate the mirror.
-        block_on(storage.get("v1/p/criterion/abc.json")).unwrap();
+        block_on(storage.get("v1/p/objects/criterion/abc.json")).unwrap();
 
         // Overwrite the cloud copy out from under the mirror; a hit must still serve
         // the mirrored bytes (invalidation is the marker's job, not get's).
         block_on(
             storage
                 .inner()
-                .put_overwrite("v1/p/criterion/abc.json", b"newer"),
+                .put_overwrite("v1/p/objects/criterion/abc.json", b"newer"),
         )
         .unwrap();
-        let bytes = block_on(storage.get("v1/p/criterion/abc.json")).unwrap();
+        let bytes = block_on(storage.get("v1/p/objects/criterion/abc.json")).unwrap();
         assert_eq!(bytes, b"body", "a cache hit serves the mirrored bytes");
     }
 
     #[test]
     fn list_reflects_objects_added_to_the_cloud_after_the_mirror_was_populated() {
         let storage = caching();
-        block_on(storage.inner().put("v1/p/criterion/a.json", b"a")).unwrap();
-        block_on(storage.get("v1/p/criterion/a.json")).unwrap();
+        block_on(storage.inner().put("v1/p/objects/criterion/a.json", b"a")).unwrap();
+        block_on(storage.get("v1/p/objects/criterion/a.json")).unwrap();
 
         // A key added to the cloud after the mirror was populated must still be
         // listed, so the load discovers the night's new objects.
-        block_on(storage.inner().put("v1/p/criterion/b.json", b"b")).unwrap();
-        let keys = block_on(storage.list("v1/p/criterion/")).unwrap();
+        block_on(storage.inner().put("v1/p/objects/criterion/b.json", b"b")).unwrap();
+        let keys = block_on(storage.list("v1/p/objects/criterion/")).unwrap();
         assert_eq!(
             keys,
             vec![
-                "v1/p/criterion/a.json".to_owned(),
-                "v1/p/criterion/b.json".to_owned()
+                "v1/p/objects/criterion/a.json".to_owned(),
+                "v1/p/objects/criterion/b.json".to_owned()
             ]
         );
     }
@@ -312,8 +326,8 @@ mod tests {
         // against an empty mirror *before* any object is fetched.
         block_on(storage.synchronize("p", &reporter)).unwrap();
         // The load then populates the mirror.
-        block_on(storage.inner().put("v1/p/criterion/a.json", b"a")).unwrap();
-        block_on(storage.get("v1/p/criterion/a.json")).unwrap();
+        block_on(storage.inner().put("v1/p/objects/criterion/a.json", b"a")).unwrap();
+        block_on(storage.get("v1/p/objects/criterion/a.json")).unwrap();
 
         // A second synchronize against the unchanged (still absent) marker is a no-op
         // that leaves the mirrored object in place.
@@ -322,7 +336,7 @@ mod tests {
             storage
                 .cache
                 .keys()
-                .contains(&"v1/p/criterion/a.json".to_owned()),
+                .contains(&"v1/p/objects/criterion/a.json".to_owned()),
             "a matching epoch leaves the mirror intact"
         );
         assert!(reporter.contains("epochs match"));
@@ -332,8 +346,8 @@ mod tests {
     fn synchronize_wipes_the_mirror_when_the_epoch_changes() {
         let storage = caching();
         let reporter = RecordingReporter::new();
-        block_on(storage.inner().put("v1/p/criterion/a.json", b"a")).unwrap();
-        block_on(storage.get("v1/p/criterion/a.json")).unwrap();
+        block_on(storage.inner().put("v1/p/objects/criterion/a.json", b"a")).unwrap();
+        block_on(storage.get("v1/p/objects/criterion/a.json")).unwrap();
         // Record the genesis epoch.
         block_on(storage.synchronize("p", &reporter)).unwrap();
 
@@ -348,7 +362,7 @@ mod tests {
         block_on(storage.synchronize("p", &reporter)).unwrap();
         assert_eq!(
             storage.cache.keys(),
-            vec!["_epoch".to_owned()],
+            vec![cache_epoch_key("p")],
             "the mirror is wiped down to the freshly recorded epoch"
         );
         assert!(reporter.contains("epochs differ"));
@@ -360,7 +374,7 @@ mod tests {
         let reporter = RecordingReporter::new();
         // No marker exists, so the recorded epoch must be the genesis sentinel.
         block_on(storage.synchronize("p", &reporter)).unwrap();
-        let recorded = block_on(storage.cache.get(RECORDED_EPOCH_KEY)).unwrap();
+        let recorded = block_on(storage.cache.get(&cache_epoch_key("p"))).unwrap();
         assert_eq!(recorded, GENESIS_EPOCH);
     }
 
@@ -368,10 +382,10 @@ mod tests {
     fn report_tally_counts_hits_and_misses() {
         let storage = caching();
         let reporter = RecordingReporter::new();
-        block_on(storage.inner().put("v1/p/criterion/a.json", b"a")).unwrap();
+        block_on(storage.inner().put("v1/p/objects/criterion/a.json", b"a")).unwrap();
         // One miss (cold) then one hit (mirrored).
-        block_on(storage.get("v1/p/criterion/a.json")).unwrap();
-        block_on(storage.get("v1/p/criterion/a.json")).unwrap();
+        block_on(storage.get("v1/p/objects/criterion/a.json")).unwrap();
+        block_on(storage.get("v1/p/objects/criterion/a.json")).unwrap();
 
         storage.report_tally(&reporter);
         assert!(
@@ -414,11 +428,11 @@ mod tests {
     #[test]
     fn put_targets_the_cloud_and_not_the_mirror() {
         let storage = caching();
-        block_on(storage.put("v1/p/criterion/a.json", b"body")).unwrap();
+        block_on(storage.put("v1/p/objects/criterion/a.json", b"body")).unwrap();
 
         // The write lands in the authoritative backend...
         assert_eq!(
-            block_on(storage.inner().get("v1/p/criterion/a.json")).unwrap(),
+            block_on(storage.inner().get("v1/p/objects/criterion/a.json")).unwrap(),
             b"body"
         );
         // ...and the mirror stays empty until a later read populates it (writes are
@@ -433,10 +447,10 @@ mod tests {
     #[test]
     fn put_overwrite_targets_the_cloud_and_not_the_mirror() {
         let storage = caching();
-        block_on(storage.put_overwrite("v1/p/criterion/a.json", b"body")).unwrap();
+        block_on(storage.put_overwrite("v1/p/objects/criterion/a.json", b"body")).unwrap();
 
         assert_eq!(
-            block_on(storage.inner().get("v1/p/criterion/a.json")).unwrap(),
+            block_on(storage.inner().get("v1/p/objects/criterion/a.json")).unwrap(),
             b"body"
         );
         assert!(
@@ -449,10 +463,15 @@ mod tests {
     #[test]
     fn delete_removes_from_the_cloud() {
         let storage = caching();
-        block_on(storage.inner().put("v1/p/criterion/a.json", b"body")).unwrap();
+        block_on(
+            storage
+                .inner()
+                .put("v1/p/objects/criterion/a.json", b"body"),
+        )
+        .unwrap();
 
-        block_on(storage.delete("v1/p/criterion/a.json")).unwrap();
-        let error = block_on(storage.inner().get("v1/p/criterion/a.json")).unwrap_err();
+        block_on(storage.delete("v1/p/objects/criterion/a.json")).unwrap();
+        let error = block_on(storage.inner().get("v1/p/objects/criterion/a.json")).unwrap_err();
         assert!(matches!(error, StorageError::NotFound { .. }), "{error:?}");
     }
 
@@ -461,7 +480,7 @@ mod tests {
         // A mirror read failing with anything other than NotFound is a real fault,
         // not a miss, so get must surface it instead of falling through to the cloud.
         let storage = CachingStorage::new(MemoryStorage::new(), GetFailsStorage);
-        let error = block_on(storage.get("v1/p/criterion/a.json")).unwrap_err();
+        let error = block_on(storage.get("v1/p/objects/criterion/a.json")).unwrap_err();
         assert!(matches!(error, StorageError::Io(_)), "{error:?}");
     }
 

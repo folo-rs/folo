@@ -849,10 +849,12 @@ mod tests {
         )
         .unwrap();
 
-        let client = storage.blob_client("v1/proj/callgrind/run.json").unwrap();
+        let client = storage
+            .blob_client("v1/proj/objects/callgrind/run.json")
+            .unwrap();
         assert_eq!(
             client.url().path(),
-            "/devstoreaccount1/bench-history/v1/proj/callgrind/run.json"
+            "/devstoreaccount1/bench-history/v1/proj/objects/callgrind/run.json"
         );
         // The SAS query is carried over to the blob URL.
         assert!(client.url().query().is_some());

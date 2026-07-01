@@ -43,9 +43,10 @@ driven in tests by fakes, never by real IO:
   `RawCriterionCase` or `RawOperationFile` values.
 * `storage::Storage` — real `LocalStorage` and `AzureBlobStorage`, selected at
   runtime by the `StorageFacade` enum that
-  `build_storage(local, config, base, cache, project)` returns (the optional `cache`
+  `build_storage(local, config, base, cache)` returns (the optional `cache`
   directory wraps an `Azure` backend in the read-through `CachingStorage` decorator —
-  the `CachedAzure` variant — rooted at `<cache>/<project>`); fake `MemoryStorage`.
+  the `CachedAzure` variant — whose mirror roots at `<cache>` and faithfully images the
+  cloud namespace under identical keys); fake `MemoryStorage`.
   `put` is **write-once** (an
   existing key yields `StorageError::AlreadyExists`); `put_overwrite` is the
   replacing escape hatch used only by `run --overwrite` (and, later, `backfill
@@ -174,14 +175,17 @@ execution** help group, three-state `require_equals` like `--local`:
 env edge is `wiring::cache_env()` and the pure resolver `wiring::resolve_cache_path`
 (mirroring the `--local` split). It is meaningful **only with the cloud backend**:
 `build_storage` wraps an `Azure` backend in `storage::caching::CachingStorage`
-(`StorageFacade::CachedAzure`) rooted at `<cache>/<project>`, mirroring every fetched
-object so the bulk history downloads at most once across runs. A cache is pointless
+(`StorageFacade::CachedAzure`) whose mirror roots at `<cache>` and **faithfully images
+the cloud namespace** under identical keys, mirroring every fetched object so the bulk
+history downloads at most once across runs. A cache is pointless
 with a `--local` backend (reads are already local), so the two **conflict**: the CLI
-rejects `--cache` together with `--local` (clap `conflicts_with`). Each mirror holds
-one project's objects, so invalidation is **per project**: a cloud-side marker
-(`storage::cache_epoch_key`, `v1/<project>/_cache-epoch`) that `put_overwrite`/`delete`
+rejects `--cache` together with `--local` (clap `conflicts_with`). The mirror may hold
+several projects' objects at once, so invalidation is **per project**: a cloud-side marker
+(`storage::cache_epoch_key`, `v1/<project>/_cache-epoch` — a sibling of that project's
+`objects/` subtree) that `put_overwrite`/`delete`
 arm and a per-command flush bumps; `synchronize_cache` (before a load) wipes that
-project's stale mirror, and `report_cache_tally` notes hits/misses after. Append-only
+project's stale mirrored objects (`storage::project_objects_prefix`, `v1/<project>/objects/`),
+and `report_cache_tally` notes hits/misses after. Append-only
 `put` never arms it, so the nightly `run --skip-existing` collection never wipes the
 cache it feeds.
 
@@ -196,7 +200,7 @@ test process's.
 ## Storage model (commit-centric)
 
 `comparability::DiscriminantSet` builds object keys under the partition prefix
-`v1/<project>/<engine>/<triple>/<machine|synthetic>` and then keys each point by
+`v1/<project>/objects/<engine>/<triple>/<machine|synthetic>` and then keys each point by
 **commit**:
 
 * `clean_key(commit)` → `…/<commit>/clean.json` — the one canonical point for a
@@ -297,7 +301,7 @@ timeline because which commits belong to a line of history depends on the branch
 being analyzed:
 
 * **Discriminant facets first.** `analyze::discriminant::parse_key` turns each
-  `v1/<project>/<engine>/<triple>/<machine|synthetic>/<commit>/<file>` key into a
+  `v1/<project>/objects/<engine>/<triple>/<machine|synthetic>/<commit>/<file>` key into a
   `DiscriminantSet` (engine, triple, machine). `--engine`/`--target-triple`/
   `--machine-key` select sets — each facet is **repeatable**, accepts the widening
   keyword `all`, and auto-detects the current machine when omitted (`--target-triple`

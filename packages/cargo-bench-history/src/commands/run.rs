@@ -119,13 +119,7 @@ pub(crate) async fn execute(
             "storage backend: {}",
             describe_storage(options.local.as_ref(), local.as_deref(), &config)
         ));
-        Some(build_storage(
-            local.as_deref(),
-            &config,
-            base,
-            None,
-            &project_id,
-        )?)
+        Some(build_storage(local.as_deref(), &config, base, None)?)
     };
 
     let runner = TokioBenchRunner::in_dir(base);
@@ -1291,7 +1285,7 @@ mod tests {
             reporter.notes()
         );
         assert!(
-            reporter.contains("stored v1/folo/callgrind/"),
+            reporter.contains("stored v1/folo/objects/callgrind/"),
             "expected a stored-key note, got {:?}",
             reporter.notes()
         );
@@ -1342,7 +1336,7 @@ mod tests {
         assert_eq!(
             keys,
             vec![
-                "v1/folo/callgrind/x86_64-pc-windows-msvc/synthetic/\
+                "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/\
                  deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/clean.json"
                     .to_owned()
             ]
@@ -1400,7 +1394,7 @@ mod tests {
         )
         .unwrap();
         let original = block_on(storage.get(
-            "v1/folo/callgrind/x86_64-pc-windows-msvc/synthetic/\
+            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/\
              deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/clean.json",
         ))
         .unwrap();
@@ -1491,7 +1485,7 @@ mod tests {
             &storage,
         )
         .unwrap();
-        let commit_dir = "v1/folo/callgrind/x86_64-pc-windows-msvc/synthetic/\
+        let commit_dir = "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/\
                           deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
         let bless_key = format!("{commit_dir}/bless-100.json");
         let record = BlessingRecord::new(
@@ -1557,7 +1551,7 @@ mod tests {
         // Blessings accept the clean run's data point, so a blessing sidecar on the
         // commit must survive when only a dirty snapshot of that commit is rewritten;
         // invalidation is reserved for a clean overwrite that discards the point.
-        let commit_dir = "v1/folo/callgrind/x86_64-pc-windows-msvc/synthetic/\
+        let commit_dir = "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/\
                           deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
         let bless_key = format!("{commit_dir}/bless-100.json");
         let record = BlessingRecord::new(

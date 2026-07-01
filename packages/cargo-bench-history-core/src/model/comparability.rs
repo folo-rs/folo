@@ -11,7 +11,7 @@ use std::fmt;
 
 use serde::Serialize;
 
-use super::constants::STORAGE_VERSION;
+use super::constants::{OBJECTS_SEGMENT, STORAGE_VERSION};
 
 /// A benchmark engine, distinguished by whether its results depend on hardware.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -126,9 +126,12 @@ impl DiscriminantSet {
 
     /// The storage prefix that all runs in this series share, within `project`.
     ///
-    /// Layout: `{STORAGE_VERSION}/{project}/{engine}/{target_triple}/{machine|synthetic}`.
-    /// Below this prefix the history is organized by commit (see [`clean_key`] and
-    /// [`dirty_key`]) so `analyze` can resolve a series from git topology.
+    /// Layout:
+    /// `{STORAGE_VERSION}/{project}/{OBJECTS_SEGMENT}/{engine}/{target_triple}/{machine|synthetic}`.
+    /// The fixed `objects` segment separates the data subtree from a project's
+    /// metadata siblings (e.g. the cache-invalidation marker); below this prefix the
+    /// history is organized by commit (see [`clean_key`] and [`dirty_key`]) so
+    /// `analyze` can resolve a series from git topology.
     ///
     /// [`clean_key`]: Self::clean_key
     /// [`dirty_key`]: Self::dirty_key
@@ -138,7 +141,7 @@ impl DiscriminantSet {
         let engine = &self.engine;
         let triple = &self.target_triple;
         let machine_key = &self.machine_key;
-        format!("{STORAGE_VERSION}/{project}/{engine}/{triple}/{machine_key}")
+        format!("{STORAGE_VERSION}/{project}/{OBJECTS_SEGMENT}/{engine}/{triple}/{machine_key}")
     }
 
     /// The object key for the canonical (clean working tree) result at `commit`.
@@ -253,7 +256,7 @@ mod tests {
         assert!(set.is_synthetic());
         assert_eq!(
             set.partition_prefix("folo"),
-            "v1/folo/alloc_tracker/x86_64-pc-windows-msvc/synthetic"
+            "v1/folo/objects/alloc_tracker/x86_64-pc-windows-msvc/synthetic"
         );
     }
 
@@ -265,7 +268,7 @@ mod tests {
             DiscriminantSet::new(Engine::AllTheTime, "x86_64-pc-windows-msvc", Some("abc123"));
         assert_eq!(
             set.partition_prefix("folo"),
-            "v1/folo/all_the_time/x86_64-pc-windows-msvc/abc123"
+            "v1/folo/objects/all_the_time/x86_64-pc-windows-msvc/abc123"
         );
     }
 
@@ -274,7 +277,7 @@ mod tests {
         let set = DiscriminantSet::new(Engine::Criterion, "x86_64-pc-windows-msvc", Some("abc123"));
         assert_eq!(
             set.partition_prefix("folo"),
-            "v1/folo/criterion/x86_64-pc-windows-msvc/abc123"
+            "v1/folo/objects/criterion/x86_64-pc-windows-msvc/abc123"
         );
     }
 
@@ -283,7 +286,7 @@ mod tests {
         let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", None);
         assert_eq!(
             set.clean_key("folo", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
-            "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/\
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/\
              deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/clean.json"
         );
     }
@@ -297,7 +300,7 @@ mod tests {
                 "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
                 1_700_000_000
             ),
-            "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/\
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/\
              deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/dirty-1700000000.json"
         );
     }
@@ -307,7 +310,7 @@ mod tests {
         let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", None);
         assert_eq!(
             set.bless_key("folo", "abc123", 1_700_000_000),
-            "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/bless-1700000000.json"
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/bless-1700000000.json"
         );
     }
 
@@ -316,7 +319,7 @@ mod tests {
         let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", None);
         assert_eq!(
             set.commit_prefix("folo", "dead/beef"),
-            "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/dead_beef/"
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/dead_beef/"
         );
     }
 
@@ -366,10 +369,10 @@ mod tests {
         let set = DiscriminantSet::new(Engine::Criterion, "weird/triple", Some("machine/one"));
         assert_eq!(
             set.partition_prefix("team/app"),
-            "v1/team_app/criterion/weird_triple/machine_one"
+            "v1/team_app/objects/criterion/weird_triple/machine_one"
         );
-        // The partition prefix has exactly the five canonical segments.
-        assert_eq!(set.partition_prefix("team/app").split('/').count(), 5);
+        // The partition prefix has exactly the six canonical segments.
+        assert_eq!(set.partition_prefix("team/app").split('/').count(), 6);
     }
 
     #[test]
@@ -378,10 +381,10 @@ mod tests {
         let object = set.clean_key("folo", "dead/beef");
         assert_eq!(
             object,
-            "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/dead_beef/clean.json"
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/dead_beef/clean.json"
         );
-        // Exactly the seven canonical key segments survive sanitization.
-        assert_eq!(object.split('/').count(), 7);
+        // Exactly the eight canonical key segments survive sanitization.
+        assert_eq!(object.split('/').count(), 8);
     }
 
     #[test]
@@ -390,9 +393,9 @@ mod tests {
         let object = set.dirty_key("folo", "dead/beef", 1_700_000_000);
         assert_eq!(
             object,
-            "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/dead_beef/dirty-1700000000.json"
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/dead_beef/dirty-1700000000.json"
         );
-        // Exactly the seven canonical key segments survive sanitization.
-        assert_eq!(object.split('/').count(), 7);
+        // Exactly the eight canonical key segments survive sanitization.
+        assert_eq!(object.split('/').count(), 8);
     }
 }

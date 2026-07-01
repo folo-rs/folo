@@ -17,7 +17,7 @@ use std::io;
 use std::path::{Component, Path};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use cargo_bench_history_core::model::{STORAGE_VERSION, sanitize_segment};
+use cargo_bench_history_core::model::{OBJECTS_SEGMENT, STORAGE_VERSION, sanitize_segment};
 
 /// An object store of immutable, key-addressed result sets.
 ///
@@ -174,11 +174,11 @@ pub(crate) fn validate_key(key: &str) -> Result<(), StorageError> {
 
 /// The reserved file-name segment of the per-project cache-invalidation marker.
 ///
-/// It occupies the **engine** position under `{STORAGE_VERSION}/<project>/`, where
-/// the real values are a controlled vocabulary (`criterion`/`callgrind`/…) that
-/// never begins with `_`, so it can never collide with a real engine segment.
-/// Even if it is enumerated, the loaders' non-`.json`/unparsable-key filter skips
-/// it before it can be mistaken for data.
+/// It is a **metadata sibling** of the project's data subtree: data objects live
+/// under `{STORAGE_VERSION}/<project>/{OBJECTS_SEGMENT}/…`, while the marker sits
+/// directly under `{STORAGE_VERSION}/<project>/`, so it can never appear in a data
+/// listing (which narrows to the `objects/` prefix) and can never be mistaken for a
+/// data key. The leading `_` keeps it visually distinct from future metadata kinds.
 const CACHE_EPOCH_SEGMENT: &str = "_cache-epoch";
 
 /// The storage key of a project's cache-invalidation marker:
@@ -186,13 +186,28 @@ const CACHE_EPOCH_SEGMENT: &str = "_cache-epoch";
 ///
 /// A cloud writer overwrites it with a fresh opaque epoch token whenever it
 /// removes or rewrites an existing object (`delete`/`put_overwrite`); the
-/// read-through cache compares it against its own recorded token to decide whether
-/// to reuse or wipe its mirror. The `project` segment is sanitized identically to
+/// read-through cache compares its cloud value against the copy its mirror recorded
+/// under the *same key* to decide whether to reuse or wipe that project's mirrored
+/// objects. The `project` segment is sanitized identically to
 /// [`DiscriminantSet::partition_prefix`](cargo_bench_history_core::model::DiscriminantSet::partition_prefix)
 /// so the marker lands in the same partition as that project's data.
 pub(crate) fn cache_epoch_key(project: &str) -> String {
     format!(
         "{STORAGE_VERSION}/{project}/{CACHE_EPOCH_SEGMENT}",
+        project = sanitize_segment(project)
+    )
+}
+
+/// The listing prefix that covers every **data** object of `project`:
+/// `{STORAGE_VERSION}/<project>/{OBJECTS_SEGMENT}/`.
+///
+/// Data loaders (`analyze`/`list`/`prune`, `backfill`'s recorded-commit scan) list
+/// under this prefix so they enumerate only benchmark objects, never a per-project
+/// metadata sibling such as the [`cache_epoch_key`] marker. The read-through cache
+/// also wipes exactly this subtree when invalidating one project's mirror.
+pub(crate) fn project_objects_prefix(project: &str) -> String {
+    format!(
+        "{STORAGE_VERSION}/{project}/{OBJECTS_SEGMENT}/",
         project = sanitize_segment(project)
     )
 }
@@ -287,13 +302,24 @@ mod tests {
 
     #[test]
     fn cache_epoch_key_lands_in_the_project_partition() {
-        // The marker is a sibling of the engine directories under v1/<project>/,
-        // in the engine position (a controlled vocabulary that never starts with
-        // `_`), so it cannot collide with a real engine segment.
+        // The marker is a metadata sibling of the project's objects/ subtree: it sits
+        // directly under v1/<project>/, so it never appears in a data listing (which
+        // narrows to the objects/ prefix) and cannot collide with a data object.
         assert_eq!(cache_epoch_key("folo"), "v1/folo/_cache-epoch");
         // The project is sanitized identically to the data partition, so the
         // marker always lands beside that project's objects.
         assert_eq!(cache_epoch_key("a b"), "v1/a_b/_cache-epoch");
+    }
+
+    #[test]
+    fn project_objects_prefix_narrows_to_the_data_subtree() {
+        // Data loaders list this prefix so they enumerate only benchmark objects and
+        // never the sibling cache-epoch marker; the project is sanitized identically.
+        assert_eq!(project_objects_prefix("folo"), "v1/folo/objects/");
+        assert_eq!(project_objects_prefix("a b"), "v1/a_b/objects/");
+        // The marker sits directly under the project partition, outside this prefix,
+        // so a data listing can never pick it up.
+        assert!(!cache_epoch_key("folo").starts_with(&project_objects_prefix("folo")));
     }
 
     #[test]

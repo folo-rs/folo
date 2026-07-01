@@ -8,8 +8,6 @@
 
 use std::path::Path;
 
-use cargo_bench_history_core::model::sanitize_segment;
-
 use crate::config::{CloudStorageConfig, Config};
 use crate::report::Reporter;
 use crate::wiring::rebase;
@@ -158,13 +156,13 @@ impl StorageFacade {
 /// `cache` is the resolved `--cache` directory (from
 /// [`resolve_cache_path`](crate::wiring::resolve_cache_path)). It is meaningful
 /// **only with the cloud backend**: when set against an Azure backend the backend
-/// is wrapped in a [`CachingStorage`] whose mirror roots at
-/// `<cache>/<project>` (so distinct projects keep distinct mirrors, each with its
-/// own recorded epoch). A cache is pointless with a `--local` backend — reads are
-/// already local — so the CLI rejects that combination outright (`--cache`
-/// conflicts with `--local`); a programmatic caller that sets both still gets the
-/// local backend, with the cache ignored. A relative cache path rebases against
-/// `base` exactly like `local`.
+/// is wrapped in a [`CachingStorage`] whose mirror roots at `<cache>` and faithfully
+/// images the cloud namespace under identical keys — so several projects share one
+/// mirror, each invalidated independently through its own marker. A cache is
+/// pointless with a `--local` backend — reads are already local — so the CLI rejects
+/// that combination outright (`--cache` conflicts with `--local`); a programmatic
+/// caller that sets both still gets the local backend, with the cache ignored. A
+/// relative cache path rebases against `base` exactly like `local`.
 ///
 /// # Errors
 ///
@@ -176,7 +174,6 @@ pub(crate) fn build_storage(
     config: &Config,
     base: &Path,
     cache: Option<&Path>,
-    project: &str,
 ) -> Result<StorageFacade, StorageError> {
     if let Some(path) = local {
         return Ok(StorageFacade::Local(LocalStorage::new(rebase(
@@ -201,11 +198,11 @@ pub(crate) fn build_storage(
             )?;
             match cache {
                 Some(cache_dir) => {
-                    // Root the mirror at <cache>/<project> so distinct projects do
-                    // not share one mirror (and one recorded epoch); object keys are
-                    // already project-qualified, but the recorded-epoch marker is not.
-                    let mirror_root =
-                        rebase(base, cache_dir.to_path_buf()).join(sanitize_segment(project));
+                    // The mirror faithfully images the cloud namespace under
+                    // identical keys, so it roots at <cache> directly: data keys are
+                    // project-qualified and the per-project marker distinguishes each
+                    // project's freshness, so no per-project root is needed.
+                    let mirror_root = rebase(base, cache_dir.to_path_buf());
                     Ok(StorageFacade::CachedAzure(CachingStorage::new(
                         azure,
                         LocalStorage::new(mirror_root),
@@ -269,14 +266,8 @@ mod tests {
     #[test]
     fn build_storage_for_local_yields_a_local_backend() {
         let config = Config::default();
-        let storage = build_storage(
-            Some(Path::new("./data")),
-            &config,
-            Path::new("/work"),
-            None,
-            "proj",
-        )
-        .unwrap();
+        let storage =
+            build_storage(Some(Path::new("./data")), &config, Path::new("/work"), None).unwrap();
         assert!(matches!(storage, StorageFacade::Local(_)));
         assert!(format!("{storage:?}").contains("data"), "{storage:?}");
     }
@@ -284,21 +275,15 @@ mod tests {
     #[test]
     fn build_storage_local_overrides_a_configured_cloud_backend() {
         let config = config_with_storage("[storage.azure]\naccount = \"a\"\ncontainer = \"c\"\n");
-        let storage = build_storage(
-            Some(Path::new("./data")),
-            &config,
-            Path::new("/work"),
-            None,
-            "proj",
-        )
-        .unwrap();
+        let storage =
+            build_storage(Some(Path::new("./data")), &config, Path::new("/work"), None).unwrap();
         assert!(matches!(storage, StorageFacade::Local(_)), "{storage:?}");
     }
 
     #[test]
     fn build_storage_without_selection_or_config_is_a_config_error() {
         let config = Config::default();
-        let error = build_storage(None, &config, Path::new("/work"), None, "proj").unwrap_err();
+        let error = build_storage(None, &config, Path::new("/work"), None).unwrap_err();
         assert!(matches!(error, StorageError::Config { .. }), "{error:?}");
     }
 
@@ -310,7 +295,7 @@ mod tests {
              endpoint = \"http://127.0.0.1:10000/devstoreaccount1\"\n\
              account_key = \"Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==\"\n",
         );
-        let storage = build_storage(None, &config, Path::new("/work"), None, "proj").unwrap();
+        let storage = build_storage(None, &config, Path::new("/work"), None).unwrap();
         assert!(matches!(storage, StorageFacade::Azure(_)));
     }
 
@@ -327,7 +312,6 @@ mod tests {
             &config,
             Path::new("/work"),
             Some(Path::new("./cache")),
-            "proj",
         )
         .unwrap();
         assert!(
@@ -346,7 +330,6 @@ mod tests {
             &config,
             Path::new("/work"),
             Some(Path::new("./cache")),
-            "proj",
         )
         .unwrap();
         assert!(matches!(storage, StorageFacade::Local(_)), "{storage:?}");
@@ -358,7 +341,7 @@ mod tests {
             "[storage.azure]\naccount = \"a\"\ncontainer = \"c\"\n\
              account_key = \"a2V5\"\nsas_token = \"sig=x\"\n",
         );
-        let error = build_storage(None, &config, Path::new("/work"), None, "proj").unwrap_err();
+        let error = build_storage(None, &config, Path::new("/work"), None).unwrap_err();
         assert!(matches!(error, StorageError::Config { .. }), "{error:?}");
     }
 
@@ -377,7 +360,6 @@ mod tests {
             &config,
             Path::new("/work"),
             Some(Path::new("./cache")),
-            "proj",
         )
         .unwrap()
     }

@@ -264,10 +264,16 @@ The layout is an immutable, append-only-by-new-file, **commit-centric** model
 concurrent CI). The path is `<discriminant set>/<commit_sha>/<run file>`:
 
 ```
-<root>/v1/<project>/<engine>/<target_triple>/<machine_key|synthetic>/<commit_sha>/
+<root>/v1/<project>/objects/<engine>/<target_triple>/<machine_key|synthetic>/<commit_sha>/
     clean.json                       # ≤1 per commit — the canonical point
     dirty-<observation_unix>.json    # 0..N snapshots taken on top of this base commit
 ```
+
+Data objects live under a per-project **`objects/`** subtree; project-level **metadata**
+— today only the cache-invalidation marker (§7.2), tomorrow perhaps an index — sits as a
+**sibling** of `objects/`. A data listing therefore enumerates `…/<project>/objects/`
+and can never accidentally pick up a metadata object, and metadata can be added beside
+the data without a layout migration.
 
 The segment **above** `<commit_sha>` is the **discriminant set** — the dimensions
 that make two runs comparable (§4.3). The commit is a directory; **clean vs dirty
@@ -333,7 +339,7 @@ duplicating the target-triple dimension confused users. Filter on the triple
 directly.)
 
 * `list discriminants` lists the distinct sets present (a cheap key `list` under
-  `v1/<project>/`, parsed and de-duplicated; an index file can be added later if
+  `v1/<project>/objects/`, parsed and de-duplicated; an index file can be added later if
   a store grows large), with their parsed engine / target triple / machine key.
 * Each facet is **repeatable** and accepts the literal `all`:
   * Omitting a facet **auto-detects the current machine**: `--target-triple`
@@ -576,14 +582,18 @@ happens; a brand-new key never invalidates anything, because it was never cached
 
 **Per-project invalidation.** Invalidation is signalled by a small **marker object**
 stored per project, holding an opaque epoch token. It lives inside that project's own
-versioned partition, alongside the data it guards, so a future storage-format version
-can redefine the cache contract in lockstep with the layout it caches. The cache and
-the marker are both scoped to a single project, so a mutation in one project only ever
-discards **that project's** mirror — other projects keep their caches. Before a load,
-the reader compares the project's cloud marker against the epoch its mirror last
-recorded; on a mismatch it discards that project's mirror and re-records the new epoch,
-then reloads. The wipe is deliberately coarse — drop the project's whole mirror rather
-than reason about which objects a deletion touched — because mutations are rare, so
+versioned partition as a **sibling of the project's object subtree**: data objects are
+grouped under a dedicated subtree, so a data listing never trips over the marker (or any
+future metadata such as an index), and a future storage-format version can redefine the
+cache contract in lockstep with the layout it caches. The mirror is a **faithful image of
+the cloud** under identical keys, so it may hold several projects' objects at once; the
+marker and the wipe are scoped to a **single project's objects**, so a mutation in one
+project only ever discards **that project's** mirrored objects — every other project's
+cached objects survive untouched. Before a load, the reader compares the project's cloud
+marker against the epoch its mirror last recorded **under that same marker key**; on a
+mismatch it wipes that project's mirrored objects and re-records the new epoch, then
+reloads. The wipe is deliberately coarse — drop all of that project's mirrored objects
+rather than reason about which objects a deletion touched — because mutations are rare, so
 "throw it away and re-download once" is simpler and obviously correct. Only whether the
 token *differs* matters, never its value or ordering, so clock skew between runners is
 harmless. The marker is maintained by the cloud backend itself, not by the cache, so
@@ -886,7 +896,7 @@ produced output, and stores the result. Backfilled runs are always on a **clean*
 tree, so each is keyed by commit (§4.2) and collision-checked:
 
 * By **default** the commits that already have a stored result are listed once up
-  front (a single `list` of the `v1/<project>/` prefix); a commit already present
+  front (a single `list` of the `v1/<project>/objects/` prefix); a commit already present
   is **skipped before its benches run** (reported, not an error), so no benchmark
   execution is wasted on commits already covered. This makes backfill **resumable**
   and cheap to re-issue — an interrupted run simply continues where it stopped. The
@@ -957,7 +967,7 @@ commit by default, or — with `--all` — the most recent blessing of every ben
 across the analysis window.
 
 `list discriminants` switches to a storage index: it lists the discriminant sets
-present under `v1/<project>/` (engine / target triple / machine key) **without
+present under `v1/<project>/objects/` (engine / target triple / machine key) **without
 requiring a repository** (§4.3). This is where the storage-set listing lives,
 separate from the repository-driven data-set preview, so it ignores the timeline
 and data-filtering groups. Because it is a **discovery catalog**, it is the one
@@ -1771,8 +1781,10 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     out of v1 for little gain in homogeneous CI pools; `--machine-key` / `machine.
     key` override the fingerprint (§5). Computed only for Criterion.
 21. **Storage layout & point identity** — *Decided:* **commit-centric** layout
-    `v1/<project>/<engine>/<triple>/<machine|synthetic>/<commit>/{clean.json |
-    dirty-<observation_unix>.json}` (§4.2). The commit is a path segment, so a clean
+    `v1/<project>/objects/<engine>/<triple>/<machine|synthetic>/<commit>/{clean.json |
+    dirty-<observation_unix>.json}` (§4.2), with data objects grouped under a per-project
+    `objects/` subtree so project metadata (the cache marker, a future index) lives as a
+    sibling and a data listing never trips over it. The commit is a path segment, so a clean
     point has the single deterministic key `…/<commit>/clean.json` and collision
     detection rides on the write-once `put` contract — refused (as
     `RunError::Duplicate`) unless `--overwrite`. Dirty
@@ -2218,10 +2230,13 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      administrative ops (`prune`/`unbless`, the manual `--overwrite` escape hatch) —
      break it, and the listing is never cached, so newly stored objects are always
      discovered. Invalidation is a small **per-project marker** holding an opaque epoch
-     token, kept inside that project's own versioned partition so a future
+     token, kept inside that project's own versioned partition — as a **sibling of the
+     project's `objects/` subtree** — so a data listing never trips over it and a future
      storage-format version can redefine the cache contract in lockstep with the layout
-     it caches. The reader discards only **that project's** mirror when the token changes
-     (coarse but correct, since mutations are rare); the marker is maintained by the
+     it caches. The mirror faithfully images the cloud under identical keys (so it may
+     hold several projects at once); when a project's token changes the reader discards
+     only **that project's mirrored objects** (coarse but correct, since mutations are
+     rare); the marker is maintained by the
      cloud backend, so every writer invalidates other machines' caches even when it holds
      no cache itself. *Key enabler the issue did not consider:* the nightly `collect`
      used `--overwrite` for same-commit idempotency, which would mutate objects and wipe

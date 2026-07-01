@@ -59,7 +59,7 @@ pub(crate) async fn bless(
 
     let project_id = resolve_project_id(&config, workspace_dir);
     let local = resolve_local_path(options.local.as_ref(), storage_env().as_deref())?;
-    let storage = build_storage(local.as_deref(), &config, workspace_dir, None, &project_id)?;
+    let storage = build_storage(local.as_deref(), &config, workspace_dir, None)?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
     let auto = detect_auto_facets().await?;
@@ -105,7 +105,7 @@ pub(crate) async fn unbless(
 
     let project_id = resolve_project_id(&config, workspace_dir);
     let local = resolve_local_path(options.local.as_ref(), storage_env().as_deref())?;
-    let storage = build_storage(local.as_deref(), &config, workspace_dir, None, &project_id)?;
+    let storage = build_storage(local.as_deref(), &config, workspace_dir, None)?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
     let auto = detect_auto_facets().await?;
@@ -375,7 +375,7 @@ mod tests {
     }
 
     fn clean_key(commit: &str) -> String {
-        format!("v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
+        format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
     }
 
     /// A linear master history `c0 - c1 - c2`, HEAD at the tip `c2`.
