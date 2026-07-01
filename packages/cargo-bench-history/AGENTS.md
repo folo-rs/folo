@@ -711,22 +711,48 @@ never insert real-time delays in tests.
 
 The integration tests drive `run` against the **real** process/filesystem/storage
 adapters, so they need a real program to launch as the "engine". That program is
-`src/bin/cargo-bench-history-mock-engine.rs`, an auto-discovered binary target
-(`cargo-bench-history-mock-engine`); tests reference it via
-`env!("CARGO_BIN_EXE_cargo-bench-history-mock-engine")`. It writes the committed
-Gungraun summary fixtures into `<target-root>/gungraun/GROUP/summary.json` (so the
-harvester finds fresh output) and exits with a chosen code — never use a shell
-builtin like `exit 7`, because the runner no longer goes through a shell. Resolve
-`<target-root>` the same way the harvester does (`CARGO_TARGET_DIR` or `target`),
-so the mock writes where the harvester reads. The integration harness injects the
-mock as the benchmark command via the `run_with_overrides` `bench_command`
-override (`[MOCK_ENGINE] + self.bench`, set with `Workspace::with_bench`), so the
-program path and each fixture-describing argument are passed verbatim as distinct
-argv entries — no shell, no quoting, no config `command`. After the mock's own
-contiguous arguments, `run` appends the cargo scope flags (`--workspace`,
-`--exclude NAME`, `--package NAME`, `--bench NAME`), the feature-selection flags
-(`--features`, `--all-features`, `--no-default-features`), and any `--`
-passthrough, which the mock ignores
+the **`mock_bench_engine` package** (`packages/mock_bench_engine/src/main.rs`), a
+standalone `publish = false` crate kept deliberately out of the published
+`cargo-bench-history` crate so `cargo install cargo-bench-history` only ever places
+the one real binary on a user's PATH (issue #289). It writes the committed Gungraun
+summary fixtures into `<target-root>/gungraun/GROUP/summary.json` (so the harvester
+finds fresh output) and exits with a chosen code — never use a shell builtin like
+`exit 7`, because the runner no longer goes through a shell. Resolve `<target-root>`
+the same way the harvester does (`CARGO_TARGET_DIR` or `target`), so the mock writes
+where the harvester reads.
+
+Cargo only exposes `CARGO_BIN_EXE_*` for binaries of the package **under test**, so
+moving the mock to its own package means the tests can no longer reference it that
+way. The `mock_bench_engine` crate therefore ships **both** a binary (`src/main.rs`,
+the mock itself) and a library (`src/lib.rs`, a locator helper); `cargo-bench-history`
+takes a normal `dev-dependency` on it (`mock_bench_engine = { path = "..." }`) and the
+tests call `mock_bench_engine::binary_path()`. That helper builds its own crate on
+demand (`cargo build --manifest-path <own Cargo.toml> --locked
+--message-format=json-render-diagnostics`, cwd-independent), reads the `executable`
+path Cargo reports for the bin artifact (the lib artifact reports none, so filtering
+on a present `executable` selects the bin), and caches it in a `LazyLock<String>`.
+Cargo handles freshness, so the path is always present and up to date after edits, and a
+plain `cargo test` run needs no extra setup. nextest, however, runs one process per test,
+so each would run its own on-demand `cargo build` — which both costs ~190 ms per process
+and, worse, races the other processes' concurrent builds over the shared target tree
+(transient "No such file or directory" engine-spawn failures were observed on macOS
+coverage runs). So every `just` recipe that runs the suite under nextest (`test`,
+`test-azurite`, `test-azure`, `test-more`, `coverage-measure`) — plus `careful`, which
+runs it under libtest — pre-builds the mock once via the `_mock-engine-path` recipe and
+passes its path in the `MOCK_BENCH_ENGINE` env var; when that points at an existing file
+the resolver trusts it (resolving it to an absolute path) and skips the per-process build.
+The two fixtures the mock `include_str!`s stay in
+`packages/cargo-bench-history/tests/fixtures/callgrind/` (they double as schema-drift
+canaries for the parser tests) and are referenced cross-package by relative path.
+
+The integration harness injects the mock as the benchmark command via the
+`run_with_overrides` `bench_command` override (`[binary_path()] + self.bench`, set with
+`Workspace::with_bench`), so the program path and each fixture-describing argument are
+passed verbatim as distinct argv entries — no shell, no quoting, no config `command`.
+After the mock's own contiguous arguments, `run` appends the cargo scope flags
+(`--workspace`, `--exclude NAME`, `--package NAME`, `--bench NAME`), the
+feature-selection flags (`--features`, `--all-features`, `--no-default-features`), and
+any `--` passthrough, which the mock ignores
 (it stops at the first argument it does not recognize). Like every other crate
 root that uses `#[cfg_attr(coverage_nightly, coverage(off))]`, the mock engine
 must declare `#![cfg_attr(coverage_nightly, feature(coverage_attribute))]` at its

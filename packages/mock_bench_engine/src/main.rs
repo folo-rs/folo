@@ -8,11 +8,11 @@
 //! Usage:
 //!
 //! ```text
-//! cargo-bench-history-mock-engine [--exit-code N] [--summary GROUP=KIND]...
-//!                                 [--criterion GROUP|FUNCTION|VALUE=NANOS]...
-//!                                 [--alloc-tracker OPERATION=BYTES/COUNT]...
-//!                                 [--all-the-time OPERATION=NANOS[@LOW:HIGH]]...
-//!                                 [--fail-if-exists PATH]
+//! mock_bench_engine [--exit-code N] [--summary GROUP=KIND]...
+//!                   [--criterion GROUP|FUNCTION|VALUE=NANOS]...
+//!                   [--alloc-tracker OPERATION=BYTES/COUNT]...
+//!                   [--all-the-time OPERATION=NANOS[@LOW:HIGH]]...
+//!                   [--fail-if-exists PATH]
 //! ```
 //!
 //! `--summary GROUP=KIND` writes a Gungraun (Callgrind) `summary.json`, where
@@ -66,12 +66,17 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+// These fixtures live in the sibling `cargo-bench-history` package's test tree
+// because they double as schema-drift canaries for that package's parser tests.
+// They are intentionally shared (not duplicated) so the mock and the parser can
+// never disagree about the on-disk summary shape.
 /// A committed Gungraun summary with no `id` (unparametrized), `Ir` = 36.
-const SINGLE_SUMMARY: &str =
-    include_str!("../../tests/fixtures/callgrind/single_unparametrized.summary.json");
+const SINGLE_SUMMARY: &str = include_str!(
+    "../../cargo-bench-history/tests/fixtures/callgrind/single_unparametrized.summary.json"
+);
 /// A committed Gungraun summary with `id` = `two_instants`, `Ir` = 87.
 const PARAMETRIZED_SUMMARY: &str =
-    include_str!("../../tests/fixtures/callgrind/parametrized.summary.json");
+    include_str!("../../cargo-bench-history/tests/fixtures/callgrind/parametrized.summary.json");
 
 /// The `package_dir` value of the committed single summary.
 const SINGLE_PACKAGE_DIR: &str = "\"/mnt/c/Source/folo/packages/fast_time\"";
