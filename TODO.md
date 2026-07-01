@@ -10,7 +10,7 @@ links to the relevant code.
 workaround for `std::hint::cold_path()` being unavailable at the workspace MSRV.
 
 The intrinsic stabilized in Rust 1.95. The workspace toolchain
-(`rust-toolchain.toml`) is at 1.96, but the workspace MSRV is 1.93, so
+(`rust-toolchain.toml`) is at 1.96.1, but the workspace MSRV is 1.93, so
 `std::hint::cold_path()` cannot yet be used without raising `nm`'s MSRV.
 
 Once the workspace MSRV (or just `nm`'s package MSRV) is raised to 1.95 or
