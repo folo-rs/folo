@@ -178,6 +178,26 @@ impl From<io::Error> for RunError {
     }
 }
 
+/// Finishes a mutating command by combining its `command` outcome with the
+/// result of the post-command cache-invalidation `flush`, giving a failed flush
+/// precedence over the command's own outcome.
+///
+/// The flush is armed only when a delete or overwrite reached the shared cloud
+/// backend during this command, so it is `Ok` in the common case and this simply
+/// returns `command` unchanged. When it *does* fail, a mutation already reached
+/// the cloud but its invalidation marker did not — a cross-machine
+/// cache-correctness hazard that is invisible at the failing command and would
+/// leave *other* machines' read-through caches stale. Surfacing it first (rather
+/// than after a `command?` that may short-circuit) guarantees the stale-cache
+/// failure is never silently dropped, even when the command itself also failed.
+pub(crate) fn finish_with_flush(
+    command: Result<RunOutcome, RunError>,
+    flush: Result<(), StorageError>,
+) -> Result<RunOutcome, RunError> {
+    flush?;
+    command
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -240,14 +260,14 @@ mod tests {
     #[test]
     fn duplicate_error_mentions_overwrite_and_has_no_source() {
         let error = RunError::Duplicate {
-            key: "v1/folo/callgrind/t/synthetic/abc/clean.json".to_owned(),
+            key: "v1/folo/objects/callgrind/t/synthetic/abc/clean.json".to_owned(),
         };
         assert!(error.to_string().contains("already stored"), "{error}");
         assert!(error.to_string().contains("--overwrite"), "{error}");
         assert!(
             error
                 .to_string()
-                .contains("v1/folo/callgrind/t/synthetic/abc/clean.json"),
+                .contains("v1/folo/objects/callgrind/t/synthetic/abc/clean.json"),
             "{error}"
         );
         assert!(error.source().is_none());
@@ -364,6 +384,81 @@ mod tests {
             }
             .stdout_text(),
             None
+        );
+    }
+
+    // A distinct command failure, so a test can tell whether the command error or
+    // the flush error came back out of `finish_with_flush`.
+    fn command_failure() -> RunError {
+        RunError::Bless {
+            message: "a bless precondition failed".to_owned(),
+        }
+    }
+
+    // A distinct flush failure (a `StorageError`, surfaced as `RunError::Storage`),
+    // so it is unambiguously different from `command_failure`.
+    fn flush_failure() -> StorageError {
+        StorageError::NotFound {
+            key: "cache-epoch".to_owned(),
+        }
+    }
+
+    #[test]
+    fn finish_with_flush_returns_the_outcome_when_both_succeed() {
+        let outcome = finish_with_flush(
+            Ok(RunOutcome::Completed {
+                message: "done".to_owned(),
+            }),
+            Ok(()),
+        )
+        .expect("both succeeded");
+        assert_eq!(
+            outcome,
+            RunOutcome::Completed {
+                message: "done".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn finish_with_flush_surfaces_a_flush_failure_after_a_successful_command() {
+        // The command stored data that reached the cloud, but the invalidation
+        // marker write failed — the flush error must not be swallowed just because
+        // the command itself succeeded.
+        let error = finish_with_flush(
+            Ok(RunOutcome::Completed {
+                message: "done".to_owned(),
+            }),
+            Err(flush_failure()),
+        )
+        .expect_err("the flush failed");
+        assert!(
+            matches!(error, RunError::Storage(_)),
+            "expected the flush error, got {error:?}"
+        );
+    }
+
+    #[test]
+    fn finish_with_flush_returns_the_command_error_when_the_flush_succeeds() {
+        let error =
+            finish_with_flush(Err(command_failure()), Ok(())).expect_err("the command failed");
+        assert!(
+            matches!(error, RunError::Bless { .. }),
+            "expected the command error, got {error:?}"
+        );
+    }
+
+    #[test]
+    fn finish_with_flush_prefers_the_flush_failure_over_a_failed_command() {
+        // The regression guard: a delete/overwrite reached the cloud (arming the
+        // marker) *and* the command later failed. The flush failure — which leaves
+        // other machines' caches stale — must take precedence rather than being
+        // silently dropped by the command's own early return.
+        let error = finish_with_flush(Err(command_failure()), Err(flush_failure()))
+            .expect_err("both failed");
+        assert!(
+            matches!(error, RunError::Storage(_)),
+            "expected the flush error to win, got {error:?}"
         );
     }
 }

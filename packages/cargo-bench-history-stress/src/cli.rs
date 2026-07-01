@@ -51,6 +51,14 @@ pub(crate) struct Cli {
     #[arg(long)]
     pub(crate) container: Option<String>,
 
+    /// Mirror fetched objects under this directory so the measured `analyze`
+    /// exercises the read-through cache. Only valid with `--storage azure` (a
+    /// local backend's reads are already local). A relative path is resolved
+    /// against the working directory; the directory persists across runs, so a
+    /// second invocation measures a warm cache.
+    #[arg(long, conflicts_with = "dir")]
+    pub(crate) cache: Option<PathBuf>,
+
     /// Which analysis modes to measure (repeatable / comma-separated).
     #[arg(
         long,

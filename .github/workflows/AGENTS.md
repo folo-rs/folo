@@ -227,9 +227,12 @@ exists today; PR-time collection/validation may follow once this proves out.
   consumer yet; add it to the matrix if/when macOS performance tracking is wanted.
 - **Whole workspace except the `benchmarks` package**, via the
   `just gh-collect-bench-history` recipe (`cargo-bench-history run --workspace --exclude
-  benchmarks --overwrite`). The `benchmarks` package holds slow, special-purpose
-  benchmarks that are not part of the tracked history. `--overwrite` makes a re-run on
-  an unchanged `main` commit idempotent rather than failing as a duplicate.
+  benchmarks --skip-existing`). The `benchmarks` package holds slow, special-purpose
+  benchmarks that are not part of the tracked history. `--skip-existing` makes a re-run on
+  an unchanged `main` commit a no-op append (each already-stored object is skipped, not
+  overwritten) rather than failing as a duplicate — and, crucially, never bumps the
+  cache-invalidation marker the `analyze` job's read-through cache depends on, so an
+  append-only night never wipes that cache.
 - **Uses a dedicated prod managed identity** (`id-folo-bench-history-prod`, provisioned
   by `infra/azure-bench-history-prod/` alongside the account), not the test identity: a
   scheduled run on `main` produces the OIDC subject
@@ -261,7 +264,17 @@ exists today; PR-time collection/validation may follow once this proves out.
   **one rolling regression issue** via `JasonEtco/create-an-issue` (`update_existing` +
   `search_existing: open`, fixed title = dedup key). Findings never fail the job —
   the tool always exits 0; the issue is advisory. Needs `issues: write`. It checks out
-  with `fetch-depth: 0` so the first-parent history resolves.
+  with `fetch-depth: 0` so the first-parent history resolves. An `actions/cache` step
+  ("Restore benchmark-history read-through cache") persists the recipe's `--cache`
+  directory (`bench-history-cache/`, the read-through mirror) between nights so the bulk
+  history is downloaded at most once rather than in full every run. The cache key is unique
+  per run (`bench-history-cache-<run_id>`; entries are immutable per key) with
+  `restore-keys: bench-history-cache-`, so each run restores the most recent prior mirror,
+  the analyze step tops it up with the night's new objects, and the run saves a fresh entry
+  on success. The step's `path:` must stay in lockstep with the directory the recipe passes
+  to `--cache`. Correctness does not depend on the cache being fresh: the cloud history is
+  append-only (collect uses `--skip-existing`), and a deliberate `--overwrite`/`prune`
+  bumps a cloud-side marker that wipes the mirror on the next read.
 - **`alert` job** (`needs: [collect, analyze]`, `if: failure()` + main-only) — opens a
   deduplicated `.github/bench-history-failure-issue.md` when any prior job fails, so a
   broken nightly is noticed. The issue title comes from the workflow-level

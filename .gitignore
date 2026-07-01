@@ -25,6 +25,15 @@ bench-history-report.md
 bench-history-notable.txt
 bench-history-issue.md
 
+# Local Azurite emulator artefacts, written into the working directory when the
+# `azure`-feature tests are run against a disk-backed Azurite (CI uses in-memory
+# persistence and never writes these). Never commit them.
+AzuriteConfig
+__azurite_db_*__.json
+__blobstorage__/
+__queuestorage__/
+__tablestorage__/
+
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore

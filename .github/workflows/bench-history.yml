@@ -130,6 +130,24 @@ jobs:
             echo "AZURE_TENANT_ID=$AZURE_TENANT_ID"
           } >> "$GITHUB_ENV"
 
+      # Persist the read-through cache (cargo-bench-history's --cache directory) across
+      # nightly runs so the bulk history is downloaded at most once instead of in full
+      # every night. The key is unique per run (cache entries are immutable per key), and
+      # restore-keys falls back to the most recent prior `bench-history-cache-` entry, so
+      # each run restores the latest mirror, the analyze step tops it up with the night's
+      # new objects, and this run saves a fresh entry on success. The path MUST match the
+      # `--cache` directory the `gh-analyze-bench-history` recipe passes (relative to the
+      # repo root). The cloud history is append-only (collect uses --skip-existing), so a
+      # restored-but-slightly-stale mirror is always correct — a deliberate
+      # --overwrite/prune bumps the cloud marker that wipes it on the next read.
+      - name: Restore benchmark-history read-through cache
+        uses: actions/cache@v4
+        with:
+          path: bench-history-cache
+          key: bench-history-cache-${{ github.run_id }}
+          restore-keys: |
+            bench-history-cache-
+
       # Renders bench-history-report.md and bench-history-notable.txt. Findings never
       # fail the recipe (the tool always exits 0); the issue is advisory, not a gate.
       - name: Analyze benchmark history

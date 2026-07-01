@@ -5,13 +5,20 @@ logic (parsing, mapping, comparability, key derivation, message formatting)
 synchronous and pushes async only to the IO edges, each modelled as a small
 "port" trait with a real Tokio adapter and an in-`#[cfg(test)]` in-memory fake.
 
-> **Design reference:** [`docs/DESIGN.md`](docs/DESIGN.md) is the canonical design &
-> implementation record — the data model, comparability/storage rules, command
-> semantics, analysis algorithms, the two-crate (shell + `cargo-bench-history-core`)
-> architecture, and the numbered decision log (§13). Keep it up to date whenever you
-> change a design decision, the data model, the crate layout, the storage format, or
-> a command's behaviour, recording non-trivial design changes as a new or amended
-> decision entry.
+> **Design reference:** [`docs/DESIGN.md`](docs/DESIGN.md) is the canonical, **high-level**
+> design document — the data model, comparability/storage rules, command semantics,
+> analysis algorithms, the two-crate (shell + `cargo-bench-history-core`) architecture,
+> and the numbered decision log (§13). Keep it up to date whenever you change a design
+> decision, the data model, the crate layout, the storage format, or a command's
+> behaviour, recording non-trivial design changes as a new or amended decision entry.
+>
+> **Keep it a design document, not an implementation record.** Describe the patterns,
+> concepts, and relationships — *what* exists and *why* — never *how* it is coded. Do
+> not name private types, methods, fields, or flags, and do not transcribe control flow,
+> data structures, or wire-protocol mechanics. Spell out implementation detail only for
+> a genuinely exceptional corner case that cannot be understood otherwise. When in
+> doubt, cut detail: the code and its tests are the record of *how*; the design document
+> is the record of *what* and *why*.
 
 ## Ports and fakes
 
@@ -36,12 +43,16 @@ driven in tests by fakes, never by real IO:
   `RawCriterionCase` or `RawOperationFile` values.
 * `storage::Storage` — real `LocalStorage` and `AzureBlobStorage`, selected at
   runtime by the `StorageFacade` enum that
-  `build_storage(local, config, base)` returns; fake `MemoryStorage`. `put` is
-  **write-once** (an
+  `build_storage(local, config, base, cache)` returns (the optional `cache`
+  directory wraps an `Azure` backend in the read-through `CachingStorage` decorator —
+  the `CachedAzure` variant — whose mirror roots at `<cache>` and faithfully images the
+  cloud namespace under identical keys); fake `MemoryStorage`.
+  `put` is **write-once** (an
   existing key yields `StorageError::AlreadyExists`); `put_overwrite` is the
   replacing escape hatch used only by `run --overwrite` (and, later, `backfill
-  --overwrite`). See [Storage selection](#storage-selection-local--cloud-config)
-  for how a command picks a backend.
+  --overwrite`). A `put_overwrite`/`delete` also arms the backend's
+  cache-invalidation marker, flushed once per command. See [Storage
+  selection](#storage-selection-local--cloud-config) for how a command picks a backend.
 * `config_writer::ConfigWriter` — real `TokioConfigWriter` (creates parent dirs,
   `create_new` so an existing file is never clobbered); fake `MemoryConfigWriter`.
   Used by `commands::install::execute_install`. Its real adapter's IO error paths
@@ -157,6 +168,27 @@ env). `build_storage` then maps that optional path (override) or the config's
 cloud backend into a `StorageFacade`. `run --no-store` is the exception: it skips
 selection entirely, so it runs with no `--local` and no configured backend.
 
+**Read-through cache (`--cache`).** The read commands `analyze`/`list`/`prune`
+additionally carry a `--cache` flag (its own `CacheArg`, same **Environment and
+execution** help group, three-state `require_equals` like `--local`:
+`Some(Some(p))`→Path, `Some(None)`→`CARGO_BENCH_HISTORY_CACHE`, `None`→unset). The
+env edge is `wiring::cache_env()` and the pure resolver `wiring::resolve_cache_path`
+(mirroring the `--local` split). It is meaningful **only with the cloud backend**:
+`build_storage` wraps an `Azure` backend in `storage::caching::CachingStorage`
+(`StorageFacade::CachedAzure`) whose mirror roots at `<cache>` and **faithfully images
+the cloud namespace** under identical keys, mirroring every fetched object so the bulk
+history downloads at most once across runs. A cache is pointless
+with a `--local` backend (reads are already local), so the two **conflict**: the CLI
+rejects `--cache` together with `--local` (clap `conflicts_with`). The mirror may hold
+several projects' objects at once, so invalidation is **per project**: a cloud-side marker
+(`storage::cache_epoch_key`, `v1/<project>/_cache-epoch` — a sibling of that project's
+`objects/` subtree) that `put_overwrite`/`delete`
+arm and a per-command flush bumps; `synchronize_cache` (before a load) wipes that
+project's stale mirrored objects (`storage::project_objects_prefix`, `v1/<project>/objects/`),
+and `report_cache_tally` notes hits/misses after. Append-only
+`put` never arms it, so the nightly `run --skip-existing` collection never wipes the
+cache it feeds.
+
 **Testing note:** the `cbh_integration` harness (`Workspace`) auto-injects
 `--local=<root>/store` for storage-backed commands so each test writes to its own
 store; `Workspace::without_local_storage()` disables that to exercise the
@@ -168,13 +200,18 @@ test process's.
 ## Storage model (commit-centric)
 
 `comparability::DiscriminantSet` builds object keys under the partition prefix
-`v1/<project>/<engine>/<triple>/<machine|synthetic>` and then keys each point by
+`v1/<project>/objects/<engine>/<triple>/<machine|synthetic>` and then keys each point by
 **commit**:
 
 * `clean_key(commit)` → `…/<commit>/clean.json` — the one canonical point for a
   clean working tree at that commit. It is deterministic, so a re-run of the same
   commit maps to the same key; the write-once `put` turns that into a
-  `RunError::Duplicate` (refused) unless `--overwrite` switches to `put_overwrite`.
+  `RunError::Duplicate` (refused) unless `--overwrite` switches to `put_overwrite`,
+  or `--skip-existing` (mutually exclusive with `--overwrite`) turns the
+  `AlreadyExists` collision into a soft skip (`StoreOutcome::Skipped`): the run still
+  benchmarks every engine — so a broken benchmark is still caught — but writes
+  nothing and does not arm the cache-invalidation marker. This is the append-only
+  mode the nightly collection uses (see [storage selection](#storage-selection-local--cloud-config)).
 * `dirty_key(commit, observation_unix)` → `…/<commit>/dirty-<observation_unix>.json`
   — a snapshot of an uncommitted tree, distinguished by its observation second so
   multiple dirty snapshots on one base commit coexist; only a same-second clash is
@@ -264,7 +301,7 @@ timeline because which commits belong to a line of history depends on the branch
 being analyzed:
 
 * **Discriminant facets first.** `analyze::discriminant::parse_key` turns each
-  `v1/<project>/<engine>/<triple>/<machine|synthetic>/<commit>/<file>` key into a
+  `v1/<project>/objects/<engine>/<triple>/<machine|synthetic>/<commit>/<file>` key into a
   `DiscriminantSet` (engine, triple, machine). `--engine`/`--target-triple`/
   `--machine-key` select sets — each facet is **repeatable**, accepts the widening
   keyword `all`, and auto-detects the current machine when omitted (`--target-triple`

@@ -427,8 +427,17 @@ impl AzureWorkspace {
         // command, which the single bench invocation runs to produce engine output.
         let mut bench_command = vec![mock_bench_engine::binary_path().to_owned()];
         bench_command.extend(self.bench.iter().cloned());
+
+        // Enable verbose reporting so the reporter's `note_with` closures run against
+        // the live backend — in particular the post-mutation cache-invalidation flush
+        // note, whose body only executes when the reporter is enabled and the flag was
+        // armed. Notes go to stderr, so this never perturbs the rendered reports.
+        let mut effective: Vec<&str> = args.to_vec();
+        if !effective.contains(&"--verbose") {
+            effective.insert(1, "--verbose");
+        }
         run_with_overrides(
-            &command_from(args),
+            &command_from(&effective),
             Overrides {
                 workspace_dir: Some(self.dir.path().to_path_buf()),
                 target_root: Some(target_root),
@@ -462,6 +471,16 @@ async fn scenario_run_stores(config: &str) {
     let outcome = workspace.drive(&["run"]).await.unwrap();
     let RunOutcome::Completed { message } = outcome else {
         panic!("expected completion, got {outcome:?}");
+    };
+    assert!(message.contains("Stored 1"), "{message}");
+
+    // Re-running the same commit with `--overwrite` replaces the stored object in
+    // place through the uncached backend's `put_overwrite`, so the clean re-run
+    // succeeds rather than colliding — the one Azure write path a plain `run` never
+    // reaches, validated here uncached (the cached backend never stores objects).
+    let outcome = workspace.drive(&["run", "--overwrite"]).await.unwrap();
+    let RunOutcome::Completed { message } = outcome else {
+        panic!("expected completion on overwrite, got {outcome:?}");
     };
     assert!(message.contains("Stored 1"), "{message}");
 }
@@ -538,6 +557,136 @@ async fn scenario_feature_and_dirty(config: &str) {
     );
 }
 
+/// Recursively counts the regular files under `dir`, used to prove the
+/// read-through cache populated its on-disk mirror.
+fn count_files(dir: &std::path::Path) -> usize {
+    let mut total: usize = 0;
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        let count = if path.is_dir() { count_files(&path) } else { 1 };
+        total = total.saturating_add(count);
+    }
+    total
+}
+
+/// Scenario: the read-through cache mirrors the cloud on a cold `analyze --cache`,
+/// reuses that mirror on a warm pass, and a mutating `prune --cache` bumps the
+/// per-project invalidation marker so the next `--cache` pass wipes the stale
+/// mirror and reloads. This drives the `CachedAzure` backend end to end — the
+/// facade's cache-aware dispatch, the mirror synchronize (reuse and wipe), and the
+/// post-delete marker flush — through exactly the command surface the binary uses.
+async fn scenario_cache_round_trip(config: &str) {
+    let workspace = AzureWorkspace::new(config).with_bench(&["--summary", "grp=single"]);
+    let cache = tempfile::tempdir().unwrap();
+    // `--cache` uses `require_equals`, so the path must be attached with `=`; a
+    // space-separated `--cache <path>` would leave the flag bare (falling back to
+    // the unset env var) and error out.
+    let cache_arg = format!("--cache={}", cache.path().to_string_lossy());
+
+    // One clean run on the base line, then a feature commit with its own clean run.
+    // A feature commit's own run is deletable without the base-branch guard, so the
+    // prune below is unambiguous.
+    workspace.drive(&["run"]).await.unwrap();
+    workspace.checkout_new_branch("feature");
+    workspace.commit("f1");
+    workspace.drive(&["run"]).await.unwrap();
+
+    // Cold: the mirror is empty, so `analyze` fetches from the cloud and populates it.
+    let cold = workspace.drive_json(&["analyze", &cache_arg]).await;
+    let cold: serde_json::Value = serde_json::from_str(&cold).unwrap();
+    assert_eq!(cold["project"], "azureproj");
+    assert_eq!(
+        cold["runs"], 2,
+        "the cold pass loads the base and feature clean runs: {cold}"
+    );
+    assert!(
+        count_files(cache.path()) > 0,
+        "the cold pass mirrors the fetched objects into the cache directory"
+    );
+
+    // Warm: the epochs match (nothing mutated yet), so the mirror is reused.
+    let warm = workspace.drive_json(&["analyze", &cache_arg]).await;
+    let warm: serde_json::Value = serde_json::from_str(&warm).unwrap();
+    assert_eq!(warm["runs"], 2, "the warm pass reuses the mirror: {warm}");
+
+    // A dry-run prune touches nothing, so the marker stays put and the mirror is
+    // still reusable on the next pass.
+    let preview = workspace
+        .drive_json(&["prune", "--clean", &cache_arg, "--dry-run"])
+        .await;
+    let preview: serde_json::Value = serde_json::from_str(&preview).unwrap();
+    assert_eq!(
+        preview["totals"]["runs"], 1,
+        "the preview would remove the feature commit's clean run: {preview}"
+    );
+
+    // A real prune deletes the feature clean run from the cloud, arming the
+    // per-project invalidation marker so other machines' mirrors go stale.
+    let pruned = workspace
+        .drive_json(&["prune", "--clean", &cache_arg])
+        .await;
+    let pruned: serde_json::Value = serde_json::from_str(&pruned).unwrap();
+    assert_eq!(
+        pruned["totals"]["runs"], 1,
+        "the prune removes the feature commit's clean run: {pruned}"
+    );
+
+    // The next pass reads the bumped marker, so it wipes the now-stale mirror and
+    // reloads from the cloud, where only the base clean run remains.
+    let after = workspace.drive_json(&["analyze", &cache_arg]).await;
+    let after: serde_json::Value = serde_json::from_str(&after).unwrap();
+    assert_eq!(
+        after["runs"], 1,
+        "after the invalidation the reloaded mirror holds only the base clean run: {after}"
+    );
+}
+
+/// Scenario: an uncached mutating round-trip — `run`s populate the cloud, then a
+/// real `prune --clean` (no `--cache`) deletes a run directly against the backend.
+/// This is the mirror image of [`scenario_cache_round_trip`]: it drives the plain
+/// `Azure` backend's `delete` dispatch and the post-delete invalidation-marker
+/// flush, so every Azure storage operation is validated uncached as well as
+/// cached. Prune loads (list + get) to decide what to remove, then deletes; the
+/// deletion arms the flag the subsequent flush consults.
+async fn scenario_prune_without_cache(config: &str) {
+    let workspace = AzureWorkspace::new(config).with_bench(&["--summary", "grp=single"]);
+
+    // One clean run on the base line, then a feature commit with its own clean run.
+    // A feature commit's own run is deletable without the base-branch guard, so the
+    // prune below is unambiguous.
+    workspace.drive(&["run"]).await.unwrap();
+    workspace.checkout_new_branch("feature");
+    workspace.commit("f1");
+    workspace.drive(&["run"]).await.unwrap();
+
+    // A dry-run prune previews the feature clean run without deleting or arming.
+    let preview = workspace
+        .drive_json(&["prune", "--clean", "--dry-run"])
+        .await;
+    let preview: serde_json::Value = serde_json::from_str(&preview).unwrap();
+    assert_eq!(
+        preview["totals"]["runs"], 1,
+        "the preview would remove the feature commit's clean run: {preview}"
+    );
+
+    // A real prune deletes the feature clean run from the cloud, arming the
+    // per-project invalidation marker that the post-delete flush then bumps.
+    let pruned = workspace.drive_json(&["prune", "--clean"]).await;
+    let pruned: serde_json::Value = serde_json::from_str(&pruned).unwrap();
+    assert_eq!(
+        pruned["totals"]["runs"], 1,
+        "the prune removes the feature commit's clean run: {pruned}"
+    );
+
+    // Re-reading the cloud shows only the base clean run survived the deletion.
+    let after = workspace.drive_json(&["analyze"]).await;
+    let after: serde_json::Value = serde_json::from_str(&after).unwrap();
+    assert_eq!(
+        after["runs"], 1,
+        "after the prune only the base clean run remains: {after}"
+    );
+}
+
 // --- Azurite (self-signed account SAS) -------------------------------------
 
 /// `run` stores a harvested result set in Azurite.
@@ -583,6 +732,38 @@ async fn analyze_feature_and_dirty_round_trip_through_azurite() {
         return;
     }
     scenario_feature_and_dirty(&azure_config()).await;
+}
+
+/// A read-through cache round-trip through Azurite: cold mirror, warm reuse, and a
+/// mutating prune that invalidates and reloads the mirror.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[cfg_attr(
+    mutants,
+    ignore = "Azure network end-to-end test: self-skips without an emulator (as under mutation), and the azure IO it exercises is already mutants::skip"
+)]
+#[serial]
+async fn analyze_with_cache_round_trips_through_azurite() {
+    if !azurite_available() {
+        return;
+    }
+    scenario_cache_round_trip(&azure_config()).await;
+}
+
+/// An uncached mutating round-trip through Azurite: `prune` deletes a run directly
+/// against the plain `Azure` backend and flushes the invalidation marker.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[cfg_attr(
+    mutants,
+    ignore = "Azure network end-to-end test: self-skips without an emulator (as under mutation), and the azure IO it exercises is already mutants::skip"
+)]
+#[serial]
+async fn prune_without_cache_round_trips_through_azurite() {
+    if !azurite_available() {
+        return;
+    }
+    scenario_prune_without_cache(&azure_config()).await;
 }
 
 /// A stored blob carries `Content-Encoding: gzip`, so a non-SDK reader knows the
@@ -687,6 +868,42 @@ async fn analyze_feature_and_dirty_round_trip_through_real_azure() {
     }
     with_real_azure_container(async |container| {
         scenario_feature_and_dirty(&real_azure_config(&container)).await;
+    })
+    .await;
+}
+
+/// A read-through cache round-trip through a real Azure account via Entra ID.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[cfg_attr(
+    mutants,
+    ignore = "Real-Azure network end-to-end test: self-skips without ENABLE_AZURE (as under mutation), and the azure IO it exercises is already mutants::skip"
+)]
+#[serial]
+async fn analyze_with_cache_round_trips_through_real_azure() {
+    if !real_azure_enabled() {
+        return;
+    }
+    with_real_azure_container(async |container| {
+        scenario_cache_round_trip(&real_azure_config(&container)).await;
+    })
+    .await;
+}
+
+/// An uncached mutating round-trip through a real Azure account via Entra ID.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[cfg_attr(
+    mutants,
+    ignore = "Real-Azure network end-to-end test: self-skips without ENABLE_AZURE (as under mutation), and the azure IO it exercises is already mutants::skip"
+)]
+#[serial]
+async fn prune_without_cache_round_trips_through_real_azure() {
+    if !real_azure_enabled() {
+        return;
+    }
+    with_real_azure_container(async |container| {
+        scenario_prune_without_cache(&real_azure_config(&container)).await;
     })
     .await;
 }

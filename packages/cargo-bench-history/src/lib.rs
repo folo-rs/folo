@@ -294,8 +294,8 @@ pub(crate) use cargo_bench_history_core::model;
 
 pub use cli::{Cli, EarlyExit};
 pub use command::{
-    AnalyzeOptions, BackfillOptions, BlessOptions, Command, InstallOptions, ListOptions,
-    ListSubject, LocalStorageSelection, PruneOptions, RunOptions, UnblessOptions,
+    AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, Command, InstallOptions,
+    ListOptions, ListSubject, LocalStorageSelection, PruneOptions, RunOptions, UnblessOptions,
 };
 pub use config::{ConfigError, default_template};
 pub use dispatch::{Overrides, run, run_with_overrides};
@@ -303,5 +303,6 @@ pub use model::{
     BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo, EnvironmentProvider, GitInfo,
     Metric, MetricKind, Run, RunContext, SCHEMA_VERSION, ToolchainInfo,
 };
+pub(crate) use outcome::finish_with_flush;
 pub use outcome::{RunError, RunOutcome};
 pub use storage::StorageError;

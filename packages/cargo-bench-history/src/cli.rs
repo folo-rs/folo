@@ -13,8 +13,8 @@ use clap::{ArgGroup, Args, Parser, Subcommand as ClapSubcommand, ValueEnum};
 
 use crate::model::BenchmarkIdPrefix;
 use crate::{
-    AnalyzeOptions, BackfillOptions, BlessOptions, Command, InstallOptions, ListOptions,
-    ListSubject, LocalStorageSelection, PruneOptions, RunOptions, UnblessOptions,
+    AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, Command, InstallOptions,
+    ListOptions, ListSubject, LocalStorageSelection, PruneOptions, RunOptions, UnblessOptions,
 };
 
 const HEADING_ENV: &str = "Environment and execution";
@@ -187,6 +187,56 @@ fn local_selection(local: Option<Option<PathBuf>>) -> Option<LocalStorageSelecti
     }
 }
 
+/// Translates the `--cache` flag into the typed [`CacheSelection`].
+///
+/// Mirrors [`local_selection`]'s three-state mapping: `None` (flag absent) selects
+/// no cache; `Some(Some(p))` (`--cache=<path>`) selects an explicit cache
+/// directory; `Some(None)` (bare `--cache`) selects the directory from
+/// `CARGO_BENCH_HISTORY_CACHE`.
+#[expect(
+    clippy::option_option,
+    reason = "mirrors the clap field's three-state optional-value representation, mapped here to \
+              the typed CacheSelection"
+)]
+fn cache_selection(cache: Option<Option<PathBuf>>) -> Option<CacheSelection> {
+    match cache {
+        None => None,
+        Some(Some(path)) => Some(CacheSelection::Path(path)),
+        Some(None) => Some(CacheSelection::FromEnv),
+    }
+}
+
+/// The `--cache` read-through cache selection, shared by the read commands
+/// `analyze`, `list`, and `prune` (the write commands take no cache: they do not
+/// read the bulk history). Kept out of [`EnvArgs`] so only the read commands carry
+/// it, but placed in the same **Environment and execution** help group.
+#[derive(Args, Debug)]
+#[command(next_help_heading = HEADING_ENV)]
+struct CacheArg {
+    /// Mirror fetched cloud objects under a local directory so repeated reads avoid
+    /// re-downloading the whole history.
+    ///
+    /// `--cache=<path>` mirrors under `<path>` (a relative path resolves against
+    /// the target repository — the working directory by default, or `--repo`). A
+    /// bare `--cache` (no value) reads the directory from the
+    /// `CARGO_BENCH_HISTORY_CACHE` environment variable. The cache applies only to
+    /// the cloud backend, so it conflicts with `--local` (a local backend's reads
+    /// are already on disk).
+    #[arg(
+        long,
+        value_name = "PATH",
+        num_args = 0..=1,
+        require_equals = true,
+        conflicts_with = "local"
+    )]
+    #[expect(
+        clippy::option_option,
+        reason = "clap's representation of a three-state optional-value flag: absent (None), bare \
+                  --cache (Some(None) -> read the env var), or --cache=<path> (Some(Some(path)))"
+    )]
+    cache: Option<Option<PathBuf>>,
+}
+
 /// The repeatable, `all`-aware discriminant facets used by every query command.
 ///
 /// Each facet auto-detects the current machine when omitted (`--engine` has no
@@ -311,6 +361,12 @@ struct RunCommand {
     #[arg(long, help_heading = HEADING_ENV)]
     overwrite: bool,
 
+    /// Treat an already-stored result for this run as a success that writes
+    /// nothing, instead of refusing it as a duplicate. Mutually exclusive with
+    /// `--overwrite`; the append-only mode the nightly collection uses.
+    #[arg(long, help_heading = HEADING_ENV, conflicts_with = "overwrite")]
+    skip_existing: bool,
+
     /// Arguments after `--` forwarded verbatim to `cargo bench` after the scope
     /// flags.
     #[arg(last = true, value_name = "ARGS")]
@@ -332,6 +388,7 @@ impl RunCommand {
             machine_key: self.machine_key,
             no_store: self.no_store,
             overwrite: self.overwrite,
+            skip_existing: self.skip_existing,
             passthrough: self.passthrough,
             verbose: self.env.verbose,
         }
@@ -371,6 +428,9 @@ struct AnalyzeCommand {
 
     #[command(flatten)]
     env: EnvArgs,
+
+    #[command(flatten)]
+    cache: CacheArg,
 
     #[command(flatten)]
     output: OutputArgs,
@@ -414,6 +474,7 @@ impl AnalyzeCommand {
             config_path: self.env.config,
             repo: self.env.repo,
             local: local_selection(self.env.local),
+            cache: cache_selection(self.cache.cache),
             context: self.timeline.context,
             base: self.timeline.base,
             no_dirty: self.no_dirty,
@@ -470,6 +531,9 @@ struct ListCommand {
     env: EnvArgs,
 
     #[command(flatten)]
+    cache: CacheArg,
+
+    #[command(flatten)]
     output: OutputArgs,
 
     #[command(flatten)]
@@ -496,6 +560,7 @@ impl ListCommand {
             config_path: self.env.config,
             repo: self.env.repo,
             local: local_selection(self.env.local),
+            cache: cache_selection(self.cache.cache),
             context: self.timeline.context,
             base: self.timeline.base,
             no_dirty: self.no_dirty,
@@ -533,6 +598,9 @@ struct PruneCommand {
 
     #[command(flatten)]
     env: EnvArgs,
+
+    #[command(flatten)]
+    cache: CacheArg,
 
     /// Preview what would be removed without deleting anything.
     #[arg(long, help_heading = HEADING_ENV)]
@@ -600,6 +668,7 @@ impl PruneCommand {
             config_path: self.env.config,
             repo: self.env.repo,
             local: local_selection(self.env.local),
+            cache: cache_selection(self.cache.cache),
             context: self.commit_selection.context,
             base: self.commit_selection.base,
             commit: self.commit,
@@ -1013,6 +1082,28 @@ mod tests {
     }
 
     #[test]
+    fn run_parses_skip_existing_switch() {
+        let command = parse(&["run", "--skip-existing"]);
+        let Command::Run(options) = command else {
+            panic!("expected run command");
+        };
+        assert!(options.skip_existing);
+        assert!(!options.overwrite);
+    }
+
+    #[test]
+    fn run_rejects_skip_existing_with_overwrite() {
+        let parsed = Cli::from_args(
+            &["cargo-bench-history"],
+            &["run", "--overwrite", "--skip-existing"],
+        );
+        assert!(
+            parsed.is_err(),
+            "--skip-existing and --overwrite are mutually exclusive"
+        );
+    }
+
+    #[test]
     fn run_parses_repo() {
         let command = parse(&["run", "--repo", "/work/folo"]);
         let Command::Run(options) = command else {
@@ -1058,6 +1149,96 @@ mod tests {
         assert_eq!(options.local, Some(LocalStorageSelection::FromEnv));
         assert_eq!(options.from, "abc");
         assert_eq!(options.to, "def");
+    }
+
+    #[test]
+    fn cache_defaults_to_none() {
+        let Command::Analyze(options) = parse(&["analyze"]) else {
+            panic!("expected analyze command");
+        };
+        assert_eq!(options.cache, None);
+    }
+
+    #[test]
+    fn cache_with_value_selects_an_explicit_path() {
+        let Command::Analyze(options) = parse(&["analyze", "--cache=./mirror"]) else {
+            panic!("expected analyze command");
+        };
+        assert_eq!(
+            options.cache,
+            Some(CacheSelection::Path(PathBuf::from("./mirror")))
+        );
+    }
+
+    #[test]
+    fn bare_cache_selects_the_environment_variable() {
+        let Command::List(options) = parse(&["list", "discriminants", "--cache"]) else {
+            panic!("expected list command");
+        };
+        assert_eq!(options.cache, Some(CacheSelection::FromEnv));
+    }
+
+    #[test]
+    fn prune_parses_cache() {
+        let Command::Prune(options) = parse(&["prune", "--clean", "--cache=./mirror"]) else {
+            panic!("expected prune command");
+        };
+        assert_eq!(
+            options.cache,
+            Some(CacheSelection::Path(PathBuf::from("./mirror")))
+        );
+    }
+
+    #[test]
+    fn cache_requires_equals_for_its_value() {
+        // Like `--local`, the space-separated form binds nothing so a following
+        // positional (an analyze prefix) is never swallowed as the cache path.
+        let Command::Analyze(options) = parse(&["analyze", "--cache", "all_the_time/read_cell"])
+        else {
+            panic!("expected analyze command");
+        };
+        assert_eq!(options.cache, Some(CacheSelection::FromEnv));
+        assert_eq!(
+            options.prefixes,
+            vec![BenchmarkIdPrefix::new("all_the_time/read_cell").unwrap()]
+        );
+    }
+
+    #[test]
+    fn cache_conflicts_with_local() {
+        // The read-through cache applies only to the cloud backend, so pairing
+        // `--cache` with `--local` is a usage error rather than a silent ignore.
+        let parsed = Cli::from_args(
+            &["cargo-bench-history"],
+            &["analyze", "--local=./store", "--cache=./mirror"],
+        );
+        assert!(
+            parsed.is_err(),
+            "--cache and --local are mutually exclusive"
+        );
+
+        // The same conflict holds for the other read commands that carry both flags.
+        assert!(
+            Cli::from_args(
+                &["cargo-bench-history"],
+                &[
+                    "list",
+                    "discriminants",
+                    "--local=./store",
+                    "--cache=./mirror"
+                ],
+            )
+            .is_err(),
+            "list must reject --cache with --local"
+        );
+        assert!(
+            Cli::from_args(
+                &["cargo-bench-history"],
+                &["prune", "--clean", "--local=./store", "--cache=./mirror"],
+            )
+            .is_err(),
+            "prune must reject --cache with --local"
+        );
     }
 
     #[test]

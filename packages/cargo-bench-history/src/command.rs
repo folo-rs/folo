@@ -22,6 +22,26 @@ pub enum LocalStorageSelection {
     FromEnv,
 }
 
+/// How a read command selects a local read-through cache directory, from the
+/// `--cache` flag.
+///
+/// Like a `--local` path, a cache directory is machine-dependent, so it is never
+/// carried in the shared configuration file but supplied at run time. `None` on a
+/// command's `cache` field means `--cache` was not given (no cache: cloud reads go
+/// straight to the backend). A distinct type from [`LocalStorageSelection`] keeps
+/// the two unrelated selections from being mixed up, even though their three-state
+/// shape is the same.
+#[doc(hidden)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CacheSelection {
+    /// `--cache=<path>`: mirror fetched objects under this filesystem directory
+    /// (relative paths resolve against the workspace directory).
+    Path(PathBuf),
+    /// A bare `--cache`: take the directory from the `CARGO_BENCH_HISTORY_CACHE`
+    /// environment variable (an unset or empty variable is an error).
+    FromEnv,
+}
+
 /// A fully parsed command ready to execute.
 #[doc(hidden)]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -79,6 +99,12 @@ pub struct RunOptions {
     /// Replace an already-stored result for this run's identity instead of
     /// refusing the run as a duplicate.
     pub overwrite: bool,
+    /// Treat an already-stored result for this run's identity as a success that
+    /// writes nothing, instead of refusing the run as a duplicate. Mutually
+    /// exclusive with `overwrite`; the append-only mode the nightly `collect`
+    /// recipe uses so collection never overwrites (and so never invalidates the
+    /// cloud read-through cache).
+    pub skip_existing: bool,
     /// Arguments forwarded verbatim to the benchmark command after the scope flags.
     pub passthrough: Vec<String>,
     /// Emit detailed diagnostic notes to standard error describing each step.
@@ -106,6 +132,10 @@ pub struct AnalyzeOptions {
     /// Local-storage selection from `--local`; overrides the configured cloud
     /// backend. `None` means `--local` was not given (use the configured backend).
     pub local: Option<LocalStorageSelection>,
+    /// Read-through cache selection from `--cache`; mirrors fetched cloud objects
+    /// under a local directory so repeated reads avoid re-downloading the history.
+    /// `None` means `--cache` was not given. Ignored with a `--local` backend.
+    pub cache: Option<CacheSelection>,
     /// Target ref whose history is analyzed; defaults to `HEAD`.
     pub context: Option<String>,
     /// Base ref the target's history is split at; defaults to the detected (or
@@ -199,6 +229,10 @@ pub struct ListOptions {
     /// Local-storage selection from `--local`; overrides the configured cloud
     /// backend. `None` means `--local` was not given (use the configured backend).
     pub local: Option<LocalStorageSelection>,
+    /// Read-through cache selection from `--cache`; mirrors fetched cloud objects
+    /// under a local directory so repeated reads avoid re-downloading the history.
+    /// `None` means `--cache` was not given. Ignored with a `--local` backend.
+    pub cache: Option<CacheSelection>,
     /// Target ref whose history is listed; defaults to `HEAD`.
     pub context: Option<String>,
     /// Base ref the target's history is split at; defaults to the detected (or
@@ -255,6 +289,11 @@ pub struct PruneOptions {
     /// Local-storage selection from `--local`; overrides the configured cloud
     /// backend. `None` means `--local` was not given (use the configured backend).
     pub local: Option<LocalStorageSelection>,
+    /// Read-through cache selection from `--cache`; mirrors fetched cloud objects
+    /// under a local directory so the pre-prune load avoids re-downloading the
+    /// history. `None` means `--cache` was not given. Ignored with a `--local`
+    /// backend.
+    pub cache: Option<CacheSelection>,
     /// Target ref whose history is pruned; defaults to `HEAD`.
     pub context: Option<String>,
     /// Base ref the context branched off from; defaults to the detected (or

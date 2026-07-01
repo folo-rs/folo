@@ -31,7 +31,7 @@ use crate::wiring::{
     STORAGE_ENV_VAR, resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo,
     storage_env,
 };
-use crate::{LocalStorageSelection, RunError, RunOptions, RunOutcome};
+use crate::{LocalStorageSelection, RunError, RunOptions, RunOutcome, finish_with_flush};
 
 /// The program and base arguments the production tool runs to benchmark the
 /// workspace. The first-class scope flags (`--workspace`/`--package`/`--bench`)
@@ -119,7 +119,7 @@ pub(crate) async fn execute(
             "storage backend: {}",
             describe_storage(options.local.as_ref(), local.as_deref(), &config)
         ));
-        Some(build_storage(local.as_deref(), &config, base)?)
+        Some(build_storage(local.as_deref(), &config, base, None)?)
     };
 
     let runner = TokioBenchRunner::in_dir(base);
@@ -148,7 +148,21 @@ pub(crate) async fn execute(
         reporter: &reporter,
     };
 
-    execute_run(options, &deps).await
+    let result = execute_run(options, &deps).await;
+    // Flush the cache-invalidation marker after the run: an `--overwrite` that
+    // replaced a stored object armed it, and bumping the marker is what invalidates
+    // *other* machines' read-through caches. An append-only run never arms it, so
+    // this is a cheap no-op there. The flush runs even on a partial failure, since a
+    // write that already reached the cloud must still invalidate caches.
+    let flush = match storage.as_ref() {
+        Some(storage) => {
+            storage
+                .flush_pending_invalidation(&project_id, &reporter)
+                .await
+        }
+        None => Ok(()),
+    };
+    finish_with_flush(result, flush)
 }
 
 /// A short human-readable description of where results are stored, for the
@@ -503,22 +517,60 @@ where
     let storage = deps
         .storage
         .expect("storage is built whenever a run may store results");
-    store_result(storage, &object_key, json.as_bytes(), options.overwrite).await?;
-    deps.reporter
-        .note(&format!("{engine}: stored {object_key}"));
+    let outcome = store_result(
+        storage,
+        &object_key,
+        json.as_bytes(),
+        options.overwrite,
+        options.skip_existing,
+    )
+    .await?;
 
-    // Replacing a clean run discards the data point its blessings accepted, so any
-    // blessing sidecars on this commit no longer describe a stored level. Remove
-    // them on overwrite so a stale blessing cannot silently re-baseline the new run.
-    if options.overwrite && !dirty {
-        invalidate_blessings(storage, &key, deps.project_id, commit, deps.reporter).await?;
+    match outcome {
+        StoreOutcome::Skipped => {
+            deps.reporter.note(&format!(
+                "{engine}: {object_key} already exists; left unchanged (--skip-existing), \
+                 so nothing was written and the cache-invalidation marker was not armed"
+            ));
+            Ok(EngineSummary {
+                stored: false,
+                count,
+                label: Some(format!(
+                    "{engine}: {count} harvested ({object_key} already exists)"
+                )),
+            })
+        }
+        StoreOutcome::Stored => {
+            deps.reporter
+                .note(&format!("{engine}: stored {object_key}"));
+
+            // Replacing a clean run discards the data point its blessings accepted, so
+            // any blessing sidecars on this commit no longer describe a stored level.
+            // Remove them on overwrite so a stale blessing cannot silently re-baseline
+            // the new run.
+            if options.overwrite && !dirty {
+                invalidate_blessings(storage, &key, deps.project_id, commit, deps.reporter).await?;
+            }
+
+            Ok(EngineSummary {
+                stored: true,
+                count,
+                label: Some(format!("{engine}: {count} stored")),
+            })
+        }
     }
+}
 
-    Ok(EngineSummary {
-        stored: true,
-        count,
-        label: Some(format!("{engine}: {count} stored")),
-    })
+/// The disposition of a single result-set store.
+#[derive(Debug)]
+enum StoreOutcome {
+    /// The result set was written (a new object, or a replacement under
+    /// `--overwrite`).
+    Stored,
+    /// An object already existed at the key and `--skip-existing` left it
+    /// untouched. No write happened, so the cloud cache-invalidation marker was
+    /// not armed.
+    Skipped,
 }
 
 /// Persists a serialized result set at `object_key`.
@@ -526,20 +578,30 @@ where
 /// A normal run is write-once: if an object already exists at the key (a clean
 /// re-run of the same commit, or a dirty snapshot sharing an effective second),
 /// the collision surfaces as [`RunError::Duplicate`] so the caller can refuse it.
-/// An overwrite replaces any existing object in place instead.
+/// `--overwrite` replaces any existing object in place instead; `--skip-existing`
+/// instead treats the existing object as a success that writes nothing — the
+/// append-only mode the nightly collection uses so it never overwrites an object
+/// (and so never invalidates the cloud read-through cache).
 async fn store_result<S: Storage>(
     storage: &S,
     object_key: &str,
     bytes: &[u8],
     overwrite: bool,
-) -> Result<(), RunError> {
+    skip_existing: bool,
+) -> Result<StoreOutcome, RunError> {
     if overwrite {
         storage.put_overwrite(object_key, bytes).await?;
-        return Ok(());
+        return Ok(StoreOutcome::Stored);
     }
     match storage.put(object_key, bytes).await {
-        Ok(()) => Ok(()),
-        Err(StorageError::AlreadyExists { key }) => Err(RunError::Duplicate { key }),
+        Ok(()) => Ok(StoreOutcome::Stored),
+        Err(StorageError::AlreadyExists { key }) => {
+            if skip_existing {
+                Ok(StoreOutcome::Skipped)
+            } else {
+                Err(RunError::Duplicate { key })
+            }
+        }
         Err(error) => Err(error.into()),
     }
 }
@@ -800,6 +862,7 @@ mod tests {
             &FailingStorage,
             "v1/p/e/t/m/c/clean.json",
             b"{}",
+            false,
             false,
         ))
         .unwrap_err();
@@ -1157,7 +1220,7 @@ mod tests {
         output: &FakeOutput,
         storage: &MemoryStorage,
     ) -> Result<RunOutcome, RunError> {
-        let reporter = StderrReporter::new(false);
+        let reporter = StderrReporter::new(true);
         drive_at_with(now_unix, options, runner, probe, output, storage, &reporter)
     }
 
@@ -1222,7 +1285,7 @@ mod tests {
             reporter.notes()
         );
         assert!(
-            reporter.contains("stored v1/folo/callgrind/"),
+            reporter.contains("stored v1/folo/objects/callgrind/"),
             "expected a stored-key note, got {:?}",
             reporter.notes()
         );
@@ -1273,7 +1336,7 @@ mod tests {
         assert_eq!(
             keys,
             vec![
-                "v1/folo/callgrind/x86_64-pc-windows-msvc/synthetic/\
+                "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/\
                  deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/clean.json"
                     .to_owned()
             ]
@@ -1316,6 +1379,53 @@ mod tests {
         assert!(key.ends_with("/clean.json"), "{key}");
         // The second run left the single stored object untouched.
         assert_eq!(storage.keys().len(), 1);
+    }
+
+    #[test]
+    fn skip_existing_treats_a_same_commit_re_run_as_a_no_op_success() {
+        let storage = MemoryStorage::new();
+        // A first clean run stores the canonical point.
+        drive(
+            &RunOptions::default(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            &FakeOutput::with_two_callgrind_summaries(),
+            &storage,
+        )
+        .unwrap();
+        let original = block_on(storage.get(
+            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/\
+             deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/clean.json",
+        ))
+        .unwrap();
+
+        // A re-run of the same commit under --skip-existing succeeds without a
+        // duplicate error and leaves the stored object byte-for-byte unchanged
+        // (so the cache-invalidation marker is never armed).
+        let skip = RunOptions {
+            skip_existing: true,
+            ..RunOptions::default()
+        };
+        drive(
+            &skip,
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            // Different harvest content: a true overwrite would change the bytes.
+            &FakeOutput {
+                callgrind: vec![RawSummary {
+                    path: PathBuf::from("a/summary.json"),
+                    content: SINGLE_FIXTURE.to_owned(),
+                }],
+                ..FakeOutput::default()
+            },
+            &storage,
+        )
+        .unwrap();
+
+        let keys = storage.keys();
+        assert_eq!(keys.len(), 1, "no new object is written: {keys:?}");
+        let after = block_on(storage.get(&keys[0])).unwrap();
+        assert_eq!(after, original, "the existing object is left untouched");
     }
 
     #[test]
@@ -1375,7 +1485,7 @@ mod tests {
             &storage,
         )
         .unwrap();
-        let commit_dir = "v1/folo/callgrind/x86_64-pc-windows-msvc/synthetic/\
+        let commit_dir = "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/\
                           deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
         let bless_key = format!("{commit_dir}/bless-100.json");
         let record = BlessingRecord::new(
@@ -1441,7 +1551,7 @@ mod tests {
         // Blessings accept the clean run's data point, so a blessing sidecar on the
         // commit must survive when only a dirty snapshot of that commit is rewritten;
         // invalidation is reserved for a clean overwrite that discards the point.
-        let commit_dir = "v1/folo/callgrind/x86_64-pc-windows-msvc/synthetic/\
+        let commit_dir = "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/\
                           deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
         let bless_key = format!("{commit_dir}/bless-100.json");
         let record = BlessingRecord::new(

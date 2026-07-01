@@ -112,3 +112,76 @@ fn binary_bare_local_without_the_environment_variable_is_an_error() {
     assert!(!output.status.success(), "{stderr}");
     assert!(stderr.contains("CARGO_BENCH_HISTORY_STORAGE"), "{stderr}");
 }
+
+/// Writes a configuration whose Azure backend sets both `account_key` and
+/// `sas_token` into `dir`'s default config path. `build_storage` rejects that
+/// conflicting pair the instant it is reached — before touching the network — so a
+/// command driven here fails fast with the auth error once `--cache` has resolved,
+/// letting the environment-edge tests prove the cache path without a live emulator.
+fn write_conflicting_auth_config(dir: &std::path::Path) {
+    let config_path = dir.join(".cargo").join("bench_history.toml");
+    std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &config_path,
+        "[project]\n\
+         id = \"testproj\"\n\n\
+         [storage.azure]\n\
+         account = \"devstoreaccount1\"\n\
+         container = \"bench-history\"\n\
+         account_key = \"a2V5\"\n\
+         sas_token = \"sv=2021-08-06&sig=abc\"\n",
+    )
+    .unwrap();
+}
+
+/// A bare `--cache` (no `=value`) reads the mirror directory from the
+/// `CARGO_BENCH_HISTORY_CACHE` environment variable. Driven against the real
+/// binary so the genuine environment edge is exercised: with the variable set, the
+/// cache path resolves and the command proceeds to `build_storage`, which then
+/// fails only for the deliberately conflicting Azure auth — not on the cache-unset
+/// path — proving the environment value was accepted.
+#[test]
+#[cfg_attr(miri, ignore)] // Spawns a real process, which Miri cannot do.
+fn binary_bare_cache_reads_the_cache_path_from_the_environment() {
+    let dir = tempfile::tempdir().unwrap();
+    write_conflicting_auth_config(dir.path());
+    let cache = dir.path().join("cache");
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_cargo-bench-history"))
+        .args(["list", "runs", "--cache"])
+        .current_dir(dir.path())
+        .env("CARGO_BENCH_HISTORY_CACHE", &cache)
+        .output()
+        .unwrap();
+
+    // Reaching the conflicting-auth error proves `build_storage` ran, so the cache
+    // path resolved from the environment rather than failing as unset first.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(stderr.contains("set only one of"), "{stderr}");
+    assert!(
+        !stderr.contains("CARGO_BENCH_HISTORY_CACHE"),
+        "the cache must have resolved from the environment: {stderr}"
+    );
+}
+
+/// A bare `--cache` with `CARGO_BENCH_HISTORY_CACHE` unset is a cache
+/// configuration error that names the environment variable, so a user learns how
+/// to supply the directory.
+#[test]
+#[cfg_attr(miri, ignore)] // Spawns a real process, which Miri cannot do.
+fn binary_bare_cache_without_the_environment_variable_is_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    write_conflicting_auth_config(dir.path());
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_cargo-bench-history"))
+        .args(["list", "runs", "--cache"])
+        .current_dir(dir.path())
+        .env_remove("CARGO_BENCH_HISTORY_CACHE")
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(stderr.contains("CARGO_BENCH_HISTORY_CACHE"), "{stderr}");
+}
