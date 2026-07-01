@@ -782,6 +782,25 @@ mod tests {
     }
 
     #[test]
+    fn azure_backend_from_parts_wraps_a_valid_endpoint_as_an_azure_override() {
+        // The command-level seam wraps a ready backend for injection via
+        // `Overrides::storage_override`; a valid HTTPS endpoint yields an Azure-backed
+        // override without any network access.
+        let injected = crate::azure_backend_from_parts(
+            "devstoreaccount1",
+            "history",
+            Some("https://127.0.0.1:10000/devstoreaccount1".to_owned()),
+            fake_credential(),
+            Arc::new(UnusedHttpClient),
+        )
+        .unwrap();
+        assert!(matches!(
+            injected.0,
+            crate::storage::StorageFacade::Azure(_)
+        ));
+    }
+
+    #[test]
     fn invalid_endpoint_is_a_config_error() {
         let error = AzureBlobStorage::from_config("prod", "history", Some("not a url".to_owned()))
             .unwrap_err();
