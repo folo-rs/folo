@@ -26,11 +26,14 @@ Split from the monolithic `just validate-local` into individual jobs:
 - **Multi-platform jobs** (run on ubuntu-latest, macos-latest, windows-latest):
   - check-dev
   - clippy-dev
-  - **test-x64** — the x86_64 test pass (ubuntu-latest, macos-latest, windows-latest)
+  - **test-x64** — the x86_64 test pass (ubuntu-latest, windows-latest)
     - Runs the full test suite (unit, integration and example tests) **with coverage
       instrumentation**, plus the benchmark targets once (`test-benches`) to verify they
       do not panic. Coverage is therefore a *side effect* of the regular test run, not a
       separately re-executed pass — there is intentionally no standalone `coverage` job.
+    - macOS is **not** in this matrix: GitHub's `macos-latest` runner is Apple Silicon
+      (arm64), so macOS is exercised by `test-arm`. Keeping this job x86_64-only keeps its
+      name accurate and stops the matrix drifting as the `-latest` labels change.
     - Runs on the **nightly** toolchain because coverage needs `llvm-tools-preview`, which
       `just install-tools` installs only for nightly. The **MSRV** test pass lives on
       `test-arm`, and MSRV compilation of every target is covered by `check-dev`.
@@ -39,11 +42,12 @@ Split from the monolithic `just validate-local` into individual jobs:
   - test-docs
   - **docs** — Multi-platform because conditional compilation affects generated documentation
   - miri-x64
-  - **test-arm** — the ARM64 test pass (ubuntu-24.04-arm, windows-11-arm)
+  - **test-arm** — the ARM64 test pass (ubuntu-24.04-arm, windows-11-arm, macos-latest)
     - Exercises ARM-specific code paths (anything gated behind
       `cfg(target_arch = "aarch64")` or similar) which x86_64 runners never compile
-      or execute, and doubles as the **MSRV** test pass (`test-x64` runs on nightly so it
-      can collect coverage). Platform-neutral code is already validated by the x86_64 matrix.
+      or execute. macOS lives here too because GitHub's `macos-latest` runner is Apple
+      Silicon (arm64). Doubles as the **MSRV** test pass (`test-x64` runs on nightly so it
+      can collect coverage). Platform-neutral code is also validated by the x86_64 matrix.
     - Collects no coverage: `llvm-tools-preview`-based instrumentation is gathered on
       x86_64 only (the `test-x64` job).
     - Paired with `test-x64`; both carry an explicit `-x64`/`-arm` suffix for
@@ -171,7 +175,7 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
 - **coverage-notify** — single-platform gate that releases Codecov's coverage
   notifications once every coverage upload for the commit has landed.
   - Coverage for one commit is uploaded by several jobs: one upload per platform from
-    the `coverage` matrix, plus a conditional `azure`-flagged upload from `test-azurite`
+    the `test-x64` matrix, plus a conditional `azure`-flagged upload from `test-azurite`
     when `cargo-bench-history` is affected. The per-commit upload count is therefore
     variable. (`test-azure` / `test-azure-gh` upload no coverage.)
   - By default Codecov re-posts its commit status / PR comment after every upload, so an
@@ -185,16 +189,16 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
     breaks. `codecov.yml` also disables `wait_for_ci` / `require_ci_to_pass` so the status
     posts as soon as coverage data is complete rather than waiting on unrelated slow jobs
     (`mutants`, etc.); those jobs gate merges through their own checks.
-  - `needs: [coverage, test-azurite]`; `if: !cancelled() && needs.coverage.result ==
+  - `needs: [test-x64, test-azurite]`; `if: !cancelled() && needs.test-x64.result ==
     'success' && (needs.test-azurite.result == 'success' || needs.test-azurite.result ==
     'skipped')`. The `!cancelled()` status function lets it run even when `test-azurite`
     is skipped (without it, the skipped dependency would skip this job too). It releases
-    notifications only when every expected upload landed: `coverage` succeeded, and
+    notifications only when every expected upload landed: `test-x64` succeeded, and
     `test-azurite` either succeeded (azure upload landed) or was skipped (cargo-bench-history
-    not affected, so no azure upload was expected). If `coverage` failed, or `test-azurite`
+    not affected, so no azure upload was expected). If `test-x64` failed, or `test-azurite`
     ran and failed, an expected upload is missing and the build is already red, so the gate
     does not release a status off an incomplete set. A `skip_all` run uploads no coverage at
-    all, so `coverage` is skipped and this job does not run.
+    all, so `test-x64` is skipped and this job does not run.
   - Runs for fork PRs too: the token is empty there and the action falls back to
     tokenless notification (public repository), so external-contributor PRs get the same
     gated, complete-data coverage status.
@@ -335,7 +339,7 @@ exists today; PR-time collection/validation may follow once this proves out.
    - `fail-fast: false` ensures all platform checks complete even if one fails
 
 6. **Codecov notification gating** — Coverage is uploaded by a variable number of jobs
-   per commit (the `coverage` platform matrix plus the conditional `test-azurite` azure
+   per commit (the `test-x64` platform matrix plus the conditional `test-azurite` azure
    upload). To stop Codecov posting a misleading status off a partial set of uploads,
    the repo-root `codecov.yml` enables `codecov.notify.manual_trigger` and the
    `coverage-notify` job releases notifications via the CLI `send-notifications` command
