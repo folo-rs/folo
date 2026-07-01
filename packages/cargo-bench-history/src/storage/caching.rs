@@ -28,7 +28,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::{Storage, StorageError, cache_epoch_key};
-use crate::report::Reporter;
+use crate::report::{Reporter, ReporterExt};
 use crate::text::count_noun;
 
 /// The mirror key under which the decorator records the cloud epoch token it last
@@ -127,7 +127,7 @@ where
         };
 
         let reuse = recorded_epoch.as_deref() == Some(cloud_epoch.as_slice());
-        if reporter.enabled() {
+        reporter.if_enabled(|| {
             reporter.note(&format!(
                 "cache: cloud invalidation marker {marker_key} reads epoch {}",
                 String::from_utf8_lossy(&cloud_epoch)
@@ -151,7 +151,7 @@ where
                      before reloading",
                 );
             }
-        }
+        });
 
         if reuse {
             return Ok(());
@@ -168,16 +168,15 @@ where
     /// slow load can be diagnosed as a cold or invalidated mirror (many misses)
     /// rather than a cloud problem. A no-op when the reporter is disabled.
     pub(crate) fn report_tally(&self, reporter: &dyn Reporter) {
-        if !reporter.enabled() {
-            return;
-        }
-        let hits = self.hits.load(Ordering::Relaxed);
-        let misses = self.misses.load(Ordering::Relaxed);
-        reporter.note(&format!(
-            "cache: served {} from the local mirror and fetched {} from the cloud this load",
-            count_noun(hits, "object"),
-            count_noun(misses, "object"),
-        ));
+        reporter.note_with(|| {
+            let hits = self.hits.load(Ordering::Relaxed);
+            let misses = self.misses.load(Ordering::Relaxed);
+            format!(
+                "cache: served {} from the local mirror and fetched {} from the cloud this load",
+                count_noun(hits, "object"),
+                count_noun(misses, "object"),
+            )
+        });
     }
 
     /// Deletes every object in the mirror, including the recorded-epoch marker (it
@@ -380,5 +379,110 @@ mod tests {
             "{:?}",
             reporter.notes()
         );
+    }
+
+    /// A backend whose `get` always fails with a non-`NotFound` I/O error, so the
+    /// decorator's error-propagation arms — which must forward anything that is not
+    /// a cache miss rather than swallow it — can be exercised without a real cloud.
+    #[derive(Debug)]
+    struct GetFailsStorage;
+
+    impl Storage for GetFailsStorage {
+        async fn put(&self, _key: &str, _bytes: &[u8]) -> Result<(), StorageError> {
+            Ok(())
+        }
+
+        async fn put_overwrite(&self, _key: &str, _bytes: &[u8]) -> Result<(), StorageError> {
+            Ok(())
+        }
+
+        async fn get(&self, _key: &str) -> Result<Vec<u8>, StorageError> {
+            Err(StorageError::Io(std::io::Error::other(
+                "backend unavailable",
+            )))
+        }
+
+        async fn list(&self, _prefix: &str) -> Result<Vec<String>, StorageError> {
+            Ok(Vec::new())
+        }
+
+        async fn delete(&self, _key: &str) -> Result<(), StorageError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn put_targets_the_cloud_and_not_the_mirror() {
+        let storage = caching();
+        block_on(storage.put("v1/p/criterion/a.json", b"body")).unwrap();
+
+        // The write lands in the authoritative backend...
+        assert_eq!(
+            block_on(storage.inner().get("v1/p/criterion/a.json")).unwrap(),
+            b"body"
+        );
+        // ...and the mirror stays empty until a later read populates it (writes are
+        // pass-through, not write-through).
+        assert!(
+            storage.cache.keys().is_empty(),
+            "{:?}",
+            storage.cache.keys()
+        );
+    }
+
+    #[test]
+    fn put_overwrite_targets_the_cloud_and_not_the_mirror() {
+        let storage = caching();
+        block_on(storage.put_overwrite("v1/p/criterion/a.json", b"body")).unwrap();
+
+        assert_eq!(
+            block_on(storage.inner().get("v1/p/criterion/a.json")).unwrap(),
+            b"body"
+        );
+        assert!(
+            storage.cache.keys().is_empty(),
+            "{:?}",
+            storage.cache.keys()
+        );
+    }
+
+    #[test]
+    fn delete_removes_from_the_cloud() {
+        let storage = caching();
+        block_on(storage.inner().put("v1/p/criterion/a.json", b"body")).unwrap();
+
+        block_on(storage.delete("v1/p/criterion/a.json")).unwrap();
+        let error = block_on(storage.inner().get("v1/p/criterion/a.json")).unwrap_err();
+        assert!(matches!(error, StorageError::NotFound { .. }), "{error:?}");
+    }
+
+    #[test]
+    fn get_propagates_a_mirror_read_error() {
+        // A mirror read failing with anything other than NotFound is a real fault,
+        // not a miss, so get must surface it instead of falling through to the cloud.
+        let storage = CachingStorage::new(MemoryStorage::new(), GetFailsStorage);
+        let error = block_on(storage.get("v1/p/criterion/a.json")).unwrap_err();
+        assert!(matches!(error, StorageError::Io(_)), "{error:?}");
+    }
+
+    #[test]
+    fn synchronize_propagates_a_marker_read_error() {
+        // The cloud marker read failing with anything other than NotFound must abort
+        // synchronization rather than be mistaken for a genesis (absent) marker.
+        let storage = CachingStorage::new(GetFailsStorage, MemoryStorage::new());
+        let reporter = RecordingReporter::new();
+        let error = block_on(storage.synchronize("p", &reporter)).unwrap_err();
+        assert!(matches!(error, StorageError::Io(_)), "{error:?}");
+    }
+
+    #[test]
+    fn synchronize_propagates_a_recorded_epoch_read_error() {
+        // The cloud marker is genesis (absent, so inner returns NotFound), but if
+        // reading the mirror's own recorded epoch fails for a non-NotFound reason,
+        // synchronize must surface it rather than silently treat the mirror as cold.
+        let storage = CachingStorage::new(MemoryStorage::new(), GetFailsStorage);
+        let reporter = RecordingReporter::new();
+        let error = block_on(storage.synchronize("p", &reporter)).unwrap_err();
+        assert!(matches!(error, StorageError::Io(_)), "{error:?}");
     }
 }

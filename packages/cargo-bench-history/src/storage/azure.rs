@@ -42,7 +42,7 @@ use super::sas::{AccountSasParams, account_sas_query};
 use super::{
     PendingInvalidation, Storage, StorageError, cache_epoch_key, github_oidc, validate_key,
 };
-use crate::report::Reporter;
+use crate::report::{Reporter, ReporterExt};
 
 /// The SAS permissions a self-signed token grants: read, write, delete, list,
 /// add, create — everything the backend needs to create the container on demand
@@ -308,12 +308,12 @@ impl AzureBlobStorage {
         }
         let key = cache_epoch_key(project);
         let token = Timestamp::now().to_string();
-        if reporter.enabled() {
-            reporter.note(&format!(
+        reporter.note_with(|| {
+            format!(
                 "cache: a delete or overwrite reached the cloud this command, so caches keyed on \
                  older data are now stale; bumping the invalidation marker {key} to epoch {token}"
-            ));
-        }
+            )
+        });
         let client = self.blob_client(&key)?;
         let compressed = codec::compress(token.as_bytes());
         self.upload_with_retry(&client, &compressed, &key, false)

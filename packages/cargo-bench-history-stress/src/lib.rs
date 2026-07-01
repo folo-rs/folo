@@ -338,4 +338,53 @@ mod tests {
             "the container suffix should be a unix second: {name}"
         );
     }
+
+    #[test]
+    fn resolve_cache_is_none_without_a_cache_flag() {
+        // No --cache means no mirror, so the measured analyze reads the cloud
+        // directly (the harness's default, uncached measurement).
+        let cli = Cli::parse_from(["cargo-bench-history-stress", "--storage", "azure"]);
+        assert!(
+            resolve_cache(&cli)
+                .expect("no cache is always valid")
+                .is_none()
+        );
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "std::path::absolute reads the process working directory"
+    )]
+    fn resolve_cache_makes_an_azure_cache_path_absolute() {
+        // A cache directory against the cloud backend resolves to an absolute path
+        // so the mirror location is stable regardless of the process working
+        // directory when the measured analyze later runs.
+        let cli = Cli::parse_from([
+            "cargo-bench-history-stress",
+            "--storage",
+            "azure",
+            "--cache",
+            "cache-dir",
+        ]);
+        let resolved = resolve_cache(&cli)
+            .expect("azure + cache is valid")
+            .expect("a cache path is returned");
+        assert!(resolved.is_absolute(), "{}", resolved.display());
+        assert!(resolved.ends_with("cache-dir"), "{}", resolved.display());
+    }
+
+    #[test]
+    fn resolve_cache_rejects_a_cache_against_local_storage() {
+        // The cache only helps the cloud backend, so pairing it with the default
+        // local storage is a usage error rather than a silent no-op.
+        let cli = Cli::parse_from(["cargo-bench-history-stress", "--cache", "cache-dir"]);
+        let error = resolve_cache(&cli).expect_err("a cache against local must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("--cache only applies to --storage azure"),
+            "{error}"
+        );
+    }
 }

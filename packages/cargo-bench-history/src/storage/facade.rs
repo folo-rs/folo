@@ -216,6 +216,7 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::config::parse_config;
+    use crate::report::RecordingReporter;
 
     use super::*;
 
@@ -346,5 +347,59 @@ mod tests {
         );
         let error = build_storage(None, &config, Path::new("/work"), None, "proj").unwrap_err();
         assert!(matches!(error, StorageError::Config { .. }), "{error:?}");
+    }
+
+    /// A `CachedAzure` facade over the Azurite account-key endpoint. Only the
+    /// backend construction is exercised here (which reads the wall clock for the
+    /// SAS expiry but touches no network); the network dispatch arms are covered by
+    /// the Azurite integration tests.
+    fn azure_cache_facade() -> StorageFacade {
+        let config = config_with_storage(
+            "[storage.azure]\naccount = \"devstoreaccount1\"\ncontainer = \"bench-history\"\n\
+             endpoint = \"http://127.0.0.1:10000/devstoreaccount1\"\n\
+             account_key = \"Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==\"\n",
+        );
+        build_storage(
+            None,
+            &config,
+            Path::new("/work"),
+            Some(Path::new("./cache")),
+            "proj",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "reads the wall clock to compute the SAS expiry")]
+    fn report_cache_tally_notes_the_tally_for_a_cached_backend() {
+        let storage = azure_cache_facade();
+        let reporter = RecordingReporter::new();
+
+        // No object was fetched, so the tally is all zeros — but the CachedAzure arm
+        // must still emit it (the `Local`/`Azure` variants stay silent). Reading the
+        // counters touches no network, so this needs no emulator.
+        storage.report_cache_tally(&reporter);
+        assert!(
+            reporter.contains("served 0 objects from the local mirror and fetched 0 objects"),
+            "{:?}",
+            reporter.notes()
+        );
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore = "reads the wall clock to compute the SAS expiry")]
+    async fn flush_pending_invalidation_for_a_cached_backend_without_mutations_is_a_noop() {
+        let storage = azure_cache_facade();
+        let reporter = RecordingReporter::new();
+
+        // Nothing armed the underlying backend's invalidation flag, so the flush
+        // takes the early-return path and writes no marker — reaching the cloud only
+        // when a mutation happened, so this needs no emulator. The CachedAzure arm
+        // must still delegate to the wrapped backend rather than be a facade no-op.
+        storage
+            .flush_pending_invalidation("proj", &reporter)
+            .await
+            .unwrap();
+        assert!(reporter.notes().is_empty(), "{:?}", reporter.notes());
     }
 }

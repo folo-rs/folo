@@ -53,12 +53,27 @@ pub(crate) trait ReporterExt {
     /// string for every object when `--verbose` is off, without sprinkling an
     /// `if reporter.enabled()` guard around each call site.
     fn note_with(&self, build: impl FnOnce() -> String);
+
+    /// Runs `body` only when notes are consumed.
+    ///
+    /// The counterpart to [`note_with`](Self::note_with) for a *block* that emits
+    /// several notes (or computes intermediate values solely to note them): it
+    /// pays nothing when `--verbose` is off, behind a single
+    /// [`enabled`](Reporter::enabled) check rather than one per note. Keeping the
+    /// guard here — the one place it is tested — means call sites never repeat it.
+    fn if_enabled(&self, body: impl FnOnce());
 }
 
 impl<R: Reporter + ?Sized> ReporterExt for R {
     fn note_with(&self, build: impl FnOnce() -> String) {
         if self.enabled() {
             self.note(&build());
+        }
+    }
+
+    fn if_enabled(&self, body: impl FnOnce()) {
+        if self.enabled() {
+            body();
         }
     }
 }
@@ -295,5 +310,29 @@ mod tests {
         });
         assert_eq!(built.get(), 1);
         assert!(recording.contains("lazy note"));
+    }
+
+    #[test]
+    fn if_enabled_runs_the_block_only_when_enabled() {
+        use std::cell::Cell;
+
+        // A disabled reporter must never run the block, so a multi-note diagnostic
+        // section behind one guard costs nothing when `--verbose` is off.
+        let ran = Cell::new(0_u32);
+        StderrReporter::new(false).if_enabled(|| ran.set(ran.get() + 1));
+        assert_eq!(ran.get(), 0);
+
+        // An enabled reporter runs the block, which can emit several notes.
+        let recording = RecordingReporter::new();
+        recording.if_enabled(|| {
+            ran.set(ran.get() + 1);
+            recording.note("first");
+            recording.note("second");
+        });
+        assert_eq!(ran.get(), 1);
+        assert_eq!(
+            recording.notes(),
+            vec!["first".to_owned(), "second".to_owned()]
+        );
     }
 }

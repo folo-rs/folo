@@ -541,6 +541,97 @@ async fn scenario_feature_and_dirty(config: &str) {
     );
 }
 
+/// Recursively counts the regular files under `dir`, used to prove the
+/// read-through cache populated its on-disk mirror.
+fn count_files(dir: &std::path::Path) -> usize {
+    let mut total: usize = 0;
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        let count = if path.is_dir() {
+            count_files(&path)
+        } else {
+            1
+        };
+        total = total.saturating_add(count);
+    }
+    total
+}
+
+/// Scenario: the read-through cache mirrors the cloud on a cold `analyze --cache`,
+/// reuses that mirror on a warm pass, and a mutating `prune --cache` bumps the
+/// per-project invalidation marker so the next `--cache` pass wipes the stale
+/// mirror and reloads. This drives the `CachedAzure` backend end to end — the
+/// facade's cache-aware dispatch, the mirror synchronize (reuse and wipe), and the
+/// post-delete marker flush — through exactly the command surface the binary uses.
+async fn scenario_cache_round_trip(config: &str) {
+    let workspace = AzureWorkspace::new(config).with_bench(&["--summary", "grp=single"]);
+    let cache = tempfile::tempdir().unwrap();
+    let cache_dir = cache.path().to_string_lossy().into_owned();
+
+    // One clean run on the base line, then a feature commit with its own clean run.
+    // A feature commit's own run is deletable without the base-branch guard, so the
+    // prune below is unambiguous.
+    workspace.drive(&["run"]).await.unwrap();
+    workspace.checkout_new_branch("feature");
+    workspace.commit("f1");
+    workspace.drive(&["run"]).await.unwrap();
+
+    // Cold: the mirror is empty, so `analyze` fetches from the cloud and populates it.
+    let cold = workspace
+        .drive_json(&["analyze", "--cache", &cache_dir])
+        .await;
+    let cold: serde_json::Value = serde_json::from_str(&cold).unwrap();
+    assert_eq!(cold["project"], "azureproj");
+    assert_eq!(
+        cold["runs"], 2,
+        "the cold pass loads the base and feature clean runs: {cold}"
+    );
+    assert!(
+        count_files(cache.path()) > 0,
+        "the cold pass mirrors the fetched objects into the cache directory"
+    );
+
+    // Warm: the epochs match (nothing mutated yet), so the mirror is reused.
+    let warm = workspace
+        .drive_json(&["analyze", "--cache", &cache_dir])
+        .await;
+    let warm: serde_json::Value = serde_json::from_str(&warm).unwrap();
+    assert_eq!(warm["runs"], 2, "the warm pass reuses the mirror: {warm}");
+
+    // A dry-run prune touches nothing, so the marker stays put and the mirror is
+    // still reusable on the next pass.
+    let preview = workspace
+        .drive_json(&["prune", "--clean", "--cache", &cache_dir, "--dry-run"])
+        .await;
+    let preview: serde_json::Value = serde_json::from_str(&preview).unwrap();
+    assert_eq!(
+        preview["totals"]["runs"], 1,
+        "the preview would remove the feature commit's clean run: {preview}"
+    );
+
+    // A real prune deletes the feature clean run from the cloud, arming the
+    // per-project invalidation marker so other machines' mirrors go stale.
+    let pruned = workspace
+        .drive_json(&["prune", "--clean", "--cache", &cache_dir])
+        .await;
+    let pruned: serde_json::Value = serde_json::from_str(&pruned).unwrap();
+    assert_eq!(
+        pruned["totals"]["runs"], 1,
+        "the prune removes the feature commit's clean run: {pruned}"
+    );
+
+    // The next pass reads the bumped marker, so it wipes the now-stale mirror and
+    // reloads from the cloud, where only the base clean run remains.
+    let after = workspace
+        .drive_json(&["analyze", "--cache", &cache_dir])
+        .await;
+    let after: serde_json::Value = serde_json::from_str(&after).unwrap();
+    assert_eq!(
+        after["runs"], 1,
+        "after the invalidation the reloaded mirror holds only the base clean run: {after}"
+    );
+}
+
 // --- Azurite (self-signed account SAS) -------------------------------------
 
 /// `run` stores a harvested result set in Azurite.
@@ -586,6 +677,22 @@ async fn analyze_feature_and_dirty_round_trip_through_azurite() {
         return;
     }
     scenario_feature_and_dirty(&azure_config()).await;
+}
+
+/// A read-through cache round-trip through Azurite: cold mirror, warm reuse, and a
+/// mutating prune that invalidates and reloads the mirror.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[cfg_attr(
+    mutants,
+    ignore = "Azure network end-to-end test: self-skips without an emulator (as under mutation), and the azure IO it exercises is already mutants::skip"
+)]
+#[serial]
+async fn analyze_with_cache_round_trips_through_azurite() {
+    if !azurite_available() {
+        return;
+    }
+    scenario_cache_round_trip(&azure_config()).await;
 }
 
 /// A stored blob carries `Content-Encoding: gzip`, so a non-SDK reader knows the
@@ -690,6 +797,24 @@ async fn analyze_feature_and_dirty_round_trip_through_real_azure() {
     }
     with_real_azure_container(async |container| {
         scenario_feature_and_dirty(&real_azure_config(&container)).await;
+    })
+    .await;
+}
+
+/// A read-through cache round-trip through a real Azure account via Entra ID.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[cfg_attr(
+    mutants,
+    ignore = "Real-Azure network end-to-end test: self-skips without ENABLE_AZURE (as under mutation), and the azure IO it exercises is already mutants::skip"
+)]
+#[serial]
+async fn analyze_with_cache_round_trips_through_real_azure() {
+    if !real_azure_enabled() {
+        return;
+    }
+    with_real_azure_container(async |container| {
+        scenario_cache_round_trip(&real_azure_config(&container)).await;
     })
     .await;
 }
