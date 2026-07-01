@@ -1,0 +1,34 @@
+# Codecov configuration.
+#
+# Coverage data for a single commit is produced by several jobs in
+# .github/workflows/validation.yml, each uploading its own report:
+#   * `coverage`     — one upload per platform (the platform matrix).
+#   * `test-azurite` — one extra `azure`-flagged upload, but ONLY when the
+#                      cargo-bench-history package is affected by the change.
+# The number of coverage uploads per commit therefore varies (one per platform,
+# plus the conditional azure upload). The `test-azure` / `test-azure-gh` jobs
+# upload no coverage, so they do not factor in here.
+#
+# By default Codecov re-computes and re-posts its commit status / PR comment after
+# every upload it receives. With several uploads trickling in, an early upload
+# gives Codecov an incomplete view and it posts a misleading "coverage decreased"
+# status simply because the remaining uploads have not arrived yet.
+#
+# `manual_trigger` is Codecov's documented mechanism for pipelines that upload a
+# variable number of reports per commit: Codecov sends NO coverage status or PR
+# comment until it is explicitly told the pipeline is done, via the CLI
+# `send-notifications` command. The `coverage-notify` job in validation.yml issues
+# that command once, after every coverage-producing job has finished, so the status
+# is computed from the complete set of uploads. Because the count is variable, this
+# is preferable to `after_n_builds`, which would need a hardcoded upload count that
+# the conditional `test-azurite` upload would break.
+#
+# `wait_for_ci` / `require_ci_to_pass` are disabled so that the coverage status is
+# posted as soon as `send-notifications` fires (i.e. once coverage data is complete)
+# instead of additionally waiting on unrelated slow jobs such as `mutants`. Coverage
+# is an independent signal; the other jobs gate merges through their own checks.
+codecov:
+  require_ci_to_pass: false
+  notify:
+    manual_trigger: true
+    wait_for_ci: false

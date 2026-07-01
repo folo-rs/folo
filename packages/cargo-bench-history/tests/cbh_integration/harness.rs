@@ -17,11 +17,6 @@ use nonempty::nonempty;
 pub(crate) use serial_test::serial;
 pub(crate) use testing::CwdGuard;
 
-/// The mock engine binary path, provided by Cargo for the auto-discovered binary
-/// target. It writes Gungraun summary fixtures into the target tree and exits with
-/// a chosen code, standing in for a real benchmark engine.
-pub(crate) const MOCK_ENGINE: &str = env!("CARGO_BIN_EXE_cargo-bench-history-mock-engine");
-
 /// The tool version recorded with each run. The integration test compiles within
 /// the package, so its `CARGO_PKG_VERSION` matches the version `run` records.
 pub(crate) const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -798,7 +793,7 @@ impl Workspace {
         // Drive `run`/`backfill` against the mock engine instead of `cargo bench`:
         // the program plus its fixture-describing arguments form the benchmark
         // command, which the single bench invocation runs to produce engine output.
-        let mut bench_command = vec![MOCK_ENGINE.to_owned()];
+        let mut bench_command = vec![mock_bench_engine::binary_path().to_owned()];
         bench_command.extend(self.bench.iter().cloned());
 
         let effective = self.effective_args(args);
@@ -824,7 +819,7 @@ impl Workspace {
         args: &[&str],
     ) -> Result<RunOutcome, RunError> {
         self.flush_git();
-        let mut bench_command = vec![MOCK_ENGINE.to_owned()];
+        let mut bench_command = vec![mock_bench_engine::binary_path().to_owned()];
         bench_command.extend(self.bench.iter().cloned());
 
         let effective = self.effective_args(args);

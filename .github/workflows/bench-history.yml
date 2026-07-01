@@ -15,6 +15,15 @@ on:
     - cron: '0 3 * * *'
   workflow_dispatch:
 
+# Title of the rolling failure-alert issue, defined once and shared by the two jobs that
+# reference it: the `alert` job stamps it as the issue title (via the
+# .github/bench-history-failure-issue.md front matter, which create-an-issue renders with
+# `{{ env.FAILURE_ISSUE_TITLE }}`), and the `resolve` job matches on it to close that issue.
+# create-an-issue dedups solely by exact title, so this string is the alert's identity; a
+# single definition keeps the open and close paths from drifting apart.
+env:
+  FAILURE_ISSUE_TITLE: Nightly benchmark-history workflow failed
+
 jobs:
   collect:
     # Skip everywhere the OIDC sign-in cannot work: forks (only this repository's
@@ -197,3 +206,56 @@ jobs:
           filename: .github/bench-history-failure-issue.md
           update_existing: true
           search_existing: open
+
+  resolve:
+    # Mirror of `alert`: when collection AND analysis are green again, auto-close the
+    # rolling failure issue (if one is open) so a fixed nightly does not leave a stale
+    # alert rotting open. Gated on both needs' results being 'success' (explicit rather
+    # than the implicit success() function, so a future unrelated job cannot affect this
+    # decision); if either failed, alert (failure()) handles it and this is skipped. Same
+    # main-only gate as the others. A no-op on nights when no failure issue is open.
+    needs: [collect, analyze]
+    if: >-
+      needs.collect.result == 'success'
+      && needs.analyze.result == 'success'
+      && github.repository == 'folo-rs/folo'
+      && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # Least privilege: this job only talks to the issues API (no checkout, no contents).
+    permissions:
+      issues: write
+
+    steps:
+      # The alert job files exactly one rolling issue carrying $FAILURE_ISSUE_TITLE and the
+      # ci-failure label; find any still-open instance and close it with an audit trail
+      # linking the green run. Uses the preinstalled gh CLI (GH_REPO lets it run without a
+      # checkout). Listing by `--label ci-failure` already excludes the advisory regression
+      # issue (label `regression`, closed by hand); the exact-title jq match (the search the
+      # alert path dedups on is substring/word-based) is a further guard. `--limit` defeats
+      # the 30-result default so a backlog of historical duplicates would all be closed.
+      - name: Close failure issue if open
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          numbers=$(gh issue list \
+            --state open \
+            --label ci-failure \
+            --limit 100 \
+            --json number,title \
+            | jq -r --arg title "$FAILURE_ISSUE_TITLE" '.[] | select(.title == $title) | .number')
+          if [ -z "$numbers" ]; then
+            echo "No open failure issue to close."
+            exit 0
+          fi
+          for n in $numbers; do
+            echo "Closing #$n"
+            gh issue close "$n" \
+              --reason completed \
+              --comment "✅ The nightly bench-history workflow is green again — auto-closing this alert. Successful run: $RUN_URL"
+          done

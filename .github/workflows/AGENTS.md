@@ -26,15 +26,31 @@ Split from the monolithic `just validate-local` into individual jobs:
 - **Multi-platform jobs** (run on ubuntu-latest, macos-latest, windows-latest):
   - check-dev
   - clippy-dev
-  - test-more-x64
+  - **test-x64** — the x86_64 test pass (ubuntu-latest, windows-latest)
+    - Runs the full test suite (unit, integration and example tests) **with coverage
+      instrumentation**, plus the benchmark targets once (`test-benches`) to verify they
+      do not panic. Coverage is therefore a *side effect* of the regular test run, not a
+      separately re-executed pass — there is intentionally no standalone `coverage` job.
+    - macOS is **not** in this matrix: GitHub's `macos-latest` runner is Apple Silicon
+      (arm64), so macOS is exercised by `test-arm`. Keeping this job x86_64-only keeps its
+      name accurate and stops the matrix drifting as the `-latest` labels change.
+    - Runs on the **nightly** toolchain because coverage needs `llvm-tools-preview`, which
+      `just install-tools` installs only for nightly. The **MSRV** test pass lives on
+      `test-arm`, and MSRV compilation of every target is covered by `check-dev`.
+    - Uploads both the coverage report (lcov) and the test results (junit) to Codecov.
+    - Paired with `test-arm`; both carry an explicit `-x64`/`-arm` suffix for symmetry.
   - test-docs
   - **docs** — Multi-platform because conditional compilation affects generated documentation
   - miri-x64
-  - **test-more-arm** — ARM64 coverage (ubuntu-24.04-arm, windows-11-arm)
+  - **test-arm** — the ARM64 test pass (ubuntu-24.04-arm, windows-11-arm, macos-latest)
     - Exercises ARM-specific code paths (anything gated behind
       `cfg(target_arch = "aarch64")` or similar) which x86_64 runners never compile
-      or execute. Platform-neutral code is already validated by the x86_64 matrix.
-    - Paired with `test-more-x64`; both carry an explicit `-x64`/`-arm` suffix for
+      or execute. macOS lives here too because GitHub's `macos-latest` runner is Apple
+      Silicon (arm64). Doubles as the **MSRV** test pass (`test-x64` runs on nightly so it
+      can collect coverage). Platform-neutral code is also validated by the x86_64 matrix.
+    - Collects no coverage: `llvm-tools-preview`-based instrumentation is gathered on
+      x86_64 only (the `test-x64` job).
+    - Paired with `test-x64`; both carry an explicit `-x64`/`-arm` suffix for
       symmetry. Other jobs that have no ARM counterpart remain unsuffixed.
   - **miri-arm** — ARM64 coverage for Miri (ubuntu-24.04-arm, windows-11-arm)
     - Miri is an interpreter with its own memory model and is architecture-agnostic
@@ -86,11 +102,11 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
     fully covers it and Linux is the cheapest runner.
   - The Azure backend's network paths **self-skip** when
     no emulator is reachable, so the multi-platform test jobs
-    (`test-more`, `coverage`) stay green without one. They run for real only in
+    (`test-x64`, `test-arm`) stay green without one. They run for real only in
     this job: Azurite is provisioned on the runner host (via the `start-azurite`
     composite action) and `BENCH_HISTORY_REQUIRE_AZURITE=1` turns an unreachable
     emulator into a hard failure so it can never silently skip every test.
-  - The multi-platform `coverage` job runs without an emulator and therefore
+  - The multi-platform `test-x64` job runs without an emulator and therefore
     cannot cover `azure.rs`; this job uploads an `azure`-flagged lcov report that
     Codecov merges with it (a line covered in any upload counts as covered).
   - Linux-only because Azurite runs directly on the host: GitHub service
@@ -155,6 +171,37 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
   - **Same double-gating** as `test-azure` (package-gated + same-repo only); collects no
     coverage. Together the two jobs cover both credential branches: `test-azure` the
     local-`az` fallback, `test-azure-gh` the CI self-minting path.
+
+- **coverage-notify** — single-platform gate that releases Codecov's coverage
+  notifications once every coverage upload for the commit has landed.
+  - Coverage for one commit is uploaded by several jobs: one upload per platform from
+    the `test-x64` matrix, plus a conditional `azure`-flagged upload from `test-azurite`
+    when `cargo-bench-history` is affected. The per-commit upload count is therefore
+    variable. (`test-azure` / `test-azure-gh` upload no coverage.)
+  - By default Codecov re-posts its commit status / PR comment after every upload, so an
+    early upload makes it report a misleadingly low "coverage decreased" figure just
+    because the remaining uploads have not arrived yet. The repo-root `codecov.yml` sets
+    `codecov.notify.manual_trigger: true`, which holds ALL coverage notifications until
+    the CLI `send-notifications` command runs; this job (`codecov/codecov-action@v7` with
+    `run_command: send-notifications`) issues it once, so the status is computed from the
+    complete set of uploads. `manual_trigger` is preferred over `after_n_builds` because
+    the latter would need a hardcoded count that the conditional `test-azurite` upload
+    breaks. `codecov.yml` also disables `wait_for_ci` / `require_ci_to_pass` so the status
+    posts as soon as coverage data is complete rather than waiting on unrelated slow jobs
+    (`mutants`, etc.); those jobs gate merges through their own checks.
+  - `needs: [test-x64, test-azurite]`; `if: !cancelled() && needs.test-x64.result ==
+    'success' && (needs.test-azurite.result == 'success' || needs.test-azurite.result ==
+    'skipped')`. The `!cancelled()` status function lets it run even when `test-azurite`
+    is skipped (without it, the skipped dependency would skip this job too). It releases
+    notifications only when every expected upload landed: `test-x64` succeeded, and
+    `test-azurite` either succeeded (azure upload landed) or was skipped (cargo-bench-history
+    not affected, so no azure upload was expected). If `test-x64` failed, or `test-azurite`
+    ran and failed, an expected upload is missing and the build is already red, so the gate
+    does not release a status off an incomplete set. A `skip_all` run uploads no coverage at
+    all, so `test-x64` is skipped and this job does not run.
+  - Runs for fork PRs too: the token is empty there and the action falls back to
+    tokenless notification (public repository), so external-contributor PRs get the same
+    gated, complete-data coverage status.
 
 ### cache-warmup.yml
 
@@ -230,7 +277,20 @@ exists today; PR-time collection/validation may follow once this proves out.
   bumps a cloud-side marker that wipes the mirror on the next read.
 - **`alert` job** (`needs: [collect, analyze]`, `if: failure()` + main-only) — opens a
   deduplicated `.github/bench-history-failure-issue.md` when any prior job fails, so a
-  broken nightly is noticed. Closed by hand once the workflow is green again.
+  broken nightly is noticed. The issue title comes from the workflow-level
+  `FAILURE_ISSUE_TITLE` env constant (the template renders `{{ env.FAILURE_ISSUE_TITLE }}`),
+  which is also the title create-an-issue dedups on. Its companion `resolve` job closes that
+  issue automatically once the workflow is green again.
+- **`resolve` job** (`needs: [collect, analyze]`, closes on success + main-only) — mirror of
+  `alert`: when collection and analysis both pass, it finds any still-open failure issue
+  (listed by the `ci-failure` label, then exact-matched against the shared
+  `FAILURE_ISSUE_TITLE` constant) and closes it via the `gh` CLI with a comment linking the
+  green run, so a fixed nightly does not leave a stale alert open. A no-op on nights when no
+  failure issue is open. Its gate is the explicit `needs.collect.result == 'success' &&
+  needs.analyze.result == 'success'` (rather than the bare `success()` function) so a future
+  unrelated job cannot affect the decision; when `collect` or `analyze` actually failed those
+  cases fall to `alert` instead. The advisory regression issue (label `regression`) is out of
+  scope and stays manual.
 
 ## Design Decisions
 
@@ -258,11 +318,11 @@ exists today; PR-time collection/validation may follow once this proves out.
      versions)
    - `miri-x64` and `miri-arm` depend on `check-dev` (Miri is much slower than `cargo check`;
      if the code does not even compile in dev mode, there is nothing for Miri to interpret)
-   - `miri-x64` also depends on `test-more-x64`, and `miri-arm` also depends on
-     `test-more-arm` (there is no point running the slow Miri interpreter unless the tests
+   - `miri-x64` also depends on `test-x64`, and `miri-arm` also depends on
+     `test-arm` (there is no point running the slow Miri interpreter unless the tests
      already pass in their base configuration)
-   - `mutants` depends on `test-more-x64` (mutation testing is meaningless if base tests fail)
-   - `careful` depends on `test-more-x64` (running the slow `cargo careful` test pass is
+   - `mutants` depends on `test-x64` (mutation testing is meaningless if base tests fail)
+   - `careful` depends on `test-x64` (running the slow `cargo careful` test pass is
      pointless unless the tests already pass in their base configuration)
    - `miri-harder-*` depend on both `miri-x64` and `miri-arm` (many-seeds runs are
      orders of magnitude slower than a single Miri pass)
@@ -272,7 +332,7 @@ exists today; PR-time collection/validation may follow once this proves out.
    - `docs` and `machete` remain multi-platform due to conditional compilation differences
    - `miri-harder-*` jobs are Windows-only due to high cost; sharded across parallel runners
    - Most checks run on the 3 x86_64 platforms (ubuntu, macos, windows)
-   - `test-more-arm` and `miri-arm` extend coverage to ARM64 (ubuntu-24.04-arm,
+   - `test-arm` and `miri-arm` extend coverage to ARM64 (ubuntu-24.04-arm,
      windows-11-arm) solely to exercise ARM-gated code paths
      (`cfg(target_arch = "aarch64")` and similar). Platform-neutral code is already
      covered by the x86_64 matrices — Miri in particular is an interpreter with its
@@ -291,6 +351,14 @@ exists today; PR-time collection/validation may follow once this proves out.
      lockfile and rust toolchain are identical)
    - `fail-fast: false` ensures all platform checks complete even if one fails
 
+6. **Codecov notification gating** — Coverage is uploaded by a variable number of jobs
+   per commit (the `test-x64` platform matrix plus the conditional `test-azurite` azure
+   upload). To stop Codecov posting a misleading status off a partial set of uploads,
+   the repo-root `codecov.yml` enables `codecov.notify.manual_trigger` and the
+   `coverage-notify` job releases notifications via the CLI `send-notifications` command
+   only once all coverage-producing jobs have finished. See the `coverage-notify` job
+   description above for details.
+
 ## Maintenance Notes
 
 - When adding new checks, consider platform-specific needs and appropriate timeouts
@@ -302,10 +370,11 @@ exists today; PR-time collection/validation may follow once this proves out.
 The `setup-environment` action installs Valgrind on Linux runners and `gungraun-runner` (via
 `just install-tools`). Both are required for the Callgrind `*_cg` bench targets that
 live in `packages/*/benches/`. Even when those targets are not executed, `cargo test
---benches` (which `test-more` uses) invokes each bench binary's `main()` once, which forwards
+--benches` (which `test-x64` and `test-arm` use, via the `test-benches` recipe) invokes each
+bench binary's `main()` once, which forwards
 its args to `gungraun-runner`. Without `gungraun-runner` on `$PATH` the call fails with
-`Failed to run benchmarks: No such file or directory`, which breaks `test-more` and
-`coverage`. The Callgrind bench binaries are compiled to no-op stubs on Windows and macOS via
+`Failed to run benchmarks: No such file or directory`, which breaks `test-x64` and
+`test-arm`. The Callgrind bench binaries are compiled to no-op stubs on Windows and macOS via
 `#[cfg(not(target_os = "linux"))] fn main() {}`, so neither tool is required there.
 
 The `start-azurite` composite action (`.github/actions/start-azurite`) installs the Azurite
