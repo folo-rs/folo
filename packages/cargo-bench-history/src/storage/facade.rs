@@ -36,13 +36,15 @@ impl Storage for StorageFacade {
         match self {
             Self::Local(storage) => storage.put(key, bytes).await,
             Self::Azure(storage) => storage.put(key, bytes).await,
-            // A cached backend is built only for the read-only `analyze`/`list`/`prune`
-            // commands; the writing commands (`run`/`backfill`/`bless`) always build an
-            // uncached backend, so no write ever reaches the cache decorator through the
-            // facade. If caching is ever wired into a write path, the decorator's
+            // A cached backend is attached only to `analyze`/`list`/`prune`, none of
+            // which *store* objects; the object-writing commands (`run`/`backfill`/
+            // `bless`) always build an uncached backend, so no `put` reaches the cache
+            // decorator through the facade. (`prune` does mutate the cloud — it deletes
+            // objects and flushes the invalidation marker — but it drives `delete`, never
+            // `put`.) If caching is ever wired into an object-writing path, the decorator's
             // write-around semantics must be revisited here rather than silently relied on.
             Self::CachedAzure(_) => {
-                unreachable!("a cached backend is never selected for a writing command")
+                unreachable!("a cached backend is never selected for an object-writing command")
             }
         }
     }
@@ -52,9 +54,9 @@ impl Storage for StorageFacade {
             Self::Local(storage) => storage.put_overwrite(key, bytes).await,
             Self::Azure(storage) => storage.put_overwrite(key, bytes).await,
             // Unreachable for the same reason as [`put`](Self::put): the cache is only
-            // ever attached to the read-only commands.
+            // attached to commands that never store objects.
             Self::CachedAzure(_) => {
-                unreachable!("a cached backend is never selected for a writing command")
+                unreachable!("a cached backend is never selected for an object-writing command")
             }
         }
     }
