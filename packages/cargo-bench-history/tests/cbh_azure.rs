@@ -559,7 +559,10 @@ fn count_files(dir: &std::path::Path) -> usize {
 async fn scenario_cache_round_trip(config: &str) {
     let workspace = AzureWorkspace::new(config).with_bench(&["--summary", "grp=single"]);
     let cache = tempfile::tempdir().unwrap();
-    let cache_dir = cache.path().to_string_lossy().into_owned();
+    // `--cache` uses `require_equals`, so the path must be attached with `=`; a
+    // space-separated `--cache <path>` would leave the flag bare (falling back to
+    // the unset env var) and error out.
+    let cache_arg = format!("--cache={}", cache.path().to_string_lossy());
 
     // One clean run on the base line, then a feature commit with its own clean run.
     // A feature commit's own run is deletable without the base-branch guard, so the
@@ -570,9 +573,7 @@ async fn scenario_cache_round_trip(config: &str) {
     workspace.drive(&["run"]).await.unwrap();
 
     // Cold: the mirror is empty, so `analyze` fetches from the cloud and populates it.
-    let cold = workspace
-        .drive_json(&["analyze", "--cache", &cache_dir])
-        .await;
+    let cold = workspace.drive_json(&["analyze", &cache_arg]).await;
     let cold: serde_json::Value = serde_json::from_str(&cold).unwrap();
     assert_eq!(cold["project"], "azureproj");
     assert_eq!(
@@ -585,16 +586,14 @@ async fn scenario_cache_round_trip(config: &str) {
     );
 
     // Warm: the epochs match (nothing mutated yet), so the mirror is reused.
-    let warm = workspace
-        .drive_json(&["analyze", "--cache", &cache_dir])
-        .await;
+    let warm = workspace.drive_json(&["analyze", &cache_arg]).await;
     let warm: serde_json::Value = serde_json::from_str(&warm).unwrap();
     assert_eq!(warm["runs"], 2, "the warm pass reuses the mirror: {warm}");
 
     // A dry-run prune touches nothing, so the marker stays put and the mirror is
     // still reusable on the next pass.
     let preview = workspace
-        .drive_json(&["prune", "--clean", "--cache", &cache_dir, "--dry-run"])
+        .drive_json(&["prune", "--clean", &cache_arg, "--dry-run"])
         .await;
     let preview: serde_json::Value = serde_json::from_str(&preview).unwrap();
     assert_eq!(
@@ -605,7 +604,7 @@ async fn scenario_cache_round_trip(config: &str) {
     // A real prune deletes the feature clean run from the cloud, arming the
     // per-project invalidation marker so other machines' mirrors go stale.
     let pruned = workspace
-        .drive_json(&["prune", "--clean", "--cache", &cache_dir])
+        .drive_json(&["prune", "--clean", &cache_arg])
         .await;
     let pruned: serde_json::Value = serde_json::from_str(&pruned).unwrap();
     assert_eq!(
@@ -615,9 +614,7 @@ async fn scenario_cache_round_trip(config: &str) {
 
     // The next pass reads the bumped marker, so it wipes the now-stale mirror and
     // reloads from the cloud, where only the base clean run remains.
-    let after = workspace
-        .drive_json(&["analyze", "--cache", &cache_dir])
-        .await;
+    let after = workspace.drive_json(&["analyze", &cache_arg]).await;
     let after: serde_json::Value = serde_json::from_str(&after).unwrap();
     assert_eq!(
         after["runs"], 1,
