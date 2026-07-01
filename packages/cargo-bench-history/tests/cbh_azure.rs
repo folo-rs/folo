@@ -6,19 +6,23 @@
 //!
 //! There are two flavours of the same scenarios:
 //!
-//! * **Azurite** (`*_in_azurite`) — against a local Azurite emulator using the
-//!   self-signed account-SAS path. They **self-skip** when no emulator is reachable
-//!   (so a normal test run stays green) and run for real once Azurite is up; CI
-//!   provides one in the `test-azurite` job.
+//! * **Azurite** (`*_in_azurite`) — against a local Azurite emulator running in
+//!   `--oauth basic` mode. Azurite has no real Entra, so these inject a fully-built
+//!   Azure backend through [`Overrides::storage_override`]: a locally-crafted Entra
+//!   token that Azurite's structural OAuth check accepts, plus a transport that
+//!   trusts the emulator's self-signed certificate. They **self-skip** when no
+//!   emulator is reachable (so a normal test run stays green) and run for real once
+//!   Azurite is up; CI provides one in the `test-azurite` job.
 //! * **Real Azure** (`*_in_real_azure`) — against a real Storage account using the
-//!   **Microsoft Entra ID** path (no account key). They self-skip unless
-//!   `ENABLE_AZURE` is set (an explicit opt-in, so the account name living in
-//!   `constants.env` does not by itself make a plain test run target the cloud);
-//!   CI provides one in the `test-azure` job, signing in via GitHub OIDC workload
-//!   identity federation, and locally `just test-azure` sets it after `az login`
-//!   (see the package AGENTS.md and `infra/azure-bench-history-test/`). The account name
-//!   comes from `BENCH_HISTORY_TEST_AZURE_ACCOUNT`. Each test uses a fresh container
-//!   that is deleted when the test finishes, even on panic.
+//!   **Microsoft Entra ID** path, driven from configuration (no injected backend),
+//!   which is what proves the real credential + real signature validation. They
+//!   self-skip unless `ENABLE_AZURE` is set (an explicit opt-in, so the account name
+//!   living in `constants.env` does not by itself make a plain test run target the
+//!   cloud); CI provides one in the `test-azure` job, signing in via GitHub OIDC
+//!   workload identity federation, and locally `just test-azure` sets it after
+//!   `az login` (see the package AGENTS.md and `infra/azure-bench-history-test/`).
+//!   The account name comes from `BENCH_HISTORY_TEST_AZURE_ACCOUNT`. Each test uses a
+//!   fresh container that is deleted when the test finishes, even on panic.
 //!
 //! Each scenario uses its own container so they never share state, and they are
 //! ignored under Miri (real network and process I/O).
@@ -30,17 +34,19 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use azure_core::credentials::TokenCredential;
-use azure_core::http::Url;
+use azure_core::credentials::{AccessToken, TokenCredential, TokenRequestOptions};
+use azure_core::http::{ClientOptions, HttpClient, Transport, Url};
+use azure_core::time::{Duration as TokenDuration, OffsetDateTime};
 use azure_identity::DeveloperToolsCredential;
-use azure_storage_blob::BlobContainerClient;
-use cargo_bench_history::{Cli, Command, Overrides, RunError, RunOutcome, run_with_overrides};
+use azure_storage_blob::{BlobContainerClient, BlobContainerClientOptions};
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use cargo_bench_history::{
+    Cli, Command, Overrides, RunError, RunOutcome, StorageOverride, azure_backend_from_parts,
+    run_with_overrides,
+};
 use futures::FutureExt as _;
 use serial_test::serial;
-
-/// The well-known Azurite development account key (public, fixed, not secret).
-const AZURITE_KEY: &str =
-    "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
 
 fn command_from(args: &[&str]) -> Command {
     Cli::from_args(&["cargo-bench-history"], args)
@@ -49,9 +55,13 @@ fn command_from(args: &[&str]) -> Command {
 }
 
 /// The Azurite blob endpoint, overridable for a non-default emulator.
+///
+/// The default is HTTPS: Entra authentication (the only supported mode) requires
+/// TLS, so the emulator runs behind a self-signed certificate that
+/// [`azurite_http_client`] is configured to trust.
 fn azurite_endpoint() -> String {
     std::env::var("AZURITE_BLOB_ENDPOINT")
-        .unwrap_or_else(|_| "http://127.0.0.1:10000/devstoreaccount1".to_owned())
+        .unwrap_or_else(|_| "https://127.0.0.1:10000/devstoreaccount1".to_owned())
 }
 
 /// Whether an Azurite blob endpoint is reachable via a short TCP connect.
@@ -99,13 +109,13 @@ fn toml_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-/// A config that stores in a fresh Azurite container.
-fn azure_config() -> String {
-    azure_config_for(&unique_container())
-}
-
 /// A config that stores in the named Azurite container, so a test can inspect the
 /// same container directly afterward.
+///
+/// The `[storage.azure]` block is Entra-only (no key or SAS), so this also proves
+/// the new configuration parses end to end. The backend the command actually uses
+/// is the injected [`StorageOverride`], because Azurite has no real Entra for the
+/// config-driven backend to authenticate against.
 fn azure_config_for(container: &str) -> String {
     format!(
         "[project]\n\
@@ -113,56 +123,115 @@ fn azure_config_for(container: &str) -> String {
          [storage.azure]\n\
          account = \"devstoreaccount1\"\n\
          container = \"{container}\"\n\
-         endpoint = \"{endpoint}\"\n\
-         account_key = \"{key}\"\n",
+         endpoint = \"{endpoint}\"\n",
         endpoint = toml_escape(&azurite_endpoint()),
-        key = AZURITE_KEY,
     )
 }
 
-/// Mints an account SAS query for the Azurite dev account, mirroring the
-/// production minting in `storage::sas` (which is unit-tested there). It is
-/// reproduced here because the Azure SDK exposes no shared-key credential and the
-/// production minting is crate-private, so a test that inspects blobs directly
-/// must sign its own token.
-fn azurite_account_sas() -> String {
-    use base64::Engine as _;
-    use base64::engine::general_purpose::STANDARD as BASE64;
-    use hmac::{Hmac, KeyInit as _, Mac as _};
-    use sha2::Sha256;
+/// A fake Entra token credential whose JWT is accepted by Azurite's `--oauth basic`
+/// mode.
+///
+/// That mode validates a token's structure and time claims (`iss` prefix, `aud`,
+/// `nbf`/`iat`/`exp`) but never verifies the signature, so a locally crafted token
+/// stands in for a real Entra token. Real signature validation stays covered by the
+/// `test-azure` / `test-azure-gh` jobs against a real Entra-only account.
+#[derive(Debug)]
+struct FakeEntraCredential;
 
-    let expiry = "2030-01-01T00:00:00Z";
-    let protocol = "https,http";
-    let string_to_sign =
-        format!("devstoreaccount1\nrwdlac\nb\nsco\n\n{expiry}\n\n{protocol}\n2021-08-06\n\n");
-    let key = BASE64.decode(AZURITE_KEY).unwrap();
-    let mut mac = Hmac::<Sha256>::new_from_slice(&key).unwrap();
-    mac.update(string_to_sign.as_bytes());
-    let signature = BASE64.encode(mac.finalize().into_bytes());
-
-    let mut url = Url::parse("http://sas.invalid/").unwrap();
-    url.query_pairs_mut().extend_pairs([
-        ("sv", "2021-08-06"),
-        ("ss", "b"),
-        ("srt", "sco"),
-        ("sp", "rwdlac"),
-        ("se", expiry),
-        ("spr", protocol),
-        ("sig", signature.as_str()),
-    ]);
-    url.query().unwrap().to_owned()
+#[async_trait::async_trait]
+impl TokenCredential for FakeEntraCredential {
+    async fn get_token(
+        &self,
+        _scopes: &[&str],
+        _options: Option<TokenRequestOptions<'_>>,
+    ) -> azure_core::Result<AccessToken> {
+        let now = OffsetDateTime::now_utc();
+        let expires = now
+            .checked_add(TokenDuration::hours(1))
+            .expect("one hour past the current time is representable");
+        Ok(AccessToken::new(fake_entra_jwt(now, expires), expires))
+    }
 }
 
-/// A SAS-authenticated container client for inspecting blobs Azurite stored,
-/// bypassing the production backend (which would transparently inflate them).
+/// Crafts an unsigned JWT that satisfies Azurite's `--oauth basic` structural
+/// checks: a valid `sts.windows.net` issuer, the storage audience, and `iat`/`nbf`
+/// in the past with `exp` in the future.
+fn fake_entra_jwt(now: OffsetDateTime, expires: OffsetDateTime) -> String {
+    let encode = |bytes: &[u8]| URL_SAFE_NO_PAD.encode(bytes);
+    let header = encode(br#"{"alg":"HS256","typ":"JWT"}"#);
+    // Backdate `iat`/`nbf` slightly so minor clock skew never rejects the token.
+    let issued = now
+        .checked_sub(TokenDuration::seconds(60))
+        .expect("60 seconds before the current time is representable")
+        .unix_timestamp();
+    let expiry = expires.unix_timestamp();
+    let payload = encode(
+        format!(
+            concat!(
+                "{{\"iss\":\"https://sts.windows.net/",
+                "00000000-0000-0000-0000-000000000000/\",",
+                "\"aud\":\"https://storage.azure.com\",",
+                "\"iat\":{issued},\"nbf\":{issued},\"exp\":{expiry}}}"
+            ),
+            issued = issued,
+            expiry = expiry,
+        )
+        .as_bytes(),
+    );
+    // The signature is never checked; any base64url segment satisfies the shape.
+    let signature = encode(b"signature");
+    format!("{header}.{payload}.{signature}")
+}
+
+/// An HTTP client that trusts Azurite's self-signed certificate.
+///
+/// The production transport validates certificates against the platform trust store
+/// and so rejects the emulator's throwaway cert; this test client disables that
+/// check. Automatic gzip decompression is turned off to match the production client:
+/// the backend stores gzip and inflates it itself in `get`, so the transport must
+/// hand back the raw compressed bytes.
+fn azurite_http_client() -> Arc<dyn HttpClient> {
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .no_gzip()
+        .build()
+        .expect("building the Azurite HTTP client");
+    Arc::new(client)
+}
+
+/// A pre-built Azure backend wired to Azurite via a fake token and a cert-trusting
+/// transport, ready to inject through [`Overrides::storage_override`].
+fn azurite_storage_override(account: &str, container: &str) -> StorageOverride {
+    let credential: Arc<dyn TokenCredential> = Arc::new(FakeEntraCredential);
+    azure_backend_from_parts(
+        account,
+        container,
+        Some(azurite_endpoint()),
+        credential,
+        azurite_http_client(),
+    )
+    .expect("building the Azurite storage override")
+}
+
+/// A container client that reads blobs Azurite stored directly, bypassing the
+/// production backend (which would transparently inflate them). It authenticates
+/// with the same fake Entra token and trusts the same self-signed certificate as
+/// the injected backend.
 fn azurite_container_client(container: &str) -> BlobContainerClient {
     let mut url = Url::parse(&azurite_endpoint()).unwrap();
     url.path_segments_mut()
         .unwrap()
         .pop_if_empty()
         .push(container);
-    url.set_query(Some(&azurite_account_sas()));
-    BlobContainerClient::new(url, None, None).unwrap()
+    let credential: Arc<dyn TokenCredential> = Arc::new(FakeEntraCredential);
+    let options = BlobContainerClientOptions {
+        client_options: ClientOptions {
+            transport: Some(Transport::new(azurite_http_client())),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    BlobContainerClient::new(url, Some(credential), Some(options)).unwrap()
 }
 
 /// The real Storage account name to target, or `None` when none is configured.
@@ -200,8 +269,9 @@ fn real_azure_enabled() -> bool {
 
 /// A config that stores in `container` on the real account via Microsoft Entra ID.
 ///
-/// It sets neither `account_key` nor `sas_token`, so `AzureBlobStorage` resolves the
-/// Entra credential path — the production default, which Azurite never exercises.
+/// It carries no injected backend, so `AzureBlobStorage` resolves the Entra
+/// credential path from configuration — the production default, which Azurite never
+/// exercises.
 fn real_azure_config(container: &str) -> String {
     let account = real_azure_account().expect("real Azure account is configured");
     format!(
@@ -297,6 +367,12 @@ async fn delete_container(endpoint: &str, container: &str) {
 struct AzureWorkspace {
     dir: tempfile::TempDir,
     bench: Vec<String>,
+    /// The (account, container) an Azurite run injects a backend for. `None` for
+    /// real-Azure workspaces, which authenticate from configuration instead. When
+    /// set, every [`drive`](Self::drive) injects a fresh Azurite backend through
+    /// [`Overrides::storage_override`] rather than letting the command resolve one
+    /// from the config file (Azurite has no real Entra to authenticate against).
+    storage_override_target: Option<(String, String)>,
     /// The synthetic UTC second stamped on the next commit. It starts a few minutes
     /// before construction and advances one second per commit, so consecutive commits
     /// never share a wall-clock second (git's commit-date resolution). Sharing a
@@ -314,6 +390,7 @@ impl AzureWorkspace {
         let workspace = Self {
             dir: tempfile::tempdir().unwrap(),
             bench: Vec::new(),
+            storage_override_target: None,
             next_second: std::cell::Cell::new(base_second),
         };
         let cargo_dir = workspace.dir.path().join(".cargo");
@@ -327,6 +404,15 @@ impl AzureWorkspace {
         workspace.git(&["init", "-b", "master"]);
         workspace.git(&["add", ".gitignore"]);
         workspace.git_commit(&["commit", "-m", "root"]);
+        workspace
+    }
+
+    /// A workspace that stores to the named Azurite container, injecting an Azurite
+    /// backend (fake Entra token + cert-trusting transport) on every drive.
+    fn new_azurite(container: &str) -> Self {
+        let mut workspace = Self::new(&azure_config_for(container));
+        workspace.storage_override_target =
+            Some(("devstoreaccount1".to_owned(), container.to_owned()));
         workspace
     }
 
@@ -427,6 +513,10 @@ impl AzureWorkspace {
         // command, which the single bench invocation runs to produce engine output.
         let mut bench_command = vec![mock_bench_engine::binary_path().to_owned()];
         bench_command.extend(self.bench.iter().cloned());
+        let storage_override = self
+            .storage_override_target
+            .as_ref()
+            .map(|(account, container)| azurite_storage_override(account, container));
         run_with_overrides(
             &command_from(args),
             Overrides {
@@ -434,6 +524,7 @@ impl AzureWorkspace {
                 target_root: Some(target_root),
                 bench_command: Some(bench_command),
                 now: None,
+                storage_override,
             },
         )
         .await
@@ -456,8 +547,8 @@ impl AzureWorkspace {
 }
 
 /// Scenario: a single `run` stores one harvested result set.
-async fn scenario_run_stores(config: &str) {
-    let workspace = AzureWorkspace::new(config).with_bench(&["--summary", "grp=single"]);
+async fn scenario_run_stores(workspace: AzureWorkspace) {
+    let workspace = workspace.with_bench(&["--summary", "grp=single"]);
 
     let outcome = workspace.drive(&["run"]).await.unwrap();
     let RunOutcome::Completed { message } = outcome else {
@@ -468,8 +559,8 @@ async fn scenario_run_stores(config: &str) {
 
 /// Scenario: a full public round-trip — two `run`s store result sets, and
 /// `analyze` reads them back (list + get) and reports over the history.
-async fn scenario_run_then_analyze(config: &str) {
-    let workspace = AzureWorkspace::new(config).with_bench(&["--summary", "grp=single"]);
+async fn scenario_run_then_analyze(workspace: AzureWorkspace) {
+    let workspace = workspace.with_bench(&["--summary", "grp=single"]);
 
     workspace.drive(&["run"]).await.unwrap();
     // A clean run is keyed by its commit, so the second point needs its own
@@ -491,8 +582,8 @@ async fn scenario_run_then_analyze(config: &str) {
 /// enumerates objects across several commit partitions and that the git-aware
 /// feature/official dirty-admission split works end to end against the backend (not
 /// just a flat two-object listing).
-async fn scenario_feature_and_dirty(config: &str) {
-    let workspace = AzureWorkspace::new(config).with_bench(&["--summary", "grp=single"]);
+async fn scenario_feature_and_dirty(workspace: AzureWorkspace) {
+    let workspace = workspace.with_bench(&["--summary", "grp=single"]);
 
     // master: root - c2   (two clean points on the official line).
     workspace.drive(&["run"]).await.unwrap();
@@ -538,7 +629,7 @@ async fn scenario_feature_and_dirty(config: &str) {
     );
 }
 
-// --- Azurite (self-signed account SAS) -------------------------------------
+// --- Azurite (fake Entra token over `--oauth basic`) -----------------------
 
 /// `run` stores a harvested result set in Azurite.
 #[tokio::test]
@@ -552,7 +643,7 @@ async fn run_stores_results_in_azurite() {
     if !azurite_available() {
         return;
     }
-    scenario_run_stores(&azure_config()).await;
+    scenario_run_stores(AzureWorkspace::new_azurite(&unique_container())).await;
 }
 
 /// A `run` + `analyze` round-trip through Azurite.
@@ -567,7 +658,7 @@ async fn run_then_analyze_round_trips_through_azurite() {
     if !azurite_available() {
         return;
     }
-    scenario_run_then_analyze(&azure_config()).await;
+    scenario_run_then_analyze(AzureWorkspace::new_azurite(&unique_container())).await;
 }
 
 /// A multi-commit feature/dirty round-trip through Azurite.
@@ -582,13 +673,13 @@ async fn analyze_feature_and_dirty_round_trip_through_azurite() {
     if !azurite_available() {
         return;
     }
-    scenario_feature_and_dirty(&azure_config()).await;
+    scenario_feature_and_dirty(AzureWorkspace::new_azurite(&unique_container())).await;
 }
 
 /// A stored blob carries `Content-Encoding: gzip`, so a non-SDK reader knows the
 /// body is compressed. The production round-trip tests cannot prove this — the
 /// backend inflates on `get` regardless of the header — so this inspects the blob
-/// directly through a SAS-authenticated client.
+/// directly through a separately-built container client.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 #[cfg_attr(
@@ -606,7 +697,7 @@ async fn stored_blob_declares_gzip_content_encoding_in_azurite() {
 
     let container = unique_container();
     let workspace =
-        AzureWorkspace::new(&azure_config_for(&container)).with_bench(&["--summary", "grp=single"]);
+        AzureWorkspace::new_azurite(&container).with_bench(&["--summary", "grp=single"]);
     workspace.drive(&["run"]).await.unwrap();
 
     let client = azurite_container_client(&container);
@@ -650,7 +741,7 @@ async fn run_stores_results_in_real_azure() {
         return;
     }
     with_real_azure_container(async |container| {
-        scenario_run_stores(&real_azure_config(&container)).await;
+        scenario_run_stores(AzureWorkspace::new(&real_azure_config(&container))).await;
     })
     .await;
 }
@@ -668,7 +759,7 @@ async fn run_then_analyze_round_trips_through_real_azure() {
         return;
     }
     with_real_azure_container(async |container| {
-        scenario_run_then_analyze(&real_azure_config(&container)).await;
+        scenario_run_then_analyze(AzureWorkspace::new(&real_azure_config(&container))).await;
     })
     .await;
 }
@@ -686,7 +777,7 @@ async fn analyze_feature_and_dirty_round_trip_through_real_azure() {
         return;
     }
     with_real_azure_container(async |container| {
-        scenario_feature_and_dirty(&real_azure_config(&container)).await;
+        scenario_feature_and_dirty(AzureWorkspace::new(&real_azure_config(&container))).await;
     })
     .await;
 }

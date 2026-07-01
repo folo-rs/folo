@@ -44,7 +44,7 @@ use crate::model::{BenchmarkIdPrefix, DiscriminantSet, Engine, STORAGE_VERSION, 
 use crate::output::{OutputSelection, OutputWriter, TokioOutputWriter, emit};
 use crate::probe::{EnvironmentProbe, SystemProbe};
 use crate::report::{Reporter, ReporterExt, StderrReporter};
-use crate::storage::{Storage, build_storage};
+use crate::storage::{Storage, StorageFacade, build_storage};
 use crate::text::count_noun;
 use crate::wiring::{
     resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
@@ -64,6 +64,7 @@ pub(crate) async fn execute(
     options: &AnalyzeOptions,
     workspace_dir: &Path,
     now_override: Option<Timestamp>,
+    storage_override: Option<StorageFacade>,
 ) -> Result<RunOutcome, RunError> {
     // Per-object notes follow `--verbose`; stage timings are emitted under either
     // `--verbose` or the programmatic `timing` flag (the stress harness sets the
@@ -79,7 +80,13 @@ pub(crate) async fn execute(
 
     let project_id = resolve_project_id(&config, workspace_dir);
     let local = resolve_local_path(options.local.as_ref(), storage_env().as_deref())?;
-    let storage = build_storage(local.as_deref(), &config, workspace_dir)?;
+    let storage = match storage_override {
+        Some(backend) => {
+            reporter.note("storage backend: injected by test override");
+            backend
+        }
+        None => build_storage(local.as_deref(), &config, workspace_dir)?,
+    };
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
     let auto = detect_auto_facets().await?;

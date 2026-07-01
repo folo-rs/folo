@@ -1,9 +1,12 @@
 name: Start Azurite
 description: >-
   Installs and starts the Azurite blob storage emulator on the runner host so
-  that `azure`-feature tests can reach it at http://127.0.0.1:10000. Linux-only:
-  the emulator runs directly on the host (not as a service container, which
-  cannot reliably bind Azurite to a reachable address).
+  that `azure`-feature tests can reach it at https://127.0.0.1:10000. It runs in
+  `--oauth basic` mode over HTTPS (behind a throwaway self-signed certificate),
+  because Microsoft Entra ID is the only supported auth mode and it requires TLS;
+  the tests trust the cert by disabling certificate validation. Linux-only: the
+  emulator runs directly on the host (not as a service container, which cannot
+  reliably bind Azurite to a reachable address).
 
 inputs:
   azurite-version:
@@ -26,10 +29,21 @@ runs:
         echo "Installing Azurite ${AZURITE_VERSION}..."
         npm install -g "azurite@${AZURITE_VERSION}"
 
-        echo "Starting Azurite blob service on 127.0.0.1:10000..."
+        echo "Generating a throwaway self-signed certificate for the HTTPS listener..."
+        openssl req -x509 -newkey rsa:2048 -nodes \
+          -keyout "$RUNNER_TEMP/azurite-key.pem" \
+          -out "$RUNNER_TEMP/azurite-cert.pem" \
+          -days 3650 \
+          -subj "/CN=127.0.0.1" \
+          -addext "subjectAltName=IP:127.0.0.1,DNS:localhost"
+
+        echo "Starting Azurite blob service on 127.0.0.1:10000 (HTTPS + OAuth)..."
         nohup azurite-blob \
           --blobHost 127.0.0.1 \
           --blobPort 10000 \
+          --cert "$RUNNER_TEMP/azurite-cert.pem" \
+          --key "$RUNNER_TEMP/azurite-key.pem" \
+          --oauth basic \
           --inMemoryPersistence \
           --skipApiVersionCheck \
           --silent \

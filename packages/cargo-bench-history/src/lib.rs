@@ -224,13 +224,10 @@
 //!
 //! ## Azure Blob storage
 //!
-//! The Azure backend authenticates in priority order: from a shared account key
-//! (set `account_key` to the base64 account key — the tool signs a short-lived
-//! account SAS from it), a pre-made SAS token (set `sas_token`), or **Microsoft
-//! Entra ID** (set neither — the recommended mode for
-//! shared and CI use, as it stores no secret). Entra ID requires an HTTPS endpoint
-//! (the default `https://<account>.blob.core.windows.net`), so the account may have
-//! shared-key access disabled entirely.
+//! The Azure backend authenticates with **Microsoft Entra ID** (OAuth): it stores
+//! no secret, and every request carries a short-lived token over an HTTPS endpoint
+//! (the default `https://<account>.blob.core.windows.net`). The account may — and
+//! should — have shared-key access disabled entirely.
 //!
 //! To stand up an Entra-ID-backed store:
 //!
@@ -304,4 +301,4 @@ pub use model::{
     Metric, MetricKind, Run, RunContext, SCHEMA_VERSION, ToolchainInfo,
 };
 pub use outcome::{RunError, RunOutcome};
-pub use storage::StorageError;
+pub use storage::{StorageError, StorageOverride, azure_backend_from_parts};

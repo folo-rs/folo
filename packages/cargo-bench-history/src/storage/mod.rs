@@ -5,9 +5,9 @@ mod azure;
 mod facade;
 mod github_oidc;
 mod local;
-mod sas;
 
-pub(crate) use facade::build_storage;
+pub(crate) use facade::{StorageFacade, build_storage};
+pub use facade::{StorageOverride, azure_backend_from_parts};
 
 use std::error::Error;
 use std::fmt;
@@ -99,8 +99,8 @@ pub enum StorageError {
         /// The key that was already occupied.
         key: String,
     },
-    /// The storage backend is misconfigured (e.g. conflicting Azure
-    /// authentication settings).
+    /// The storage backend is misconfigured (e.g. an Azure endpoint that is not a
+    /// valid HTTPS URL).
     Config {
         /// Human-readable description of the misconfiguration.
         message: String,

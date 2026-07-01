@@ -25,11 +25,9 @@ azure_core = { workspace = true }
 # defaults are scoped to this package alone.
 azure_identity = { workspace = true, features = ["default"] }
 azure_storage_blob = { workspace = true, features = ["default"] }
-base64 = { workspace = true }
 cargo-bench-history-core = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 futures = { workspace = true }
-hmac = { workspace = true }
 jiff = { workspace = true, features = ["serde"] }
 many_cpus = { workspace = true }
 mimalloc = { workspace = true }
@@ -42,10 +40,12 @@ tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "r
 toml = { workspace = true, features = ["parse", "serde"] }
 
 [dev-dependencies]
+base64 = { workspace = true }
 cargo-bench-history-core = { path = "../cargo-bench-history-core", features = ["private-test-util"] }
 futures = { workspace = true, features = ["executor"] }
 mock_bench_engine = { path = "../mock_bench_engine" }
 mutants = { workspace = true }
+reqwest = { workspace = true, features = ["gzip", "rustls"] }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 testing = { path = "../testing" }
