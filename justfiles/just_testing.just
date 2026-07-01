@@ -362,18 +362,6 @@ test-benches FILTER="":
 
     cargo +$env:RUST_MSRV test {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast --benches
 
-# Runs regular tests as well as doing one iteration of benchmarks (the latter via the
-# `test-benches` recipe, run afterwards). We separate it from "test" because benchmarks are
-# quite slow, so we tend to only run them as part of a full validation pass. Tests go
-# through nextest (parallel execution, junit reporting, retries, etc.).
-[group('testing')]
-[script]
-test-more FILTER="": && (test-benches FILTER)
-    $ErrorActionPreference = "Stop"
-    $PSNativeCommandUseErrorActionPreference = $true
-
-    cargo +$env:RUST_MSRV nextest run {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast --tests
-
 [group('testing')]
 [script]
 test-docs FILTER="":

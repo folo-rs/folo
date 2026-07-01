@@ -301,8 +301,8 @@ jobs:
       - name: Setup environment
         uses: ./.github/actions/setup-environment
 
-      - name: Run test-more on ${{ matrix.platform }}
-        run: just package="${{ needs.delta.outputs.packages }}" test-more
+      - name: Run tests on ${{ matrix.platform }}
+        run: just package="${{ needs.delta.outputs.packages }}" test
 
       - name: Upload test results to Codecov
         if: ${{ !cancelled() }}
@@ -312,6 +312,9 @@ jobs:
           files: target/nextest/default/junit.xml
           flags: ${{ matrix.platform }}
           report_type: test_results
+
+      - name: Run benchmark targets on ${{ matrix.platform }}
+        run: just package="${{ needs.delta.outputs.packages }}" test-benches
 
   # ARM64 coverage for Miri. Miri is an interpreter with its own memory model and is
   # architecture-agnostic for platform-neutral code; we run it on ARM purely to exercise

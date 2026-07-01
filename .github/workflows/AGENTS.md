@@ -301,8 +301,8 @@ exists today; PR-time collection/validation may follow once this proves out.
 The `setup-environment` action installs Valgrind on Linux runners and `gungraun-runner` (via
 `just install-tools`). Both are required for the Callgrind `*_cg` bench targets that
 live in `packages/*/benches/`. Even when those targets are not executed, `cargo test
---benches` (which `test-x64` and `test-arm` use, via the `test-benches` and `test-more`
-recipes) invokes each bench binary's `main()` once, which forwards
+--benches` (which `test-x64` and `test-arm` use, via the `test-benches` recipe) invokes each
+bench binary's `main()` once, which forwards
 its args to `gungraun-runner`. Without `gungraun-runner` on `$PATH` the call fails with
 `Failed to run benchmarks: No such file or directory`, which breaks `test-x64` and
 `test-arm`. The Callgrind bench binaries are compiled to no-op stubs on Windows and macOS via
