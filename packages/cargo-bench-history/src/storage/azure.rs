@@ -331,18 +331,30 @@ impl Storage for AzureBlobStorage {
             .await
     }
 
-    #[cfg_attr(test, mutants::skip)] // Delegates to the Azure SDK; verified by the Azurite round-trip tests, which mutation testing cannot run.
+    #[cfg_attr(test, mutants::skip)] // Delegates to the Azure SDK; the create-vs-replace arming is verified by the Azurite round-trip tests, which mutation testing cannot run.
     async fn put_overwrite(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
         validate_key(key)?;
         let client = self.blob_client(key)?;
         let compressed = codec::compress(bytes);
-        self.upload_with_retry(&client, &compressed, key, false)
-            .await?;
-        // Overwriting an object breaks per-key immutability, so any local cache
-        // mirroring it is now stale: arm the flag a later flush consults to bump
-        // this project's cache-invalidation marker.
-        self.invalidation.arm();
-        Ok(())
+        // Probe with a write-once upload first. Creating a brand-new key leaves
+        // per-key immutability intact and no cache mirrors it yet, so it must not
+        // invalidate anything (a read-through mirror discovers new keys via its
+        // always-fresh listing). Only a genuine replace of an existing object can
+        // leave a stale cached copy, so only that path arms the flag a later flush
+        // consults to bump this project's cache-invalidation marker.
+        match self
+            .upload_with_retry(&client, &compressed, key, true)
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(StorageError::AlreadyExists { .. }) => {
+                self.upload_with_retry(&client, &compressed, key, false)
+                    .await?;
+                self.invalidation.arm();
+                Ok(())
+            }
+            Err(other) => Err(other),
+        }
     }
 
     #[cfg_attr(test, mutants::skip)] // Delegates to the Azure SDK; verified by the Azurite round-trip tests, which mutation testing cannot run.
@@ -1482,6 +1494,58 @@ mod tests {
             .unwrap();
 
         assert_eq!(storage.get("v1/fresh.json").await.unwrap(), b"only");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(
+        mutants,
+        ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip"
+    )]
+    #[serial]
+    async fn put_overwrite_creating_a_new_key_does_not_arm_invalidation() {
+        let Some(storage) = azurite_storage_or_skip() else {
+            return;
+        };
+        // Adding a brand-new key leaves per-key immutability intact and no cache
+        // mirrors it, so it must not arm the invalidation flag.
+        storage
+            .put_overwrite("v1/added.json", b"body")
+            .await
+            .unwrap();
+        assert!(
+            !storage.invalidation.take(),
+            "creating a new key must not arm invalidation"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(
+        mutants,
+        ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip"
+    )]
+    #[serial]
+    async fn put_overwrite_replacing_an_existing_key_arms_invalidation() {
+        let Some(storage) = azurite_storage_or_skip() else {
+            return;
+        };
+        // A write-once `put` seeds the object without arming (the additive path).
+        storage.put("v1/replaced.json", b"original").await.unwrap();
+        assert!(
+            !storage.invalidation.take(),
+            "a write-once put must not arm invalidation"
+        );
+        // Overwriting the now-existing object breaks immutability, so any mirror of
+        // it is stale: this path must arm the flag.
+        storage
+            .put_overwrite("v1/replaced.json", b"replacement")
+            .await
+            .unwrap();
+        assert!(
+            storage.invalidation.take(),
+            "replacing an existing key must arm invalidation"
+        );
     }
 
     #[tokio::test]

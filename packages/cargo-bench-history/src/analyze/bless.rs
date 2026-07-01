@@ -77,9 +77,11 @@ pub(crate) async fn bless(
         &reporter,
     )
     .await;
-    // Flush the cache-invalidation marker after success: a re-bless that overwrites
-    // an existing sidecar arms the backend, so the bump invalidates other machines'
-    // caches. A first-time bless is additive and never arms it (a cheap no-op).
+    // Flush the cache-invalidation marker after success: blessing writes a fresh
+    // timestamped sidecar, so it is additive and never arms the backend — a
+    // read-through cache discovers the new key through its always-fresh listing. It
+    // only arms (and so bumps the marker, invalidating other machines' caches) in
+    // the rare case of overwriting an existing sidecar, e.g. a same-second re-bless.
     let flush = storage
         .flush_pending_invalidation(&project_id, &reporter)
         .await;

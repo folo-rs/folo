@@ -199,13 +199,16 @@ pub(crate) fn cache_epoch_key(project: &str) -> String {
 
 /// A one-shot "a cloud object was removed or overwritten" flag.
 ///
-/// A cloud writer [`arm`](Self::arm)s it on every `delete`/`put_overwrite` — the
-/// only operations that break the storage model's per-key immutability — and a
-/// single flush at the end of a command [`take`](Self::take)s it and, when set,
-/// writes one fresh [`cache_epoch_key`] marker. Coalescing every mutation in a
-/// command into a single marker write keeps the bump to one round-trip. Write-once
-/// `put` (the additive path the nightly collection uses) never arms it, so an
-/// append-only night never invalidates the cache.
+/// A cloud writer [`arm`](Self::arm)s it on a `delete` or on a `put_overwrite`
+/// that *replaces an existing object* — the only operations that break the storage
+/// model's per-key immutability — and a single flush at the end of a command
+/// [`take`](Self::take)s it and, when set, writes one fresh [`cache_epoch_key`]
+/// marker. Coalescing every mutation in a command into a single marker write keeps
+/// the bump to one round-trip. Creating a new key never arms it — whether through
+/// write-once `put` (the additive path the nightly collection uses) or a
+/// `put_overwrite` that turns out to add rather than replace — so an append-only
+/// night never invalidates the cache, and a read-through mirror still discovers the
+/// new key through its always-fresh listing.
 #[derive(Debug, Default)]
 pub(crate) struct PendingInvalidation {
     armed: AtomicBool,

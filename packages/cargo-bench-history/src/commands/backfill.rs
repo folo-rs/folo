@@ -141,10 +141,11 @@ pub(crate) async fn execute(
     let worktree = worktree_path();
 
     let result = execute_backfill(options, &git, &runner, &worktree).await;
-    // Flush the cache-invalidation marker once for the whole range: a
-    // `backfill --overwrite` replaces stored objects across every commit (arming the
-    // shared backend), and a single coalesced bump invalidates other machines'
-    // caches. An append-only backfill never arms it, so this is a cheap no-op.
+    // Flush the cache-invalidation marker once for the whole range: where a
+    // `backfill --overwrite` replaces an already-stored object it arms the shared
+    // backend, and a single coalesced bump invalidates other machines' caches.
+    // Filling a gap with a brand-new object is additive and never arms it, so an
+    // append-only backfill is a cheap no-op.
     let reporter = StderrReporter::new(options.verbose);
     let flush = storage
         .flush_pending_invalidation(&project_id, &reporter)
