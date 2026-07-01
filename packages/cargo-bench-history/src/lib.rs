@@ -303,5 +303,6 @@ pub use model::{
     BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo, EnvironmentProvider, GitInfo,
     Metric, MetricKind, Run, RunContext, SCHEMA_VERSION, ToolchainInfo,
 };
+pub(crate) use outcome::finish_with_flush;
 pub use outcome::{RunError, RunOutcome};
 pub use storage::StorageError;

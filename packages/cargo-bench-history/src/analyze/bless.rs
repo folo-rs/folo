@@ -30,7 +30,7 @@ use crate::text::count_noun;
 use crate::wiring::{
     resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
 };
-use crate::{BlessOptions, RunError, RunOutcome, UnblessOptions};
+use crate::{BlessOptions, RunError, RunOutcome, UnblessOptions, finish_with_flush};
 
 use super::StorageKey;
 use super::{
@@ -83,9 +83,7 @@ pub(crate) async fn bless(
     let flush = storage
         .flush_pending_invalidation(&project_id, &reporter)
         .await;
-    let outcome = result?;
-    flush?;
-    Ok(outcome)
+    finish_with_flush(result, flush)
 }
 
 /// The real `unbless`: load configuration, wire the configured storage and git
@@ -125,9 +123,7 @@ pub(crate) async fn unbless(
     let flush = storage
         .flush_pending_invalidation(&project_id, &reporter)
         .await;
-    let outcome = result?;
-    flush?;
-    Ok(outcome)
+    finish_with_flush(result, flush)
 }
 
 /// Storage- and git-generic `bless`: validate the preconditions, then write a

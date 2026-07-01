@@ -31,7 +31,7 @@ use crate::wiring::{
     STORAGE_ENV_VAR, resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo,
     storage_env,
 };
-use crate::{LocalStorageSelection, RunError, RunOptions, RunOutcome};
+use crate::{LocalStorageSelection, RunError, RunOptions, RunOutcome, finish_with_flush};
 
 /// The program and base arguments the production tool runs to benchmark the
 /// workspace. The first-class scope flags (`--workspace`/`--package`/`--bench`)
@@ -168,9 +168,7 @@ pub(crate) async fn execute(
         }
         None => Ok(()),
     };
-    let outcome = result?;
-    flush?;
-    Ok(outcome)
+    finish_with_flush(result, flush)
 }
 
 /// A short human-readable description of where results are stored, for the

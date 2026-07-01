@@ -32,7 +32,7 @@ use crate::wiring::{
     cache_env, resolve_cache_path, resolve_config_path, resolve_local_path, resolve_project_id,
     resolve_repo, storage_env,
 };
-use crate::{PruneOptions, RunError, RunOutcome};
+use crate::{PruneOptions, RunError, RunOutcome, finish_with_flush};
 
 use super::ReportFormat;
 use super::{
@@ -131,9 +131,7 @@ pub(crate) async fn execute(
         .flush_pending_invalidation(&project_id, &reporter)
         .await;
     storage.report_cache_tally(&reporter);
-    let outcome = result?;
-    flush?;
-    Ok(outcome)
+    finish_with_flush(result, flush)
 }
 
 /// Storage- and git-generic `prune`: resolve the selected commit topology, choose

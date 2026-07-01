@@ -44,7 +44,7 @@ use crate::text::count_noun;
 use crate::wiring::{
     resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
 };
-use crate::{BackfillOptions, RunError, RunOptions, RunOutcome};
+use crate::{BackfillOptions, RunError, RunOptions, RunOutcome, finish_with_flush};
 
 use super::run::{RunDeps, RunSummary, default_bench_command, run_engines};
 
@@ -149,9 +149,7 @@ pub(crate) async fn execute(
     let flush = storage
         .flush_pending_invalidation(&project_id, &reporter)
         .await;
-    let outcome = result?;
-    flush?;
-    Ok(outcome)
+    finish_with_flush(result, flush)
 }
 
 /// Plans and runs the backfill against injected ports.
