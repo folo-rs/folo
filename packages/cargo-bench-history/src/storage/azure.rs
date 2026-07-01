@@ -90,15 +90,6 @@ impl AzureBlobStorage {
     ) -> Result<Self, StorageError> {
         let container_endpoint = container_endpoint_url(account, container, endpoint)?;
 
-        // Reject Entra-over-HTTP before building anything else, so this validation
-        // error never depends on first constructing the HTTP client (which would pull
-        // in `reqwest` and make the check un-runnable under Miri).
-        if container_endpoint.scheme() != "https" {
-            return Err(config_error(
-                "Azure Entra ID authentication requires an https endpoint",
-            ));
-        }
-
         // Build one HTTP client up front and share it across every per-object blob
         // and container client (via the transport seam in `shared_client_options`),
         // so all operations reuse a single connection pool and keep TCP+TLS
@@ -138,7 +129,8 @@ impl AzureBlobStorage {
     ///
     /// # Errors
     ///
-    /// Returns [`StorageError::Config`] if the endpoint is not a valid base URL.
+    /// Returns [`StorageError::Config`] if the endpoint is not a valid base URL, or
+    /// is not HTTPS (Entra ID authentication requires TLS, even through this seam).
     pub(crate) fn from_parts(
         account: &str,
         container: &str,
@@ -505,7 +497,8 @@ async fn upload(client: &BlobClient, bytes: &[u8], if_not_exists: bool) -> azure
 ///
 /// # Errors
 ///
-/// Returns [`StorageError::Config`] if the endpoint is not a valid base URL.
+/// Returns [`StorageError::Config`] if the endpoint is not a valid base URL, or is
+/// not HTTPS (Entra ID authentication requires TLS).
 fn container_endpoint_url(
     account: &str,
     container: &str,
@@ -519,6 +512,18 @@ fn container_endpoint_url(
         .map_err(|()| config_error(format!("Azure endpoint {endpoint:?} cannot be a base URL")))?
         .pop_if_empty()
         .push(container);
+
+    // Entra ID authentication requires TLS, so reject any non-HTTPS endpoint here
+    // rather than after building the transport. Centralizing the check means both
+    // `from_config` and the `from_parts` injection seam enforce it, and it never
+    // depends on first constructing the HTTP client — which would pull in `reqwest`
+    // and make the check un-runnable under Miri.
+    if container_endpoint.scheme() != "https" {
+        return Err(config_error(
+            "Azure Entra ID authentication requires an https endpoint",
+        ));
+    }
+
     Ok(container_endpoint)
 }
 
@@ -746,6 +751,26 @@ mod tests {
             "prod",
             "history",
             Some("http://insecure.example/account".to_owned()),
+        )
+        .unwrap_err();
+        match error {
+            StorageError::Config { message } => {
+                assert!(message.contains("https"), "{message}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_parts_rejects_a_non_https_endpoint() {
+        // The injection seam enforces the same TLS invariant as `from_config`, so the
+        // public `azure_backend_from_parts` seam can never build an insecure backend.
+        let error = AzureBlobStorage::from_parts(
+            "devstoreaccount1",
+            "history",
+            Some("http://insecure.example/account".to_owned()),
+            fake_credential(),
+            Arc::new(UnusedHttpClient),
         )
         .unwrap_err();
         match error {

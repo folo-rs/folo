@@ -33,9 +33,8 @@ pub struct Overrides {
     /// The clock anchor for the analysis default `--since` lookback window.
     pub now: Option<Timestamp>,
     /// A pre-built storage backend for `run`/`analyze` to use instead of the one
-    /// [`build_storage`](crate::azure_backend_from_parts) would resolve from
-    /// configuration. End-to-end tests use this to drive commands against an
-    /// Azurite backend behind a locally-faked Entra token and a
+    /// resolved from configuration. End-to-end tests use this to drive commands
+    /// against an Azurite backend behind a locally-faked Entra token and a
     /// certificate-trusting transport, which no configuration could produce.
     pub storage_override: Option<StorageOverride>,
 }

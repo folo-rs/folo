@@ -114,9 +114,8 @@ fn toml_escape(value: &str) -> String {
 ///
 /// The `[storage.azure]` block is Entra-only (no key or SAS), so this also proves
 /// the new configuration parses end to end. The backend the command actually uses
-/// is the injected [`StorageOverride`], because Azurite has no real Entra for
-/// [`build_storage`](cargo_bench_history::azure_backend_from_parts) to authenticate
-/// against.
+/// is the injected [`StorageOverride`], because Azurite has no real Entra for the
+/// config-driven backend to authenticate against.
 fn azure_config_for(container: &str) -> String {
     format!(
         "[project]\n\
