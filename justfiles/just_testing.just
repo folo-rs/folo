@@ -351,12 +351,9 @@ test-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_TEST_AZURE_ACCOUNT', ''):
 # consumed here; this is purely a "the benches still build and run" smoke check, separated
 # from "test" because benchmarks are quite slow.
 #
-# Benches go through `cargo test --benches` rather than nextest: nextest's per-test
-# discover-then-dispatch model is incompatible with the Callgrind (`*_cg`) benches, whose
-# `harness = false` main() spawns Valgrind for the entire suite in one shot. `cargo test
-# --benches` invokes each bench binary's main() once with `--test`, which Criterion treats
-# as "run each bench once" and Gungraun treats as its normal one-shot Valgrind run.
-# Upstream tracking: https://github.com/gungraun/gungraun/pull/644.
+# Benches go through `cargo test --benches` (not nextest): this invokes each bench binary's
+# main() once with `--test`, which Criterion treats as "run each bench once" and Gungraun
+# treats as its normal one-shot Valgrind run — exactly the smoke check we want here.
 [group('testing')]
 [script]
 test-benches FILTER="":
