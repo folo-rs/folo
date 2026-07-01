@@ -44,6 +44,7 @@ toml = { workspace = true, features = ["parse", "serde"] }
 [dev-dependencies]
 cargo-bench-history-core = { path = "../cargo-bench-history-core", features = ["private-test-util"] }
 futures = { workspace = true, features = ["executor"] }
+mock_bench_engine = { path = "../mock_bench_engine" }
 mutants = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }

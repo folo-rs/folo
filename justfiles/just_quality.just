@@ -3,10 +3,21 @@ clippy PROFILE='dev':
     cargo clippy {{ target_package }} --profile {{ PROFILE }} --all-targets --all-features --locked -- -D warnings
 
 [group('quality')]
+[script]
 coverage-measure:
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
     # Before running the tests, we need to clear old test coverage data because the coverage report
     # simply sums up all the data in the target folder, even if it is from old builds.
     cargo +{{ env_var('RUST_NIGHTLY') }} llvm-cov clean --workspace
+
+    # Pre-build the mock benchmark engine once and hand each per-test process its path via
+    # MOCK_BENCH_ENGINE. nextest runs every test in its own process, so without this each
+    # cargo-bench-history integration test would build the engine on demand and those
+    # concurrent `cargo build` invocations would race over the shared coverage target tree
+    # (observed as transient "No such file or directory" engine-spawn failures on macOS).
+    $env:MOCK_BENCH_ENGINE = just _mock-engine-path | Select-Object -Last 1
 
     # This will run tests and generate test coverage data files, to be analyzed separately.
     #
@@ -57,8 +68,17 @@ default-features-check:
     cargo ensure-no-default-features
 
 [group('quality')]
+[script]
 careful FILTER="":
-    cargo +{{ env_var('RUST_NIGHTLY') }} careful test {{ target_package }} --no-fail-fast --all-features {{ FILTER }} --locked
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    # Pre-build the mock benchmark engine once and pass its path via MOCK_BENCH_ENGINE, so the
+    # cargo-bench-history integration tests skip the per-process on-demand engine build (the
+    # same pattern the `test` and `coverage-measure` recipes use).
+    $env:MOCK_BENCH_ENGINE = just _mock-engine-path | Select-Object -Last 1
+
+    cargo +$env:RUST_NIGHTLY careful test {{ target_package }} --no-fail-fast --all-features {{ FILTER }} --locked
 
 # Separate file because it is a giant script.
 import 'just_quality_mutants.just'

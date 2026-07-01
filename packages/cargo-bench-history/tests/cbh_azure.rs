@@ -38,9 +38,6 @@ use cargo_bench_history::{Cli, Command, Overrides, RunError, RunOutcome, run_wit
 use futures::FutureExt as _;
 use serial_test::serial;
 
-/// The mock engine binary path, provided by Cargo for the auto-discovered binary target.
-const MOCK_ENGINE: &str = env!("CARGO_BIN_EXE_cargo-bench-history-mock-engine");
-
 /// The well-known Azurite development account key (public, fixed, not secret).
 const AZURITE_KEY: &str =
     "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
@@ -428,7 +425,7 @@ impl AzureWorkspace {
         // Drive `run`/`backfill` against the mock engine instead of `cargo bench`:
         // the program plus its fixture-describing arguments form the benchmark
         // command, which the single bench invocation runs to produce engine output.
-        let mut bench_command = vec![MOCK_ENGINE.to_owned()];
+        let mut bench_command = vec![mock_bench_engine::binary_path().to_owned()];
         bench_command.extend(self.bench.iter().cloned());
         run_with_overrides(
             &command_from(args),

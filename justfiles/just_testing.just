@@ -140,8 +140,38 @@ miri-example EXAMPLE:
     }
 
 [group('testing')]
+[script]
 test FILTER="":
-    cargo +{{ env_var('RUST_MSRV') }} nextest run {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    $env:MOCK_BENCH_ENGINE = just _mock-engine-path | Select-Object -Last 1
+    cargo +$env:RUST_MSRV nextest run {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast
+
+# Build the test-support `mock_bench_engine` binary and print its path. The mock is a
+# fake benchmark engine the cargo-bench-history integration tests drive; it lives in
+# its own never-published package (see packages/mock_bench_engine and issue #289), so
+# Cargo does not expose it via CARGO_BIN_EXE_* to the tests. The tests build and locate
+# it on demand, but a test runner can call this once up front and pass the path via
+# MOCK_BENCH_ENGINE so each per-test process skips a redundant Cargo freshness check.
+[group('testing')]
+[script]
+_mock-engine-path:
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    $messages = cargo +$env:RUST_MSRV build -p mock_bench_engine --message-format=json-render-diagnostics --locked
+    $exe = $messages |
+        ForEach-Object {
+            # Tolerate non-JSON lines (e.g. rendered diagnostics or blank lines), just
+            # as the Rust-side resolver does; only parsed objects flow downstream.
+            if ([string]::IsNullOrWhiteSpace($_)) { return }
+            try { $_ | ConvertFrom-Json -ErrorAction Stop } catch { return }
+        } |
+        Where-Object { $_.reason -eq "compiler-artifact" -and $_.target.name -eq "mock_bench_engine" -and $_.executable } |
+        Select-Object -Last 1 -ExpandProperty executable
+    if (-not $exe) { throw "could not resolve the mock_bench_engine executable from cargo output" }
+    Write-Output $exe
 
 # Run the cargo-bench-history "stress analyze" harness against LOCAL filesystem
 # storage: it seeds a giant synthetic benchmark history (default 1000 benchmarks ×
@@ -302,6 +332,7 @@ test-azurite:
         # AZURITE_BLOB_ENDPOINT cannot redirect the tests to a different target (the recipe
         # would then start/reuse one emulator while the tests hit another — non-hermetic).
         $env:AZURITE_BLOB_ENDPOINT = "http://${blobHost}:${blobPort}/devstoreaccount1"
+        $env:MOCK_BENCH_ENGINE = just _mock-engine-path | Select-Object -Last 1
         Write-Host "Running Azurite-backed tests against ${blobHost}:${blobPort}."
         cargo +$env:RUST_MSRV nextest run -p cargo-bench-history --locked --no-fail-fast azure azurite
     } finally {
@@ -343,6 +374,7 @@ test-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_TEST_AZURE_ACCOUNT', ''):
 
     $env:BENCH_HISTORY_TEST_AZURE_ACCOUNT = $account
     $env:ENABLE_AZURE = "1"
+    $env:MOCK_BENCH_ENGINE = just _mock-engine-path | Select-Object -Last 1
 
     Write-Host "Running real-Azure tests against account '$account' (Microsoft Entra ID; requires az login)."
     cargo +$env:RUST_MSRV nextest run -p cargo-bench-history real_azure --locked --no-fail-fast
