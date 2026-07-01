@@ -7,11 +7,10 @@
 //! separators are never percent-encoded), which makes prefix listing line up with
 //! the partition layout.
 //!
-//! Authentication is resolved once at construction, in priority order: a
-//! self-signed account SAS (`account_key`), a verbatim SAS token (`sas_token`),
-//! or Microsoft Entra ID. SAS modes carry their token in the endpoint URL's query
-//! and pass no credential (so the emulator's plain-HTTP endpoint is accepted);
-//! Entra mode passes a token credential and requires HTTPS.
+//! Authentication is Microsoft Entra ID (OAuth), resolved once at construction:
+//! a token credential is attached to every request and the endpoint is always
+//! HTTPS. See [`entra_credential`] for how the credential itself is discovered
+//! (ambient developer/CLI session, or self-minted GitHub OIDC in CI).
 
 use std::collections::HashMap;
 use std::env;
@@ -35,19 +34,8 @@ use azure_storage_blob::{
 };
 use cargo_bench_history_core::codec;
 use futures::TryStreamExt as _;
-use jiff::tz::TimeZone;
-use jiff::{Timestamp, ToSpan as _};
 
-use super::sas::{AccountSasParams, account_sas_query};
 use super::{Storage, StorageError, github_oidc, validate_key};
-
-/// The SAS permissions a self-signed token grants: read, write, delete, list,
-/// add, create — everything the backend needs to create the container on demand
-/// and write, read, and enumerate objects.
-const SAS_PERMISSIONS: &str = "rwdlac";
-
-/// The SAS resource types a self-signed token covers: service, container, object.
-const SAS_RESOURCE_TYPES: &str = "sco";
 
 /// The HTTP content coding declared on every uploaded blob. The storage layer
 /// always stores gzip, so this header is unconditionally truthful and lets a
@@ -59,12 +47,11 @@ const GZIP_CONTENT_ENCODING: &str = "gzip";
 /// A [`Storage`] that persists objects as blobs in an Azure Blob container.
 #[derive(Clone)]
 pub(crate) struct AzureBlobStorage {
-    /// The container endpoint URL. For SAS authentication the signed query is
-    /// already applied here and preserved across every derived blob URL.
+    /// The container endpoint URL. It carries no secret: authentication is a
+    /// per-request Entra token, not a signed query.
     container_endpoint: Url,
-    /// The token credential for Entra ID authentication, or `None` when a SAS
-    /// query on `container_endpoint` carries the authentication instead.
-    credential: Option<Arc<dyn TokenCredential>>,
+    /// The Entra ID token credential attached to every request.
+    credential: Arc<dyn TokenCredential>,
     /// One pooled HTTP client shared by every per-object blob and container
     /// client (injected via the transport seam in [`shared_client_options`]).
     /// All operations then reuse a single `reqwest` connection pool, so the
@@ -79,60 +66,34 @@ pub(crate) struct AzureBlobStorage {
 
 impl fmt::Debug for AzureBlobStorage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Redact the query string: for SAS authentication it contains the
-        // signature, which must never reach logs.
-        let mut endpoint = self.container_endpoint.clone();
-        endpoint.set_query(None);
-        // `http_client` is an opaque shared transport with no meaningful debug
-        // representation and no security relevance; omit it explicitly.
+        // The container endpoint carries no secret (Entra supplies a per-request
+        // token), so it is shown in full. `http_client` is an opaque shared
+        // transport with no meaningful debug representation; omit it explicitly.
         f.debug_struct("AzureBlobStorage")
-            .field("endpoint", &endpoint.as_str())
-            .field("entra", &self.credential.is_some())
+            .field("endpoint", &self.container_endpoint.as_str())
             .finish_non_exhaustive()
     }
 }
 
 impl AzureBlobStorage {
-    /// Builds an Azure backend from its configured parameters.
+    /// Builds an Azure backend from its configured parameters, authenticating
+    /// with Microsoft Entra ID.
     ///
     /// # Errors
     ///
-    /// Returns [`StorageError::Config`] if both `account_key` and `sas_token` are
-    /// set, if the endpoint is not a valid base URL, if Entra authentication is
-    /// selected without an HTTPS endpoint, or if an account SAS cannot be signed.
+    /// Returns [`StorageError::Config`] if the endpoint is not a valid base URL,
+    /// or is not HTTPS (Entra ID authentication requires TLS).
     pub(crate) fn from_config(
         account: &str,
         container: &str,
         endpoint: Option<String>,
-        account_key: Option<String>,
-        sas_token: Option<String>,
     ) -> Result<Self, StorageError> {
-        if account_key.is_some() && sas_token.is_some() {
-            return Err(config_error(
-                "set only one of `account_key` or `sas_token` for Azure storage",
-            ));
-        }
-
-        let endpoint =
-            endpoint.unwrap_or_else(|| format!("https://{account}.blob.core.windows.net"));
-        let mut container_endpoint = Url::parse(&endpoint).map_err(|error| {
-            config_error(format!("invalid Azure endpoint {endpoint:?}: {error}"))
-        })?;
-        container_endpoint
-            .path_segments_mut()
-            .map_err(|()| {
-                config_error(format!("Azure endpoint {endpoint:?} cannot be a base URL"))
-            })?
-            .pop_if_empty()
-            .push(container);
+        let container_endpoint = container_endpoint_url(account, container, endpoint)?;
 
         // Reject Entra-over-HTTP before building anything else, so this validation
         // error never depends on first constructing the HTTP client (which would pull
-        // in `reqwest` and make the check un-runnable under Miri). The SAS modes set a
-        // credential-bearing query and so accept the emulator's plain-HTTP endpoint;
-        // only the Entra path (neither key nor token) demands HTTPS.
-        let is_entra = account_key.is_none() && sas_token.is_none();
-        if is_entra && container_endpoint.scheme() != "https" {
+        // in `reqwest` and make the check un-runnable under Miri).
+        if container_endpoint.scheme() != "https" {
             return Err(config_error(
                 "Azure Entra ID authentication requires an https endpoint",
             ));
@@ -153,31 +114,39 @@ impl AzureBlobStorage {
             automatic_decompression: false,
         }));
 
-        let credential = if let Some(account_key) = account_key {
-            let query = account_sas_query(&AccountSasParams {
-                account,
-                account_key_base64: &account_key,
-                permissions: SAS_PERMISSIONS,
-                resource_types: SAS_RESOURCE_TYPES,
-                expiry: &account_sas_expiry(),
-                protocol: sas_protocol(&container_endpoint),
-            })
-            .map_err(|error| config_error(format!("could not sign account SAS: {error}")))?;
-            container_endpoint.set_query(Some(&query));
-            None
-        } else if let Some(sas_token) = sas_token {
-            container_endpoint.set_query(Some(sas_token.trim_start_matches('?')));
-            None
-        } else {
-            // The endpoint was already confirmed to be HTTPS above.
-            let credential = entra_credential(&http_client)?;
-            // Wrap the credential so a burst of concurrent reads shares one token
-            // instead of each driving its own token acquisition (see
-            // `CachingCredential`).
-            let caching: Arc<dyn TokenCredential> = Arc::new(CachingCredential::new(credential));
-            Some(caching)
-        };
+        let credential = entra_credential(&http_client)?;
+        // Wrap the credential so a burst of concurrent reads shares one token
+        // instead of each driving its own token acquisition (see `CachingCredential`).
+        let credential: Arc<dyn TokenCredential> = Arc::new(CachingCredential::new(credential));
 
+        Ok(Self {
+            container_endpoint,
+            credential,
+            http_client,
+        })
+    }
+
+    /// Assembles a backend from already-built parts, bypassing credential and
+    /// transport discovery.
+    ///
+    /// This is the injection seam the Azurite tests use (directly, and through the
+    /// [`azure_backend_from_parts`](crate::azure_backend_from_parts) command seam):
+    /// they supply a fake token credential (accepted by Azurite's `--oauth basic`
+    /// structural check) and an HTTP client that trusts the emulator's self-signed
+    /// certificate, neither of which [`from_config`](Self::from_config) would
+    /// produce.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError::Config`] if the endpoint is not a valid base URL.
+    pub(crate) fn from_parts(
+        account: &str,
+        container: &str,
+        endpoint: Option<String>,
+        credential: Arc<dyn TokenCredential>,
+        http_client: Arc<dyn HttpClient>,
+    ) -> Result<Self, StorageError> {
+        let container_endpoint = container_endpoint_url(account, container, endpoint)?;
         Ok(Self {
             container_endpoint,
             credential,
@@ -218,7 +187,7 @@ impl AzureBlobStorage {
             client_options: self.shared_client_options(),
             ..Default::default()
         };
-        BlobClient::new(url, self.credential.clone(), Some(options))
+        BlobClient::new(url, Some(Arc::clone(&self.credential)), Some(options))
             .map_err(|error| azure_io(&error))
     }
 
@@ -235,7 +204,7 @@ impl AzureBlobStorage {
         };
         BlobContainerClient::new(
             self.container_endpoint.clone(),
-            self.credential.clone(),
+            Some(Arc::clone(&self.credential)),
             Some(options),
         )
         .map_err(|error| azure_io(&error))
@@ -530,25 +499,27 @@ async fn upload(client: &BlobClient, bytes: &[u8], if_not_exists: bool) -> azure
     Ok(())
 }
 
-/// The SAS expiry, a fixed lifetime from now, formatted as `YYYY-MM-DDThh:mm:ssZ`.
-fn account_sas_expiry() -> String {
-    let expiry = Timestamp::now()
-        .checked_add(24.hours())
-        .expect("the current time plus a fixed lifetime is representable");
-    expiry
-        .to_zoned(TimeZone::UTC)
-        .strftime("%Y-%m-%dT%H:%M:%SZ")
-        .to_string()
-}
-
-/// The SAS signed protocol for `endpoint`: `https` for a secure endpoint, or
-/// `https,http` for a plain-HTTP endpoint such as the Azurite emulator.
-fn sas_protocol(endpoint: &Url) -> &'static str {
-    if endpoint.scheme() == "https" {
-        "https"
-    } else {
-        "https,http"
-    }
+/// Builds the container endpoint URL from the configured account, container, and
+/// optional endpoint override, defaulting to the public blob endpoint for
+/// `account`.
+///
+/// # Errors
+///
+/// Returns [`StorageError::Config`] if the endpoint is not a valid base URL.
+fn container_endpoint_url(
+    account: &str,
+    container: &str,
+    endpoint: Option<String>,
+) -> Result<Url, StorageError> {
+    let endpoint = endpoint.unwrap_or_else(|| format!("https://{account}.blob.core.windows.net"));
+    let mut container_endpoint = Url::parse(&endpoint)
+        .map_err(|error| config_error(format!("invalid Azure endpoint {endpoint:?}: {error}")))?;
+    container_endpoint
+        .path_segments_mut()
+        .map_err(|()| config_error(format!("Azure endpoint {endpoint:?} cannot be a base URL")))?
+        .pop_if_empty()
+        .push(container);
+    Ok(container_endpoint)
 }
 
 /// The kind of fault an Azure error represents, in terms the storage model cares
@@ -624,10 +595,6 @@ mod tests {
 
     use futures::executor::block_on;
 
-    /// The well-known Azurite development account key (public, fixed, not secret).
-    const AZURITE_KEY: &str =
-        "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
-
     /// Builds an Azure HTTP-response error with the given status and storage
     /// error code, mirroring what the SDK surfaces for a failed request.
     fn http_error(status: StatusCode, error_code: Option<&str>) -> azure_core::Error {
@@ -695,40 +662,49 @@ mod tests {
         ));
     }
 
-    #[test]
-    #[cfg_attr(miri, ignore = "reads the wall clock to compute the SAS expiry")]
-    fn account_sas_expiry_is_a_future_fixed_width_utc_timestamp() {
-        let expiry = account_sas_expiry();
-        let parsed: Timestamp = expiry.parse().unwrap();
-        assert!(
-            parsed > Timestamp::now(),
-            "expiry {expiry} should be in the future"
-        );
-        // The SAS string-to-sign requires the fixed-width `YYYY-MM-DDThh:mm:ssZ` form.
-        assert_eq!(expiry.len(), "2030-01-01T00:00:00Z".len(), "{expiry}");
-        assert!(expiry.ends_with('Z'), "{expiry}");
+    /// A far-future Unix second, well beyond any token refresh margin, for fake
+    /// credentials in the pure `from_parts` tests (which never actually acquire a
+    /// token, but must construct one that would look fresh).
+    const FAR_FUTURE_UNIX: i64 = 4_102_444_800; // 2100-01-01T00:00:00Z
+
+    /// A fake token credential for the pure `from_parts` tests. The code paths
+    /// under test assemble a URL or reject a key before any request is issued, so
+    /// this credential is never asked for a token.
+    fn fake_credential() -> Arc<dyn TokenCredential> {
+        Arc::new(CountingCredential::new(FAR_FUTURE_UNIX, false))
     }
 
-    #[test]
-    #[cfg_attr(miri, ignore = "reads the wall clock to compute the SAS expiry")]
-    fn account_key_mode_bakes_a_sas_query_and_uses_no_credential() {
-        let storage = AzureBlobStorage::from_config(
-            "devstoreaccount1",
-            "bench-history",
-            Some("http://127.0.0.1:10000/devstoreaccount1".to_owned()),
-            Some(AZURITE_KEY.to_owned()),
-            None,
-        )
-        .unwrap();
+    /// An HTTP client that must never be driven: the `from_parts` unit tests
+    /// exercise URL assembly and key validation, both of which complete before any
+    /// request reaches the transport.
+    #[derive(Debug)]
+    struct UnusedHttpClient;
 
-        assert!(storage.credential.is_none());
-        let query = storage.container_endpoint.query().unwrap();
-        assert!(query.contains("sig="), "{query}");
-        assert!(query.contains("spr=https%2Chttp"), "{query}");
-        assert_eq!(
-            storage.container_endpoint.path(),
-            "/devstoreaccount1/bench-history"
-        );
+    #[async_trait::async_trait]
+    impl HttpClient for UnusedHttpClient {
+        async fn execute_request(
+            &self,
+            _request: &azure_core::http::Request,
+        ) -> azure_core::Result<azure_core::http::AsyncRawResponse> {
+            panic!("the stub HTTP client must not be used")
+        }
+    }
+
+    /// Builds an Entra backend from fake parts (fake credential, unused transport)
+    /// for the pure unit tests that only inspect URL assembly and key validation.
+    fn storage_from_fake_parts(
+        account: &str,
+        container: &str,
+        endpoint: Option<String>,
+    ) -> AzureBlobStorage {
+        AzureBlobStorage::from_parts(
+            account,
+            container,
+            endpoint,
+            fake_credential(),
+            Arc::new(UnusedHttpClient),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -736,33 +712,10 @@ mod tests {
         miri,
         ignore = "builds a real HTTP client (reqwest) that Miri cannot run"
     )]
-    fn sas_token_mode_uses_the_token_verbatim() {
-        let storage = AzureBlobStorage::from_config(
-            "prod",
-            "history",
-            Some("https://prod.blob.core.windows.net".to_owned()),
-            None,
-            Some("?sv=2021-08-06&sig=abc".to_owned()),
-        )
-        .unwrap();
+    fn from_config_defaults_to_the_public_https_endpoint() {
+        let storage = AzureBlobStorage::from_config("prod", "history", None).unwrap();
 
-        assert!(storage.credential.is_none());
-        // The leading `?` is stripped; the rest is used as the query verbatim.
-        assert_eq!(
-            storage.container_endpoint.query(),
-            Some("sv=2021-08-06&sig=abc")
-        );
-    }
-
-    #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "builds a real HTTP client (reqwest) that Miri cannot run"
-    )]
-    fn entra_mode_uses_a_credential_and_default_endpoint() {
-        let storage = AzureBlobStorage::from_config("prod", "history", None, None, None).unwrap();
-
-        assert!(storage.credential.is_some());
+        // Entra carries no query; the default endpoint targets the public blob host.
         assert_eq!(storage.container_endpoint.query(), None);
         assert_eq!(
             storage.container_endpoint.as_str(),
@@ -771,37 +724,20 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "reads the wall clock to compute the SAS expiry")]
     fn blob_client_keeps_slash_separators_literal() {
-        let storage = AzureBlobStorage::from_config(
+        let storage = storage_from_fake_parts(
             "devstoreaccount1",
             "bench-history",
-            Some("http://127.0.0.1:10000/devstoreaccount1".to_owned()),
-            Some(AZURITE_KEY.to_owned()),
-            None,
-        )
-        .unwrap();
+            Some("https://127.0.0.1:10000/devstoreaccount1".to_owned()),
+        );
 
         let client = storage.blob_client("v1/proj/callgrind/run.json").unwrap();
         assert_eq!(
             client.url().path(),
             "/devstoreaccount1/bench-history/v1/proj/callgrind/run.json"
         );
-        // The SAS query is carried over to the blob URL.
-        assert!(client.url().query().is_some());
-    }
-
-    #[test]
-    fn both_auth_modes_set_is_a_config_error() {
-        let error = AzureBlobStorage::from_config(
-            "prod",
-            "history",
-            None,
-            Some(AZURITE_KEY.to_owned()),
-            Some("sig=abc".to_owned()),
-        )
-        .unwrap_err();
-        assert!(matches!(error, StorageError::Config { .. }), "{error:?}");
+        // Entra carries no query, so the blob URL stays clean.
+        assert_eq!(client.url().query(), None);
     }
 
     #[test]
@@ -810,8 +746,6 @@ mod tests {
             "prod",
             "history",
             Some("http://insecure.example/account".to_owned()),
-            None,
-            None,
         )
         .unwrap_err();
         match error {
@@ -824,103 +758,33 @@ mod tests {
 
     #[test]
     fn invalid_endpoint_is_a_config_error() {
-        let error = AzureBlobStorage::from_config(
-            "prod",
-            "history",
-            Some("not a url".to_owned()),
-            Some(AZURITE_KEY.to_owned()),
-            None,
-        )
-        .unwrap_err();
+        let error = AzureBlobStorage::from_config("prod", "history", Some("not a url".to_owned()))
+            .unwrap_err();
         assert!(matches!(error, StorageError::Config { .. }), "{error:?}");
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "reads the wall clock to compute the SAS expiry")]
-    fn invalid_account_key_is_a_config_error() {
-        let error = AzureBlobStorage::from_config(
+    fn container_endpoint_url_trailing_slash_does_not_double_up_segments() {
+        let url = container_endpoint_url(
             "devstoreaccount1",
             "bench-history",
-            Some("http://127.0.0.1:10000/devstoreaccount1".to_owned()),
-            Some("not valid base64!!!".to_owned()),
-            None,
-        )
-        .unwrap_err();
-        assert!(matches!(error, StorageError::Config { .. }), "{error:?}");
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore = "reads the wall clock to compute the SAS expiry")]
-    fn https_endpoint_signs_with_https_only_protocol() {
-        let storage = AzureBlobStorage::from_config(
-            "prod",
-            "history",
-            Some("https://prod.blob.core.windows.net".to_owned()),
-            Some(AZURITE_KEY.to_owned()),
-            None,
+            Some("https://127.0.0.1:10000/devstoreaccount1/".to_owned()),
         )
         .unwrap();
-        let query = storage.container_endpoint.query().unwrap();
-        assert!(
-            query.contains("spr=https&") || query.ends_with("spr=https"),
-            "{query}"
-        );
+        assert_eq!(url.path(), "/devstoreaccount1/bench-history");
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "reads the wall clock to compute the SAS expiry")]
-    fn debug_redacts_the_sas_query() {
-        let storage = AzureBlobStorage::from_config(
-            "devstoreaccount1",
-            "bench-history",
-            Some("http://127.0.0.1:10000/devstoreaccount1".to_owned()),
-            Some(AZURITE_KEY.to_owned()),
-            None,
-        )
-        .unwrap();
-        let rendered = format!("{storage:?}");
-        assert!(
-            !rendered.contains("sig="),
-            "must not leak signature: {rendered}"
-        );
-        assert!(rendered.contains("bench-history"), "{rendered}");
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore = "reads the wall clock to compute the SAS expiry")]
-    fn trailing_slash_endpoint_does_not_double_up_segments() {
-        let storage = AzureBlobStorage::from_config(
-            "devstoreaccount1",
-            "bench-history",
-            Some("http://127.0.0.1:10000/devstoreaccount1/".to_owned()),
-            Some(AZURITE_KEY.to_owned()),
-            None,
-        )
-        .unwrap();
-        assert_eq!(
-            storage.container_endpoint.path(),
-            "/devstoreaccount1/bench-history"
-        );
-    }
-
-    #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "builds a real HTTP client (reqwest) that Miri cannot run"
-    )]
     fn put_and_get_reject_keys_that_escape_the_prefix() {
         // The Azure IO methods delegate to the SDK (and are mutation-skipped), but
         // each first runs the pure `validate_key` guard before any network call.
         // `block_on` drives that guard to completion without an emulator or a Tokio
         // runtime: the future resolves to the rejection before it awaits anything.
-        let storage = AzureBlobStorage::from_config(
+        let storage = storage_from_fake_parts(
             "prod",
             "history",
             Some("https://prod.blob.core.windows.net".to_owned()),
-            None,
-            Some("?sv=2021-08-06&sig=abc".to_owned()),
-        )
-        .unwrap();
+        );
 
         let put = block_on(storage.put("../bad", b"x")).unwrap_err();
         assert!(matches!(put, StorageError::InvalidKey { .. }), "{put:?}");
@@ -1164,14 +1028,21 @@ mod tests {
 
     use std::net::{TcpStream, ToSocketAddrs as _};
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::Duration;
+    use std::time::Duration as StdDuration;
 
+    use base64::Engine as _;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use jiff::Timestamp;
     use serial_test::serial;
 
     /// The Azurite blob endpoint, overridable for a non-default emulator.
+    ///
+    /// The default is HTTPS: Entra authentication (the only supported mode)
+    /// requires TLS, so the emulator runs behind a self-signed certificate that
+    /// [`azurite_http_client`] is configured to trust.
     fn azurite_endpoint() -> String {
         env::var("AZURITE_BLOB_ENDPOINT")
-            .unwrap_or_else(|_| "http://127.0.0.1:10000/devstoreaccount1".to_owned())
+            .unwrap_or_else(|_| "https://127.0.0.1:10000/devstoreaccount1".to_owned())
     }
 
     /// A fresh, valid container name (lowercase, 3-63 chars) unique to one test.
@@ -1199,11 +1070,84 @@ mod tests {
         };
         addrs
             .into_iter()
-            .any(|addr| TcpStream::connect_timeout(&addr, Duration::from_secs(2)).is_ok())
+            .any(|addr| TcpStream::connect_timeout(&addr, StdDuration::from_secs(2)).is_ok())
     }
 
-    /// An account-key backend for a fresh container, or `None` to skip when no
-    /// emulator is reachable.
+    /// A fake Entra token credential whose JWT is accepted by Azurite's
+    /// `--oauth basic` mode.
+    ///
+    /// That mode validates a token's structure and time claims (`iss` prefix,
+    /// `aud`, `nbf`/`iat`/`exp`) but never verifies the signature, so a locally
+    /// crafted token stands in for a real Entra token. Real signature validation
+    /// stays covered by the `test-azure` / `test-azure-gh` jobs against a real
+    /// Entra-only account.
+    #[derive(Debug)]
+    struct FakeEntraCredential;
+
+    #[async_trait::async_trait]
+    impl TokenCredential for FakeEntraCredential {
+        async fn get_token(
+            &self,
+            _scopes: &[&str],
+            _options: Option<TokenRequestOptions<'_>>,
+        ) -> azure_core::Result<AccessToken> {
+            let now = OffsetDateTime::now_utc();
+            let expires = now
+                .checked_add(Duration::hours(1))
+                .expect("one hour past the current time is representable");
+            Ok(AccessToken::new(fake_entra_jwt(now, expires), expires))
+        }
+    }
+
+    /// Crafts an unsigned JWT that satisfies Azurite's `--oauth basic` structural
+    /// checks: a valid `sts.windows.net` issuer, the storage audience, and
+    /// `iat`/`nbf` in the past with `exp` in the future.
+    fn fake_entra_jwt(now: OffsetDateTime, expires: OffsetDateTime) -> String {
+        let encode = |bytes: &[u8]| URL_SAFE_NO_PAD.encode(bytes);
+        let header = encode(br#"{"alg":"HS256","typ":"JWT"}"#);
+        // Backdate `iat`/`nbf` slightly so minor clock skew never rejects the token.
+        let issued = now
+            .checked_sub(Duration::seconds(60))
+            .expect("60 seconds before the current time is representable")
+            .unix_timestamp();
+        let expiry = expires.unix_timestamp();
+        let payload = encode(
+            format!(
+                concat!(
+                    "{{\"iss\":\"https://sts.windows.net/",
+                    "00000000-0000-0000-0000-000000000000/\",",
+                    "\"aud\":\"https://storage.azure.com\",",
+                    "\"iat\":{issued},\"nbf\":{issued},\"exp\":{expiry}}}"
+                ),
+                issued = issued,
+                expiry = expiry,
+            )
+            .as_bytes(),
+        );
+        // The signature is never checked; any base64url segment satisfies the shape.
+        let signature = encode(b"signature");
+        format!("{header}.{payload}.{signature}")
+    }
+
+    /// An HTTP client that trusts Azurite's self-signed certificate.
+    ///
+    /// The production transport (`new_http_client`) validates certificates against
+    /// the platform trust store and so rejects the emulator's throwaway cert; this
+    /// test client disables that check. Automatic gzip decompression is turned off
+    /// to match the production client: the backend stores gzip and inflates it
+    /// itself in `get`, so the transport must hand back the raw compressed bytes.
+    fn azurite_http_client() -> Arc<dyn HttpClient> {
+        let client = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .no_gzip()
+            .build()
+            .expect("building the Azurite HTTP client");
+        Arc::new(client)
+    }
+
+    /// An Entra backend for a fresh container, wired to Azurite via a fake token
+    /// and a cert-trusting transport; or `None` to skip when no emulator is
+    /// reachable.
     ///
     /// Setting `BENCH_HISTORY_REQUIRE_AZURITE` turns an unreachable emulator into
     /// a hard failure, so the dedicated CI job that provisions Azurite cannot
@@ -1221,12 +1165,12 @@ mod tests {
             );
             return None;
         }
-        let storage = AzureBlobStorage::from_config(
+        let storage = AzureBlobStorage::from_parts(
             "devstoreaccount1",
             &unique_container(),
             Some(azurite_endpoint()),
-            Some(AZURITE_KEY.to_owned()),
-            None,
+            Arc::new(FakeEntraCredential),
+            azurite_http_client(),
         )
         .unwrap();
         Some(storage)

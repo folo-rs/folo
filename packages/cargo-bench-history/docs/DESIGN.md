@@ -446,38 +446,33 @@ backend-agnostic by holding a `StorageFacade`.
   always compiled in — `cargo-bench-history` is a CLI tool installed without
   feature flags, so a build-time gate would only ever hide a backend the user
   explicitly configured. It compiles on Windows, Linux **and macOS**. Auth is
-  resolved once in `from_config`, in priority order:
-  1. **self-signed account SAS** (`account_key`) — the signing math lives in
-     `storage::sas` (HMAC-SHA256 via the pure-Rust RustCrypto `hmac`/`sha2`
-     crates) and is the path used for **Azurite** in CI and for SAS-based
-     production access. The token is baked into the endpoint URL's query, so the
-     client passes **no credential** and Azurite's plain-HTTP endpoint is
-     accepted.
-  2. **verbatim `sas_token`** — a pre-signed SAS supplied in config, used as-is.
-  3. **Microsoft Entra ID** — the secret-free production default (CI managed
-     identity / workload-identity federation, local `az login`, env service
-     principals); requires an **HTTPS** endpoint. The concrete credential is picked
-     by `entra_credential`: in a GitHub Actions job configured for federation it is a
-     `ClientAssertionCredential` whose assertion self-mints a fresh GitHub OIDC JWT on
-     demand (`storage::github_oidc`); otherwise it is `DeveloperToolsCredential`
-     (which discovers the local `az login` session). Either way it is wrapped in a
-     `CachingCredential` decorator that serializes token acquisition and caches the
-     token per scope, so `analyze`'s concurrent object-load burst shares one
-     acquisition instead of driving that many simultaneous token fetches — which on
-     Windows collide on the exclusive MSAL token-cache lockfile and fail the whole
-     read.
+  **Microsoft Entra ID (OAuth) only**, resolved once in `from_config`: the
+  secret-free production default (CI managed identity / workload-identity
+  federation, local `az login`, env service principals), always over an **HTTPS**
+  endpoint (Entra bearer tokens require TLS). The concrete credential is picked by
+  `entra_credential`: in a GitHub Actions job configured for federation it is a
+  `ClientAssertionCredential` whose assertion self-mints a fresh GitHub OIDC JWT on
+  demand (`storage::github_oidc`); otherwise it is `DeveloperToolsCredential`
+  (which discovers the local `az login` session). Either way it is wrapped in a
+  `CachingCredential` decorator that serializes token acquisition and caches the
+  token per scope, so `analyze`'s concurrent object-load burst shares one
+  acquisition instead of driving that many simultaneous token fetches — which on
+  Windows collide on the exclusive MSAL token-cache lockfile and fail the whole
+  read.
 
-  The shipped azure-sdk-for-rust v1.0.0 removed connection-string parsing,
-  `StorageSharedKeyCredential`, and `DefaultAzureCredential`, which is why the
-  account-SAS path is self-signed rather than delegated to the SDK. Tested in
-  regular CI two ways (decision 17): the `test-azurite` job against the **Azurite
-  emulator** (account-SAS path) and the additive `test-azure` job against a **real
-  Storage account** over the **Entra ID** path (signed in via GitHub OIDC, a fresh
-  container per test deleted afterward). Neither is `#[ignore]`; the network tests
-  **self-skip** when their backend is not configured and are
-  `#[cfg_attr(miri, ignore)]`. Account-key construction reads the wall clock for
-  the SAS expiry, so those pure tests are Miri-ignored too — the signing math is
-  still covered under Miri by `storage::sas`'s fixed-expiry golden vector.
+  Legacy shared-key/self-signed-account-SAS (`account_key`) and verbatim-SAS
+  (`sas_token`) modes were removed (decision 41): a leftover key/token field is now
+  a loud config parse error. Tested in regular CI two ways (decision 17): the
+  `test-azurite` job against the **Azurite emulator** and the additive `test-azure`
+  job against a **real Storage account**, both over the **Entra ID** path (signed in
+  via GitHub OIDC, a fresh container per test deleted afterward). Azurite has no real
+  Entra, so it runs in `--oauth basic` mode over HTTPS (self-signed cert) and the
+  tests inject a locally-faked Entra token plus a cert-trusting transport through
+  `from_parts` / the `azure_backend_from_parts` command seam; real signature
+  validation stays proven by `test-azure`. Neither job is `#[ignore]`; the network
+  tests **self-skip** when their backend is not configured and are
+  `#[cfg_attr(miri, ignore)]` (the faked token reads the wall clock for its
+  `iat`/`nbf`/`exp` claims).
 * An in-memory `Storage` fake (in `#[cfg(test)]`) backs the Miri-safe
   orchestration tests; it mirrors the same key/prefix semantics as `LocalStorage`.
 * **Connection reuse & on-the-wire compression.** Every per-object blob and
@@ -1352,9 +1347,8 @@ src/
   storage/
     mod.rs                # Storage trait (async) + in-memory fake
     local.rs              # tokio::fs backend (gzip via core::codec)
-    facade.rs             # StorageFacade enum (Local | Azure), static dispatch
+    facade.rs             # StorageFacade enum (Local | Azure), static dispatch + test-seam
     azure.rs              # AzureBlobStorage (one shared pooled reqwest transport, §7)
-    sas.rs                # self-signed account-SAS signer
   analyze/
     mod.rs                # query orchestration (concurrent load + Spawner injection)
     list.rs               # `list runs|discriminants|blessings` data-set preview
@@ -1463,9 +1457,8 @@ adds macOS; mapped to the original request's numbering:
    regression over local Callgrind history; text report (+ `--fail-on`).
 3. ✅ **`install`** (your 4) — generate `.cargo/bench_history.toml`, point the user
    to it.
-4. ✅ **Azure blob** (your 5) — `AzureBlobStorage`, self-signed
-   account SAS (Azurite/CI + SAS production) / verbatim SAS / Entra ID;
-   `run`/`analyze` become storage-agnostic; verify it builds and runs on
+4. ✅ **Azure blob** (your 5) — `AzureBlobStorage`, **Microsoft Entra ID (OAuth)
+   only**; `run`/`analyze` become storage-agnostic; verify it builds and runs on
    Windows, Linux and macOS.
 5. ✅ **Criterion** (your 6) — adapter parses `target/criterion/**/new/{benchmark,
    estimates}.json` into `WallTime` records (slope estimate when present, else the
@@ -1536,13 +1529,12 @@ Each iteration ships with tests and docs and leaves the tool runnable.
    step, not a fork).
 5. **`analyze` v1 finding** — *Decided:* rolling-baseline regression first;
    change-point and drift plug in afterward.
-6. **Azure auth** — *Decided:* resolved in priority order — self-signed account
-   SAS (`account_key`, the Azurite/CI and SAS-production path, HMAC-signed by
-   `storage::sas`), verbatim `sas_token`, then Microsoft Entra ID (the secret-free
+6. **Azure auth** — *Decided:* **Microsoft Entra ID (OAuth) only** — the secret-free
    production default; a self-minting GitHub OIDC `ClientAssertionCredential` in a
-   federated CI job, otherwise `DeveloperToolsCredential` — see decision 38). The
-   account SAS is self-signed because azure-sdk-for-rust v1.0.0 dropped connection
-   strings, `StorageSharedKeyCredential`, and `DefaultAzureCredential` (§7).
+   federated CI job, otherwise `DeveloperToolsCredential` (see decision 38), always
+   over an HTTPS endpoint. *(Superseded by decision 41: the earlier priority-ordered
+   self-signed account SAS (`account_key`, HMAC-signed) and verbatim `sas_token`
+   modes were removed.)*
 7. **Date/time dependency** — *Decided:* `jiff` for timestamps and `--since`
    parsing.
 8. **`run` invocation** — *Decided:* `run`/`backfill` invoke the
@@ -1614,15 +1606,18 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     cloud, not `#[ignore]`; only `#[cfg_attr(miri, ignore)]` for the network edge. The
     emulator runs directly on the runner host (started by the `start-azurite` composite
     action) in a Linux-only, package-gated job rather than as a service container,
-    which cannot reliably bind Azurite to a reachable address. The network tests
+    which cannot reliably bind Azurite to a reachable address. Since Entra is the only
+    auth mode and it requires TLS, Azurite runs in `--oauth basic` mode over HTTPS
+    (behind a throwaway self-signed cert) and the tests inject a locally-faked Entra
+    token plus a cert-trusting transport (decision 41). The network tests
     **self-skip** when no emulator is reachable so the multi-platform test
     jobs stay green; `BENCH_HISTORY_REQUIRE_AZURITE=1` (set only in `test-azurite`)
     turns an unreachable emulator into a hard failure so it can never silently skip.
     That job also collects coverage so the `azure.rs` network paths reach Codecov.
 
-    **Real Azure account** (`test-azure` job): an additive job that exercises the
-    **Microsoft Entra ID** authentication path the emulator (account-key/SAS) never
-    touches — a real Storage account with shared-key access disabled, reached over
+    **Real Azure account** (`test-azure` job): an additive job that exercises **real
+    Microsoft Entra ID** signature validation that the emulator (which only fakes the
+    token) cannot — a real Storage account with shared-key access disabled, reached over
     HTTPS. No Rust change is needed: `DeveloperToolsCredential` already chains to the
     Azure CLI, so the same credential works locally (after `az login`) and in CI (after
     `azure/login@v2` signs in via **GitHub OIDC workload identity federation**, no
@@ -2118,3 +2113,29 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      stay in `cargo-bench-history/tests/fixtures/` — they double as schema-drift canaries
      for the parser tests — and are referenced cross-package by relative path rather than
      duplicated.
+
+41. **Azure auth is Microsoft Entra ID (OAuth) only** — *Decided:* the two legacy auth
+     modes — self-signed shared-key account SAS (`account_key`) and verbatim SAS
+     (`sas_token`) — were removed; `AzureBlobStorage` authenticates exclusively via
+     Microsoft Entra ID, so `credential` is always present and the endpoint is always
+     HTTPS. *Why:* the real Storage account already disables shared-key access
+     (`allowSharedKeyAccess: false`, decision 17 infra), so `account_key` never worked
+     against real Azure — it was Azurite-only legacy — and `sas_token` was an unused
+     historical escape hatch. Collapsing to one mode deletes the `storage::sas` HMAC
+     signer, the `hmac` dependency, and the priority-resolution + conflict-check logic
+     in `from_config`. A leftover `account_key`/`sas_token` field is a **loud config
+     parse error** (via `#[serde(deny_unknown_fields)]` on the `[storage.azure]`
+     struct), the same clean-migration stance the crate takes for unknown
+     `[storage.local]` fields — no silent back-compat. *Cost:* Azurite has no real
+     Entra, so its CI/local tests run it in `--oauth basic` mode over HTTPS (behind a
+     throwaway self-signed cert; `start-azurite` and `just test-azurite` provision it)
+     and inject two things the production `from_config` never builds: a fake
+     `TokenCredential` returning a locally-crafted JWT whose structure and
+     `iss`/`aud`/`nbf`/`iat`/`exp` claims satisfy Azurite's signature-free structural
+     check, and an `HttpClient` (a `reqwest` client with `danger_accept_invalid_certs`
+     + `no_gzip`) that trusts the cert. `AzureBlobStorage::from_parts(...)` assembles a
+     backend from those parts: the unit round-trips call it directly, and the `cbh_azure`
+     end-to-end tests inject a fully-built backend through `Overrides::storage_override`
+     (the `#[doc(hidden)]` `azure_backend_from_parts` seam), so production carries no
+     fake-token backdoor. Real signature validation stays proven by the `test-azure` /
+     `test-azure-gh` jobs against the real Entra-only account.
