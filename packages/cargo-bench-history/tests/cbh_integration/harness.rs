@@ -490,15 +490,30 @@ impl Workspace {
         self
     }
 
-    /// Builds the effective CLI arguments for a drive, injecting
-    /// `--local=<root>/store` for storage-backed commands.
+    /// Builds the effective CLI arguments for a drive, injecting `--verbose` for
+    /// every command and `--local=<root>/store` for storage-backed commands.
     ///
     /// Local-storage paths are a run-time selection rather than configuration, so
     /// each test stores to its own workspace `store/` directory via `--local`. The
     /// `install` command takes no storage, and an explicit `--local` already in
     /// `args` is left untouched, as is every command when injection is disabled.
+    /// `--verbose` is injected unconditionally (every subcommand accepts it) so the
+    /// reporter is enabled and its `note_with` closures run under test.
     fn effective_args(&self, args: &[&str]) -> Vec<String> {
         let mut effective: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+
+        // Enable verbose reporting for every driven command so the reporter's
+        // `note_with`/`if_enabled` closures actually run under test (they are
+        // skipped when the reporter is disabled), keeping their bodies covered.
+        // Notes go to stderr, so this never perturbs a command's stdout or the
+        // rendered reports the assertions read back. Every subcommand accepts
+        // `--verbose`; a caller that already passed it is left untouched.
+        let has_subcommand = !effective.is_empty();
+        let already_verbose = effective.iter().any(|arg| arg == "--verbose");
+        if has_subcommand && !already_verbose {
+            effective.insert(1, "--verbose".to_owned());
+        }
+
         let already_local = effective
             .iter()
             .any(|arg| arg == "--local" || arg.starts_with("--local="));

@@ -401,6 +401,10 @@ mod tests {
 
     #[tokio::test]
     #[cfg_attr(miri, ignore = "reads the wall clock to compute the SAS expiry")]
+    #[cfg_attr(
+        mutants,
+        ignore = "A PendingInvalidation::take mutant turns this no-op into a real marker write to the absent emulator, whose SDK retry policy backs off for ~60s before failing and trips the mutation timeout; take()'s contract is caught fast by pending_invalidation_starts_unarmed."
+    )]
     async fn flush_pending_invalidation_for_a_cached_backend_without_mutations_is_a_noop() {
         let storage = azure_cache_facade();
         let reporter = RecordingReporter::new();

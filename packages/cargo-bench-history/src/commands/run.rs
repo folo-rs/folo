@@ -1226,7 +1226,7 @@ mod tests {
         output: &FakeOutput,
         storage: &MemoryStorage,
     ) -> Result<RunOutcome, RunError> {
-        let reporter = StderrReporter::new(false);
+        let reporter = StderrReporter::new(true);
         drive_at_with(now_unix, options, runner, probe, output, storage, &reporter)
     }
 
