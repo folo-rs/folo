@@ -12,10 +12,11 @@ use std::process::ExitCode;
 
 use cargo_freeze_deps::{Cli, run};
 
-// mimalloc is a scalable general-purpose allocator: faster small allocations and
-// no cross-thread allocator-lock contention (acute on the Windows process heap),
-// a broad low-risk win applied uniformly across the workspace's binaries. Miri
-// cannot call mimalloc's FFI, so under Miri the default allocator stands in.
+// Install mimalloc as a scalable, general-purpose allocator process-wide: faster
+// small allocations and no cross-thread allocator-lock contention (acute on the
+// Windows process heap), a broad low-risk win applied uniformly across the
+// workspace's binaries. Miri cannot call mimalloc's FFI, so under Miri the
+// default allocator stands in.
 #[cfg(not(miri))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
