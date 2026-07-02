@@ -84,7 +84,7 @@ on:
   workflow_dispatch:
     inputs:
       rebuild_tag:
-        description: Rebuild + upload binaries for an already-published tag
+        description: One crate's release tag ({crate}-v{version}) whose binaries to rebuild + re-upload
         required: false
 
 concurrency:
@@ -244,8 +244,7 @@ for macOS (`macos-latest` is Apple Silicon / arm64). There is **no**
 `ubuntu-latest-arm` or `windows-latest-arm` alias, so the ARM Linux/Windows images
 must be pinned by version (`ubuntu-24.04-arm`, `windows-11-arm`) — hence the
 apparent inconsistency with the x64 rows. Bump the pinned ARM images when newer
-ones ship. `x86_64-apple-darwin` (Intel Mac) is omitted; add it on a `macos-13`
-runner if an Intel-Mac consumer appears.
+ones ship. `x86_64-apple-darwin` (Intel Mac) is intentionally not supported.
 
 ### `alert` — a per-run failure issue
 
@@ -298,10 +297,15 @@ publish step is built to ride out both without bespoke complexity:
   crate published but its binaries did not upload (e.g. the run died before
   `build-binaries`), a plain workflow re-run will not rebuild them, because
   release-plz now skips that already-published crate and it drops out of
-  `releases`. For that case, the `workflow_dispatch` `rebuild_tag` input drives
-  `build-binaries` directly for an already-published tag, bypassing the
-  release-plz gate. `taiki-e` overwrites existing assets, so re-uploading is safe
-  and reproduces identical checksummed archives.
+  `releases`. Recovery uses the `workflow_dispatch` `rebuild_tag` input: because
+  each binary crate gets its **own** git tag and GitHub release
+  (`{crate}-v{version}`, holding just that crate's archives), a single tag names
+  exactly one crate at one version. Dispatching with `rebuild_tag` set to that tag
+  runs `build-binaries` for that one crate across the whole target matrix and
+  uploads to its release, bypassing the release-plz publish gate. `taiki-e`
+  overwrites existing assets, so re-uploading is safe and reproduces identical
+  checksummed archives. If more than one crate needs rebuilding (rare), dispatch
+  once per crate tag.
 
 (Because a GitHub Actions `uses:` step cannot be retried in place, the retry is
 implemented by running the release-plz invocation inside a small shell loop that
@@ -331,15 +335,6 @@ true` in the working-copy `release-plz.toml` (merging into any existing
 and the release-enabled set is *always* exactly the derived binary-crate set — so
 a newly-added binary crate gets its release with no config edit, and no library
 crate is ever released.
-
-The simpler alternative is **static** per-package config: add `git_release_enable
-= true` to the `[[package]]` entries for the three binary crates (adding entries
-for `cargo-detect-package` and `cargo-freeze-deps`). If that path is taken and a
-future binary crate's line is forgotten, release-plz creates no release for its
-tag, so `taiki-e` fails to upload (surfaced by the `alert` issue) and that release
-simply ships without binstall binaries. Recovering means fixing the config,
-bumping the version, and re-publishing — a rare, acceptable cost. Dynamic
-injection avoids the foot-gun and is the recommended approach.
 
 ## The asset-naming contract
 
@@ -428,10 +423,3 @@ For the automated flow to function:
 Each binary crate's README states that `cargo binstall <crate>` installs a
 prebuilt binary on supported targets, with a transparent source-build fallback
 otherwise.
-
-## Open decisions
-
-1. **git_release_enable mechanism** — dynamic CI injection (recommended, no
-   config drift) vs. static per-package entries (simpler config, manual upkeep).
-2. **Intel macOS** — `x86_64-apple-darwin` is out until there is a consumer; add a
-   `macos-13` matrix row when one appears.
