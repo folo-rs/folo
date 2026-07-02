@@ -96,43 +96,45 @@ pub(crate) async fn execute(
     let base = base.as_path();
 
     let config_path = resolve_config_path(base, options.config_path.as_deref());
-    reporter.note(&format!(
-        "loading configuration from {}",
-        config_path.display()
-    ));
+    reporter.note_with(|| format!("loading configuration from {}", config_path.display()));
     let config = load_config(&config_path, options.config_path.is_some()).await?;
 
     let project_id = resolve_project_id(&config, base);
-    reporter.note(&format!("project id: {project_id}"));
+    reporter.note_with(|| format!("project id: {project_id}"));
 
     // Under `--no-store` the run produces no stored objects, so storage selection
     // is skipped entirely: the command works with no `--local` and no configured
     // cloud backend, which would otherwise be an error.
     let storage = if let Some(backend) = storage_override {
-        reporter.note("storage backend: injected by test override");
+        reporter.note_with(|| "storage backend: injected by test override".to_owned());
         Some(backend)
     } else if options.no_store {
-        reporter.note(
+        reporter.note_with(|| {
             "not resolving a storage backend because --no-store was given; \
-             benchmarks will run but no results will be stored",
-        );
+             benchmarks will run but no results will be stored"
+                .to_owned()
+        });
         None
     } else {
         let local = resolve_local_path(options.local.as_ref(), storage_env().as_deref())?;
-        reporter.note(&format!(
-            "storage backend: {}",
-            describe_storage(options.local.as_ref(), local.as_deref(), &config)
-        ));
+        reporter.note_with(|| {
+            format!(
+                "storage backend: {}",
+                describe_storage(options.local.as_ref(), local.as_deref(), &config)
+            )
+        });
         Some(build_storage(local.as_deref(), &config, base, None)?)
     };
 
     let runner = TokioBenchRunner::in_dir(base);
     let probe = SystemProbe::in_dir(base);
     let target_root = target_root.unwrap_or_else(|| resolve_target_root_in(base));
-    reporter.note(&format!(
-        "cargo target directory (scanned for engine output): {}",
-        target_root.display()
-    ));
+    reporter.note_with(|| {
+        format!(
+            "cargo target directory (scanned for engine output): {}",
+            target_root.display()
+        )
+    });
     let output = FsBenchOutputSource::new(target_root.clone());
     let clock = Clock::new_tokio();
     let env = |name: &str| std::env::var(name).ok();
@@ -317,11 +319,13 @@ where
             code: status.code,
         });
     }
-    deps.reporter.note(&format!(
-        "benchmark command finished; harvesting output modified at or after {} \
+    deps.reporter.note_with(|| {
+        format!(
+            "benchmark command finished; harvesting output modified at or after {} \
          (older files are treated as stale leftovers)",
-        timestamp_from(run_start)
-    ));
+            timestamp_from(run_start)
+        )
+    });
 
     let rustc = deps.probe.toolchain().await?;
     let shared = SharedContext {
@@ -446,9 +450,9 @@ where
     // is no misconfiguration to report, since absence is the expected steady state
     // for an engine that does not apply here.
     if count == 0 {
-        deps.reporter.note(&format!(
-            "{engine}: no fresh benchmark cases harvested; nothing to store"
-        ));
+        deps.reporter.note_with(|| {
+            format!("{engine}: no fresh benchmark cases harvested; nothing to store")
+        });
         return Ok(EngineSummary {
             stored: false,
             count: 0,
@@ -457,10 +461,12 @@ where
     }
 
     if options.no_store {
-        deps.reporter.note(&format!(
-            "{engine}: harvested {}; not storing (--no-store)",
-            count_noun(count, "case")
-        ));
+        deps.reporter.note_with(|| {
+            format!(
+                "{engine}: harvested {}; not storing (--no-store)",
+                count_noun(count, "case")
+            )
+        });
         return Ok(EngineSummary {
             stored: false,
             count,
@@ -503,14 +509,16 @@ where
         key.clean_key(deps.project_id, commit)
     };
 
-    deps.reporter.note(&format!(
-        "{engine}: {} at commit {commit} ({}){} -> {object_key}",
-        count_noun(count, "case"),
-        if dirty { "dirty" } else { "clean" },
-        machine_key
-            .as_deref()
-            .map_or_else(String::new, |key| format!(", machine {key}")),
-    ));
+    deps.reporter.note_with(|| {
+        format!(
+            "{engine}: {} at commit {commit} ({}){} -> {object_key}",
+            count_noun(count, "case"),
+            if dirty { "dirty" } else { "clean" },
+            machine_key
+                .as_deref()
+                .map_or_else(String::new, |key| format!(", machine {key}")),
+        )
+    });
 
     // A freshly built run is composed of plain structs and finite counts, so
     // serialization cannot fail.
@@ -533,10 +541,12 @@ where
 
     match outcome {
         StoreOutcome::Skipped => {
-            deps.reporter.note(&format!(
-                "{engine}: {object_key} already exists; left unchanged (--skip-existing), \
+            deps.reporter.note_with(|| {
+                format!(
+                    "{engine}: {object_key} already exists; left unchanged (--skip-existing), \
                  so nothing was written and the cache-invalidation marker was not armed"
-            ));
+                )
+            });
             Ok(EngineSummary {
                 stored: false,
                 count,
@@ -547,7 +557,7 @@ where
         }
         StoreOutcome::Stored => {
             deps.reporter
-                .note(&format!("{engine}: stored {object_key}"));
+                .note_with(|| format!("{engine}: stored {object_key}"));
 
             // Replacing a clean run discards the data point its blessings accepted, so
             // any blessing sidecars on this commit no longer describe a stored level.
@@ -632,7 +642,7 @@ async fn invalidate_blessings<S: Storage>(
             .is_some_and(|name| name.starts_with("bless-"));
         if is_bless {
             storage.delete(&object_key).await?;
-            reporter.note(&format!("removed stale blessing {object_key}"));
+            reporter.note_with(|| format!("removed stale blessing {object_key}"));
         }
     }
     Ok(())

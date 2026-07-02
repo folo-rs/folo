@@ -5,9 +5,10 @@
 //!
 //! * [`Logger::step`] — always-on phase markers describing what the harness is
 //!   about to do.
-//! * [`Logger::detail`] — emitted only under `--verbose`. Each detail line is
-//!   *explanatory*: it states the inputs and the reasoning behind a decision so
-//!   the run can be reconstructed from the logs alone, never just the conclusion.
+//! * [`Logger::detail_with`] — emitted only under `--verbose`, formatted lazily.
+//!   Each detail line is *explanatory*: it states the inputs and the reasoning
+//!   behind a decision so the run can be reconstructed from the logs alone, never
+//!   just the conclusion.
 
 /// Operator-facing progress logger writing to stderr.
 #[derive(Clone, Copy, Debug)]
@@ -17,16 +18,17 @@ pub(crate) struct Logger {
 }
 
 impl Logger {
-    /// Creates a logger; `verbose` enables the explanatory [`detail`](Self::detail)
-    /// stream.
+    /// Creates a logger; `verbose` enables the explanatory
+    /// [`detail_with`](Self::detail_with) stream.
     pub(crate) fn new(verbose: bool) -> Self {
         Self { verbose }
     }
 
     /// Emits an always-on phase marker (`==> ...`) describing the next step.
     //
-    // Takes `self` for call-site symmetry with `detail` (both are `logger.x(..)`),
-    // even though a phase marker is unconditional and reads no state.
+    // Takes `self` for call-site symmetry with `detail_with` (both are
+    // `logger.x(..)`), even though a phase marker is unconditional and reads no
+    // state.
     #[expect(
         clippy::unused_self,
         reason = "kept an instance method so callers use one logger handle uniformly"
@@ -42,13 +44,16 @@ impl Logger {
         self.verbose
     }
 
-    /// Emits an explanatory detail line, only under `--verbose`.
+    /// Emits an explanatory detail line, only under `--verbose`, formatting it
+    /// lazily so a non-verbose run pays nothing.
     ///
     /// The message should state the inputs and reasoning behind a decision, not
-    /// merely announce its outcome.
-    pub(crate) fn detail(self, message: &str) {
+    /// merely announce its outcome. The `build` closure — typically an allocating
+    /// `format!` — runs only when `--verbose` is set, so an unconditional emit is
+    /// never reachable at a call site without its guard.
+    pub(crate) fn detail_with(self, build: impl FnOnce() -> String) {
         if self.verbose {
-            eprintln!("    {message}");
+            eprintln!("    {}", build());
         }
     }
 }

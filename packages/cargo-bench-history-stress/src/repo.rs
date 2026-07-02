@@ -58,10 +58,11 @@ pub(crate) async fn build_repo(
         main_times.len(),
         feature_times.len()
     ));
-    logger.detail(
+    logger.detail_with(|| {
         "the whole history is one fast-import stream because analyze resolves topology from real \
-         git, so storage keys must be named by the SHAs git assigns",
-    );
+         git, so storage keys must be named by the SHAs git assigns"
+            .to_owned()
+    });
 
     run_git(dir, &["init", "-q", "-b", BRANCH_MAIN, "."]).await?;
 
@@ -73,14 +74,18 @@ pub(crate) async fn build_repo(
     // otherwise report as a tree full of deletions (a dirty tree). The marks file
     // lives outside the work tree so it never shows up as an untracked file.
     run_git(dir, &["reset", "--hard", BRANCH_MAIN]).await?;
-    logger.detail("reset the work tree to main so analyze sees a clean (non-dirty) checkout");
+    logger.detail_with(|| {
+        "reset the work tree to main so analyze sees a clean (non-dirty) checkout".to_owned()
+    });
 
     let marks = read_marks(marks_path).await?;
     let repo = resolve_commits(&marks, main_times, feature_times)?;
-    logger.detail(&format!(
-        "read back {} commit SHAs from the export-marks file",
-        repo.main.len().saturating_add(repo.feature.len())
-    ));
+    logger.detail_with(|| {
+        format!(
+            "read back {} commit SHAs from the export-marks file",
+            repo.main.len().saturating_add(repo.feature.len())
+        )
+    });
     Ok(repo)
 }
 
