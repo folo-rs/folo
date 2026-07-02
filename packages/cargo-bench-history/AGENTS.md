@@ -189,7 +189,7 @@ several projects' objects at once, so invalidation is **per project**: a cloud-s
 arm and a per-command flush bumps; `synchronize_cache` (before a load) wipes that
 project's stale mirrored objects (`storage::project_objects_prefix`, `v1/<project>/objects/`),
 and `report_cache_tally` notes hits/misses after. Append-only
-`put` never arms it, so the nightly `run --skip-existing` collection never wipes the
+`put` never arms it, so the CI `run --skip-existing` collection never wipes the
 cache it feeds.
 
 **Testing note:** the `cbh_integration` harness (`Workspace`) auto-injects
@@ -214,7 +214,7 @@ test process's.
   `AlreadyExists` collision into a soft skip (`StoreOutcome::Skipped`): the run still
   benchmarks every engine — so a broken benchmark is still caught — but writes
   nothing and does not arm the cache-invalidation marker. This is the append-only
-  mode the nightly collection uses (see [storage selection](#storage-selection-local--cloud-config)).
+  mode the CI collection uses (see [storage selection](#storage-selection-local--cloud-config)).
 * `dirty_key(commit, observation_unix)` → `…/<commit>/dirty-<observation_unix>.json`
   — a snapshot of an uncommitted tree, distinguished by its observation second so
   multiple dirty snapshots on one base commit coexist; only a same-second clash is

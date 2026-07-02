@@ -352,7 +352,7 @@ directly.)
   * `all` (e.g. `--machine-key all`) removes the filter for that dimension —
     the explicit way to widen past the current machine. It is rejected in
     create mode (see below).
-* A facet that matches several sets (e.g. a Windows and a Linux nightly pool)
+* A facet that matches several sets (e.g. a Windows and a Linux runner pool)
   yields **one report per set** — parallel data sets, analyzed individually.
 
 **Hardware-independent sets and the machine-key facet.** Callgrind and
@@ -556,9 +556,9 @@ unit-tested without touching the process environment. The chosen backend (and wh
 > Status: **implemented.** Decision 41 logs the rationale and the alternatives weighed.
 
 `analyze`/`list`/`prune` load the whole in-selection history before reconstructing the
-series, and against the cloud backend that is one download per object. The nightly
-`analyze` re-fetches everything even though almost all of it is identical to the night
-before. An optional on-disk **read-through cache** removes that waste: each run pays
+series, and against the cloud backend that is one download per object. The CI
+`analyze` re-fetches everything even though almost all of it is identical to the previous
+run. An optional on-disk **read-through cache** removes that waste: each run pays
 the network cost only for objects it has never seen, and the cache survives between CI
 runs via the GitHub [`actions/cache`](https://github.com/actions/cache) action.
 
@@ -570,7 +570,7 @@ misses the cache and falls through). Trusting a cached body forever is sound bec
 the storage model is **immutable per key** — the write-once `put` refuses to change an
 existing key, so clean runs, dirty snapshots, and blessing sidecars never change once
 written. Only two operations break that immutability, and both are rare, deliberate
-administrative actions never reached on the nightly hot path: a `delete` (used by
+administrative actions never reached on the CI collection hot path: a `delete` (used by
 `prune`/`unbless`, and by `--overwrite` dropping a stale blessing) and a `put_overwrite`
 (the explicit `--overwrite` escape hatch). A cache must be discarded whenever either
 happens; a brand-new key never invalidates anything, because it was never cached.
@@ -598,14 +598,14 @@ harmless. The marker is maintained by the cloud backend itself, not by the cache
 machines' caches: the local cache is a read-side optimization, the marker a cloud-side
 correctness contract, and the two are independent.
 
-**The nightly must stay append-only.** The cache only survives a nightly run if that
+**Collection must stay append-only.** The cache only survives a CI run if that
 run never mutates an existing object. The collection previously used `--overwrite`
 purely so a re-run on an unchanged commit was idempotent rather than a duplicate
 failure — but overwriting routes every write (even the first write of a new commit)
-through the mutating path and would invalidate the cache every night. A
+through the mutating path and would invalidate the cache on every run. A
 `run --skip-existing` mode fixes this: a write-once collision becomes a **soft skip**
 (the run still benchmarks every engine, so a broken benchmark is still caught, but
-writes nothing) instead of a failure. The nightly switches to it, keeping the
+writes nothing) instead of a failure. Collection switches to it, keeping the
 production write path **purely additive** so it never bumps the marker. This is also
 better history hygiene — a stored measurement becomes immutable, so a re-run can never
 silently rewrite past data — while still meeting the original "a re-run must not fail
@@ -617,7 +617,7 @@ fallback, resolved like `--local`) on `analyze`/`list`/`prune` selects the cache
 directory. It applies only to the cloud backend, so it **conflicts with `--local`** —
 a local backend's reads are already on disk. `run`/`backfill` take no `--cache` (they
 do not read the bulk history) but still maintain the marker through the backend
-automatically. In CI the nightly `collect` switches to `--skip-existing`, and the
+automatically. In CI the `collect` step uses `--skip-existing`, and the
 `analyze` job restores and saves the cache directory through `actions/cache`. The one
 scaling limit is the repository's Actions-cache quota (a default 10 GiB, raisable with
 paid billing); beyond it the cache degrades to a partial restore — still correct, just
@@ -701,7 +701,7 @@ simply produce no output — no OS logic is needed in the tool.
    by default (non-zero exit, via the write-once `put` contract, §4.2) unless
    `--overwrite`, which makes re-runs idempotent and safe to repeat (or `--skip-existing`,
    which treats the existing point as a success and writes nothing — the append-only mode the
-   nightly `collect` uses, §7.2). A **dirty**
+   CI `collect` uses, §7.2). A **dirty**
    snapshot writes
    `…/<commit>/dirty-<observation_unix>.json` and coexists with prior snapshots (only a
    same-timestamp clash is a conflict). An engine that harvests **zero** cases stores
@@ -735,7 +735,7 @@ the hardware fingerprint, §4.1), `--no-store`, `--overwrite` (replace an existi
 same-commit point instead of refusing, §4.2), `--skip-existing` (mutually exclusive
 with `--overwrite`: a same-commit point that already exists is a **soft skip** —
 success, nothing written — instead of the `RunError::Duplicate` failure of the
-default write-once mode; used by the nightly `collect` recipe so collection stays
+default write-once mode; used by the CI `collect` recipe so collection stays
 append-only and never invalidates the read-through cache, see §7.2), `--verbose` (print a step-by-step
 diagnostic trail to stderr — the benchmark command and injected env, directories
 scanned, files included/skipped-as-stale, and each stored key — to diagnose a run
@@ -774,7 +774,7 @@ present (§4.3), unfiltered by default. When *analyzing*, `--engine`,
 `--target-triple`, `--machine-key` filter the sets — each repeatable, each accepting
 `all`, each defaulting to the current machine (engine to *all engines*) when omitted
 (§4.3); every matched set is analyzed independently and produces its own report (so a
-Windows and a Linux nightly pool come out as two reports).
+Windows and a Linux runner pool come out as two reports).
 
 **Selecting the commits (the query model).** Two refs frame the analysis:
 * `--context <ref>` — the **target** whose history is analyzed (default: current
@@ -1227,7 +1227,7 @@ does not force branch mode — a dirty checkout that has only ever stored clean 
 carries no feature-branch data and stays history. `tip` is never auto-selected; it
 is an explicit fast guard. This matches the two real scenarios:
 
-* **Scheduled trend watch (history).** A nightly/weekly job looks back over the base
+* **Scheduled trend watch (history).** A scheduled job looks back over the base
   branch's last months for regressions and slow trends, posting findings to an
   alert channel. Long-range techniques make sense here because the series is long.
 * **Feature-branch evaluation (branch).** One-to-several runs sit on top of the base
@@ -1749,9 +1749,9 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     additive job, identical to `test-azure` except it also exports `AZURE_CLIENT_ID`
     (= `AZURE_TEST_CLIENT_ID`). That single switch routes `from_config` through the
     **self-minting `ClientAssertionCredential`** (decision 38) — the exact credential
-    the nightly prod collection depends on — so PR-time CI proves the real GitHub OIDC →
+    the per-push prod collection depends on — so PR-time CI proves the real GitHub OIDC →
     Entra → Blob round-trip works, instead of only discovering a regression after merge
-    on the next nightly run. `permissions: id-token: write` provides the
+    on the next collection run. `permissions: id-token: write` provides the
     `ACTIONS_ID_TOKEN_REQUEST_*` values the tool reads to mint assertions, and the test
     identity's `pull_request` federated credential lets same-repo PR runs federate in.
     `azure/login@v2` is retained **only** so the harness's `az`-based container cleanup
@@ -2237,16 +2237,16 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      changes the reader discards only **that project's mirrored objects** (coarse but
      correct, since mutations are rare); the marker is maintained by the
      cloud backend, so every writer invalidates other machines' caches even when it holds
-     no cache itself. *Key enabler the issue did not consider:* the nightly `collect`
+     no cache itself. *Key enabler the issue did not consider:* the CI `collect`
      used `--overwrite` for same-commit idempotency, which would mutate objects and wipe
-     the cache nightly; a new **`run --skip-existing`** mode keeps the production write
+     the cache on every run; a new **`run --skip-existing`** mode keeps the production write
      path append-only — and makes stored measurements immutable, which is better history
-     hygiene — so the nightly never invalidates the cache it feeds. CLI: a `--cache <dir>`
+     hygiene — so collection never invalidates the cache it feeds. CLI: a `--cache <dir>`
      (+ `CARGO_BENCH_HISTORY_CACHE` env) on the three read commands, applicable only to
      the cloud backend, so it **conflicts with `--local`**. CI: the `collect` recipe
      switches to `--skip-existing`, and the `analyze` job restores/saves the cache via
      `actions/cache`. *Rejected:* (a) caching the listing — would hide newly stored
-     objects; (b) keeping the nightly on `--overwrite` and detecting create-vs-replace at
+     objects; (b) keeping collection on `--overwrite` and detecting create-vs-replace at
      the backend to spare the cache — works, but adds a round-trip per write and leaves
      history mutable, which `--skip-existing` avoids outright; (c) building the cache into
      the Azure backend to cache raw wire bytes — cheaper on a miss, but not testable with

@@ -766,11 +766,11 @@ jobs:
         run: ./infra/azure-bench-history-test/cleanup-containers.ps1 -MinAgeMinutes 180
 
   # Variant of test-azure that exercises cargo-bench-history's SELF-MINTING GitHub
-  # OIDC credential — the exact credential the nightly prod collection (bench-history.yml)
+  # OIDC credential — the exact credential the prod collection (bench-history.yml)
   # depends on — against the real test account. The unit tests in storage/github_oidc.rs
   # stub the HTTP exchange, and test-azure above takes the local-az DeveloperToolsCredential
   # fallback, so without this job nothing would prove the self-minting path actually
-  # round-trips real GitHub OIDC -> Entra -> Blob until the post-merge nightly run.
+  # round-trips real GitHub OIDC -> Entra -> Blob until the post-merge collection run.
   #
   # The only difference from test-azure is exporting AZURE_CLIENT_ID: setting it is the
   # switch that makes from_config build a ClientAssertionCredential (which mints a fresh

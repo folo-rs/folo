@@ -585,7 +585,7 @@ enum StoreOutcome {
 /// the collision surfaces as [`RunError::Duplicate`] so the caller can refuse it.
 /// `--overwrite` replaces any existing object in place instead; `--skip-existing`
 /// instead treats the existing object as a success that writes nothing — the
-/// append-only mode the nightly collection uses so it never overwrites an object
+/// append-only mode the CI collection uses so it never overwrites an object
 /// (and so never invalidates the cloud read-through cache).
 async fn store_result<S: Storage>(
     storage: &S,
