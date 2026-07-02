@@ -15,8 +15,8 @@
 //! parts are never
 //! materialized. (The leaner element trims overall peak only marginally — peak is
 //! set by the per-worker builders coexisting during the merge — but the lighter
-//! parse is still worth keeping; see `cargo-bench-history`'s `docs/DESIGN.md`
-//! decision 36.)
+//! parse is still worth keeping; see the load section of `cargo-bench-history`'s
+//! `docs/analyze.md`.)
 
 use serde::Deserialize;
 use smallvec::SmallVec;

@@ -7,18 +7,12 @@ synchronous and pushes async only to the IO edges, each modelled as a small
 
 > **Design reference:** [`docs/DESIGN.md`](docs/DESIGN.md) is the canonical, **high-level**
 > design document — the data model, comparability/storage rules, command semantics,
-> analysis algorithms, the two-crate (shell + `cargo-bench-history-core`) architecture,
-> and the numbered decision log (§13). Keep it up to date whenever you change a design
+> analysis algorithms, and the two-crate (shell + `cargo-bench-history-core`) architecture.
+> Keep it up to date whenever you change a design
 > decision, the data model, the crate layout, the storage format, or a command's
-> behaviour, recording non-trivial design changes as a new or amended decision entry.
->
-> **Keep it a design document, not an implementation record.** Describe the patterns,
-> concepts, and relationships — *what* exists and *why* — never *how* it is coded. Do
-> not name private types, methods, fields, or flags, and do not transcribe control flow,
-> data structures, or wire-protocol mechanics. Spell out implementation detail only for
-> a genuinely exceptional corner case that cannot be understood otherwise. When in
-> doubt, cut detail: the code and its tests are the record of *how*; the design document
-> is the record of *what* and *why*.
+> behaviour. It follows the workspace design-documentation conventions in
+> [`../../docs/design.md`](../../docs/design.md) — describe patterns, concepts, and
+> relationships, *what* exists and *why*, never *how* it is coded.
 
 ## Ports and fakes
 
@@ -306,7 +300,8 @@ speedup, so the `cargo-bench-history` binary installs `mimalloc` as its
 `#[global_allocator]` (the stress harness does the same for representative numbers). The
 lean `RunPoints` projection only trims peak ~1%; the repeated benchmark ids and the merge
 coexistence dominate peak, so the open memory levers are bounded merge-as-complete waves
-and id interning — see `docs/DESIGN.md` decision 36.
+and id interning — see the "Architecture" section of `docs/DESIGN.md` and the load
+section of `docs/analyze.md`.
 
 `analyze` assembles a series by **resolving git topology at query time** rather
 than reading a flat storage prefix — the storage layout cannot pre-assemble a

@@ -132,19 +132,6 @@ pool_id: u64,
 Do not use section separator comments (e.g. `// --- Section ---` or `// ======= Title =======`)
 to create visual "chapters" in code. Code organization should be clear from naming and structure.
 
-## Design documentation
-
-Document design elements, key decisions and architectural choices in inline
-comments in the files to which they apply. Use regular `//` comments, not API
-documentation comments.
-
-Put package-level design documentation in `package-name/docs/design.md`. It is expected that
-all major refactoring or redesign works are accompanied by design documentation which is kept
-up to date when design changes are made.
-
-If a package has multiple significant sub-components, create and maintain design documents for
-each of them as `package-name/docs/component1.md` and similar, referenced from the `design.md`.
-
 ## Named constants
 
 Avoid magic values in the code and use named constants instead. It does not matter

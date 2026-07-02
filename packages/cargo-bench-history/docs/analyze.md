@@ -1,364 +1,193 @@
-# `analyze` data-flow & parallelism reference
+# `analyze` — data-flow and parallelism
 
-A mental model of the `analyze` pipeline: what loads where, in what order, what is
-computed/sorted, and exactly where concurrency vs. parallelism happens. This is the
-canonical reference for the load and detection path; keep it in sync with the logic
-(see `AGENTS.md`, the `analyze` section). For the *statistical* design (detectors,
-re-baselining semantics) see `DESIGN.md`; this document is about *flow and
-performance*.
+A component design of the `analyze` pipeline: what loads where, in what order, and
+exactly where I/O concurrency versus CPU parallelism happens. The statistical design
+(detectors, gating, re-baselining) lives in [`DESIGN.md`](DESIGN.md); this document is
+about **flow and performance**.
 
-Code lives in two crates, referenced by symbol + file:
+## Two kinds of "going wide"
 
-- **shell** `cargo-bench-history` — IO, git, storage, orchestration
-  (`src/analyze/mod.rs`, `src/storage/`).
-- **core** `cargo-bench-history-core` — pure compute leaves
-  (`src/analyze/{series,stats,findings,parallel,report}.rs`).
+The single most important distinction is between overlapping *waiting* and overlapping
+*work*:
 
----
+* **I/O concurrency** overlaps in-flight storage reads on one cooperative task. It hides
+  per-object latency but adds no compute throughput, and is used only for the low-volume
+  blessing-sidecar load.
+* **CPU parallelism** fans real work across cores. The two expensive stages — loading and
+  parsing the stored objects, and running per-series detection — each fan out this way.
 
-## 1. Two kinds of "going wide" (read this first)
+Both fan-out stages route through an **injected spawner** rather than ad-hoc threads, so
+the work runs on the runtime's shared blocking pool in production and inline on the calling
+thread under Miri and in-memory tests. That single seam is what lets the whole load run
+reactor-free and unchanged under Miri while still scaling on real hardware.
 
-The single most important distinction:
-
-| Mechanism | What it is | Where | Threads |
-|---|---|---|---|
-| **CPU parallelism (load)** | the storage-key-sorted survivors are split into one balanced contiguous chunk per worker; each chunk is fetched + decompressed + JSON-parsed **and folded** into that worker's own `SeriesBuilder` on a blocking task through an injected `anyspawn::Spawner` (`spawn`) | `fold_runs_chunked` in `select_dataset` | runtime worker threads, not freshly spawned per call |
-| **CPU parallelism (detect)** | one balanced contiguous chunk of series per worker is dispatched to a blocking task through the same `Spawner` (`spawn_blocking`); chunk math in `analyze::parallel` | `find_changes_spawned` (the detection step) | runtime worker threads |
-| **I/O concurrency** | `buffer_unordered(LOAD_CONCURRENCY)` multiplexes in-flight `Storage::get` futures on **one** `!Send` task | the blessing-sidecar load (`load_objects_concurrently`) | cooperative on a single task — **not** OS-thread parallelism |
-
-"Folding across cores" and "detecting across cores" are the two stages that fan compute
-out across cores, and both do so through a `Spawner` so the work runs on the runtime's
-shared blocking pool (production) — or inline on the calling thread (tests/Miri) — rather
-than on anonymous per-call OS threads. The low-volume blessing-sidecar load still uses
-the older single-task `buffer_unordered` I/O concurrency. Production runs all of this
-under `#[tokio::main]`; tests drive `select_dataset` through the
-`synchronous_spawner` and `futures::executor::block_on`, so the load stays reactor-free
-and runs unchanged under Miri.
-
----
-
-## 2. Top-level flow (one `analyze` invocation)
+## Top-level flow
 
 ```mermaid
 flowchart TD
-  EXEC["analyze::execute()"] --> AW["analyze_with()"]
-  AW --> SD["select_dataset()"]
-  SD --> DS[("SelectedDataSet:\nseries + run_index + blessings")]
-  DS --> AB["apply_blessings()\n(history mode re-baseline)"]
-  AB --> FC["find_changes_spawned()"]
+  EXEC["analyze"] --> SD["select data set (the load)"]
+  SD --> DS[("series + run tallies + blessings")]
+  DS --> AB["apply blessings (history re-baseline)"]
+  AB --> FC["detect changes (per series)"]
   FC --> SUM["per-set summaries"]
-  SUM --> RENDER["render()"]
-  RENDER --> OUT["RunOutcome::Analyzed\nreport + regressions"]
+  SUM --> RENDER["render reports"]
 ```
 
-The cost is overwhelmingly in **`select_dataset`** (the load) and secondarily in
-**`find_changes_spawned`** (the detect). Everything else is bookkeeping.
+The cost is overwhelmingly in the **load** and secondarily in the **detect**; everything
+else is bookkeeping. Each analysis mode (`history`, `branch`, `tip`) is a separate
+invocation with its own load — there is no dataset cache across modes — and the mode is
+auto-detected once per run from git topology.
 
-Each analysis **mode** (`history`, `branch`, `tip`) is a *separate* `analyze`
-invocation with its *own* `select_dataset` load — there is no shared dataset cache
-across modes. The mode is auto-detected once per run from git topology
-(`auto_mode`), unless `--mode` overrides it.
-
----
-
-## 3. `select_dataset` — the load (where the wall-clock goes)
+## The load
 
 ```mermaid
 flowchart TD
-  subgraph P1["Phase 1 — key-only filtering (NO payload fetched)"]
-    L["storage.list(prefix)\n1 round-trip, returns all keys"] --> KF["parse_key + facet match"]
+  subgraph P1["Phase 1 — key-only filtering (no payload fetched)"]
+    L["list keys (one round-trip)"] --> KF["parse key + facet match"]
     KF --> WF["history / dirty / since-until filters\n(commit time + topology)"]
-    WF --> TF["to_fetch: Vec<(key, StorageKey)>"]
-    TF --> SK["sort by storage key\n→ each object's rank = object_ordinal"]
+    WF --> SK["sort survivors by storage key\n→ assign each a global ordinal"]
   end
-  SK --> LOAD
+  SK --> P23
   subgraph P23["Phase 2/3 — chunked parallel fetch+parse+fold, then merge"]
-    LOAD["fold_runs_chunked: split survivors into\none balanced contiguous chunk per worker"] -->|"spawn(chunk) ★ BLOCKING TASKS ★"| WORK["each worker: for key in chunk →\nStorage::get → gzip inflate → JSON → RunPoints\n→ push into its OWN SeriesBuilder, drop RunPoints"]
-    WORK -->|"await in spawn order"| MERGE["merge per-worker SeriesBuilders\n+ RunIndexes into one"]
+    LOAD["split survivors into one balanced chunk per worker"]
+    LOAD -->|spawn| WORK["each worker: fetch → inflate → parse →\nfold into own builder"]
+    WORK -->|await in spawn order| MERGE["merge per-worker builders + tallies"]
   end
-  MERGE --> FIN["SeriesBuilder.finish()"]
+  MERGE --> FIN["finalize series"]
 ```
 
-Key properties:
+Design properties that make this both fast and deterministic:
 
-- **Phase 1 never fetches a payload.** History-membership, base-side dirty admission
-  and the `--since`/`--until` window are all decided from the *key* and git topology
-  (`window_excludes`), so an excluded object costs zero round-trips.
-- **Ordinals are assigned up front** by sorting `to_fetch` by key. Each survivor's rank
-  in that order is its `object_ordinal`, captured before chunking so the result is
-  independent of which worker finishes first. `object_ordinal` is the final point
-  tie-break and stands in for the full storage key to keep points small.
-- **The parse and the fold both run across cores; a serial merge follows.**
-  `fold_runs_chunked` splits the key-sorted survivors into one balanced contiguous chunk
-  per worker (sizes differ by at most one) and spawns one blocking task per chunk; each
-  task fetches, inflates, and JSON-parses each object into a lean `RunPoints` (the
-  projection below) and **folds it straight into that worker's own `SeriesBuilder` /
-  `RunIndex`, dropping the `RunPoints` immediately** — so a worker never buffers its
-  chunk's parsed runs. The driver awaits the tasks **in spawn order** and merges their
-  builders (`SeriesBuilder::merge`), run tallies (`RunIndex::merge`) and admission lists
-  into one. Because ordinals are global and the final `finish()` sort is global, the
-  merge is associative and the result is byte-identical to a single-threaded fold in
-  storage-key order. Both the parse and the fold — the local-backend load's dominant
-  costs — now scale with cores; only the merge and the final sort stay serial.
-- **The parsed element is lean (`RunPoints`).** Each object is parsed into `RunPoints`
-  (`analyze::run_points`), which carries only what `SeriesBuilder::push` reads from the
-  run payload — per result, the benchmark id and each metric's
-  `kind`/`value`/`interval_low`/`interval_high` — and `push` consumes that projection
-  rather than a full `Run` (the commit a point is labelled with comes from the storage
-  key, not the payload, so `RunPoints` holds no git fields). Serde ignores the rest of the
-  run JSON, so the discarded run context (environment, toolchain, timestamps) and
+* **Phase 1 never fetches a payload.** History membership, base-side dirty admission, and
+  the `--since`/`--until` window are all decided from the *key* and git topology, so an
+  excluded object costs zero round-trips.
+* **Ordering is fixed before parallelism.** Survivors are sorted by storage key and each is
+  assigned a global ordinal *before* chunking, so the result never depends on which worker
+  finishes first. That ordinal is also each point's final tie-break, standing in for the
+  full key to keep points small.
+* **Parse and fold both run across cores; only the merge is serial.** The key-sorted
+  survivors split into one balanced contiguous chunk per worker (sizes differing by at most
+  one, so a slice just above the worker count still uses every worker). Each worker fetches,
+  inflates, JSON-parses, and folds each object straight into its own series builder,
+  dropping the parsed run immediately so no chunk's parsed runs are ever buffered. The
+  driver then merges the per-worker builders in a serial pass. Because ordinals are global
+  and the finalizing sort is global, the merge is associative and the result is
+  byte-identical to a single-threaded fold in storage-key order.
+* **The parsed element is lean.** Each object is parsed into a projection carrying only the
+  fields the fold reads — per result the benchmark identity and each metric's kind, value,
+  and confidence interval. The commit a point is labelled with comes from the storage key,
+  not the payload, so the discarded run context (environment, toolchain, timestamps) and
   per-metric standard deviation are never materialized.
-- **Memory: fold-in-worker did not lower peak (the accepted tradeoff).** Folding in the
-  worker means no chunk's parsed runs are ever buffered — yet this is *not* a memory win.
-  At merge time every worker's finished `SeriesBuilder` is resident at once alongside the
-  growing combined builder (~2× the compact point output transiently), plus one mimalloc
-  arena per worker thread. Measured back-to-back on the ~20000-object local-FS history,
-  fold-in-worker ran ~19.0 s / ~47% CPU at **~7210 MiB** peak versus an intermediate
-  buffered-parallel variant (parse a chunk to `Vec<RunPoints>`, fold serially on the main
-  thread) at ~21.1 s / ~40% / **~6880 MiB** — i.e. ~10% faster with better core use but
-  ~5% (~330 MiB) *more* peak. So the buffered runs were never the dominant peak term, and
-  the lean `RunPoints` projection trims peak only ~1% in isolation (the repeated ~1000
-  benchmark ids re-materialized per object, plus mimalloc's page retention, dominate).
-  Fold-in-worker is kept for the wall-time and CPU win; the remaining memory levers
-  (bounded merge-as-complete waves, id interning) are deferred — see `DESIGN.md`
-  decision 36.
-- **The parallel parse needs a scalable allocator.** serde_json makes many small
-  allocations; on the system allocator their cross-thread contention (acute on the
-  Windows process heap) serializes the worker threads and erases the parallel win — the
-  naive change measured *slower* than serial. The `cargo-bench-history` binary therefore
-  installs `mimalloc` as its `#[global_allocator]` (so does the stress harness, for
-  representative numbers); with it the parse scales cleanly across cores.
 
-### `SeriesBuilder::push` — what the fold does (`analyze::series`)
+A large history materializes tens of millions of series points, so the fold keeps them
+compact and interns each commit into one shared reference across all its points, cloning a
+benchmark identity only on a true first-seen miss rather than per point. The worker count
+derives from the host's available parallelism, capped at the survivor count so a small data
+set never spawns idle workers.
 
-Per parsed `RunPoints`: intern the commit from the storage key (not the
-run payload) into an `Arc<str>` shared by every point
-on that commit (`intern`); resolve the benchmark id's bucket in a `HashTable` with a
-single `entry` probe — hashing `BenchmarkId` with the builder's one fixed hasher
-instance and **cloning the id only on a true cache miss** (one id-clone per distinct
-series, never per point); push a compact `SeriesPoint` (`topo_index`, `dirty`,
-`object_ordinal: u32`, `commit: Arc<str>`, `value`, `interval_low/high`) into the
-`(set, id, kind)` group. A large history materialises tens of millions of these,
-hence the compactness and interning.
+**Memory is the accepted tradeoff, not a win.** Folding in the worker parallelizes the fold
+for a wall-time and CPU gain but does not lower peak memory: at merge time every worker's
+finished builder is briefly resident alongside the growing merged one, plus one allocator
+arena per worker thread. Further memory reduction is possible — bounded merge-as-complete
+waves and identity interning across workers — but is deliberately left unexploited in
+favour of the wall-time and CPU win.
 
-### Tuning constants (`analyze::mod`)
+**The parallel parse needs a scalable global allocator.** The JSON parser makes many small
+allocations; on the system allocator their cross-thread contention (acute on the Windows
+process heap) serializes the workers and erases the parallel win — the naive parallel parse
+measures *slower* than serial. The binary therefore installs a scalable allocator
+(`mimalloc`) so per-thread heaps remove the contention; the stress harness installs the same
+one for representative numbers. This dependency is load-bearing: do not remove the allocator
+without re-measuring the parallel load.
 
-- **Load worker count** (`worker_count`, from `analyze::parallel`) — how many blocking
-  tasks the run load fans across: `thread::available_parallelism()`, capped at the
-  survivor count so a small data set does not spawn idle workers. This bounds both the
-  parallel parse+fold width and (on the run-load path) the number of concurrent in-flight
-  `Storage::get`s, since each worker awaits its chunk's gets sequentially.
-- `LOAD_CONCURRENCY` — how many `Storage::get` round-trips the **blessing-sidecar** load
-  overlaps on its single `buffer_unordered` task. Hides per-object latency (critical on
-  the remote backend); set near the knee where in-flight fetches saturate the network
-  path, past which extra concurrency only subdivides the fixed path bandwidth and
-  lengthens each request without lifting throughput.
-
----
-
-## 4. `SeriesBuilder::finish()` + `find_changes_spawned()` — build & detect
+## Build and detect
 
 ```mermaid
 flowchart TD
-  FIN["finish()"] --> FLAT["flatten nested maps → Vec<Series>"]
-  FLAT --> SS["sort series by (set,id,kind)\n— SERIAL —"]
-  SS --> PPS["sort each series' points by topology\n— SERIAL —"]
-  PPS --> SERIES[("Vec<Series> → Arc<[Series]>")]
-  SERIES --> DALL["detect_all_spawned: one chunk per worker\n→ spawn_blocking(detect_one)\n★ SPAWNED BLOCKING TASKS ★"]
-  DALL --> CANDS["Vec<Candidate>"]
-  CANDS --> BH["benjamini_hochberg FDR filter\n— SERIAL —"]
-  BH --> MAT["materialise surviving findings'\nchart points"]
-  MAT --> SF["sort findings by |Δ|, method, identity\n— SERIAL —"]
-  SF --> FINDINGS[("Vec<Finding>")]
+  FIN["finalize"] --> FLAT["flatten to a series list"]
+  FLAT --> SS["sort series, then sort each series' points by topology\n— serial —"]
+  SS --> DALL["detect: one chunk of series per worker\n(spawned)"]
+  DALL --> CANDS["candidate findings"]
+  CANDS --> BH["false-discovery filter — serial —"]
+  BH --> MAT["materialize surviving findings' chart points"]
+  MAT --> SF["sort findings by magnitude, method, identity — serial —"]
+  SF --> FINDINGS[("findings")]
 ```
 
-### Inside one `detect_one` (`analyze::findings`) — per series, runs on a worker
+Detection has no cross-series state, so the series split into one balanced chunk per worker
+— the same split-once, spawn, await-and-recombine pattern as the load — and the output is
+identical to a sequential pass. A single available CPU (as Miri reports) yields a single
+worker over the whole input. Per series the mode selects the detector: history runs both a
+change-point and a drift detector and keeps the better fit (plus an optional recovered-spike
+pass); branch compares the branch tip's level against its base; tip guards only the newest
+point.
 
-The detection step has no cross-series state, so the series are split into one
-balanced contiguous chunk per worker and each chunk is detected on its own blocking
-task; the chunks recombine in series order, so the output is identical to a sequential
-pass. The mode selects the detector:
+The statistical kernels are chosen to keep the tens-of-millions-of-points path affordable —
+an in-place unstable sort for the median (no scratch buffer, and ties are bit-identical so
+reordering cannot change the result), pre-sized buffers for the pairwise Theil–Sen slope,
+and a single sort for the false-discovery filter across all noisy candidates.
 
-- **History** (long-range trend): project point values once, then run a
-  **change-point** detector *and* a **drift** detector and keep the better fit
-  (`arbitrate`); optionally a recovered-spike pass when inactive findings are
-  requested.
-- **Branch**: compare the branch tip's level against its base across the merge-base.
-- **Tip**: guard only the newest point.
+## The full parallelism / serial map
 
-These detectors call the **stats kernels**, per series:
+| Stage | Concurrency type | Unit of work |
+|---|---|---|
+| List keys | single async request | the whole prefix |
+| Phase-1 filtering | serial | per candidate key |
+| **Fetch + parse + fold (runs)** | **CPU-parallel (spawned)** | one chunk of survivors per worker |
+| Merge per-worker builders | serial | per worker partial |
+| Series sort + point sort | serial | the series list / per series |
+| **Detect** | **CPU-parallel (spawned)** | one chunk of series per worker |
+| Blessing-sidecar fetch | I/O-concurrent (one task) | per object, bounded in flight |
+| False-discovery filter + finding sort + render | serial | the candidate / finding list |
 
-| Kernel | File | Cost | Allocation |
-|---|---|---|---|
-| `median_in_place` | `analyze::stats` | `sort_unstable_by(f64::total_cmp)` then midpoint | **none** — sorts the caller's slice in place, no scratch buffer |
-| `theil_sen_line` | `analyze::stats` | `O(n²)` pairwise slopes, two `median_in_place`s | sizes its slope/intercept buffers once up front (`pair_count`) |
-| `benjamini_hochberg` | `analyze::stats` | one `sort_unstable_by` over the p-values | once, across all noisy candidates |
+## Where the bottlenecks live
 
-`median_in_place` is genuinely in-place: the unstable sort orders without the scratch
-buffer a stable sort would allocate, and ties under `total_cmp` are bit-identical so
-reordering them cannot change the median.
+* **Local-filesystem backend** — the load is **parse-bound**, and both parse and fold fan
+  across cores, so the ceiling is the slowest chunk's parse+fold plus the serial merge
+  throughput. Levers: a cheaper fold, a leaner parsed shape, and fewer/larger objects. This
+  parallel parse only pays off with the scalable allocator above.
+* **Azure backend** — **network-bound**. The run load drives at most one in-flight read per
+  worker (each worker awaits its chunk's reads sequentially), which is well below the
+  blessing-sidecar load's wider pipeline — so the win from the parallel design is on the
+  CPU-bound parse+fold, not on remote I/O. With the shared connection pool (below) the
+  per-object handshake is amortised across a keep-alive pool, leaving path bandwidth and,
+  for small objects, a per-request round-trip rate as the two ceilings; fewer, larger blobs
+  help more than more concurrency.
 
----
+## Azure connection reuse
 
-## 5. The full parallelism / serial map
-
-| Stage | Concurrency type | Unit of work | Fork/join criterion |
-|---|---|---|---|
-| `storage.list` | single async request | the whole prefix | — |
-| Phase-1 filtering | serial | per candidate key | — |
-| **fetch + parse + fold (runs)** | **CPU-parallel (spawned blocking tasks)** | one chunk of survivors per worker | `fold_runs_chunked`: split once, each worker folds its own builder, await + merge in spawn order |
-| merge (`SeriesBuilder::merge`) | **serial** | per worker partial | runs after the parallel load completes |
-| series sort | serial | the `Vec<Series>` | — |
-| point sort | serial | per series | — |
-| **detect** | **CPU-parallel (spawned blocking tasks)** | one chunk of series per worker | split once over all series, await + concat |
-| blessing-sidecar fetch | **I/O-concurrent (one task)** | per object, bounded in flight | `buffer_unordered(LOAD_CONCURRENCY)` |
-| BH filter + finding sort + render | serial | the candidate/finding list | — |
-
-Both `fold_runs_chunked` and `find_changes_spawned` split their input into **exactly one
-balanced chunk per worker** (sizes differ by at most one, so a slice just above the worker
-count still uses every worker rather than collapsing to fewer chunks), dispatch each chunk
-to a blocking task through the injected `Spawner`, then await them in spawn order —
-`fold_runs_chunked` merges the per-worker partials, `find_changes_spawned` concatenates the
-per-worker results — for output identical to a sequential pass. A single available CPU
-(Miri reports one) yields a single worker: one chunk, one task over the whole input.
-
----
-
-## 6. Where the bottlenecks live (to steer optimization)
-
-- **Local-filesystem backend:** the load is **parse-bound**, and both the parse and the
-  fold now fan across cores. `fold_runs_chunked` spreads the gzip-inflate + JSON-parse +
-  fold over one blocking task per CPU, so the ceiling is the slowest chunk's parse+fold
-  plus the serial merge throughput. Levers: cheaper `push`, parse into a leaner shape
-  (`RunPoints` already drops the run context and per-metric std-dev — less to
-  allocate/parse), fewer/larger objects. Note folding inside the workers did **not** lower
-  peak memory (every worker's partial builder coexists with the merged builder during the
-  merge — see §3 and `DESIGN.md` decision 36); the open memory levers are bounded
-  merge-as-complete waves and id interning, not a leaner buffered element. This parallel
-  parse only pays off with a scalable global allocator (see the mimalloc note below).
-- **Azure backend:** network-bound, and the run load now drives **at most one in-flight
-  `Storage::get` per worker** (≈ CPU count), because each worker awaits its chunk's gets
-  sequentially. That is well below the `LOAD_CONCURRENCY`-wide pipeline the streaming load
-  used, so on a latency-bound remote path the run load can be *less* I/O-concurrent than
-  before; the win from this change is on the CPU-bound parse+fold, not on remote I/O. With
-  the shared connection pool (§7) the per-object TCP+TLS handshake is amortised across a
-  keep-alive pool, leaving two ceilings: the path bandwidth and — for small objects — a
-  per-request round-trip rate. Fewer-larger blobs (and fewer bytes) help more than more
-  concurrency. (The blessing-sidecar load keeps the `LOAD_CONCURRENCY`-wide path.)
-- **The global allocator is load-bearing for the parallel parse.** serde_json's many
-  small allocations contend on the system allocator's cross-thread lock; on the Windows
-  process heap that contention made the naive parallel parse *slower* than serial
-  (negative scaling even 1→2 threads). The binary installs `mimalloc` as its
-  `#[global_allocator]` so the per-thread heaps eliminate the contention and the parse
-  scales. Do not remove it without re-measuring the parallel load.
-- **Data-structure hot spots:** `SeriesPoint` compactness, `Arc<str>` commit interning
-  and single-probe `HashTable` id lookups (clone-on-miss) keep the
-  tens-of-millions-of-points fold affordable. Preserve these; do not regress them.
-
----
-
-## 7. Azure connection reuse
-
-The Azure backend (`storage::azure::AzureBlobStorage`) needs a separate per-object
-`BlobClient` (and a `BlobContainerClient` for `list`) to address each blob, but they
-all share **one** pooled HTTP client so every `get`/`put`/`delete`/`list` reuses a
-single `reqwest` connection pool.
-
-The reuse matters because `reqwest` pools connections *inside each `Client`*. If each
-per-object client built its own transport — which is what `BlobClient::new(url,
-credential, None)` does (`None` options → `Transport::default()` →
-`new_http_client(None)` → a brand-new `reqwest::Client`) — every object would pay a
-fresh TCP+TLS handshake with **no HTTP keep-alive reuse**. Raising fetch concurrency
-would not help (each object still pays full connection setup) and at high concurrency
-would exhaust ephemeral ports.
+`reqwest` pools connections *inside each client*, but the SDK builds a fresh transport for
+every per-object blob client by default — so naively addressing each blob would pay a fresh
+TCP+TLS handshake with no keep-alive reuse, and raising fetch concurrency would only exhaust
+ephemeral ports without helping.
 
 ```mermaid
 flowchart LR
-  subgraph NOW["Client per object — no reuse"]
-    direction TB
-    A1["get A"] --> AC1["BlobClient::new(None)"] --> AR1["new reqwest::Client\n(own pool)"] --> AH1["TCP+TLS handshake"] --> AZ[("Azure")]
-    B1["get B"] --> BC1["BlobClient::new(None)"] --> BR1["new reqwest::Client\n(own pool)"] --> BH1["TCP+TLS handshake"] --> AZ
+  subgraph BAD["Client per object — no reuse"]
+    A1["get A"] --> AR1["own pool → handshake"] --> AZ[("Azure")]
+    B1["get B"] --> BR1["own pool → handshake"] --> AZ
   end
-  subgraph FIX["Shared pooled client — keep-alive"]
-    direction TB
-    A2["get A"] --> SP["shared Arc<dyn HttpClient>\n(one pooled reqwest::Client)"]
+  subgraph GOOD["Shared pooled client — keep-alive"]
+    A2["get A"] --> SP["one shared pooled client"]
     B2["get B"] --> SP
     SP --> KH["reused keep-alive connection"] --> AZ2[("Azure")]
   end
 ```
 
-**How it is wired:** `AzureBlobStorage::from_config` builds **one** pooled HTTP client
-(stored as the `http_client: Arc<dyn HttpClient>` field) and `shared_client_options()`
-injects it into every per-object client through the transport seam, so all operations
-share a single connection pool. The relevant symbols are re-exported from
-`azure_core::http` (`new_http_client`, `HttpClientOptions`, `Transport`, `HttpClient`,
-`ClientOptions`):
+The backend therefore builds **one** pooled HTTP client and injects it into every
+per-object client through the transport seam, so all operations share a single connection
+pool. Automatic decompression stays **off** on that transport: the storage layer stores gzip
+and inflates it itself, so letting the transport auto-inflate would double-inflate the
+bytes. This is validated end-to-end against both the Azurite emulator and a real Storage
+account.
 
-```rust
-// built once in from_config:
-let http_client = new_http_client(Some(HttpClientOptions {
-    // The storage layer stores gzip and inflates it itself in `get`, so the
-    // transport must hand back raw compressed bytes. This mirrors the SDK's own
-    // per-client default; turning auto-decompression on would double-inflate.
-    automatic_decompression: false,
-}));
+## Localizing a slowdown with `--verbose`
 
-// per client (via shared_client_options):
-let options = BlobClientOptions {
-    client_options: ClientOptions {
-        transport: Some(Transport::new(Arc::clone(&self.http_client))),
-        ..Default::default()
-    },
-    ..Default::default()
-};
-BlobClient::new(url, self.credential.clone(), Some(options))
-```
-
-`automatic_decompression` must stay **off**: the SDK's own per-client transport sets it
-to `false` and the storage layer inflates gzip manually in `get` (`codec::decompress`).
-A shared client built with `new_http_client(None)` would default it to `true`, so
-`reqwest` would auto-inflate and the manual `codec::decompress` would then double-inflate
-the bytes.
-
-This shared pool gives keep-alive connection reuse (far fewer handshakes, lower
-per-object latency, no port exhaustion) and lets fetch concurrency actually pay off on
-the remote backend. Validated by the Azurite round-trip tests (`storage::azure`) and the
-real-Azure end-to-end tests (`cbh_azure::*_in_real_azure`).
-
----
-
-## 8. Localizing a slowdown with `--verbose` stage timings
-
-`analyze --verbose` emits a per-stage wall-clock breakdown to standard error, on a
-channel separate from the per-object notes, so a mystery slowdown can be pinned to a
-specific stage of the diagrams above without reading the code. Each line reads
-`[bench-history] timing: <stage> took <elapsed>`. The stages mirror this document:
-
-| Stage label (substring)        | Diagram location                                  |
-|--------------------------------|---------------------------------------------------|
-| `select_dataset (full load …)` | §2 `select_dataset` — the whole load              |
-| `candidate listing + facet …`  | §3 Phase 1 listing + facet filter                 |
-| `storage.list(prefix) …`       | §3 the single `storage.list` round-trip alone     |
-| `git topology resolution`      | §2/§3 `resolve_history` (commit order + times)    |
-| `git.first_parent ancestry …`  | §3 the first-parent ancestry walk alone (scales with history) |
-| `phase 1 — key-only …`         | §3 Phase 1 filtering loop (no fetches)            |
-| `phase 2/3 — chunked parallel fetch …` | §3 Phase 2/3 chunked parallel fetch + parse + per-worker fold, then merge |
-| `series build finalization`    | §4 `SeriesBuilder::finish()` (+ serial point sort) |
-| `blessing sidecar load`        | §3 history-mode blessing fetch (history only)     |
-| `re-baseline blessed series`   | §2 `apply_blessings`                              |
-| `change detection (find_changes …)` | §4 `find_changes_spawned` (per-series detect + FDR) |
-| `report render`                | §2 `render`                                       |
-
-The timing channel is *deliberately independent* of the per-object note stream. The
-notes emit one line per stored object; at stress scale (tens of thousands of objects)
-that flood would both bury the timings and distort the very wall clock being measured.
-So a programmatic caller can request timings alone: `AnalyzeOptions.timing` turns on the
-stage breakdown without the notes (the `--verbose` CLI flag turns on both). The stress
-harness (`cargo-bench-history-stress --verbose`) uses exactly this to surface the load
-breakdown while keeping its own measurement clean.
-
-Implementation: `report::Reporter::timing(stage, elapsed)` is the sink;
-`StderrReporter::with_timing(verbose, timing)` controls the two streams independently;
-the stage boundaries are timed with `Instant` in `analyze_with` and `select_dataset`.
-Keep the labels above in sync with the diagrams when stage boundaries move.
-
+`analyze --verbose` emits a per-stage wall-clock breakdown to standard error on a channel
+**deliberately independent** of the per-object note stream, so a mystery slowdown can be
+pinned to a specific stage of the diagrams above without reading the code. The independence
+matters at stress scale: the per-object notes emit one line per stored object, and tens of
+thousands of them would both bury the timings and distort the very wall clock being
+measured. A programmatic caller can therefore request the stage timings alone, without the
+note flood — which is exactly how the stress harness surfaces the load breakdown while
+keeping its own measurement clean.
