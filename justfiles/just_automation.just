@@ -15,7 +15,7 @@
 # is nothing to replace.
 [group('automation')]
 gh-collect-bench-history:
-    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- run --workspace --exclude benchmarks --skip-existing --verbose
+    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- collect --workspace --exclude benchmarks --skip-existing --verbose
 
 # Analyzes the collected history for regressions across ALL engines, target triples and
 # machine keys, writing two working-directory artefacts: bench-history-report.md (the

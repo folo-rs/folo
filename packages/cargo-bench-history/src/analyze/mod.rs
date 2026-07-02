@@ -3127,7 +3127,7 @@ mod tests {
 
     #[test]
     fn history_is_found_for_a_project_id_that_requires_sanitizing() {
-        // `run` stores under the sanitized project segment, so `analyze` must list
+        // `collect` stores under the sanitized project segment, so `analyze` must list
         // under that same segment; listing under the raw id would miss the history.
         let storage = MemoryStorage::new();
         let raw_project = "my project/v2";

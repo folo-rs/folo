@@ -4,10 +4,10 @@ use crate::harness::*;
 /// summary, and a stored set with the expected object key and context.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn run_callgrind_end_to_end_stores_results() {
+async fn collect_callgrind_end_to_end_stores_results() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
 
-    let outcome = workspace.drive(&["run"]).await.unwrap();
+    let outcome = workspace.drive(&["collect"]).await.unwrap();
     let RunOutcome::Completed { message } = outcome else {
         panic!("expected completion, got {outcome:?}");
     };
@@ -51,7 +51,7 @@ async fn run_callgrind_end_to_end_stores_results() {
 /// subdirectory before writing, standing in for cargo's per-package cwd.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn run_harvests_output_when_the_engine_runs_in_a_package_directory() {
+async fn collect_harvests_output_when_the_engine_runs_in_a_package_directory() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&[
         "--chdir",
         "subpkg",
@@ -61,7 +61,7 @@ async fn run_harvests_output_when_the_engine_runs_in_a_package_directory() {
     std::fs::create_dir_all(workspace.root().join("subpkg")).unwrap();
 
     let outcome = workspace
-        .drive_resolving_target_root(&["run"])
+        .drive_resolving_target_root(&["collect"])
         .await
         .unwrap();
 
@@ -79,7 +79,7 @@ async fn run_harvests_output_when_the_engine_runs_in_a_package_directory() {
 /// Two summaries under the target tree yield one stored set with one record each.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn run_stores_a_record_per_summary() {
+async fn collect_stores_a_record_per_summary() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&[
         "--summary",
         "a=single",
@@ -87,7 +87,7 @@ async fn run_stores_a_record_per_summary() {
         "b=parametrized",
     ]);
 
-    let outcome = workspace.drive(&["run"]).await.unwrap();
+    let outcome = workspace.drive(&["collect"]).await.unwrap();
     let RunOutcome::Completed { message } = outcome else {
         panic!("expected completion, got {outcome:?}");
     };
@@ -116,7 +116,7 @@ async fn run_stores_a_record_per_summary() {
 /// into one series. Without the package component they would silently merge.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn run_distinguishes_same_module_path_across_packages() {
+async fn collect_distinguishes_same_module_path_across_packages() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&[
         "--summary",
         "a=single",
@@ -124,7 +124,7 @@ async fn run_distinguishes_same_module_path_across_packages() {
         "b=single-alt-pkg",
     ]);
 
-    let outcome = workspace.drive(&["run"]).await.unwrap();
+    let outcome = workspace.drive(&["collect"]).await.unwrap();
     let RunOutcome::Completed { message } = outcome else {
         panic!("expected completion, got {outcome:?}");
     };
@@ -160,7 +160,7 @@ async fn run_distinguishes_same_module_path_across_packages() {
 /// result.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn run_harvests_colliding_bench_binary_names_in_distinct_packages() {
+async fn collect_harvests_colliding_bench_binary_names_in_distinct_packages() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&[
         "--summary",
         "shared/foo=single",
@@ -168,7 +168,7 @@ async fn run_harvests_colliding_bench_binary_names_in_distinct_packages() {
         "shared/bar=single-alt-pkg",
     ]);
 
-    let outcome = workspace.drive(&["run"]).await.unwrap();
+    let outcome = workspace.drive(&["collect"]).await.unwrap();
     let RunOutcome::Completed { message } = outcome else {
         panic!("expected completion, got {outcome:?}");
     };
@@ -196,10 +196,10 @@ async fn run_harvests_colliding_bench_binary_names_in_distinct_packages() {
 /// `--no-store` still harvests the output but writes nothing to storage.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn run_no_store_harvests_without_storing() {
+async fn collect_no_store_harvests_without_storing() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
 
-    let outcome = workspace.drive(&["run", "--no-store"]).await.unwrap();
+    let outcome = workspace.drive(&["collect", "--no-store"]).await.unwrap();
     let RunOutcome::Completed { message } = outcome else {
         panic!("expected completion, got {outcome:?}");
     };
@@ -216,10 +216,10 @@ async fn run_no_store_harvests_without_storing() {
 /// nothing is stored.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn run_propagates_nonzero_engine_exit() {
+async fn collect_propagates_nonzero_engine_exit() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&["--exit-code", "7"]);
 
-    let error = workspace.drive(&["run"]).await.unwrap_err();
+    let error = workspace.drive(&["collect"]).await.unwrap_err();
     let RunError::Engine { engine, code } = error else {
         panic!("expected an engine error, got {error:?}");
     };
@@ -237,11 +237,11 @@ async fn run_propagates_nonzero_engine_exit() {
 /// is auto-detected and harvested.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn run_criterion_stores_results() {
+async fn collect_criterion_stores_results() {
     let workspace =
         Workspace::new(&storage_only_config()).with_bench(&["--criterion", "grp|capture|now=26.9"]);
 
-    let outcome = workspace.drive(&["run"]).await.unwrap();
+    let outcome = workspace.drive(&["collect"]).await.unwrap();
     assert!(matches!(outcome, RunOutcome::Completed { .. }));
 
     let (key, set) = workspace.single_object();
@@ -263,7 +263,7 @@ async fn run_criterion_stores_results() {
 /// own partition.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn run_harvests_every_engine_that_produced_output() {
+async fn collect_harvests_every_engine_that_produced_output() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&[
         "--summary",
         "grp=single",
@@ -275,7 +275,7 @@ async fn run_harvests_every_engine_that_produced_output() {
         "read_cell=20",
     ]);
 
-    let outcome = workspace.drive(&["run"]).await.unwrap();
+    let outcome = workspace.drive(&["collect"]).await.unwrap();
     let RunOutcome::Completed { message } = outcome else {
         panic!("expected completion, got {outcome:?}");
     };
@@ -317,11 +317,11 @@ async fn run_harvests_every_engine_that_produced_output() {
 /// hardware), carrying both the byte and the count metric.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn run_alloc_tracker_stores_results() {
+async fn collect_alloc_tracker_stores_results() {
     let workspace = Workspace::new(&storage_only_config())
         .with_bench(&["--alloc-tracker", "allocate_vec=200/2"]);
 
-    let outcome = workspace.drive(&["run"]).await.unwrap();
+    let outcome = workspace.drive(&["collect"]).await.unwrap();
     assert!(matches!(outcome, RunOutcome::Completed { .. }));
 
     let (key, set) = workspace.single_object();
@@ -346,12 +346,12 @@ async fn run_alloc_tracker_stores_results() {
 /// the fingerprint.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn run_all_the_time_is_partitioned_by_machine_key() {
+async fn collect_all_the_time_is_partitioned_by_machine_key() {
     let workspace =
         Workspace::new(&storage_only_config()).with_bench(&["--all-the-time", "read_cell=20"]);
 
     workspace
-        .drive(&["run", "--machine-key", "ci-pool-b"])
+        .drive(&["collect", "--machine-key", "ci-pool-b"])
         .await
         .unwrap();
 
@@ -377,11 +377,11 @@ async fn run_all_the_time_is_partitioned_by_machine_key() {
 /// into the stored result set, end to end through the real adapter.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn run_all_the_time_records_dispersion() {
+async fn collect_all_the_time_records_dispersion() {
     let workspace = Workspace::new(&storage_only_config())
         .with_bench(&["--all-the-time", "read_cell=20@19:21"]);
 
-    workspace.drive(&["run"]).await.unwrap();
+    workspace.drive(&["collect"]).await.unwrap();
 
     let (_key, set) = workspace.single_object();
     let processor_time = metric_of(&set.results[0], MetricKind::ProcessorTime);
@@ -394,14 +394,14 @@ async fn run_all_the_time_records_dispersion() {
 /// `--machine-key` overrides the machine fingerprint in a Criterion partition.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn run_criterion_honors_machine_key_override() {
+async fn collect_criterion_honors_machine_key_override() {
     let workspace =
         Workspace::new(&storage_only_config()).with_bench(&["--criterion", "grp|capture|now=9"]);
 
     // `run` auto-detects the triple; this test asserts the machine-key override
     // segment, so derive the triple from the stored context for a portable key.
     workspace
-        .drive(&["run", "--machine-key", "ci-pool-a"])
+        .drive(&["collect", "--machine-key", "ci-pool-a"])
         .await
         .unwrap();
 
@@ -417,7 +417,7 @@ async fn run_criterion_honors_machine_key_override() {
 /// distinct group/function/value identities as separate records.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn run_criterion_collects_distinct_cases_as_records() {
+async fn collect_criterion_collects_distinct_cases_as_records() {
     // Same function name in two different groups, plus a parametrized case: all
     // three identities are distinct and must survive as separate records.
     let workspace = Workspace::new(&storage_only_config()).with_bench(&[
@@ -429,7 +429,7 @@ async fn run_criterion_collects_distinct_cases_as_records() {
         "timestamp/capture|fast_clock|=13",
     ]);
 
-    workspace.drive(&["run"]).await.unwrap();
+    workspace.drive(&["collect"]).await.unwrap();
 
     let (_, set) = workspace.single_object();
     assert_eq!(set.results.len(), 3, "{:?}", set.results);
@@ -458,11 +458,11 @@ async fn run_criterion_collects_distinct_cases_as_records() {
 /// guards against writer/reader sanitization drift through the real pipeline.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn run_then_analyze_round_trips_a_sanitizing_project_id() {
+async fn collect_then_analyze_round_trips_a_sanitizing_project_id() {
     let workspace = Workspace::clean_repo(&storage_only_config_with_id("my proj/sub"))
         .with_bench(&["--summary", "grp=single"]);
 
-    workspace.drive(&["run"]).await.unwrap();
+    workspace.drive(&["collect"]).await.unwrap();
 
     // The writer sanitizes `my proj/sub` to `my_proj_sub` for the partition.
     let objects = workspace.stored_objects();
@@ -492,12 +492,12 @@ async fn run_then_analyze_round_trips_a_sanitizing_project_id() {
 /// and the reader keeps both runs in one series.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn run_then_analyze_preserves_unusual_identity_characters() {
+async fn collect_then_analyze_preserves_unusual_identity_characters() {
     let workspace = Workspace::clean_repo(&storage_only_config())
         .with_bench(&["--criterion", "time.capture|mide tiempo|tamaño 4=18.5"]);
 
     workspace
-        .drive(&["run", "--machine-key", "pool"])
+        .drive(&["collect", "--machine-key", "pool"])
         .await
         .unwrap();
 
@@ -535,14 +535,14 @@ async fn run_then_analyze_preserves_unusual_identity_characters() {
 /// `--config` loads the configuration from a non-default path.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn run_uses_explicit_config_path() {
+async fn collect_uses_explicit_config_path() {
     // Only the custom path holds a configuration; the default discovery path is
     // absent, so a successful run proves `--config` was honored.
     let workspace = Workspace::with_config_at("config/bench.toml", &storage_only_config())
         .with_bench(&["--summary", "grp=single"]);
 
     let outcome = workspace
-        .drive(&["run", "--config", "config/bench.toml"])
+        .drive(&["collect", "--config", "config/bench.toml"])
         .await
         .unwrap();
     assert!(matches!(outcome, RunOutcome::Completed { .. }));
@@ -556,9 +556,9 @@ async fn run_uses_explicit_config_path() {
 async fn re_running_the_same_commit_is_refused_as_a_duplicate() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
 
-    workspace.drive(&["run"]).await.unwrap();
+    workspace.drive(&["collect"]).await.unwrap();
 
-    let error = workspace.drive(&["run"]).await.unwrap_err();
+    let error = workspace.drive(&["collect"]).await.unwrap_err();
     let RunError::Duplicate { key } = error else {
         panic!("expected a duplicate error, got {error:?}");
     };
@@ -574,9 +574,9 @@ async fn re_running_the_same_commit_is_refused_as_a_duplicate() {
 async fn overwrite_replaces_the_stored_result() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
 
-    workspace.drive(&["run"]).await.unwrap();
+    workspace.drive(&["collect"]).await.unwrap();
 
-    workspace.drive(&["run", "--overwrite"]).await.unwrap();
+    workspace.drive(&["collect", "--overwrite"]).await.unwrap();
 
     let objects = workspace.stored_objects();
     assert_eq!(

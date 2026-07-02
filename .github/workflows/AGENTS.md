@@ -227,7 +227,7 @@ exists today; PR-time collection/validation may follow once this proves out.
   history for that night. macOS is omitted — there is no macOS-hosted history store
   consumer yet; add it to the matrix if/when macOS performance tracking is wanted.
 - **Whole workspace except the `benchmarks` package**, via the
-  `just gh-collect-bench-history` recipe (`cargo-bench-history run --workspace --exclude
+  `just gh-collect-bench-history` recipe (`cargo-bench-history collect --workspace --exclude
   benchmarks --skip-existing`). The `benchmarks` package holds slow, special-purpose
   benchmarks that are not part of the tracked history. `--skip-existing` makes a re-run on
   an unchanged `main` commit a no-op append (each already-stored object is skipped, not

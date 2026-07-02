@@ -45,7 +45,7 @@ impl Storage for StorageFacade {
             Self::Local(storage) => storage.put(key, bytes).await,
             Self::Azure(storage) => storage.put(key, bytes).await,
             // A cached backend is attached only to `analyze`/`list`/`prune`, none of
-            // which *store* objects; the object-writing commands (`run`/`backfill`/
+            // which *store* objects; the object-writing commands (`collect`/`backfill`/
             // `bless`) always build an uncached backend, so no `put` reaches the cache
             // decorator through the facade. (`prune` does mutate the cloud — it deletes
             // objects and flushes the invalidation marker — but it drives `delete`, never

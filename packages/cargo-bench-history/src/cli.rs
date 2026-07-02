@@ -13,8 +13,8 @@ use clap::{ArgGroup, Args, Parser, Subcommand as ClapSubcommand, ValueEnum};
 
 use crate::model::BenchmarkIdPrefix;
 use crate::{
-    AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, Command, InstallOptions,
-    ListOptions, ListSubject, LocalStorageSelection, PruneOptions, RunOptions, UnblessOptions,
+    AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
+    InstallOptions, ListOptions, ListSubject, LocalStorageSelection, PruneOptions, UnblessOptions,
 };
 
 const HEADING_ENV: &str = "Environment and execution";
@@ -90,10 +90,10 @@ impl Cli {
             Subcommand::Analyze(command) => Command::Analyze(command.into_options()),
             Subcommand::Backfill(command) => Command::Backfill(command.into_options()),
             Subcommand::Bless(command) => Command::Bless(command.into_options()),
+            Subcommand::Collect(command) => Command::Collect(command.into_options()),
             Subcommand::Install(command) => Command::Install(command.into_options()),
             Subcommand::List(command) => Command::List(command.into_options()),
             Subcommand::Prune(command) => Command::Prune(command.into_options()),
-            Subcommand::Run(command) => Command::Run(command.into_options()),
             Subcommand::Unbless(command) => Command::Unbless(command.into_options()),
         }
     }
@@ -117,18 +117,18 @@ impl Cli {
 enum Subcommand {
     /// Analyze stored history for notable patterns.
     Analyze(AnalyzeCommand),
-    /// Replay `run` across a range of historical commits.
+    /// Replay `collect` across a range of historical commits.
     Backfill(BackfillCommand),
     /// Accept a benchmark's current level on the base branch as intentional.
     Bless(BlessCommand),
+    /// Run the workspace benchmarks (`cargo bench`) and store the results.
+    Collect(CollectCommand),
     /// Generate a starter configuration file.
     Install(InstallCommand),
     /// List the data set a matching `analyze` would include, without analyzing it.
     List(ListCommand),
     /// Delete stored runs (and their blessing sidecars) from the resolved data set.
     Prune(PruneCommand),
-    /// Run the workspace benchmarks (`cargo bench`) and store the results.
-    Run(RunCommand),
     /// Remove blessings recorded at the current commit.
     Unbless(UnblessCommand),
 }
@@ -311,7 +311,7 @@ struct OutputArgs {
 
 /// Run the workspace benchmarks (`cargo bench`) and store the results.
 #[derive(Args, Debug)]
-struct RunCommand {
+struct CollectCommand {
     #[command(flatten)]
     env: EnvArgs,
 
@@ -373,9 +373,9 @@ struct RunCommand {
     passthrough: Vec<String>,
 }
 
-impl RunCommand {
-    fn into_options(self) -> RunOptions {
-        RunOptions {
+impl CollectCommand {
+    fn into_options(self) -> CollectOptions {
+        CollectOptions {
             config_path: self.env.config,
             repo: self.env.repo,
             local: local_selection(self.env.local),
@@ -689,7 +689,7 @@ impl PruneCommand {
     }
 }
 
-/// Replay `run` across a range of historical commits.
+/// Replay `collect` across a range of historical commits.
 #[derive(Args, Debug)]
 struct BackfillCommand {
     /// Oldest commit of the range to backfill, inclusive; a SHA, tag, or ref such
@@ -886,8 +886,8 @@ mod tests {
 
     #[test]
     fn cli_is_debug_formatted() {
-        let cli = Cli::from_args(&["cargo-bench-history"], &["run"]).unwrap();
-        assert!(format!("{cli:?}").contains("Run"), "{cli:?}");
+        let cli = Cli::from_args(&["cargo-bench-history"], &["collect"]).unwrap();
+        assert!(format!("{cli:?}").contains("Collect"), "{cli:?}");
     }
 
     #[test]
@@ -895,16 +895,16 @@ mod tests {
         let help = Cli::help("cargo-bench-history");
         assert!(!help.is_empty(), "help text is non-empty");
         for command in [
-            "analyze", "backfill", "bless", "install", "list", "prune", "run", "unbless",
+            "analyze", "backfill", "bless", "collect", "install", "list", "prune", "unbless",
         ] {
             assert!(help.contains(command), "help lists {command}: {help}");
         }
     }
 
     #[test]
-    fn run_collects_scope_and_passthrough() {
+    fn collect_parses_scope_and_passthrough() {
         let command = parse(&[
-            "run",
+            "collect",
             "--package",
             "nm",
             "-p",
@@ -914,8 +914,8 @@ mod tests {
             "--",
             "--noplot",
         ]);
-        let Command::Run(options) = command else {
-            panic!("expected run command");
+        let Command::Collect(options) = command else {
+            panic!("expected collect command");
         };
         assert_eq!(
             options.packages,
@@ -927,10 +927,10 @@ mod tests {
     }
 
     #[test]
-    fn run_workspace_and_package_conflict() {
+    fn collect_workspace_and_package_conflict() {
         let error = Cli::from_args(
             &["cargo-bench-history"],
-            &["run", "--workspace", "-p", "nm"],
+            &["collect", "--workspace", "-p", "nm"],
         )
         .unwrap_err();
         assert_eq!(error.status, Err(()));
@@ -942,10 +942,10 @@ mod tests {
     }
 
     #[test]
-    fn run_collects_exclude_filters() {
-        let command = parse(&["run", "--exclude", "nm", "--exclude", "many_cpus"]);
-        let Command::Run(options) = command else {
-            panic!("expected run command");
+    fn collect_parses_exclude_filters() {
+        let command = parse(&["collect", "--exclude", "nm", "--exclude", "many_cpus"]);
+        let Command::Collect(options) = command else {
+            panic!("expected collect command");
         };
         assert!(
             options.packages.is_empty(),
@@ -958,17 +958,17 @@ mod tests {
     }
 
     #[test]
-    fn run_collects_feature_selection() {
+    fn collect_parses_feature_selection() {
         let command = parse(&[
-            "run",
+            "collect",
             "--features",
             "foo,bar",
             "--features",
             "baz",
             "--no-default-features",
         ]);
-        let Command::Run(options) = command else {
-            panic!("expected run command");
+        let Command::Collect(options) = command else {
+            panic!("expected collect command");
         };
         assert_eq!(
             options.features,
@@ -979,20 +979,20 @@ mod tests {
     }
 
     #[test]
-    fn run_collects_all_features() {
-        let command = parse(&["run", "--all-features"]);
-        let Command::Run(options) = command else {
-            panic!("expected run command");
+    fn collect_parses_all_features() {
+        let command = parse(&["collect", "--all-features"]);
+        let Command::Collect(options) = command else {
+            panic!("expected collect command");
         };
         assert!(options.all_features);
         assert!(options.features.is_empty());
     }
 
     #[test]
-    fn run_exclude_and_package_conflict() {
+    fn collect_exclude_and_package_conflict() {
         let error = Cli::from_args(
             &["cargo-bench-history"],
-            &["run", "--exclude", "nm", "-p", "many_cpus"],
+            &["collect", "--exclude", "nm", "-p", "many_cpus"],
         )
         .unwrap_err();
         assert_eq!(error.status, Err(()));
@@ -1073,29 +1073,29 @@ mod tests {
     }
 
     #[test]
-    fn run_parses_overwrite_switch() {
-        let command = parse(&["run", "--overwrite"]);
-        let Command::Run(options) = command else {
-            panic!("expected run command");
+    fn collect_parses_overwrite_switch() {
+        let command = parse(&["collect", "--overwrite"]);
+        let Command::Collect(options) = command else {
+            panic!("expected collect command");
         };
         assert!(options.overwrite);
     }
 
     #[test]
-    fn run_parses_skip_existing_switch() {
-        let command = parse(&["run", "--skip-existing"]);
-        let Command::Run(options) = command else {
-            panic!("expected run command");
+    fn collect_parses_skip_existing_switch() {
+        let command = parse(&["collect", "--skip-existing"]);
+        let Command::Collect(options) = command else {
+            panic!("expected collect command");
         };
         assert!(options.skip_existing);
         assert!(!options.overwrite);
     }
 
     #[test]
-    fn run_rejects_skip_existing_with_overwrite() {
+    fn collect_rejects_skip_existing_with_overwrite() {
         let parsed = Cli::from_args(
             &["cargo-bench-history"],
-            &["run", "--overwrite", "--skip-existing"],
+            &["collect", "--overwrite", "--skip-existing"],
         );
         assert!(
             parsed.is_err(),
@@ -1104,26 +1104,26 @@ mod tests {
     }
 
     #[test]
-    fn run_parses_repo() {
-        let command = parse(&["run", "--repo", "/work/folo"]);
-        let Command::Run(options) = command else {
-            panic!("expected run command");
+    fn collect_parses_repo() {
+        let command = parse(&["collect", "--repo", "/work/folo"]);
+        let Command::Collect(options) = command else {
+            panic!("expected collect command");
         };
         assert_eq!(options.repo, Some(PathBuf::from("/work/folo")));
     }
 
     #[test]
     fn local_defaults_to_none() {
-        let Command::Run(options) = parse(&["run"]) else {
-            panic!("expected run command");
+        let Command::Collect(options) = parse(&["collect"]) else {
+            panic!("expected collect command");
         };
         assert_eq!(options.local, None);
     }
 
     #[test]
     fn local_with_value_selects_an_explicit_path() {
-        let Command::Run(options) = parse(&["run", "--local=./store"]) else {
-            panic!("expected run command");
+        let Command::Collect(options) = parse(&["collect", "--local=./store"]) else {
+            panic!("expected collect command");
         };
         assert_eq!(
             options.local,
@@ -1242,23 +1242,23 @@ mod tests {
     }
 
     #[test]
-    fn run_parses_machine_key_override() {
-        let command = parse(&["run", "--machine-key", "ci-pool-a"]);
-        let Command::Run(options) = command else {
-            panic!("expected run command");
+    fn collect_parses_machine_key_override() {
+        let command = parse(&["collect", "--machine-key", "ci-pool-a"]);
+        let Command::Collect(options) = command else {
+            panic!("expected collect command");
         };
         assert_eq!(options.machine_key.as_deref(), Some("ci-pool-a"));
     }
 
     #[test]
-    fn run_parses_verbose_switch() {
-        let Command::Run(options) = parse(&["run", "--verbose"]) else {
-            panic!("expected run command");
+    fn collect_parses_verbose_switch() {
+        let Command::Collect(options) = parse(&["collect", "--verbose"]) else {
+            panic!("expected collect command");
         };
         assert!(options.verbose);
 
-        let Command::Run(options) = parse(&["run"]) else {
-            panic!("expected run command");
+        let Command::Collect(options) = parse(&["collect"]) else {
+            panic!("expected collect command");
         };
         assert!(!options.verbose);
     }
@@ -1699,15 +1699,15 @@ mod tests {
     }
 
     #[test]
-    fn run_rejects_unknown_flag() {
-        Cli::from_args(&["cargo-bench-history"], &["run", "--frobnicate"]).unwrap_err();
+    fn collect_rejects_unknown_flag() {
+        Cli::from_args(&["cargo-bench-history"], &["collect", "--frobnicate"]).unwrap_err();
     }
 
     #[test]
     fn help_request_lists_subcommands() {
         let early_exit = Cli::from_args(&["cargo-bench-history"], &["--help"]).unwrap_err();
         assert!(
-            early_exit.output.contains("run"),
+            early_exit.output.contains("collect"),
             "help should list subcommands: {}",
             early_exit.output
         );
@@ -1728,14 +1728,14 @@ mod tests {
             "help should describe `analyze`: {help}"
         );
         assert!(
-            help.contains("Replay `run` across a range"),
+            help.contains("Replay `collect` across a range"),
             "help should describe `backfill`: {help}"
         );
 
         // The commands appear in alphabetical order. Each marker is a distinct,
         // non-overlapping substring, so the offsets are strictly increasing
         // exactly when they are sorted.
-        let order = ["analyze", "backfill", "install", "list", "prune", "run"];
+        let order = ["analyze", "backfill", "collect", "install", "list", "prune"];
         let positions: Vec<usize> = order
             .iter()
             .map(|name| help.find(&format!("\n  {name} ")).unwrap())

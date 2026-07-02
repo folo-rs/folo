@@ -130,7 +130,7 @@ const FIXTURE_CONFIG: &str = "[project]\nid = \"e2e\"\n";
     mutants,
     ignore = "Heavy real `cargo bench` build (compiles Criterion per run); the run/harvest pipeline it covers is also driven by the mock-engine integration tests and the resolve_target_root unit test, so it carries no unique mutation signal"
 )]
-async fn run_against_real_criterion_bench_stores_wall_time() {
+async fn collect_against_real_criterion_bench_stores_wall_time() {
     let fixture = tempfile::tempdir().unwrap();
     let root = fixture.path();
 
@@ -152,7 +152,7 @@ async fn run_against_real_criterion_bench_stores_wall_time() {
     // assertions and before the tempdir is dropped (required on Windows).
     let outcome = {
         let _cwd = CwdGuard::enter(root);
-        run(&command_from(&["run", "--local=./store"]))
+        run(&command_from(&["collect", "--local=./store"]))
             .await
             .unwrap()
     };

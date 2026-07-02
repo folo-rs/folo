@@ -1,4 +1,4 @@
-//! The `run` command: execute the configured engines and store the results.
+//! The `collect` command: execute the configured engines and store the results.
 //!
 //! Orchestration is generic over a set of small async ports (process runner,
 //! environment probe, benchmark-output source, storage) plus an injected
@@ -31,7 +31,7 @@ use crate::wiring::{
     STORAGE_ENV_VAR, resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo,
     storage_env,
 };
-use crate::{LocalStorageSelection, RunError, RunOptions, RunOutcome, finish_with_flush};
+use crate::{CollectOptions, LocalStorageSelection, RunError, RunOutcome, finish_with_flush};
 
 /// The program and base arguments the production tool runs to benchmark the
 /// workspace. The first-class scope flags (`--workspace`/`--package`/`--bench`)
@@ -42,7 +42,7 @@ const DEFAULT_BENCH_COMMAND: [&str; 2] = ["cargo", "bench"];
 const BENCH_COMMAND_LABEL: &str = "cargo bench";
 
 /// The injected collaborators an orchestrated run operates against.
-pub(crate) struct RunDeps<'a, R, P, O, S> {
+pub(crate) struct CollectDeps<'a, R, P, O, S> {
     /// Launches the benchmark command.
     pub(crate) runner: &'a R,
     /// Probes git and toolchain facts.
@@ -64,7 +64,7 @@ pub(crate) struct RunDeps<'a, R, P, O, S> {
     /// injected into the benchmark command's environment as `CARGO_TARGET_DIR` so
     /// the output always lands where the harvest looks for it.
     pub(crate) target_root: &'a Path,
-    /// The benchmark command (program plus base arguments) run once per `run`.
+    /// The benchmark command (program plus base arguments) run once per `collect`.
     /// Production uses `cargo bench`; the scope flags and passthrough are appended
     /// to it. Tests inject a mock program in its place.
     pub(crate) bench_command: &'a [String],
@@ -72,7 +72,7 @@ pub(crate) struct RunDeps<'a, R, P, O, S> {
     pub(crate) reporter: &'a dyn Reporter,
 }
 
-/// The real `run`: wire the production adapters and orchestrate.
+/// The real `collect`: wire the production adapters and orchestrate.
 ///
 /// `target_root` overrides the cargo target directory the harvest scans.
 /// Production passes `None`, resolving the root from `CARGO_TARGET_DIR` (or the
@@ -81,7 +81,7 @@ pub(crate) struct RunDeps<'a, R, P, O, S> {
 /// `cargo bench`. Tests pass explicit values so the flow is hermetic without
 /// mutating the process environment.
 pub(crate) async fn execute(
-    options: &RunOptions,
+    options: &CollectOptions,
     workspace_dir: &Path,
     target_root: Option<PathBuf>,
     bench_command: Option<Vec<String>>,
@@ -138,7 +138,7 @@ pub(crate) async fn execute(
     let env = |name: &str| std::env::var(name).ok();
     let bench_command = bench_command.unwrap_or_else(default_bench_command);
 
-    let deps = RunDeps {
+    let deps = CollectDeps {
         runner: &runner,
         probe: &probe,
         output: &output,
@@ -152,7 +152,7 @@ pub(crate) async fn execute(
         reporter: &reporter,
     };
 
-    let result = execute_run(options, &deps).await;
+    let result = execute_collect(options, &deps).await;
     // Flush the cache-invalidation marker after the run: an `--overwrite` that
     // replaced a stored object armed it, and bumping the marker is what invalidates
     // *other* machines' read-through caches. An append-only run never arms it, so
@@ -236,7 +236,7 @@ struct EngineSummary {
 }
 
 /// Aggregate outcome of running every selected engine in one run.
-pub(crate) struct RunSummary {
+pub(crate) struct CollectSummary {
     /// Number of result sets stored.
     pub(crate) stored: usize,
     /// Number of benchmark cases harvested across all engines.
@@ -246,9 +246,9 @@ pub(crate) struct RunSummary {
 }
 
 /// Orchestrates a run against injected collaborators.
-pub(crate) async fn execute_run<R, P, O, S>(
-    options: &RunOptions,
-    deps: &RunDeps<'_, R, P, O, S>,
+pub(crate) async fn execute_collect<R, P, O, S>(
+    options: &CollectOptions,
+    deps: &CollectDeps<'_, R, P, O, S>,
 ) -> Result<RunOutcome, RunError>
 where
     R: BenchRunner,
@@ -268,7 +268,7 @@ where
 
 /// Runs the benchmark command once and harvests every engine's output.
 ///
-/// This is the storage-aware core shared by the `run` command and `backfill`:
+/// This is the storage-aware core shared by the `collect` command and `backfill`:
 /// the former wraps the summary in a human-readable message, the latter maps it
 /// to a per-commit outcome. The benchmark command (`cargo bench` in production)
 /// is run a single time with the union of every engine's injected environment;
@@ -276,9 +276,9 @@ where
 /// that produced no output (for example Callgrind off Linux, where its benches
 /// compile to no-ops) simply contributes nothing.
 pub(crate) async fn run_engines<R, P, O, S>(
-    options: &RunOptions,
-    deps: &RunDeps<'_, R, P, O, S>,
-) -> Result<RunSummary, RunError>
+    options: &CollectOptions,
+    deps: &CollectDeps<'_, R, P, O, S>,
+) -> Result<CollectSummary, RunError>
 where
     R: BenchRunner,
     P: EnvironmentProbe,
@@ -347,7 +347,7 @@ where
         }
     }
 
-    Ok(RunSummary {
+    Ok(CollectSummary {
         stored,
         harvested,
         labels,
@@ -369,7 +369,7 @@ where
 /// therefore exercise disjoint benchmark cases.
 fn build_bench_argv(
     bench_command: &[String],
-    options: &RunOptions,
+    options: &CollectOptions,
 ) -> Result<Vec<String>, RunError> {
     let Some((program, _)) = bench_command.split_first() else {
         return Err(RunError::Command {
@@ -420,8 +420,8 @@ fn build_bench_argv(
 
 /// Harvests one engine's output and (unless suppressed) stores the result set.
 async fn harvest_engine<R, P, O, S>(
-    options: &RunOptions,
-    deps: &RunDeps<'_, R, P, O, S>,
+    options: &CollectOptions,
+    deps: &CollectDeps<'_, R, P, O, S>,
     shared: &SharedContext,
     engine: Engine,
     run_start: SystemTime,
@@ -1208,7 +1208,7 @@ mod tests {
     }
 
     fn drive(
-        options: &RunOptions,
+        options: &CollectOptions,
         runner: &FakeRunner,
         probe: &FakeProbe,
         output: &FakeOutput,
@@ -1219,7 +1219,7 @@ mod tests {
 
     fn drive_at(
         now_unix: u64,
-        options: &RunOptions,
+        options: &CollectOptions,
         runner: &FakeRunner,
         probe: &FakeProbe,
         output: &FakeOutput,
@@ -1231,7 +1231,7 @@ mod tests {
 
     fn drive_at_with(
         now_unix: u64,
-        options: &RunOptions,
+        options: &CollectOptions,
         runner: &FakeRunner,
         probe: &FakeProbe,
         output: &FakeOutput,
@@ -1244,7 +1244,7 @@ mod tests {
         let clock = Clock::new_frozen_at(now);
         let env = |_name: &str| None::<String>;
         let bench_command = mock_bench_command();
-        let deps = RunDeps {
+        let deps = CollectDeps {
             runner,
             probe,
             output,
@@ -1257,11 +1257,11 @@ mod tests {
             bench_command: &bench_command,
             reporter,
         };
-        block_on(execute_run(options, &deps))
+        block_on(execute_collect(options, &deps))
     }
 
     #[test]
-    fn verbose_run_notes_the_command_and_stored_key() {
+    fn verbose_collect_notes_the_command_and_stored_key() {
         let runner = FakeRunner::succeeding();
         let probe = FakeProbe::new();
         let output = FakeOutput::with_two_callgrind_summaries();
@@ -1270,7 +1270,7 @@ mod tests {
 
         drive_at_with(
             FROZEN_UNIX,
-            &RunOptions::default(),
+            &CollectOptions::default(),
             &runner,
             &probe,
             &output,
@@ -1297,7 +1297,7 @@ mod tests {
     }
 
     #[test]
-    fn verbose_run_notes_an_empty_harvest() {
+    fn verbose_collect_notes_an_empty_harvest() {
         let runner = FakeRunner::succeeding();
         let probe = FakeProbe::new();
         let output = FakeOutput::default();
@@ -1306,7 +1306,7 @@ mod tests {
 
         drive_at_with(
             FROZEN_UNIX,
-            &RunOptions::default(),
+            &CollectOptions::default(),
             &runner,
             &probe,
             &output,
@@ -1330,7 +1330,14 @@ mod tests {
         let output = FakeOutput::with_two_callgrind_summaries();
         let storage = MemoryStorage::new();
 
-        let outcome = drive(&RunOptions::default(), &runner, &probe, &output, &storage).unwrap();
+        let outcome = drive(
+            &CollectOptions::default(),
+            &runner,
+            &probe,
+            &output,
+            &storage,
+        )
+        .unwrap();
 
         let RunOutcome::Completed { message } = outcome else {
             panic!("expected completion");
@@ -1361,7 +1368,7 @@ mod tests {
     fn clean_re_run_of_the_same_commit_is_refused_as_a_duplicate() {
         let storage = MemoryStorage::new();
         drive(
-            &RunOptions::default(),
+            &CollectOptions::default(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1370,7 +1377,7 @@ mod tests {
         .unwrap();
 
         let error = drive(
-            &RunOptions::default(),
+            &CollectOptions::default(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1391,7 +1398,7 @@ mod tests {
         let storage = MemoryStorage::new();
         // A first clean run stores the canonical point.
         drive(
-            &RunOptions::default(),
+            &CollectOptions::default(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1407,9 +1414,9 @@ mod tests {
         // A re-run of the same commit under --skip-existing succeeds without a
         // duplicate error and leaves the stored object byte-for-byte unchanged
         // (so the cache-invalidation marker is never armed).
-        let skip = RunOptions {
+        let skip = CollectOptions {
             skip_existing: true,
-            ..RunOptions::default()
+            ..CollectOptions::default()
         };
         drive(
             &skip,
@@ -1437,7 +1444,7 @@ mod tests {
     fn overwrite_replaces_a_clean_result_in_place() {
         let storage = MemoryStorage::new();
         drive(
-            &RunOptions::default(),
+            &CollectOptions::default(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             // First run harvests two records.
@@ -1446,9 +1453,9 @@ mod tests {
         )
         .unwrap();
 
-        let overwrite = RunOptions {
+        let overwrite = CollectOptions {
             overwrite: true,
-            ..RunOptions::default()
+            ..CollectOptions::default()
         };
         drive(
             &overwrite,
@@ -1483,7 +1490,7 @@ mod tests {
         let storage = MemoryStorage::new();
         // A first clean run establishes the commit directory.
         drive(
-            &RunOptions::default(),
+            &CollectOptions::default(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1504,9 +1511,9 @@ mod tests {
 
         // Overwriting the clean run discards the accepted data point, so its
         // blessing sidecar is removed.
-        let overwrite = RunOptions {
+        let overwrite = CollectOptions {
             overwrite: true,
-            ..RunOptions::default()
+            ..CollectOptions::default()
         };
         drive(
             &overwrite,
@@ -1532,7 +1539,7 @@ mod tests {
     fn dirty_run_is_keyed_by_observation_time() {
         let storage = MemoryStorage::new();
         drive(
-            &RunOptions::default(),
+            &CollectOptions::default(),
             &FakeRunner::succeeding(),
             &FakeProbe::dirty(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1567,9 +1574,9 @@ mod tests {
         );
         block_on(storage.put(&bless_key, record.to_json().unwrap().as_bytes())).unwrap();
 
-        let overwrite = RunOptions {
+        let overwrite = CollectOptions {
             overwrite: true,
-            ..RunOptions::default()
+            ..CollectOptions::default()
         };
         drive(
             &overwrite,
@@ -1597,7 +1604,7 @@ mod tests {
         let storage = MemoryStorage::new();
         drive_at(
             FROZEN_UNIX,
-            &RunOptions::default(),
+            &CollectOptions::default(),
             &FakeRunner::succeeding(),
             &FakeProbe::dirty(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1606,7 +1613,7 @@ mod tests {
         .unwrap();
         drive_at(
             FROZEN_UNIX + 1,
-            &RunOptions::default(),
+            &CollectOptions::default(),
             &FakeRunner::succeeding(),
             &FakeProbe::dirty(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1625,7 +1632,7 @@ mod tests {
         let storage = MemoryStorage::new();
         drive_at(
             FROZEN_UNIX,
-            &RunOptions::default(),
+            &CollectOptions::default(),
             &FakeRunner::succeeding(),
             &FakeProbe::dirty(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1635,7 +1642,7 @@ mod tests {
 
         let error = drive_at(
             FROZEN_UNIX,
-            &RunOptions::default(),
+            &CollectOptions::default(),
             &FakeRunner::succeeding(),
             &FakeProbe::dirty(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1647,9 +1654,9 @@ mod tests {
         assert_eq!(storage.keys().len(), 1);
 
         // With --overwrite the clash is resolved by replacing the object in place.
-        let overwrite = RunOptions {
+        let overwrite = CollectOptions {
             overwrite: true,
-            ..RunOptions::default()
+            ..CollectOptions::default()
         };
         drive_at(
             FROZEN_UNIX,
@@ -1665,9 +1672,9 @@ mod tests {
 
     #[test]
     fn no_store_harvests_without_writing() {
-        let options = RunOptions {
+        let options = CollectOptions {
             no_store: true,
-            ..RunOptions::default()
+            ..CollectOptions::default()
         };
         let storage = MemoryStorage::new();
 
@@ -1695,7 +1702,7 @@ mod tests {
         // otherwise inflate `analyze`'s run count.
         let storage = MemoryStorage::new();
         let outcome = drive(
-            &RunOptions::default(),
+            &CollectOptions::default(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::default(),
@@ -1719,7 +1726,7 @@ mod tests {
         // skipped while Criterion is still stored.
         let storage = MemoryStorage::new();
         let outcome = drive(
-            &RunOptions::default(),
+            &CollectOptions::default(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_criterion_case(),
@@ -1744,7 +1751,7 @@ mod tests {
     fn non_zero_engine_exit_is_an_error() {
         let storage = MemoryStorage::new();
         let error = drive(
-            &RunOptions::default(),
+            &CollectOptions::default(),
             &FakeRunner::failing(101),
             &FakeProbe::new(),
             &FakeOutput::with_two_callgrind_summaries(),
@@ -1766,7 +1773,7 @@ mod tests {
     fn both_engines_run_stores_a_set_per_engine() {
         let storage = MemoryStorage::new();
         let outcome = drive(
-            &RunOptions::default(),
+            &CollectOptions::default(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_callgrind_and_criterion(),
@@ -1799,7 +1806,7 @@ mod tests {
     fn criterion_output_is_stored() {
         let storage = MemoryStorage::new();
         let outcome = drive(
-            &RunOptions::default(),
+            &CollectOptions::default(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_criterion_case(),
@@ -1826,9 +1833,9 @@ mod tests {
     #[test]
     fn criterion_partition_uses_the_machine_key_override() {
         let storage = MemoryStorage::new();
-        let options = RunOptions {
+        let options = CollectOptions {
             machine_key: Some("ci-pool-a".to_owned()),
-            ..RunOptions::default()
+            ..CollectOptions::default()
         };
         drive(
             &options,
@@ -1851,7 +1858,7 @@ mod tests {
     fn malformed_criterion_case_is_a_parse_error() {
         let storage = MemoryStorage::new();
         let error = drive(
-            &RunOptions::default(),
+            &CollectOptions::default(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_malformed_criterion_case(),
@@ -1874,7 +1881,7 @@ mod tests {
     fn malformed_alloc_tracker_operation_is_a_parse_error() {
         let storage = MemoryStorage::new();
         let error = drive(
-            &RunOptions::default(),
+            &CollectOptions::default(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_malformed_alloc_tracker_operation(),
@@ -1896,7 +1903,7 @@ mod tests {
     fn malformed_all_the_time_operation_is_a_parse_error() {
         let storage = MemoryStorage::new();
         let error = drive(
-            &RunOptions::default(),
+            &CollectOptions::default(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_malformed_all_the_time_operation(),
@@ -1917,7 +1924,7 @@ mod tests {
     fn alloc_tracker_output_is_stored_in_a_synthetic_partition() {
         let storage = MemoryStorage::new();
         let outcome = drive(
-            &RunOptions::default(),
+            &CollectOptions::default(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_alloc_tracker_operation(),
@@ -1953,9 +1960,9 @@ mod tests {
     #[test]
     fn all_the_time_output_is_partitioned_by_machine_key() {
         let storage = MemoryStorage::new();
-        let options = RunOptions {
+        let options = CollectOptions {
             machine_key: Some("ci-pool-a".to_owned()),
-            ..RunOptions::default()
+            ..CollectOptions::default()
         };
         let outcome = drive(
             &options,
@@ -1993,9 +2000,9 @@ mod tests {
         let runner = FakeRunner::succeeding();
         // The CLI strips the leading `--` separator, so at runtime the passthrough
         // vector holds only the forwarded flags.
-        let options = RunOptions {
+        let options = CollectOptions {
             passthrough: vec!["--quiet".to_owned()],
-            ..RunOptions::default()
+            ..CollectOptions::default()
         };
 
         drive(
@@ -2019,9 +2026,9 @@ mod tests {
     #[test]
     fn exclude_arguments_reach_the_runner_verbatim() {
         let runner = FakeRunner::succeeding();
-        let options = RunOptions {
+        let options = CollectOptions {
             excludes: vec!["nm".to_owned(), "many_cpus".to_owned()],
-            ..RunOptions::default()
+            ..CollectOptions::default()
         };
 
         drive(
@@ -2051,10 +2058,10 @@ mod tests {
     #[test]
     fn feature_selection_reaches_the_runner_verbatim() {
         let runner = FakeRunner::succeeding();
-        let options = RunOptions {
+        let options = CollectOptions {
             features: vec!["foo".to_owned()],
             all_features: true,
-            ..RunOptions::default()
+            ..CollectOptions::default()
         };
 
         drive(
@@ -2079,7 +2086,7 @@ mod tests {
         let runner = FakeRunner::succeeding();
 
         drive(
-            &RunOptions::default(),
+            &CollectOptions::default(),
             &runner,
             &FakeProbe::new(),
             &FakeOutput::default(),
@@ -2105,7 +2112,7 @@ mod tests {
     fn malformed_summary_is_a_parse_error() {
         let storage = MemoryStorage::new();
         let error = drive(
-            &RunOptions::default(),
+            &CollectOptions::default(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_malformed_summary(),
@@ -2127,15 +2134,15 @@ mod tests {
 
     #[test]
     fn build_bench_argv_defaults_to_the_whole_workspace() {
-        let argv = build_bench_argv(&mock_bench_command(), &RunOptions::default()).unwrap();
+        let argv = build_bench_argv(&mock_bench_command(), &CollectOptions::default()).unwrap();
         assert_eq!(argv, ["mock", "--workspace"]);
     }
 
     #[test]
     fn build_bench_argv_translates_package_filters() {
-        let options = RunOptions {
+        let options = CollectOptions {
             packages: vec!["nm".to_owned(), "many_cpus".to_owned()],
-            ..RunOptions::default()
+            ..CollectOptions::default()
         };
         let argv = build_bench_argv(&mock_bench_command(), &options).unwrap();
         // Packages omit `--workspace` and each becomes a `--package` pair.
@@ -2144,9 +2151,9 @@ mod tests {
 
     #[test]
     fn build_bench_argv_translates_exclude_filters() {
-        let options = RunOptions {
+        let options = CollectOptions {
             excludes: vec!["nm".to_owned(), "many_cpus".to_owned()],
-            ..RunOptions::default()
+            ..CollectOptions::default()
         };
         let argv = build_bench_argv(&mock_bench_command(), &options).unwrap();
         // Excludes ride alongside the implicit `--workspace`, each an
@@ -2166,11 +2173,11 @@ mod tests {
 
     #[test]
     fn build_bench_argv_translates_feature_selection() {
-        let options = RunOptions {
+        let options = CollectOptions {
             packages: vec!["nm".to_owned()],
             features: vec!["foo".to_owned(), "bar baz".to_owned()],
             no_default_features: true,
-            ..RunOptions::default()
+            ..CollectOptions::default()
         };
         let argv = build_bench_argv(&mock_bench_command(), &options).unwrap();
         // Feature flags follow the scope flags, each `--features` value forwarded
@@ -2192,9 +2199,9 @@ mod tests {
 
     #[test]
     fn build_bench_argv_translates_all_features() {
-        let options = RunOptions {
+        let options = CollectOptions {
             all_features: true,
-            ..RunOptions::default()
+            ..CollectOptions::default()
         };
         let argv = build_bench_argv(&mock_bench_command(), &options).unwrap();
         assert_eq!(argv, ["mock", "--workspace", "--all-features"]);
@@ -2202,14 +2209,14 @@ mod tests {
 
     #[test]
     fn build_bench_argv_translates_bench_filters_and_passthrough_in_order() {
-        let options = RunOptions {
+        let options = CollectOptions {
             packages: vec!["nm".to_owned()],
             benches: vec!["nm_observe".to_owned()],
             // The CLI strips the leading `--` separator, so passthrough arrives
             // here without it; `build_bench_argv` re-inserts one before the
             // forwarded flags so cargo forwards them to the benchmark binary.
             passthrough: vec!["--noplot".to_owned()],
-            ..RunOptions::default()
+            ..CollectOptions::default()
         };
         let argv = build_bench_argv(&mock_bench_command(), &options).unwrap();
         assert_eq!(
@@ -2230,9 +2237,9 @@ mod tests {
     fn build_bench_argv_omits_the_separator_without_passthrough() {
         // No passthrough means no trailing `--`, so cargo is not handed a bare
         // separator with nothing after it.
-        let options = RunOptions {
+        let options = CollectOptions {
             packages: vec!["nm".to_owned()],
-            ..RunOptions::default()
+            ..CollectOptions::default()
         };
         let argv = build_bench_argv(&mock_bench_command(), &options).unwrap();
         assert_eq!(argv, ["mock", "--package", "nm"]);
@@ -2240,7 +2247,7 @@ mod tests {
 
     #[test]
     fn build_bench_argv_rejects_an_empty_command() {
-        let error = build_bench_argv(&[], &RunOptions::default()).unwrap_err();
+        let error = build_bench_argv(&[], &CollectOptions::default()).unwrap_err();
         match error {
             RunError::Command { engine, message } => {
                 assert_eq!(engine, "cargo bench");

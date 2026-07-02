@@ -22,7 +22,7 @@ synchronous and pushes async only to the IO edges, each modelled as a small
 
 ## Ports and fakes
 
-The orchestrator (`commands::run::execute_run`) is generic over its ports and is
+The orchestrator (`commands::collect::execute_collect`) is generic over its ports and is
 driven in tests by fakes, never by real IO:
 
 * `process::BenchRunner` — real `TokioBenchRunner` runs the benchmark command's
@@ -50,7 +50,7 @@ driven in tests by fakes, never by real IO:
   and faithfully images the cloud namespace under identical keys); fake `MemoryStorage`.
   `put` is **write-once** (an
   existing key yields `StorageError::AlreadyExists`); `put_overwrite` is the
-  replacing escape hatch used only by `run --overwrite` (and, later, `backfill
+  replacing escape hatch used only by `collect --overwrite` (and, later, `backfill
   --overwrite`). A `put_overwrite`/`delete` also arms the backend's
   cache-invalidation marker, flushed once per command. See [Storage
   selection](#storage-selection-local--cloud-config) for how a command picks a backend.
@@ -80,15 +80,15 @@ prune stay in selection lockstep automatically — see those sections):
 * **Output** (reporting commands) — `--no-text` / `--markdown <path>` /
   `--json <path>`. Text on stdout by default; the file toggles compose and one
   analysis pass renders every requested format. See `src/output.rs`.
-* **Benchmark scope** (`run`/`backfill`) — `--workspace`, `--package`/`-p`,
+* **Benchmark scope** (`collect`/`backfill`) — `--workspace`, `--package`/`-p`,
   `--exclude` (drops packages from a whole-workspace run; conflicts with
   `--package`), `--bench`.
-* **Feature selection** (`run`/`backfill`) — `--features`, `--all-features`,
+* **Feature selection** (`collect`/`backfill`) — `--features`, `--all-features`,
   `--no-default-features`, all forwarded verbatim to `cargo bench`.
 * **Discriminant selection** — `--engine`, `--target-triple`, `--machine-key`. On
   query commands each is **repeatable** (a `Vec`), accepts the widening keyword
   `all`, and auto-detects the current machine when omitted (§4.3). On create commands
-  (`run`/`backfill`) only `--machine-key` is accepted (single override); there is no
+  (`collect`/`backfill`) only `--machine-key` is accepted (single override); there is no
   `--engine`/`--target-triple` and no `all`.
 * **Commit selection** — `--context` (the target ref, formerly `--branch`),
   `--base`, `--since`, `--until`. `--since`/`--until` filter by **commit** timestamp.
@@ -106,7 +106,7 @@ the three).
 
 ## Verbose diagnostics (`report::Reporter`)
 
-`--verbose` is accepted by every command (`run`/`backfill`/`analyze`/`install`)
+`--verbose` is accepted by every command (`collect`/`backfill`/`analyze`/`install`)
 and threads a `report::Reporter` through the relevant pipeline so an
 otherwise-silent outcome can be diagnosed. The trait has `enabled()` (gate
 expensive per-file note formatting) and `note(&str)`. Production uses
@@ -115,7 +115,7 @@ expensive per-file note formatting) and `note(&str)`. Production uses
 stays clean. Tests use the `#[cfg(test)]` `RecordingReporter` (records notes in a
 `RefCell`, exposing `notes()`/`contains()`).
 `bench_output::collect` takes `&dyn Reporter` and notes each directory scanned and
-every file included/excluded/stale; `run` notes the argv, injected env, harvest
+every file included/excluded/stale; `collect` notes the argv, injected env, harvest
 boundary, and each stored key. `analyze_with` notes the listing prefix, facet
 filters, the resolved target/base/merge-base, the **auto-detected mode and the
 reason for it** (which topology/data inputs it considered and that the on-disk
@@ -148,7 +148,7 @@ time (`unknown variant 'local', expected 'azure'`) rather than silently ignored
 the way a wholly unknown section is. There is no backward-compat handling — remove
 `[storage.local]` and select local storage via `--local` instead.
 
-Every storage-backed command (`run`, `analyze`, `list`, `prune`, `backfill`,
+Every storage-backed command (`collect`, `analyze`, `list`, `prune`, `backfill`,
 `bless`/`unbless`) carries a `--local` flag (on the shared `EnvArgs` group) and
 resolves the backend with this precedence:
 
@@ -166,7 +166,7 @@ is the only edge that reads `CARGO_BENCH_HISTORY_STORAGE`, and the pure
 `wiring::resolve_local_path(selection, env)` turns the selection + injected value
 into an `Option<PathBuf>` (Miri-safe, unit-tested without touching the process
 env). `build_storage` then maps that optional path (override) or the config's
-cloud backend into a `StorageFacade`. `run --no-store` is the exception: it skips
+cloud backend into a `StorageFacade`. `collect --no-store` is the exception: it skips
 selection entirely, so it runs with no `--local` and no configured backend.
 
 **Read-through cache (`--cache`).** The read commands `analyze`/`list`/`prune`
@@ -189,7 +189,7 @@ several projects' objects at once, so invalidation is **per project**: a cloud-s
 arm and a per-command flush bumps; `synchronize_cache` (before a load) wipes that
 project's stale mirrored objects (`storage::project_objects_prefix`, `v1/<project>/objects/`),
 and `report_cache_tally` notes hits/misses after. Append-only
-`put` never arms it, so the nightly `run --skip-existing` collection never wipes the
+`put` never arms it, so the nightly `collect --skip-existing` collection never wipes the
 cache it feeds.
 
 **Testing note:** the `cbh_integration` harness (`Workspace`) auto-injects
@@ -222,7 +222,7 @@ test process's.
 
 The commit segment is the **full** SHA (`git.commit`, `unknown` when there is
 no repo), because the git-aware `analyze` reads `v1/.../<full_sha>/` directories
-resolved from `git rev-list`. The `run` store step picks clean vs dirty from
+resolved from `git rev-list`. The `collect` store step picks clean vs dirty from
 `git.dirty`. A run stores only an **observation** timestamp (wall-clock now,
 provenance only); the commit's position on the timeline is its committer date,
 read from git topology at analyze time, not stored on the object. There is no
@@ -235,7 +235,7 @@ Object **keys/filenames are unchanged** (still `…/clean.json` etc.), but the
 **body bytes are gzip**, not plaintext JSON. The storage layer compresses
 transparently at the `Storage` trait boundary: `put`/`put_overwrite` compress the
 caller's plaintext JSON and `get` inflates back to plaintext, so every caller
-(`run`, `backfill`, `analyze`, `prune`, `bless`) keeps handing and receiving plain
+(`collect`, `backfill`, `analyze`, `prune`, `bless`) keeps handing and receiving plain
 JSON and is unaffected. The single source of the encoding is
 `cargo_bench_history_core::codec` (`compress`/`decompress`, gzip level 6, pure-Rust
 `miniz_oxide`, deterministic, Miri-clean); both the storage backends and the stress
@@ -453,7 +453,7 @@ so history analysis re-baselines past it and stops re-flagging it. Blessings mat
   commit's `clean.json`. It records the blessed benchmark-id prefixes and the
   issuing commit (there is **no** `reason` field — it was removed to keep the model
   small). Sidecars are append-only and never mutate a `clean.json`; `unbless`
-  deletes the sidecar(s) at the context commit, and `run --overwrite` drops a
+  deletes the sidecar(s) at the context commit, and `collect --overwrite` drops a
   commit's stale sidecars when it rewrites that commit.
 * **`bless` rules (hard errors, no `--force`).** `analyze::bless::bless_with`
   requires: the context commit (HEAD by default, or `--context <ref>`) is on the
@@ -596,7 +596,7 @@ a 404 / missing-container fault to `NotFound`).
 
 ## The `backfill` command
 
-`commands::backfill` replays `run` across an inclusive commit range, bootstrapping
+`commands::backfill` replays `collect` across an inclusive commit range, bootstrapping
 history for commits that predate the tool. The range endpoints are **positional
 subjects** — `backfill <from> <to>` (oldest-first inclusive), not `--from`/`--to`
 flags. It is generic over two ports so the
@@ -611,7 +611,7 @@ loop logic runs against Miri-safe fakes:
   `FakeGitHistory` and records `added`/`resets`/`removed` via `RefCell`.
 * `CommitRunner` — `recorded_commits` (the set of commits already stored, probed
   once) plus `run` (runs and stores one already-checked-out commit). The real
-  `SystemCommitRunner` reuses the `run` pipeline (`run::run_engines`) against a
+  `SystemCommitRunner` reuses the `collect` pipeline (`collect::run_engines`) against a
   worktree-rooted `SystemProbe::in_dir` / `TokioBenchRunner::in_dir` /
   `FsBenchOutputSource` (`target_root = worktree/target`); the fake returns canned
   per-commit outcomes and a canned recorded set.
@@ -637,7 +637,7 @@ Key invariants:
   for already-benchmarked commits. The check is intentionally per-commit, not
   per-engine: a commit with a clean result for only some engines is still skipped —
   `--overwrite` clears the set so every commit is re-benchmarked and replaced.
-* **Failure model** (`map_run_result`, a pure classifier): a stored set →
+* **Failure model** (`map_collect_result`, a pure classifier): a stored set →
   `Stored{cases}`; an empty harvest → `SkippedEmpty`; `RunError::Duplicate` →
   `SkippedExisting` (a post-bench safety net for a commit not caught by the
   pre-check); `Engine`/`Command`/`Parse` → `BenchFailed` (a recoverable, per-commit
@@ -699,7 +699,7 @@ Four benchmark engines are supported, each behind a pure parser in `bench/`:
   mean-only output without an interval falls back to the
   Mann-Whitney/Mann-Kendall tests).
 
-There is no engine configuration. `run` and `backfill` invoke `cargo bench` once
+There is no engine configuration. `collect` and `backfill` invoke `cargo bench` once
 with the combined environment every supported engine needs
 (`injected_bench_env`, today `GUNGRAUN_SAVE_SUMMARY=pretty-json`; the other three
 engines auto-emit JSON on drop and need no env), then harvest every output tree
@@ -712,7 +712,7 @@ from the whole-workspace run; conflicts with `--package`), or `--bench NAME`
 (repeatable), and select cargo features with `--features` (repeatable),
 `--all-features`, or `--no-default-features` — these
 translate to the matching `cargo bench` arguments. `--engine` is **not** a
-`run`/`backfill` flag; it is an `analyze` facet over already-stored data.
+`collect`/`backfill` flag; it is an `analyze` facet over already-stored data.
 `Engine::ALL` enumerates the engines harvested per run.
 
 ## Machine key
@@ -747,7 +747,7 @@ never insert real-time delays in tests.
 
 ## Mock engine for end-to-end tests
 
-The integration tests drive `run` against the **real** process/filesystem/storage
+The integration tests drive `collect` against the **real** process/filesystem/storage
 adapters, so they need a real program to launch as the "engine". That program is
 the **`mock_bench_engine` package** (`packages/mock_bench_engine/src/main.rs`), a
 standalone `publish = false` crate kept deliberately out of the published
@@ -787,7 +787,7 @@ The integration harness injects the mock as the benchmark command via the
 `run_with_overrides` `bench_command` override (`[binary_path()] + self.bench`, set with
 `Workspace::with_bench`), so the program path and each fixture-describing argument are
 passed verbatim as distinct argv entries — no shell, no quoting, no config `command`.
-After the mock's own contiguous arguments, `run` appends the cargo scope flags
+After the mock's own contiguous arguments, `collect` appends the cargo scope flags
 (`--workspace`, `--exclude NAME`, `--package NAME`, `--bench NAME`), the
 feature-selection flags (`--features`, `--all-features`, `--no-default-features`), and
 any `--` passthrough, which the mock ignores
@@ -843,9 +843,9 @@ cannot be dropped while it is the current directory, so restore the original CWD
 `[project] id` in the test config rather than relying on the CWD basename.
 
 Each test also points the harvest at its own tempdir `target/` for the duration
-of `run`, and drives `run`/`backfill` against the mock benchmark program instead
+of `collect`, and drives `collect`/`backfill` against the mock benchmark program instead
 of `cargo bench`, by passing both an explicit target root and the benchmark
-command through the `run_with_overrides` entry. `run` injects that resolved root
+command through the `run_with_overrides` entry. `collect` injects that resolved root
 into the benchmark environment as `CARGO_TARGET_DIR`, so the engine writes exactly
 where the harvest scans. This matters under the coverage job, which runs `cargo
 llvm-cov nextest` and redirects every build and bin into one shared

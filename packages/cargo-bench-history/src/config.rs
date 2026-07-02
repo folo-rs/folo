@@ -18,8 +18,8 @@ const DEFAULT_TEMPLATE: &str = "\
 # machine-dependent and this file is shared (version-controlled). Select local
 # storage at run time instead, on any command:
 #
-#   cargo bench-history run --local=./bench-history
-#   cargo bench-history run --local            # path from CARGO_BENCH_HISTORY_STORAGE
+#   cargo bench-history collect --local=./bench-history
+#   cargo bench-history collect --local            # path from CARGO_BENCH_HISTORY_STORAGE
 
 # [project]
 # id = \"my-project\"            # defaults to the workspace directory name

@@ -8,7 +8,10 @@ fn binary_help_exits_success_on_stdout() {
 
     assert!(output.status.success(), "--help should exit 0");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("run"), "help should reach stdout: {stdout}");
+    assert!(
+        stdout.contains("collect"),
+        "help should reach stdout: {stdout}"
+    );
     assert!(
         output.stderr.is_empty(),
         "help should not write to stderr: {}",
@@ -22,7 +25,7 @@ fn binary_parse_error_exits_failure_on_stderr() {
     // An unknown flag is a parse error whose usage text still mentions `--help`;
     // the exit code must come from the parse status, not a substring match.
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_cargo-bench-history"))
-        .args(["run", "--frobnicate"])
+        .args(["collect", "--frobnicate"])
         .output()
         .unwrap();
 

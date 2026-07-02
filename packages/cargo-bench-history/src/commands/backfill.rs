@@ -1,18 +1,18 @@
-//! The `backfill` command: replay `run` across a range of historical commits.
+//! The `backfill` command: replay `collect` across a range of historical commits.
 //!
 //! Backfilling bootstraps a history for a repository that adopted the tool late,
 //! and supports ad-hoc "what did this look like N commits ago" investigations. It
 //! checks out each commit of a range in a dedicated git **worktree** (never the
-//! primary checkout) and runs the configured engines there exactly as the `run`
+//! primary checkout) and runs the configured engines there exactly as the `collect`
 //! command does. A backfilled run carries no commit timestamp of its own; its
 //! position on the timeline is where its commit sits in git history, resolved live
 //! at analyze time (see the `backfill` command in `DESIGN.md`).
 //!
-//! Like `run`, the orchestration is generic over small ports so the loop logic is
+//! Like `collect`, the orchestration is generic over small ports so the loop logic is
 //! exercised with in-memory fakes (Miri-safe): a [`BackfillGit`] port for the git
 //! topology and worktree lifecycle, and a [`CommitRunner`] port that runs and
 //! stores one commit. The production [`execute`] wires the real adapters; the real
-//! [`CommitRunner`] reuses the `run` pipeline ([`run_engines`]) against a
+//! [`CommitRunner`] reuses the `collect` pipeline ([`run_engines`]) against a
 //! worktree-rooted probe, engine runner, and output source.
 //!
 //! Before any commit is benchmarked, the commits that already have a stored
@@ -43,9 +43,9 @@ use crate::text::count_noun;
 use crate::wiring::{
     resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
 };
-use crate::{BackfillOptions, RunError, RunOptions, RunOutcome, finish_with_flush};
+use crate::{BackfillOptions, CollectOptions, RunError, RunOutcome, finish_with_flush};
 
-use super::run::{RunDeps, RunSummary, default_bench_command, run_engines};
+use super::collect::{CollectDeps, CollectSummary, default_bench_command, run_engines};
 
 /// Read access to a repository's commit topology plus the worktree lifecycle a
 /// backfill needs to check out each commit in isolation.
@@ -352,12 +352,12 @@ fn worktree_path() -> PathBuf {
     ))
 }
 
-/// Maps a per-commit `run` result to a [`CommitOutcome`].
+/// Maps a per-commit `collect` result to a [`CommitOutcome`].
 ///
 /// A stored set (or several) is success; a duplicate is a resumable skip; an
 /// empty harvest is a non-fatal skip; a build/bench failure is recoverable;
 /// everything else (storage, configuration, I/O) is infrastructure and aborts.
-fn map_run_result(result: Result<RunSummary, RunError>) -> Result<CommitOutcome, RunError> {
+fn map_collect_result(result: Result<CollectSummary, RunError>) -> Result<CommitOutcome, RunError> {
     match result {
         Ok(summary) if summary.stored > 0 => Ok(CommitOutcome::Stored {
             cases: summary.harvested,
@@ -487,7 +487,7 @@ impl BackfillGit for SystemBackfillGit {
     }
 }
 
-/// The real [`CommitRunner`], wiring the `run` pipeline against a worktree.
+/// The real [`CommitRunner`], wiring the `collect` pipeline against a worktree.
 struct SystemCommitRunner<'a, S> {
     /// Resolved project identity for the storage partition.
     project_id: &'a str,
@@ -516,7 +516,7 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
             .collect())
     }
 
-    #[cfg_attr(test, mutants::skip)] // Wires real adapters; the result mapping is tested via `map_run_result`.
+    #[cfg_attr(test, mutants::skip)] // Wires real adapters; the result mapping is tested via `map_collect_result`.
     async fn run(&self, worktree: &Path, _commit: &str) -> Result<CommitOutcome, RunError> {
         let probe = SystemProbe::in_dir(worktree);
         let runner = TokioBenchRunner::in_dir(worktree);
@@ -528,7 +528,7 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
 
         // A backfilled run is always clean (the worktree is a pristine checkout)
         // and takes its timeline position from the commit's committer date.
-        let run_options = RunOptions {
+        let collect_options = CollectOptions {
             config_path: None,
             repo: None,
             local: None,
@@ -545,7 +545,7 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
             passthrough: self.options.passthrough.clone(),
             verbose: self.options.verbose,
         };
-        let deps = RunDeps {
+        let deps = CollectDeps {
             runner: &runner,
             probe: &probe,
             output: &output,
@@ -559,7 +559,7 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
             reporter: &reporter,
         };
 
-        map_run_result(run_engines(&run_options, &deps).await)
+        map_collect_result(run_engines(&collect_options, &deps).await)
     }
 }
 
@@ -1160,8 +1160,8 @@ mod tests {
     }
 
     #[test]
-    fn map_run_result_classifies_each_run_outcome() {
-        let stored = map_run_result(Ok(RunSummary {
+    fn map_collect_result_classifies_each_run_outcome() {
+        let stored = map_collect_result(Ok(CollectSummary {
             stored: 1,
             harvested: 7,
             labels: Vec::new(),
@@ -1169,7 +1169,7 @@ mod tests {
         .unwrap();
         assert_eq!(stored, CommitOutcome::Stored { cases: 7 });
 
-        let empty = map_run_result(Ok(RunSummary {
+        let empty = map_collect_result(Ok(CollectSummary {
             stored: 0,
             harvested: 0,
             labels: Vec::new(),
@@ -1177,13 +1177,13 @@ mod tests {
         .unwrap();
         assert_eq!(empty, CommitOutcome::SkippedEmpty);
 
-        let duplicate = map_run_result(Err(RunError::Duplicate {
+        let duplicate = map_collect_result(Err(RunError::Duplicate {
             key: "v1/p/objects/callgrind/t/synthetic/abc/clean.json".to_owned(),
         }))
         .unwrap();
         assert_eq!(duplicate, CommitOutcome::SkippedExisting);
 
-        let failed = map_run_result(Err(RunError::Engine {
+        let failed = map_collect_result(Err(RunError::Engine {
             engine: "callgrind".to_owned(),
             code: Some(101),
         }))
@@ -1193,7 +1193,7 @@ mod tests {
         };
         assert!(reason.contains("101"), "{reason}");
 
-        let infra = map_run_result(Err(RunError::Storage(StorageError::NotFound {
+        let infra = map_collect_result(Err(RunError::Storage(StorageError::NotFound {
             key: "k".to_owned(),
         })));
         assert!(matches!(infra, Err(RunError::Storage(_))), "{infra:?}");

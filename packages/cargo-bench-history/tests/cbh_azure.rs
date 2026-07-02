@@ -557,10 +557,10 @@ impl AzureWorkspace {
 }
 
 /// Scenario: a single `run` stores one harvested result set.
-async fn scenario_run_stores(workspace: AzureWorkspace) {
+async fn scenario_collect_stores(workspace: AzureWorkspace) {
     let workspace = workspace.with_bench(&["--summary", "grp=single"]);
 
-    let outcome = workspace.drive(&["run"]).await.unwrap();
+    let outcome = workspace.drive(&["collect"]).await.unwrap();
     let RunOutcome::Completed { message } = outcome else {
         panic!("expected completion, got {outcome:?}");
     };
@@ -570,7 +570,7 @@ async fn scenario_run_stores(workspace: AzureWorkspace) {
     // place through the uncached backend's `put_overwrite`, so the clean re-run
     // succeeds rather than colliding — the one Azure write path a plain `run` never
     // reaches, validated here uncached (the cached backend never stores objects).
-    let outcome = workspace.drive(&["run", "--overwrite"]).await.unwrap();
+    let outcome = workspace.drive(&["collect", "--overwrite"]).await.unwrap();
     let RunOutcome::Completed { message } = outcome else {
         panic!("expected completion on overwrite, got {outcome:?}");
     };
@@ -579,14 +579,14 @@ async fn scenario_run_stores(workspace: AzureWorkspace) {
 
 /// Scenario: a full public round-trip — two `run`s store result sets, and
 /// `analyze` reads them back (list + get) and reports over the history.
-async fn scenario_run_then_analyze(workspace: AzureWorkspace) {
+async fn scenario_collect_then_analyze(workspace: AzureWorkspace) {
     let workspace = workspace.with_bench(&["--summary", "grp=single"]);
 
-    workspace.drive(&["run"]).await.unwrap();
+    workspace.drive(&["collect"]).await.unwrap();
     // A clean run is keyed by its commit, so the second point needs its own
     // commit; otherwise it would collide with the first on the same clean key.
     workspace.commit("second");
-    workspace.drive(&["run"]).await.unwrap();
+    workspace.drive(&["collect"]).await.unwrap();
 
     let report = workspace.drive_json(&["analyze"]).await;
 
@@ -606,16 +606,16 @@ async fn scenario_feature_and_dirty(workspace: AzureWorkspace) {
     let workspace = workspace.with_bench(&["--summary", "grp=single"]);
 
     // master: root - c2   (two clean points on the official line).
-    workspace.drive(&["run"]).await.unwrap();
+    workspace.drive(&["collect"]).await.unwrap();
     workspace.commit("c2");
-    workspace.drive(&["run"]).await.unwrap();
+    workspace.drive(&["collect"]).await.unwrap();
 
     // feature off c2: one clean point plus a dirty snapshot on the same commit.
     workspace.checkout_new_branch("feature");
     workspace.commit("f1");
-    workspace.drive(&["run"]).await.unwrap();
+    workspace.drive(&["collect"]).await.unwrap();
     workspace.make_dirty("uncommitted.txt");
-    workspace.drive(&["run"]).await.unwrap();
+    workspace.drive(&["collect"]).await.unwrap();
 
     // The feature view admits the dirty snapshot on the target-side commit, so all
     // four stored objects are loaded from the backend.
@@ -678,10 +678,10 @@ async fn scenario_cache_round_trip(workspace: AzureWorkspace) {
     // One clean run on the base line, then a feature commit with its own clean run.
     // A feature commit's own run is deletable without the base-branch guard, so the
     // prune below is unambiguous.
-    workspace.drive(&["run"]).await.unwrap();
+    workspace.drive(&["collect"]).await.unwrap();
     workspace.checkout_new_branch("feature");
     workspace.commit("f1");
-    workspace.drive(&["run"]).await.unwrap();
+    workspace.drive(&["collect"]).await.unwrap();
 
     // Cold: the mirror is empty, so `analyze` fetches from the cloud and populates it.
     let cold = workspace.drive_json(&["analyze", &cache_arg]).await;
@@ -746,10 +746,10 @@ async fn scenario_prune_without_cache(workspace: AzureWorkspace) {
     // One clean run on the base line, then a feature commit with its own clean run.
     // A feature commit's own run is deletable without the base-branch guard, so the
     // prune below is unambiguous.
-    workspace.drive(&["run"]).await.unwrap();
+    workspace.drive(&["collect"]).await.unwrap();
     workspace.checkout_new_branch("feature");
     workspace.commit("f1");
-    workspace.drive(&["run"]).await.unwrap();
+    workspace.drive(&["collect"]).await.unwrap();
 
     // A dry-run prune previews the feature clean run without deleting or arming.
     let preview = workspace
@@ -789,11 +789,11 @@ async fn scenario_prune_without_cache(workspace: AzureWorkspace) {
     ignore = "Azure network end-to-end test: self-skips without an emulator (as under mutation), and the azure IO it exercises is already mutants::skip"
 )]
 #[serial]
-async fn run_stores_results_in_azurite() {
+async fn collect_stores_results_in_azurite() {
     if !azurite_available() {
         return;
     }
-    scenario_run_stores(AzureWorkspace::new_azurite(&unique_container())).await;
+    scenario_collect_stores(AzureWorkspace::new_azurite(&unique_container())).await;
 }
 
 /// A `run` + `analyze` round-trip through Azurite.
@@ -804,11 +804,11 @@ async fn run_stores_results_in_azurite() {
     ignore = "Azure network end-to-end test: self-skips without an emulator (as under mutation), and the azure IO it exercises is already mutants::skip"
 )]
 #[serial]
-async fn run_then_analyze_round_trips_through_azurite() {
+async fn collect_then_analyze_round_trips_through_azurite() {
     if !azurite_available() {
         return;
     }
-    scenario_run_then_analyze(AzureWorkspace::new_azurite(&unique_container())).await;
+    scenario_collect_then_analyze(AzureWorkspace::new_azurite(&unique_container())).await;
 }
 
 /// A multi-commit feature/dirty round-trip through Azurite.
@@ -880,7 +880,7 @@ async fn stored_blob_declares_gzip_content_encoding_in_azurite() {
     let container = unique_container();
     let workspace =
         AzureWorkspace::new_azurite(&container).with_bench(&["--summary", "grp=single"]);
-    workspace.drive(&["run"]).await.unwrap();
+    workspace.drive(&["collect"]).await.unwrap();
 
     let client = azurite_container_client(&container);
     let mut pager = client.list_blobs(None).unwrap();
@@ -918,12 +918,12 @@ async fn stored_blob_declares_gzip_content_encoding_in_azurite() {
     ignore = "Real-Azure network end-to-end test: self-skips without ENABLE_AZURE (as under mutation), and the azure IO it exercises is already mutants::skip"
 )]
 #[serial]
-async fn run_stores_results_in_real_azure() {
+async fn collect_stores_results_in_real_azure() {
     if !real_azure_enabled() {
         return;
     }
     with_real_azure_container(async |container| {
-        scenario_run_stores(AzureWorkspace::new(&real_azure_config(&container))).await;
+        scenario_collect_stores(AzureWorkspace::new(&real_azure_config(&container))).await;
     })
     .await;
 }
@@ -936,12 +936,12 @@ async fn run_stores_results_in_real_azure() {
     ignore = "Real-Azure network end-to-end test: self-skips without ENABLE_AZURE (as under mutation), and the azure IO it exercises is already mutants::skip"
 )]
 #[serial]
-async fn run_then_analyze_round_trips_through_real_azure() {
+async fn collect_then_analyze_round_trips_through_real_azure() {
     if !real_azure_enabled() {
         return;
     }
     with_real_azure_container(async |container| {
-        scenario_run_then_analyze(AzureWorkspace::new(&real_azure_config(&container))).await;
+        scenario_collect_then_analyze(AzureWorkspace::new(&real_azure_config(&container))).await;
     })
     .await;
 }

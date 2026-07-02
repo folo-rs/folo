@@ -25,14 +25,14 @@
 //!
 //! ```text
 //! cargo bench-history install   # write a starter .cargo/bench_history.toml
-//! cargo bench-history run --local=./bench-history        # bench the current commit and store the results
+//! cargo bench-history collect --local=./bench-history    # bench the current commit and store the results
 //! cargo bench-history backfill --local=./bench-history <from> <to>   # bootstrap history from past commits
 //! cargo bench-history analyze --local=./bench-history    # report regressions and drift over history
 //! ```
 //!
-//! `run` benches the current commit and stores the results in the selected
+//! `collect` benches the current commit and stores the results in the selected
 //! storage; `backfill` benches a range of past commits so there is a trend to
-//! analyze (a single `run` on its own has nothing to compare against); `analyze`
+//! analyze (a single `collect` on its own has nothing to compare against); `analyze`
 //! reads the accumulated history back and reports what changed. Run these from the
 //! repository whose benchmarks you are tracking.
 //!
@@ -68,7 +68,7 @@
 //!
 //! # Commands
 //!
-//! ## `run`
+//! ## `collect`
 //!
 //! Executes the workspace benches once with `cargo bench`, harvests every
 //! supported engine's machine-readable output, and stores one result set per
@@ -89,7 +89,7 @@
 //!
 //! ## `backfill`
 //!
-//! Replays `run` across the inclusive commit range `<from> <to>`, bootstrapping
+//! Replays `collect` across the inclusive commit range `<from> <to>`, bootstrapping
 //! history for a repository that adopted the tool late. Each commit is checked out
 //! in a dedicated git **worktree** (the primary checkout is never touched, so a
 //! dirty working tree is fine) and benched there, taking its timeline position
@@ -234,10 +234,10 @@
 //! 1. **Deploy a Storage account** reachable over HTTPS. Entra-only accounts
 //!    (shared-key access disabled) are supported and preferred — there is then no
 //!    account key to leak. The `bench-history` container does not need to pre-exist;
-//!    `run` creates it on first use.
+//!    `collect` creates it on first use.
 //! 2. **Grant the identity that runs the tool the `Storage Blob Data Contributor`
 //!    role** on the account. This data-plane role covers both the blob read/write
-//!    the tool performs and the container creation `run` does on first use; the
+//!    the tool performs and the container creation `collect` does on first use; the
 //!    broader `Storage Blob Data Owner` is not needed for a flat blob container.
 //!    Locally, that identity is your `az login` user; in CI it is the federated
 //!    managed identity below.
@@ -291,8 +291,8 @@ pub(crate) use cargo_bench_history_core::model;
 
 pub use cli::{Cli, EarlyExit};
 pub use command::{
-    AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, Command, InstallOptions,
-    ListOptions, ListSubject, LocalStorageSelection, PruneOptions, RunOptions, UnblessOptions,
+    AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
+    InstallOptions, ListOptions, ListSubject, LocalStorageSelection, PruneOptions, UnblessOptions,
 };
 pub use config::{ConfigError, default_template};
 pub use dispatch::{Overrides, run, run_with_overrides};
