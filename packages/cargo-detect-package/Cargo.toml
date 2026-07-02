@@ -16,6 +16,7 @@ all-features = true
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
+mimalloc = { workspace = true }
 toml = { workspace = true, features = ["parse", "serde"] }
 
 [dev-dependencies]
