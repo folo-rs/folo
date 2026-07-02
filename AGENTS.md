@@ -247,10 +247,11 @@ tempted to edit a `Cargo.toml` version field on a feature branch.
 
 How crates.io publishing and `cargo-binstall` prebuilt binaries are automated from
 CI on merge to `main`: the `release.yml` flow (publish via Trusted Publishing →
-derive released binary crates → matrix-build + upload checksummed archives → alert
-on failure), the asset-naming contract that keeps the archive filenames and each
-crate's `[package.metadata.binstall]` block in lockstep, the `release-plz.toml`
-configuration, and the rate-limit/idempotency/new-crate-bootstrap handling.
+reconcile which binary-crate releases are missing per-target archives → matrix-build
++ upload checksummed archives → alert on failure), the asset-naming contract that
+keeps the archive filenames and each crate's `[package.metadata.binstall]` block in
+lockstep, the `release-plz.toml` configuration, and the
+rate-limit/idempotency/self-healing-retry/new-crate-bootstrap handling.
 
 **Open this when**: implementing or debugging automated releases, the
 crates.io/OIDC publish flow, the prebuilt-binary matrix, or a `cargo binstall`

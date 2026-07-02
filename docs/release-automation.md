@@ -29,8 +29,8 @@ flowchart TD
     D -- no --> Z["No-op (most pushes)"]
     D -- yes --> E["Publish changed crates to crates.io<br/>(Trusted Publishing, OIDC — no token)"]
     E --> F["Create a git tag + GitHub release<br/>per published binary crate"]
-    F --> G["Derive released binary crates<br/>(releases output ∩ bin crates)"]
-    G --> H["Matrix build: crate × target<br/>package + checksum archives"]
+    F --> G["Reconcile: for every published binary crate,<br/>find (crate, target) archives missing from its release"]
+    G --> H["Matrix build only the missing<br/>(crate, target) pairs + checksums"]
     H --> I["Upload archives + .sha256<br/>to each crate's release"]
     I --> J["cargo binstall &lt;crate&gt; → prebuilt binary<br/>(source-build fallback otherwise)"]
     E -. any job fails .-> K["Open a per-run failure issue"]
@@ -65,15 +65,16 @@ every binary regardless of whether it is published (tracked separately in
 A single workflow, triggered on `push: branches: [main]`, holds four jobs.
 `release-plz release` is idempotent — on a push with no version change it is a
 no-op — so the workflow runs on every push to `main` and only acts when a bump
-landed. It also accepts a `workflow_dispatch` input (a tag) for the manual
-binary-rebuild path described under [Robust publishing](#robust-publishing).
+landed. It also accepts a bare `workflow_dispatch` (no inputs) that re-runs the
+same flow to auto-heal missing binaries, as described under
+[Robust publishing](#robust-publishing).
 
 Keeping publish and binaries in **one** workflow run is deliberate: a workflow
 that creates a tag/release with the default `GITHUB_TOKEN` does not trigger
 downstream `on: release` / `on: push: tags` workflows (GitHub suppresses these to
-avoid recursion). Driving the binary jobs from the publish job's *outputs* within
-the same run sidesteps that entirely, so the ambient `GITHUB_TOKEN` suffices and
-no PAT or GitHub App token is needed.
+avoid recursion). Driving the binary jobs from within the same run sidesteps that
+entirely, so the ambient `GITHUB_TOKEN` suffices and no PAT or GitHub App token is
+needed.
 
 ```yaml
 # Illustrative sketch — not a final workflow file.
@@ -81,11 +82,7 @@ name: Release
 on:
   push:
     branches: [main]
-  workflow_dispatch:
-    inputs:
-      rebuild_tag:
-        description: One crate's release tag ({crate}-v{version}) whose binaries to rebuild + re-upload
-        required: false
+  workflow_dispatch: {}   # bare manual re-trigger; reconciliation auto-heals missing binaries
 
 concurrency:
   group: release-${{ github.ref }}
@@ -134,20 +131,29 @@ publish:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-The `release-plz` invocation exposes:
+The `release-plz` invocation exposes `releases_created` (`"true"` when at least one
+crate was published this run) and `releases` (a JSON array of the crates published
+this run). These are used for the run summary and logging only — the binary jobs
+do **not** consume them, because a binary matrix driven off "what was published
+*this run*" cannot heal a partial failure on a later re-run (release-plz skips the
+already-published crate, so it vanishes from `releases`). Instead the binary jobs
+**reconcile** against the actual published state, described next.
 
-* `releases_created` — `"true"` when at least one crate was published this run.
-* `releases` — a JSON array, one entry per published crate:
-  `[{"package_name":"cargo-bench-history","version":"0.1.0","tag":"cargo-bench-history-v0.1.0"}]`.
+### `plan-binaries` — reconcile missing binary assets
 
-Stages 2–3 consume `releases`, so they build binaries for exactly the crates
-published in this run and upload to the exact tags release-plz created.
+Runs after `publish` on every workflow run (not gated on `releases_created`), so a
+plain re-run or a bare `workflow_dispatch` heals binaries without republishing.
 
-### `plan-binaries` — derive the build matrix
+It **auto-determines** the work by reconciling desired state against actual state,
+with no hardcoded or human-supplied crate list:
 
-Runs when `needs.publish.outputs.releases_created == 'true'`. It intersects the
-crates published this run (`releases`) with the publishable-binary-crate set (a
-`cargo metadata` scan) and emits a matrix of `{name, tag, version}`.
+1. Derive the publishable binary crates and their current manifest versions from
+   `cargo metadata` (the filter below). Each crate's expected release tag is
+   `{crate}-v{version}`.
+2. For each such crate whose release exists, list the release's assets (`gh release
+   view`) and compute which of the expected per-target archives
+   (`{crate}-v{version}-{target}.zip`) are absent.
+3. Emit a matrix of exactly the missing `(crate, target)` pairs.
 
 The binary-crate derivation is a single filter, reused here and by the
 git-release-enable injection step so the two can never disagree. In
@@ -164,15 +170,19 @@ cargo metadata --no-deps --format-version 1 \
 ```
 
 Against the current workspace this yields exactly `cargo-bench-history`,
-`cargo-detect-package`, `cargo-freeze-deps`. The plan step keeps only those names
-present in `releases` and carries each one's `tag`/`version` straight from the
-`releases` output (so the upload target is the actual tag, never a reconstructed
-guess).
+`cargo-detect-package`, `cargo-freeze-deps`. On a normal push that just published,
+every target archive is missing → the whole matrix builds. On an ordinary push
+that changed nothing, all archives already exist → the matrix is empty and
+`build-binaries` is skipped. On a re-run after a partial failure, only the still-
+missing `(crate, target)` pairs are emitted — so retries always operate on the
+correct, self-determined set.
 
 ### `build-binaries` — build, package, checksum, upload
 
-Runs when the plan produced any crates. The matrix is the Cartesian product of
-the released binary crates × the target matrix.
+Runs when the plan produced any missing pairs. The matrix is precisely those
+reconciled `(crate, target)` pairs (`matrix.include`), each carrying its
+`tag`/`version` so uploads target the actual release tag, never a reconstructed
+guess.
 
 **Standard environment.** These jobs use the shared
 [`./.github/actions/setup-environment`](../.github/actions/setup-environment)
@@ -196,32 +206,28 @@ build-binaries:
   if: needs.plan-binaries.outputs.has_binaries == 'true'
   strategy:
     fail-fast: false   # one target's failure must not abandon the others' archives
+    # The matrix is computed by plan-binaries: one entry per missing (crate, target)
+    # pair, each carrying {name, tag, version, triple, os} (os from the target table below).
     matrix:
-      crate: ${{ fromJSON(needs.plan-binaries.outputs.matrix).crate }}
-      target:
-        - { triple: x86_64-unknown-linux-gnu,  os: ubuntu-latest }
-        - { triple: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm }
-        - { triple: x86_64-pc-windows-msvc,     os: windows-latest }
-        - { triple: aarch64-pc-windows-msvc,    os: windows-11-arm }
-        - { triple: aarch64-apple-darwin,       os: macos-latest }
-  runs-on: ${{ matrix.target.os }}
+      include: ${{ fromJSON(needs.plan-binaries.outputs.matrix) }}
+  runs-on: ${{ matrix.os }}
   permissions:
     contents: write   # upload assets to the release
   steps:
     - uses: actions/checkout@v6
       with:
-        ref: refs/tags/${{ matrix.crate.tag }}   # build the exact released code
+        ref: refs/tags/${{ matrix.tag }}   # build the exact released code
     - uses: ./.github/actions/setup-environment
     - uses: taiki-e/upload-rust-binary-action@v1
       with:
-        bin: ${{ matrix.crate.name }}
-        package: ${{ matrix.crate.name }}
-        target: ${{ matrix.target.triple }}
-        archive: ${{ matrix.crate.name }}-v${{ matrix.crate.version }}-$target
+        bin: ${{ matrix.name }}
+        package: ${{ matrix.name }}
+        target: ${{ matrix.triple }}
+        archive: ${{ matrix.name }}-v${{ matrix.version }}-$target
         tar: none
         zip: all
         checksum: sha256
-        ref: refs/tags/${{ matrix.crate.tag }}
+        ref: refs/tags/${{ matrix.tag }}
         locked: true
         token: ${{ secrets.GITHUB_TOKEN }}
 ```
@@ -229,7 +235,9 @@ build-binaries:
 #### Target matrix
 
 Native runners, one per target, no cross-compilation — the same runner set as the
-nightly `bench-history` matrix plus macOS:
+nightly `bench-history` matrix plus macOS. This table is the single `triple → runner`
+source that `plan-binaries` joins each missing `(crate, target)` pair against to set
+its `os`:
 
 | Rust target                 | Runner             |
 | --------------------------- | ------------------ |
@@ -292,24 +300,21 @@ publish step is built to ride out both without bespoke complexity:
   somehow overruns the ~30-minute token lifetime fails that attempt and the next
   retry proceeds with a new token. This is rare and needs no special handling
   beyond the retry.
-* **Binaries after a partial failure.** The binary matrix is driven by the
-  `releases` output, which lists only crates *newly* published in that run. If a
+* **Binaries after a partial failure — auto-reconciled, no manual crate list.**
+  The binary jobs never depend on "what was published *this run*"; `plan-binaries`
+  reconciles the current published state against uploaded assets (see
+  [`plan-binaries`](#plan-binaries--reconcile-missing-binary-assets)). So if a
   crate published but its binaries did not upload (e.g. the run died before
-  `build-binaries`), a plain workflow re-run will not rebuild them, because
-  release-plz now skips that already-published crate and it drops out of
-  `releases`. Recovery uses the `workflow_dispatch` `rebuild_tag` input: because
-  each binary crate gets its **own** git tag and GitHub release
-  (`{crate}-v{version}`, holding just that crate's archives), a single tag names
-  exactly one crate at one version. Dispatching with `rebuild_tag` set to that tag
-  runs `build-binaries` for that one crate across the whole target matrix and
-  uploads to its release, bypassing the release-plz publish gate. `taiki-e`
-  overwrites existing assets, so re-uploading is safe and reproduces identical
-  checksummed archives. If more than one crate needs rebuilding (rare), dispatch
-  once per crate tag.
+  `build-binaries`), simply re-running the workflow — or a bare
+  `workflow_dispatch` — recomputes the missing `(crate, target)` pairs across
+  *all* affected crates and builds exactly those. The recovery set is always
+  self-determined; there is no per-crate dispatch and no human-supplied tag list.
+  `taiki-e` overwrites existing assets, so re-uploading is safe and reproduces
+  identical checksummed archives.
 
 (Because a GitHub Actions `uses:` step cannot be retried in place, the retry is
 implemented by running the release-plz invocation inside a small shell loop that
-re-runs it and captures the `releases` JSON.)
+re-runs it.)
 
 ## release-plz configuration
 
