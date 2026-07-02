@@ -35,6 +35,11 @@ pub(crate) enum StorageFacade {
 }
 
 impl Storage for StorageFacade {
+    // A trivial redirect to the selected real backend, except for the structurally
+    // unreachable cached arm below; excluded from coverage under the facade rule in
+    // docs/testing.md (a redirect-only method whose sole non-redirect arm can never
+    // run cannot reach full line coverage and is not worth testing).
+    #[cfg_attr(coverage_nightly, coverage(off))]
     async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
         match self {
             Self::Local(storage) => storage.put(key, bytes).await,
@@ -52,6 +57,9 @@ impl Storage for StorageFacade {
         }
     }
 
+    // Excluded from coverage for the same reason as [`put`](Self::put): a redirect-only
+    // facade method with a structurally unreachable cached arm.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     async fn put_overwrite(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
         match self {
             Self::Local(storage) => storage.put_overwrite(key, bytes).await,
