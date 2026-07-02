@@ -16,7 +16,7 @@ async fn collect_callgrind_end_to_end_stores_results() {
     let (key, set) = workspace.single_object();
 
     // Synthetic partition (Callgrind is hardware-independent) under the resolved
-    // triple. `run` auto-detects the host triple, so derive it from the stored
+    // triple. `collect` auto-detects the host triple, so derive it from the stored
     // context to keep the assertion host-portable. The temp workspace is outside
     // any git repository, so the commit resolves to the `unknown` fallback and the
     // clean tree yields `clean.json`.
@@ -398,7 +398,7 @@ async fn collect_criterion_honors_machine_key_override() {
     let workspace =
         Workspace::new(&storage_only_config()).with_bench(&["--criterion", "grp|capture|now=9"]);
 
-    // `run` auto-detects the triple; this test asserts the machine-key override
+    // `collect` auto-detects the triple; this test asserts the machine-key override
     // segment, so derive the triple from the stored context for a portable key.
     workspace
         .drive(&["collect", "--machine-key", "ci-pool-a"])
@@ -453,7 +453,7 @@ async fn collect_criterion_collects_distinct_cases_as_records() {
 }
 
 /// A project id containing characters that require sanitizing (a space and a `/`)
-/// round-trips: `run` stores under the sanitized partition and `analyze` finds the
+/// round-trips: `collect` stores under the sanitized partition and `analyze` finds the
 /// very same history. Both sides must derive the identical storage segment, so this
 /// guards against writer/reader sanitization drift through the real pipeline.
 #[tokio::test]
@@ -488,7 +488,7 @@ async fn collect_then_analyze_round_trips_a_sanitizing_project_id() {
 
 /// Unusual characters in a benchmark identity (spaces, a dot, and non-ASCII
 /// letters) belong to the object's JSON body, never to the storage partition key.
-/// They survive `run` -> store -> `analyze` verbatim while the key stays sanitized
+/// They survive `collect` -> store -> `analyze` verbatim while the key stays sanitized
 /// and the reader keeps both runs in one series.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
@@ -505,7 +505,7 @@ async fn collect_then_analyze_preserves_unusual_identity_characters() {
     assert_eq!(objects.len(), 1, "{objects:?}");
     let (key, set) = &objects[0];
     // The partition key is identity-free and fully sanitized: none of the
-    // identity's spaces or non-ASCII letters leak into it. `run` auto-detects the
+    // identity's spaces or non-ASCII letters leak into it. `collect` auto-detects the
     // triple, so derive it from the stored context for a portable prefix.
     let triple = &set.context.toolchain.target_triple;
     assert!(

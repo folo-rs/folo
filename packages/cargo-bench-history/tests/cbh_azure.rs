@@ -1,7 +1,7 @@
 //! End-to-end integration tests for the Azure Blob storage backend.
 //!
-//! These drive the public `run` and `analyze` commands against a live Azure Blob
-//! endpoint, proving the Azure adapter stores result sets (`run`) and reads them
+//! These drive the public `collect` and `analyze` commands against a live Azure Blob
+//! endpoint, proving the Azure adapter stores result sets (`collect`) and reads them
 //! back (`analyze`) through exactly the same command surface the binary uses.
 //!
 //! There are two flavours of the same scenarios:
@@ -508,7 +508,7 @@ impl AzureWorkspace {
     /// harvest at the workspace's own `target/` so it is hermetic.
     async fn drive(&self, args: &[&str]) -> Result<RunOutcome, RunError> {
         let target_root = self.dir.path().join("target");
-        // Drive `run`/`backfill` against the mock engine instead of `cargo bench`:
+        // Drive `collect`/`backfill` against the mock engine instead of `cargo bench`:
         // the program plus its fixture-describing arguments form the benchmark
         // command, which the single bench invocation runs to produce engine output.
         let mut bench_command = vec![mock_bench_engine::binary_path().to_owned()];
@@ -556,7 +556,7 @@ impl AzureWorkspace {
     }
 }
 
-/// Scenario: a single `run` stores one harvested result set.
+/// Scenario: a single `collect` stores one harvested result set.
 async fn scenario_collect_stores(workspace: AzureWorkspace) {
     let workspace = workspace.with_bench(&["--summary", "grp=single"]);
 
@@ -568,7 +568,7 @@ async fn scenario_collect_stores(workspace: AzureWorkspace) {
 
     // Re-running the same commit with `--overwrite` replaces the stored object in
     // place through the uncached backend's `put_overwrite`, so the clean re-run
-    // succeeds rather than colliding — the one Azure write path a plain `run` never
+    // succeeds rather than colliding — the one Azure write path a plain `collect` never
     // reaches, validated here uncached (the cached backend never stores objects).
     let outcome = workspace.drive(&["collect", "--overwrite"]).await.unwrap();
     let RunOutcome::Completed { message } = outcome else {
@@ -577,7 +577,7 @@ async fn scenario_collect_stores(workspace: AzureWorkspace) {
     assert!(message.contains("Stored 1"), "{message}");
 }
 
-/// Scenario: a full public round-trip — two `run`s store result sets, and
+/// Scenario: a full public round-trip — two `collect` runs store result sets, and
 /// `analyze` reads them back (list + get) and reports over the history.
 async fn scenario_collect_then_analyze(workspace: AzureWorkspace) {
     let workspace = workspace.with_bench(&["--summary", "grp=single"]);
@@ -733,7 +733,7 @@ async fn scenario_cache_round_trip(workspace: AzureWorkspace) {
     );
 }
 
-/// Scenario: an uncached mutating round-trip — `run`s populate the cloud, then a
+/// Scenario: an uncached mutating round-trip — `collect` runs populate the cloud, then a
 /// real `prune --clean` (no `--cache`) deletes a run directly against the backend.
 /// This is the mirror image of [`scenario_cache_round_trip`]: it drives the plain
 /// `Azure` backend's `delete` dispatch and the post-delete invalidation-marker
@@ -781,7 +781,7 @@ async fn scenario_prune_without_cache(workspace: AzureWorkspace) {
 
 // --- Azurite (fake Entra token over `--oauth basic`) -----------------------
 
-/// `run` stores a harvested result set in Azurite.
+/// `collect` stores a harvested result set in Azurite.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 #[cfg_attr(
@@ -796,7 +796,7 @@ async fn collect_stores_results_in_azurite() {
     scenario_collect_stores(AzureWorkspace::new_azurite(&unique_container())).await;
 }
 
-/// A `run` + `analyze` round-trip through Azurite.
+/// A `collect` + `analyze` round-trip through Azurite.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 #[cfg_attr(
@@ -910,7 +910,7 @@ async fn stored_blob_declares_gzip_content_encoding_in_azurite() {
 
 // --- Real Azure (Microsoft Entra ID) ---------------------------------------
 
-/// `run` stores a harvested result set in a real Azure account via Entra ID.
+/// `collect` stores a harvested result set in a real Azure account via Entra ID.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 #[cfg_attr(
@@ -928,7 +928,7 @@ async fn collect_stores_results_in_real_azure() {
     .await;
 }
 
-/// A `run` + `analyze` round-trip through a real Azure account via Entra ID.
+/// A `collect` + `analyze` round-trip through a real Azure account via Entra ID.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 #[cfg_attr(

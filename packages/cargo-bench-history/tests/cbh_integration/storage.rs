@@ -47,7 +47,7 @@ async fn collect_local_flag_with_a_relative_path_rebases_against_the_workspace()
 
 /// `--local` overrides a configured cloud backend: with both present the local
 /// path is used and the cloud backend is never built (its endpoint is never
-/// contacted), so the run completes and stores locally.
+/// contacted), so it completes and stores locally.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_local_flag_overrides_a_configured_cloud_backend() {
