@@ -25,14 +25,14 @@ pub struct Overrides {
     /// the process working directory. Relative `--config`/`--repo`/local-storage
     /// paths resolve against this directory.
     pub workspace_dir: Option<PathBuf>,
-    /// The cargo target root scanned for engine output (`run`/`backfill`). `None`
+    /// The cargo target root scanned for engine output (`collect`/`backfill`). `None`
     /// resolves the conventional target directory under the workspace.
     pub target_root: Option<PathBuf>,
-    /// The benchmark command `run`/`backfill` invoke instead of `cargo bench`.
+    /// The benchmark command `collect`/`backfill` invoke instead of `cargo bench`.
     pub bench_command: Option<Vec<String>>,
     /// The clock anchor for the analysis default `--since` lookback window.
     pub now: Option<Timestamp>,
-    /// A pre-built storage backend for `run`/`analyze` to use instead of the one
+    /// A pre-built storage backend for `collect`/`analyze` to use instead of the one
     /// resolved from configuration. End-to-end tests use this to drive commands
     /// against an Azurite backend behind a locally-faked Entra token and a
     /// certificate-trusting transport, which no configuration could produce.
@@ -41,7 +41,7 @@ pub struct Overrides {
 
 /// Executes a parsed command.
 ///
-/// Every handler is asynchronous: `run` and `analyze` drive IO over the
+/// Every handler is asynchronous: `collect` and `analyze` drive IO over the
 /// configured storage, and `install` writes a configuration file.
 ///
 /// # Errors
@@ -55,7 +55,7 @@ pub async fn run(command: &Command) -> Result<RunOutcome, RunError> {
 
 /// Executes a parsed command with the given test [`Overrides`].
 ///
-/// This exists so end-to-end tests can drive the full `run`/`backfill` flow
+/// This exists so end-to-end tests can drive the full `collect`/`backfill` flow
 /// against a mock benchmark program instead of `cargo bench`, operate on a
 /// temporary workspace without mutating the process environment or current
 /// directory, and pin a deterministic `now` for the analysis default `--since`
@@ -84,8 +84,8 @@ pub async fn run_with_overrides(
     let workspace_dir = workspace_dir.as_path();
     let storage_override = storage_override.map(|o| o.0);
     match command {
-        Command::Run(options) => {
-            commands::run(
+        Command::Collect(options) => {
+            commands::collect(
                 options,
                 workspace_dir,
                 target_root,

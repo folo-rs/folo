@@ -5,7 +5,7 @@ use std::path::Path;
 
 use crate::config::default_template;
 use crate::config_writer::{ConfigWriter, TokioConfigWriter};
-use crate::report::{Reporter, StderrReporter};
+use crate::report::{Reporter, ReporterExt, StderrReporter};
 use crate::wiring::resolve_config_path;
 use crate::{InstallOptions, RunError, RunOutcome};
 
@@ -34,15 +34,17 @@ async fn execute_install<W: ConfigWriter>(
 ) -> Result<RunOutcome, RunError> {
     let path = resolve_config_path(workspace_dir, options.config_path.as_deref());
 
-    reporter.note(&format!(
-        "writing a starter configuration to {} (only if absent)",
-        path.display()
-    ));
+    reporter.note_with(|| {
+        format!(
+            "writing a starter configuration to {} (only if absent)",
+            path.display()
+        )
+    });
     let written = writer.write_new(&path, default_template()).await?;
     if written {
-        reporter.note("configuration did not exist; wrote the starter template");
+        reporter.note_with(|| "configuration did not exist; wrote the starter template".to_owned());
     } else {
-        reporter.note("configuration already exists; left it unchanged");
+        reporter.note_with(|| "configuration already exists; left it unchanged".to_owned());
     }
 
     Ok(RunOutcome::Completed {
@@ -59,7 +61,7 @@ fn install_message(path: &Path, written: bool) -> String {
              Next steps:\n\
              - For local storage, no configuration is needed: pass `--local=<path>` (or set CARGO_BENCH_HISTORY_STORAGE and pass a bare `--local`) on any command.\n\
              - For cloud storage, edit the file to configure one [storage] backend (today: [storage.azure]).\n\
-             - Run `cargo bench-history run --local=./bench-history` to record the first benchmark history entry.\n\
+             - Run `cargo bench-history collect --local=./bench-history` to record the first benchmark history entry.\n\
              - To seed history for an existing repository, run `cargo bench-history backfill --local=./bench-history <from-commit> <to-commit>` to benchmark a range of past commits.\n\
              - Run `cargo bench-history analyze --local=./bench-history` once you have a few entries to review trends."
         )

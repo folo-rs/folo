@@ -114,10 +114,12 @@ async fn run_harness() -> Result<(), Error> {
     // combination rather than silently ignoring it.
     let cache = resolve_cache(&cli)?;
     if let Some(cache) = &cache {
-        logger.detail(&format!(
-            "measuring analyze against a read-through cache rooted at {}",
-            cache.display()
-        ));
+        logger.detail_with(|| {
+            format!(
+                "measuring analyze against a read-through cache rooted at {}",
+                cache.display()
+            )
+        });
     }
 
     // The git repository and the workspace (config + import marks) live in
@@ -288,10 +290,7 @@ async fn write_config(
     tokio::fs::write(&path, target.config_toml())
         .await
         .map_err(|error| fail(format!("failed to write {}: {error}", path.display())))?;
-    logger.detail(&format!(
-        "wrote analyze configuration to {}",
-        path.display()
-    ));
+    logger.detail_with(|| format!("wrote analyze configuration to {}", path.display()));
     Ok(())
 }
 

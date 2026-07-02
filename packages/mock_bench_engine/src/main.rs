@@ -1,6 +1,6 @@
 //! A stand-in benchmark engine used by the integration tests.
 //!
-//! It imitates the only parts of a real engine that `cargo bench-history run`
+//! It imitates the only parts of a real engine that `cargo bench-history collect`
 //! observes: it writes machine-readable output files into the cargo target tree
 //! (so the harvester finds fresh output) and exits with a caller-chosen code (so
 //! exit-code handling can be exercised). It performs no real benchmarking.
@@ -65,6 +65,15 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+
+// Install mimalloc as a scalable, general-purpose allocator process-wide: faster
+// small allocations and no cross-thread allocator-lock contention (acute on the
+// Windows process heap), a broad low-risk win applied uniformly across the
+// workspace's binaries. Miri cannot call mimalloc's FFI, so under Miri the
+// default allocator stands in.
+#[cfg(not(miri))]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 // These fixtures live in the sibling `cargo-bench-history` package's test tree
 // because they double as schema-drift canaries for that package's parser tests.

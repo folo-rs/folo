@@ -40,7 +40,7 @@ pub(crate) trait Storage: fmt::Debug + Send + Sync {
     ///
     /// Unlike [`put`](Self::put), this never fails because an object already
     /// exists; it is the explicit escape hatch from the write-once contract that
-    /// `run --overwrite` and `backfill --overwrite` use to regenerate a data
+    /// `collect --overwrite` and `backfill --overwrite` use to regenerate a data
     /// point. Intermediate structure is created as needed.
     ///
     /// The returned future is `Send` for the same reason [`get`](Self::get)'s is:
@@ -220,9 +220,9 @@ pub(crate) fn project_objects_prefix(project: &str) -> String {
 /// [`take`](Self::take)s it and, when set, writes one fresh [`cache_epoch_key`]
 /// marker. Coalescing every mutation in a command into a single marker write keeps
 /// the bump to one round-trip. Creating a new key never arms it — whether through
-/// write-once `put` (the additive path the nightly collection uses) or a
+/// write-once `put` (the additive path the CI collection uses) or a
 /// `put_overwrite` that turns out to add rather than replace — so an append-only
-/// night never invalidates the cache, and a read-through mirror still discovers the
+/// run never invalidates the cache, and a read-through mirror still discovers the
 /// new key through its always-fresh listing.
 #[derive(Debug, Default)]
 pub(crate) struct PendingInvalidation {

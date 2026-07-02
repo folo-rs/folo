@@ -25,12 +25,15 @@ fn cloud_config() -> String {
 /// the store lands inside it regardless of the process current directory.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn run_local_flag_with_a_relative_path_rebases_against_the_workspace() {
+async fn collect_local_flag_with_a_relative_path_rebases_against_the_workspace() {
     // `--local=store` is supplied explicitly (no harness injection), so this
     // exercises the real relative-path rebasing the flag performs.
     let workspace = Workspace::new(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
 
-    let outcome = workspace.drive(&["run", "--local=store"]).await.unwrap();
+    let outcome = workspace
+        .drive(&["collect", "--local=store"])
+        .await
+        .unwrap();
     let RunOutcome::Completed { message } = outcome else {
         panic!("expected completion, got {outcome:?}");
     };
@@ -44,13 +47,16 @@ async fn run_local_flag_with_a_relative_path_rebases_against_the_workspace() {
 
 /// `--local` overrides a configured cloud backend: with both present the local
 /// path is used and the cloud backend is never built (its endpoint is never
-/// contacted), so the run completes and stores locally.
+/// contacted), so it completes and stores locally.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn run_local_flag_overrides_a_configured_cloud_backend() {
+async fn collect_local_flag_overrides_a_configured_cloud_backend() {
     let workspace = Workspace::new(&cloud_config()).with_bench(&["--summary", "grp=single"]);
 
-    let outcome = workspace.drive(&["run", "--local=store"]).await.unwrap();
+    let outcome = workspace
+        .drive(&["collect", "--local=store"])
+        .await
+        .unwrap();
     let RunOutcome::Completed { message } = outcome else {
         panic!("expected completion, got {outcome:?}");
     };
@@ -67,12 +73,12 @@ async fn run_local_flag_overrides_a_configured_cloud_backend() {
 /// benchmark.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn run_without_a_storage_selection_or_cloud_config_errors() {
+async fn collect_without_a_storage_selection_or_cloud_config_errors() {
     let workspace = Workspace::new(&storage_only_config())
         .without_local_storage()
         .with_bench(&["--summary", "grp=single"]);
 
-    let error = workspace.drive(&["run"]).await.unwrap_err();
+    let error = workspace.drive(&["collect"]).await.unwrap_err();
     let RunError::Storage(storage) = error else {
         panic!("expected a storage error, got {error:?}");
     };
@@ -157,12 +163,12 @@ async fn backfill_without_a_storage_selection_or_cloud_config_errors() {
 /// stores nothing even with no `--local` and no configured cloud backend.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn run_no_store_needs_no_storage_selection() {
+async fn collect_no_store_needs_no_storage_selection() {
     let workspace = Workspace::new(&storage_only_config())
         .without_local_storage()
         .with_bench(&["--summary", "grp=single"]);
 
-    let outcome = workspace.drive(&["run", "--no-store"]).await.unwrap();
+    let outcome = workspace.drive(&["collect", "--no-store"]).await.unwrap();
     let RunOutcome::Completed { message } = outcome else {
         panic!("expected completion, got {outcome:?}");
     };

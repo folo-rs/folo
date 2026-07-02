@@ -1,19 +1,29 @@
 name: Benchmark history
 
-# Nightly collection of the workspace's benchmark results into the long-lived Azure
+# Per-commit collection of the workspace's benchmark results into the long-lived Azure
 # history store (account folohistory, baked into .cargo/bench_history.toml; see also
-# infra/azure-bench-history-prod/). Each run benchmarks the whole workspace EXCEPT the
-# slow, special-purpose `benchmarks` package, on every supported OS/architecture, and
-# appends the results keyed by the current `main` commit. Over time this builds the
-# performance history that `cargo-bench-history analyze` reads to spot regressions.
+# infra/azure-bench-history-prod/). Each push to `main` benchmarks the whole workspace
+# EXCEPT the slow, special-purpose `benchmarks` package, on every supported OS/architecture,
+# and appends the results keyed by the pushed commit. Over time this builds the performance
+# history that `cargo-bench-history analyze` reads to spot regressions.
 #
-# Only nightly for now. PR-time collection/validation may follow once this proves out.
+# Runs per-push rather than on a nightly schedule: a nightly run re-benchmarks an unchanged
+# tip for no gain and misses intermediate same-day commits, whereas per-push collects one
+# data point per commit. The trade-off is more runner time on busy days.
 on:
-  schedule:
-    # 03:00 UTC, offset from the 00:00 cache-warmup cron so the two do not contend for
-    # the runner pool (and so this runs against an already-warm Rust cache).
-    - cron: '0 3 * * *'
+  push:
+    branches: [main]
   workflow_dispatch:
+
+# Group by the commit SHA, not the ref. Distinct commits must collect in parallel — each is
+# its own history data point, and cancelling one to favour a newer commit would drop that
+# commit's measurements, defeating the per-commit goal (so the usual ref-keyed
+# cancel-in-progress from validation.yml would be wrong here). cancel-in-progress therefore
+# only dedups a redundant re-trigger of the SAME commit (a re-run, or a workflow_dispatch on
+# an already-pushed commit), which `--skip-existing` would make a no-op append anyway.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: true
 
 # Title of the rolling failure-alert issue, defined once and shared by the two jobs that
 # reference it: the `alert` job stamps it as the issue title (via the
@@ -22,7 +32,7 @@ on:
 # create-an-issue dedups solely by exact title, so this string is the alert's identity; a
 # single definition keeps the open and close paths from drifting apart.
 env:
-  FAILURE_ISSUE_TITLE: Nightly benchmark-history workflow failed
+  FAILURE_ISSUE_TITLE: Benchmark-history workflow failed
 
 jobs:
   collect:
@@ -34,8 +44,8 @@ jobs:
     if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
 
     strategy:
-      # One platform's benchmarks failing must not abandon the others' history for the
-      # night; each platform stores into its own partition independently.
+      # One platform's benchmarks failing must not abandon the others' history for this
+      # commit; each platform stores into its own partition independently.
       fail-fast: false
       matrix:
         platform: [ubuntu-latest, windows-latest, ubuntu-24.04-arm, windows-11-arm]
@@ -90,7 +100,7 @@ jobs:
   analyze:
     # Survey the freshly-updated history for regressions and post a rolling issue when
     # any finding survives. Runs after every platform finishes (even partially:
-    # fail-fast is off) so the night's analysis reflects whatever did land, and only on
+    # fail-fast is off) so this commit's analysis reflects whatever did land, and only on
     # main (where OIDC sign-in works), matching collect's gate.
     needs: collect
     if: always() && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
@@ -131,10 +141,10 @@ jobs:
           } >> "$GITHUB_ENV"
 
       # Persist the read-through cache (cargo-bench-history's --cache directory) across
-      # nightly runs so the bulk history is downloaded at most once instead of in full
-      # every night. The key is unique per run (cache entries are immutable per key), and
+      # runs so the bulk history is downloaded at most once instead of in full every
+      # run. The key is unique per run (cache entries are immutable per key), and
       # restore-keys falls back to the most recent prior `bench-history-cache-` entry, so
-      # each run restores the latest mirror, the analyze step tops it up with the night's
+      # each run restores the latest mirror, the analyze step tops it up with this run's
       # new objects, and this run saves a fresh entry on success. The path MUST match the
       # `--cache` directory the `gh-analyze-bench-history` recipe passes (relative to the
       # repo root). The cloud history is append-only (collect uses --skip-existing), so a
@@ -160,17 +170,16 @@ jobs:
 
       # JasonEtco/create-an-issue derives the issue title/labels from the file's YAML
       # front matter; the report the tool renders has none, so prepend a fixed header.
-      # The fixed title is also the dedup key that turns nightly findings into one
-      # rolling issue.
+      # The fixed title is also the dedup key that turns findings into one rolling issue.
       - name: Compose regression issue
         if: steps.notable.outputs.value == 'true'
         shell: bash
         run: |
-          { printf -- '---\ntitle: Benchmark regressions detected (nightly)\nlabels: bench-history, regression\n---\n\n'; cat bench-history-report.md; } > bench-history-issue.md
+          { printf -- '---\ntitle: Benchmark regressions detected\nlabels: bench-history, regression\n---\n\n'; cat bench-history-report.md; } > bench-history-issue.md
 
-      # One rolling issue, updated rather than duplicated each night (the fixed title is
+      # One rolling issue, updated rather than duplicated each run (the fixed title is
       # the dedup key), so a regression that persists does not spam new issues. Opened
-      # only when findings exist; nights with none touch nothing.
+      # only when findings exist; runs with none touch nothing.
       - name: File rolling regression issue
         if: steps.notable.outputs.value == 'true'
         uses: JasonEtco/create-an-issue@v2
@@ -183,7 +192,7 @@ jobs:
 
   alert:
     # Open a deduplicated issue whenever collection or analysis fails, so a broken
-    # nightly is noticed instead of silently rotting. Same main-only gate as the others.
+    # run is noticed instead of silently rotting. Same main-only gate as the others.
     needs: [collect, analyze]
     if: failure() && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -209,11 +218,11 @@ jobs:
 
   resolve:
     # Mirror of `alert`: when collection AND analysis are green again, auto-close the
-    # rolling failure issue (if one is open) so a fixed nightly does not leave a stale
+    # rolling failure issue (if one is open) so a fixed run does not leave a stale
     # alert rotting open. Gated on both needs' results being 'success' (explicit rather
     # than the implicit success() function, so a future unrelated job cannot affect this
     # decision); if either failed, alert (failure()) handles it and this is skipped. Same
-    # main-only gate as the others. A no-op on nights when no failure issue is open.
+    # main-only gate as the others. A no-op on runs when no failure issue is open.
     needs: [collect, analyze]
     if: >-
       needs.collect.result == 'success'
@@ -257,5 +266,5 @@ jobs:
             echo "Closing #$n"
             gh issue close "$n" \
               --reason completed \
-              --comment "✅ The nightly bench-history workflow is green again — auto-closing this alert. Successful run: $RUN_URL"
+              --comment "✅ The bench-history workflow is green again — auto-closing this alert. Successful run: $RUN_URL"
           done

@@ -130,26 +130,26 @@ where
         };
 
         let reuse = recorded_epoch.as_deref() == Some(cloud_epoch.as_slice());
-        reporter.if_enabled(|| {
-            reporter.note(&format!(
+        reporter.if_enabled(|notes| {
+            notes.note(&format!(
                 "cache: cloud invalidation marker {marker_key} reads epoch {}",
                 String::from_utf8_lossy(&cloud_epoch)
             ));
             match &recorded_epoch {
-                Some(recorded) => reporter.note(&format!(
+                Some(recorded) => notes.note(&format!(
                     "cache: local mirror last synchronized at epoch {}",
                     String::from_utf8_lossy(recorded)
                 )),
-                None => reporter
+                None => notes
                     .note("cache: local mirror has no recorded epoch, so it is treated as cold"),
             }
             if reuse {
-                reporter.note(
+                notes.note(
                     "cache: epochs match, so the mirror is reused without re-downloading the \
                      history",
                 );
             } else {
-                reporter.note(
+                notes.note(
                     "cache: epochs differ, so this project's mirrored objects are wiped and the \
                      cloud epoch re-recorded before reloading",
                 );
@@ -305,7 +305,7 @@ mod tests {
         block_on(storage.get("v1/p/objects/criterion/a.json")).unwrap();
 
         // A key added to the cloud after the mirror was populated must still be
-        // listed, so the load discovers the night's new objects.
+        // listed, so the load discovers the run's new objects.
         block_on(storage.inner().put("v1/p/objects/criterion/b.json", b"b")).unwrap();
         let keys = block_on(storage.list("v1/p/objects/criterion/")).unwrap();
         assert_eq!(

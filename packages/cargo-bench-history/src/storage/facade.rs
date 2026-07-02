@@ -14,7 +14,7 @@ use azure_core::http::HttpClient;
 
 use crate::config::{CloudStorageConfig, Config};
 use crate::model::sanitize_segment;
-use crate::report::Reporter;
+use crate::report::{Reporter, ReporterExt};
 use crate::wiring::rebase;
 
 use super::azure::AzureBlobStorage;
@@ -45,7 +45,7 @@ impl Storage for StorageFacade {
             Self::Local(storage) => storage.put(key, bytes).await,
             Self::Azure(storage) => storage.put(key, bytes).await,
             // A cached backend is attached only to `analyze`/`list`/`prune`, none of
-            // which *store* objects; the object-writing commands (`run`/`backfill`/
+            // which *store* objects; the object-writing commands (`collect`/`backfill`/
             // `bless`) always build an uncached backend, so no `put` reaches the cache
             // decorator through the facade. (`prune` does mutate the cloud — it deletes
             // objects and flushes the invalidation marker — but it drives `delete`, never
@@ -283,7 +283,7 @@ pub(crate) fn resolve_storage(
 ) -> Result<StorageFacade, StorageError> {
     match storage_override {
         Some(backend) => {
-            reporter.note("storage backend: injected by test override");
+            reporter.note_with(|| "storage backend: injected by test override".to_owned());
             Ok(match cache {
                 Some(cache_dir) => {
                     // `cached_at` only fronts a plain `Azure` override with a mirror;
@@ -291,17 +291,19 @@ pub(crate) fn resolve_storage(
                     // which of the two actually happened rather than always claiming a
                     // wrap.
                     if matches!(backend, StorageFacade::Azure(_)) {
-                        reporter.note(
+                        reporter.note_with(|| {
                             "--cache is set: wrapping the injected Azure backend in a \
                              read-through cache mirror so the override honors --cache like \
-                             a configured backend does",
-                        );
+                             a configured backend does"
+                                .to_owned()
+                        });
                     } else {
-                        reporter.note(
+                        reporter.note_with(|| {
                             "--cache is set, but the injected backend is not a plain Azure \
                              backend, so it is used unchanged — a read-through cache only \
-                             fronts a cloud backend",
-                        );
+                             fronts a cloud backend"
+                                .to_owned()
+                        });
                     }
                     backend.cached_at(rebase(base, cache_dir.to_path_buf()))
                 }

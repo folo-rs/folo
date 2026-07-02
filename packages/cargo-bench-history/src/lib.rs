@@ -25,14 +25,14 @@
 //!
 //! ```text
 //! cargo bench-history install   # write a starter .cargo/bench_history.toml
-//! cargo bench-history run --local=./bench-history        # bench the current commit and store the results
+//! cargo bench-history collect --local=./bench-history    # bench the current commit and store the results
 //! cargo bench-history backfill --local=./bench-history <from> <to>   # bootstrap history from past commits
 //! cargo bench-history analyze --local=./bench-history    # report regressions and drift over history
 //! ```
 //!
-//! `run` benches the current commit and stores the results in the selected
+//! `collect` benches the current commit and stores the results in the selected
 //! storage; `backfill` benches a range of past commits so there is a trend to
-//! analyze (a single `run` on its own has nothing to compare against); `analyze`
+//! analyze (a single `collect` on its own has nothing to compare against); `analyze`
 //! reads the accumulated history back and reports what changed. Run these from the
 //! repository whose benchmarks you are tracking.
 //!
@@ -68,7 +68,7 @@
 //!
 //! # Commands
 //!
-//! ## `run`
+//! ## `collect`
 //!
 //! Executes the workspace benches once with `cargo bench`, harvests every
 //! supported engine's machine-readable output, and stores one result set per
@@ -89,7 +89,7 @@
 //!
 //! ## `backfill`
 //!
-//! Replays `run` across the inclusive commit range `<from> <to>`, bootstrapping
+//! Replays `collect` across the inclusive commit range `<from> <to>`, bootstrapping
 //! history for a repository that adopted the tool late. Each commit is checked out
 //! in a dedicated git **worktree** (the primary checkout is never touched, so a
 //! dirty working tree is fine) and benched there, taking its timeline position
@@ -217,7 +217,7 @@
 //! Storage is resolved per command: `--local=<path>` selects local filesystem
 //! storage (a bare `--local` takes the path from `CARGO_BENCH_HISTORY_STORAGE`),
 //! otherwise the configured cloud backend is used; with neither, a storage-backed
-//! command errors (except `run --no-store`, which stores nothing). Every command
+//! command errors (except `collect --no-store`, which stores nothing). Every command
 //! also accepts `--config PATH` to point at a non-default file, `--repo
 //! PATH` to resolve git state from another directory, and `--verbose` to emit a
 //! step-by-step diagnostic trail to standard error.
@@ -234,16 +234,16 @@
 //! 1. **Deploy a Storage account** reachable over HTTPS. Entra-only accounts
 //!    (shared-key access disabled) are supported and preferred — there is then no
 //!    account key to leak. The `bench-history` container does not need to pre-exist;
-//!    `run` creates it on first use.
+//!    `collect` creates it on first use.
 //! 2. **Grant the identity that runs the tool the `Storage Blob Data Contributor`
 //!    role** on the account. This data-plane role covers both the blob read/write
-//!    the tool performs and the container creation `run` does on first use; the
+//!    the tool performs and the container creation `collect` does on first use; the
 //!    broader `Storage Blob Data Owner` is not needed for a flat blob container.
 //!    Locally, that identity is your `az login` user; in CI it is the federated
 //!    managed identity below.
 //! 3. **For CI, authenticate with GitHub OIDC workload identity federation** instead
 //!    of a stored secret: create a user-assigned managed identity, add a federated
-//!    credential whose subject matches the workflow's OIDC token (for a scheduled run
+//!    credential whose subject matches the workflow's OIDC token (for a run
 //!    on the default branch that is `repo:<owner>/<repo>:ref:refs/heads/main`) and
 //!    whose audience is `api://AzureADTokenExchange`, then grant it the role from
 //!    step 2. Run the tool from a job that has `permissions: { id-token: write }`,
@@ -262,7 +262,7 @@
 //! <https://github.com/folo-rs/folo/tree/main/infra/azure-bench-history-prod> and a
 //! separate test account/identity at
 //! <https://github.com/folo-rs/folo/tree/main/infra/azure-bench-history-test>, with the
-//! account name baked into the committed `.cargo/bench_history.toml` and the nightly
+//! account name baked into the committed `.cargo/bench_history.toml` and the per-push
 //! consumer at <https://github.com/folo-rs/folo/blob/main/.github/workflows/bench-history.yml>.
 
 mod analyze;
@@ -291,8 +291,8 @@ pub(crate) use cargo_bench_history_core::model;
 
 pub use cli::{Cli, EarlyExit};
 pub use command::{
-    AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, Command, InstallOptions,
-    ListOptions, ListSubject, LocalStorageSelection, PruneOptions, RunOptions, UnblessOptions,
+    AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
+    InstallOptions, ListOptions, ListSubject, LocalStorageSelection, PruneOptions, UnblessOptions,
 };
 pub use config::{ConfigError, default_template};
 pub use dispatch::{Overrides, run, run_with_overrides};

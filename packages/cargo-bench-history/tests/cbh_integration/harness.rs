@@ -18,7 +18,7 @@ pub(crate) use serial_test::serial;
 pub(crate) use testing::CwdGuard;
 
 /// The tool version recorded with each run. The integration test compiles within
-/// the package, so its `CARGO_PKG_VERSION` matches the version `run` records.
+/// the package, so its `CARGO_PKG_VERSION` matches the version `collect` records.
 pub(crate) const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// A process-global base repository template: a `master`-branch repo carrying the
@@ -357,7 +357,7 @@ impl GitGraph {
     }
 }
 
-/// A hermetic workspace for driving `run` against the real adapters.
+/// A hermetic workspace for driving `collect` against the real adapters.
 ///
 /// Writes a configuration and (optionally) fake engine output under a temporary
 /// directory, then drives a command with that directory as the process current
@@ -376,10 +376,10 @@ pub(crate) struct Workspace {
     /// case, so no extra `git` spawn); undated commits are read from git on first
     /// use. Git remains the source of truth — this only avoids redundant spawns.
     committer_times: RefCell<HashMap<String, Timestamp>>,
-    /// Arguments passed to the mock benchmark engine that `run`/`backfill` invoke
+    /// Arguments passed to the mock benchmark engine that `collect`/`backfill` invoke
     /// in place of `cargo bench`. They tell the mock which fixtures to emit (which
     /// `--summary` / `--criterion` cases, or an `--exit-code`), so each engine's
-    /// output tree is produced by the single benchmark command `run` invokes.
+    /// output tree is produced by the single benchmark command `collect` invokes.
     bench: Vec<String>,
     /// Streams commit creation through one long-lived `git fast-import` rather than
     /// a `git commit` subprocess per commit (see [`GitGraph`]). The `&self` commit
@@ -434,7 +434,7 @@ impl Workspace {
     }
 
     /// Alias for [`repo`](Self::repo): the standard repository already keeps its
-    /// working tree clean across a `run` (the volatile `.cargo`/`store`/`target`
+    /// working tree clean across a `collect` (the volatile `.cargo`/`store`/`target`
     /// directories are git-ignored). Retained for call sites that want to spell out
     /// that a clean tree — and therefore `history`-mode analysis — is intended.
     pub(crate) fn clean_repo(config: &str) -> Self {
@@ -805,7 +805,7 @@ impl Workspace {
         // keeps the test hermetic without mutating the process environment.
         let target_root = self.root().join("target");
 
-        // Drive `run`/`backfill` against the mock engine instead of `cargo bench`:
+        // Drive `collect`/`backfill` against the mock engine instead of `cargo bench`:
         // the program plus its fixture-describing arguments form the benchmark
         // command, which the single bench invocation runs to produce engine output.
         let mut bench_command = vec![mock_bench_engine::binary_path().to_owned()];
@@ -923,7 +923,7 @@ impl Workspace {
     }
 
     /// Writes `set` to `key` (a `/`-separated object key) under the local store,
-    /// mirroring the layout `run` produces — including the gzip body encoding the
+    /// mirroring the layout `collect` produces — including the gzip body encoding the
     /// storage layer applies, so the production read path inflates it correctly.
     pub(crate) fn seed(&self, key: &str, set: &Run) {
         let mut path = self.root().join("store");

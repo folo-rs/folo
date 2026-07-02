@@ -66,6 +66,17 @@ rules.
 resolving a Clippy lint where multiple valid forms exist; naming a constant,
 builder method, or variable.
 
+### [docs/design.md](docs/design.md)
+
+Where design documentation lives (inline `//` comments, package-level
+`docs/design.md`, per-component files), what it should contain (high-level
+patterns, tenets, and relationships — *what* and *why*, never *how*), and what to
+keep out of it (implementation detail, listings/catalogues, changelogs, decision
+logs).
+
+**Open this when**: writing or maintaining design documentation, and keeping it up
+to date with every commit.
+
 ### [docs/file-organization.md](docs/file-organization.md)
 
 How files, modules, and visibility are structured: small files, flat public
