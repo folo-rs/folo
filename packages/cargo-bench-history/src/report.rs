@@ -89,8 +89,10 @@ pub(crate) trait ReporterExt {
     /// pays nothing when `--verbose` is off, behind a single guard rather than
     /// one per note. Because the unconditional [`note`](Notes::note) lives on the
     /// [`Notes`] handle passed here — and nowhere else callers can reach — a bare
-    /// note is only ever emittable inside such a guarded block.
-    fn if_enabled(&self, body: impl FnOnce(Notes<'_, Self>));
+    /// note is only ever emittable inside such a guarded block. The closure is
+    /// higher-ranked over the handle's lifetime (`for<'a>`), so the handle cannot
+    /// be moved into outer state and used after the guard completes.
+    fn if_enabled(&self, body: impl for<'a> FnOnce(Notes<'a, Self>));
 
     /// Records the wall-clock duration of a named pipeline `stage`.
     ///
@@ -108,7 +110,7 @@ impl<R: Reporter + ?Sized> ReporterExt for R {
         }
     }
 
-    fn if_enabled(&self, body: impl FnOnce(Notes<'_, Self>)) {
+    fn if_enabled(&self, body: impl for<'a> FnOnce(Notes<'a, Self>)) {
         if self.enabled() {
             body(Notes { reporter: self });
         }
