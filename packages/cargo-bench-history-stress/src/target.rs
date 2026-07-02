@@ -522,7 +522,7 @@ mod tests {
         let fake = Arc::new(FakeRunner::default());
         let target = fake_azure_target(&fake, PathBuf::from("staging"));
 
-        block_on(target.provision(Logger::new(false)))
+        block_on(target.provision(Logger::new(true)))
             .expect("provisioning succeeds with a passing runner");
 
         let calls = recorded(&fake);
@@ -531,6 +531,17 @@ mod tests {
         assert!(call.contains("storage container create"), "got: {call}");
         assert!(call.contains("--account-name acct"), "got: {call}");
         assert!(call.contains("--name cont"), "got: {call}");
+    }
+
+    #[test]
+    fn provision_reports_the_local_store_directory() {
+        // A local target provisions by only announcing where its store lives, with
+        // no external tool involved; a verbose run runs (and prints) that
+        // explanatory detail.
+        let target = local_target(PathBuf::from("store"));
+
+        block_on(target.provision(Logger::new(true)))
+            .expect("provisioning a local target is infallible");
     }
 
     #[test]
@@ -551,7 +562,7 @@ mod tests {
         let fake = Arc::new(FakeRunner::default());
         let target = fake_azure_target(&fake, PathBuf::from("staging"));
 
-        block_on(target.upload(Logger::new(false)))
+        block_on(target.upload(Logger::new(true)))
             .expect("uploading succeeds with a passing runner");
 
         let calls = recorded(&fake);
