@@ -6,7 +6,16 @@ allow_dirty = true
 changelog_update = false
 
 # All we care about is crates.io, Git releases are not used.
+# Enabled per binary crate at CI time (release.yml injects git_release_enable = true
+# for the derived binary crates) so their prebuilt-binary uploads have a release to
+# attach to; the committed config stays free of per-binary release flags.
 git_release_enable = false
+
+# Pin the tag format explicitly (this is already the multi-package-workspace default).
+# The prebuilt-binary asset URLs in each binary crate's `[package.metadata.binstall]`
+# block are derived from this exact pattern, so freezing it here stops a future
+# release-plz default change from silently breaking `cargo binstall`.
+git_tag_name = "{{ package }}-v{{ version }}"
 
 # It complains about timeouts now and then. Not convinced it is really timing out but.
 publish_timeout = "45m"

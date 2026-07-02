@@ -8,7 +8,9 @@ cargo integration mode (default) and environment variable mode.
 
 ## Usage
 
-Install via `cargo install cargo-detect-package` and then:
+Install with [`cargo binstall cargo-detect-package`](https://github.com/cargo-bins/cargo-binstall)
+to fetch a prebuilt binary on supported targets (transparently building from source
+elsewhere), or `cargo install cargo-detect-package` to always build from source. Then:
 
 ```text
 cargo detect-package --path <PATH> [--via-env <ENV_VAR>] [--outside-package <ACTION>] <SUBCOMMAND>...

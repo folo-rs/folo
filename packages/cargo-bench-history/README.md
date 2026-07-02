@@ -18,6 +18,12 @@ filesystem storage (or a bare `--local` to take the path from the
 backend in `.cargo/bench_history.toml` and omit `--local`. A local path is
 machine-dependent, so it is never stored in the shared config file.
 
+## Installation
+
+Install with [`cargo binstall cargo-bench-history`](https://github.com/cargo-bins/cargo-binstall)
+to fetch a prebuilt binary on supported targets (transparently building from source
+elsewhere), or `cargo install cargo-bench-history` to always build from source.
+
 ```text
 # Write a starter .cargo/bench_history.toml (documents the optional cloud backend).
 cargo bench-history install

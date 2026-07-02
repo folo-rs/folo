@@ -121,14 +121,15 @@ publish:
     - uses: actions/checkout@v6
       with:
         fetch-depth: 0
-        persist-credentials: false
+        # persist-credentials stays at its default (true): release-plz pushes the
+        # release tags via git, which uses the checkout-persisted token.
     - uses: ./.github/actions/setup-environment
     - name: Enable git releases for the derived binary crates
       run: ...   # inject git_release_enable = true per bin crate (see release-plz config)
     - id: release-plz
       run: ...   # release-plz release, wrapped in the retry loop (see Robust publishing)
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # forge API (tags + GitHub releases)
 ```
 
 The `release-plz` invocation exposes `releases_created` (`"true"` when at least one

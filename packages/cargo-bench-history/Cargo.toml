@@ -11,6 +11,17 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[package.metadata.binstall]
+# Prebuilt binaries are published by .github/workflows/release.yml (see
+# docs/release-automation.md). release-plz tags releases as `<crate>-v<version>`,
+# which cargo-binstall's auto-detection does not derive, so the URL is explicit.
+# Archives are `.zip` on every platform and the binary sits at the archive root.
+# This crate is the slowest to build from source (Azure SDK), so it benefits most
+# from a prebuilt binary.
+pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-v{ version }-{ target }.zip"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "zip"
+
 [dependencies]
 anyspawn = { workspace = true, features = ["tokio"] }
 async-trait = { workspace = true }

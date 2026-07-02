@@ -1,0 +1,339 @@
+name: Release
+
+# Automated crates.io publishing + cargo-binstall prebuilt binaries, driven from
+# every push to `main`. Version bumping is the only manual step (`just prepare-release`
+# then push); everything here is automatic. See docs/release-automation.md for the
+# full design.
+#
+# Publishing and the binary jobs live in ONE workflow run on purpose: a tag/release
+# created with the default GITHUB_TOKEN does not trigger downstream `on: release` /
+# `on: push: tags` workflows, so driving the binary jobs from within this same run
+# (rather than a separate tag-triggered workflow) is what lets the ambient
+# GITHUB_TOKEN suffice — no PAT or GitHub App token needed.
+on:
+  push:
+    branches: [main]
+  # A bare manual re-trigger (no inputs). publish is a no-op when nothing changed, and
+  # plan-binaries reconciles + heals any missing prebuilt binaries. See the
+  # `plan-binaries` job and docs/release-automation.md ("Robust publishing").
+  workflow_dispatch: {}
+
+# Never cancel a publish mid-flight: releasing is not safe to interrupt. Keyed on the
+# ref so a later push to main queues behind the in-flight release rather than killing it.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # crates.io Trusted Publishing federates only this repository's identity; a fork
+    # cannot mint a matching OIDC token, so gate to the canonical repo (a fork's push
+    # skips cleanly instead of failing at the token exchange).
+    if: github.repository == 'folo-rs/folo'
+    runs-on: ubuntu-latest
+    # Generous ceiling: covers up to 3 publish attempts (release-plz publish_timeout is
+    # 45m) with 15-minute waits between retries, comfortably under this cap.
+    timeout-minutes: 180
+
+    permissions:
+      # release-plz pushes the git tags and creates the GitHub releases.
+      contents: write
+      # crates.io Trusted Publishing: release-plz exchanges a GitHub OIDC token for a
+      # short-lived crates.io token itself, so no CARGO_REGISTRY_TOKEN is stored.
+      id-token: write
+
+    # Consumed only for the run summary/logging below. The binary jobs deliberately do
+    # NOT depend on these (see the `plan-binaries` job): a matrix driven off "published
+    # this run" cannot heal a partial failure on a later re-run, because release-plz
+    # then skips the already-published crate and it drops out of `releases`.
+    outputs:
+      releases: ${{ steps.release.outputs.releases }}
+      releases_created: ${{ steps.release.outputs.releases_created }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        # Full history so release-plz can resolve tags/commits reliably.
+        with:
+          fetch-depth: 0
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Compose CI release-plz config (enable git releases for binary crates)
+        id: config
+        shell: bash
+        run: |
+          set -euo pipefail
+          # git_release_enable stays false in the committed release-plz.toml (there are
+          # many pure-library crates and we do not want GitHub releases for them). Here
+          # we derive the publishable binary crates and turn git_release_enable on for
+          # exactly those, in a CI-only copy of the config, so their prebuilt-binary
+          # uploads have a release to attach to. The set is always exactly the derived
+          # binary-crate set, so a newly-added binary crate is covered with no config
+          # edit and no library crate is ever released.
+          #
+          # The copy is written OUTSIDE the working tree so `cargo publish` does not see
+          # a dirty repository.
+          config_path="$RUNNER_TEMP/release-plz.ci.toml"
+
+          # Same filter as plan-binaries: publishable (`publish` is null or a non-empty
+          # registry list) AND has a `bin` target.
+          bin_crates=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[]
+                | select(.publish == null or (.publish | length > 0))
+                | select(any(.targets[]; (.kind | index("bin")) != null))
+                | .name')
+          echo "Binary crates to enable git releases for:"
+          echo "$bin_crates"
+
+          # tomlkit merges the flag into any existing [[package]] entry (or appends a new
+          # one), preserving the rest of the config. Use an isolated venv so we do not
+          # fight the runner's externally-managed system Python.
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet tomlkit
+          BIN_CRATES="$bin_crates" CONFIG_PATH="$config_path" \
+            "$RUNNER_TEMP/venv/bin/python" - <<'PY'
+          import os
+          import tomlkit
+
+          names = os.environ["BIN_CRATES"].split()
+          with open("release-plz.toml", encoding="utf-8") as f:
+              doc = tomlkit.parse(f.read())
+
+          pkgs = doc.get("package")
+          if pkgs is None:
+              pkgs = tomlkit.aot()
+              doc["package"] = pkgs
+
+          existing = {p.get("name"): p for p in pkgs}
+          for name in names:
+              entry = existing.get(name)
+              if entry is None:
+                  entry = tomlkit.table()
+                  entry["name"] = name
+                  pkgs.append(entry)
+              entry["git_release_enable"] = True
+
+          with open(os.environ["CONFIG_PATH"], "w", encoding="utf-8") as f:
+              f.write(tomlkit.dumps(doc))
+          PY
+
+          echo "path=$config_path" >> "$GITHUB_OUTPUT"
+          echo "--- CI release-plz config ---"
+          cat "$config_path"
+
+      - name: Release to crates.io (Trusted Publishing) with retries
+        id: release
+        shell: bash
+        env:
+          # release-plz reads the git-forge token from GIT_TOKEN (creates tags/releases).
+          GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_PLZ_CONFIG: ${{ steps.config.outputs.path }}
+        run: |
+          set -uo pipefail
+          # crates.io rate-limits and the ~30-minute OIDC token both argue for bounded
+          # retries. release-plz is idempotent: each run re-checks crates.io and publishes
+          # only versions not already there, so a retry after a rate-limit rejection (or a
+          # whole-workflow re-run) safely resumes a partially-published release. Each
+          # attempt performs its own OIDC token exchange, so a fresh token is minted per
+          # try — a publish that overruns the token lifetime just fails that attempt and
+          # the next one proceeds with a new token.
+          attempts=3
+          delay=900   # 15 minutes
+          n=1
+          out_file="$RUNNER_TEMP/release-plz.out.json"
+
+          while true; do
+            release-plz release --config "$RELEASE_PLZ_CONFIG" -o json >"$out_file"
+            code=$?
+            if [ "$code" -eq 0 ]; then
+              break
+            fi
+            if [ "$n" -ge "$attempts" ]; then
+              echo "release-plz failed after $n attempt(s) (exit $code)" >&2
+              exit "$code"
+            fi
+            echo "Attempt $n failed (exit $code); retrying in $delay seconds..." >&2
+            n=$((n + 1))
+            sleep "$delay"
+          done
+
+          releases=$(jq -c '.releases // []' "$out_file" 2>/dev/null || echo '[]')
+          created=false
+          if [ "$(echo "$releases" | jq 'length')" -gt 0 ]; then
+            created=true
+          fi
+          echo "releases=$releases" >> "$GITHUB_OUTPUT"
+          echo "releases_created=$created" >> "$GITHUB_OUTPUT"
+          echo "Published this run: $releases"
+
+  plan-binaries:
+    # Runs after every successful publish (including no-op pushes), NOT gated on whether
+    # anything was published this run. This is what makes retries self-healing: a plain
+    # re-run or a bare workflow_dispatch reconciles the actual published state against the
+    # uploaded assets and rebuilds only what is missing — no manual crate list.
+    needs: publish
+    if: github.repository == 'folo-rs/folo'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      # `gh release view` reads releases; checkout needs read.
+      contents: read
+
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      has_binaries: ${{ steps.plan.outputs.has_binaries }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Reconcile missing binary assets
+        id: plan
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The single triple -> runner source of truth. Native runners, one per target,
+          # no cross-compilation. GitHub exposes `-latest` only for x64 Linux/Windows and
+          # macOS (macos-latest is arm64); ARM Linux/Windows have no `-latest` alias, so
+          # they are pinned by version. Bump the pinned images when newer ones ship.
+          targets_json='[
+            {"triple":"x86_64-unknown-linux-gnu","os":"ubuntu-latest"},
+            {"triple":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm"},
+            {"triple":"x86_64-pc-windows-msvc","os":"windows-latest"},
+            {"triple":"aarch64-pc-windows-msvc","os":"windows-11-arm"},
+            {"triple":"aarch64-apple-darwin","os":"macos-latest"}
+          ]'
+
+          # Publishable binary crates and their current manifest versions (same filter as
+          # the publish job's git-release-enable step).
+          crates_json=$(cargo metadata --no-deps --format-version 1 \
+            | jq -c '[.packages[]
+                | select(.publish == null or (.publish | length > 0))
+                | select(any(.targets[]; (.kind | index("bin")) != null))
+                | {name: .name, version: .version}]')
+          echo "Publishable binary crates: $crates_json"
+
+          include='[]'
+          for row in $(echo "$crates_json" | jq -r '.[] | @base64'); do
+            crate=$(echo "$row" | base64 --decode)
+            name=$(echo "$crate" | jq -r '.name')
+            version=$(echo "$crate" | jq -r '.version')
+            tag="${name}-v${version}"
+
+            # Assets already on this crate's release. If the release does not exist yet
+            # (publish creates it), skip: there is nothing to attach binaries to.
+            if ! assets=$(gh release view "$tag" --json assets --jq '[.assets[].name]' 2>/dev/null); then
+              echo "No release found for $tag yet; skipping."
+              continue
+            fi
+
+            for t in $(echo "$targets_json" | jq -r '.[] | @base64'); do
+              target=$(echo "$t" | base64 --decode)
+              triple=$(echo "$target" | jq -r '.triple')
+              os=$(echo "$target" | jq -r '.os')
+              archive="${name}-v${version}-${triple}.zip"
+
+              if echo "$assets" | jq -e --arg a "$archive" 'index($a) != null' >/dev/null; then
+                continue   # already uploaded
+              fi
+
+              entry=$(jq -cn \
+                --arg name "$name" --arg version "$version" --arg tag "$tag" \
+                --arg triple "$triple" --arg os "$os" \
+                '{name: $name, version: $version, tag: $tag, triple: $triple, os: $os}')
+              include=$(echo "$include" | jq -c --argjson e "$entry" '. + [$e]')
+              echo "Needs build: $name $version for $triple"
+            done
+          done
+
+          count=$(echo "$include" | jq 'length')
+          echo "Missing (crate, target) archives: $count"
+          echo "matrix=$include" >> "$GITHUB_OUTPUT"
+          if [ "$count" -gt 0 ]; then
+            echo "has_binaries=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_binaries=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-binaries:
+    needs: [publish, plan-binaries]
+    if: needs.plan-binaries.outputs.has_binaries == 'true'
+    strategy:
+      # One target's failure must not abandon the others' archives. The reconciliation
+      # in plan-binaries means the next run rebuilds only whatever is still missing.
+      fail-fast: false
+      matrix:
+        # One entry per missing (crate, target) pair: {name, version, tag, triple, os}.
+        include: ${{ fromJSON(needs.plan-binaries.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+
+    permissions:
+      # Upload the archive + checksum as assets on the crate's release.
+      contents: write
+
+    steps:
+      - name: Checkout released tag
+        uses: actions/checkout@v6
+        # Build the exact released code, not the branch tip.
+        with:
+          ref: refs/tags/${{ matrix.tag }}
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Build, package, checksum and upload
+        uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: ${{ matrix.name }}
+          package: ${{ matrix.name }}
+          target: ${{ matrix.triple }}
+          # `$target` is expanded by the action. Archives are `.zip` on every platform
+          # (tar: none, zip: all) so each crate's [package.metadata.binstall] block needs
+          # no per-OS override; the binary sits at the archive root.
+          archive: ${{ matrix.name }}-v${{ matrix.version }}-$target
+          tar: none
+          zip: all
+          checksum: sha256
+          locked: true
+          # Upload to the crate's release (its own tag), not github.ref (the branch).
+          ref: refs/tags/${{ matrix.tag }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  alert:
+    # File a GitHub issue unique to this run whenever any job above fails, so every failed
+    # release is tracked individually (not folded into a rolling issue). `failure()` fires
+    # only on a real failure — a skipped build-binaries (nothing to build) does not count.
+    needs: [publish, plan-binaries, build-binaries]
+    if: failure() && github.repository == 'folo-rs/folo'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      issues: write
+
+    steps:
+      - name: Open failure issue for this run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Ensure the shared label exists (idempotent) so `gh issue create` cannot fail
+          # on a missing label.
+          gh label create ci-failure --color B60205 --description "CI workflow failure" --force >/dev/null 2>&1 || true
+          gh issue create \
+            --label ci-failure \
+            --title "Release workflow failed (run ${{ github.run_id }})" \
+            --body "The release workflow failed.
+
+          Once the cause is fixed, re-run this workflow (or a bare \`workflow_dispatch\`): the publish step resumes any partial crates.io publish, and \`plan-binaries\` reconciles and rebuilds any missing prebuilt binaries automatically.
+
+          Failed run: $RUN_URL"
