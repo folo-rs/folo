@@ -25,7 +25,7 @@ use crate::model::{EnvironmentInfo, GitInfo, RunContext, ToolchainInfo, detect_e
 use crate::probe::{EnvironmentProbe, SystemProbe};
 use crate::process::{BenchRunner, TokioBenchRunner};
 use crate::report::{Reporter, ReporterExt, StderrReporter};
-use crate::storage::{Storage, StorageError, build_storage};
+use crate::storage::{Storage, StorageError, StorageFacade, build_storage};
 use crate::text::count_noun;
 use crate::wiring::{
     STORAGE_ENV_VAR, resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo,
@@ -85,6 +85,7 @@ pub(crate) async fn execute(
     workspace_dir: &Path,
     target_root: Option<PathBuf>,
     bench_command: Option<Vec<String>>,
+    storage_override: Option<StorageFacade>,
 ) -> Result<RunOutcome, RunError> {
     let reporter = StderrReporter::new(options.verbose);
 
@@ -107,7 +108,10 @@ pub(crate) async fn execute(
     // Under `--no-store` the run produces no stored objects, so storage selection
     // is skipped entirely: the command works with no `--local` and no configured
     // cloud backend, which would otherwise be an error.
-    let storage = if options.no_store {
+    let storage = if let Some(backend) = storage_override {
+        reporter.note("storage backend: injected by test override");
+        Some(backend)
+    } else if options.no_store {
         reporter.note(
             "not resolving a storage backend because --no-store was given; \
              benchmarks will run but no results will be stored",
@@ -188,9 +192,10 @@ fn describe_storage(
             )
         }
         _ => match &config.storage {
-            Some(CloudStorageConfig::Azure {
-                account, container, ..
-            }) => format!("Azure Blob (account {account}, container {container})"),
+            Some(CloudStorageConfig::Azure(azure)) => format!(
+                "Azure Blob (account {}, container {})",
+                azure.account, azure.container
+            ),
             None => "none configured".to_owned(),
         },
     }

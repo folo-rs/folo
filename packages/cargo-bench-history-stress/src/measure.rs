@@ -283,6 +283,7 @@ fn overrides(workspace: &Path, anchor: Timestamp) -> Overrides {
         target_root: None,
         bench_command: None,
         now: Some(anchor),
+        storage_override: None,
     }
 }
 

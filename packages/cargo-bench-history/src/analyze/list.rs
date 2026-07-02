@@ -20,7 +20,7 @@ use serde::Serialize;
 use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
 use crate::report::{Reporter, ReporterExt, StderrReporter};
-use crate::storage::{Storage, build_storage};
+use crate::storage::{Storage, StorageFacade, resolve_storage};
 use crate::text::count_noun;
 use crate::wiring::{
     cache_env, resolve_cache_path, resolve_config_path, resolve_local_path, resolve_project_id,
@@ -49,6 +49,7 @@ pub(crate) async fn execute(
     options: &ListOptions,
     workspace_dir: &Path,
     now_override: Option<Timestamp>,
+    storage_override: Option<StorageFacade>,
 ) -> Result<RunOutcome, RunError> {
     let reporter = StderrReporter::new(options.verbose);
 
@@ -62,7 +63,14 @@ pub(crate) async fn execute(
     let project_id = resolve_project_id(&config, workspace_dir);
     let local = resolve_local_path(options.local.as_ref(), storage_env().as_deref())?;
     let cache = resolve_cache_path(options.cache.as_ref(), cache_env().as_deref())?;
-    let storage = build_storage(local.as_deref(), &config, workspace_dir, cache.as_deref())?;
+    let storage = resolve_storage(
+        storage_override,
+        local.as_deref(),
+        &config,
+        workspace_dir,
+        cache.as_deref(),
+        &reporter,
+    )?;
     storage.synchronize_cache(&project_id, &reporter).await?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));

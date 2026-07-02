@@ -229,14 +229,19 @@ bench-history-stress-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_TEST_AZURE_
     cargo run --release -p cargo-bench-history-stress --locked -- --storage azure --account $account {{ ARGS }}
 
 # Run the cargo-bench-history Azure storage tests against a local Azurite blob
-# emulator (the self-signed account-SAS auth path), as opposed to `test-azure` which
-# targets a REAL account via Microsoft Entra ID. Mirrors the CI `test-azurite` job
-# for local verification.
+# emulator running in `--oauth basic` mode (a locally-faked Microsoft Entra token
+# over HTTPS), as opposed to `test-azure` which targets a REAL account via
+# Microsoft Entra ID. Mirrors the CI `test-azurite` job for local verification.
 #
 # Requires the Azurite emulator (installed by `just install-tools`, or manually via
-# `npm install -g azurite`). If an emulator is already listening on 127.0.0.1:10000
-# this recipe reuses it; otherwise it starts one (in-memory, no persisted state) and
-# stops it again when the tests finish — even on failure. BENCH_HISTORY_REQUIRE_AZURITE
+# `npm install -g azurite`). Because Entra is the only supported auth mode and it
+# requires TLS, this recipe uses a self-signed certificate (generated once and cached
+# under the Cargo target directory, so it is reused across runs and cleaned up with
+# `target/`) and starts Azurite with `--cert/--pwd --oauth basic` over HTTPS; the tests
+# trust that cert by disabling certificate validation. If an emulator is already listening on
+# 127.0.0.1:10000 this recipe reuses it (which must therefore also be an HTTPS
+# `--oauth basic` emulator); otherwise it starts one (in-memory, no persisted state)
+# and stops it again when the tests finish — even on failure. BENCH_HISTORY_REQUIRE_AZURITE
 # is set so an unreachable emulator is a hard error rather than a silent skip, mirroring
 # the CI job. The `azure azurite` test filter selects the Azure-backend tests by the
 # naming convention (the `storage::azure` unit tests and the `*_in_azurite` integration
@@ -275,9 +280,42 @@ test-azurite:
         Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
     }
 
+    # Generate a self-signed certificate for Azurite's HTTPS listener, written as a
+    # password-protected PFX (the cross-platform format .NET exports). Entra auth
+    # requires TLS, so `--oauth basic` only runs over HTTPS; the tests trust this cert
+    # by disabling certificate validation, so its contents (beyond being a valid cert
+    # for 127.0.0.1) do not matter. It is given a 10-year lifetime so the cached copy
+    # never needs rolling.
+    function New-AzuriteCertificate {
+        param([Parameter(Mandatory)][string] $PfxPath, [Parameter(Mandatory)][string] $Password)
+
+        $rsa = [System.Security.Cryptography.RSA]::Create(2048)
+        try {
+            $request = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
+                "CN=127.0.0.1",
+                $rsa,
+                [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+                [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+            $sanBuilder = [System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
+            $sanBuilder.AddIpAddress([System.Net.IPAddress]::Loopback)
+            $sanBuilder.AddDnsName("localhost")
+            $request.CertificateExtensions.Add($sanBuilder.Build())
+            $notBefore = [System.DateTimeOffset]::UtcNow.AddDays(-1)
+            $notAfter = [System.DateTimeOffset]::UtcNow.AddYears(10)
+            $certificate = $request.CreateSelfSigned($notBefore, $notAfter)
+            $pfxBytes = $certificate.Export(
+                [System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx,
+                $Password)
+            [System.IO.File]::WriteAllBytes($PfxPath, $pfxBytes)
+        } finally {
+            $rsa.Dispose()
+        }
+    }
+
     $startedByUs = $false
     $launcher = $null
     $emulatorPid = 0
+    $certPassword = "azurite"
     try {
         if (Test-AzuriteReachable) {
             Write-Host "Azurite already reachable at ${blobHost}:${blobPort}; reusing the running emulator."
@@ -288,16 +326,32 @@ test-azurite:
                 throw "Azurite is not installed. Install it with: npm install -g azurite"
             }
 
+            # Cache the certificate under the Cargo target directory (honoring
+            # CARGO_TARGET_DIR and any `build.target-dir` config) so it is generated
+            # once and reused, and cleaned up whenever `target/` is removed.
+            $targetDir = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).target_directory
+            $certPath = Join-Path $targetDir "azurite/selfsigned.pfx"
+            if (Test-Path $certPath) {
+                Write-Host "Reusing the cached self-signed certificate at $certPath."
+            } else {
+                New-Item -ItemType Directory -Path (Split-Path -Parent $certPath) -Force | Out-Null
+                Write-Host "Generating a self-signed certificate at $certPath (cached for future runs)."
+                New-AzuriteCertificate -PfxPath $certPath -Password $certPassword
+            }
+
             $azuriteArgs = @(
                 "--blobHost", $blobHost,
                 "--blobPort", "$blobPort",
+                "--cert", $certPath,
+                "--pwd", $certPassword,
+                "--oauth", "basic",
                 "--inMemoryPersistence",
                 "--skipApiVersionCheck",
                 "--silent",
                 "--loose"
             )
 
-            Write-Host "Starting Azurite blob emulator on ${blobHost}:${blobPort} (in-memory)."
+            Write-Host "Starting Azurite blob emulator on ${blobHost}:${blobPort} (in-memory, HTTPS + OAuth)."
             $startParams = @{
                 FilePath     = $azurite.Source
                 ArgumentList = $azuriteArgs
@@ -331,7 +385,7 @@ test-azurite:
         # Pin the endpoint to the emulator this recipe manages so a developer's pre-existing
         # AZURITE_BLOB_ENDPOINT cannot redirect the tests to a different target (the recipe
         # would then start/reuse one emulator while the tests hit another — non-hermetic).
-        $env:AZURITE_BLOB_ENDPOINT = "http://${blobHost}:${blobPort}/devstoreaccount1"
+        $env:AZURITE_BLOB_ENDPOINT = "https://${blobHost}:${blobPort}/devstoreaccount1"
         $env:MOCK_BENCH_ENGINE = just _mock-engine-path | Select-Object -Last 1
         Write-Host "Running Azurite-backed tests against ${blobHost}:${blobPort}."
         cargo +$env:RUST_MSRV nextest run -p cargo-bench-history --locked --no-fail-fast azure azurite

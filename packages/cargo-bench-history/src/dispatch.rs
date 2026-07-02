@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use jiff::Timestamp;
 
 use crate::commands;
+use crate::storage::StorageOverride;
 use crate::{Command, RunError, RunOutcome};
 
 /// Test-only overrides for [`run_with_overrides`].
@@ -31,6 +32,11 @@ pub struct Overrides {
     pub bench_command: Option<Vec<String>>,
     /// The clock anchor for the analysis default `--since` lookback window.
     pub now: Option<Timestamp>,
+    /// A pre-built storage backend for `run`/`analyze` to use instead of the one
+    /// resolved from configuration. End-to-end tests use this to drive commands
+    /// against an Azurite backend behind a locally-faked Entra token and a
+    /// certificate-trusting transport, which no configuration could produce.
+    pub storage_override: Option<StorageOverride>,
 }
 
 /// Executes a parsed command.
@@ -69,20 +75,33 @@ pub async fn run_with_overrides(
         target_root,
         bench_command,
         now,
+        storage_override,
     } = overrides;
     let workspace_dir = match workspace_dir {
         Some(dir) => dir,
         None => std::env::current_dir().map_err(RunError::Io)?,
     };
     let workspace_dir = workspace_dir.as_path();
+    let storage_override = storage_override.map(|o| o.0);
     match command {
         Command::Run(options) => {
-            commands::run(options, workspace_dir, target_root, bench_command).await
+            commands::run(
+                options,
+                workspace_dir,
+                target_root,
+                bench_command,
+                storage_override,
+            )
+            .await
         }
         Command::Install(options) => commands::install(options, workspace_dir).await,
-        Command::Analyze(options) => commands::analyze(options, workspace_dir, now).await,
-        Command::List(options) => commands::list(options, workspace_dir, now).await,
-        Command::Prune(options) => commands::prune(options, workspace_dir).await,
+        Command::Analyze(options) => {
+            commands::analyze(options, workspace_dir, now, storage_override).await
+        }
+        Command::List(options) => {
+            commands::list(options, workspace_dir, now, storage_override).await
+        }
+        Command::Prune(options) => commands::prune(options, workspace_dir, storage_override).await,
         Command::Backfill(options) => {
             commands::backfill(options, workspace_dir, bench_command).await
         }

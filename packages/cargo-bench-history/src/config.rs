@@ -25,22 +25,17 @@ const DEFAULT_TEMPLATE: &str = "\
 # id = \"my-project\"            # defaults to the workspace directory name
 # default_branch = \"main\"      # base branch for `analyze`; auto-detected by default
 
-# To store results in Azure Blob Storage, configure exactly one cloud backend
-# here. Authentication is, in priority order: a self-signed account SAS (set
-# `account_key`), a pre-made SAS token (set `sas_token`), or Microsoft Entra ID
-# (set neither; requires an HTTPS endpoint). Entra ID is the recommended mode for
-# CI, where GitHub Actions can federate into Azure without a stored secret; for
-# setup, see
+# To store results in Azure Blob Storage, configure the cloud backend here.
+# Authentication is always Microsoft Entra ID (OAuth): the endpoint must be
+# HTTPS and the identity running the tool is granted data-plane access to the
+# container. In CI, GitHub Actions federates into Azure without a stored secret;
+# for setup, see
 # https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-azure
 #
 # [storage.azure]
 # account = \"mystorageaccount\"
 # container = \"bench-history\"
 # endpoint = \"https://mystorageaccount.blob.core.windows.net\"  # optional
-# account_key = \"...\"   # optional: base64 account key, self-signs an account SAS
-# sas_token = \"...\"     # optional: a pre-made SAS token, used verbatim. Give the
-#                        # query string only, without the leading '?', for example
-#                        # \"sv=2024-11-04&ss=b&srt=o&sp=r&se=2030-01-01T00:00:00Z&sig=...\"
 ";
 
 /// The parsed configuration file.
@@ -78,27 +73,28 @@ pub(crate) struct ProjectConfig {
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum CloudStorageConfig {
     /// Store result sets in an Azure Blob Storage container.
-    Azure {
-        /// The storage account name (e.g. `devstoreaccount1` for Azurite).
-        account: String,
-        /// The blob container that holds the result-set objects.
-        container: String,
-        /// The blob service endpoint. Defaults to
-        /// `https://{account}.blob.core.windows.net`; set it explicitly to reach
-        /// an emulator such as Azurite (e.g.
-        /// `http://127.0.0.1:10000/devstoreaccount1`).
-        #[serde(default)]
-        endpoint: Option<String>,
-        /// A base64 storage account key. When set, the backend self-signs an
-        /// account SAS to authenticate (the mode used against Azurite).
-        #[serde(default)]
-        account_key: Option<String>,
-        /// A pre-made SAS token (the URL query string only, without a leading
-        /// `?`, e.g. `sv=2024-11-04&ss=b&srt=o&sp=r&se=...&sig=...`). When set, it
-        /// is used verbatim to authenticate. Mutually exclusive with `account_key`.
-        #[serde(default)]
-        sas_token: Option<String>,
-    },
+    Azure(AzureStorageConfig),
+}
+
+/// Azure Blob Storage configuration for a `[storage.azure]` table.
+///
+/// Authentication is always Microsoft Entra ID (OAuth); no secret is carried in
+/// this shared file. Unknown fields are rejected (`deny_unknown_fields`), so a
+/// leftover legacy auth key (`account_key`, `sas_token`) names itself in a parse
+/// error rather than being silently ignored.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AzureStorageConfig {
+    /// The storage account name (e.g. `devstoreaccount1` for Azurite).
+    pub account: String,
+    /// The blob container that holds the result-set objects.
+    pub container: String,
+    /// The blob service endpoint. Defaults to
+    /// `https://{account}.blob.core.windows.net`; set it explicitly to reach an
+    /// emulator such as Azurite (e.g. `https://127.0.0.1:10000/devstoreaccount1`).
+    /// Entra ID requires HTTPS.
+    #[serde(default)]
+    pub endpoint: Option<String>,
 }
 
 /// Parses a configuration from TOML source text.
@@ -219,33 +215,23 @@ mod tests {
     }
 
     #[test]
-    fn azure_storage_with_account_key_is_parsed() {
+    fn azure_storage_parses_account_container_and_endpoint() {
         let text = "\
 [storage.azure]
 account = \"devstoreaccount1\"
 container = \"bench-history\"
-endpoint = \"http://127.0.0.1:10000/devstoreaccount1\"
-account_key = \"a2V5\"
+endpoint = \"https://127.0.0.1:10000/devstoreaccount1\"
 ";
         let config = parse_config(text).unwrap();
-        let Some(CloudStorageConfig::Azure {
-            account,
-            container,
-            endpoint,
-            account_key,
-            sas_token,
-        }) = config.storage
-        else {
+        let Some(CloudStorageConfig::Azure(azure)) = config.storage else {
             panic!("expected azure storage, got {:?}", config.storage);
         };
-        assert_eq!(account, "devstoreaccount1");
-        assert_eq!(container, "bench-history");
+        assert_eq!(azure.account, "devstoreaccount1");
+        assert_eq!(azure.container, "bench-history");
         assert_eq!(
-            endpoint.as_deref(),
-            Some("http://127.0.0.1:10000/devstoreaccount1")
+            azure.endpoint.as_deref(),
+            Some("https://127.0.0.1:10000/devstoreaccount1")
         );
-        assert_eq!(account_key.as_deref(), Some("a2V5"));
-        assert_eq!(sas_token, None);
     }
 
     #[test]
@@ -256,33 +242,45 @@ account = \"prod\"
 container = \"history\"
 ";
         let config = parse_config(text).unwrap();
-        let Some(CloudStorageConfig::Azure {
-            endpoint,
-            account_key,
-            sas_token,
-            ..
-        }) = config.storage
-        else {
+        let Some(CloudStorageConfig::Azure(azure)) = config.storage else {
             panic!("expected azure storage, got {:?}", config.storage);
         };
-        assert_eq!(endpoint, None);
-        assert_eq!(account_key, None);
-        assert_eq!(sas_token, None);
+        assert_eq!(azure.endpoint, None);
     }
 
     #[test]
-    fn azure_storage_with_sas_token_is_parsed() {
-        let text = "\
-[storage.azure]
-account = \"prod\"
-container = \"history\"
-sas_token = \"sv=2021-08-06&sig=abc\"
-";
-        let config = parse_config(text).unwrap();
-        let Some(CloudStorageConfig::Azure { sas_token, .. }) = config.storage else {
-            panic!("expected azure storage, got {:?}", config.storage);
+    fn azure_storage_rejects_a_legacy_account_key_field() {
+        // The legacy shared-key auth mode is gone: authentication is always Entra
+        // ID. A leftover `account_key` is not silently ignored — `deny_unknown_fields`
+        // makes it a loud parse error that names the offending key, forcing a clean
+        // migration.
+        let error = parse_config(
+            "[storage.azure]\naccount = \"a\"\ncontainer = \"c\"\naccount_key = \"a2V5\"\n",
+        )
+        .unwrap_err();
+        let ConfigError::Parse(message) = error else {
+            panic!("expected a parse error, got {error:?}");
         };
-        assert_eq!(sas_token.as_deref(), Some("sv=2021-08-06&sig=abc"));
+        assert!(
+            message.contains("account_key"),
+            "unexpected parse error: {message}"
+        );
+    }
+
+    #[test]
+    fn azure_storage_rejects_a_legacy_sas_token_field() {
+        // The legacy verbatim-SAS auth mode is gone too, and rejected the same way.
+        let error = parse_config(
+            "[storage.azure]\naccount = \"a\"\ncontainer = \"c\"\nsas_token = \"sig=x\"\n",
+        )
+        .unwrap_err();
+        let ConfigError::Parse(message) = error else {
+            panic!("expected a parse error, got {error:?}");
+        };
+        assert!(
+            message.contains("sas_token"),
+            "unexpected parse error: {message}"
+        );
     }
 
     #[test]
@@ -379,10 +377,7 @@ key = \"ci-pool-a\"
 
         let config = load_config(&path, true).await.unwrap();
 
-        assert!(matches!(
-            config.storage,
-            Some(CloudStorageConfig::Azure { .. })
-        ));
+        assert!(matches!(config.storage, Some(CloudStorageConfig::Azure(_))));
         assert_eq!(config.project.id.as_deref(), Some("folo"));
     }
 

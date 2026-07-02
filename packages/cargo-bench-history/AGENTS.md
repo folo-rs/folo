@@ -739,10 +739,8 @@ never insert real-time delays in tests.
 * Any test that touches the real filesystem, spawns a process, starts a Tokio
   runtime, or reads the wall clock must be `#[tokio::test]` (or `#[test]` for
   `std::fs`) **and** `#[cfg_attr(miri, ignore = "…")]` with a reason. This covers
-  the real-IO end-to-end tests, the Azurite network tests, and the account-key
-  `AzureBlobStorage` tests (building an account SAS reads the clock for its
-  expiry; the pure SAS signing math is still covered under Miri by the
-  fixed-expiry golden vector in `storage::sas`).
+  the real-IO end-to-end tests and the Azurite network tests (the fake Entra token
+  they inject reads the clock for its `iat`/`nbf`/`exp` claims).
 
 ## Mock engine for end-to-end tests
 
@@ -905,25 +903,23 @@ the upstream schema genuinely changes, and update the parser/tests to match.
 **always compiled in** — `cargo-bench-history` is a CLI tool that users install
 without choosing feature flags, so gating the backend behind a build feature
 would only ever hide a backend the user explicitly configured. It pulls in the
-Azure SDK and the RustCrypto `hmac`/`sha2` crates used to self-sign SAS tokens.
-Object keys map 1:1 to `/`-separated blob names, so the key model is identical to
-`LocalStorage` (write-once, list-by-prefix).
+Azure SDK. Object keys map 1:1 to `/`-separated blob names, so the key model is
+identical to `LocalStorage` (write-once, list-by-prefix).
 
-Authentication is resolved once in `AzureBlobStorage::from_config`, in priority
-order: a self-signed account SAS (`account_key`), a verbatim `sas_token`, or
-Microsoft Entra ID. SAS modes carry the token in the endpoint URL's query and pass
-no credential, so the emulator's plain-HTTP endpoint is accepted; Entra mode passes
-a token credential and requires HTTPS. The Entra credential is chosen by the
-`entra_credential` helper: in a GitHub Actions job configured for Azure federation
-(detected by `github_oidc::credential_from` finding `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`
-and the `ACTIONS_ID_TOKEN_REQUEST_*` pair) it builds a `ClientAssertionCredential`
-whose assertion (`storage::github_oidc::GithubOidcAssertion`) mints a **fresh**
-GitHub OIDC JWT on demand for each Entra token exchange; everywhere else (local
-`az login`, the `test-azure` CI job) it falls back to `DeveloperToolsCredential`.
-Self-minting is what keeps a multi-hour collection run authenticated: a single
-`azure/login` session caches one OIDC assertion that expires within minutes, so the
-first access-token refresh after it lapses re-submits a dead assertion and Entra
-rejects it (`AADSTS700024`).
+Authentication is **Microsoft Entra ID (OAuth) only**, resolved once in
+`AzureBlobStorage::from_config`: a token credential is attached to every request
+and the endpoint is always HTTPS (Entra bearer tokens require TLS). The Entra
+credential is chosen by the `entra_credential` helper: in a GitHub Actions job
+configured for Azure federation (detected by `github_oidc::credential_from` finding
+`AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and the `ACTIONS_ID_TOKEN_REQUEST_*` pair) it
+builds a `ClientAssertionCredential` whose assertion
+(`storage::github_oidc::GithubOidcAssertion`) mints a **fresh** GitHub OIDC JWT on
+demand for each Entra token exchange; everywhere else (local `az login`, the
+`test-azure` CI job) it falls back to `DeveloperToolsCredential`. Self-minting is
+what keeps a multi-hour collection run authenticated: a single `azure/login` session
+caches one OIDC assertion that expires within minutes, so the first access-token
+refresh after it lapses re-submits a dead assertion and Entra rejects it
+(`AADSTS700024`).
 The chosen Entra credential is then wrapped in a `CachingCredential` decorator that
 holds a cache lock across the inner acquisition, so a concurrent read burst collapses
 to one token acquisition rather than racing the Windows MSAL token-cache lockfile
@@ -932,8 +928,32 @@ to one token acquisition rather than racing the Windows MSAL token-cache lockfil
 `#[async_trait]` `TokenCredential`/`ClientAssertion` traits, so they are where the
 crate pulls in `async_trait` — the crate's own IO ports still use RPITIT
 (`impl Future`), as the external traits leave no choice.
-The account-SAS signer lives in `storage::sas` and is verified against a pinned
-golden signature — do not "fix" that test by editing the expected value.
+
+Legacy shared-key/account-SAS and verbatim-SAS auth modes have been removed; a
+leftover `account_key` or `sas_token` in a `[storage.azure]` block is now a loud
+configuration parse error (`#[serde(deny_unknown_fields)]`), the same clean-migration
+stance the crate takes for unknown `[storage.local]` fields.
+
+### The Azurite / test seam
+
+Azurite has no real Entra, so the network tests run it in `--oauth basic` mode over
+HTTPS behind a throwaway self-signed certificate. Two things are injected to make
+that work, neither of which `from_config` produces:
+
+* a **fake `TokenCredential`** returning a locally-crafted JWT whose structure and
+  `iss`/`aud`/`nbf`/`iat`/`exp` claims satisfy Azurite's `--oauth basic` check (it
+  never verifies the signature); and
+* an **`HttpClient`** that trusts the emulator's cert (a `reqwest` client with
+  `danger_accept_invalid_certs(true)` and `no_gzip()` to match production's
+  no-auto-decompression transport).
+
+`AzureBlobStorage::from_parts(account, container, endpoint, credential, http_client)`
+assembles a backend from those parts. The `storage::azure` unit round-trips call it
+directly; the `cbh_azure` end-to-end tests inject a fully-built backend through
+`Overrides::storage_override` (built via the `#[doc(hidden)]`
+`azure_backend_from_parts` seam), so production carries no "fake token" backdoor.
+Real signature validation stays proven by the `test-azure` / `test-azure-gh` jobs
+against a real Entra-only account.
 
 ### Running the Azurite tests locally
 
@@ -949,22 +969,27 @@ The `just test-azurite` recipe wraps the whole flow. Install the emulator once w
 just test-azurite
 ```
 
-It starts an in-memory Azurite on `127.0.0.1:10000` (reusing one already running),
+It generates a throwaway self-signed certificate, starts an in-memory Azurite on
+`127.0.0.1:10000` in `--oauth basic` mode over HTTPS (reusing one already running),
 runs the Azure-backend tests with `BENCH_HISTORY_REQUIRE_AZURITE=1` so an
 unreachable emulator is a hard error rather than a silent skip, and stops the
 emulator it started afterward — even on failure (it never stops one it did not
 start). It is the local counterpart of `just test-azure`. To run the tests by hand
-instead, start the emulator and point `cargo` at it:
+instead, start the emulator with a cert and OAuth, then point `cargo` at it:
 
 ```powershell
+# Generate a self-signed cert (PFX) that Azurite serves over HTTPS:
+$pfx = "$env:TEMP\azurite.pfx"
+$cert = New-SelfSignedCertificate -DnsName "127.0.0.1" -CertStoreLocation Cert:\CurrentUser\My
+Export-PfxCertificate -Cert $cert -FilePath $pfx -Password (ConvertTo-SecureString "azurite" -AsPlainText -Force)
 # On Windows azurite-blob is a .cmd, so launch it through cmd:
-cmd /c azurite-blob --blobHost 127.0.0.1 --blobPort 10000 --inMemoryPersistence --skipApiVersionCheck --silent --loose
+cmd /c azurite-blob --blobHost 127.0.0.1 --blobPort 10000 --cert $pfx --pwd azurite --oauth basic --inMemoryPersistence --skipApiVersionCheck --silent --loose
 # then, in another shell:
 cargo test -p cargo-bench-history
 ```
 
 * `AZURITE_BLOB_ENDPOINT` overrides the default
-  `http://127.0.0.1:10000/devstoreaccount1` endpoint.
+  `https://127.0.0.1:10000/devstoreaccount1` endpoint.
 * `BENCH_HISTORY_REQUIRE_AZURITE=1` turns an unreachable emulator into a hard
   failure instead of a skip. `just test-azurite` sets it for you; CI also sets it
   in the dedicated `test-azurite` job so a misconfigured emulator can never
@@ -979,11 +1004,12 @@ without an emulator and so cannot cover them).
 ### Running the real-Azure tests locally
 
 The `*_in_real_azure` tests in `cbh_azure` exercise the **Microsoft Entra ID**
-path against a real Storage account (the production default that Azurite's
-account-SAS path never touches). They **self-skip** unless `ENABLE_AZURE` is set —
-an explicit opt-in, so the account name living in `constants.env` does not by itself
-make a plain test run target the cloud. Each test uses a fresh container that is
-deleted when it finishes, even on panic.
+path against a real Storage account, driven from configuration (no injected
+backend), which is what proves the real credential and real signature validation
+that Azurite's faked-token path cannot. They **self-skip** unless `ENABLE_AZURE` is
+set — an explicit opt-in, so the account name living in `constants.env` does not by
+itself make a plain test run target the cloud. Each test uses a fresh container that
+is deleted when it finishes, even on panic.
 
 One-time: deploy the account, managed identity and federated credentials with the
 Bicep + scripts in [`infra/azure-bench-history-test/`](../../infra/azure-bench-history-test/)
@@ -1025,9 +1051,9 @@ The `mutants` CI jobs run without Azurite, so the SDK-delegating IO methods
 `upload_with_retry` and `upload` helpers) — whose only coverage is the Azurite
 round-trip tests — carry `#[cfg_attr(test, mutants::skip)]`, the same pattern
 `probe.rs` uses for its `git`/`rustc` shell-outs. The pure logic those methods
-lean on (`classify`, `map_error`, the `storage::sas` signer, and
-`account_sas_expiry`) has dedicated unit tests and stays under mutation testing,
-so the error-mapping and signing behavior is still mutation-covered.
+lean on (`classify`, `map_error`, and the endpoint/URL construction) has dedicated
+unit tests and stays under mutation testing, so the error-mapping behavior is still
+mutation-covered.
 
 **Skipping non-discriminating tests under mutation.** The `just mutants` recipe builds
 with `--cfg mutants` set (it ensures `RUSTFLAGS` contains `--cfg mutants`, preserving any
