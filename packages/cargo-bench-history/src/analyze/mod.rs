@@ -741,7 +741,8 @@ struct WorkerFold {
 /// ~5% above the buffered-parallel variant; the win it buys is the ~10% faster wall
 /// time and better core use from moving the fold off the main thread. The decompress +
 /// JSON parse — the CPU-dominated cost — is spread across the runtime's worker threads.
-/// See `docs/DESIGN.md` decision 36.
+/// See the "Architecture" section of `docs/DESIGN.md` and the load section of
+/// `docs/analyze.md`.
 async fn fold_runs_chunked<S>(
     storage: &S,
     spawner: &Spawner,
