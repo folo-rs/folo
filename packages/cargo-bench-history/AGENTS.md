@@ -627,7 +627,7 @@ Key invariants:
   `first_parent(to).split_off(position(from))` (avoid `vec[a..]` — clippy
   `indexing_slicing`).
 * **Pre-run existence check** (`run_commits`): in the default skip-existing mode,
-  `recorded_commits` lists the project prefix (`v1/{project}/`) once and
+  `recorded_commits` lists the project objects prefix (`v1/{project}/objects/`) once and
   `commit_of_clean_key` extracts each clean object's commit segment; a commit in
   that set is reported `SkippedExisting` and its benchmark execution is skipped
   outright (no `reset_to`, no `run`). This makes backfill resumable without paying
@@ -1085,8 +1085,8 @@ testing and coverage). See that package's `README.md` for the dataset shape and 
 Key facts when touching it:
 
 * **Zero production-code coupling.** The harness only *writes* objects in the same
-  key layout the storage backends use (`v1/{project}/{engine}/{triple}/{machine}/
-  {commit}/{file}`) and in the same **gzip body encoding** — it calls
+  key layout the storage backends use (`v1/{project}/objects/{engine}/{triple}/
+  {machine}/{commit}/{file}`) and in the same **gzip body encoding** — it calls
   `cargo_bench_history_core::codec::compress` (the exact function the backends use)
   rather than reimplementing it, and `seed.rs` reports the *compressed* byte length
   so the total-bytes figure reflects real on-disk/wire volume. It then reads the
