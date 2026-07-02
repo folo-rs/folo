@@ -667,6 +667,7 @@ fn config_error(message: impl Into<String>) -> StorageError {
 mod tests {
     use super::*;
 
+    use azure_core::http::headers::Headers;
     use futures::executor::block_on;
 
     /// Builds an Azure HTTP-response error with the given status and storage
@@ -761,6 +762,27 @@ mod tests {
             _request: &azure_core::http::Request,
         ) -> azure_core::Result<azure_core::http::AsyncRawResponse> {
             panic!("the stub HTTP client must not be used")
+        }
+    }
+
+    /// An HTTP client that answers every request with `403 Forbidden`, standing
+    /// in for a non-conflict, non-retryable Azure failure (for example a rejected
+    /// credential). The status is outside the SDK's retry set, so the request is
+    /// issued exactly once and the test incurs no backoff delay.
+    #[derive(Debug)]
+    struct ForbiddenHttpClient;
+
+    #[async_trait::async_trait]
+    impl HttpClient for ForbiddenHttpClient {
+        async fn execute_request(
+            &self,
+            _request: &azure_core::http::Request,
+        ) -> azure_core::Result<azure_core::http::AsyncRawResponse> {
+            Ok(azure_core::http::AsyncRawResponse::from_bytes(
+                StatusCode::Forbidden,
+                Headers::new(),
+                azure_core::Bytes::new(),
+            ))
         }
     }
 
@@ -1537,6 +1559,37 @@ mod tests {
         assert!(
             storage.invalidation.take(),
             "replacing an existing key must arm invalidation"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg_attr(
+        miri,
+        ignore = "drives the Azure SDK request pipeline, which Miri cannot run"
+    )]
+    async fn put_overwrite_forwards_a_non_conflict_upload_error() {
+        // The write-once probe fails with a non-conflict, non-retryable status
+        // (403 Forbidden here), which is neither `AlreadyExists` nor a missing
+        // container: `put_overwrite` must forward it verbatim rather than fall
+        // through to the replace path.
+        let storage = AzureBlobStorage::from_parts(
+            "acct",
+            "history",
+            None,
+            fake_credential(),
+            Arc::new(ForbiddenHttpClient),
+        )
+        .unwrap();
+
+        let error = storage
+            .put_overwrite("v1/proj/object.json", b"body")
+            .await
+            .expect_err("a forbidden upload must surface as an error");
+
+        assert!(matches!(error, StorageError::Io(_)));
+        assert!(
+            !storage.invalidation.take(),
+            "a failed write-once probe must not arm invalidation"
         );
     }
 

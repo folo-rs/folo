@@ -597,9 +597,10 @@ mod tests {
     #[test]
     fn resolve_storage_uses_an_uncached_override_verbatim() {
         // An override without `--cache` is used exactly as injected, with a note that
-        // the backend came from a test override rather than configuration.
-        let dir = tempdir().unwrap();
-        let injected = StorageFacade::Local(LocalStorage::new(dir.path()));
+        // the backend came from a test override rather than configuration. The path is
+        // never touched (`resolve_storage` does no I/O), so a literal keeps this
+        // Miri-clean.
+        let injected = StorageFacade::Local(LocalStorage::new(Path::new("/mirror")));
         let reporter = RecordingReporter::new();
         let storage = resolve_storage(
             Some(injected),
@@ -627,17 +628,16 @@ mod tests {
     fn resolve_storage_leaves_a_non_azure_override_unchanged_under_cache() {
         // Only an Azure override gains a mirror when `--cache` is set; every other
         // variant is returned unchanged (the CLI forbids `--local` with `--cache`, so
-        // this guards the `cached_at` no-op arm rather than a real scenario).
-        let dir = tempdir().unwrap();
-        let cache = tempdir().unwrap();
-        let injected = StorageFacade::Local(LocalStorage::new(dir.path()));
+        // this guards the `cached_at` no-op arm rather than a real scenario). No I/O
+        // happens, so literal paths keep this Miri-clean.
+        let injected = StorageFacade::Local(LocalStorage::new(Path::new("/mirror")));
         let reporter = RecordingReporter::new();
         let storage = resolve_storage(
             Some(injected),
             None,
             &Config::default(),
             Path::new("/work"),
-            Some(cache.path()),
+            Some(Path::new("/cache")),
             &reporter,
         )
         .unwrap();
