@@ -7,6 +7,10 @@
 //! variant.
 
 use std::path::Path;
+use std::sync::Arc;
+
+use azure_core::credentials::TokenCredential;
+use azure_core::http::HttpClient;
 
 use crate::config::{CloudStorageConfig, Config};
 use crate::wiring::rebase;
@@ -75,7 +79,7 @@ impl Storage for StorageFacade {
 ///
 /// Returns [`StorageError::Config`] if no storage is selected (no `--local` and no
 /// configured cloud backend), or if the selected cloud backend cannot be built —
-/// for example an Azure backend with conflicting authentication settings.
+/// for example an Azure backend with a non-HTTPS endpoint.
 pub(crate) fn build_storage(
     local: Option<&Path>,
     config: &Config,
@@ -88,19 +92,13 @@ pub(crate) fn build_storage(
         ))));
     }
     match &config.storage {
-        Some(CloudStorageConfig::Azure {
-            account,
-            container,
-            endpoint,
-            account_key,
-            sas_token,
-        }) => Ok(StorageFacade::Azure(AzureBlobStorage::from_config(
-            account,
-            container,
-            endpoint.clone(),
-            account_key.clone(),
-            sas_token.clone(),
-        )?)),
+        Some(CloudStorageConfig::Azure(azure)) => {
+            Ok(StorageFacade::Azure(AzureBlobStorage::from_config(
+                &azure.account,
+                &azure.container,
+                azure.endpoint.clone(),
+            )?))
+        }
         None => Err(StorageError::Config {
             message: "no storage configured: pass --local=<path> (or set \
                       CARGO_BENCH_HISTORY_STORAGE and pass a bare --local) or \
@@ -108,6 +106,43 @@ pub(crate) fn build_storage(
                 .to_owned(),
         }),
     }
+}
+
+/// A pre-built storage backend injected through
+/// [`Overrides::storage_override`](crate::Overrides) so end-to-end tests can drive
+/// commands against a backend that [`build_storage`] could not itself produce.
+///
+/// The wrapped [`StorageFacade`] is deliberately opaque: the type is public (so a
+/// test in another crate can hold one) but carries no accessors, so the only thing
+/// a caller can do with it is hand it back to a command. Test-support code (the
+/// fake token credential, the certificate-trusting transport) stays in the tests;
+/// only the assembled backend crosses the boundary.
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub struct StorageOverride(pub(crate) StorageFacade);
+
+/// Builds an Azure [`StorageOverride`] from already-constructed parts.
+///
+/// This is the command-level test seam: an end-to-end test supplies a token
+/// credential and an HTTP client (for Azurite, a locally-faked Entra token and a
+/// certificate-trusting transport) and receives a backend it can inject via
+/// [`Overrides::storage_override`](crate::Overrides), bypassing the
+/// config-to-[`build_storage`] path that could not produce such a backend.
+///
+/// # Errors
+///
+/// Returns [`StorageError::Config`] if the endpoint is not a valid base URL.
+#[doc(hidden)]
+pub fn azure_backend_from_parts(
+    account: &str,
+    container: &str,
+    endpoint: Option<String>,
+    credential: Arc<dyn TokenCredential>,
+    http_client: Arc<dyn HttpClient>,
+) -> Result<StorageOverride, StorageError> {
+    let backend =
+        AzureBlobStorage::from_parts(account, container, endpoint, credential, http_client)?;
+    Ok(StorageOverride(StorageFacade::Azure(backend)))
 }
 
 #[cfg(test)]
@@ -177,24 +212,16 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "reads the wall clock to compute the SAS expiry")]
-    fn build_storage_for_azure_with_account_key_yields_an_azure_backend() {
+    #[cfg_attr(
+        miri,
+        ignore = "builds a real HTTP client (reqwest) that Miri cannot run"
+    )]
+    fn build_storage_for_azure_yields_an_azure_backend() {
         let config = config_with_storage(
             "[storage.azure]\naccount = \"devstoreaccount1\"\ncontainer = \"bench-history\"\n\
-             endpoint = \"http://127.0.0.1:10000/devstoreaccount1\"\n\
-             account_key = \"Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==\"\n",
+             endpoint = \"https://devstoreaccount1.blob.core.windows.net\"\n",
         );
         let storage = build_storage(None, &config, Path::new("/work")).unwrap();
         assert!(matches!(storage, StorageFacade::Azure(_)));
-    }
-
-    #[test]
-    fn build_storage_for_azure_with_conflicting_auth_is_a_config_error() {
-        let config = config_with_storage(
-            "[storage.azure]\naccount = \"a\"\ncontainer = \"c\"\n\
-             account_key = \"a2V5\"\nsas_token = \"sig=x\"\n",
-        );
-        let error = build_storage(None, &config, Path::new("/work")).unwrap_err();
-        assert!(matches!(error, StorageError::Config { .. }), "{error:?}");
     }
 }

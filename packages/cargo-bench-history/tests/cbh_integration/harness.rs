@@ -805,6 +805,7 @@ impl Workspace {
                 target_root: Some(target_root),
                 bench_command: Some(bench_command),
                 now: Some(analysis_now()),
+                storage_override: None,
             },
         )
         .await
@@ -831,6 +832,7 @@ impl Workspace {
                 target_root: None,
                 bench_command: Some(bench_command),
                 now: Some(analysis_now()),
+                storage_override: None,
             },
         )
         .await
