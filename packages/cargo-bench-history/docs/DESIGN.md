@@ -1,6 +1,6 @@
 # cargo-bench-history — Design & Implementation Plan
 
-Status: implemented. All of the numbered iterations are shipped — `run`,
+Status: implemented. All of the numbered iterations are shipped — `collect`,
 `analyze` (engine-aware change-point + drift detection), `install`, the Azure Blob
 backend, the Criterion adapter, the commit-centric storage model, git-aware
 `analyze`, and `backfill`. The resolved design decisions are logged in
@@ -25,7 +25,7 @@ It stores every result over time (local path or Azure blob), runs in multiple
 environments (dev PC, GitHub Actions, ADO), and partitions data only when the
 results are not otherwise comparable.
 
-Commands: `run`, `install`, `analyze`, `backfill`, `list`, `prune`, `bless`,
+Commands: `collect`, `install`, `analyze`, `backfill`, `list`, `prune`, `bless`,
 `unbless`.
 
 ## 2. How the benchmark systems work (and what they emit)
@@ -68,7 +68,7 @@ Key facts:
 ### 2.2 Callgrind via Gungraun (simulated, hardware-independent)
 
 Gungraun 0.19.0 runs each scenario once under Valgrind/Callgrind and can emit a
-**machine-readable summary** — this is the “special need” the `run` command
+**machine-readable summary** — this is the “special need” the `collect` command
 exists to satisfy:
 
 * `--save-summary[=json|pretty-json]` (env `GUNGRAUN_SAVE_SUMMARY`) writes
@@ -90,8 +90,8 @@ Key facts:
   rustc/libc versions are recorded as metadata so a bump shows up as a step in
   the timeline rather than silently forking history.
 * The default `cargo bench` output is human-readable text only → we must opt in
-  to the JSON summary. Tiny but real: that is what `run` does (sets the env var /
-  arg). We therefore **implement `run`, but it stays thin.**
+  to the JSON summary. Tiny but real: that is what `collect` does (sets the env var /
+  arg). We therefore **implement `collect`, but it stays thin.**
 
 ### 2.3 `alloc_tracker` (heap allocations, hardware-independent)
 
@@ -287,7 +287,7 @@ and ordering comes from *git topology*, never from a timestamp baked into the ke
 **clean** run is identified by `<discriminant set> + <commit>` and maps to the single
 deterministic key `…/<commit>/clean.json`. Collision detection rides on the
 **write-once** `put` contract: the store refuses to overwrite an existing object, so a
-second clean `run`/`backfill` of the same commit fails atomically (non-zero exit,
+second clean `collect`/`backfill` of the same commit fails atomically (non-zero exit,
 nothing written) with no separate exists-check round-trip or TOCTOU window;
 `--overwrite` switches to a replacing write (e.g. to clobber data from broken infra). A
 **dirty** run is keyed by its observation time,
@@ -363,7 +363,7 @@ fingerprint still includes every synthetic set alongside this machine's
 hardware-dependent (`criterion`, `all_the_time`) sets, and excludes only *other*
 machines' hardware-dependent data.
 
-**Create vs. query.** `run` and `backfill` *record new benchmark data* into exactly
+**Create vs. query.** `collect` and `backfill` *record new benchmark data* into exactly
 one machine's reality, so they auto-detect every facet and accept only
 `--machine-key` as an override (for a stable CI-pool key). They do **not** accept
 `--engine` selection (engines come from config / what ran), a `--target-triple`
@@ -451,7 +451,7 @@ trait Storage {
 ```
 
 `put` is write-once (a re-`put` of an existing key is `StorageError::AlreadyExists`,
-the basis of `run`'s clean-collision refusal — §8.1); `put_overwrite` replaces in
+the basis of `collect`'s clean-collision refusal — §8.1); `put_overwrite` replaces in
 place (the `--overwrite` escape hatch). `delete` removes one object and returns
 `StorageError::NotFound` when it is absent — used by `prune` (§8.6) to delete the
 selected runs.
@@ -459,7 +459,7 @@ selected runs.
 Storage I/O is **async** (§10): `LocalStorage` over `tokio::fs`, `AzureBlobStorage`
 over async HTTP. `async fn` in a trait is not `dyn`-compatible, so backend
 selection is a `StorageFacade` **enum** (`Local` | `Azure`) with static dispatch
-rather than a boxed-future trait object, and `run`/`analyze` stay
+rather than a boxed-future trait object, and `collect`/`analyze` stay
 backend-agnostic by holding a `StorageFacade`.
 
 * **LocalStorage** (iteration 1): root selected at run time from `--local` (§7.1);
@@ -526,7 +526,7 @@ A leftover `[storage.local]` table from an earlier scheme is **rejected** at par
 time (`unknown variant 'local', expected 'azure'`), nudging the user to remove it
 and select local storage via `--local`.
 
-Every storage-backed command (`run`, `analyze`, `list`, `prune`, `backfill`,
+Every storage-backed command (`collect`, `analyze`, `list`, `prune`, `backfill`,
 `bless`/`unbless`) takes a `--local` flag and resolves the backend in this
 precedence:
 
@@ -543,7 +543,7 @@ precedence:
 4. **neither `--local` nor a configured cloud backend** → a storage configuration
    error telling the user to pass `--local` or configure a cloud backend.
 
-`run --no-store` is the one exception: it skips storage selection entirely (the
+`collect --no-store` is the one exception: it skips storage selection entirely (the
 benchmarks run but nothing is written), so it works with no `--local` and no
 configured backend. The path resolution is split for testability and Miri safety:
 a thin edge helper reads the environment variable, and a pure resolver maps the
@@ -603,7 +603,7 @@ run never mutates an existing object. The collection previously used `--overwrit
 purely so a re-run on an unchanged commit was idempotent rather than a duplicate
 failure — but overwriting routes every write (even the first write of a new commit)
 through the mutating path and would invalidate the cache on every run. A
-`run --skip-existing` mode fixes this: a write-once collision becomes a **soft skip**
+`collect --skip-existing` mode fixes this: a write-once collision becomes a **soft skip**
 (the run still benchmarks every engine, so a broken benchmark is still caught, but
 writes nothing) instead of a failure. Collection switches to it, keeping the
 production write path **purely additive** so it never bumps the marker. This is also
@@ -615,7 +615,7 @@ red" goal. Regenerating data after a harness change stays a deliberate, manual
 **CLI and CI.** A `--cache <dir>` flag (with a `CARGO_BENCH_HISTORY_CACHE` environment
 fallback, resolved like `--local`) on `analyze`/`list`/`prune` selects the cache
 directory. It applies only to the cloud backend, so it **conflicts with `--local`** —
-a local backend's reads are already on disk. `run`/`backfill` take no `--cache` (they
+a local backend's reads are already on disk. `collect`/`backfill` take no `--cache` (they
 do not read the bulk history) but still maintain the marker through the backend
 automatically. In CI the `collect` step uses `--skip-existing`, and the
 `analyze` job restores and saves the cache directory through `actions/cache`. The one
@@ -626,7 +626,7 @@ be the next step.
 
 ## 8. Commands
 
-The commands (`run`, `install`, `analyze`, `backfill`, `list`, `prune`, `bless`,
+The commands (`collect`, `install`, `analyze`, `backfill`, `list`, `prune`, `bless`,
 `unbless`) follow the established pattern: `main.rs` strips the injected
 `bench-history` arg, **`clap`** parses (with subcommands), and dispatches to
 `lib::run`, which returns a typed `Outcome`/`Error`.
@@ -656,9 +656,9 @@ rather than one flat list:
 
 A bare `list` with no subject is an error that names the available subjects.
 
-### 8.1 `cargo bench-history run`
+### 8.1 `cargo bench-history collect`
 
-**Engines are detected from output, not configured.** `run` invokes the
+**Engines are detected from output, not configured.** `collect` invokes the
 workspace's benches once with `cargo bench` and harvests whichever engines
 produced output. There is no `[engines]` configuration: the tool enables the
 combined environment every supported engine needs and then inspects each output
@@ -667,7 +667,7 @@ can be driven from a single `cargo bench` invocation, and off-Linux the
 Callgrind (`_cg`) benches compile to `#[cfg(target_os = "linux")]` no-ops, so they
 simply produce no output — no OS logic is needed in the tool.
 
-`run`:
+`collect`:
 
 1. **Injects the combined bench environment via environment variables** (not
    appended args). Env is robust regardless of how the benches launch. Callgrind
@@ -695,7 +695,7 @@ simply produce no output — no OS logic is needed in the tool.
    tree is attributed to its engine; an engine whose tree produced no cases is
    silently skipped.
 4. Builds a `Run` per engine (with the resolved RunContext) and **stores it
-   immediately** — `run` always persists; there is no separate publish step
+   immediately** — `collect` always persists; there is no separate publish step
    (`--no-store` produces results without writing, for dry runs). A **clean** point
    writes the deterministic key `…/<commit>/clean.json`; an existing one is refused
    by default (non-zero exit, via the write-once `put` contract, §4.2) unless
@@ -743,7 +743,7 @@ that unexpectedly stored nothing). The benchmarked commit's position on the
 timeline is its committer date, read from git at analyze time (§6) — there is no
 `--timestamp` override. The target triple
 is always auto-detected (§4.1) — there is no `--target-triple` override. `--engine`
-is **not** a `run` flag — it is an `analyze` facet over stored data (§8.3).
+is **not** a `collect` flag — it is an `analyze` facet over stored data (§8.3).
 
 ### 8.2 `cargo bench-history install`
 Generate an example `.cargo/bench_history.toml` if absent; print its path and
@@ -865,7 +865,7 @@ order, runs the finding algorithms (§9), and prints a report.
 ### 8.4 `cargo bench-history backfill`
 
 Reconstructs history by checking out each commit in a range and running
-`cargo bench-history run` for it. Bootstraps an existing repo's timeline and is
+`cargo bench-history collect` for it. Bootstraps an existing repo's timeline and is
 also the convenient path for ad-hoc evaluation over a span of commits.
 
 ```
@@ -926,7 +926,7 @@ nothing.
 
 `--config`, `--workspace`/`--package`/`--exclude`/`--bench`,
 `--features`/`--all-features`/`--no-default-features`, `--target-triple`,
-`--machine-key` and `-- <passthrough>` behave as for `run`. To collect Callgrind
+`--machine-key` and `-- <passthrough>` behave as for `collect`. To collect Callgrind
 data, run backfill on Linux/WSL — the worktree path is reachable from WSL exactly
 like the primary checkout.
 
@@ -1086,7 +1086,7 @@ carries the blessed commit, the issue time, the prefix filters, and the tool
 version; the blessed commit's committer time is read from git at analyze time, not
 stored on the sidecar. Sidecars are **immutable** (append-only), so narrowing a
 blessing means `unbless` then re-bless the subset to keep. Overwriting a commit's
-`clean.json` (a `run --overwrite`) deletes its stale blessing sidecars, since the
+`clean.json` (a `collect --overwrite`) deletes its stale blessing sidecars, since the
 accepted data point is gone.
 
 `unbless` deletes every blessing recorded **at the context commit** in the selected
@@ -1523,9 +1523,9 @@ workspace member (and so are subject to mutation testing and coverage). See its
 
 ## 11. Cross-platform notes
 
-* `analyze`, `install`, and the harvest/store half of `run` are platform-neutral
+* `analyze`, `install`, and the harvest/store half of `collect` are platform-neutral
   (pure file/IO/compute) and first-class on **Windows, Linux and macOS**.
-* Only the *bench execution* inside `run` is constrained: Callgrind needs
+* Only the *bench execution* inside `collect` is constrained: Callgrind needs
   Linux/Valgrind, so its benches are `#[cfg(target_os = "linux")]` and simply
   produce no output on Windows/macOS — to collect Callgrind data, run the tool on
   Linux (or in WSL). Criterion runs natively on all three OSes.
@@ -1547,20 +1547,20 @@ the timestamps) + `Storage` trait + `comparability` (incl. target-triple
 resolution, §4.1) + `RunContext` (git/CI + commit/observation times). Small and
 high-leverage; the iterations built on it.
 
-The plan folds the original "upload" step into "run" (run always persists) and
+The plan folds the original "upload" step into "collect" (collect always persists) and
 adds macOS; mapped to the original request's numbering:
 
-1. ✅ **`run` for Callgrind, end-to-end with local storage** (your 1 + 2) — adapter
+1. ✅ **`collect` for Callgrind, end-to-end with local storage** (your 1 + 2) — adapter
    injects `GUNGRAUN_SAVE_SUMMARY`, invokes the benches, `mtime`-scoped
    harvest of `summary.json`, builds the Run, and writes it via
-   `LocalStorage` to the partition. `run` persists by itself; no separate
+   `LocalStorage` to the partition. `collect` persists by itself; no separate
    `upload`. (Confirms the “special need” is just the summary flag — kept.)
 2. ✅ **`analyze` (useful finding)** (your 3) — series engine + rolling-baseline
    regression over local Callgrind history; text report (+ `--fail-on`).
 3. ✅ **`install`** (your 4) — generate `.cargo/bench_history.toml`, point the user
    to it.
 4. ✅ **Azure blob** (your 5) — `AzureBlobStorage`, **Microsoft Entra ID (OAuth)
-   only**; `run`/`analyze` become storage-agnostic; verify it builds and runs on
+   only**; `collect`/`analyze` become storage-agnostic; verify it builds and runs on
    Windows, Linux and macOS.
 5. ✅ **Criterion** (your 6) — adapter parses `target/criterion/**/new/{benchmark,
    estimates}.json` into `WallTime` records (slope estimate when present, else the
@@ -1569,11 +1569,11 @@ adds macOS; mapped to the original request's numbering:
    `BenchmarkId.package` is `None` (Criterion files are package-agnostic; §3).
    Noise-aware thresholds and change-point/drift findings are split into a
    follow-up iteration.
-6. ✅ **Commit-centric storage model + `run` idempotency** (§4.2, §4.3) — commit-centric layout
+6. ✅ **Commit-centric storage model + `collect` idempotency** (§4.2, §4.3) — commit-centric layout
    (`…/<commit>/{clean.json | dirty-<unix>.json}`), a `Storage`
    `put_overwrite` write-replacing escape hatch, the clean write-once collision refusal
    (surfaced as `RunError::Duplicate`) + `--overwrite`, and the dirty effective=now
-   keying. Re-targets `comparability` and `run`'s store step; small, in-process, heavily
+   keying. Re-targets `comparability` and `collect`'s store step; small, in-process, heavily
    unit-tested before the git-heavy work builds on it.
 7. ✅ **Git-aware `analyze`** (§8.3, §4.3) — the query model: a read-only git-history
    port (`rev-list --first-parent`, `merge-base`, default-branch detection) with a
@@ -1612,7 +1612,7 @@ adds macOS; mapped to the original request's numbering:
   (allocations, wall time) alongside the Criterion wall-clock measurements. A future
   iteration can harvest those JSON files as **extra metrics on the same Criterion runs**
   (recorded side by side with `WallTime`, e.g. allocation counts / bytes), so a single
-  `run` captures wall time *and* allocation behaviour for a benchmark and `analyze`
+  `collect` captures wall time *and* allocation behaviour for a benchmark and `analyze`
   can flag a regression in either. This is purely additive to the harvest + model
   (more `Metric` kinds on the existing Criterion `BenchmarkResult`s); the partition,
   series, and analysis machinery are unchanged.
@@ -1639,7 +1639,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
    modes were removed.)*
 7. **Date/time dependency** — *Decided:* `jiff` for timestamps and `--since`
    parsing.
-8. **`run` invocation** — *Decided:* `run`/`backfill` invoke the
+8. **`collect` invocation** — *Decided:* `collect`/`backfill` invoke the
    workspace's benches once with `cargo bench` (no per-engine config); the tool
    injects the union of every supported engine's environment (e.g.
    `GUNGRAUN_SAVE_SUMMARY` for Callgrind) plus `CARGO_TARGET_DIR`, then harvests
@@ -1662,18 +1662,18 @@ Each iteration ships with tests and docs and leaves the tool runnable.
    three times — effective, execution, ingest — with a `--timestamp` override of the
    effective time; the stored commit timestamp, the effective-time concept, and
    `--timestamp` are all gone.)*
-10. **Filtering** — *Decided:* `run`/`backfill` expose first-class scope
+10. **Filtering** — *Decided:* `collect`/`backfill` expose first-class scope
     flags — `--workspace` (default), `--package`/`-p NAME`, `--exclude NAME`,
     `--bench NAME` — plus cargo feature-selection flags (`--features`,
     `--all-features`, `--no-default-features`) that
     translate directly to `cargo bench` arguments; everything after `--` is
     forwarded verbatim after them. The `mtime ≥ run-start` harvest captures exactly
-    what ran. `--engine` is not a `run` flag — it is an `analyze` facet over stored
+    what ran. `--engine` is not a `collect` flag — it is an `analyze` facet over stored
     data (decision 22). *(Superseded: the earlier filter-agnostic passthrough-only
     model with `--engine`-scoped engine selection.)*
 11. **Target triple & WSL** — *Decided:* the partition triple is where the bench
     *ran*, and is always the host triple of the running tool (composed from
-    `std::env::consts::ARCH` + `OS`). There is no `run` override and no per-engine
+    `std::env::consts::ARCH` + `OS`). There is no `collect` override and no per-engine
     constraint: the tool always runs where it benchmarks, so the host triple *is*
     the execution triple. Callgrind data is collected by running the tool natively
     on Linux/WSL (its benches no-op off Linux), so there is no Windows-trigger/
@@ -1683,12 +1683,12 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     stored the tool's `host_triple` as metadata; `--target-triple` is now only an
     `analyze` facet, decision 22.)*
 12. **macOS** — *Decided:* first-class for `install` / `analyze` / Criterion /
-    Azure and the harvest-store half of `run`; only Callgrind execution is
+    Azure and the harvest-store half of `collect`; only Callgrind execution is
     unavailable (no Valgrind), and its benches simply produce no output there.
-13. **`run` vs `upload`** — *Decided:* `run` always persists (execute → harvest →
+13. **`collect` vs `upload`** — *Decided:* `collect` always persists (execute → harvest →
     store). A standalone `upload` (re-harvest existing `target/` output without
     re-running benches) was considered and **dropped** as irrelevant: for Callgrind it
-    cannot work without `run`'s run-time env injection (no summary is written
+    cannot work without `collect`'s run-time env injection (no summary is written
     otherwise), and for Criterion the need never materialized.
 14. **Async runtime** — *Decided:* async by default on Tokio (`#[tokio::main]`,
     `async fn run`); I/O edges (process, fs, storage/HTTP) are async behind small
@@ -1698,7 +1698,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     injected clock; `tick::ClockControl` drives deterministic simulated time in
     tests. No hand-rolled clock port; convert its `SystemTime` to `jiff::Timestamp`.
 16. **WSL env propagation** — *Superseded:* the earlier `WSLENV` bridging
-    is removed. `run`/`backfill` invoke `cargo bench` in-process, so to collect
+    is removed. `collect`/`backfill` invoke `cargo bench` in-process, so to collect
     Callgrind data you run the tool natively on Linux/WSL and no env var has to
     cross a WSL boundary (decision 8).
 17. **Cloud-storage testing** — *Decided:* the Azure backend is exercised in regular
@@ -1810,13 +1810,13 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     ephemeral-data **warning** to the report. Rationale: these are the user's
     in-flight changes, so showing them (with a nudge to branch) beats a confusing
     `0 runs`; persisting them is still refused so committed history stays clean.
-23. **`backfill`** — *Decided:* a dedicated command (not a `run` flag) that replays
-    `run` across an inclusive first-parent commit range oldest-first
+23. **`backfill`** — *Decided:* a dedicated command (not a `collect` flag) that replays
+    `collect` across an inclusive first-parent commit range oldest-first
     (`<from>` … `<to>`). It requires both endpoints to resolve and `<from>` to be a
     first-parent ancestor of `<to>`, then derives the range purely from `<to>`'s
     first-parent history — it does **not** depend on the current checkout or branch,
     so any range whose endpoints form a first-parent line can be backfilled. Each
-    commit is benchmarked exactly as `run` (no `--timestamp` override; a commit's
+    commit is benchmarked exactly as `collect` (no `--timestamp` override; a commit's
     position on the timeline is its own committer date, read from git) from inside a dedicated **git worktree** so
     the user's checkout is never disturbed and an interruption leaves them in place.
     Existing points are **skipped before they are re-benchmarked** by default (the
@@ -1825,7 +1825,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     net), `--overwrite` regenerates them; a build/bench failure stops by
     default and `--ignore-errors` skips and continues with an end-of-run summary,
     while infrastructure failures always abort. Benches are whatever each commit
-    contains, run with `cargo bench` exactly as `run` (§8.4).
+    contains, run with `cargo bench` exactly as `collect` (§8.4).
 24. **Series ordering** — *Decided:* **git topology** (first-parent order of the
     resolved commit list), not a stored commit timestamp. This removes the
     committer-date monotonicity hazard (rebases / amended dates no longer misorder)
@@ -1834,13 +1834,13 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     drives only the `--since`/`--until` window; runs sharing one commit sub-order
     clean-before-dirty, then by storage key.
 25. **No engine configuration** — *Decided:* there is no `[engines]` config.
-    `run`/`backfill` run the workspace's benches once with `cargo bench`, inject the
+    `collect`/`backfill` run the workspace's benches once with `cargo bench`, inject the
     combined environment every supported engine needs, and detect each engine from
     the output tree it wrote (decision 8). Scope is expressed with first-class
     `--workspace`/`--package`/`--exclude`/`--bench` flags plus cargo
     feature-selection flags (`--features`/`--all-features`/`--no-default-features`)
     (decision 10). This supersedes the
-    per-engine `command`/`os`/`extra_args` config, the `--engine`-on-`run` selector,
+    per-engine `command`/`os`/`extra_args` config, the `--engine`-on-`collect` selector,
     and the `WSLENV` bridging. The bet is that a single `cargo bench` invocation with
     the union of engine env vars yields correct output for every supported engine —
     true for Criterion + Callgrind, where off-Linux the Callgrind benches are
@@ -1904,7 +1904,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      re-baselines the series from the blessed commit forward — the detectors run on
      the active segment only, while pre-blessing points stay for charting/context
      (§9.7). `unbless` deletes blessings at the context commit (later blessings stay
-     in effect); `run --overwrite` drops a commit's stale sidecars; `list blessings`
+     in effect); `collect --overwrite` drops a commit's stale sidecars; `list blessings`
      (`--all` for the window roll-up) audits them. Blessings are honoured **only in
      history mode** (branch/tip treat the base as fully blessed). Separately, history
      mode marks a self-corrected spike as an **inactive** finding (`active=false`),
@@ -1926,7 +1926,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      (operate on `--target-triple` directly — the triple fixes both, and the
      duplication confused users); the discriminant facets become **repeatable** and
      accept the widening keyword `all`, auto-detecting the current machine when
-     omitted (decision 29-bis / §4.3); create-mode commands (`run`/`backfill`) no
+     omitted (decision 29-bis / §4.3); create-mode commands (`collect`/`backfill`) no
      longer accept a `--target-triple` override (always auto-detected, §4.1) and gain
      `--repo`; `--branch` is renamed `--context` (it need not be a branch); `--until`
      is added to `analyze`/`list` for timeline symmetry with `--since`; **subjects**
@@ -1947,7 +1947,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      Azure rejects concurrent writes to one identity's credentials), and two
      `Storage Blob Data Contributor` role assignments — for the managed identity (CI)
      and an optional local developer principal. That single data-plane role covers
-     container create + delete and blob read/write/delete, so production `run`
+     container create + delete and blob read/write/delete, so production `collect`
      (`ensure_container`) and the test cleanup both work without a control-plane role.
      A UAMI is chosen over an App Registration because user-assigned identities and
      their federated credentials are natively Bicep-able (no Graph extension) and
@@ -2239,7 +2239,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      cloud backend, so every writer invalidates other machines' caches even when it holds
      no cache itself. *Key enabler the issue did not consider:* the CI `collect`
      used `--overwrite` for same-commit idempotency, which would mutate objects and wipe
-     the cache on every run; a new **`run --skip-existing`** mode keeps the production write
+     the cache on every run; a new **`collect --skip-existing`** mode keeps the production write
      path append-only — and makes stored measurements immutable, which is better history
      hygiene — so collection never invalidates the cache it feeds. CLI: a `--cache <dir>`
      (+ `CARGO_BENCH_HISTORY_CACHE` env) on the three read commands, applicable only to

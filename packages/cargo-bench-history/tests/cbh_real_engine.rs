@@ -1,7 +1,7 @@
 //! A true end-to-end test that runs the real `cargo bench` against a real
 //! Criterion benchmark and harvests the output the genuine engine writes.
 //!
-//! Every other integration test drives `run` against a mock engine through the
+//! Every other integration test drives `collect` against a mock engine through the
 //! `run_with_overrides` entry, pinning an absolute target root and launching the
 //! mock from the workspace-root current directory. That is fast and hermetic, but
 //! it cannot exercise the production `resolve_target_root`, real cargo argument
@@ -120,17 +120,18 @@ criterion_main!(benches);
 /// `id` avoids depending on the tempdir basename.
 const FIXTURE_CONFIG: &str = "[project]\nid = \"e2e\"\n";
 
-/// Drives the production `run` against a real `cargo bench` + Criterion build and
-/// asserts the genuine wall-time output is harvested and stored.
+/// Drives the `collect` command through the production entry against a real
+/// `cargo bench` + Criterion build and asserts the genuine wall-time output is
+/// harvested and stored.
 #[tokio::test]
 #[serial]
 #[cfg_attr(miri, ignore)] // Spawns a real `cargo bench`, which Miri cannot run.
 #[cfg_attr(coverage_nightly, ignore)] // Heavy real build; llvm-cov shares one target dir.
 #[cfg_attr(
     mutants,
-    ignore = "Heavy real `cargo bench` build (compiles Criterion per run); the run/harvest pipeline it covers is also driven by the mock-engine integration tests and the resolve_target_root unit test, so it carries no unique mutation signal"
+    ignore = "Heavy real `cargo bench` build (compiles Criterion per run); the collect/harvest pipeline it covers is also driven by the mock-engine integration tests and the resolve_target_root unit test, so it carries no unique mutation signal"
 )]
-async fn run_against_real_criterion_bench_stores_wall_time() {
+async fn collect_against_real_criterion_bench_stores_wall_time() {
     let fixture = tempfile::tempdir().unwrap();
     let root = fixture.path();
 
@@ -152,13 +153,13 @@ async fn run_against_real_criterion_bench_stores_wall_time() {
     // assertions and before the tempdir is dropped (required on Windows).
     let outcome = {
         let _cwd = CwdGuard::enter(root);
-        run(&command_from(&["run", "--local=./store"]))
+        run(&command_from(&["collect", "--local=./store"]))
             .await
             .unwrap()
     };
 
     let RunOutcome::Completed { message } = outcome else {
-        panic!("expected a completed run, got {outcome:?}");
+        panic!("expected completion, got {outcome:?}");
     };
     assert!(
         message.contains("Stored 1"),

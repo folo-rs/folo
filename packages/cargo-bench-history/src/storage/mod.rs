@@ -40,7 +40,7 @@ pub(crate) trait Storage: fmt::Debug + Send + Sync {
     ///
     /// Unlike [`put`](Self::put), this never fails because an object already
     /// exists; it is the explicit escape hatch from the write-once contract that
-    /// `run --overwrite` and `backfill --overwrite` use to regenerate a data
+    /// `collect --overwrite` and `backfill --overwrite` use to regenerate a data
     /// point. Intermediate structure is created as needed.
     ///
     /// The returned future is `Send` for the same reason [`get`](Self::get)'s is:

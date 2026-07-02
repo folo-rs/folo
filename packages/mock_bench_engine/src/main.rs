@@ -1,6 +1,6 @@
 //! A stand-in benchmark engine used by the integration tests.
 //!
-//! It imitates the only parts of a real engine that `cargo bench-history run`
+//! It imitates the only parts of a real engine that `cargo bench-history collect`
 //! observes: it writes machine-readable output files into the cargo target tree
 //! (so the harvester finds fresh output) and exits with a caller-chosen code (so
 //! exit-code handling can be exercised). It performs no real benchmarking.

@@ -47,7 +47,7 @@ pub enum CacheSelection {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Command {
     /// Run the configured benchmark engines and store the results.
-    Run(RunOptions),
+    Collect(CollectOptions),
     /// Generate a starter configuration file.
     Install(InstallOptions),
     /// Analyze stored history for notable patterns.
@@ -57,7 +57,7 @@ pub enum Command {
     /// Delete stored runs (and their blessing sidecars) from the data set a
     /// matching `analyze`/`list` pass resolves.
     Prune(PruneOptions),
-    /// Replay `run` across a range of historical commits.
+    /// Replay `collect` across a range of historical commits.
     Backfill(BackfillOptions),
     /// Accept a benchmark's current level on the base branch as intentional.
     Bless(BlessOptions),
@@ -65,10 +65,10 @@ pub enum Command {
     Unbless(UnblessOptions),
 }
 
-/// Options for the `run` command.
+/// Options for the `collect` command.
 #[doc(hidden)]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct RunOptions {
+pub struct CollectOptions {
     /// Path to the configuration file, if overridden.
     pub config_path: Option<PathBuf>,
     /// Repository to run benchmarks in and read git state from; defaults to the

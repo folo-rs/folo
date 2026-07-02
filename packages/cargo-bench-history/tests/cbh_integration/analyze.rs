@@ -887,7 +887,7 @@ async fn analyze_official_view_excludes_dirty_runs() {
 
 /// When every stored run on the default branch is a dirty (uncommitted-tree)
 /// snapshot — the trap a user hits when the configuration file is never committed,
-/// so each `run` records a `dirty-*.json` on the base-side tip — `analyze` finds
+/// so each `collect` records a `dirty-*.json` on the base-side tip — `analyze` finds
 /// zero runs but renders a diagnostic hint that explains the exclusion, so the
 /// empty result is not mistaken for "no data". This exercises the discoverability
 /// fix end to end through the production dispatch.

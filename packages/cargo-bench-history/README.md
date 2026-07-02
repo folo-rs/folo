@@ -24,7 +24,7 @@ cargo bench-history install
 
 # Run the workspace benchmarks for the current commit and store the results
 # locally. Drop --local to store in the cloud backend from the config file.
-cargo bench-history run --local=./bench-history
+cargo bench-history collect --local=./bench-history
 
 # Bootstrap history by benching a range of past commits, so analysis has a
 # trend to work with (a single run on its own has nothing to compare against).

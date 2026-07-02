@@ -2,7 +2,7 @@
 
 This directory provisions the Azure storage account that holds the **real,
 long-lived benchmark history** collected by the `bench-history` GitHub workflow
-(and by local `cargo run -p cargo-bench-history -- run` invocations). It is the production data store,
+(and by local `cargo run -p cargo-bench-history -- collect` invocations). It is the production data store,
 as opposed to the throwaway test account in
 [`infra/azure-bench-history-test/`](../azure-bench-history-test/).
 
@@ -76,7 +76,7 @@ script printed:
 
 ```powershell
 az login                                          # sign in as your Entra user
-cargo run -p cargo-bench-history --bin cargo-bench-history -- run --workspace --exclude benchmarks
+cargo run -p cargo-bench-history --bin cargo-bench-history -- collect --workspace --exclude benchmarks
 ```
 
 This benches every workspace package except `benchmarks` (the slow, special-purpose
