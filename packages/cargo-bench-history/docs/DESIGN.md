@@ -264,10 +264,16 @@ The layout is an immutable, append-only-by-new-file, **commit-centric** model
 concurrent CI). The path is `<discriminant set>/<commit_sha>/<run file>`:
 
 ```
-<root>/v1/<project>/<engine>/<target_triple>/<machine_key|synthetic>/<commit_sha>/
+<root>/v1/<project>/objects/<engine>/<target_triple>/<machine_key|synthetic>/<commit_sha>/
     clean.json                       # ≤1 per commit — the canonical point
     dirty-<observation_unix>.json    # 0..N snapshots taken on top of this base commit
 ```
+
+Data objects live under a per-project **`objects/`** subtree; project-level **metadata**
+— today only the cache-invalidation marker (§7.2), tomorrow perhaps an index — sits as a
+**sibling** of `objects/`. A data listing therefore enumerates `…/<project>/objects/`
+and can never accidentally pick up a metadata object, and metadata can be added beside
+the data without a layout migration.
 
 The segment **above** `<commit_sha>` is the **discriminant set** — the dimensions
 that make two runs comparable (§4.3). The commit is a directory; **clean vs dirty
@@ -301,6 +307,23 @@ stray `/` (e.g. a `project.id` of `team/app`) from silently splitting the key in
 the wrong number of segments — which `analyze` would then drop as unattributable —
 by mangling the value rather than rejecting the run.
 
+**Why the run kind is filename semantics, not a path segment.** A tempting future `v2` would
+hoist the run *kind* into the key path (`…/runs-clean/<commit>.json`, `…/runs-dirty/…`,
+`…/blessings/…`) so a single-kind query could narrow its `list` to one prefix. The kind stays
+**filename semantics within the commit directory** instead, for two reasons. First, the cost
+that split would save is **already saved**: `analyze` excludes non-admitted dirty (and
+off-history, and out-of-window) candidates in a **key-only pass before any body is fetched**
+(§8.3), reading the kind straight from the filename — so a clean-only analysis never issues a
+round-trip for a dirty snapshot today, and a kind prefix would remove `get`s that are never
+made. Second, the commit-centric grouping **co-locates** a commit's `clean.json`, its
+`dirty-*` snapshots, and its blessing sidecars under one `<commit>/` directory, which is
+exactly what lets `prune` drop a commit's whole set and keeps a blessing **adjacent to the
+`clean.json` it baselines** (§8.6, §8.7); a kind-first layout would scatter those across three
+subtrees and complicate both joins. The one genuine upside — independent single-kind
+enumeration (`list blessings`) — is minor and, if ever needed, is cheaper to obtain by
+narrowing the existing `list` prefix by **discriminant** (which this layout already permits)
+than by a migration. Deferred as a `v2` option, not adopted (decision 42).
+
 ### 4.3 Discriminant set & query facets
 
 The discriminant set `<project>/<engine>/<target_triple>/<machine_key|synthetic>`
@@ -316,7 +339,7 @@ duplicating the target-triple dimension confused users. Filter on the triple
 directly.)
 
 * `list discriminants` lists the distinct sets present (a cheap key `list` under
-  `v1/<project>/`, parsed and de-duplicated; an index file can be added later if
+  `v1/<project>/objects/`, parsed and de-duplicated; an index file can be added later if
   a store grows large), with their parsed engine / target triple / machine key.
 * Each facet is **repeatable** and accepts the literal `all`:
   * Omitting a facet **auto-detects the current machine**: `--target-triple`
@@ -461,7 +484,7 @@ backend-agnostic by holding a `StorageFacade`.
   read.
 
   Legacy shared-key/self-signed-account-SAS (`account_key`) and verbatim-SAS
-  (`sas_token`) modes were removed (decision 41): a leftover key/token field is now
+  (`sas_token`) modes were removed (decision 43): a leftover key/token field is now
   a loud config parse error. Tested in regular CI two ways (decision 17): the
   `test-azurite` job against the **Azurite emulator** and the additive `test-azure`
   job against a **real Storage account**, both over the **Entra ID** path (signed in
@@ -527,6 +550,79 @@ a thin edge helper reads the environment variable, and a pure resolver maps the
 `--local` choice plus that value to an optional path, so the decision logic is
 unit-tested without touching the process environment. The chosen backend (and why
 — flag, environment, or cloud config) is reported on the `--verbose` trail.
+
+### 7.2 Read-through cache for the cloud backend (issue #262)
+
+> Status: **implemented.** Decision 41 logs the rationale and the alternatives weighed.
+
+`analyze`/`list`/`prune` load the whole in-selection history before reconstructing the
+series, and against the cloud backend that is one download per object. The nightly
+`analyze` re-fetches everything even though almost all of it is identical to the night
+before. An optional on-disk **read-through cache** removes that waste: each run pays
+the network cost only for objects it has never seen, and the cache survives between CI
+runs via the GitHub [`actions/cache`](https://github.com/actions/cache) action.
+
+**What is cached, and why it stays correct.** The cache mirrors fetched **object
+bodies**, keyed by storage key. It never caches the **listing**: discovering the
+current key set is one cheap round-trip whose whole purpose is to see what is new, so
+it always goes to the cloud and a freshly stored object is still found (its body simply
+misses the cache and falls through). Trusting a cached body forever is sound because
+the storage model is **immutable per key** — the write-once `put` refuses to change an
+existing key, so clean runs, dirty snapshots, and blessing sidecars never change once
+written. Only two operations break that immutability, and both are rare, deliberate
+administrative actions never reached on the nightly hot path: a `delete` (used by
+`prune`/`unbless`, and by `--overwrite` dropping a stale blessing) and a `put_overwrite`
+(the explicit `--overwrite` escape hatch). A cache must be discarded whenever either
+happens; a brand-new key never invalidates anything, because it was never cached.
+
+**Per-project invalidation.** Invalidation is signalled by a small **marker object**
+stored per project, holding an opaque epoch token. It lives inside that project's own
+versioned partition as a **sibling of the project's object subtree**: data objects are
+grouped under a dedicated subtree, so a data listing never trips over the marker (or any
+future metadata such as an index), and a future storage-format version can redefine the
+cache contract in lockstep with the layout it caches. The mirror is a **faithful image of
+a single cloud backend** under identical keys. Its root is namespaced by that backend's
+identity (account, then container), so two different backends that share one `--cache`
+directory never serve each other's bodies; within one backend's mirror several projects'
+objects still coexist. The marker and the wipe are scoped to a **single project's objects**,
+so a mutation in one project only ever discards **that project's** mirrored objects — every
+other project's cached objects survive untouched. Before a load, the reader compares the
+project's cloud marker against the epoch its mirror last recorded **under that same marker
+key**; on a mismatch it wipes that project's mirrored objects and re-records the new epoch,
+then reloads. The wipe is deliberately coarse — drop all of that project's mirrored objects
+rather than reason about which objects a deletion touched — because mutations are rare, so
+"throw it away and re-download once" is simpler and obviously correct. Only whether the
+token *differs* matters, never its value or ordering, so clock skew between runners is
+harmless. The marker is maintained by the cloud backend itself, not by the cache, so
+**every** writer — including a developer's cache-less `prune` — invalidates *other*
+machines' caches: the local cache is a read-side optimization, the marker a cloud-side
+correctness contract, and the two are independent.
+
+**The nightly must stay append-only.** The cache only survives a nightly run if that
+run never mutates an existing object. The collection previously used `--overwrite`
+purely so a re-run on an unchanged commit was idempotent rather than a duplicate
+failure — but overwriting routes every write (even the first write of a new commit)
+through the mutating path and would invalidate the cache every night. A
+`run --skip-existing` mode fixes this: a write-once collision becomes a **soft skip**
+(the run still benchmarks every engine, so a broken benchmark is still caught, but
+writes nothing) instead of a failure. The nightly switches to it, keeping the
+production write path **purely additive** so it never bumps the marker. This is also
+better history hygiene — a stored measurement becomes immutable, so a re-run can never
+silently rewrite past data — while still meeting the original "a re-run must not fail
+red" goal. Regenerating data after a harness change stays a deliberate, manual
+`--overwrite`, which legitimately invalidates caches.
+
+**CLI and CI.** A `--cache <dir>` flag (with a `CARGO_BENCH_HISTORY_CACHE` environment
+fallback, resolved like `--local`) on `analyze`/`list`/`prune` selects the cache
+directory. It applies only to the cloud backend, so it **conflicts with `--local`** —
+a local backend's reads are already on disk. `run`/`backfill` take no `--cache` (they
+do not read the bulk history) but still maintain the marker through the backend
+automatically. In CI the nightly `collect` switches to `--skip-existing`, and the
+`analyze` job restores and saves the cache directory through `actions/cache`. The one
+scaling limit is the repository's Actions-cache quota (a default 10 GiB, raisable with
+paid billing); beyond it the cache degrades to a partial restore — still correct, just
+less effective — at which point a server-side cache or a pruned look-back window would
+be the next step.
 
 ## 8. Commands
 
@@ -603,7 +699,9 @@ simply produce no output — no OS logic is needed in the tool.
    (`--no-store` produces results without writing, for dry runs). A **clean** point
    writes the deterministic key `…/<commit>/clean.json`; an existing one is refused
    by default (non-zero exit, via the write-once `put` contract, §4.2) unless
-   `--overwrite`, which makes re-runs idempotent and safe to repeat. A **dirty**
+   `--overwrite`, which makes re-runs idempotent and safe to repeat (or `--skip-existing`,
+   which treats the existing point as a success and writes nothing — the append-only mode the
+   nightly `collect` uses, §7.2). A **dirty**
    snapshot writes
    `…/<commit>/dirty-<observation_unix>.json` and coexists with prior snapshots (only a
    same-timestamp clash is a conflict). An engine that harvests **zero** cases stores
@@ -634,7 +732,11 @@ own `clean.json` and the second collides with the first (§4.2) — gaps in cove
 are expected to come from *different commits* covering different subsets, not from
 multiple partial runs at one commit. Other flags: `--machine-key <key>` (override
 the hardware fingerprint, §4.1), `--no-store`, `--overwrite` (replace an existing
-same-commit point instead of refusing, §4.2), `--verbose` (print a step-by-step
+same-commit point instead of refusing, §4.2), `--skip-existing` (mutually exclusive
+with `--overwrite`: a same-commit point that already exists is a **soft skip** —
+success, nothing written — instead of the `RunError::Duplicate` failure of the
+default write-once mode; used by the nightly `collect` recipe so collection stays
+append-only and never invalidates the read-through cache, see §7.2), `--verbose` (print a step-by-step
 diagnostic trail to stderr — the benchmark command and injected env, directories
 scanned, files included/skipped-as-stale, and each stored key — to diagnose a run
 that unexpectedly stored nothing). The benchmarked commit's position on the
@@ -791,7 +893,7 @@ produced output, and stores the result. Backfilled runs are always on a **clean*
 tree, so each is keyed by commit (§4.2) and collision-checked:
 
 * By **default** the commits that already have a stored result are listed once up
-  front (a single `list` of the `v1/<project>/` prefix); a commit already present
+  front (a single `list` of the `v1/<project>/objects/` prefix); a commit already present
   is **skipped before its benches run** (reported, not an error), so no benchmark
   execution is wasted on commits already covered. This makes backfill **resumable**
   and cheap to re-issue — an interrupted run simply continues where it stopped. The
@@ -862,7 +964,7 @@ commit by default, or — with `--all` — the most recent blessing of every ben
 across the analysis window.
 
 `list discriminants` switches to a storage index: it lists the discriminant sets
-present under `v1/<project>/` (engine / target triple / machine key) **without
+present under `v1/<project>/objects/` (engine / target triple / machine key) **without
 requiring a repository** (§4.3). This is where the storage-set listing lives,
 separate from the repository-driven data-set preview, so it ignores the timeline
 and data-filtering groups. Because it is a **discovery catalog**, it is the one
@@ -1532,7 +1634,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
 6. **Azure auth** — *Decided:* **Microsoft Entra ID (OAuth) only** — the secret-free
    production default; a self-minting GitHub OIDC `ClientAssertionCredential` in a
    federated CI job, otherwise `DeveloperToolsCredential` (see decision 38), always
-   over an HTTPS endpoint. *(Superseded by decision 41: the earlier priority-ordered
+   over an HTTPS endpoint. *(Superseded by decision 43: the earlier priority-ordered
    self-signed account SAS (`account_key`, HMAC-signed) and verbatim `sas_token`
    modes were removed.)*
 7. **Date/time dependency** — *Decided:* `jiff` for timestamps and `--since`
@@ -1609,7 +1711,7 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     which cannot reliably bind Azurite to a reachable address. Since Entra is the only
     auth mode and it requires TLS, Azurite runs in `--oauth basic` mode over HTTPS
     (behind a throwaway self-signed cert) and the tests inject a locally-faked Entra
-    token plus a cert-trusting transport (decision 41). The network tests
+    token plus a cert-trusting transport (decision 43). The network tests
     **self-skip** when no emulator is reachable so the multi-platform test
     jobs stay green; `BENCH_HISTORY_REQUIRE_AZURITE=1` (set only in `test-azurite`)
     turns an unreachable emulator into a hard failure so it can never silently skip.
@@ -1676,8 +1778,10 @@ Each iteration ships with tests and docs and leaves the tool runnable.
     out of v1 for little gain in homogeneous CI pools; `--machine-key` / `machine.
     key` override the fingerprint (§5). Computed only for Criterion.
 21. **Storage layout & point identity** — *Decided:* **commit-centric** layout
-    `v1/<project>/<engine>/<triple>/<machine|synthetic>/<commit>/{clean.json |
-    dirty-<observation_unix>.json}` (§4.2). The commit is a path segment, so a clean
+    `v1/<project>/objects/<engine>/<triple>/<machine|synthetic>/<commit>/{clean.json |
+    dirty-<observation_unix>.json}` (§4.2), with data objects grouped under a per-project
+    `objects/` subtree so project metadata (the cache marker, a future index) lives as a
+    sibling and a data listing never trips over it. The commit is a path segment, so a clean
     point has the single deterministic key `…/<commit>/clean.json` and collision
     detection rides on the write-once `put` contract — refused (as
     `RunError::Duplicate`) unless `--overwrite`. Dirty
@@ -2114,7 +2218,63 @@ Each iteration ships with tests and docs and leaves the tool runnable.
      for the parser tests — and are referenced cross-package by relative path rather than
      duplicated.
 
-41. **Azure auth is Microsoft Entra ID (OAuth) only** — *Decided:* the two legacy auth
+41. **Read-through cache for the cloud backend (issue #262)** — *Implemented (§7.2).*
+     The cloud-backed read commands (`analyze`/`list`/`prune`) gain an optional on-disk
+     **body cache** so a run pays the network cost only for objects it has never seen,
+     persisted between CI runs via `actions/cache`. Correctness rests on the model's
+     **per-key immutability**: a cached body is valid forever because write-once `put`
+     cannot change an existing key; only `delete` and `put_overwrite` — rare, deliberate
+     administrative ops (`prune`/`unbless`, the manual `--overwrite` escape hatch) —
+     break it, and the listing is never cached, so newly stored objects are always
+     discovered. Invalidation is a small **per-project marker** holding an opaque epoch
+     token, kept inside that project's own versioned partition — as a **sibling of the
+     project's `objects/` subtree** — so a data listing never trips over it and a future
+     storage-format version can redefine the cache contract in lockstep with the layout
+     it caches. The mirror faithfully images **one cloud backend** under identical keys —
+     its root namespaced by that backend's identity (account, then container) so two
+     backends sharing one `--cache` directory never serve each other's bodies, while a
+     single backend's mirror still holds several projects at once; when a project's token
+     changes the reader discards only **that project's mirrored objects** (coarse but
+     correct, since mutations are rare); the marker is maintained by the
+     cloud backend, so every writer invalidates other machines' caches even when it holds
+     no cache itself. *Key enabler the issue did not consider:* the nightly `collect`
+     used `--overwrite` for same-commit idempotency, which would mutate objects and wipe
+     the cache nightly; a new **`run --skip-existing`** mode keeps the production write
+     path append-only — and makes stored measurements immutable, which is better history
+     hygiene — so the nightly never invalidates the cache it feeds. CLI: a `--cache <dir>`
+     (+ `CARGO_BENCH_HISTORY_CACHE` env) on the three read commands, applicable only to
+     the cloud backend, so it **conflicts with `--local`**. CI: the `collect` recipe
+     switches to `--skip-existing`, and the `analyze` job restores/saves the cache via
+     `actions/cache`. *Rejected:* (a) caching the listing — would hide newly stored
+     objects; (b) keeping the nightly on `--overwrite` and detecting create-vs-replace at
+     the backend to spare the cache — works, but adds a round-trip per write and leaves
+     history mutable, which `--skip-existing` avoids outright; (c) building the cache into
+     the Azure backend to cache raw wire bytes — cheaper on a miss, but not testable with
+     in-memory fakes and couples concerns, whereas a storage decorator is fake-driven and
+     reactor-free.
+
+42. **Type-segmented (`v2`) blob layout — deferred, not adopted (§4.2)** — a forward-looking
+     idea to hoist the run *kind* into the key path
+     (`v2/<project>/…/runs-clean/<commit>.json`, `…/runs-dirty/…`, `…/blessings/…`) instead of
+     encoding it in the filename, so a single-kind query could narrow its `list` to one prefix.
+     *Rejected for now* on three grounds. **(a)** The query cost it targets is already avoided:
+     `analyze`'s key-only Phase 1 (§8.3 — the "Phase 1 — key-only filtering" pass in
+     `analyze/mod.rs`) drops non-admitted dirty / off-history / out-of-window candidates *before*
+     any body fetch, reading the kind from the filename, so a clean-only analysis issues no
+     dirty-body `get`s today — a kind prefix would remove round-trips that are never made.
+     **(b)** It would break the **co-location** of a commit's clean run, dirty snapshots, and
+     blessing sidecars under one `<commit>/` directory, which `prune` (whole-commit deletion,
+     §8.6) and `bless` (the sidecar lives beside the `clean.json` it baselines, §8.7) rely on;
+     a kind-first layout scatters them across three subtrees. **(c)** Only **one** of {kind,
+     discriminant} can occupy the high prefix, and the layout already puts discriminants high
+     (the more common facet filter) — yet the loader does not even exploit that for `list`
+     narrowing, evidence that listing cost is not a felt pain. The one genuine upside,
+     independent single-kind enumeration (`list blessings`), is minor and, if ever needed, is a
+     migration-free `list`-prefix narrowing away. **Orthogonal to the issue #262 cache
+     (decision 41)** — which keys off whatever the layout is and never caches `list` — and
+     explicitly **not** bundled with it.
+
+43. **Azure auth is Microsoft Entra ID (OAuth) only** — *Decided:* the two legacy auth
      modes — self-signed shared-key account SAS (`account_key`) and verbatim SAS
      (`sas_token`) — were removed; `AzureBlobStorage` authenticates exclusively via
      Microsoft Entra ID, so `credential` is always present and the endpoint is always

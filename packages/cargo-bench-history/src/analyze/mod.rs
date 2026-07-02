@@ -44,10 +44,11 @@ use crate::model::{BenchmarkIdPrefix, DiscriminantSet, Engine, STORAGE_VERSION, 
 use crate::output::{OutputSelection, OutputWriter, TokioOutputWriter, emit};
 use crate::probe::{EnvironmentProbe, SystemProbe};
 use crate::report::{Reporter, ReporterExt, StderrReporter};
-use crate::storage::{Storage, StorageFacade, build_storage};
+use crate::storage::{Storage, StorageFacade, project_objects_prefix, resolve_storage};
 use crate::text::count_noun;
 use crate::wiring::{
-    resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
+    cache_env, resolve_cache_path, resolve_config_path, resolve_local_path, resolve_project_id,
+    resolve_repo, storage_env,
 };
 use crate::{
     AnalyzeOptions, BlessOptions, ListOptions, PruneOptions, RunError, RunOutcome, UnblessOptions,
@@ -80,13 +81,18 @@ pub(crate) async fn execute(
 
     let project_id = resolve_project_id(&config, workspace_dir);
     let local = resolve_local_path(options.local.as_ref(), storage_env().as_deref())?;
-    let storage = match storage_override {
-        Some(backend) => {
-            reporter.note("storage backend: injected by test override");
-            backend
-        }
-        None => build_storage(local.as_deref(), &config, workspace_dir)?,
-    };
+    let cache = resolve_cache_path(options.cache.as_ref(), cache_env().as_deref())?;
+    let storage = resolve_storage(
+        storage_override,
+        local.as_deref(),
+        &config,
+        workspace_dir,
+        cache.as_deref(),
+        &reporter,
+    )?;
+    // Reconcile the read-through cache (if any) with the cloud before loading, so a
+    // stale mirror is wiped rather than served.
+    storage.synchronize_cache(&project_id, &reporter).await?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
     let auto = detect_auto_facets().await?;
@@ -103,7 +109,7 @@ pub(crate) async fn execute(
     // Relative `--markdown`/`--json` paths resolve against the workspace directory
     // (the working directory in production), the same base as `--config`.
     let writer = TokioOutputWriter::new(workspace_dir.to_path_buf());
-    analyze_with(
+    let outcome = analyze_with(
         &git,
         &storage,
         &project_id,
@@ -116,7 +122,11 @@ pub(crate) async fn execute(
         &writer,
         &spawner,
     )
-    .await
+    .await;
+    // Surface the cache hit/miss tally after the load, so a slow analyze can be
+    // diagnosed as a cold or invalidated mirror regardless of the load's outcome.
+    storage.report_cache_tally(&reporter);
+    outcome
 }
 
 /// Whether colored output should be emitted: only to an interactive terminal with
@@ -590,7 +600,7 @@ async fn facet_filtered_candidates<S: Storage>(
     // character that sanitizes (a space, `/`, a non-ASCII letter, ...) is stored
     // mangled, so listing under the raw id would silently find an empty history.
     let project = sanitize_segment(project_id);
-    let prefix = format!("{STORAGE_VERSION}/{project}/");
+    let prefix = project_objects_prefix(project_id);
 
     reporter.note(&format!(
         "project id: {project_id} (storage segment: {project})"
@@ -1754,12 +1764,12 @@ mod tests {
 
     /// The clean object key for `commit` in the callgrind/linux partition.
     fn clean_key(commit: &str) -> String {
-        format!("v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
+        format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
     }
 
     /// The clean object key for `commit` in an arbitrary engine/triple/machine-key partition.
     fn clean_key_in(engine: &str, triple: &str, machine: &str, commit: &str) -> String {
-        format!("v1/folo/{engine}/{triple}/{machine}/{commit}/clean.json")
+        format!("v1/folo/objects/{engine}/{triple}/{machine}/{commit}/clean.json")
     }
 
     /// A stored result set whose single record carries two metrics (`Ir` and
@@ -1793,7 +1803,9 @@ mod tests {
 
     /// A dirty snapshot key for `commit` taken at `unix`.
     fn dirty_key(commit: &str, unix: i64) -> String {
-        format!("v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/dirty-{unix}.json")
+        format!(
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/dirty-{unix}.json"
+        )
     }
 
     /// Stores a value at `key` in `storage`, panicking on failure (test helper).
@@ -2137,9 +2149,9 @@ mod tests {
     fn facet_filter_skips_an_unrecognized_storage_key() {
         let storage = MemoryStorage::new();
         seed_linear_step(&storage);
-        // A `.json` object under the project prefix whose key is not a valid
-        // seven-segment storage key is noted and skipped, not parsed as data.
-        block_on(storage.put("v1/folo/bogus.json", b"{}")).unwrap();
+        // A `.json` object under the project's objects prefix whose key is not a
+        // valid eight-segment storage key is noted and skipped, not parsed as data.
+        block_on(storage.put("v1/folo/objects/bogus.json", b"{}")).unwrap();
         let reporter = RecordingReporter::new();
         block_on(analyze_with(
             &linear6_git(),
@@ -2330,7 +2342,8 @@ mod tests {
             "0.0.1".to_owned(),
         );
         let bless_key =
-            "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/c3/bless-3.json".to_owned();
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/c3/bless-3.json"
+                .to_owned();
         block_on(storage.put(&bless_key, record.to_json().unwrap().as_bytes())).unwrap();
 
         let reporter = RecordingReporter::new();
@@ -2393,7 +2406,8 @@ mod tests {
             "0.0.1".to_owned(),
         );
         let bless_key =
-            "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/c3/bless-3.json".to_owned();
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/c3/bless-3.json"
+                .to_owned();
         block_on(storage.put(&bless_key, record.to_json().unwrap().as_bytes())).unwrap();
 
         let reporter = RecordingReporter::new();
@@ -2461,7 +2475,8 @@ mod tests {
         seed_linear_step(&storage);
         // c3 is on the linear6 history, so history mode loads its sidecar.
         let bless_key =
-            "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/c3/bless-3.json".to_owned();
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/c3/bless-3.json"
+                .to_owned();
         block_on(storage.put(&bless_key, &[0xff, 0xfe, 0x00])).unwrap();
         let error = analyze_blessing_error(&storage);
         match error {
@@ -2477,7 +2492,8 @@ mod tests {
         let storage = MemoryStorage::new();
         seed_linear_step(&storage);
         let bless_key =
-            "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/c3/bless-3.json".to_owned();
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/c3/bless-3.json"
+                .to_owned();
         block_on(storage.put(&bless_key, b"{ not a blessing record")).unwrap();
         let error = analyze_blessing_error(&storage);
         match error {
@@ -2504,7 +2520,8 @@ mod tests {
             "0.0.1".to_owned(),
         );
         let bless_key =
-            "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/z9/bless-3.json".to_owned();
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/z9/bless-3.json"
+                .to_owned();
         block_on(storage.put(&bless_key, record.to_json().unwrap().as_bytes())).unwrap();
 
         let reporter = RecordingReporter::new();
@@ -2952,7 +2969,7 @@ mod tests {
         store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
         store(
             &storage,
-            "v1/folo/callgrind/x86_64-pc-windows-msvc/synthetic/c0/clean.json",
+            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/c0/clean.json",
             &ir_set(0, "c0", 100.0),
         );
         let git = linear_git();
@@ -2978,7 +2995,7 @@ mod tests {
         store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
         store(
             &storage,
-            "v1/folo/callgrind/x86_64-pc-windows-msvc/synthetic/c0/clean.json",
+            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/c0/clean.json",
             &ir_set(0, "c0", 100.0),
         );
         let git = linear_git();
@@ -3003,7 +3020,7 @@ mod tests {
         store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
         store(
             &storage,
-            "v1/folo/callgrind/x86_64-pc-windows-msvc/synthetic/c0/clean.json",
+            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/c0/clean.json",
             &ir_set(0, "c0", 100.0),
         );
         let git = linear_git();
@@ -3021,7 +3038,7 @@ mod tests {
         store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
         store(
             &storage,
-            "v1/folo/criterion/x86_64-unknown-linux-gnu/synthetic/c0/clean.json",
+            "v1/folo/objects/criterion/x86_64-unknown-linux-gnu/synthetic/c0/clean.json",
             &ir_set(0, "c0", 100.0),
         );
         let git = linear_git();
@@ -3122,7 +3139,7 @@ mod tests {
             let commit = format!("c{index}");
             let second = i64::try_from(index).unwrap();
             let key = format!(
-                "v1/{sanitized}/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json"
+                "v1/{sanitized}/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json"
             );
             store(&storage, &key, &ir_set(second, &commit, value));
         }
@@ -3178,7 +3195,7 @@ mod tests {
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("c0"), &ir_set(0, "c0", 10.0));
         // A stray non-result object under the prefix must be ignored, not parsed.
-        block_on(storage.put("v1/folo/callgrind/README.txt", b"not json")).unwrap();
+        block_on(storage.put("v1/folo/objects/callgrind/README.txt", b"not json")).unwrap();
         let git = linear_git();
 
         let (_, regressions) = analyze(&git, &storage, "folo", &options());

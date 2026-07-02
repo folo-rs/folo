@@ -30,7 +30,7 @@ use crate::text::count_noun;
 use crate::wiring::{
     resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
 };
-use crate::{BlessOptions, RunError, RunOutcome, UnblessOptions};
+use crate::{BlessOptions, RunError, RunOutcome, UnblessOptions, finish_with_flush};
 
 use super::StorageKey;
 use super::{
@@ -59,13 +59,13 @@ pub(crate) async fn bless(
 
     let project_id = resolve_project_id(&config, workspace_dir);
     let local = resolve_local_path(options.local.as_ref(), storage_env().as_deref())?;
-    let storage = build_storage(local.as_deref(), &config, workspace_dir)?;
+    let storage = build_storage(local.as_deref(), &config, workspace_dir, None)?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
     let auto = detect_auto_facets().await?;
 
     let now = now_override.unwrap_or_else(Timestamp::now);
-    bless_with(
+    let result = bless_with(
         &git,
         &storage,
         &project_id,
@@ -76,7 +76,16 @@ pub(crate) async fn bless(
         env!("CARGO_PKG_VERSION"),
         &reporter,
     )
-    .await
+    .await;
+    // Flush the cache-invalidation marker after success: blessing writes a fresh
+    // timestamped sidecar, so it is additive and never arms the backend — a
+    // read-through cache discovers the new key through its always-fresh listing. It
+    // only arms (and so bumps the marker, invalidating other machines' caches) in
+    // the rare case of overwriting an existing sidecar, e.g. a same-second re-bless.
+    let flush = storage
+        .flush_pending_invalidation(&project_id, &reporter)
+        .await;
+    finish_with_flush(result, flush)
 }
 
 /// The real `unbless`: load configuration, wire the configured storage and git
@@ -96,12 +105,12 @@ pub(crate) async fn unbless(
 
     let project_id = resolve_project_id(&config, workspace_dir);
     let local = resolve_local_path(options.local.as_ref(), storage_env().as_deref())?;
-    let storage = build_storage(local.as_deref(), &config, workspace_dir)?;
+    let storage = build_storage(local.as_deref(), &config, workspace_dir, None)?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
     let auto = detect_auto_facets().await?;
 
-    unbless_with(
+    let result = unbless_with(
         &git,
         &storage,
         &project_id,
@@ -110,7 +119,13 @@ pub(crate) async fn unbless(
         &auto,
         &reporter,
     )
-    .await
+    .await;
+    // Unblessing deletes sidecars, which arms the backend, so flush the marker to
+    // invalidate other machines' caches.
+    let flush = storage
+        .flush_pending_invalidation(&project_id, &reporter)
+        .await;
+    finish_with_flush(result, flush)
 }
 
 /// Storage- and git-generic `bless`: validate the preconditions, then write a
@@ -360,7 +375,7 @@ mod tests {
     }
 
     fn clean_key(commit: &str) -> String {
-        format!("v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
+        format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
     }
 
     /// A linear master history `c0 - c1 - c2`, HEAD at the tip `c2`.

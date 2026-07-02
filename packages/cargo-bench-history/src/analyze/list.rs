@@ -20,10 +20,11 @@ use serde::Serialize;
 use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
 use crate::report::{Reporter, ReporterExt, StderrReporter};
-use crate::storage::{Storage, build_storage};
+use crate::storage::{Storage, StorageFacade, resolve_storage};
 use crate::text::count_noun;
 use crate::wiring::{
-    resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
+    cache_env, resolve_cache_path, resolve_config_path, resolve_local_path, resolve_project_id,
+    resolve_repo, storage_env,
 };
 use crate::{ListOptions, ListSubject, RunError, RunOutcome};
 
@@ -48,6 +49,7 @@ pub(crate) async fn execute(
     options: &ListOptions,
     workspace_dir: &Path,
     now_override: Option<Timestamp>,
+    storage_override: Option<StorageFacade>,
 ) -> Result<RunOutcome, RunError> {
     let reporter = StderrReporter::new(options.verbose);
 
@@ -60,7 +62,16 @@ pub(crate) async fn execute(
 
     let project_id = resolve_project_id(&config, workspace_dir);
     let local = resolve_local_path(options.local.as_ref(), storage_env().as_deref())?;
-    let storage = build_storage(local.as_deref(), &config, workspace_dir)?;
+    let cache = resolve_cache_path(options.cache.as_ref(), cache_env().as_deref())?;
+    let storage = resolve_storage(
+        storage_override,
+        local.as_deref(),
+        &config,
+        workspace_dir,
+        cache.as_deref(),
+        &reporter,
+    )?;
+    storage.synchronize_cache(&project_id, &reporter).await?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
     let auto = detect_auto_facets().await?;
@@ -70,7 +81,7 @@ pub(crate) async fn execute(
     // (mirrors `analyze::execute`).
     let spawner = Spawner::new_tokio();
     let writer = TokioOutputWriter::new(workspace_dir.to_path_buf());
-    list_with(
+    let outcome = list_with(
         &git,
         &storage,
         &project_id,
@@ -82,7 +93,9 @@ pub(crate) async fn execute(
         &writer,
         &spawner,
     )
-    .await
+    .await;
+    storage.report_cache_tally(&reporter);
+    outcome
 }
 
 /// Storage- and git-generic `list`: either list the discriminant sets present in
@@ -985,7 +998,7 @@ mod tests {
     }
 
     fn clean_key(commit: &str) -> String {
-        format!("v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
+        format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
     }
 
     fn store(storage: &MemoryStorage, key: &str, set: &Run) {
@@ -1336,7 +1349,7 @@ mod tests {
         store(&storage, &clean_key("c0"), &two_metric_set(0, "c0"));
         store(
             &storage,
-            "v1/folo/criterion/x86_64-unknown-linux-gnu/synthetic/c0/clean.json",
+            "v1/folo/objects/criterion/x86_64-unknown-linux-gnu/synthetic/c0/clean.json",
             &two_metric_set(0, "c0"),
         );
         let git = linear_git();
@@ -1401,7 +1414,7 @@ mod tests {
         store(&storage, &clean_key("c0"), &two_metric_set(0, "c0"));
         store(
             &storage,
-            "v1/folo/criterion/x86_64-pc-windows-msvc/m1/c0/clean.json",
+            "v1/folo/objects/criterion/x86_64-pc-windows-msvc/m1/c0/clean.json",
             &two_metric_set(0, "c0"),
         );
         let git = FakeGitHistory::new(); // No repo, but listing does not need one.
@@ -1558,7 +1571,7 @@ mod tests {
     /// The blessing-sidecar key in the same partition as [`clean_key`].
     fn bless_key(commit: &str, issued_unix: i64) -> String {
         format!(
-            "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/bless-{issued_unix}.json"
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/bless-{issued_unix}.json"
         )
     }
 

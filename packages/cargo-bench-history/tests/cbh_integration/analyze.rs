@@ -243,7 +243,7 @@ async fn analyze_engine_filters_partition() {
     // A criterion-partition object that the callgrind filter must skip. Its commit
     // segment is never read because the engine facet excludes it from listing.
     workspace.seed(
-        "v1/testproj/criterion/x86_64-pc-windows-msvc/m1/abc123/clean.json",
+        "v1/testproj/objects/criterion/x86_64-pc-windows-msvc/m1/abc123/clean.json",
         &ir_result_set(1, "c1", 100.0),
     );
 

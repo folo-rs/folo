@@ -34,8 +34,12 @@ use azure_storage_blob::{
 };
 use cargo_bench_history_core::codec;
 use futures::TryStreamExt as _;
+use jiff::Timestamp;
 
-use super::{Storage, StorageError, github_oidc, validate_key};
+use super::{
+    PendingInvalidation, Storage, StorageError, cache_epoch_key, github_oidc, validate_key,
+};
+use crate::report::{Reporter, ReporterExt};
 
 /// The HTTP content coding declared on every uploaded blob. The storage layer
 /// always stores gzip, so this header is unconditionally truthful and lets a
@@ -62,6 +66,14 @@ pub(crate) struct AzureBlobStorage {
     /// [`shared_client_options`]: AzureBlobStorage::shared_client_options
     /// [`from_config`]: AzureBlobStorage::from_config
     http_client: Arc<dyn HttpClient>,
+    /// One-shot flag, shared across clones, that records whether this backend has
+    /// removed or overwritten an existing object since the last flush. A read
+    /// command's [`flush_pending_invalidation`] consults it to decide whether to
+    /// bump this project's cache-invalidation marker. Held behind an [`Arc`] so a
+    /// clone made deeper in the stack still arms the same flag.
+    ///
+    /// [`flush_pending_invalidation`]: AzureBlobStorage::flush_pending_invalidation
+    invalidation: Arc<PendingInvalidation>,
 }
 
 impl fmt::Debug for AzureBlobStorage {
@@ -114,6 +126,7 @@ impl AzureBlobStorage {
             container_endpoint,
             credential,
             http_client,
+            invalidation: Arc::new(PendingInvalidation::default()),
         })
     }
 
@@ -143,6 +156,7 @@ impl AzureBlobStorage {
             container_endpoint,
             credential,
             http_client,
+            invalidation: Arc::new(PendingInvalidation::default()),
         })
     }
 
@@ -236,6 +250,38 @@ impl AzureBlobStorage {
             Err(error) => Err(map_error(&error, key)),
         }
     }
+
+    /// Writes a fresh cache-invalidation marker for `project` if this backend has
+    /// removed or overwritten an object since the last flush, coalescing every
+    /// mutation in the command into a single marker write.
+    ///
+    /// The marker carries an opaque epoch token (the flush instant rendered
+    /// RFC 3339); only whether the token *differs* matters to a reader, so reading
+    /// the wall clock here — rather than threading a clock down — is harmless (the
+    /// worst case under skew is one extra cache wipe). The write goes through the
+    /// internal upload path, so writing the marker does not itself re-arm the flag.
+    #[cfg_attr(test, mutants::skip)] // Delegates to the Azure SDK; verified by the Azurite round-trip tests, which mutation testing cannot run.
+    pub(crate) async fn flush_pending_invalidation(
+        &self,
+        project: &str,
+        reporter: &dyn Reporter,
+    ) -> Result<(), StorageError> {
+        if !self.invalidation.take() {
+            return Ok(());
+        }
+        let key = cache_epoch_key(project);
+        let token = Timestamp::now().to_string();
+        reporter.note_with(|| {
+            format!(
+                "cache: a delete or overwrite reached the cloud this command, so caches keyed on \
+                 older data are now stale; bumping the invalidation marker {key} to epoch {token}"
+            )
+        });
+        let client = self.blob_client(&key)?;
+        let compressed = codec::compress(token.as_bytes());
+        self.upload_with_retry(&client, &compressed, &key, false)
+            .await
+    }
 }
 
 impl Storage for AzureBlobStorage {
@@ -248,13 +294,30 @@ impl Storage for AzureBlobStorage {
             .await
     }
 
-    #[cfg_attr(test, mutants::skip)] // Delegates to the Azure SDK; verified by the Azurite round-trip tests, which mutation testing cannot run.
+    #[cfg_attr(test, mutants::skip)] // Delegates to the Azure SDK; the create-vs-replace arming is verified by the Azurite round-trip tests, which mutation testing cannot run.
     async fn put_overwrite(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
         validate_key(key)?;
         let client = self.blob_client(key)?;
         let compressed = codec::compress(bytes);
-        self.upload_with_retry(&client, &compressed, key, false)
+        // Probe with a write-once upload first. Creating a brand-new key leaves
+        // per-key immutability intact and no cache mirrors it yet, so it must not
+        // invalidate anything (a read-through mirror discovers new keys via its
+        // always-fresh listing). Only a genuine replace of an existing object can
+        // leave a stale cached copy, so only that path arms the flag a later flush
+        // consults to bump this project's cache-invalidation marker.
+        match self
+            .upload_with_retry(&client, &compressed, key, true)
             .await
+        {
+            Ok(()) => Ok(()),
+            Err(StorageError::AlreadyExists { .. }) => {
+                self.upload_with_retry(&client, &compressed, key, false)
+                    .await?;
+                self.invalidation.arm();
+                Ok(())
+            }
+            Err(other) => Err(other),
+        }
     }
 
     #[cfg_attr(test, mutants::skip)] // Delegates to the Azure SDK; verified by the Azurite round-trip tests, which mutation testing cannot run.
@@ -315,7 +378,13 @@ impl Storage for AzureBlobStorage {
         validate_key(key)?;
         let client = self.blob_client(key)?;
         match client.delete(None).await {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                // Removing an object breaks per-key immutability, so any local
+                // cache mirroring it is now stale: arm the flag a later flush
+                // consults to bump this project's cache-invalidation marker.
+                self.invalidation.arm();
+                Ok(())
+            }
             Err(error) if matches!(classify(&error), Fault::NotFound | Fault::ContainerMissing) => {
                 Err(StorageError::NotFound {
                     key: key.to_owned(),
@@ -598,6 +667,7 @@ fn config_error(message: impl Into<String>) -> StorageError {
 mod tests {
     use super::*;
 
+    use azure_core::http::headers::Headers;
     use futures::executor::block_on;
 
     /// Builds an Azure HTTP-response error with the given status and storage
@@ -695,6 +765,27 @@ mod tests {
         }
     }
 
+    /// An HTTP client that answers every request with `403 Forbidden`, standing
+    /// in for a non-conflict, non-retryable Azure failure (for example a rejected
+    /// credential). The status is outside the SDK's retry set, so the request is
+    /// issued exactly once and the test incurs no backoff delay.
+    #[derive(Debug)]
+    struct ForbiddenHttpClient;
+
+    #[async_trait::async_trait]
+    impl HttpClient for ForbiddenHttpClient {
+        async fn execute_request(
+            &self,
+            _request: &azure_core::http::Request,
+        ) -> azure_core::Result<azure_core::http::AsyncRawResponse> {
+            Ok(azure_core::http::AsyncRawResponse::from_bytes(
+                StatusCode::Forbidden,
+                Headers::new(),
+                azure_core::Bytes::new(),
+            ))
+        }
+    }
+
     /// Builds an Entra backend from fake parts (fake credential, unused transport)
     /// for the pure unit tests that only inspect URL assembly and key validation.
     fn storage_from_fake_parts(
@@ -736,10 +827,12 @@ mod tests {
             Some("https://127.0.0.1:10000/devstoreaccount1".to_owned()),
         );
 
-        let client = storage.blob_client("v1/proj/callgrind/run.json").unwrap();
+        let client = storage
+            .blob_client("v1/proj/objects/callgrind/run.json")
+            .unwrap();
         assert_eq!(
             client.url().path(),
-            "/devstoreaccount1/bench-history/v1/proj/callgrind/run.json"
+            "/devstoreaccount1/bench-history/v1/proj/objects/callgrind/run.json"
         );
         // Entra carries no query, so the blob URL stays clean.
         assert_eq!(client.url().query(), None);
@@ -1415,6 +1508,89 @@ mod tests {
             .unwrap();
 
         assert_eq!(storage.get("v1/fresh.json").await.unwrap(), b"only");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(
+        mutants,
+        ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip"
+    )]
+    #[serial]
+    async fn put_overwrite_creating_a_new_key_does_not_arm_invalidation() {
+        let Some(storage) = azurite_storage_or_skip() else {
+            return;
+        };
+        // Adding a brand-new key leaves per-key immutability intact and no cache
+        // mirrors it, so it must not arm the invalidation flag.
+        storage
+            .put_overwrite("v1/added.json", b"body")
+            .await
+            .unwrap();
+        assert!(
+            !storage.invalidation.take(),
+            "creating a new key must not arm invalidation"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(
+        mutants,
+        ignore = "Azurite network test: self-skips without an emulator (as under mutation), and the IO it exercises is already mutants::skip"
+    )]
+    #[serial]
+    async fn put_overwrite_replacing_an_existing_key_arms_invalidation() {
+        let Some(storage) = azurite_storage_or_skip() else {
+            return;
+        };
+        // A write-once `put` seeds the object without arming (the additive path).
+        storage.put("v1/replaced.json", b"original").await.unwrap();
+        assert!(
+            !storage.invalidation.take(),
+            "a write-once put must not arm invalidation"
+        );
+        // Overwriting the now-existing object breaks immutability, so any mirror of
+        // it is stale: this path must arm the flag.
+        storage
+            .put_overwrite("v1/replaced.json", b"replacement")
+            .await
+            .unwrap();
+        assert!(
+            storage.invalidation.take(),
+            "replacing an existing key must arm invalidation"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg_attr(
+        miri,
+        ignore = "drives the Azure SDK request pipeline, which Miri cannot run"
+    )]
+    async fn put_overwrite_forwards_a_non_conflict_upload_error() {
+        // The write-once probe fails with a non-conflict, non-retryable status
+        // (403 Forbidden here), which is neither `AlreadyExists` nor a missing
+        // container: `put_overwrite` must forward it verbatim rather than fall
+        // through to the replace path.
+        let storage = AzureBlobStorage::from_parts(
+            "acct",
+            "history",
+            None,
+            fake_credential(),
+            Arc::new(ForbiddenHttpClient),
+        )
+        .unwrap();
+
+        let error = storage
+            .put_overwrite("v1/proj/object.json", b"body")
+            .await
+            .expect_err("a forbidden upload must surface as an error");
+
+        assert!(matches!(error, StorageError::Io(_)));
+        assert!(
+            !storage.invalidation.take(),
+            "a failed write-once probe must not arm invalidation"
+        );
     }
 
     #[tokio::test]

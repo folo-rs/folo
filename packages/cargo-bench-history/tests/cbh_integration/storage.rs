@@ -39,7 +39,7 @@ async fn run_local_flag_with_a_relative_path_rebases_against_the_workspace() {
     // `stored_objects` reads `<workspace>/store`, so a result there proves the
     // relative path resolved against the workspace, not the process cwd.
     let (key, _) = workspace.single_object();
-    assert!(key.starts_with("v1/testproj/"), "{key}");
+    assert!(key.starts_with("v1/testproj/objects/"), "{key}");
 }
 
 /// `--local` overrides a configured cloud backend: with both present the local
@@ -59,7 +59,7 @@ async fn run_local_flag_overrides_a_configured_cloud_backend() {
     // The object landed in the local store, proving the cloud backend was not
     // used despite being configured.
     let (key, _) = workspace.single_object();
-    assert!(key.starts_with("v1/testproj/"), "{key}");
+    assert!(key.starts_with("v1/testproj/objects/"), "{key}");
 }
 
 /// With neither `--local` nor a configured cloud backend, a storage-backed
@@ -83,6 +83,74 @@ async fn run_without_a_storage_selection_or_cloud_config_errors() {
         workspace.stored_objects().is_empty(),
         "a failed selection stores nothing"
     );
+}
+
+/// Drives `args` against a workspace that has a project id but no storage
+/// selection and no configured cloud backend, asserting the command fails fast
+/// with the `build_storage` "no storage configured" error. Every storage-backed
+/// command resolves its backend the same way, so this covers each command's
+/// `build_storage(...)?` call site propagating the configuration error rather than
+/// proceeding to touch git or the network.
+async fn assert_command_errors_without_storage(args: &[&str]) {
+    let workspace = Workspace::new(&storage_only_config()).without_local_storage();
+
+    let error = workspace.drive(args).await.unwrap_err();
+    let RunError::Storage(storage) = error else {
+        panic!("expected a storage error from {args:?}, got {error:?}");
+    };
+    let rendered = storage.to_string();
+    assert!(
+        rendered.contains("no storage configured"),
+        "{args:?}: {rendered}"
+    );
+}
+
+/// `analyze` fails fast with the storage configuration error when no backend is
+/// selected or configured.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn analyze_without_a_storage_selection_or_cloud_config_errors() {
+    assert_command_errors_without_storage(&["analyze"]).await;
+}
+
+/// `list` fails fast with the storage configuration error when no backend is
+/// selected or configured.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn list_without_a_storage_selection_or_cloud_config_errors() {
+    assert_command_errors_without_storage(&["list", "runs"]).await;
+}
+
+/// `prune` fails fast with the storage configuration error when no backend is
+/// selected or configured.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn prune_without_a_storage_selection_or_cloud_config_errors() {
+    assert_command_errors_without_storage(&["prune", "--clean"]).await;
+}
+
+/// `bless` fails fast with the storage configuration error when no backend is
+/// selected or configured.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn bless_without_a_storage_selection_or_cloud_config_errors() {
+    assert_command_errors_without_storage(&["bless", "--all"]).await;
+}
+
+/// `unbless` fails fast with the storage configuration error when no backend is
+/// selected or configured.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn unbless_without_a_storage_selection_or_cloud_config_errors() {
+    assert_command_errors_without_storage(&["unbless"]).await;
+}
+
+/// `backfill` fails fast with the storage configuration error when no backend is
+/// selected or configured, before any commit in its range is resolved.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn backfill_without_a_storage_selection_or_cloud_config_errors() {
+    assert_command_errors_without_storage(&["backfill", "HEAD~1", "HEAD"]).await;
 }
 
 /// `--no-store` skips storage selection entirely, so the run completes and

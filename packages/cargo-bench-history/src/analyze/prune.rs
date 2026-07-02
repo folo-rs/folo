@@ -26,12 +26,13 @@ use serde::Serialize;
 use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
 use crate::report::{Reporter, ReporterExt, StderrReporter};
-use crate::storage::{Storage, build_storage};
+use crate::storage::{Storage, StorageFacade, resolve_storage};
 use crate::text::count_noun;
 use crate::wiring::{
-    resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
+    cache_env, resolve_cache_path, resolve_config_path, resolve_local_path, resolve_project_id,
+    resolve_repo, storage_env,
 };
-use crate::{PruneOptions, RunError, RunOutcome};
+use crate::{PruneOptions, RunError, RunOutcome, finish_with_flush};
 
 use super::ReportFormat;
 use super::{
@@ -86,6 +87,7 @@ impl Scope {
 pub(crate) async fn execute(
     options: &PruneOptions,
     workspace_dir: &Path,
+    storage_override: Option<StorageFacade>,
 ) -> Result<RunOutcome, RunError> {
     let reporter = StderrReporter::new(options.verbose);
 
@@ -98,13 +100,22 @@ pub(crate) async fn execute(
 
     let project_id = resolve_project_id(&config, workspace_dir);
     let local = resolve_local_path(options.local.as_ref(), storage_env().as_deref())?;
-    let storage = build_storage(local.as_deref(), &config, workspace_dir)?;
+    let cache = resolve_cache_path(options.cache.as_ref(), cache_env().as_deref())?;
+    let storage = resolve_storage(
+        storage_override,
+        local.as_deref(),
+        &config,
+        workspace_dir,
+        cache.as_deref(),
+        &reporter,
+    )?;
+    storage.synchronize_cache(&project_id, &reporter).await?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
     let auto = detect_auto_facets().await?;
 
     let writer = TokioOutputWriter::new(workspace_dir.to_path_buf());
-    prune_with(
+    let result = prune_with(
         &git,
         &storage,
         &project_id,
@@ -114,7 +125,15 @@ pub(crate) async fn execute(
         &reporter,
         &writer,
     )
-    .await
+    .await;
+    // Flush the cache-invalidation marker even on a partial failure: any delete that
+    // already reached the cloud must invalidate *other* machines' caches, so this
+    // bump cannot be skipped just because a later step failed.
+    let flush = storage
+        .flush_pending_invalidation(&project_id, &reporter)
+        .await;
+    storage.report_cache_tally(&reporter);
+    finish_with_flush(result, flush)
 }
 
 /// Storage- and git-generic `prune`: resolve the selected commit topology, choose
@@ -737,15 +756,19 @@ mod tests {
     }
 
     fn clean_key(commit: &str) -> String {
-        format!("v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
+        format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
     }
 
     fn dirty_key(commit: &str, unix: i64) -> String {
-        format!("v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/dirty-{unix}.json")
+        format!(
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/dirty-{unix}.json"
+        )
     }
 
     fn bless_key(commit: &str, unix: i64) -> String {
-        format!("v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/bless-{unix}.json")
+        format!(
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/bless-{unix}.json"
+        )
     }
 
     fn store(storage: &MemoryStorage, key: &str, value: &Run) {
@@ -1317,7 +1340,7 @@ mod tests {
         // A criterion dirty run on the same commit must survive an engine-scoped
         // callgrind prune.
         let criterion_dirty =
-            "v1/folo/criterion/x86_64-unknown-linux-gnu/synthetic/f1/dirty-200.json";
+            "v1/folo/objects/criterion/x86_64-unknown-linux-gnu/synthetic/f1/dirty-200.json";
         store(&storage, criterion_dirty, &set("f1"));
         let git = feature_git();
 
