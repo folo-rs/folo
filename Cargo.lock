@@ -495,6 +495,7 @@ name = "cargo-detect-package"
 version = "1.0.22"
 dependencies = [
  "clap",
+ "mimalloc",
  "mockall",
  "mutants",
  "serial_test",
@@ -507,6 +508,7 @@ name = "cargo-freeze-deps"
 version = "0.1.2"
 dependencies = [
  "clap",
+ "mimalloc",
  "mutants",
  "semver",
  "serial_test",
@@ -1951,6 +1953,7 @@ dependencies = [
 name = "mock_bench_engine"
 version = "0.0.0"
 dependencies = [
+ "mimalloc",
  "serde_json",
 ]
 
