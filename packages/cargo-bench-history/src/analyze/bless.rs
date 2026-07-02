@@ -51,10 +51,7 @@ pub(crate) async fn bless(
     let reporter = StderrReporter::new(options.verbose);
 
     let config_path = resolve_config_path(workspace_dir, options.config_path.as_deref());
-    reporter.note(&format!(
-        "loading configuration from {}",
-        config_path.display()
-    ));
+    reporter.note_with(|| format!("loading configuration from {}", config_path.display()));
     let config = load_config(&config_path, options.config_path.is_some()).await?;
 
     let project_id = resolve_project_id(&config, workspace_dir);
@@ -97,10 +94,7 @@ pub(crate) async fn unbless(
     let reporter = StderrReporter::new(options.verbose);
 
     let config_path = resolve_config_path(workspace_dir, options.config_path.as_deref());
-    reporter.note(&format!(
-        "loading configuration from {}",
-        config_path.display()
-    ));
+    reporter.note_with(|| format!("loading configuration from {}", config_path.display()));
     let config = load_config(&config_path, options.config_path.is_some()).await?;
 
     let project_id = resolve_project_id(&config, workspace_dir);

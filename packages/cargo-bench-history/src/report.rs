@@ -7,37 +7,65 @@
 //! to standard output. The real adapter writes notes to standard error so they
 //! never contaminate machine-readable stdout; tests record them in memory.
 //!
-//! Stage timings are a *second*, independent channel ([`Reporter::timing`]): they
-//! report the wall-clock cost of each pipeline stage so a mystery slowdown can be
-//! localized. They are kept separate from per-object [`note`](Reporter::note)s
-//! precisely so a caller can ask for the coarse per-stage breakdown *without* the
-//! per-object flood — the stress harness, which analyzes tens of thousands of
-//! objects, would otherwise drown in (and be slowed by) one note per object.
+//! Stage timings are a *second*, independent channel ([`ReporterExt::timing`]):
+//! they report the wall-clock cost of each pipeline stage so a mystery slowdown
+//! can be localized. They are kept separate from per-object
+//! [`note`](Notes::note)s precisely so a caller can ask for the coarse per-stage
+//! breakdown *without* the per-object flood — the stress harness, which analyzes
+//! tens of thousands of objects, would otherwise drown in (and be slowed by) one
+//! note per object.
+//!
+//! The unconditional emit primitives live on a sealed [`Sink`] trait that cannot
+//! be named outside this module, so the only note-emitting surface a caller sees
+//! is the guarded [`note_with`](ReporterExt::note_with) /
+//! [`if_enabled`](ReporterExt::if_enabled) pair. An unconditional
+//! [`note`](Notes::note) is reachable *only* on the [`Notes`] handle passed to an
+//! `if_enabled` block, so a bare `note` can never escape its `--verbose` guard.
 
 use std::time::Duration;
 
-/// Receives human-facing diagnostic notes emitted while a command runs.
-pub(crate) trait Reporter {
-    /// Whether notes are consumed at all.
-    ///
-    /// Callers may use this to skip building an expensive note (for example, one
-    /// formatted per scanned file) when nothing would consume it.
-    fn enabled(&self) -> bool;
+mod sealed {
+    use std::time::Duration;
 
-    /// Records a single diagnostic note.
-    fn note(&self, message: &str);
-
-    /// Records the wall-clock duration of a named pipeline `stage`.
+    /// The unconditional emit primitives, sealed within [`report`](super) so no
+    /// caller can invoke them directly.
     ///
-    /// `stage` should name the stage *and* what it encompasses (so the breakdown
-    /// reconstructs where the time went), e.g. `"phase 2/3 fetch + parallel parse +
-    /// fold"`. This is a separate channel from [`note`](Reporter::note) so the
-    /// per-stage cost can be surfaced without the per-object note flood.
-    fn timing(&self, stage: &str, elapsed: Duration);
+    /// Every note or timing a command emits flows through the guarded helpers on
+    /// [`ReporterExt`](super::ReporterExt) — which are the only surface that can
+    /// reach these methods — so the `--verbose` guard is applied in exactly one
+    /// place and can never be bypassed or forgotten at a call site.
+    pub(in crate::report) trait Sink {
+        /// Whether notes are consumed at all, gating the guarded helpers.
+        fn enabled(&self) -> bool;
+
+        /// Records a single diagnostic note unconditionally.
+        fn emit_note(&self, message: &str);
+
+        /// Records the wall-clock duration of a named pipeline `stage`
+        /// unconditionally.
+        fn emit_timing(&self, stage: &str, elapsed: Duration);
+    }
 }
 
-/// Lazy-formatting helpers available on every [`Reporter`], including
-/// `&dyn Reporter`.
+use sealed::Sink;
+
+/// Receives human-facing diagnostic notes emitted while a command runs.
+///
+/// This is the threaded reporter type (`&dyn Reporter`). It deliberately exposes
+/// *no* unconditional emit method: callers reach the sink only through the
+/// guarded helpers on [`ReporterExt`], so a raw `note` can never be emitted
+/// without its `--verbose` guard. Any [`Sink`] is a `Reporter`.
+#[expect(
+    private_bounds,
+    reason = "Sink is sealed within this module on purpose so its unconditional \
+              emit primitives stay off the crate-facing reporter surface"
+)]
+pub(crate) trait Reporter: Sink {}
+
+impl<T: Sink + ?Sized> Reporter for T {}
+
+/// The guarded, crate-facing diagnostic API available on every [`Reporter`],
+/// including `&dyn Reporter`.
 ///
 /// These live on a separate trait rather than on [`Reporter`] itself so the base
 /// trait stays dyn-compatible: a method taking a generic closure cannot be
@@ -48,33 +76,64 @@ pub(crate) trait ReporterExt {
     /// consumed.
     ///
     /// The `build` closure — typically an allocating `format!` — is invoked only
-    /// when [`enabled`](Reporter::enabled) is true. On a hot path that emits one
-    /// note per scanned object this avoids building (and immediately discarding) a
-    /// string for every object when `--verbose` is off, without sprinkling an
+    /// when notes are enabled. On a hot path that emits one note per scanned
+    /// object this avoids building (and immediately discarding) a string for
+    /// every object when `--verbose` is off, without sprinkling an
     /// `if reporter.enabled()` guard around each call site.
     fn note_with(&self, build: impl FnOnce() -> String);
 
-    /// Runs `body` only when notes are consumed.
+    /// Runs `body` — handed a [`Notes`] emitter — only when notes are consumed.
     ///
     /// The counterpart to [`note_with`](Self::note_with) for a *block* that emits
     /// several notes (or computes intermediate values solely to note them): it
-    /// pays nothing when `--verbose` is off, behind a single
-    /// [`enabled`](Reporter::enabled) check rather than one per note. Keeping the
-    /// guard here — the one place it is tested — means call sites never repeat it.
-    fn if_enabled(&self, body: impl FnOnce());
+    /// pays nothing when `--verbose` is off, behind a single guard rather than
+    /// one per note. Because the unconditional [`note`](Notes::note) lives on the
+    /// [`Notes`] handle passed here — and nowhere else callers can reach — a bare
+    /// note is only ever emittable inside such a guarded block.
+    fn if_enabled(&self, body: impl FnOnce(Notes<'_, Self>));
+
+    /// Records the wall-clock duration of a named pipeline `stage`.
+    ///
+    /// `stage` should name the stage *and* what it encompasses (so the breakdown
+    /// reconstructs where the time went), e.g. `"phase 2/3 fetch + parallel parse +
+    /// fold"`. This is a separate channel from [`note`](Notes::note) so the
+    /// per-stage cost can be surfaced without the per-object note flood.
+    fn timing(&self, stage: &str, elapsed: Duration);
 }
 
 impl<R: Reporter + ?Sized> ReporterExt for R {
     fn note_with(&self, build: impl FnOnce() -> String) {
         if self.enabled() {
-            self.note(&build());
+            self.emit_note(&build());
         }
     }
 
-    fn if_enabled(&self, body: impl FnOnce()) {
+    fn if_enabled(&self, body: impl FnOnce(Notes<'_, Self>)) {
         if self.enabled() {
-            body();
+            body(Notes { reporter: self });
         }
+    }
+
+    fn timing(&self, stage: &str, elapsed: Duration) {
+        self.emit_timing(stage, elapsed);
+    }
+}
+
+/// The unconditional note emitter handed to an [`if_enabled`](ReporterExt::if_enabled)
+/// block.
+///
+/// A block already runs only when notes are enabled, so the notes it emits need
+/// no further guard — hence this is the one place an unconditional
+/// [`note`](Self::note) is exposed. It cannot be constructed elsewhere, so a bare
+/// note can never escape its `--verbose` guard.
+pub(crate) struct Notes<'a, R: ?Sized> {
+    reporter: &'a R,
+}
+
+impl<R: Reporter + ?Sized> Notes<'_, R> {
+    /// Records a single diagnostic note.
+    pub(crate) fn note(&self, message: &str) {
+        self.reporter.emit_note(message);
     }
 }
 
@@ -112,7 +171,7 @@ impl StderrReporter {
     }
 }
 
-impl Reporter for StderrReporter {
+impl Sink for StderrReporter {
     fn enabled(&self) -> bool {
         self.verbose
     }
@@ -123,7 +182,7 @@ impl Reporter for StderrReporter {
     /// so a mutation of its body cannot be caught by a test; the `verbose` flag it
     /// guards on is covered by `stderr_reporter_reports_enabled_state`.
     #[cfg_attr(test, mutants::skip)]
-    fn note(&self, message: &str) {
+    fn emit_note(&self, message: &str) {
         if self.verbose {
             eprintln!("[bench-history] {message}");
         }
@@ -132,10 +191,10 @@ impl Reporter for StderrReporter {
     /// Writes the stage timing to standard error when timing is enabled.
     ///
     /// A pure standard-error side effect, untestable for the same reason as
-    /// [`note`](Self::note); the `timing_enabled` flag it guards on is covered by
-    /// `stderr_reporter_reports_timing_state`.
+    /// [`emit_note`](Self::emit_note); the `timing_enabled` flag it guards on is
+    /// covered by `stderr_reporter_reports_timing_state`.
     #[cfg_attr(test, mutants::skip)]
-    fn timing(&self, stage: &str, elapsed: Duration) {
+    fn emit_timing(&self, stage: &str, elapsed: Duration) {
         if self.timing_enabled {
             eprintln!(
                 "[bench-history] timing: {stage} took {}",
@@ -166,10 +225,10 @@ mod test_support {
     use std::cell::RefCell;
     use std::time::Duration;
 
-    use super::Reporter;
+    use super::Sink;
 
-    /// A [`Reporter`] that records every note in memory so tests can assert on the
-    /// diagnostic trail.
+    /// A [`Reporter`](super::Reporter) that records every note in memory so tests
+    /// can assert on the diagnostic trail.
     #[derive(Debug, Default)]
     pub(crate) struct RecordingReporter {
         notes: RefCell<Vec<String>>,
@@ -201,16 +260,16 @@ mod test_support {
         }
     }
 
-    impl Reporter for RecordingReporter {
+    impl Sink for RecordingReporter {
         fn enabled(&self) -> bool {
             true
         }
 
-        fn note(&self, message: &str) {
+        fn emit_note(&self, message: &str) {
             self.notes.borrow_mut().push(message.to_owned());
         }
 
-        fn timing(&self, stage: &str, _elapsed: Duration) {
+        fn emit_timing(&self, stage: &str, _elapsed: Duration) {
             // Record only the stage label; the elapsed time is non-deterministic, so
             // tests assert that a stage *was* timed, not how long it took.
             self.timings.borrow_mut().push(stage.to_owned());
@@ -249,8 +308,8 @@ mod tests {
     #[test]
     fn recording_reporter_captures_timings_separately_from_notes() {
         let reporter = RecordingReporter::new();
-        reporter.note("a per-object note");
-        reporter.timing("select_dataset (full load)", Duration::from_millis(5));
+        reporter.emit_note("a per-object note");
+        reporter.emit_timing("select_dataset (full load)", Duration::from_millis(5));
 
         // Timings live in their own channel, so a per-object note assertion is not
         // disturbed by them and vice versa.
@@ -275,8 +334,8 @@ mod tests {
     fn recording_reporter_captures_notes() {
         let reporter = RecordingReporter::new();
         assert!(reporter.enabled());
-        reporter.note("scanning target/criterion");
-        reporter.note("excluding stale.json");
+        reporter.emit_note("scanning target/criterion");
+        reporter.emit_note("excluding stale.json");
 
         assert_eq!(
             reporter.notes(),
@@ -319,15 +378,16 @@ mod tests {
         // A disabled reporter must never run the block, so a multi-note diagnostic
         // section behind one guard costs nothing when `--verbose` is off.
         let ran = Cell::new(0_u32);
-        StderrReporter::new(false).if_enabled(|| ran.set(ran.get() + 1));
+        StderrReporter::new(false).if_enabled(|_notes| ran.set(ran.get() + 1));
         assert_eq!(ran.get(), 0);
 
-        // An enabled reporter runs the block, which can emit several notes.
+        // An enabled reporter runs the block, which emits several notes through the
+        // handle — the only place a bare `note` is reachable.
         let recording = RecordingReporter::new();
-        recording.if_enabled(|| {
+        recording.if_enabled(|notes| {
             ran.set(ran.get() + 1);
-            recording.note("first");
-            recording.note("second");
+            notes.note("first");
+            notes.note("second");
         });
         assert_eq!(ran.get(), 1);
         assert_eq!(
