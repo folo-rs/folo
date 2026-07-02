@@ -305,7 +305,7 @@ mod tests {
         block_on(storage.get("v1/p/objects/criterion/a.json")).unwrap();
 
         // A key added to the cloud after the mirror was populated must still be
-        // listed, so the load discovers the night's new objects.
+        // listed, so the load discovers the run's new objects.
         block_on(storage.inner().put("v1/p/objects/criterion/b.json", b"b")).unwrap();
         let keys = block_on(storage.list("v1/p/objects/criterion/")).unwrap();
         assert_eq!(
