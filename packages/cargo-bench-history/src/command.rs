@@ -101,7 +101,7 @@ pub struct CollectOptions {
     pub overwrite: bool,
     /// Treat an already-stored result for this run's identity as a success that
     /// writes nothing, instead of refusing the run as a duplicate. Mutually
-    /// exclusive with `overwrite`; the append-only mode the nightly `collect`
+    /// exclusive with `overwrite`; the append-only mode the CI `collect`
     /// recipe uses so collection never overwrites (and so never invalidates the
     /// cloud read-through cache).
     pub skip_existing: bool,

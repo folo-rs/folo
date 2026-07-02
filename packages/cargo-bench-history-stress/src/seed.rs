@@ -101,10 +101,11 @@ pub(crate) fn seed(
         tasks.len(),
         series
     ));
-    logger.detail(
+    logger.detail_with(|| {
         "each clean object holds every benchmark's primary metric at one commit; objects fan \
-         out across CPU cores because serialization, not I/O, dominates generation",
-    );
+         out across CPU cores because serialization, not I/O, dominates generation"
+            .to_owned()
+    });
 
     let bytes = write_tasks(root, scenario, sets, &tasks)?;
     let stats = SeedStats {
@@ -112,10 +113,12 @@ pub(crate) fn seed(
         bytes,
         series,
     };
-    logger.detail(&format!(
-        "wrote {} bytes across {} objects",
-        stats.bytes, stats.objects
-    ));
+    logger.detail_with(|| {
+        format!(
+            "wrote {} bytes across {} objects",
+            stats.bytes, stats.objects
+        )
+    });
     Ok(stats)
 }
 

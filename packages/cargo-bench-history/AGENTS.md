@@ -107,9 +107,18 @@ the three).
 ## Verbose diagnostics (`report::Reporter`)
 
 `--verbose` is accepted by every command (`collect`/`backfill`/`analyze`/`install`)
-and threads a `report::Reporter` through the relevant pipeline so an
-otherwise-silent outcome can be diagnosed. The trait has `enabled()` (gate
-expensive per-file note formatting) and `note(&str)`. Production uses
+and threads a `&dyn report::Reporter` through the relevant pipeline so an
+otherwise-silent outcome can be diagnosed. The whole point of the module's shape
+is that a note can never be emitted without its `--verbose` guard: the
+unconditional emit primitives live on a **sealed** `Sink` supertrait that cannot
+be named outside `report`, so the only note surface a caller sees is the guarded
+pair on `ReporterExt` — `note_with(|| format!(…))` for a single lazy line and
+`if_enabled(|notes| { notes.note(…); … })` for a block that emits several. A bare
+unconditional `note` is reachable *only* on the `Notes` handle passed to an
+`if_enabled` block, so call sites never call `enabled()` or `note()` directly and
+there is no `if reporter.enabled()` guard to forget. Stage timings are a separate
+channel (`ReporterExt::timing`), gated independently so the stress harness can ask
+for the per-stage breakdown without the per-object flood. Production uses
 `StderrReporter::new(verbose)`, which writes `[bench-history] …` lines to
 **standard error** only when verbose — never stdout, so machine-readable output
 stays clean. Tests use the `#[cfg(test)]` `RecordingReporter` (records notes in a
@@ -128,6 +137,7 @@ Verbose notes must be **explanatory, not conclusion-only** — see
 `docs/standalone-binaries.md`. State the inputs and the rule behind each decision
 (e.g. the mode note names whether the tip is its own merge-base and whether a dirty
 run is recorded) so the logic can be reconstructed from the log.
+
 
 `analyze` also renders a non-verbose diagnostic *hint* (carried on `ReportInput`/
 `JsonReport`, built by `empty_history_hint`) whenever facet-matching runs were
@@ -189,7 +199,7 @@ several projects' objects at once, so invalidation is **per project**: a cloud-s
 arm and a per-command flush bumps; `synchronize_cache` (before a load) wipes that
 project's stale mirrored objects (`storage::project_objects_prefix`, `v1/<project>/objects/`),
 and `report_cache_tally` notes hits/misses after. Append-only
-`put` never arms it, so the nightly `collect --skip-existing` collection never wipes the
+`put` never arms it, so the CI `collect --skip-existing` collection never wipes the
 cache it feeds.
 
 **Testing note:** the `cbh_integration` harness (`Workspace`) auto-injects
@@ -214,7 +224,7 @@ test process's.
   `AlreadyExists` collision into a soft skip (`StoreOutcome::Skipped`): the run still
   benchmarks every engine — so a broken benchmark is still caught — but writes
   nothing and does not arm the cache-invalidation marker. This is the append-only
-  mode the nightly collection uses (see [storage selection](#storage-selection-local--cloud-config)).
+  mode the CI collection uses (see [storage selection](#storage-selection-local--cloud-config)).
 * `dirty_key(commit, observation_unix)` → `…/<commit>/dirty-<observation_unix>.json`
   — a snapshot of an uncommitted tree, distinguished by its observation second so
   multiple dirty snapshots on one base commit coexist; only a same-second clash is

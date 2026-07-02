@@ -184,17 +184,18 @@ impl StorageTarget {
     pub(crate) async fn provision(&self, logger: Logger) -> Result<(), Error> {
         match &self.kind {
             Kind::Local => {
-                logger.detail(&format!("local store directory is {}", self.root.display()));
+                logger.detail_with(|| format!("local store directory is {}", self.root.display()));
                 Ok(())
             }
             Kind::Azure { account, container } => {
                 logger.step(&format!(
                     "creating Azure blob container {container} in account {account}"
                 ));
-                logger.detail(
+                logger.detail_with(|| {
                     "a fresh container per run keeps stress data isolated and lets cleanup delete \
-                     the whole container in one call",
-                );
+                     the whole container in one call"
+                        .to_owned()
+                });
                 self.az(
                     &[
                         "storage",
@@ -227,10 +228,11 @@ impl StorageTarget {
         logger.step(&format!(
             "uploading the staged tree to container {container} with azcopy"
         ));
-        logger.detail(
+        logger.detail_with(|| {
             "azcopy authenticates as the current az login session (AZCOPY_AUTO_LOGIN_TYPE=AZCLI), \
-             so the same Entra identity is used locally and under workload-identity federation",
-        );
+             so the same Entra identity is used locally and under workload-identity federation"
+                .to_owned()
+        });
         let source = wildcard_source(&self.root);
         let destination = format!("https://{account}.blob.core.windows.net/{container}");
         self.run_tool(
@@ -318,7 +320,7 @@ impl StorageTarget {
         envs: &[(&str, &str)],
         logger: Logger,
     ) -> Result<(), Error> {
-        logger.detail(&format!("running {program} {}", args.join(" ")));
+        logger.detail_with(|| format!("running {program} {}", args.join(" ")));
         match &self.runner {
             Runner::Process => run_process(program, args, envs).await,
             #[cfg(test)]
@@ -520,7 +522,7 @@ mod tests {
         let fake = Arc::new(FakeRunner::default());
         let target = fake_azure_target(&fake, PathBuf::from("staging"));
 
-        block_on(target.provision(Logger::new(false)))
+        block_on(target.provision(Logger::new(true)))
             .expect("provisioning succeeds with a passing runner");
 
         let calls = recorded(&fake);
@@ -529,6 +531,17 @@ mod tests {
         assert!(call.contains("storage container create"), "got: {call}");
         assert!(call.contains("--account-name acct"), "got: {call}");
         assert!(call.contains("--name cont"), "got: {call}");
+    }
+
+    #[test]
+    fn provision_reports_the_local_store_directory() {
+        // A local target provisions by only announcing where its store lives, with
+        // no external tool involved; a verbose run runs (and prints) that
+        // explanatory detail.
+        let target = local_target(PathBuf::from("store"));
+
+        block_on(target.provision(Logger::new(true)))
+            .expect("provisioning a local target is infallible");
     }
 
     #[test]
@@ -549,7 +562,7 @@ mod tests {
         let fake = Arc::new(FakeRunner::default());
         let target = fake_azure_target(&fake, PathBuf::from("staging"));
 
-        block_on(target.upload(Logger::new(false)))
+        block_on(target.upload(Logger::new(true)))
             .expect("uploading succeeds with a passing runner");
 
         let calls = recorded(&fake);

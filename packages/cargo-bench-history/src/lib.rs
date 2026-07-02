@@ -217,7 +217,7 @@
 //! Storage is resolved per command: `--local=<path>` selects local filesystem
 //! storage (a bare `--local` takes the path from `CARGO_BENCH_HISTORY_STORAGE`),
 //! otherwise the configured cloud backend is used; with neither, a storage-backed
-//! command errors (except `run --no-store`, which stores nothing). Every command
+//! command errors (except `collect --no-store`, which stores nothing). Every command
 //! also accepts `--config PATH` to point at a non-default file, `--repo
 //! PATH` to resolve git state from another directory, and `--verbose` to emit a
 //! step-by-step diagnostic trail to standard error.
@@ -243,7 +243,7 @@
 //!    managed identity below.
 //! 3. **For CI, authenticate with GitHub OIDC workload identity federation** instead
 //!    of a stored secret: create a user-assigned managed identity, add a federated
-//!    credential whose subject matches the workflow's OIDC token (for a scheduled run
+//!    credential whose subject matches the workflow's OIDC token (for a run
 //!    on the default branch that is `repo:<owner>/<repo>:ref:refs/heads/main`) and
 //!    whose audience is `api://AzureADTokenExchange`, then grant it the role from
 //!    step 2. Run the tool from a job that has `permissions: { id-token: write }`,
@@ -262,7 +262,7 @@
 //! <https://github.com/folo-rs/folo/tree/main/infra/azure-bench-history-prod> and a
 //! separate test account/identity at
 //! <https://github.com/folo-rs/folo/tree/main/infra/azure-bench-history-test>, with the
-//! account name baked into the committed `.cargo/bench_history.toml` and the nightly
+//! account name baked into the committed `.cargo/bench_history.toml` and the per-push
 //! consumer at <https://github.com/folo-rs/folo/blob/main/.github/workflows/bench-history.yml>.
 
 mod analyze;

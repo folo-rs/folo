@@ -113,11 +113,13 @@ impl FsBenchOutputSource {
         let summary_name = OsStr::new(SUMMARY_FILE);
 
         let root = self.target_root.join(GUNGRAUN_DIR);
-        reporter.note(&format!(
-            "callgrind: scanning {} for {SUMMARY_FILE} files modified at or after {}",
-            root.display(),
-            format_mtime(threshold)
-        ));
+        reporter.note_with(|| {
+            format!(
+                "callgrind: scanning {} for {SUMMARY_FILE} files modified at or after {}",
+                root.display(),
+                format_mtime(threshold)
+            )
+        });
 
         let mut summaries = Vec::new();
         let mut stack = vec![root.clone()];
@@ -155,10 +157,12 @@ impl FsBenchOutputSource {
         }
 
         summaries.sort_by(|left, right| left.path.cmp(&right.path));
-        reporter.note(&format!(
-            "callgrind: harvested {}",
-            count_noun(summaries.len(), "fresh summary file")
-        ));
+        reporter.note_with(|| {
+            format!(
+                "callgrind: harvested {}",
+                count_noun(summaries.len(), "fresh summary file")
+            )
+        });
         Ok(summaries)
     }
 
@@ -180,7 +184,7 @@ impl FsBenchOutputSource {
         let new_dir_name = OsStr::new(CRITERION_NEW_DIR);
 
         let root = self.target_root.join(CRITERION_DIR);
-        reporter.note(&format!(
+        reporter.note_with(|| format!(
             "criterion: scanning {} for {CRITERION_NEW_DIR}/ cases with {CRITERION_ESTIMATES_FILE} \
              modified at or after {}",
             root.display(),
@@ -253,10 +257,12 @@ impl FsBenchOutputSource {
         }
 
         cases.sort_by(|left, right| left.dir.cmp(&right.dir));
-        reporter.note(&format!(
-            "criterion: harvested {}",
-            count_noun(cases.len(), "fresh case")
-        ));
+        reporter.note_with(|| {
+            format!(
+                "criterion: harvested {}",
+                count_noun(cases.len(), "fresh case")
+            )
+        });
         Ok(cases)
     }
 
@@ -277,11 +283,13 @@ impl FsBenchOutputSource {
         let json_extension = OsStr::new("json");
 
         let root = self.target_root.join(engine_dir);
-        reporter.note(&format!(
-            "{label}: scanning {} for *.json files modified at or after {}",
-            root.display(),
-            format_mtime(threshold)
-        ));
+        reporter.note_with(|| {
+            format!(
+                "{label}: scanning {} for *.json files modified at or after {}",
+                root.display(),
+                format_mtime(threshold)
+            )
+        });
 
         let mut files = Vec::new();
         let mut entries = match tokio::fs::read_dir(&root).await {
@@ -316,10 +324,12 @@ impl FsBenchOutputSource {
         }
 
         files.sort_by(|left, right| left.path.cmp(&right.path));
-        reporter.note(&format!(
-            "{label}: harvested {}",
-            count_noun(files.len(), "fresh operation file")
-        ));
+        reporter.note_with(|| {
+            format!(
+                "{label}: harvested {}",
+                count_noun(files.len(), "fresh operation file")
+            )
+        });
         Ok(files)
     }
 }
@@ -364,10 +374,12 @@ fn format_mtime(time: SystemTime) -> String {
 /// rare mid-scan race that is only noted in verbose mode.
 fn note_missing_dir(reporter: &dyn Reporter, engine: &str, dir: &Path, root: &Path) {
     if dir == root {
-        reporter.note(&format!(
-            "{engine}: directory {} does not exist; no output was produced here",
-            dir.display()
-        ));
+        reporter.note_with(|| {
+            format!(
+                "{engine}: directory {} does not exist; no output was produced here",
+                dir.display()
+            )
+        });
     } else {
         reporter.note_with(|| {
             format!(

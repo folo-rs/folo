@@ -104,7 +104,7 @@ pub(crate) async fn measure(
 ) -> Result<MeasureResult, Error> {
     let options = build_options(workspace, repo, mode, storage, logger.verbose());
     logger.step(&format!("analyzing in {} mode", mode.keyword()));
-    logger.detail(&format!(
+    logger.detail_with(|| format!(
         "context={}, base={}, facets forced to all (seeded triples and the synthetic machine key \
          never match the host), repeats={repeat}",
         options.context.as_deref().unwrap_or(""),
@@ -150,16 +150,18 @@ pub(crate) async fn measure(
         let parsed: ReportCounts = serde_json::from_str(&report)
             .map_err(|error| fail(format!("failed to parse the analyze report: {error}")))?;
 
-        logger.detail(&format!(
-            "attempt {} took {:.3}s wall / {:.3}s CPU = {:.0}% of {cores} cores ({} objects, \
+        logger.detail_with(|| {
+            format!(
+                "attempt {} took {:.3}s wall / {:.3}s CPU = {:.0}% of {cores} cores ({} objects, \
              {} series)",
-            attempt.saturating_add(1),
-            elapsed.as_secs_f64(),
-            attempt_cpu.as_secs_f64(),
-            cpu_efficiency(attempt_cpu, elapsed, cores) * 100.0,
-            parsed.runs,
-            parsed.series,
-        ));
+                attempt.saturating_add(1),
+                elapsed.as_secs_f64(),
+                attempt_cpu.as_secs_f64(),
+                cpu_efficiency(attempt_cpu, elapsed, cores) * 100.0,
+                parsed.runs,
+                parsed.series,
+            )
+        });
         best = Some(keep_fastest(best, (elapsed, attempt_cpu)));
         counts = Some(parsed);
     }

@@ -5,7 +5,7 @@ use std::path::Path;
 
 use crate::config::default_template;
 use crate::config_writer::{ConfigWriter, TokioConfigWriter};
-use crate::report::{Reporter, StderrReporter};
+use crate::report::{Reporter, ReporterExt, StderrReporter};
 use crate::wiring::resolve_config_path;
 use crate::{InstallOptions, RunError, RunOutcome};
 
@@ -34,15 +34,17 @@ async fn execute_install<W: ConfigWriter>(
 ) -> Result<RunOutcome, RunError> {
     let path = resolve_config_path(workspace_dir, options.config_path.as_deref());
 
-    reporter.note(&format!(
-        "writing a starter configuration to {} (only if absent)",
-        path.display()
-    ));
+    reporter.note_with(|| {
+        format!(
+            "writing a starter configuration to {} (only if absent)",
+            path.display()
+        )
+    });
     let written = writer.write_new(&path, default_template()).await?;
     if written {
-        reporter.note("configuration did not exist; wrote the starter template");
+        reporter.note_with(|| "configuration did not exist; wrote the starter template".to_owned());
     } else {
-        reporter.note("configuration already exists; left it unchanged");
+        reporter.note_with(|| "configuration already exists; left it unchanged".to_owned());
     }
 
     Ok(RunOutcome::Completed {

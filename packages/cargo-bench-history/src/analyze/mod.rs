@@ -73,10 +73,7 @@ pub(crate) async fn execute(
     let reporter = StderrReporter::with_timing(options.verbose, options.stage_timings_enabled());
 
     let config_path = resolve_config_path(workspace_dir, options.config_path.as_deref());
-    reporter.note(&format!(
-        "loading configuration from {}",
-        config_path.display()
-    ));
+    reporter.note_with(|| format!("loading configuration from {}", config_path.display()));
     let config = load_config(&config_path, options.config_path.is_some()).await?;
 
     let project_id = resolve_project_id(&config, workspace_dir);
@@ -602,19 +599,18 @@ async fn facet_filtered_candidates<S: Storage>(
     let project = sanitize_segment(project_id);
     let prefix = project_objects_prefix(project_id);
 
-    reporter.note(&format!(
-        "project id: {project_id} (storage segment: {project})"
-    ));
-    reporter.note(&format!("listing stored objects under prefix {prefix}"));
-    reporter.note_with(|| format!("facet filters: {}", describe_facets(facets)));
+    reporter.if_enabled(|notes| {
+        notes.note(&format!(
+            "project id: {project_id} (storage segment: {project})"
+        ));
+        notes.note(&format!("listing stored objects under prefix {prefix}"));
+        notes.note(&format!("facet filters: {}", describe_facets(facets)));
+    });
 
     let list_started = Instant::now();
     let keys = storage.list(&prefix).await.map_err(RunError::Storage)?;
     reporter.timing("storage.list(prefix) round-trip", list_started.elapsed());
-    reporter.note(&format!(
-        "storage returned {}",
-        count_noun(keys.len(), "object key")
-    ));
+    reporter.note_with(|| format!("storage returned {}", count_noun(keys.len(), "object key")));
 
     let mut candidates: Vec<(String, StorageKey)> = Vec::new();
     for key in keys {
@@ -639,10 +635,12 @@ async fn facet_filtered_candidates<S: Storage>(
         }
         candidates.push((key, parsed));
     }
-    reporter.note(&format!(
-        "{} match the facet filters",
-        count_noun(candidates.len(), "object")
-    ));
+    reporter.note_with(|| {
+        format!(
+            "{} match the facet filters",
+            count_noun(candidates.len(), "object")
+        )
+    });
     Ok(candidates)
 }
 
@@ -863,10 +861,12 @@ where
         .into_iter()
         .partition(|(_, parsed)| !parsed.is_bless());
     if !bless_candidates.is_empty() {
-        reporter.note(&format!(
-            "{} of those are blessing sidecars",
-            count_noun(bless_candidates.len(), "object")
-        ));
+        reporter.note_with(|| {
+            format!(
+                "{} of those are blessing sidecars",
+                count_noun(bless_candidates.len(), "object")
+            )
+        });
     }
 
     let topology_started = Instant::now();
@@ -914,17 +914,20 @@ where
 
     // The mode steers the analysis and the default `--since`. An explicit `--mode`
     // overrides the auto-detection.
-    let mode = match selection.mode_override {
-        Some(mode) => {
-            reporter.note(&format!(
-                "analysis mode: {} (set explicitly via --mode, overriding auto-detection)",
-                mode.as_str()
-            ));
-            mode
-        }
-        None => {
-            let mode = auto_mode(tip_is_merge_base, dirty_tip_run_present);
-            reporter.note(&format!(
+    let mode =
+        match selection.mode_override {
+            Some(mode) => {
+                reporter.note_with(|| {
+                    format!(
+                        "analysis mode: {} (set explicitly via --mode, overriding auto-detection)",
+                        mode.as_str()
+                    )
+                });
+                mode
+            }
+            None => {
+                let mode = auto_mode(tip_is_merge_base, dirty_tip_run_present);
+                reporter.note_with(|| format!(
                 "analysis mode: {} (auto-detected because the target tip {} its own merge-base \
                  with the base branch and {} recorded on top of it; the on-disk working-tree \
                  state is deliberately not consulted here)",
@@ -936,20 +939,24 @@ where
                     "no dirty run is"
                 },
             ));
-            mode
-        }
-    };
+                mode
+            }
+        };
     let since = resolve_since(selection.since, mode, now)?;
-    reporter.note(&format!(
-        "since cutoff: {} ({})",
-        since.map_or_else(|| "none".to_owned(), |since| since.to_string()),
-        since_cutoff_reason(selection.since.is_some(), mode)
-    ));
+    reporter.note_with(|| {
+        format!(
+            "since cutoff: {} ({})",
+            since.map_or_else(|| "none".to_owned(), |since| since.to_string()),
+            since_cutoff_reason(selection.since.is_some(), mode)
+        )
+    });
     let until = parse_until(selection.until)?;
-    reporter.note(&format!(
-        "until cutoff: {}",
-        until.map_or_else(|| "none".to_owned(), |until| until.to_string())
-    ));
+    reporter.note_with(|| {
+        format!(
+            "until cutoff: {}",
+            until.map_or_else(|| "none".to_owned(), |until| until.to_string())
+        )
+    });
 
     // Tally why candidates do not enter the analysis, so a `0 runs` outcome can
     // explain itself (via `--verbose` per object, and via a summary hint when
@@ -1091,12 +1098,14 @@ where
         "series build finalization (builder.finish: assemble + serial point sort)",
         finish_started.elapsed(),
     );
-    reporter.note(&format!(
-        "{} entered the analysis ({excluded_outside_history} outside history, \
+    reporter.note_with(|| {
+        format!(
+            "{} entered the analysis ({excluded_outside_history} outside history, \
          {excluded_dirty_base} dirty-on-base, {excluded_since} before --since, \
          {excluded_until} after --until)",
-        count_noun(run_index.total(), "object")
-    ));
+            count_noun(run_index.total(), "object")
+        )
+    });
 
     // Load the blessing sidecars on in-window commits into a per-set map. A
     // blessing on a commit outside the analyzed history (or that fails to parse) is
@@ -1365,15 +1374,17 @@ where
         None => None,
     };
 
-    reporter.note(&format!(
-        "target ref {target_ref} resolves to {target_sha}; {} on its first-parent line",
-        count_noun(commit_count, "commit")
-    ));
-    reporter.note(&format!(
-        "base ref resolves to {}; merge-base with target is {}",
-        base_sha.as_deref().unwrap_or("<none>"),
-        merge_base.as_deref().unwrap_or("<none>")
-    ));
+    reporter.if_enabled(|notes| {
+        notes.note(&format!(
+            "target ref {target_ref} resolves to {target_sha}; {} on its first-parent line",
+            count_noun(commit_count, "commit")
+        ));
+        notes.note(&format!(
+            "base ref resolves to {}; merge-base with target is {}",
+            base_sha.as_deref().unwrap_or("<none>"),
+            merge_base.as_deref().unwrap_or("<none>")
+        ));
+    });
 
     // The base-branch dirty-tip exception: `analyze`/`list` admit a base-side tip's
     // dirty runs only when the working tree is currently dirty (`--no-dirty` skips
@@ -1388,9 +1399,10 @@ where
                 git.is_dirty().await.map_err(RunError::Io)?
             };
             if working_tree_dirty {
-                reporter.note(
-                    "working tree is dirty: dirty snapshots on a base-side tip will be admitted",
-                );
+                reporter.note_with(|| {
+                    "working tree is dirty: dirty snapshots on a base-side tip will be admitted"
+                        .to_owned()
+                });
             }
             working_tree_dirty
         }

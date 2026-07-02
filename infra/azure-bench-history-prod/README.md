@@ -1,4 +1,4 @@
-# Azure infrastructure for the nightly benchmark-history data store
+# Azure infrastructure for the benchmark-history data store
 
 This directory provisions the Azure storage account that holds the **real,
 long-lived benchmark history** collected by the `bench-history` GitHub workflow
@@ -17,11 +17,11 @@ the environment can be deleted and re-created with one command.
   disabled** (Entra ID only, so there is no account key to leak). Container and blob
   soft-delete are disabled, matching the test account.
 - A **dedicated user-assigned managed identity** (`id-folo-bench-history-prod`) with a
-  **GitHub OIDC federated credential** for `main`. The nightly workflow federates into
+  **GitHub OIDC federated credential** for `main`. The bench-history workflow federates into
   it with no stored secret: `cargo-bench-history` mints a fresh GitHub OIDC token on
   demand and exchanges it with Entra for each access token (so a multi-hour run stays
   authenticated). Only `main` is trusted — there is no pull-request credential —
-  because collection only ever runs on `main` (schedule + gated dispatch).
+  because collection only ever runs on `main` (push + gated dispatch).
 - **`Storage Blob Data Contributor`** role assignments on the account for that managed
   identity and (optionally) a local developer principal. That single role covers
   container create/delete and blob read/write/delete via the data plane, which is all
@@ -83,7 +83,7 @@ This benches every workspace package except `benchmarks` (the slow, special-purp
 one) and stores into the account from `.cargo/bench_history.toml`. It requires your
 user to hold the `Storage Blob Data Contributor` role on the account (deploy with
 `-LocalPrincipalId` as above). For a throwaway run that never touches Azure, add
-`--local <path>`. The nightly automation uses the dedicated `just gh-collect-bench-history`
+`--local <path>`. The CI automation uses the dedicated `just gh-collect-bench-history`
 recipe instead.
 
 ## Tear down / re-create
@@ -94,5 +94,5 @@ recipe instead.
 ```
 
 Tearing down permanently deletes the collected history. It is reconstructible with
-`cargo bench-history backfill` over past commits, but the nightly job otherwise only
+`cargo bench-history backfill` over past commits, but the collection job otherwise only
 repopulates history going forward.

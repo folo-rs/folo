@@ -363,7 +363,7 @@ struct CollectCommand {
 
     /// Treat an already-stored result for this run as a success that writes
     /// nothing, instead of refusing it as a duplicate. Mutually exclusive with
-    /// `--overwrite`; the append-only mode the nightly collection uses.
+    /// `--overwrite`; the append-only mode the CI collection uses.
     #[arg(long, help_heading = HEADING_ENV, conflicts_with = "overwrite")]
     skip_existing: bool,
 

@@ -151,12 +151,12 @@ Split from the monolithic `just validate-extra-local` into individual jobs, all 
 
 - **test-azure-gh** — single-platform (Linux) by choice, package-gated to `cargo-bench-history`
   - Variant of `test-azure` that exercises cargo-bench-history's **self-minting GitHub
-    OIDC credential** — the credential the nightly prod collection (`bench-history.yml`)
+    OIDC credential** — the credential the per-push prod collection (`bench-history.yml`)
     depends on — against the real test account. The `storage/github_oidc.rs` unit tests
     stub the HTTP exchange and `test-azure` takes the local-`az`
     `DeveloperToolsCredential` fallback, so without this job nothing proves the
     self-minting path actually round-trips real GitHub OIDC → Entra → Blob until the
-    post-merge nightly run.
+    post-merge collection run.
   - **Only difference from `test-azure`**: an extra step exports `AZURE_CLIENT_ID`
     (= `AZURE_TEST_CLIENT_ID`). Setting `AZURE_CLIENT_ID` is the switch that makes
     `from_config` build a `ClientAssertionCredential` (which GETs a fresh OIDC JWT,
@@ -216,27 +216,29 @@ for manual cache warming after toolchain updates.
 
 ### bench-history.yml
 
-A scheduled workflow that collects the workspace's benchmark results into the
-long-lived Azure history store every night, building the performance history that
-`cargo-bench-history analyze` reads to detect regressions. Only nightly collection
-exists today; PR-time collection/validation may follow once this proves out.
+A push-triggered workflow that collects the workspace's benchmark results into the
+long-lived Azure history store on every push to `main`, building the performance history
+that `cargo-bench-history analyze` reads to detect regressions. It runs per-push rather
+than on a nightly schedule: a nightly run re-benchmarks an unchanged tip for no gain and
+misses intermediate same-day commits, whereas per-push collects exactly one data point per
+commit. The accepted trade-off is more runner time on busy days.
 
 - **Multi-platform matrix** (ubuntu-latest, windows-latest, ubuntu-24.04-arm,
   windows-11-arm) with `fail-fast: false`: each OS/architecture is a distinct
   measurement target, and a failure on one platform must not abandon the others'
-  history for that night. macOS is omitted — there is no macOS-hosted history store
+  history for that commit. macOS is omitted — there is no macOS-hosted history store
   consumer yet; add it to the matrix if/when macOS performance tracking is wanted.
 - **Whole workspace except the `benchmarks` package**, via the
   `just gh-collect-bench-history` recipe (`cargo-bench-history collect --workspace --exclude
   benchmarks --skip-existing`). The `benchmarks` package holds slow, special-purpose
   benchmarks that are not part of the tracked history. `--skip-existing` makes a re-run on
-  an unchanged `main` commit a no-op append (each already-stored object is skipped, not
-  overwritten) rather than failing as a duplicate — and, crucially, never bumps the
-  cache-invalidation marker the `analyze` job's read-through cache depends on, so an
-  append-only night never wipes that cache.
+  an already-collected `main` commit a no-op append (each already-stored object is skipped,
+  not overwritten) rather than failing as a duplicate — and, crucially, never bumps the
+  cache-invalidation marker the `analyze` job's read-through cache depends on, so a
+  re-triggered append-only run never wipes that cache.
 - **Uses a dedicated prod managed identity** (`id-folo-bench-history-prod`, provisioned
   by `infra/azure-bench-history-prod/` alongside the account), not the test identity: a
-  scheduled run on `main` produces the OIDC subject
+  push (or gated dispatch) on `main` produces the OIDC subject
   `repo:folo-rs/folo:ref:refs/heads/main`, which matches that identity's `main`-branch
   federated credential. The prod stack is self-contained so the data store never depends
   on test infrastructure. So this workflow needs only `permissions: { id-token: write,
@@ -249,15 +251,23 @@ exists today; PR-time collection/validation may follow once this proves out.
   target. The prod account is baked into the committed `.cargo/bench_history.toml` (where
   cargo-bench-history config belongs), so no account name is surfaced into `$GITHUB_ENV`;
   only the `azure/login` inputs need the grep step.
-- **Same-repo gate** (`if: github.repository == 'folo-rs/folo'`): scheduled workflows
-  also trigger on forks that enable Actions, but only this repository's identity can
-  federate into Azure, so the job skips everywhere else.
+- **Same-repo + main-only gate** (`if: github.repository == 'folo-rs/folo' && github.ref ==
+  'refs/heads/main'`): only this repository's identity can federate into Azure, and the
+  federated credential is scoped to `refs/heads/main`, so a fork or a `workflow_dispatch`
+  from a feature branch skips cleanly instead of failing at OIDC exchange.
 - **Auto-detected machine key**: the wall-clock engines partition by the runner's
   auto-detected machine fingerprint (no override) — the `target-triple` already separates
   OS/arch, and an explicit key would risk merging dissimilar hosts under one partition.
-- `timeout-minutes: 360`; schedule offset to 03:00 UTC so it does not contend with the
-  00:00 `cache-warmup` cron (and runs against an already-warm Rust cache). Like
-  `cache-warmup`, it is schedule-triggered and so carries no `concurrency` cancel key.
+- `timeout-minutes: 360` (a generous ceiling that only bounds a genuinely stuck run, since
+  the matrix runs in parallel). Unlike `cache-warmup`, this workflow IS commit-driven, so it
+  carries a `concurrency` block — but keyed on the commit **SHA**
+  (`${{ github.workflow }}-${{ github.sha }}`), NOT the ref. Distinct commits must collect
+  in parallel: each is its own history data point, and the ref-keyed cancel-in-progress used
+  by `validation.yml` would cancel an in-flight commit's benchmarks whenever a newer commit
+  landed, dropping that commit's data and defeating the per-commit goal. With a SHA key,
+  `cancel-in-progress: true` only dedups a redundant re-trigger of the SAME commit (a re-run
+  or a dispatch on an already-pushed commit), which `--skip-existing` would make a no-op
+  append anyway.
 - **`analyze` job** (`needs: collect`, `if: always()` + same main-only gate) — after
   collection it runs `just gh-analyze-bench-history` (`analyze --engine all --target-triple
   all --machine-key all` across every platform's history) which writes a Markdown report
@@ -267,18 +277,18 @@ exists today; PR-time collection/validation may follow once this proves out.
   the tool always exits 0; the issue is advisory. Needs `issues: write`. It checks out
   with `fetch-depth: 0` so the first-parent history resolves. An `actions/cache` step
   ("Restore benchmark-history read-through cache") persists the recipe's `--cache`
-  directory (`bench-history-cache/`, the read-through mirror) between nights so the bulk
+  directory (`bench-history-cache/`, the read-through mirror) between runs so the bulk
   history is downloaded at most once rather than in full every run. The cache key is unique
   per run (`bench-history-cache-<run_id>`; entries are immutable per key) with
   `restore-keys: bench-history-cache-`, so each run restores the most recent prior mirror,
-  the analyze step tops it up with the night's new objects, and the run saves a fresh entry
+  the analyze step tops it up with this run's new objects, and the run saves a fresh entry
   on success. The step's `path:` must stay in lockstep with the directory the recipe passes
   to `--cache`. Correctness does not depend on the cache being fresh: the cloud history is
   append-only (collect uses `--skip-existing`), and a deliberate `--overwrite`/`prune`
   bumps a cloud-side marker that wipes the mirror on the next read.
 - **`alert` job** (`needs: [collect, analyze]`, `if: failure()` + main-only) — opens a
   deduplicated `.github/bench-history-failure-issue.md` when any prior job fails, so a
-  broken nightly is noticed. The issue title comes from the workflow-level
+  broken run is noticed. The issue title comes from the workflow-level
   `FAILURE_ISSUE_TITLE` env constant (the template renders `{{ env.FAILURE_ISSUE_TITLE }}`),
   which is also the title create-an-issue dedups on. Its companion `resolve` job closes that
   issue automatically once the workflow is green again.
@@ -286,7 +296,7 @@ exists today; PR-time collection/validation may follow once this proves out.
   `alert`: when collection and analysis both pass, it finds any still-open failure issue
   (listed by the `ci-failure` label, then exact-matched against the shared
   `FAILURE_ISSUE_TITLE` constant) and closes it via the `gh` CLI with a comment linking the
-  green run, so a fixed nightly does not leave a stale alert open. A no-op on nights when no
+  green run, so a fixed run does not leave a stale alert open. A no-op on runs when no
   failure issue is open. Its gate is the explicit `needs.collect.result == 'success' &&
   needs.analyze.result == 'success'` (rather than the bare `success()` function) so a future
   unrelated job cannot affect the decision; when `collect` or `analyze` actually failed those
@@ -299,8 +309,11 @@ exists today; PR-time collection/validation may follow once this proves out.
    key with `group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}` and
    `cancel-in-progress: true`. This automatically cancels in-progress runs when new commits
    are pushed to the same PR branch or to main, avoiding wasted runner time on outdated code.
-   The `cache-warmup` and `bench-history` workflows are excluded because they are
-   schedule-triggered and not commit-driven.
+   The `cache-warmup` workflow is excluded because it is schedule-triggered and not
+   commit-driven. `bench-history` is commit-driven (push to main) and so DOES carry a
+   `concurrency` block, but keyed on the commit **SHA** rather than the ref: it collects one
+   history data point per commit, so cancelling an in-flight commit to favour a newer one
+   would drop measurements. See its section above for the full rationale.
 
 2. **Parallelization over sequential execution** — Individual jobs provide:
    - Faster CI feedback (first failure visible immediately)
