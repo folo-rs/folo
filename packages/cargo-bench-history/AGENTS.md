@@ -45,8 +45,9 @@ driven in tests by fakes, never by real IO:
   runtime by the `StorageFacade` enum that
   `build_storage(local, config, base, cache)` returns (the optional `cache`
   directory wraps an `Azure` backend in the read-through `CachingStorage` decorator —
-  the `CachedAzure` variant — whose mirror roots at `<cache>` and faithfully images the
-  cloud namespace under identical keys); fake `MemoryStorage`.
+  the `CachedAzure` variant — whose mirror is rooted under `<cache>` at a per-backend
+  subpath (`<cache>/<account>/<container>`, so distinct backends never share one image)
+  and faithfully images the cloud namespace under identical keys); fake `MemoryStorage`.
   `put` is **write-once** (an
   existing key yields `StorageError::AlreadyExists`); `put_overwrite` is the
   replacing escape hatch used only by `run --overwrite` (and, later, `backfill
@@ -175,7 +176,9 @@ execution** help group, three-state `require_equals` like `--local`:
 env edge is `wiring::cache_env()` and the pure resolver `wiring::resolve_cache_path`
 (mirroring the `--local` split). It is meaningful **only with the cloud backend**:
 `build_storage` wraps an `Azure` backend in `storage::caching::CachingStorage`
-(`StorageFacade::CachedAzure`) whose mirror roots at `<cache>` and **faithfully images
+(`StorageFacade::CachedAzure`) whose mirror is rooted under `<cache>` at a per-backend
+subpath (`<cache>/<account>/<container>`, so reusing one `--cache` dir across distinct
+Azure backends can't serve one backend's image for another) and **faithfully images
 the cloud namespace** under identical keys, mirroring every fetched object so the bulk
 history downloads at most once across runs. A cache is pointless
 with a `--local` backend (reads are already local), so the two **conflict**: the CLI

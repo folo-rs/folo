@@ -233,7 +233,11 @@ pub(crate) fn build_storage(
                     // rooting the mirror at `<cache>` directly would let one backend's
                     // mirror be served for another (cross-backend cache poisoning).
                     // Namespace the mirror root by backend identity (account, then
-                    // container) so each backend gets its own faithful mirror.
+                    // container) so each backend gets its own faithful mirror. The
+                    // endpoint is intentionally left out of the namespace: real Azure
+                    // account names are globally unique, so account+container fully
+                    // identifies a backend; only a same-name emulator/sovereign-cloud
+                    // collision could alias, which the `--cache` seam never targets.
                     let mirror_root = rebase(base, cache_dir.to_path_buf())
                         .join(sanitize_segment(&azure.account))
                         .join(sanitize_segment(&azure.container));
@@ -282,10 +286,23 @@ pub(crate) fn resolve_storage(
             reporter.note("storage backend: injected by test override");
             Ok(match cache {
                 Some(cache_dir) => {
-                    reporter.note(
-                        "wrapping injected backend in a read-through cache so the override \
-                         honors --cache like the configured path does",
-                    );
+                    // `cached_at` only fronts a plain `Azure` override with a mirror;
+                    // every other variant is returned unchanged, so the note must state
+                    // which of the two actually happened rather than always claiming a
+                    // wrap.
+                    if matches!(backend, StorageFacade::Azure(_)) {
+                        reporter.note(
+                            "--cache is set: wrapping the injected Azure backend in a \
+                             read-through cache mirror so the override honors --cache like \
+                             a configured backend does",
+                        );
+                    } else {
+                        reporter.note(
+                            "--cache is set, but the injected backend is not a plain Azure \
+                             backend, so it is used unchanged — a read-through cache only \
+                             fronts a cloud backend",
+                        );
+                    }
                     backend.cached_at(rebase(base, cache_dir.to_path_buf()))
                 }
                 None => backend,
@@ -651,7 +668,7 @@ mod tests {
         .unwrap();
         assert!(matches!(storage, StorageFacade::Local(_)), "{storage:?}");
         assert!(
-            reporter.contains("read-through cache"),
+            reporter.contains("used unchanged") && !reporter.contains("wrapping"),
             "{:?}",
             reporter.notes()
         );
@@ -685,7 +702,7 @@ mod tests {
         );
         assert!(
             reporter.contains("injected by test override")
-                && reporter.contains("read-through cache"),
+                && reporter.contains("wrapping the injected Azure backend"),
             "{:?}",
             reporter.notes()
         );
