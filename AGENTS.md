@@ -243,6 +243,19 @@ threads, and the no-version-bumps-on-feature-branches rule.
 **Open this when**: creating a pull request; addressing review comments;
 tempted to edit a `Cargo.toml` version field on a feature branch.
 
+### [docs/release-automation.md](docs/release-automation.md)
+
+The design (not yet implemented) for automating crates.io publishing and shipping
+`cargo-binstall` prebuilt binaries from CI on merge to `main`: the `release.yml`
+three-stage flow (publish via Trusted Publishing → derive released binary crates →
+matrix-build + upload checksummed archives), the mandatory asset-naming contract
+that keeps the archive filenames and each crate's `[package.metadata.binstall]`
+block in lockstep, and the `release-plz.toml` changes.
+
+**Open this when**: implementing or debugging automated releases, the
+crates.io/OIDC publish flow, the prebuilt-binary matrix, or a `cargo binstall`
+resolution failure; adding a new published binary crate.
+
 ### [docs/standalone-binaries.md](docs/standalone-binaries.md)
 
 How standalone binaries (CLI tools, subcommands) are expected to behave: the
