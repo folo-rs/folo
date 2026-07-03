@@ -1,3 +1,5 @@
+#requires -Version 7
+
 # Release-automation logic for the `Release` GitHub workflow (.github/workflows/release.yml)
 # and the local `just prepare-release` / `just check-never-published` recipes.
 #
