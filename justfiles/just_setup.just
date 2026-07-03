@@ -93,3 +93,11 @@ install-tools:
     } else {
         Install-Module Pester -MinimumVersion 5.0 -Scope CurrentUser -Force -SkipPublisherCheck
     }
+
+    # actionlint lints the GitHub Actions workflow files (`just lint-workflows`, run both locally
+    # and by the CI lint-workflows job). It is not a cargo crate and has no installer, so a helper
+    # script fetches the pinned official binary and verifies its checksum; see
+    # scripts/install-actionlint.ps1. Unlike azcopy/Azurite this IS needed in CI (the workflow
+    # linting job runs it), so it is installed on every platform with no CI skip. No-op when the
+    # pinned actionlint is already present.
+    & "{{justfile_directory()}}/scripts/install-actionlint.ps1"
