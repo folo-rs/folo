@@ -39,7 +39,8 @@ Split from the monolithic `just validate-local` into individual jobs:
 - **lint-workflows** and **test-scripts** — Runs only on `ubuntu-latest`, and
   **unconditionally**: unlike the package-scoped jobs below, these do not depend on the
   `delta` job and have no `skip_all` gate. Their inputs are not Cargo packages — the workflow
-  files under `.github/workflows/` for `lint-workflows` (via `just lint-workflows`, actionlint)
+  files under `.github/workflows/` for `lint-workflows` (via `just lint-workflows`, actionlint,
+  which delegates to ShellCheck for embedded shell steps)
   and the standalone scripts under `scripts/` for `test-scripts` (via `just test-scripts`,
   Pester) — so a PR touching only those files produces `skip_all=true` from the delta analysis
   and would otherwise be validated by nothing. Both are fast static/unit checks, so running

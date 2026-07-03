@@ -94,6 +94,14 @@ install-tools:
         Install-Module Pester -MinimumVersion 5.0 -Scope CurrentUser -Force -SkipPublisherCheck
     }
 
+    # ShellCheck is what actionlint delegates to for linting embedded shell (`run:`) steps. GitHub's
+    # Linux runners ship it, so the CI lint-workflows job shellchecks every bash step; installing it
+    # here keeps local `just lint-workflows` faithful to CI instead of silently skipping those
+    # checks. Like actionlint it is a pinned, checksum-verified standalone binary; see
+    # scripts/install-shellcheck.ps1. Installed on every platform with no CI skip. No-op when the
+    # pinned ShellCheck is already present.
+    & "{{justfile_directory()}}/scripts/install-shellcheck.ps1"
+
     # actionlint lints the GitHub Actions workflow files (`just lint-workflows`, run both locally
     # and by the CI lint-workflows job). It is not a cargo crate and has no installer, so a helper
     # script fetches the pinned official binary and verifies its checksum; see
