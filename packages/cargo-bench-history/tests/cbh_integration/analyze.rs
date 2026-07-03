@@ -583,6 +583,12 @@ async fn analyze_callgrind_step_below_the_noise_floor_is_suppressed() {
         parsed["regressions"], 0,
         "a 0.1% deterministic step is below the 1% noise floor and must not flag: {report}"
     );
+    let findings = parsed["findings"].as_array().expect("findings is an array");
+    assert!(
+        findings.is_empty(),
+        "the sub-floor move is fully suppressed, so no finding of any direction reaches \
+         the report: {report}"
+    );
 }
 
 /// A Callgrind series that steps up by 2% - above the 1% basic noise filter yet
