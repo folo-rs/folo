@@ -269,6 +269,8 @@ where
         notable,
         runs: dataset.run_index.total(),
         series: series.len(),
+        commit_span: dataset.run_index.commit_span(),
+        report_improvements: context.reports_improvements(),
         findings: &findings,
         sets: &summaries,
         hint: hint.as_deref(),
@@ -509,6 +511,26 @@ impl RunIndex {
         &self,
     ) -> impl Iterator<Item = (&DiscriminantSet, &BTreeMap<usize, CommitCounts>)> {
         self.sets.iter()
+    }
+
+    /// The oldest and newest commit that contributed a run, by first-parent
+    /// topological position, as `(first, last)` full SHAs. `None` when no run was
+    /// admitted. The report header uses it to state the span of analyzed history.
+    pub(crate) fn commit_span(&self) -> Option<(&str, &str)> {
+        let mut first: Option<(usize, &str)> = None;
+        let mut last: Option<(usize, &str)> = None;
+        for by_commit in self.sets.values() {
+            for (&topo_index, counts) in by_commit {
+                let commit = counts.commit.as_str();
+                if first.is_none_or(|(index, _)| topo_index < index) {
+                    first = Some((topo_index, commit));
+                }
+                if last.is_none_or(|(index, _)| topo_index > index) {
+                    last = Some((topo_index, commit));
+                }
+            }
+        }
+        Some((first?.1, last?.1))
     }
 }
 
@@ -3569,6 +3591,54 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(summarize(&first), summarize(&reference));
+    }
+
+    #[test]
+    fn commit_span_spans_the_oldest_and_newest_analyzed_commit() {
+        let set = DiscriminantSet {
+            engine: "criterion".to_owned(),
+            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
+            machine_key: "synthetic".to_owned(),
+        };
+        let other_set = DiscriminantSet {
+            engine: "callgrind".to_owned(),
+            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
+            machine_key: "synthetic".to_owned(),
+        };
+
+        let mut index = RunIndex::new();
+        assert_eq!(index.commit_span(), None, "an empty index spans nothing");
+
+        // Record out of topological order and across two sets: the span must key off
+        // the first-parent position, not the insertion order, and must consider every
+        // set so the header covers the whole analyzed history.
+        index.record(&set, 2, "c2", false);
+        index.record(&set, 0, "c0", false);
+        index.record(&other_set, 1, "c1", false);
+
+        assert_eq!(
+            index.commit_span(),
+            Some(("c0", "c2")),
+            "the span runs from the lowest to the highest topological position"
+        );
+    }
+
+    #[test]
+    fn commit_span_collapses_to_a_single_commit() {
+        let set = DiscriminantSet {
+            engine: "criterion".to_owned(),
+            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
+            machine_key: "synthetic".to_owned(),
+        };
+        let mut index = RunIndex::new();
+        index.record(&set, 0, "solo", false);
+        index.record(&set, 0, "solo", true);
+
+        assert_eq!(
+            index.commit_span(),
+            Some(("solo", "solo")),
+            "a single analyzed commit is both ends of the span"
+        );
     }
 
     #[test]

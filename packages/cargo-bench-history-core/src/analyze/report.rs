@@ -13,6 +13,7 @@ use colored::{Color, Colorize};
 use rasciigraph::{Config, plot_colored, plot_many_colored};
 use serde::Serialize;
 
+use crate::analyze::findings::short_commit;
 use crate::analyze::{Direction, Finding, FindingMethod, SeriesValue};
 use crate::model::BenchmarkId;
 use crate::model::DiscriminantSet;
@@ -80,8 +81,18 @@ pub struct ReportInput<'a> {
     pub notable: bool,
     /// Total stored runs loaded across every set.
     pub runs: usize,
-    /// Total distinct series compared across every set.
+    /// Total distinct series compared across every set. Carried for the JSON report;
+    /// the text and Markdown reports omit it as an uninformative tally.
     pub series: usize,
+    /// The oldest and newest analyzed commit (full SHAs, first-parent order), so the
+    /// header can state the span of history the analysis covered. `None` when no run
+    /// entered the analysis.
+    pub commit_span: Option<(&'a str, &'a str)>,
+    /// Whether this analysis reports improvements. When `false` (history mode's
+    /// default regressions-only watch, and tip mode) the text and Markdown reports
+    /// omit the improvement tally, which would always be zero. The JSON report always
+    /// carries it.
+    pub report_improvements: bool,
     /// Every set's findings, globally ranked most-notable first.
     pub findings: &'a [Finding],
     /// The per-set breakdown, one entry per set that contributed data.
@@ -315,15 +326,22 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
     let _color = ColorOverride::force(color);
 
     let regressions = count_top(input.findings, Direction::Regression);
-    let improvements = count_top(input.findings, Direction::Improvement);
+
+    let mut header = vec![
+        format!("runs: {}", runs_with_span(input.runs, input.commit_span)),
+        format!("regressions: {regressions}"),
+    ];
+    if input.report_improvements {
+        header.push(format!(
+            "improvements: {}",
+            count_top(input.findings, Direction::Improvement)
+        ));
+    }
 
     let mut lines = vec![
         format!("Analyzed project {} ({} mode)", input.project, input.mode),
         format!("  commit: {}", tip_label(input.tip_commit, input.tip_dirty)),
-        format!(
-            "  runs: {}  series: {}  regressions: {regressions}  improvements: {improvements}",
-            input.runs, input.series
-        ),
+        format!("  {}", header.join("  ")),
     ];
 
     if input.findings.is_empty() {
@@ -344,8 +362,8 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
             continue;
         }
         lines.push(String::new());
-        lines.push(format!("Set {}", set_label(summary.set)));
-        lines.push(set_counts_line(summary));
+        lines.push(set_label(summary.set));
+        lines.push(set_counts_line(summary, input.report_improvements));
         for finding in &summary.findings {
             push_finding_block(&mut lines, finding, chart_enabled);
         }
@@ -392,15 +410,37 @@ fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, chart_enabled:
 }
 
 /// The per-set summary line — the cheap tally the JSON `sets` block carries, shown
-/// under each set header so the text and Markdown reports surface it too.
-fn set_counts_line(summary: &SetSummary<'_>) -> String {
-    format!(
-        "  runs: {}  series: {}  regressions: {}  improvements: {}",
-        summary.runs,
-        summary.series,
-        count_direction(&summary.findings, Direction::Regression),
-        count_direction(&summary.findings, Direction::Improvement),
-    )
+/// under each set header so the text and Markdown reports surface it too. The
+/// improvement tally is omitted when the analysis does not report improvements.
+fn set_counts_line(summary: &SetSummary<'_>, report_improvements: bool) -> String {
+    let mut fields = vec![
+        format!("runs: {}", summary.runs),
+        format!(
+            "regressions: {}",
+            count_direction(&summary.findings, Direction::Regression)
+        ),
+    ];
+    if report_improvements {
+        fields.push(format!(
+            "improvements: {}",
+            count_direction(&summary.findings, Direction::Improvement)
+        ));
+    }
+    format!("  {}", fields.join("  "))
+}
+
+/// Formats the run tally with the analyzed commit span appended, so the report
+/// header states both how many runs entered the analysis and the stretch of history
+/// they cover. A single analyzed commit collapses the range to that one commit; with
+/// no runs the count stands alone.
+fn runs_with_span(runs: usize, span: Option<(&str, &str)>) -> String {
+    match span {
+        Some((first, last)) if first == last => format!("{runs} ({})", short_commit(first)),
+        Some((first, last)) => {
+            format!("{runs} ({} → {})", short_commit(first), short_commit(last))
+        }
+        None => runs.to_string(),
+    }
 }
 
 /// The plain-text detail body shared by the text and Markdown reports: the
@@ -523,18 +563,24 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
     let _color = ColorOverride::force(false);
 
     let regressions = count_top(input.findings, Direction::Regression);
-    let improvements = count_top(input.findings, Direction::Improvement);
 
     let mut lines = vec![
         format!("# Benchmark history analysis: {}", input.project),
         String::new(),
         format!("- Commit: {}", tip_label(input.tip_commit, input.tip_dirty)),
         format!("- Mode: {}", input.mode),
-        format!("- Runs analyzed: {}", input.runs),
-        format!("- Series compared: {}", input.series),
+        format!(
+            "- Runs analyzed: {}",
+            runs_with_span(input.runs, input.commit_span)
+        ),
         format!("- Regressions: {regressions}"),
-        format!("- Improvements: {improvements}"),
     ];
+    if input.report_improvements {
+        lines.push(format!(
+            "- Improvements: {}",
+            count_top(input.findings, Direction::Improvement)
+        ));
+    }
 
     if input.findings.is_empty() {
         lines.push(String::new());
@@ -555,18 +601,19 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
             continue;
         }
         lines.push(String::new());
-        lines.push(format!("## Set {}", set_label(summary.set)));
+        lines.push(format!("## {}", set_label(summary.set)));
         lines.push(String::new());
         lines.push(format!("- Runs: {}", summary.runs));
-        lines.push(format!("- Series: {}", summary.series));
         lines.push(format!(
             "- Regressions: {}",
             count_direction(&summary.findings, Direction::Regression)
         ));
-        lines.push(format!(
-            "- Improvements: {}",
-            count_direction(&summary.findings, Direction::Improvement)
-        ));
+        if input.report_improvements {
+            lines.push(format!(
+                "- Improvements: {}",
+                count_direction(&summary.findings, Direction::Improvement)
+            ));
+        }
         for finding in &summary.findings {
             push_finding_markdown(&mut lines, finding, chart_enabled);
         }
@@ -588,7 +635,7 @@ fn push_finding_markdown(lines: &mut Vec<String>, finding: &Finding, chart_enabl
         " _(recovered)_".to_owned()
     };
     lines.push(format!(
-        "**{}** — `{}` · {}{status}",
+        "**{}** — `{}` · `{}`{status}",
         format_percent(finding.relative_delta),
         describe_id(&finding.id),
         finding.kind.as_str(),
@@ -804,6 +851,8 @@ mod tests {
             notable: !findings.is_empty(),
             runs: findings.len().saturating_add(3),
             series: findings.len().max(1),
+            commit_span: None,
+            report_improvements: true,
             findings,
             sets: summaries,
             hint: None,
@@ -833,6 +882,8 @@ mod tests {
             notable: false,
             runs: 3,
             series: 1,
+            commit_span: None,
+            report_improvements: false,
             findings: &[],
             sets: &[],
             hint: None,
@@ -854,6 +905,8 @@ mod tests {
             notable: false,
             runs: 0,
             series: 0,
+            commit_span: None,
+            report_improvements: false,
             findings: &[],
             sets: &[],
             hint: Some("Found 2 stored runs ... dirty snapshots"),
@@ -872,7 +925,10 @@ mod tests {
         let input = single_set_input("folo", &set, &findings, &mut summaries);
         let report = render(&input, ReportFormat::Text, false);
         assert!(report.contains("regressions: 1"), "{report}");
-        assert!(report.contains("Set callgrind/"), "{report}");
+        assert!(
+            report.contains("callgrind/x86_64-unknown-linux-gnu/synthetic"),
+            "the set heading drops the redundant `Set ` prefix: {report}"
+        );
         // The percentage leads the finding paragraph; severity is gone.
         assert!(report.contains("+30.00%"), "{report}");
         assert!(!report.contains("[major]"), "{report}");
@@ -907,6 +963,8 @@ mod tests {
             notable: true,
             runs: 99,
             series: 88,
+            commit_span: None,
+            report_improvements: true,
             findings: &findings,
             sets: &summaries,
             hint: None,
@@ -914,11 +972,12 @@ mod tests {
         };
         let report = render(&input, ReportFormat::Text, false);
         // The per-set counts line carries the set's own tallies, distinct from the
-        // top-level totals (`runs: 99  series: 88`).
+        // top-level totals (`runs: 99`). The series count is no longer surfaced.
         assert!(
-            report.contains("  runs: 7  series: 5  regressions: 1  improvements: 0"),
+            report.contains("  runs: 7  regressions: 1  improvements: 0"),
             "{report}"
         );
+        assert!(!report.contains("series:"), "{report}");
     }
 
     #[test]
@@ -1020,15 +1079,15 @@ mod tests {
             "{report}"
         );
         assert!(
-            report.contains("## Set callgrind/x86_64-unknown-linux-gnu/synthetic"),
-            "{report}"
+            report.contains("## callgrind/x86_64-unknown-linux-gnu/synthetic"),
+            "the set heading drops the redundant `Set ` prefix: {report}"
         );
         // The per-set tally mirrors the JSON metadata and the text header.
         assert!(report.contains("- Regressions: 1"), "{report}");
         // Findings render as bold-headline blocks, not a table.
         assert!(!report.contains("| Change | Direction |"), "{report}");
         assert!(
-            report.contains("**+30.00%** — `nm/nm::observe/pull` · instruction_count"),
+            report.contains("**+30.00%** — `nm/nm::observe/pull` · `instruction_count`"),
             "{report}"
         );
         // An active finding carries no recovered suffix.
@@ -1052,7 +1111,7 @@ mod tests {
         // The headline suffix flags a recovered finding; the shared detail line names
         // the recovery commit.
         assert!(
-            report.contains("· instruction_count _(recovered)_"),
+            report.contains("· `instruction_count` _(recovered)_"),
             "{report}"
         );
         assert!(report.contains("recovers at c4"), "{report}");
@@ -1098,6 +1157,8 @@ mod tests {
             notable: false,
             runs: 0,
             series: 0,
+            commit_span: None,
+            report_improvements: false,
             findings: &[],
             sets: &[],
             hint: Some("Found 2 stored runs ... commit your working tree"),
@@ -1118,6 +1179,8 @@ mod tests {
             notable: false,
             runs: 0,
             series: 0,
+            commit_span: None,
+            report_improvements: false,
             findings: &[],
             sets: &[],
             hint: Some("dirty snapshots on base-branch commits"),
@@ -1163,6 +1226,8 @@ mod tests {
             notable: false,
             runs: 1,
             series: 1,
+            commit_span: None,
+            report_improvements: false,
             findings: &[],
             sets: &[],
             hint: None,
@@ -1186,6 +1251,8 @@ mod tests {
             notable: false,
             runs: 0,
             series: 0,
+            commit_span: None,
+            report_improvements: false,
             findings: &[],
             sets: &[],
             hint: None,
@@ -1259,6 +1326,8 @@ mod tests {
             notable: false,
             runs: 1,
             series: 1,
+            commit_span: None,
+            report_improvements: true,
             findings: &[],
             sets: &[],
             hint: None,
@@ -1522,6 +1591,8 @@ mod tests {
             notable: true,
             runs: 10,
             series: 2,
+            commit_span: None,
+            report_improvements: false,
             findings: &findings,
             sets: &summaries,
             hint: None,
@@ -1563,6 +1634,8 @@ mod tests {
             notable: true,
             runs: 10,
             series: 2,
+            commit_span: None,
+            report_improvements: false,
             findings: &findings,
             sets: &summaries,
             hint: None,
@@ -1575,5 +1648,111 @@ mod tests {
             !report.contains("aarch64-apple-darwin"),
             "the empty set is skipped: {report}"
         );
+    }
+
+    #[test]
+    fn header_shows_the_analyzed_commit_span() {
+        let set = discriminant_set();
+        let findings = vec![regression()];
+        let mut summaries = Vec::new();
+        let mut input = single_set_input("folo", &set, &findings, &mut summaries);
+        input.runs = 12;
+        input.commit_span = Some(("a1b2c3d4e5f60000", "f6e5d4c3b2a10000"));
+
+        // Both ends abbreviate to 12 hex digits, joined by an arrow, so the reader can
+        // see the stretch of history the analysis covered.
+        let text = render(&input, ReportFormat::Text, false);
+        assert!(
+            text.contains("runs: 12 (a1b2c3d4e5f6 → f6e5d4c3b2a1)"),
+            "{text}"
+        );
+        let markdown = render(&input, ReportFormat::Markdown, false);
+        assert!(
+            markdown.contains("- Runs analyzed: 12 (a1b2c3d4e5f6 → f6e5d4c3b2a1)"),
+            "{markdown}"
+        );
+    }
+
+    #[test]
+    fn header_collapses_a_single_commit_span() {
+        let set = discriminant_set();
+        let findings = vec![regression()];
+        let mut summaries = Vec::new();
+        let mut input = single_set_input("folo", &set, &findings, &mut summaries);
+        input.runs = 1;
+        input.commit_span = Some(("abcdef0123456789", "abcdef0123456789"));
+
+        // One analyzed commit reads as a single anchor, not `x → x`.
+        let text = render(&input, ReportFormat::Text, false);
+        assert!(text.contains("runs: 1 (abcdef012345)"), "{text}");
+    }
+
+    #[test]
+    fn improvement_tally_is_omitted_when_improvements_are_not_reported() {
+        let set = discriminant_set();
+        let findings = vec![regression()];
+        let mut summaries = Vec::new();
+        let mut input = single_set_input("folo", &set, &findings, &mut summaries);
+        input.report_improvements = false;
+
+        // Neither the top-level header nor the per-set breakdown counts improvements
+        // when the analysis reports none (an always-zero tally).
+        let text = render(&input, ReportFormat::Text, false);
+        assert!(text.contains("regressions: 1"), "{text}");
+        assert!(!text.contains("improvements:"), "{text}");
+
+        let markdown = render(&input, ReportFormat::Markdown, false);
+        assert!(markdown.contains("- Regressions: 1"), "{markdown}");
+        assert!(!markdown.contains("- Improvements:"), "{markdown}");
+    }
+
+    #[test]
+    fn improvement_tally_is_shown_when_improvements_are_reported() {
+        let set = discriminant_set();
+        let findings = vec![regression()];
+        let mut summaries = Vec::new();
+        let mut input = single_set_input("folo", &set, &findings, &mut summaries);
+        input.report_improvements = true;
+
+        let text = render(&input, ReportFormat::Text, false);
+        assert!(text.contains("improvements: 0"), "{text}");
+        let markdown = render(&input, ReportFormat::Markdown, false);
+        assert!(markdown.contains("- Improvements: 0"), "{markdown}");
+    }
+
+    #[test]
+    fn series_tally_is_omitted_from_text_and_markdown_but_kept_in_json() {
+        let set = discriminant_set();
+        let findings = vec![regression()];
+        let mut summaries = Vec::new();
+        let input = single_set_input("folo", &set, &findings, &mut summaries);
+
+        let text = render(&input, ReportFormat::Text, false);
+        assert!(!text.contains("series:"), "{text}");
+        let markdown = render(&input, ReportFormat::Markdown, false);
+        assert!(!markdown.contains("- Series"), "{markdown}");
+
+        // JSON keeps the series count for machine consumers (e.g. the stress harness).
+        let json = render(&input, ReportFormat::Json, false);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(parsed["series"].is_number(), "{json}");
+        assert!(parsed["sets"][0]["series"].is_number(), "{json}");
+    }
+
+    #[test]
+    fn markdown_wraps_the_metric_name_in_inline_code() {
+        let set = discriminant_set();
+        let findings = vec![regression()];
+        let mut summaries = Vec::new();
+        let input = single_set_input("folo", &set, &findings, &mut summaries);
+
+        // The metric name is a keyword-like identifier, so Markdown renders it as inline
+        // code (backticks) rather than bare prose. The text report carries no such markup.
+        let markdown = render(&input, ReportFormat::Markdown, false);
+        assert!(markdown.contains("· `instruction_count`"), "{markdown}");
+
+        let text = render(&input, ReportFormat::Text, false);
+        assert!(text.contains("· instruction_count"), "{text}");
+        assert!(!text.contains("`instruction_count`"), "{text}");
     }
 }
