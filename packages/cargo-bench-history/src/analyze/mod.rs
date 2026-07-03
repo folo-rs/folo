@@ -550,20 +550,27 @@ impl RunIndex {
     /// topological position, as `(first, last)` full SHAs. `None` when no run was
     /// admitted. The report header uses it to state the span of analyzed history.
     pub(crate) fn commit_span(&self) -> Option<(&str, &str)> {
-        let mut first: Option<(usize, &str)> = None;
-        let mut last: Option<(usize, &str)> = None;
-        for by_commit in self.sets.values() {
-            for (&topo_index, counts) in by_commit {
-                let commit = counts.commit.as_str();
-                if first.is_none_or(|(index, _)| topo_index < index) {
-                    first = Some((topo_index, commit));
-                }
-                if last.is_none_or(|(index, _)| topo_index > index) {
-                    last = Some((topo_index, commit));
-                }
-            }
-        }
-        Some((first?.1, last?.1))
+        // A given first-parent position maps to exactly one commit, so every set records
+        // the same commit under it: the span is simply the commit at the lowest position
+        // and the one at the highest. Reading those extremes with `min_by_key`/`max_by_key`
+        // keeps the ordering in the standard library rather than a hand-rolled comparison.
+        let first = self
+            .sets
+            .values()
+            .flat_map(|by_commit| by_commit.iter())
+            .min_by_key(|entry| *entry.0)?
+            .1
+            .commit
+            .as_str();
+        let last = self
+            .sets
+            .values()
+            .flat_map(|by_commit| by_commit.iter())
+            .max_by_key(|entry| *entry.0)?
+            .1
+            .commit
+            .as_str();
+        Some((first, last))
     }
 }
 
@@ -2987,10 +2994,15 @@ mod tests {
             no_dirty: true,
             ..options()
         };
-        let (report, _, _) = analyze_json(&git, &storage, "folo", &opts);
+        let (report, _, reporter) = analyze_json(&git, &storage, "folo", &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 3, "--no-dirty drops the dirty tip snapshot");
         assert!(parsed["warning"].is_null(), "no warning under --no-dirty");
+        assert!(
+            !reporter.contains("dirty snapshots on a base-side tip will be admitted"),
+            "--no-dirty skips the dirtiness probe, so the dirty-tree exception never fires: {:?}",
+            reporter.notes()
+        );
     }
 
     #[test]
@@ -3693,6 +3705,15 @@ mod tests {
             Some(("solo", "solo")),
             "a single analyzed commit is both ends of the span"
         );
+    }
+
+    #[test]
+    fn resolve_now_reads_the_injected_clock() {
+        // The analyze family sources its wall-clock anchor through an injectable
+        // `tick::Clock`; a frozen clock must surface its own instant verbatim rather than
+        // any default minted independently of the clock.
+        let anchor = ts(1_700_000_000);
+        assert_eq!(resolve_now(Some(Clock::new_frozen_at(anchor))), anchor);
     }
 
     #[test]
