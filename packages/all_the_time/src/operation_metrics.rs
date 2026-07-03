@@ -6,8 +6,11 @@ use crate::{OperationStatistics, SpanRecord, compute_statistics};
 ///
 /// Sized to cover Criterion's default sample count (100) plus its warm-up calls
 /// with headroom, so that recording a span is an allocation-free push in the
-/// common case. The buffer is allocated once, when the operation is created,
-/// keeping the measured region free of allocations.
+/// common case. A benchmark configured with a larger `sample_size` eventually
+/// exceeds this and the next push grows the buffer. That growth is harmless to
+/// the measurement: a span records itself from `Drop`, after it has already
+/// captured its elapsed delta and before the next span starts, so the
+/// reallocation falls between measured spans and never lands inside one.
 const DEFAULT_SPAN_CAPACITY: usize = 256;
 
 /// Metrics tracked for each operation in the session.

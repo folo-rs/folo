@@ -33,7 +33,7 @@ gated). No engine is exempt from run-to-run noise.
   must be opted into with an environment variable — the narrow "special need" that justifies
   `collect` existing at all.
 * **`alloc_tracker`** — heap allocations (bytes and counts). Hardware-independent but not
-  deterministic: warmup and buffer-resize allocations are amortised over a Criterion-chosen
+  deterministic: warmup and buffer-resize allocations are amortized over a Criterion-chosen
   iteration count, so the per-iteration figures jitter. It prefers a warmup-robust slope and
   records a bootstrap confidence interval over its measured spans when its output carries one.
 * **`all_the_time`** — processor (CPU) time. Hardware-dependent and noisy, carrying a
@@ -546,7 +546,7 @@ A series is built per `(discriminant set, benchmark identity, metric)`, ordered 
 first-parent topology. The goal is **high signal-to-noise**: report level shifts and trends
 that are real and stay silent on measurement jitter. **No engine is deterministic** — even
 Callgrind's simulated counts drift by a few percent run to run, and an `alloc_tracker`
-figure amortises first-touch and buffer-resize allocations over a Criterion-chosen iteration
+figure amortizes first-touch and buffer-resize allocations over a Criterion-chosen iteration
 count, so its per-iteration mean wobbles too. The detector therefore treats every metric as
 noisy and never trusts a value as exact.
 

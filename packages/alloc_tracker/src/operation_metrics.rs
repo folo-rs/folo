@@ -14,8 +14,12 @@ use folo_utils::{Span, SpanStats};
 ///
 /// Sized to cover Criterion's default sample count (100) plus its warm-up calls
 /// with headroom, so that recording a span is an allocation-free push in the
-/// common case. The buffer is allocated once, when the operation is created,
-/// keeping the measured region free of tracker-induced allocations.
+/// common case. A benchmark configured with a larger `sample_size` eventually
+/// exceeds this and the next push grows the buffer. That growth allocation does
+/// not contaminate the measurement: a span records itself from `Drop`, after it
+/// has already captured its allocation delta and before the next span starts, so
+/// the reallocation falls between measured spans and is attributed to none of
+/// them.
 const DEFAULT_SPAN_CAPACITY: usize = 256;
 
 /// One recorded span: the whole-span byte and allocation-count deltas and the
