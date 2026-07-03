@@ -1656,6 +1656,20 @@ mod tests {
     }
 
     #[test]
+    fn change_point_rejects_a_single_point_regime() {
+        // Pettitt splits at tau=1, leaving a one-point before regime (below
+        // min_regime). The size guard rejects when *either* regime is too small, so
+        // a `||`->`&&` slip would wrongly admit this lopsided split. A permissive
+        // rank-test threshold isolates the guard: only the size check keeps it out.
+        let config = AnalysisConfig {
+            change_alpha: 0.5,
+            ..AnalysisConfig::default()
+        };
+        let series = series_of(&[100.0, 130.0, 130.0, 130.0, 130.0, 130.0]);
+        assert!(evaluate_change_point(&series, &values_of(&series), &config).is_none());
+    }
+
+    #[test]
     fn sustained_step_is_flagged_as_a_change_point() {
         // A clean step from 100 to 130 with three points each side: a 3-vs-3 clean
         // step is Mann–Whitney significant.
@@ -2637,6 +2651,20 @@ mod tests {
             evaluate_resolved_spike(&series, &values_of(&series), &AnalysisConfig::default())
                 .is_none()
         );
+    }
+
+    #[test]
+    fn resolved_spike_exactly_three_regimes_long_is_a_spike() {
+        // With min_regime 3 the shortest detectable spike holds exactly 3*3 = 9
+        // points: a baseline, an elevated plateau, and a recovery of three each. The
+        // `n < min * 3` gate must be a strict `<`; a `<=`/`==` slip would reject this
+        // minimal spike, whose 3-vs-3 rise and recovery are both rank significant.
+        let config = AnalysisConfig {
+            min_regime: 3,
+            ..AnalysisConfig::default()
+        };
+        let series = series_of(&[10.0, 10.0, 10.0, 100.0, 100.0, 100.0, 10.0, 10.0, 10.0]);
+        assert!(evaluate_resolved_spike(&series, &values_of(&series), &config).is_some());
     }
 
     #[test]
