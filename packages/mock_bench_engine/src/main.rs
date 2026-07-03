@@ -383,14 +383,17 @@ fn parse_time_arg(value: &str) -> TimeOperation {
     }
 }
 
-/// Parses a `LOW:HIGH` interval into a `(low, high)` pair of nanoseconds.
+/// Parses a `LOW:HIGH` interval into a `(low, high)` pair. The values are unitless
+/// bounds — nanoseconds for `all_the_time`, bytes or allocation counts for
+/// `alloc_tracker` — so `LOW` must not exceed `HIGH`, otherwise the emitted
+/// dispersion would carry a negative standard deviation and inverted min/max.
 #[cfg_attr(coverage_nightly, coverage(off))]
 fn parse_bounds(bounds: &str) -> (f64, f64) {
     let (low, high) = bounds.split_once(':').expect("interval must be LOW:HIGH");
-    (
-        low.parse().expect("LOW must be a number"),
-        high.parse().expect("HIGH must be a number"),
-    )
+    let low: f64 = low.parse().expect("LOW must be a number");
+    let high: f64 = high.parse().expect("HIGH must be a number");
+    assert!(low <= high, "interval LOW must not exceed HIGH");
+    (low, high)
 }
 
 /// Writes one `alloc_tracker` `<operation>.json` file under `alloc_tracker/`.
