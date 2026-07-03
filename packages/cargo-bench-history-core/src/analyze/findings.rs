@@ -2426,6 +2426,23 @@ mod tests {
     }
 
     #[test]
+    fn reports_improvements_matches_improvement_keeps() {
+        let context = |mode, include_improvements| AnalysisContext {
+            mode,
+            config: AnalysisConfig::default(),
+            merge_base_index: None,
+            include_improvements,
+            include_inactive: false,
+        };
+        // The improvement tally is emitted exactly when an improvement finding would be
+        // kept: history mode only when opted in, branch mode always, tip mode never.
+        assert!(!context(AnalysisMode::History, false).reports_improvements());
+        assert!(context(AnalysisMode::History, true).reports_improvements());
+        assert!(context(AnalysisMode::Branch, false).reports_improvements());
+        assert!(!context(AnalysisMode::Tip, false).reports_improvements());
+    }
+
+    #[test]
     fn resolved_spike_at_the_minimum_length_reports_the_deviation() {
         // Exactly min_regime * 3 (6) points is the shortest detectable spike; the
         // `n < min * 3` gate must be a strict `<`. The plateau (20) deviates from the
