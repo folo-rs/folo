@@ -46,6 +46,13 @@ Validate changes via `just validate-local`. This runs a number of different chec
 and will uncover most issues. If you only touched a few packages, scope it to them
 via `package="foo bar"`.
 
+`just validate-local` includes package-scoped **mutation testing** as its final
+step. Uncaught mutations are a very common cause of CI failures, so we run them
+before pushing rather than discovering them in CI. Mutation testing is by far the
+slowest step, so it runs last (after the cheaper checks have had a chance to fail
+fast); scope it with `package="foo bar"` to keep it tractable. To run just the
+mutation step on its own, use `just package="foo bar" mutants`.
+
 We operate under a **zero warnings allowed** requirement — fix all warnings that
 validation generates.
 
