@@ -1,5 +1,4 @@
-use crate::harness::serial;
-use crate::harness::*;
+use crate::harness::{serial, *};
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot do.

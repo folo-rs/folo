@@ -304,7 +304,6 @@ mod text;
 mod wiring;
 
 pub(crate) use cargo_bench_history_core::model;
-
 pub use cli::{Cli, EarlyExit};
 pub use command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,

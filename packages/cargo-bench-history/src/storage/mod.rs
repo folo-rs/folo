@@ -7,17 +7,15 @@ mod facade;
 mod github_oidc;
 mod local;
 
-pub(crate) use facade::{StorageFacade, build_storage, resolve_storage};
-pub use facade::{StorageOverride, azure_backend_from_parts};
-
 use std::error::Error;
-use std::fmt;
 use std::future::Future;
-use std::io;
 use std::path::{Component, Path};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::{fmt, io};
 
 use cargo_bench_history_core::model::{OBJECTS_SEGMENT, STORAGE_VERSION, sanitize_segment};
+pub(crate) use facade::{StorageFacade, build_storage, resolve_storage};
+pub use facade::{StorageOverride, azure_backend_from_parts};
 
 /// An object store of immutable, key-addressed result sets.
 ///

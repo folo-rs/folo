@@ -52,7 +52,7 @@ async fn examine_pivots_a_rising_history_into_points() {
         points.iter().all(|point| point["dirty"] == false),
         "every seeded run is clean: {message}"
     );
-    // Every point carries the full commit SHA it was measured against.
+    // Every point carries the full commit ID it was measured against.
     assert!(
         points
             .iter()
@@ -87,8 +87,8 @@ async fn examine_renders_a_text_pivot_with_titles() {
         message.contains("Data points for nm/nm::observe/pull metric instruction_count"),
         "{message}"
     );
-    // The short commit id abbreviates each SHA to twelve characters.
-    let head = workspace.head_sha();
+    // The short commit id abbreviates each commit ID to twelve characters.
+    let head = workspace.head_commit_id();
     let short_head: String = head.chars().take(12).collect();
     assert!(
         message.contains(&short_head),

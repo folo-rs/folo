@@ -17,13 +17,6 @@ pub(crate) mod examine;
 pub(crate) mod list;
 pub(crate) mod prune;
 
-pub(crate) use cargo_bench_history_core::analyze::{
-    AnalysisConfig, AnalysisContext, AnalysisMode, BlessingPlacement, DiscriminantSetQuery,
-    FacetFilter, ReportFormat, ReportInput, RunPoints, Series, SeriesBuilder, SeriesFilter,
-    SetSummary, StorageKey, apply_blessings, balanced_chunk_sizes, find_changes_spawned,
-    format_value, parse_key, render, select_commits, worker_count,
-};
-
 use std::collections::{BTreeMap, HashMap};
 use std::io::IsTerminal;
 use std::path::Path;
@@ -31,6 +24,12 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyspawn::Spawner;
+pub(crate) use cargo_bench_history_core::analyze::{
+    AnalysisConfig, AnalysisContext, AnalysisMode, BlessingPlacement, DiscriminantSetQuery,
+    FacetFilter, ReportFormat, ReportInput, RunPoints, Series, SeriesBuilder, SeriesFilter,
+    SetSummary, StorageKey, apply_blessings, balanced_chunk_sizes, find_changes_spawned,
+    format_value, parse_key, render, select_commits, worker_count,
+};
 use futures::{StreamExt as _, TryStreamExt as _};
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
@@ -41,8 +40,9 @@ use tick::Clock;
 use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
 use crate::machine::resolve_machine_key;
-use crate::model::BlessingRecord;
-use crate::model::{BenchmarkIdPrefix, DiscriminantSet, Engine, STORAGE_VERSION, sanitize_segment};
+use crate::model::{
+    BenchmarkIdPrefix, BlessingRecord, DiscriminantSet, Engine, STORAGE_VERSION, sanitize_segment,
+};
 use crate::output::{OutputSelection, OutputWriter, TokioOutputWriter, emit};
 use crate::probe::{EnvironmentProbe, SystemProbe};
 use crate::report::{Reporter, ReporterExt, StderrReporter};
@@ -446,7 +446,7 @@ pub(crate) struct AutoFacets {
 /// summaries and the `list runs` breakdown need.
 #[derive(Clone, Debug)]
 pub(crate) struct CommitCounts {
-    /// The commit the runs were measured against (full SHA, or a label in tests).
+    /// The commit the runs were measured against (full commit ID, or a label in tests).
     pub(crate) commit: String,
     /// Clean (committed-tree) runs recorded on the commit.
     pub(crate) clean: usize,
@@ -551,7 +551,7 @@ impl RunIndex {
     /// admitted. The report header uses it to state the span of analyzed history.
     // The oldest/newest tie-break is unobservable, so its comparison mutants are
     // equivalent: a first-parent topological position denotes exactly one commit, so
-    // every set records the same SHA at a given position and `<` vs `<=` (or `>` vs
+    // every set records the same commit ID at a given position and `<` vs `<=` (or `>` vs
     // `>=`) only ever chooses between identical strings.
     #[cfg_attr(test, mutants::skip)]
     pub(crate) fn commit_span(&self) -> Option<(&str, &str)> {
@@ -602,7 +602,7 @@ struct SelectedDataSet {
     /// each data point with what its commit changed. A commit absent here has an
     /// empty subject; only `examine` reads this.
     commit_subjects: HashMap<String, String>,
-    /// The full SHA of the analyzed tip commit (the resolved `--context`/HEAD),
+    /// The full commit ID of the analyzed tip commit (the resolved `--context`/HEAD),
     /// carried into the report so it names the exact commit the findings describe.
     tip_commit: String,
     /// Whether the working tree carried uncommitted changes when the analysis ran;
@@ -1381,12 +1381,12 @@ enum DirtyTipPolicy {
 
 /// The git topology a selection resolves to: the target ref it was resolved
 /// against, the first-parent position of each selected commit, and the per-commit
-/// dirty-admission flags. All maps use owned commit SHAs so the borrowed
+/// dirty-admission flags. All maps use owned commit IDs so the borrowed
 /// `selected` set can drop before the caller's load loop.
 struct ResolvedHistory {
     /// The target ref the timeline was resolved against (for diagnostics).
     target_ref: String,
-    /// The full SHA the target ref resolved to — the analyzed tip commit, carried
+    /// The full commit ID the target ref resolved to — the analyzed tip commit, carried
     /// into the report so it names the exact commit the findings describe.
     tip_commit: String,
     /// Whether the working tree carried uncommitted changes when the topology was
@@ -1437,7 +1437,7 @@ where
     // history, not from stored timestamps. An unresolvable target ref means there
     // is no repository here (or the branch does not exist), which is an error.
     let target_ref = selection.context.unwrap_or("HEAD");
-    let Some(target_sha) = git.resolve(target_ref).await.map_err(RunError::Io)? else {
+    let Some(target_commit_id) = git.resolve(target_ref).await.map_err(RunError::Io)? else {
         return Err(RunError::Analyze {
             message: format!(
                 "this command requires a git repository: could not resolve {target_ref:?}. \
@@ -1446,31 +1446,34 @@ where
         });
     };
 
-    let base_sha = resolve_base_ref(git, config, selection.base).await?;
+    let base_commit_id = resolve_base_ref(git, config, selection.base).await?;
     let first_parent_started = Instant::now();
-    let first_parent = git.first_parent(&target_sha).await.map_err(RunError::Io)?;
+    let first_parent = git
+        .first_parent(&target_commit_id)
+        .await
+        .map_err(RunError::Io)?;
     reporter.timing(
         "git.first_parent ancestry walk (target's first-parent line)",
         first_parent_started.elapsed(),
     );
-    // Split the first-parent ancestry into the SHA timeline (for commit selection
-    // and the merge-base lookup) and a SHA -> committer-time map (for the window).
+    // Split the first-parent ancestry into the commit ID timeline (for commit selection
+    // and the merge-base lookup) and a commit ID -> committer-time map (for the window).
     let commit_count = first_parent.len();
     let mut ancestry: Vec<String> = Vec::with_capacity(commit_count);
     let mut commit_times: HashMap<String, Timestamp> = HashMap::new();
     let mut commit_subjects: HashMap<String, String> = HashMap::new();
     for commit in first_parent {
         if let Some(time) = commit.committer_time {
-            commit_times.insert(commit.sha.clone(), time);
+            commit_times.insert(commit.commit_id.clone(), time);
         }
         if !commit.subject.is_empty() {
-            commit_subjects.insert(commit.sha.clone(), commit.subject);
+            commit_subjects.insert(commit.commit_id.clone(), commit.subject);
         }
-        ancestry.push(commit.sha);
+        ancestry.push(commit.commit_id);
     }
-    let merge_base = match &base_sha {
+    let merge_base = match &base_commit_id {
         Some(base) => git
-            .merge_base(&target_sha, base)
+            .merge_base(&target_commit_id, base)
             .await
             .map_err(RunError::Io)?,
         None => None,
@@ -1478,12 +1481,12 @@ where
 
     reporter.if_enabled(|notes| {
         notes.note(&format!(
-            "target ref {target_ref} resolves to {target_sha}; {} on its first-parent line",
+            "target ref {target_ref} resolves to {target_commit_id}; {} on its first-parent line",
             count_noun(commit_count, "commit")
         ));
         notes.note(&format!(
             "base ref resolves to {}; merge-base with target is {}",
-            base_sha.as_deref().unwrap_or("<none>"),
+            base_commit_id.as_deref().unwrap_or("<none>"),
             merge_base.as_deref().unwrap_or("<none>")
         ));
     });
@@ -1539,11 +1542,13 @@ where
         .and_then(|base| order.get(base).copied());
     // The target's tip is its own merge-base (or no base is known) exactly when
     // this is an official base-branch view rather than a feature branch.
-    let tip_is_merge_base = merge_base.as_deref().is_none_or(|base| base == target_sha);
+    let tip_is_merge_base = merge_base
+        .as_deref()
+        .is_none_or(|base| base == target_commit_id);
 
     Ok(ResolvedHistory {
         target_ref: target_ref.to_owned(),
-        tip_commit: target_sha,
+        tip_commit: target_commit_id,
         tip_dirty: working_tree_dirty,
         order,
         commit_times,
@@ -1564,7 +1569,7 @@ fn dirty_base_exception_warning() -> String {
 }
 
 /// Resolves the base ref the target's history is split against, returning its
-/// commit SHA or `None` when no base can be determined.
+/// commit ID or `None` when no base can be determined.
 ///
 /// Precedence: an explicit `--base` (an error if it does not resolve), then the
 /// configured `project.default_branch`, then the repository's detected default
@@ -1597,7 +1602,7 @@ async fn resolve_base_ref<G: GitHistory>(
     Ok(None)
 }
 
-/// Resolves the *display name* of the base ref (without resolving it to a SHA),
+/// Resolves the *display name* of the base ref (without resolving it to a commit ID),
 /// for diagnostics such as the `prune --prune-base` guard.
 ///
 /// Mirrors [`resolve_base_ref`]'s precedence: an explicit `--base`, then the
@@ -1840,22 +1845,22 @@ fn instant_before(span: Span, flag: &str, now: Timestamp) -> Result<Timestamp, R
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
-    use futures::executor::block_on;
-    use jiff::Timestamp;
-
-    use crate::config::{Config, parse_config};
-    use crate::git_history::FakeGitHistory;
-    use crate::model::{BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, Metric, MetricKind};
-    use crate::model::{EnvironmentInfo, GitInfo, Run, RunContext, ToolchainInfo};
-    use crate::output::MemoryOutputWriter;
-    use crate::report::RecordingReporter;
-    use crate::storage::{MemoryStorage, Storage};
-
     use std::path::{Path, PathBuf};
 
+    use futures::executor::block_on;
+    use jiff::Timestamp;
     use nonempty::nonempty;
 
     use super::*;
+    use crate::config::{Config, parse_config};
+    use crate::git_history::FakeGitHistory;
+    use crate::model::{
+        BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo, GitInfo, Metric,
+        MetricKind, Run, RunContext, ToolchainInfo,
+    };
+    use crate::output::MemoryOutputWriter;
+    use crate::report::RecordingReporter;
+    use crate::storage::{MemoryStorage, Storage};
 
     fn ts(seconds: i64) -> Timestamp {
         Timestamp::from_second(seconds).unwrap()

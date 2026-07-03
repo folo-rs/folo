@@ -162,7 +162,7 @@ const SECONDS_PER_DAY: i64 = 86_400;
 /// integration suite, and a seed-heavy history pays it once per commit. Streaming
 /// the commits into one `fast-import` collapses an N-commit history into a single
 /// spawn: each commit is one buffered write plus a `get-mark` round-trip that
-/// reports the new SHA, so [`Workspace::commit`] and friends stay synchronous and
+/// reports the new commit ID, so [`Workspace::commit`] and friends stay synchronous and
 /// their call sites read exactly as they would against real `git commit`.
 ///
 /// All commits the harness creates this way carry the base template's empty tree,
@@ -184,7 +184,7 @@ struct GitGraph {
     /// down by [`finalize`](Self::finalize) before any real `git` command.
     session: Option<Session>,
     /// The next `fast-import` mark, used transiently to read back each commit's
-    /// SHA via `get-mark`.
+    /// commit ID via `get-mark`.
     next_mark: u32,
     /// The committer second handed to the next undated commit (see
     /// [`UNDATED_EPOCH_SECONDS`]).
@@ -221,7 +221,7 @@ impl GitGraph {
     }
 
     /// Streams an empty commit dated `second` (raw committer seconds, UTC) with
-    /// message `message` onto the current branch, returning its full SHA.
+    /// message `message` onto the current branch, returning its full commit ID.
     fn commit(&mut self, message: &str, second: i64) -> String {
         let mark = self
             .next_mark
@@ -262,13 +262,13 @@ impl GitGraph {
 
         let mut line = String::new();
         session.stdout.read_line(&mut line).unwrap();
-        let sha = line.trim().to_owned();
+        let commit_id = line.trim().to_owned();
         assert_eq!(
-            sha.len(),
+            commit_id.len(),
             40,
-            "git fast-import get-mark returned `{sha}`, not a full SHA"
+            "git fast-import get-mark returned `{commit_id}`, not a full commit ID"
         );
-        sha
+        commit_id
     }
 
     /// Allocates the committer second for the next undated commit, advancing the
@@ -366,12 +366,12 @@ impl GitGraph {
 /// temp-dir cleanup happen outside it (required on Windows).
 pub(crate) struct Workspace {
     dir: tempfile::TempDir,
-    /// Maps a short commit label (for example `c1`) to the full SHA of the empty
+    /// Maps a short commit label (for example `c1`) to the full commit ID of the empty
     /// commit created for it, so seeded storage keys and the live git topology
     /// agree on the commit-directory segment. Interior mutability lets the
     /// `&self` commit helpers populate it lazily as a test builds its topology.
     commits: RefCell<HashMap<String, String>>,
-    /// Read-through cache of each commit SHA's git committer timestamp, used to
+    /// Read-through cache of each commit ID's git committer timestamp, used to
     /// stamp a clean seed's provenance observation from the commit it sits on.
     /// [`commit_dated`](Self::commit_dated) populates it at creation (the common
     /// case, so no extra `git` spawn); undated commits are read from git on first
@@ -582,31 +582,31 @@ impl Workspace {
         );
         // Guard against a malformed template (for example a loose ref the copy
         // dropped): resolving HEAD straight from the copied `.git` must yield a full
-        // SHA, so a broken copy fails loudly here instead of misbehaving in a later
+        // commit ID, so a broken copy fails loudly here instead of misbehaving in a later
         // command. The read is cheap and never spawns git for a healthy template.
         assert_eq!(
-            self.head_sha().len(),
+            self.head_commit_id().len(),
             40,
             "copied base template did not yield a resolvable HEAD"
         );
     }
 
-    /// Reads `HEAD`'s commit SHA straight from the `.git` directory, avoiding a
+    /// Reads `HEAD`'s commit ID straight from the `.git` directory, avoiding a
     /// `git rev-parse` subprocess (process startup dominates these tests on
     /// Windows). For the small, freshly-created repositories the harness builds the
     /// branch ref is always loose; a `git rev-parse` fallback covers the unexpected
     /// (packed refs, detached `HEAD`).
-    pub(crate) fn head_sha(&self) -> String {
+    pub(crate) fn head_commit_id(&self) -> String {
         self.flush_git();
         let git_dir = self.root().join(".git");
         if let Ok(head) = std::fs::read_to_string(git_dir.join("HEAD")) {
             let head = head.trim();
             if let Some(reference) = head.strip_prefix("ref: ") {
                 // `refs/heads/<branch>` uses `/`, which the Windows path APIs accept.
-                if let Ok(sha) = std::fs::read_to_string(git_dir.join(reference)) {
-                    let sha = sha.trim();
-                    if sha.len() == 40 {
-                        return sha.to_owned();
+                if let Ok(commit_id) = std::fs::read_to_string(git_dir.join(reference)) {
+                    let commit_id = commit_id.trim();
+                    if commit_id.len() == 40 {
+                        return commit_id.to_owned();
                     }
                 }
             } else if head.len() == 40 {
@@ -618,17 +618,17 @@ impl Workspace {
     }
 
     /// Lazily creates an empty commit labeled `label` on the current branch and
-    /// returns its full SHA, reusing the SHA if the label was already created.
+    /// returns its full commit ID, reusing the commit ID if the label was already created.
     ///
     /// Creation order is the first-parent topology order, so seeding in oldest-first
     /// order makes the storage keys line up with the live git history `analyze`
     /// reconstructs the series from.
     pub(crate) fn commit(&self, label: &str) -> String {
-        if let Some(sha) = self.commits.borrow().get(label) {
-            return sha.clone();
+        if let Some(commit_id) = self.commits.borrow().get(label) {
+            return commit_id.clone();
         }
         let second = self.graph.borrow_mut().next_undated_second();
-        let sha = self.graph.borrow_mut().commit(label, second);
+        let commit_id = self.graph.borrow_mut().commit(label, second);
         // Cache the committer time from the synthetic second we just stamped, so an
         // interleaved seed reading this commit's provenance never has to spawn git
         // (which would finalize the stream mid-history). Git stays the source of
@@ -636,43 +636,43 @@ impl Workspace {
         let observed = Timestamp::from_second(second).unwrap();
         self.committer_times
             .borrow_mut()
-            .insert(sha.clone(), observed);
+            .insert(commit_id.clone(), observed);
         self.commits
             .borrow_mut()
-            .insert(label.to_owned(), sha.clone());
-        sha
+            .insert(label.to_owned(), commit_id.clone());
+        commit_id
     }
 
     /// Lazily creates an empty commit labeled `label`, dated `date` (`YYYY-MM-DD`,
-    /// at UTC midnight), on the current branch and returns its full SHA, reusing the
-    /// SHA (without redating) if the label already exists.
+    /// at UTC midnight), on the current branch and returns its full commit ID, reusing the
+    /// commit ID (without redating) if the label already exists.
     ///
     /// Pinning the author and committer date lets the window tests exercise
     /// `--since`/`--until`: `analyze`/`list` read each commit's committer timestamp
     /// from git topology to decide the window before any object is fetched, so the
     /// date stamped here governs how a seeded object behaves under the window.
     pub(crate) fn commit_dated(&self, date: &str, label: &str) -> String {
-        if let Some(sha) = self.commits.borrow().get(label) {
-            return sha.clone();
+        if let Some(commit_id) = self.commits.borrow().get(label) {
+            return commit_id.clone();
         }
         let when = format!("{date}T00:00:00+00:00");
         let observed: Timestamp = when.parse().unwrap();
-        let sha = self.graph.borrow_mut().commit(label, observed.as_second());
+        let commit_id = self.graph.borrow_mut().commit(label, observed.as_second());
         self.committer_times
             .borrow_mut()
-            .insert(sha.clone(), observed);
+            .insert(commit_id.clone(), observed);
         self.commits
             .borrow_mut()
-            .insert(label.to_owned(), sha.clone());
-        sha
+            .insert(label.to_owned(), commit_id.clone());
+        commit_id
     }
 
-    /// Resolves a previously created commit `label` to its full SHA, panicking if
+    /// Resolves a previously created commit `label` to its full commit ID, panicking if
     /// the label was never created. Seeds attach objects to commits the test owns,
     /// so a missing label means the test forgot to create its topology first (via
     /// [`commit`](Self::commit), [`commit_dated`](Self::commit_dated), or
     /// [`merge`](Self::merge)).
-    fn sha(&self, label: &str) -> String {
+    fn commit_id(&self, label: &str) -> String {
         self.commits
             .borrow()
             .get(label)
@@ -685,20 +685,20 @@ impl Workspace {
             })
     }
 
-    /// Returns `sha`'s git committer timestamp, used to stamp a clean seed's
+    /// Returns `commit_id`'s git committer timestamp, used to stamp a clean seed's
     /// provenance observation from the commit it sits on. Dated commits are served
     /// from the cache populated at creation; any other commit is read from git once
     /// (`git show -s --format=%cI`) and cached. Git is the source of truth here.
-    fn committer_time(&self, sha: &str) -> Timestamp {
-        if let Some(observed) = self.committer_times.borrow().get(sha) {
+    fn committer_time(&self, commit_id: &str) -> Timestamp {
+        if let Some(observed) = self.committer_times.borrow().get(commit_id) {
             return *observed;
         }
-        let output = self.git(&["show", "-s", "--format=%cI", sha]);
+        let output = self.git(&["show", "-s", "--format=%cI", commit_id]);
         let text = String::from_utf8(output.stdout).unwrap();
         let observed: Timestamp = text.trim().parse().unwrap();
         self.committer_times
             .borrow_mut()
-            .insert(sha.to_owned(), observed);
+            .insert(commit_id.to_owned(), observed);
         observed
     }
     pub(crate) fn checkout_new_branch(&self, name: &str) {
@@ -714,7 +714,7 @@ impl Workspace {
 
     /// Merges `branch` into the current branch with an always-materialized merge
     /// commit (`--no-ff`), labels the resulting merge commit `label`, and returns
-    /// its full SHA. The merge commit has the current branch's tip as its first
+    /// its full commit ID. The merge commit has the current branch's tip as its first
     /// parent and `branch`'s tip as its second, so it sits on the current branch's
     /// first-parent line while the merged-in commits stay off it — the topology the
     /// git-aware `analyze`/`backfill` selection must respect.
@@ -730,18 +730,18 @@ impl Workspace {
             &["merge", "--no-ff", "--no-edit", "-m", label, branch],
             second,
         );
-        let sha = self.head();
+        let commit_id = self.head();
         self.committer_times
             .borrow_mut()
-            .insert(sha.clone(), Timestamp::from_second(second).unwrap());
+            .insert(commit_id.clone(), Timestamp::from_second(second).unwrap());
         self.commits
             .borrow_mut()
-            .insert(label.to_owned(), sha.clone());
-        sha
+            .insert(label.to_owned(), commit_id.clone());
+        commit_id
     }
 
     /// Commits a tracked file with `contents` at `relative` on the current branch
-    /// and returns the new commit's full SHA. Unlike [`commit`](Self::commit), the
+    /// and returns the new commit's full ID. Unlike [`commit`](Self::commit), the
     /// commit changes the tree, so the file appears in any worktree checked out to
     /// it — used to stand in for a "broken" commit the mock engine reacts to. It
     /// takes the next synthetic committer date, keeping the timeline monotonic and
@@ -751,29 +751,29 @@ impl Workspace {
         self.git(&["add", relative]);
         let second = self.graph.borrow_mut().next_undated_second();
         self.git_at(&["commit", "-m", message], second);
-        let sha = self.head();
+        let commit_id = self.head();
         self.committer_times
             .borrow_mut()
-            .insert(sha.clone(), Timestamp::from_second(second).unwrap());
-        sha
+            .insert(commit_id.clone(), Timestamp::from_second(second).unwrap());
+        commit_id
     }
 
     /// Removes a previously tracked file at `relative`, commits the removal on the
-    /// current branch, and returns the new commit's full SHA. As with
+    /// current branch, and returns the new commit's full ID. As with
     /// [`commit_with_file`](Self::commit_with_file), the removal commit takes the
     /// next synthetic committer date.
     pub(crate) fn commit_removing_file(&self, message: &str, relative: &str) -> String {
         self.git(&["rm", relative]);
         let second = self.graph.borrow_mut().next_undated_second();
         self.git_at(&["commit", "-m", message], second);
-        let sha = self.head();
+        let commit_id = self.head();
         self.committer_times
             .borrow_mut()
-            .insert(sha.clone(), Timestamp::from_second(second).unwrap());
-        sha
+            .insert(commit_id.clone(), Timestamp::from_second(second).unwrap());
+        commit_id
     }
 
-    /// The full SHA of the current `HEAD`.
+    /// The full commit ID of the current `HEAD`.
     pub(crate) fn head(&self) -> String {
         let output = self.git(&["rev-parse", "HEAD"]);
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
@@ -947,10 +947,14 @@ impl Workspace {
     /// for the previously created commit `label`, so a single commit can host
     /// objects in several comparable sets (as parallel CI pools produce).
     pub(crate) fn seed_callgrind_in(&self, triple: &str, machine: &str, label: &str, value: f64) {
-        let sha = self.sha(label);
-        let observed = self.committer_time(&sha);
-        let key = format!("v1/testproj/objects/callgrind/{triple}/{machine}/{sha}/clean.json");
-        self.seed(&key, &ir_result_set(observed.as_second(), &sha, value));
+        let commit_id = self.commit_id(label);
+        let observed = self.committer_time(&commit_id);
+        let key =
+            format!("v1/testproj/objects/callgrind/{triple}/{machine}/{commit_id}/clean.json");
+        self.seed(
+            &key,
+            &ir_result_set(observed.as_second(), &commit_id, value),
+        );
     }
 
     /// Seeds one *dirty* (uncommitted-tree) Callgrind snapshot with an `Ir` value on
@@ -959,24 +963,30 @@ impl Workspace {
     /// midnight). A real dirty run executes after the commit it is based on, so the
     /// effective second is legitimately later than the commit's own date.
     pub(crate) fn seed_dirty_callgrind(&self, observed: &str, label: &str, value: f64) {
-        let sha = self.sha(label);
+        let commit_id = self.commit_id(label);
         let effective: Timestamp = format!("{observed}T00:00:00Z").parse().unwrap();
         let key = format!(
-            "v1/testproj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{sha}/dirty-{}.json",
+            "v1/testproj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit_id}/dirty-{}.json",
             effective.as_second()
         );
-        self.seed(&key, &ir_result_set(effective.as_second(), &sha, value));
+        self.seed(
+            &key,
+            &ir_result_set(effective.as_second(), &commit_id, value),
+        );
     }
 
     /// Seeds one Callgrind result set carrying `metrics` for benchmark
     /// `nm::observe/pull` on the previously created commit `label`.
     pub(crate) fn seed_metrics(&self, label: &str, metrics: Vec<Metric>) {
-        let sha = self.sha(label);
-        let observed = self.committer_time(&sha);
+        let commit_id = self.commit_id(label);
+        let observed = self.committer_time(&commit_id);
         let key = format!(
-            "v1/testproj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{sha}/clean.json"
+            "v1/testproj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit_id}/clean.json"
         );
-        self.seed(&key, &result_set_with(observed.as_second(), &sha, metrics));
+        self.seed(
+            &key,
+            &result_set_with(observed.as_second(), &commit_id, metrics),
+        );
     }
 
     /// Seeds a flat history followed by a clear, sustained upward step — a
@@ -1000,14 +1010,14 @@ impl Workspace {
     /// Seeds one Criterion `wall_time` result set on the previously created commit
     /// `label`, in the machine-key partition `machine`.
     pub(crate) fn seed_criterion(&self, label: &str, machine: &str, value: f64) {
-        let sha = self.sha(label);
-        let observed = self.committer_time(&sha);
+        let commit_id = self.commit_id(label);
+        let observed = self.committer_time(&commit_id);
         let key = format!(
-            "v1/testproj/objects/criterion/x86_64-pc-windows-msvc/{machine}/{sha}/clean.json"
+            "v1/testproj/objects/criterion/x86_64-pc-windows-msvc/{machine}/{commit_id}/clean.json"
         );
         self.seed(
             &key,
-            &criterion_result_set(observed.as_second(), &sha, value),
+            &criterion_result_set(observed.as_second(), &commit_id, value),
         );
     }
 
@@ -1022,15 +1032,15 @@ impl Workspace {
         machine: &str,
         value: f64,
     ) {
-        let sha = self.sha(label);
+        let commit_id = self.commit_id(label);
         let effective: Timestamp = format!("{observed}T00:00:00Z").parse().unwrap();
         let key = format!(
-            "v1/testproj/objects/criterion/x86_64-pc-windows-msvc/{machine}/{sha}/dirty-{}.json",
+            "v1/testproj/objects/criterion/x86_64-pc-windows-msvc/{machine}/{commit_id}/dirty-{}.json",
             effective.as_second()
         );
         self.seed(
             &key,
-            &criterion_result_set(effective.as_second(), &sha, value),
+            &criterion_result_set(effective.as_second(), &commit_id, value),
         );
     }
 
@@ -1060,14 +1070,14 @@ impl Workspace {
     /// `alpha::bench/wide` and `beta::bench/narrow`, each with an `Ir` metric at the
     /// given value, on the previously created commit `label`.
     pub(crate) fn seed_two_benchmarks(&self, label: &str, alpha: f64, beta: f64) {
-        let sha = self.sha(label);
-        let observed = self.committer_time(&sha);
+        let commit_id = self.commit_id(label);
+        let observed = self.committer_time(&commit_id);
         let key = format!(
-            "v1/testproj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{sha}/clean.json"
+            "v1/testproj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit_id}/clean.json"
         );
         self.seed(
             &key,
-            &two_benchmark_result_set(observed.as_second(), &sha, alpha, beta),
+            &two_benchmark_result_set(observed.as_second(), &commit_id, alpha, beta),
         );
     }
 
@@ -1076,14 +1086,14 @@ impl Workspace {
     /// allocations per iteration. Allocation counts are deterministic, so the
     /// partition is `synthetic` (no machine key).
     pub(crate) fn seed_alloc_tracker(&self, label: &str, operation: &str, bytes: f64, allocs: f64) {
-        let sha = self.sha(label);
-        let observed = self.committer_time(&sha);
+        let commit_id = self.commit_id(label);
+        let observed = self.committer_time(&commit_id);
         let key = format!(
-            "v1/testproj/objects/alloc_tracker/x86_64-unknown-linux-gnu/synthetic/{sha}/clean.json"
+            "v1/testproj/objects/alloc_tracker/x86_64-unknown-linux-gnu/synthetic/{commit_id}/clean.json"
         );
         self.seed(
             &key,
-            &alloc_result_set(observed.as_second(), &sha, operation, bytes, allocs),
+            &alloc_result_set(observed.as_second(), &commit_id, operation, bytes, allocs),
         );
     }
 
@@ -1098,14 +1108,14 @@ impl Workspace {
         operation: &str,
         nanos: f64,
     ) {
-        let sha = self.sha(label);
-        let observed = self.committer_time(&sha);
+        let commit_id = self.commit_id(label);
+        let observed = self.committer_time(&commit_id);
         let key = format!(
-            "v1/testproj/objects/all_the_time/x86_64-unknown-linux-gnu/{machine}/{sha}/clean.json"
+            "v1/testproj/objects/all_the_time/x86_64-unknown-linux-gnu/{machine}/{commit_id}/clean.json"
         );
         self.seed(
             &key,
-            &time_result_set(observed.as_second(), &sha, operation, nanos),
+            &time_result_set(observed.as_second(), &commit_id, operation, nanos),
         );
     }
 
@@ -1121,16 +1131,16 @@ impl Workspace {
         nanos: f64,
         half_width: f64,
     ) {
-        let sha = self.sha(label);
-        let observed = self.committer_time(&sha);
+        let commit_id = self.commit_id(label);
+        let observed = self.committer_time(&commit_id);
         let key = format!(
-            "v1/testproj/objects/all_the_time/x86_64-unknown-linux-gnu/{machine}/{sha}/clean.json"
+            "v1/testproj/objects/all_the_time/x86_64-unknown-linux-gnu/{machine}/{commit_id}/clean.json"
         );
         self.seed(
             &key,
             &time_result_set_with_dispersion(
                 observed.as_second(),
-                &sha,
+                &commit_id,
                 operation,
                 nanos,
                 half_width,

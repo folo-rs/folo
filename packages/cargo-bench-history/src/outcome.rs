@@ -2,8 +2,7 @@
 //! successful [`run`](crate::run) returns and the [`RunError`] it fails with.
 
 use std::error::Error;
-use std::fmt;
-use std::io;
+use std::{fmt, io};
 
 use crate::{ConfigError, StorageError};
 /// The outcome of a successful [`run`](crate::run).

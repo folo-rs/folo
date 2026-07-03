@@ -28,7 +28,6 @@
 //! This package is not meant for use in production, serving only as a development tool.
 //!
 //! # Features
-//!
 #![cfg_attr(
     feature = "panic_on_next_alloc",
     doc = "- `panic_on_next_alloc`: Enables the [`panic_on_next_alloc`] function for debugging"

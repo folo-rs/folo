@@ -49,7 +49,7 @@ format:
 
 [group('quality')]
 format-check:
-    cargo +{{ env_var('RUST_NIGHTLY') }} fmt --verbose --all --check
+    cargo +{{ env_var('RUST_NIGHTLY') }} fmt --verbose --all --check -- --config-path ./unstable-rustfmt.toml
     cargo sort --workspace --check
     cargo sort-derives --check
 

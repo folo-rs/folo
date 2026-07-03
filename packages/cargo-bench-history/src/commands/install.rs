@@ -77,11 +77,10 @@ mod tests {
 
     use futures::executor::block_on;
 
+    use super::*;
     use crate::config_writer::MemoryConfigWriter;
     use crate::report::RecordingReporter;
     use crate::wiring::default_config_path;
-
-    use super::*;
 
     /// Tests pass an empty base so `resolve_config_path` leaves the relative
     /// configuration key untouched, keeping the in-memory writer keys relative.

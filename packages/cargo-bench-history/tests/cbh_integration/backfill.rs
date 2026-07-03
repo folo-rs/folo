@@ -19,14 +19,15 @@ async fn backfill_stores_one_clean_object_per_commit_and_restores_checkout() {
     };
     assert!(message.contains("2 stored"), "{message}");
 
-    // One clean object per commit, keyed by that commit's full SHA. `backfill`
+    // One clean object per commit, keyed by that commit's full ID. `backfill`
     // auto-detects the target triple, so derive it from a stored object to keep
     // the key assertions correct on every platform CI runs on.
     let objects = workspace.stored_objects();
     assert_eq!(objects.len(), 2, "{objects:?}");
     let triple = objects[0].1.context.toolchain.target_triple.clone();
-    for sha in [&c1, &c2] {
-        let expected = format!("v1/testproj/objects/callgrind/{triple}/synthetic/{sha}/clean.json");
+    for commit_id in [&c1, &c2] {
+        let expected =
+            format!("v1/testproj/objects/callgrind/{triple}/synthetic/{commit_id}/clean.json");
         assert!(
             objects.iter().any(|(key, _)| key == &expected),
             "missing {expected} in {objects:?}"
@@ -76,8 +77,9 @@ async fn backfill_spans_a_merge_commit_along_first_parent() {
     let objects = workspace.stored_objects();
     assert_eq!(objects.len(), 3, "{objects:?}");
     let triple = objects[0].1.context.toolchain.target_triple.clone();
-    for sha in [&c1, &m, &c3] {
-        let expected = format!("v1/testproj/objects/callgrind/{triple}/synthetic/{sha}/clean.json");
+    for commit_id in [&c1, &m, &c3] {
+        let expected =
+            format!("v1/testproj/objects/callgrind/{triple}/synthetic/{commit_id}/clean.json");
         assert!(
             objects.iter().any(|(key, _)| key == &expected),
             "missing {expected} in {objects:?}"
@@ -85,10 +87,12 @@ async fn backfill_spans_a_merge_commit_along_first_parent() {
     }
     // The merged-in side-branch commits are off the first-parent line: nothing is
     // stored for them.
-    for sha in [&sf1, &sf2] {
+    for commit_id in [&sf1, &sf2] {
         assert!(
-            !objects.iter().any(|(key, _)| key.contains(sha.as_str())),
-            "side-branch commit {sha} must not be backfilled: {objects:?}"
+            !objects
+                .iter()
+                .any(|(key, _)| key.contains(commit_id.as_str())),
+            "side-branch commit {commit_id} must not be backfilled: {objects:?}"
         );
     }
 }

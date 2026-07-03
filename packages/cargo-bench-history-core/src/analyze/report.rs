@@ -15,8 +15,7 @@ use serde::Serialize;
 
 use crate::analyze::findings::short_commit;
 use crate::analyze::{Direction, Finding, FindingMethod, SeriesValue};
-use crate::model::BenchmarkId;
-use crate::model::DiscriminantSet;
+use crate::model::{BenchmarkId, DiscriminantSet};
 
 /// Height, in rows, of a history-mode finding chart.
 const CHART_HEIGHT: u32 = 4;
@@ -204,7 +203,7 @@ struct JsonReport<'a> {
     /// The project the history belongs to.
     project: &'a str,
     /// The commit the analysis was run against (resolved `--context`, HEAD by
-    /// default): the full SHA, so a consumer can link the report to a commit.
+    /// default): the full commit ID, so a consumer can link the report to a commit.
     tip_commit: &'a str,
     /// Whether the working tree carried uncommitted changes when the analysis ran.
     tip_dirty: bool,
@@ -791,11 +790,10 @@ fn format_percent(relative_delta: f64) -> String {
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
-    use crate::model::MetricKind;
-
     use nonempty::nonempty;
 
     use super::*;
+    use crate::model::MetricKind;
 
     fn discriminant_set() -> DiscriminantSet {
         DiscriminantSet {

@@ -2,9 +2,8 @@
 //! and where its benchmark history is stored.
 
 use std::error::Error;
-use std::fmt;
-use std::io;
 use std::path::{Path, PathBuf};
+use std::{fmt, io};
 
 use serde::Deserialize;
 

@@ -284,7 +284,6 @@
 //! To make your code testable with fake hardware, accept `SystemHardware` as a value (typically
 //! as a function parameter or struct field) instead of always calling `SystemHardware::current()`.
 //! This allows tests to substitute fake hardware while production code uses real hardware.
-//!
 #![cfg_attr(
     any(test, feature = "test-util"),
     doc = "See the [`fake`] module for detailed examples and API documentation."
@@ -336,10 +335,9 @@
     html_favicon_url = "https://raw.githubusercontent.com/folo-rs/folo/refs/heads/main/packages/many_cpus/icon.ico"
 )]
 
+#[cfg(any(test, feature = "test-util"))]
+pub use many_cpus_impl::fake;
 pub use many_cpus_impl::{
     EfficiencyClass, MemoryRegionId, Processor, ProcessorId, ProcessorSet, ProcessorSetBuilder,
     ResourceQuota, SystemHardware,
 };
-
-#[cfg(any(test, feature = "test-util"))]
-pub use many_cpus_impl::fake;

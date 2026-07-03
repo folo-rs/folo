@@ -12,15 +12,14 @@ use std::sync::Arc;
 use azure_core::credentials::TokenCredential;
 use azure_core::http::HttpClient;
 
-use crate::config::{CloudStorageConfig, Config};
-use crate::model::sanitize_segment;
-use crate::report::{Reporter, ReporterExt};
-use crate::wiring::rebase;
-
 use super::azure::AzureBlobStorage;
 use super::caching::CachingStorage;
 use super::local::LocalStorage;
 use super::{Storage, StorageError};
+use crate::config::{CloudStorageConfig, Config};
+use crate::model::sanitize_segment;
+use crate::report::{Reporter, ReporterExt};
+use crate::wiring::rebase;
 
 /// A [`Storage`] backend selected at configuration time.
 #[derive(Clone, Debug)]
@@ -356,10 +355,9 @@ pub fn azure_backend_from_parts(
 mod tests {
     use tempfile::tempdir;
 
+    use super::*;
     use crate::config::parse_config;
     use crate::report::RecordingReporter;
-
-    use super::*;
 
     fn config_with_storage(storage: &str) -> Config {
         parse_config(storage).unwrap()

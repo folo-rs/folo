@@ -7,9 +7,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tokio::io::AsyncWriteExt;
-
 use cargo_bench_history_core::codec;
+use tokio::io::AsyncWriteExt;
 
 use super::{Storage, StorageError, is_plain_segment};
 

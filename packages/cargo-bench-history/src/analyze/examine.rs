@@ -21,10 +21,19 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use anyspawn::Spawner;
+use jiff::Timestamp;
 use serde::Serialize;
+use tick::Clock;
 
+use super::{
+    AutoFacets, ReportFormat, Selection, Series, SeriesFilter, detect_auto_facets,
+    dirty_base_exception_warning, empty_history_hint, format_value, resolve_now, select_dataset,
+};
 use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
+use crate::model::{BenchmarkIdPrefix, DiscriminantSet, MetricKind};
+use crate::output::{OutputSelection, OutputWriter, TokioOutputWriter, emit};
 use crate::report::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, StorageFacade, resolve_storage};
 use crate::text::count_noun;
@@ -33,18 +42,6 @@ use crate::wiring::{
     resolve_repo, storage_env,
 };
 use crate::{ExamineOptions, RunError, RunOutcome};
-
-use anyspawn::Spawner;
-use jiff::Timestamp;
-use tick::Clock;
-
-use super::{
-    AutoFacets, Selection, detect_auto_facets, dirty_base_exception_warning, empty_history_hint,
-    format_value, resolve_now, select_dataset,
-};
-use super::{ReportFormat, Series, SeriesFilter};
-use crate::model::{BenchmarkIdPrefix, DiscriminantSet, MetricKind};
-use crate::output::{OutputSelection, OutputWriter, TokioOutputWriter, emit};
 
 /// How many leading characters of a commit title the text and Markdown tables
 /// keep. The truncation is a readability convenience of those renderings; the JSON
@@ -218,7 +215,7 @@ fn parse_metric(name: &str) -> Result<MetricKind, RunError> {
 /// One recorded observation of the examined series.
 #[derive(Clone, Debug)]
 struct DataPoint {
-    /// The commit the run was measured against (full SHA, or a label in tests).
+    /// The commit the run was measured against (full commit ID, or a label in tests).
     commit: String,
     /// The short commit id shown in the text and Markdown tables.
     short_commit: String,
@@ -274,7 +271,7 @@ fn build_pivot(
                     let commit = point.commit.as_deref().unwrap_or("unknown");
                     let title = commit_subjects.get(commit).cloned().unwrap_or_default();
                     DataPoint {
-                        short_commit: short_sha(commit).to_owned(),
+                        short_commit: short_commit_id(commit).to_owned(),
                         commit: commit.to_owned(),
                         value: point.value,
                         dirty: point.dirty,
@@ -319,10 +316,10 @@ fn truncate_title(title: &str) -> String {
     title.chars().take(TITLE_LIMIT).collect()
 }
 
-/// The short commit id: the first 12 characters of the SHA (mirrors the
+/// The short commit id: the first 12 characters of the commit ID (mirrors the
 /// abbreviation `list`, `bless`, and `backfill` use).
-fn short_sha(sha: &str) -> &str {
-    sha.get(..12).unwrap_or(sha)
+fn short_commit_id(commit_id: &str) -> &str {
+    commit_id.get(..12).unwrap_or(commit_id)
 }
 
 /// Renders the pivot in the requested format, appending the diagnostic hint and
@@ -501,15 +498,16 @@ mod tests {
     use jiff::Timestamp;
     use nonempty::nonempty;
 
+    use super::*;
     use crate::config::Config;
     use crate::git_history::FakeGitHistory;
-    use crate::model::{BenchmarkId, BenchmarkResult, Metric, MetricKind, Run};
-    use crate::model::{EnvironmentInfo, GitInfo, RunContext, ToolchainInfo};
+    use crate::model::{
+        BenchmarkId, BenchmarkResult, EnvironmentInfo, GitInfo, Metric, MetricKind, Run,
+        RunContext, ToolchainInfo,
+    };
     use crate::output::MemoryOutputWriter;
     use crate::report::RecordingReporter;
     use crate::storage::{MemoryStorage, Storage};
-
-    use super::*;
 
     fn config() -> Config {
         Config::default()
