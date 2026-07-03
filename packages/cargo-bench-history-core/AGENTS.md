@@ -20,7 +20,7 @@ here, alongside the workspace-wide rules in `docs/` (especially
   [`RunPoints`](src/analyze/run_points.rs) projection — only the fields
   `SeriesBuilder::push` reads (per result, the id and the
   metric value/interval), dropping the run context and per-metric standard deviation —
-  and `push` consumes that projection rather than a full `Run`. The full commit SHA a
+  and `push` consumes that projection rather than a full `Run`. The full commit ID a
   point is labelled with comes from the storage key, not the run payload, so the
   projection carries no git fields. Keep that projection in
   lockstep with what the fold reads. **Note on memory:** folding in the worker did *not*

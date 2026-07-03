@@ -29,8 +29,7 @@ use std::sync::Arc;
 use azure_core::Error;
 use azure_core::credentials::TokenCredential;
 use azure_core::error::ErrorKind;
-use azure_core::http::headers;
-use azure_core::http::{ClientMethodOptions, HttpClient, Method, Request, Url};
+use azure_core::http::{ClientMethodOptions, HttpClient, Method, Request, Url, headers};
 use azure_identity::{ClientAssertion, ClientAssertionCredential};
 use serde::Deserialize;
 
@@ -201,13 +200,13 @@ impl ClientAssertion for GithubOidcAssertion {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use super::*;
-
     use std::sync::Mutex;
 
     use azure_core::http::headers::Headers;
     use azure_core::http::{AsyncRawResponse, StatusCode};
     use futures::executor::block_on;
+
+    use super::*;
 
     /// Records the request a [`StubHttpClient`] saw, so a test can assert on the URL
     /// and bearer header the assertion built.

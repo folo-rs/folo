@@ -15,10 +15,20 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use anyspawn::Spawner;
+use jiff::Timestamp;
 use serde::Serialize;
+use tick::Clock;
 
+use super::{
+    AutoFacets, ReportFormat, RunIndex, Selection, Series, SeriesFilter, apply_blessings,
+    detect_auto_facets, dirty_base_exception_warning, empty_history_hint,
+    facet_filtered_candidates, resolve_facets, resolve_now, select_dataset,
+};
 use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
+use crate::model::{BlessingRecord, DiscriminantSet};
+use crate::output::{OutputSelection, OutputWriter, TokioOutputWriter, emit};
 use crate::report::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, StorageFacade, resolve_storage};
 use crate::text::count_noun;
@@ -27,19 +37,6 @@ use crate::wiring::{
     resolve_repo, storage_env,
 };
 use crate::{ListOptions, ListSubject, RunError, RunOutcome};
-
-use anyspawn::Spawner;
-use jiff::Timestamp;
-use tick::Clock;
-
-use super::{
-    AutoFacets, Selection, detect_auto_facets, dirty_base_exception_warning, empty_history_hint,
-    facet_filtered_candidates, resolve_facets, resolve_now, select_dataset,
-};
-use super::{ReportFormat, RunIndex, Series, SeriesFilter, apply_blessings};
-use crate::model::BlessingRecord;
-use crate::model::DiscriminantSet;
-use crate::output::{OutputSelection, OutputWriter, TokioOutputWriter, emit};
 
 /// The real `list`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
@@ -204,7 +201,7 @@ where
 /// One commit's contribution to a discriminant set, in first-parent order.
 #[derive(Clone, Debug)]
 struct CommitEntry {
-    /// The commit the runs were measured against (full SHA, or a label in tests).
+    /// The commit the runs were measured against (full commit ID, or a label in tests).
     commit: String,
     /// Stored runs on this commit in the set.
     runs: usize,
@@ -619,13 +616,13 @@ where
         entries.push(BlessingEntry {
             set: parsed.set,
             benchmark: None,
-            commit: short_sha(&record.commit).to_owned(),
+            commit: short_commit_id(&record.commit).to_owned(),
             commit_time: head_commit_time,
             issued_at: Some(record.issued_at),
             prefixes: record.prefixes.into_iter().map(String::from).collect(),
         });
     }
-    Ok((short_sha(&head).to_owned(), entries))
+    Ok((short_commit_id(&head).to_owned(), entries))
 }
 
 /// Collects the most recent blessing of every benchmark across the analysis window
@@ -672,7 +669,7 @@ where
         entries.push(BlessingEntry {
             set: one.set.clone(),
             benchmark: Some(benchmark),
-            commit: short_sha(&blessing.commit).to_owned(),
+            commit: short_commit_id(&blessing.commit).to_owned(),
             commit_time: blessing.commit_time,
             issued_at: None,
             prefixes: Vec::new(),
@@ -681,9 +678,9 @@ where
     Ok((String::new(), entries))
 }
 
-/// The first twelve characters of a SHA (all of it when shorter), for display.
-fn short_sha(sha: &str) -> &str {
-    sha.get(..12).unwrap_or(sha)
+/// The first twelve characters of a commit ID (all of it when shorter), for display.
+fn short_commit_id(commit_id: &str) -> &str {
+    commit_id.get(..12).unwrap_or(commit_id)
 }
 
 /// Renders a blessing listing in the requested format.
@@ -874,22 +871,22 @@ fn render_blessings_json(
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
-    use futures::executor::block_on;
-    use jiff::Timestamp;
-
-    use crate::config::Config;
-    use crate::git_history::FakeGitHistory;
-    use crate::model::{BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, Metric, MetricKind, Run};
-    use crate::model::{EnvironmentInfo, GitInfo, RunContext, ToolchainInfo};
-    use crate::report::RecordingReporter;
-    use crate::storage::{MemoryStorage, Storage};
-
-    use crate::output::MemoryOutputWriter;
     use std::path::PathBuf;
 
+    use futures::executor::block_on;
+    use jiff::Timestamp;
     use nonempty::nonempty;
 
     use super::*;
+    use crate::config::Config;
+    use crate::git_history::FakeGitHistory;
+    use crate::model::{
+        BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo, GitInfo, Metric,
+        MetricKind, Run, RunContext, ToolchainInfo,
+    };
+    use crate::output::MemoryOutputWriter;
+    use crate::report::RecordingReporter;
+    use crate::storage::{MemoryStorage, Storage};
 
     fn config() -> Config {
         Config::default()

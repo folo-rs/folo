@@ -659,7 +659,7 @@ impl ExamineCommand {
         .required(true)
 ))]
 struct PruneCommand {
-    /// Restrict removal to these commits (a full or short SHA, prefix-matched);
+    /// Restrict removal to these commits (a full or short commit ID, prefix-matched);
     /// repeatable (default: every one of the selected commits).
     #[arg(value_name = "COMMIT")]
     commit: Vec<String>,
@@ -760,12 +760,12 @@ impl PruneCommand {
 /// Replay `collect` across a range of historical commits.
 #[derive(Args, Debug)]
 struct BackfillCommand {
-    /// Oldest commit of the range to backfill, inclusive; a SHA, tag, or ref such
+    /// Oldest commit of the range to backfill, inclusive; a commit ID, tag, or ref such
     /// as `HEAD~20`.
     #[arg(value_name = "FROM")]
     from: String,
 
-    /// Newest commit of the range to backfill, inclusive; a SHA, tag, or ref such
+    /// Newest commit of the range to backfill, inclusive; a commit ID, tag, or ref such
     /// as `HEAD`. Must be reachable from `<FROM>` along first-parent history.
     #[arg(value_name = "TO")]
     to: String,

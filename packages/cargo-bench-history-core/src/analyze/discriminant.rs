@@ -107,7 +107,7 @@ pub struct StorageKey {
     pub project: String,
     /// The discriminant set the key belongs to.
     pub set: DiscriminantSet,
-    /// The commit directory segment (full SHA, or `unknown`).
+    /// The commit directory segment (full commit ID, or `unknown`).
     pub commit: String,
     /// The file segment (`clean.json`, `dirty-<unix>.json`, or `bless-<unix>.json`).
     pub file: String,

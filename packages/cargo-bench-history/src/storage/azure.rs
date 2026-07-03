@@ -13,10 +13,8 @@
 //! (ambient developer/CLI session, or self-minted GitHub OIDC in CI).
 
 use std::collections::HashMap;
-use std::env;
-use std::fmt;
-use std::io;
 use std::sync::Arc;
+use std::{env, fmt, io};
 
 use azure_core::credentials::{AccessToken, TokenCredential, TokenRequestOptions};
 use azure_core::error::ErrorKind;
@@ -665,10 +663,10 @@ fn config_error(message: impl Into<String>) -> StorageError {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use super::*;
-
     use azure_core::http::headers::Headers;
     use futures::executor::block_on;
+
+    use super::*;
 
     /// Builds an Azure HTTP-response error with the given status and storage
     /// error code, mirroring what the SDK surfaces for a failed request.

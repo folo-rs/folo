@@ -18,18 +18,17 @@ use std::collections::hash_map::Entry as MapEntry;
 use std::hash::BuildHasher;
 use std::sync::Arc;
 
-use foldhash::HashMap as FoldHashMap;
-use foldhash::HashMapExt;
 use foldhash::fast::RandomState;
+use foldhash::{HashMap as FoldHashMap, HashMapExt};
 use hashbrown::HashTable;
 use hashbrown::hash_table::Entry;
 use jiff::Timestamp;
 
 use crate::analyze::StorageKey;
 use crate::analyze::run_points::RunPoints;
-use crate::model::BlessingRecord;
-use crate::model::DiscriminantSet;
-use crate::model::{BenchmarkId, BenchmarkIdPrefix, MetricKind, Run};
+use crate::model::{
+    BenchmarkId, BenchmarkIdPrefix, BlessingRecord, DiscriminantSet, MetricKind, Run,
+};
 
 /// A single observation in a series.
 ///
@@ -50,7 +49,7 @@ pub struct SeriesPoint {
     /// standing in for the full storage key to keep the point small.
     pub object_ordinal: u32,
     /// Commit the run was measured against — the storage key's commit directory
-    /// segment (a full SHA, or `unknown`). Interned so all points on one commit
+    /// segment (a full commit ID, or `unknown`). Interned so all points on one commit
     /// share a single allocation.
     pub commit: Option<Arc<str>>,
     /// The measured value.
@@ -71,7 +70,7 @@ pub struct SeriesPoint {
 /// section of `DESIGN.md`.
 #[derive(Clone, Debug)]
 pub struct Blessing {
-    /// Full commit SHA the blessing was issued at (the report anchor).
+    /// Full commit ID the blessing was issued at (the report anchor).
     pub commit: String,
     /// Committer date of the blessed commit (resolved from git topology), for the
     /// report anchor. `None` when topology did not report a date for the commit.
@@ -289,7 +288,7 @@ impl SeriesBuilder {
     ///
     /// `topo_index` is the run commit's first-parent position, `object_ordinal` its
     /// rank in sorted storage-key order (the final point tie-break), and `commit`
-    /// the storage key's commit directory segment (a full SHA, or `unknown`); the
+    /// the storage key's commit directory segment (a full commit ID, or `unknown`); the
     /// caller supplies all three because they come from the storage key and git
     /// topology, not the run payload. `run` is the fold-relevant projection of the
     /// run (see [`RunPoints`]); only the matching metrics are retained — it can be
@@ -521,13 +520,13 @@ mod tests {
     )]
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
-    use crate::analyze::parse_key;
-    use crate::model::{BenchmarkResult, Metric};
-    use crate::model::{EnvironmentInfo, GitInfo, RunContext, ToolchainInfo};
-
     use nonempty::NonEmpty;
 
     use super::*;
+    use crate::analyze::parse_key;
+    use crate::model::{
+        BenchmarkResult, EnvironmentInfo, GitInfo, Metric, RunContext, ToolchainInfo,
+    };
 
     fn ts(seconds: i64) -> Timestamp {
         Timestamp::from_second(seconds).unwrap()

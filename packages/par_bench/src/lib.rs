@@ -124,7 +124,6 @@
 //! ```
 //!
 //! # Resource usage tracking
-//!
 #![cfg_attr(
     any(feature = "alloc_tracker", feature = "all_the_time"),
     doc = "When either the `alloc_tracker` or `all_the_time` features are enabled, the [`ResourceUsageExt`]"

@@ -4,7 +4,7 @@
 //!
 //! A run is positioned on its series timeline purely by git topology — the
 //! first-parent index of its commit, resolved live during analysis from the
-//! stored commit SHA. The object records no commit timestamp of its own; the
+//! stored commit ID. The object records no commit timestamp of its own; the
 //! observation timestamp it does carry is provenance and is never used for
 //! ordering or windowing.
 
@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 /// Metadata attached to every stored run.
 ///
-/// A run's timeline position comes from git topology (keyed by the commit SHA in
+/// A run's timeline position comes from git topology (keyed by the commit ID in
 /// [`git`](Self::git)), not from any stored timestamp. `observation` is provenance
 /// metadata and is never used for ordering or windowing.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

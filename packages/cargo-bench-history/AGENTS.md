@@ -27,7 +27,7 @@ against fakes under `block_on` (Miri-safe, no runtime). The ports:
   `put_overwrite`/`delete` are the escape hatches and arm the cache-invalidation marker.
 * `config_writer::ConfigWriter` — `install`'s config-file writer (`create_new`).
 * `git_history::GitHistory` — read-only commit topology (`resolve`, `default_branch`,
-  `merge_base`, `first_parent`, `committer_time`, `is_dirty`). `first_parent` pairs each SHA
+  `merge_base`, `first_parent`, `committer_time`, `is_dirty`). `first_parent` pairs each commit ID
   with its committer date and subject; `FakeGitHistory` models a canned graph.
 
 **When you add an IO edge, follow the same pattern.** Never call `SystemTime::now()` in

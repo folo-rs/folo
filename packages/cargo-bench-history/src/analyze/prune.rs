@@ -25,8 +25,15 @@ use jiff::Timestamp;
 use serde::Serialize;
 use tick::Clock;
 
+use super::{
+    AutoFacets, DirtyTipPolicy, ReportFormat, ResolvedHistory, Selection, WindowEdge,
+    detect_auto_facets, facet_filtered_candidates, parse_since, parse_until, resolve_base_name,
+    resolve_facets, resolve_history, resolve_now, window_excludes,
+};
 use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
+use crate::model::DiscriminantSet;
+use crate::output::{OutputSelection, OutputWriter, TokioOutputWriter, emit};
 use crate::report::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, StorageFacade, resolve_storage};
 use crate::text::count_noun;
@@ -35,15 +42,6 @@ use crate::wiring::{
     resolve_repo, storage_env,
 };
 use crate::{PruneOptions, RunError, RunOutcome, finish_with_flush};
-
-use super::ReportFormat;
-use super::{
-    AutoFacets, DirtyTipPolicy, ResolvedHistory, Selection, WindowEdge, detect_auto_facets,
-    facet_filtered_candidates, parse_since, parse_until, resolve_base_name, resolve_facets,
-    resolve_history, resolve_now, window_excludes,
-};
-use crate::model::DiscriminantSet;
-use crate::output::{OutputSelection, OutputWriter, TokioOutputWriter, emit};
 
 /// Which objects a prune pass deletes.
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -388,7 +386,7 @@ fn commit_is_eligible(
 }
 
 /// Whether a commit matches the `<commit>` selection (case-insensitive prefix
-/// match, so a short SHA selects the full one). An empty selection matches every
+/// match, so a short commit ID selects the full one). An empty selection matches every
 /// commit.
 fn commit_matches(commit: &str, filters: &[String]) -> bool {
     if filters.is_empty() {
@@ -434,7 +432,7 @@ struct RemovalItem {
 /// One commit's objects to remove, in first-parent order.
 #[derive(Clone)]
 struct CommitRemoval {
-    /// The commit the runs were measured against (full SHA, or a label in tests).
+    /// The commit the runs were measured against (full commit ID, or a label in tests).
     commit: String,
     /// How many runs (clean or dirty) are removed on this commit.
     runs: usize,
@@ -697,22 +695,22 @@ fn render_plan_json(plan: &Plan, dry_run: bool) -> String {
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
-    use futures::executor::block_on;
-    use jiff::Timestamp;
-
-    use crate::config::Config;
-    use crate::git_history::FakeGitHistory;
-    use crate::model::{BenchmarkId, BenchmarkResult, Metric, MetricKind, Run};
-    use crate::model::{EnvironmentInfo, GitInfo, RunContext, ToolchainInfo};
-    use crate::report::RecordingReporter;
-    use crate::storage::{MemoryStorage, Storage};
-
-    use crate::output::MemoryOutputWriter;
     use std::path::PathBuf;
 
+    use futures::executor::block_on;
+    use jiff::Timestamp;
     use nonempty::nonempty;
 
     use super::*;
+    use crate::config::Config;
+    use crate::git_history::FakeGitHistory;
+    use crate::model::{
+        BenchmarkId, BenchmarkResult, EnvironmentInfo, GitInfo, Metric, MetricKind, Run,
+        RunContext, ToolchainInfo,
+    };
+    use crate::output::MemoryOutputWriter;
+    use crate::report::RecordingReporter;
+    use crate::storage::{MemoryStorage, Storage};
 
     fn config() -> Config {
         Config::default()

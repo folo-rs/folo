@@ -146,7 +146,7 @@ A clean run maps to the single deterministic key `…/<commit>/clean.json`, so c
 detection rides on the write-once storage contract: a second clean run of the same commit
 fails atomically with nothing written, with no separate exists-check round-trip. A dirty
 run is keyed by its observation second so successive snapshots coexist. Branch is not a
-path component — a commit SHA is globally unique, so the same commit on two branches is
+path component — a commit ID is globally unique, so the same commit on two branches is
 one point, and branch selection happens at query time. Each path segment is sanitized so a
 stray separator in a value cannot split the key into the wrong number of segments.
 

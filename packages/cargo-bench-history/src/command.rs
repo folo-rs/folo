@@ -358,7 +358,7 @@ pub struct PruneOptions {
     /// Base ref the context branched off from; defaults to the detected (or
     /// configured) default branch.
     pub base: Option<String>,
-    /// Restrict removal to specific commits (case-insensitive SHA-prefix match);
+    /// Restrict removal to specific commits (case-insensitive commit-ID prefix match);
     /// repeatable. Empty means every one of the selected commits.
     pub commit: Vec<String>,
     /// Only prune commits made on or after this cutoff, if set.

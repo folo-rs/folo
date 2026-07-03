@@ -35,10 +35,8 @@ use anyspawn::Spawner;
 use serde::Serialize;
 
 use crate::analyze::parallel::{balanced_chunk_sizes, worker_count};
-use crate::analyze::stats;
-use crate::analyze::{Series, SeriesPoint};
-use crate::model::DiscriminantSet;
-use crate::model::{BenchmarkId, MetricKind};
+use crate::analyze::{Series, SeriesPoint, stats};
+use crate::model::{BenchmarkId, DiscriminantSet, MetricKind};
 
 /// Tunable parameters of the engine-aware analysis.
 #[derive(Clone, Copy, Debug)]
@@ -884,7 +882,7 @@ fn stamp_history(finding: &mut Finding, series: &Series) {
     }
 }
 
-/// Abbreviates a commit SHA for display (first 12 hex digits).
+/// Abbreviates a commit ID for display (first 12 hex digits).
 pub(crate) fn short_commit(commit: &str) -> String {
     commit.get(..12).unwrap_or(commit).to_owned()
 }
@@ -1226,17 +1224,14 @@ mod tests {
     )]
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
-    use jiff::Timestamp;
-
     use std::sync::Arc;
 
-    use crate::analyze::{Blessing, SeriesPoint};
-    use crate::model::DiscriminantSet;
-    use crate::model::MetricKind;
-
+    use jiff::Timestamp;
     use nonempty::nonempty;
 
     use super::*;
+    use crate::analyze::{Blessing, SeriesPoint};
+    use crate::model::{DiscriminantSet, MetricKind};
 
     /// Builds a deterministic (Callgrind) series carrying `values` in topological
     /// order, with no dispersion.

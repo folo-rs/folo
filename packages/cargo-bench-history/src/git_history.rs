@@ -31,8 +31,8 @@ use crate::process::capture;
 /// when `git` reported no subject; commands other than `examine` ignore it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FirstParentCommit {
-    /// The commit's full SHA.
-    pub(crate) sha: String,
+    /// The commit's full ID.
+    pub(crate) commit_id: String,
     /// The commit's committer timestamp (`git`'s `%cI`), or `None` when absent or
     /// unparseable.
     pub(crate) committer_time: Option<Timestamp>,
@@ -46,7 +46,7 @@ pub(crate) struct FirstParentCommit {
 /// absent value (`Ok(None)` / an empty list), reserving `Err` for an unexpected
 /// failure to invoke `git`.
 pub(crate) trait GitHistory {
-    /// Resolves a ref (branch, tag, `HEAD`, or SHA) to its full commit SHA.
+    /// Resolves a ref (branch, tag, `HEAD`, or commit ID) to its full commit ID.
     ///
     /// Returns `Ok(None)` when the ref does not resolve — an absent branch, or a
     /// path that is not a git repository at all (which is how `analyze` detects
@@ -126,7 +126,7 @@ impl SystemGitHistory {
 }
 
 impl GitHistory for SystemGitHistory {
-    #[cfg_attr(test, mutants::skip)] // Shells out to `git`; parsing delegated to `parse_sha`.
+    #[cfg_attr(test, mutants::skip)] // Shells out to `git`; parsing delegated to `parse_commit_id`.
     async fn resolve(&self, reference: &str) -> io::Result<Option<String>> {
         // `^{commit}` peels tags/refs to the commit they name; `--verify --quiet`
         // makes an unknown ref a clean non-zero exit rather than noisy output.
@@ -134,7 +134,7 @@ impl GitHistory for SystemGitHistory {
         let output = self
             .run(&["rev-parse", "--verify", "--quiet", &spec])
             .await?;
-        Ok(output.and_then(|stdout| parse_sha(&stdout)))
+        Ok(output.and_then(|stdout| parse_commit_id(&stdout)))
     }
 
     #[cfg_attr(test, mutants::skip)] // Shells out to `git`; parsing delegated to `branch_from_symbolic_ref`.
@@ -156,10 +156,10 @@ impl GitHistory for SystemGitHistory {
         Ok(None)
     }
 
-    #[cfg_attr(test, mutants::skip)] // Shells out to `git`; parsing delegated to `parse_sha`.
+    #[cfg_attr(test, mutants::skip)] // Shells out to `git`; parsing delegated to `parse_commit_id`.
     async fn merge_base(&self, a: &str, b: &str) -> io::Result<Option<String>> {
         let output = self.run(&["merge-base", a, b]).await?;
-        Ok(output.and_then(|stdout| parse_sha(&stdout)))
+        Ok(output.and_then(|stdout| parse_commit_id(&stdout)))
     }
 
     #[cfg_attr(test, mutants::skip)] // Shells out to `git`; parsing delegated to `parse_first_parent_log`.
@@ -209,9 +209,9 @@ fn porcelain_is_dirty(stdout: &str) -> bool {
     !stdout.trim().is_empty()
 }
 
-/// Extracts a single commit SHA from `git rev-parse` / `git merge-base` output:
+/// Extracts a single commit ID from `git rev-parse` / `git merge-base` output:
 /// the first non-empty trimmed line, or `None` when there is none.
-fn parse_sha(stdout: &str) -> Option<String> {
+fn parse_commit_id(stdout: &str) -> Option<String> {
     stdout
         .lines()
         .map(str::trim)
@@ -222,18 +222,18 @@ fn parse_sha(stdout: &str) -> Option<String> {
 /// Parses `git log --first-parent --reverse -z --format=%H%x00%cI%x00%s` output
 /// into [`FirstParentCommit`]s in stream order. `-z` NUL-terminates each commit's
 /// record and the three fields are NUL-delimited, so the stream is a flat run of
-/// `<sha>\0<committer-date>\0<subject>` triples with a trailing empty token from
+/// `<commit_id>\0<committer-date>\0<subject>` triples with a trailing empty token from
 /// the final terminator. A field carrying an unparseable date yields
 /// `committer_time: None` and an empty subject field yields an empty string. With
 /// `--reverse` the input is oldest-first.
 fn parse_first_parent_log(stdout: &str) -> Vec<FirstParentCommit> {
     let mut fields = stdout.split('\0');
     let mut commits = Vec::new();
-    while let Some(sha) = fields.next() {
-        let sha = sha.trim();
-        // A real commit's SHA is never empty; the only empty leading token is the
+    while let Some(commit_id) = fields.next() {
+        let commit_id = commit_id.trim();
+        // A real commit's ID is never empty; the only empty leading token is the
         // one following the final record's terminator, which ends the stream.
-        if sha.is_empty() {
+        if commit_id.is_empty() {
             break;
         }
         let committer_time = fields
@@ -241,7 +241,7 @@ fn parse_first_parent_log(stdout: &str) -> Vec<FirstParentCommit> {
             .and_then(|field| field.trim().parse::<Timestamp>().ok());
         let subject = fields.next().unwrap_or_default().to_owned();
         commits.push(FirstParentCommit {
-            sha: sha.to_owned(),
+            commit_id: commit_id.to_owned(),
             committer_time,
             subject,
         });
@@ -298,13 +298,13 @@ mod fake {
     /// topologies with the real-git integration tests, not this fake.
     #[derive(Clone, Debug, Default)]
     pub(crate) struct FakeGitHistory {
-        /// Ref name (branch/tag/`HEAD`) -> the commit SHA it points at.
+        /// Ref name (branch/tag/`HEAD`) -> the commit ID it points at.
         refs: HashMap<String, String>,
-        /// Commit SHA -> its first parent (`None` for a root commit).
+        /// Commit ID -> its first parent (`None` for a root commit).
         parents: HashMap<String, Option<String>>,
-        /// Commit SHA -> its committer timestamp, for commits seeded with one.
+        /// Commit ID -> its committer timestamp, for commits seeded with one.
         times: HashMap<String, Timestamp>,
-        /// Commit SHA -> its subject line, for commits seeded with one.
+        /// Commit ID -> its subject line, for commits seeded with one.
         subjects: HashMap<String, String>,
         /// The detected default branch, if the repository advertises one.
         default_branch: Option<String>,
@@ -325,44 +325,45 @@ mod fake {
             }
         }
 
-        /// Records a commit `sha` with the given first `parent` (`None` = root).
-        pub(crate) fn commit(&mut self, sha: &str, parent: Option<&str>) -> &mut Self {
+        /// Records a commit `commit_id` with the given first `parent` (`None` = root).
+        pub(crate) fn commit(&mut self, commit_id: &str, parent: Option<&str>) -> &mut Self {
             self.parents
-                .insert(sha.to_owned(), parent.map(ToOwned::to_owned));
+                .insert(commit_id.to_owned(), parent.map(ToOwned::to_owned));
             self
         }
 
-        /// Records a commit `sha` (first `parent`, `None` = root) carrying a
+        /// Records a commit `commit_id` (first `parent`, `None` = root) carrying a
         /// committer timestamp, so the topology window can be exercised.
         pub(crate) fn commit_at(
             &mut self,
-            sha: &str,
+            commit_id: &str,
             parent: Option<&str>,
             time: Timestamp,
         ) -> &mut Self {
-            self.commit(sha, parent);
-            self.times.insert(sha.to_owned(), time);
+            self.commit(commit_id, parent);
+            self.times.insert(commit_id.to_owned(), time);
             self
         }
 
         /// Records the subject line of a commit, so `examine`'s point labeling can
         /// be exercised. The commit itself must be recorded separately (via
         /// [`commit`](Self::commit) or [`commit_at`](Self::commit_at)).
-        pub(crate) fn subject(&mut self, sha: &str, subject: &str) -> &mut Self {
-            self.subjects.insert(sha.to_owned(), subject.to_owned());
+        pub(crate) fn subject(&mut self, commit_id: &str, subject: &str) -> &mut Self {
+            self.subjects
+                .insert(commit_id.to_owned(), subject.to_owned());
             self
         }
 
         /// Points a named ref at a commit.
-        pub(crate) fn branch(&mut self, name: &str, sha: &str) -> &mut Self {
-            self.refs.insert(name.to_owned(), sha.to_owned());
+        pub(crate) fn branch(&mut self, name: &str, commit_id: &str) -> &mut Self {
+            self.refs.insert(name.to_owned(), commit_id.to_owned());
             self
         }
 
-        /// Points `HEAD` at the commit a ref or SHA resolves to.
+        /// Points `HEAD` at the commit a ref or commit ID resolves to.
         pub(crate) fn head(&mut self, reference: &str) -> &mut Self {
-            let sha = self.resolve_sync(reference).unwrap();
-            self.refs.insert("HEAD".to_owned(), sha);
+            let commit_id = self.resolve_sync(reference).unwrap();
+            self.refs.insert("HEAD".to_owned(), commit_id);
             self
         }
 
@@ -378,10 +379,10 @@ mod fake {
             self
         }
 
-        /// Resolves a ref or raw SHA to a commit SHA, without async.
+        /// Resolves a ref or raw commit ID to a commit ID, without async.
         fn resolve_sync(&self, reference: &str) -> Option<String> {
-            if let Some(sha) = self.refs.get(reference) {
-                return Some(sha.clone());
+            if let Some(commit_id) = self.refs.get(reference) {
+                return Some(commit_id.clone());
             }
             if self.parents.contains_key(reference) {
                 return Some(reference.to_owned());
@@ -389,10 +390,10 @@ mod fake {
             None
         }
 
-        /// The first-parent chain of `sha`, newest commit first.
-        fn chain(&self, sha: &str) -> Vec<String> {
+        /// The first-parent chain of `commit_id`, newest commit first.
+        fn chain(&self, commit_id: &str) -> Vec<String> {
             let mut chain = Vec::new();
-            let mut current = Some(sha.to_owned());
+            let mut current = Some(commit_id.to_owned());
             while let Some(commit) = current {
                 let next = self.parents.get(&commit).cloned().flatten();
                 chain.push(commit);
@@ -434,17 +435,17 @@ mod fake {
             &self,
             reference: &str,
         ) -> impl Future<Output = io::Result<Vec<FirstParentCommit>>> {
-            let Some(sha) = self.resolve_sync(reference) else {
+            let Some(commit_id) = self.resolve_sync(reference) else {
                 return ready(Ok(Vec::new()));
             };
-            let mut chain = self.chain(&sha);
+            let mut chain = self.chain(&commit_id);
             chain.reverse(); // oldest-first, matching `git log --reverse`.
             let commits = chain
                 .into_iter()
-                .map(|sha| FirstParentCommit {
-                    committer_time: self.times.get(&sha).copied(),
-                    subject: self.subjects.get(&sha).cloned().unwrap_or_default(),
-                    sha,
+                .map(|commit_id| FirstParentCommit {
+                    committer_time: self.times.get(&commit_id).copied(),
+                    subject: self.subjects.get(&commit_id).cloned().unwrap_or_default(),
+                    commit_id,
                 })
                 .collect();
             ready(Ok(commits))
@@ -456,7 +457,7 @@ mod fake {
         ) -> impl Future<Output = io::Result<Option<Timestamp>>> {
             let time = self
                 .resolve_sync(reference)
-                .and_then(|sha| self.times.get(&sha).copied());
+                .and_then(|commit_id| self.times.get(&commit_id).copied());
             ready(Ok(time))
         }
 
@@ -474,18 +475,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_sha_takes_first_non_empty_line() {
+    fn parse_commit_id_takes_first_non_empty_line() {
         assert_eq!(
-            parse_sha("  \n abc123 \n def \n"),
+            parse_commit_id("  \n abc123 \n def \n"),
             Some("abc123".to_owned())
         );
-        assert_eq!(parse_sha("   \n  \n"), None);
-        assert_eq!(parse_sha(""), None);
+        assert_eq!(parse_commit_id("   \n  \n"), None);
+        assert_eq!(parse_commit_id(""), None);
     }
 
     #[test]
     fn parse_first_parent_log_keeps_order_times_subjects_and_drops_blanks() {
-        // `-z` NUL-terminates each `<sha>\0<date>\0<subject>` record, so the input
+        // `-z` NUL-terminates each `<commit_id>\0<date>\0<subject>` record, so the input
         // is a flat NUL-separated run of triples ending in a terminator.
         let parsed = parse_first_parent_log(
             "c0\x002024-01-01T00:00:00+00:00\x00First commit\x00c1\x002024-02-01T00:00:00+00:00\x00Fix the thing\x00c2\x002024-03-01T00:00:00+00:00\x00Subject with spaces  \x00",
@@ -494,17 +495,17 @@ mod tests {
             parsed,
             vec![
                 FirstParentCommit {
-                    sha: "c0".to_owned(),
+                    commit_id: "c0".to_owned(),
                     committer_time: Some("2024-01-01T00:00:00+00:00".parse().unwrap()),
                     subject: "First commit".to_owned(),
                 },
                 FirstParentCommit {
-                    sha: "c1".to_owned(),
+                    commit_id: "c1".to_owned(),
                     committer_time: Some("2024-02-01T00:00:00+00:00".parse().unwrap()),
                     subject: "Fix the thing".to_owned(),
                 },
                 FirstParentCommit {
-                    sha: "c2".to_owned(),
+                    commit_id: "c2".to_owned(),
                     committer_time: Some("2024-03-01T00:00:00+00:00".parse().unwrap()),
                     subject: "Subject with spaces  ".to_owned(),
                 },
@@ -518,12 +519,12 @@ mod tests {
             ),
             vec![
                 FirstParentCommit {
-                    sha: "c0".to_owned(),
+                    commit_id: "c0".to_owned(),
                     committer_time: Some("2024-01-01T00:00:00+00:00".parse().unwrap()),
                     subject: String::new(),
                 },
                 FirstParentCommit {
-                    sha: "c1".to_owned(),
+                    commit_id: "c1".to_owned(),
                     committer_time: None,
                     subject: "has subject".to_owned(),
                 },
@@ -541,7 +542,7 @@ mod tests {
         assert_eq!(
             parse_first_parent_log("c0\x002024-01-01T00:00:00+00:00\x00Weird\u{1f}subject\x00"),
             vec![FirstParentCommit {
-                sha: "c0".to_owned(),
+                commit_id: "c0".to_owned(),
                 committer_time: Some("2024-01-01T00:00:00+00:00".parse().unwrap()),
                 subject: "Weird\u{1f}subject".to_owned(),
             }]
@@ -604,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn fake_resolves_refs_and_raw_shas() {
+    fn fake_resolves_refs_and_raw_commit_ids() {
         let git = fixture();
         assert_eq!(
             block_on(git.resolve("master")).unwrap(),
@@ -641,15 +642,15 @@ mod tests {
     #[test]
     fn fake_first_parent_is_oldest_first() {
         let git = fixture();
-        let shas = |reference: &str| {
+        let commit_ids = |reference: &str| {
             block_on(git.first_parent(reference))
                 .unwrap()
                 .into_iter()
-                .map(|commit| commit.sha)
+                .map(|commit| commit.commit_id)
                 .collect::<Vec<_>>()
         };
-        assert_eq!(shas("master"), vec!["c0", "c1", "c2", "c3"]);
-        assert_eq!(shas("feature"), vec!["c0", "c1", "f1", "f2"]);
+        assert_eq!(commit_ids("master"), vec!["c0", "c1", "c2", "c3"]);
+        assert_eq!(commit_ids("feature"), vec!["c0", "c1", "f1", "f2"]);
         assert!(block_on(git.first_parent("absent")).unwrap().is_empty());
     }
 
@@ -669,18 +670,18 @@ mod tests {
             block_on(git.first_parent("master")).unwrap(),
             vec![
                 FirstParentCommit {
-                    sha: "c0".to_owned(),
+                    commit_id: "c0".to_owned(),
                     committer_time: Some(t0),
                     subject: "Initial commit".to_owned(),
                 },
                 FirstParentCommit {
-                    sha: "c1".to_owned(),
+                    commit_id: "c1".to_owned(),
                     committer_time: Some(t1),
                     subject: "Fix the thing".to_owned(),
                 },
                 FirstParentCommit {
                     // A commit seeded without a subject carries an empty one.
-                    sha: "c2".to_owned(),
+                    commit_id: "c2".to_owned(),
                     committer_time: None,
                     subject: String::new(),
                 },
@@ -698,7 +699,7 @@ mod tests {
             .commit("c2", Some("c1")) // Seeded without a time.
             .branch("master", "c1")
             .head("master");
-        // Resolves a ref to its commit's time, and a raw SHA likewise.
+        // Resolves a ref to its commit's time, and a raw commit ID likewise.
         assert_eq!(block_on(git.committer_time("HEAD")).unwrap(), Some(t1));
         assert_eq!(block_on(git.committer_time("c0")).unwrap(), Some(t0));
         // A commit without a recorded time, and an unresolved ref, are `None`.

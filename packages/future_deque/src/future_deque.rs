@@ -54,7 +54,6 @@ impl<T> FutureHandle<T> for BlindPooledMut<dyn ErasedFuture<T>> {
 /// popping for convenience. They return `Poll::Ready(Some(value))` when the respective
 /// end has a completed future, `Poll::Ready(None)` when the deque is empty, or
 /// `Poll::Pending` when the respective end is not yet ready.
-///
 #[cfg_attr(
     any(test, feature = "futures-stream"),
     doc = "With the `futures-stream` feature, `FutureDeque` also implements [`Stream`][futures_core::Stream], yielding completed results from the front."

@@ -19,9 +19,10 @@ use crate::bench_output::{BenchOutputSource, FsBenchOutputSource, Harvest};
 use crate::config::{CloudStorageConfig, Config, load_config};
 use crate::host::RustcInfo;
 use crate::machine::{HardwareProfile, resolve_machine_key};
-use crate::model::{BenchmarkResult, Run};
-use crate::model::{DiscriminantSet, Engine};
-use crate::model::{EnvironmentInfo, GitInfo, RunContext, ToolchainInfo, detect_environment};
+use crate::model::{
+    BenchmarkResult, DiscriminantSet, Engine, EnvironmentInfo, GitInfo, Run, RunContext,
+    ToolchainInfo, detect_environment,
+};
 use crate::probe::{EnvironmentProbe, SystemProbe};
 use crate::process::{BenchRunner, TokioBenchRunner};
 use crate::report::{Reporter, ReporterExt, StderrReporter};
@@ -498,7 +499,7 @@ where
         .is_hardware_dependent()
         .then(|| resolve_machine_key(options.machine_key.as_deref(), &shared.hardware));
     let key = DiscriminantSet::new(engine, target_triple, machine_key.as_deref());
-    // History is organized by commit, so the full commit SHA names the directory
+    // History is organized by commit, so the full commit ID names the directory
     // (`analyze` resolves which commits to read from git topology). A clean run is
     // keyed solely by its commit and so is deterministic; a dirty snapshot adds its
     // observation time so concurrent snapshots of the same commit coexist.
@@ -771,8 +772,7 @@ mod tests {
     use crate::bench_output::{Harvest, RawCriterionCase, RawOperationFile, RawSummary};
     use crate::config::parse_config;
     use crate::git::parse_git_info;
-    use crate::model::BenchmarkIdPrefix;
-    use crate::model::BlessingRecord;
+    use crate::model::{BenchmarkIdPrefix, BlessingRecord};
     use crate::process::EngineStatus;
     use crate::report::RecordingReporter;
     use crate::storage::MemoryStorage;

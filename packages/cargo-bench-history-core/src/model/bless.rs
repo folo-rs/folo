@@ -20,7 +20,7 @@ use crate::model::{BenchmarkId, BenchmarkIdPrefix};
 ///
 /// Records which on-disk format a file was written with. Reads are not gated on
 /// it: version 2 dropped the redundant `commit_time` field (the blessed commit's
-/// date is resolved from git topology, keyed by the commit SHA), and older records
+/// date is resolved from git topology, keyed by the commit ID), and older records
 /// still deserialize because the removed field is simply ignored.
 pub const BLESS_SCHEMA_VERSION: u32 = 2;
 
@@ -29,7 +29,7 @@ pub const BLESS_SCHEMA_VERSION: u32 = 2;
 pub struct BlessingRecord {
     /// Schema version of this record (see [`BLESS_SCHEMA_VERSION`]).
     pub schema_version: u32,
-    /// Full commit SHA the blessing was issued at (the blessed data point). The
+    /// Full commit ID the blessing was issued at (the blessed data point). The
     /// commit's date, when a report needs it, is resolved from git topology.
     pub commit: String,
     /// Wall-clock time at which the blessing was issued (provenance).

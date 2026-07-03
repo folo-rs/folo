@@ -32,6 +32,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use tick::Clock;
 
+use super::collect::{CollectDeps, CollectSummary, default_bench_command, run_engines};
 use crate::bench_output::FsBenchOutputSource;
 use crate::config::load_config;
 use crate::git_history::{GitHistory, SystemGitHistory};
@@ -45,12 +46,10 @@ use crate::wiring::{
 };
 use crate::{BackfillOptions, CollectOptions, RunError, RunOutcome, finish_with_flush};
 
-use super::collect::{CollectDeps, CollectSummary, default_bench_command, run_engines};
-
 /// Read access to a repository's commit topology plus the worktree lifecycle a
 /// backfill needs to check out each commit in isolation.
 trait BackfillGit {
-    /// Resolves a ref (branch, tag, `HEAD`, or SHA) to its full commit SHA, or
+    /// Resolves a ref (branch, tag, `HEAD`, or commit ID) to its full commit ID, or
     /// `Ok(None)` when it does not resolve.
     fn resolve(&self, reference: &str) -> impl Future<Output = io::Result<Option<String>>>;
 
@@ -71,7 +70,7 @@ trait BackfillGit {
 
 /// Runs and stores the configured engines for one already-checked-out commit.
 trait CommitRunner {
-    /// The set of commits (by full SHA) that already have a stored clean result
+    /// The set of commits (by full commit ID) that already have a stored clean result
     /// anywhere under this project's partitions. A commit in this set has already
     /// been backfilled, so the default skip-existing mode skips it without
     /// benchmarking. Probed once per backfill.
@@ -216,7 +215,7 @@ async fn plan_commits<G: BackfillGit>(
     Ok(ancestry.split_off(start))
 }
 
-/// Resolves `reference` to a commit SHA, mapping an absent ref to a clear error.
+/// Resolves `reference` to a commit ID, mapping an absent ref to a clear error.
 async fn resolve_required<G: BackfillGit>(
     git: &G,
     reference: &str,
@@ -329,9 +328,9 @@ impl BackfillReport {
     }
 }
 
-/// Abbreviates a commit SHA for display, falling back to the full value.
-fn short(sha: &str) -> &str {
-    sha.get(..12).unwrap_or(sha)
+/// Abbreviates a commit ID for display, falling back to the full value.
+fn short(commit_id: &str) -> &str {
+    commit_id.get(..12).unwrap_or(commit_id)
 }
 
 /// A unique scratch path for the backfill worktree, under the system temp dir.
@@ -373,7 +372,7 @@ fn map_collect_result(result: Result<CollectSummary, RunError>) -> Result<Commit
     }
 }
 
-/// The commit (full SHA) recorded by a stored clean object, or `None` when the key
+/// The commit (full commit ID) recorded by a stored clean object, or `None` when the key
 /// is not a clean object.
 ///
 /// A clean key is `…/<commit>/clean.json`, so the commit is the path segment
@@ -422,9 +421,9 @@ impl BackfillGit for SystemBackfillGit {
 
     #[cfg_attr(test, mutants::skip)] // Delegates to the git-shelling history port; no pure logic to assert.
     async fn first_parent(&self, reference: &str) -> io::Result<Vec<String>> {
-        // Backfill needs only the commit shas, not their committer timestamps.
+        // Backfill needs only the commit IDs, not their committer timestamps.
         let commits = self.history.first_parent(reference).await?;
-        Ok(commits.into_iter().map(|commit| commit.sha).collect())
+        Ok(commits.into_iter().map(|commit| commit.commit_id).collect())
     }
 
     #[cfg_attr(test, mutants::skip)] // Shells out to `git`; environment IO with no pure logic to assert.
@@ -572,11 +571,10 @@ mod tests {
 
     use futures::executor::block_on;
 
+    use super::*;
     use crate::StorageError;
     use crate::git_history::FakeGitHistory;
     use crate::storage::MemoryStorage;
-
-    use super::*;
 
     /// A canned per-commit result the fake [`CommitRunner`] returns.
     #[derive(Clone)]
@@ -616,7 +614,7 @@ mod tests {
             let future = self.history.first_parent(reference);
             async move {
                 let commits = future.await?;
-                Ok(commits.into_iter().map(|commit| commit.sha).collect())
+                Ok(commits.into_iter().map(|commit| commit.commit_id).collect())
             }
         }
 

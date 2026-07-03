@@ -13,8 +13,9 @@ use std::fmt;
 use nonempty::NonEmpty;
 use serde::Deserialize;
 
-use crate::model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
-use crate::model::{L1_HITS_EVENT, LL_HITS_EVENT, RAM_HITS_EVENT};
+use crate::model::{
+    BenchmarkId, BenchmarkResult, L1_HITS_EVENT, LL_HITS_EVENT, Metric, MetricKind, RAM_HITS_EVENT,
+};
 
 /// The Gungraun summary schema version this parser understands.
 const SUPPORTED_VERSION: &str = "6";

@@ -22,6 +22,10 @@ use std::path::Path;
 use jiff::Timestamp;
 use tick::Clock;
 
+use super::{
+    AutoFacets, Selection, StorageKey, detect_auto_facets, facet_filtered_candidates,
+    resolve_base_ref, resolve_facets, resolve_now,
+};
 use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
 use crate::model::BlessingRecord;
@@ -32,12 +36,6 @@ use crate::wiring::{
     resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
 };
 use crate::{BlessOptions, RunError, RunOutcome, UnblessOptions, finish_with_flush};
-
-use super::StorageKey;
-use super::{
-    AutoFacets, Selection, detect_auto_facets, facet_filtered_candidates, resolve_base_ref,
-    resolve_facets, resolve_now,
-};
 
 /// The real `bless`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
@@ -163,7 +161,7 @@ where
 
     let context = options.context.as_deref().unwrap_or("HEAD");
     let head = resolve_commit(git, context).await?;
-    let short = short_sha(&head);
+    let short = short_commit_id(&head);
 
     // Blessing is base-branch-only: a feature-branch blessing would silently
     // vanish (or duplicate) once the branch is squash-merged, so it is refused
@@ -185,7 +183,7 @@ where
                 "the context commit {short} is not on the base branch {}; blessings are only \
                  allowed on the base branch, since a feature-branch blessing would not survive \
                  a squash merge",
-                short_sha(&base)
+                short_commit_id(&base)
             ),
         });
     }
@@ -269,7 +267,7 @@ where
 {
     let context = options.context.as_deref().unwrap_or("HEAD");
     let head = resolve_commit(git, context).await?;
-    let short = short_sha(&head);
+    let short = short_commit_id(&head);
 
     let selection = Selection::from_unbless(options);
     let facets = resolve_facets(&selection, Some(auto))?;
@@ -298,8 +296,8 @@ where
     Ok(RunOutcome::Completed { message })
 }
 
-/// Resolves a context ref (for example `HEAD` or a commit SHA) to a full commit
-/// SHA, mapping an unresolvable ref (not a repository, or an unknown ref) to a
+/// Resolves a context ref (for example `HEAD` or a commit ID) to a full commit
+/// commit ID, mapping an unresolvable ref (not a repository, or an unknown ref) to a
 /// clear blessing error.
 async fn resolve_commit<G: GitHistory>(git: &G, reference: &str) -> Result<String, RunError> {
     git.resolve(reference)
@@ -313,9 +311,9 @@ async fn resolve_commit<G: GitHistory>(git: &G, reference: &str) -> Result<Strin
         })
 }
 
-/// The first twelve characters of a SHA (all of it when shorter), for messages.
-fn short_sha(sha: &str) -> &str {
-    sha.get(..12).unwrap_or(sha)
+/// The first twelve characters of a commit ID (all of it when shorter), for messages.
+fn short_commit_id(commit_id: &str) -> &str {
+    commit_id.get(..12).unwrap_or(commit_id)
 }
 
 #[cfg(test)]
@@ -323,16 +321,16 @@ fn short_sha(sha: &str) -> &str {
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
     use futures::executor::block_on;
-
-    use crate::git_history::FakeGitHistory;
-    use crate::model::{BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, Metric, MetricKind, Run};
-    use crate::model::{EnvironmentInfo, GitInfo, RunContext, ToolchainInfo};
-    use crate::report::RecordingReporter;
-    use crate::storage::MemoryStorage;
-
     use nonempty::nonempty;
 
     use super::*;
+    use crate::git_history::FakeGitHistory;
+    use crate::model::{
+        BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo, GitInfo, Metric,
+        MetricKind, Run, RunContext, ToolchainInfo,
+    };
+    use crate::report::RecordingReporter;
+    use crate::storage::MemoryStorage;
 
     fn config() -> Config {
         Config::default()
@@ -488,7 +486,7 @@ mod tests {
         assert!(matches!(error, RunError::Bless { .. }), "{error:?}");
         assert!(error.to_string().contains("base branch"), "{error}");
         // The message names both the current commit and the base ref via
-        // `short_sha`, so both must appear verbatim.
+        // `short_commit_id`, so both must appear verbatim.
         assert!(error.to_string().contains("f1"), "names HEAD: {error}");
         assert!(error.to_string().contains("c2"), "names base: {error}");
         assert!(stored_blessings(&storage).is_empty(), "nothing written");

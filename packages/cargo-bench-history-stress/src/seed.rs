@@ -44,8 +44,8 @@ enum Task {
         set: usize,
         /// First-parent index of the commit on `main`.
         index: usize,
-        /// The commit SHA.
-        sha: String,
+        /// The commit ID.
+        commit_id: String,
         /// The committer date.
         time: Timestamp,
     },
@@ -53,8 +53,8 @@ enum Task {
     CleanFeature {
         /// Index into the discriminant-set matrix.
         set: usize,
-        /// The commit SHA.
-        sha: String,
+        /// The commit ID.
+        commit_id: String,
         /// The committer date.
         time: Timestamp,
     },
@@ -64,8 +64,8 @@ enum Task {
         set: usize,
         /// Which dirty snapshot this is (distinguishes the observation time).
         k: usize,
-        /// The feature-tip commit SHA the snapshot is based on.
-        sha: String,
+        /// The feature-tip commit ID the snapshot is based on.
+        commit_id: String,
         /// The feature-tip committer date.
         time: Timestamp,
         /// The snapshot's observation second (part of its key).
@@ -75,8 +75,8 @@ enum Task {
     Bless {
         /// Index into the discriminant-set matrix.
         set: usize,
-        /// The blessed commit SHA.
-        sha: String,
+        /// The blessed commit ID.
+        commit_id: String,
         /// The blessing's issued second (part of its key).
         issued: i64,
     },
@@ -136,14 +136,14 @@ fn plan_tasks(scenario: Scenario, sets: &[DiscriminantSet], repo: &SeededRepo) -
             tasks.push(Task::CleanMain {
                 set,
                 index,
-                sha: commit.sha.clone(),
+                commit_id: commit.commit_id.clone(),
                 time: commit.time,
             });
         }
         for commit in &repo.feature {
             tasks.push(Task::CleanFeature {
                 set,
-                sha: commit.sha.clone(),
+                commit_id: commit.commit_id.clone(),
                 time: commit.time,
             });
         }
@@ -153,7 +153,7 @@ fn plan_tasks(scenario: Scenario, sets: &[DiscriminantSet], repo: &SeededRepo) -
                 tasks.push(Task::Dirty {
                     set,
                     k,
-                    sha: tip.sha.clone(),
+                    commit_id: tip.commit_id.clone(),
                     time: tip.time,
                     observation,
                 });
@@ -164,7 +164,7 @@ fn plan_tasks(scenario: Scenario, sets: &[DiscriminantSet], repo: &SeededRepo) -
         {
             tasks.push(Task::Bless {
                 set,
-                sha: commit.sha.clone(),
+                commit_id: commit.commit_id.clone(),
                 issued: commit.time.as_second().saturating_add(60),
             });
         }
@@ -227,43 +227,61 @@ fn write_one(
         Task::CleanMain {
             set: s,
             index,
-            sha,
+            commit_id,
             time,
         } => {
-            let run = clean_run(scenario, set, *time, sha, BRANCH_MAIN, false, |b| {
+            let run = clean_run(scenario, set, *time, commit_id, BRANCH_MAIN, false, |b| {
                 scenario.main_clean_value(b, *s, *index, true)
             });
-            (set.clean_key(PROJECT, sha), run.to_json()?)
+            (set.clean_key(PROJECT, commit_id), run.to_json()?)
         }
-        Task::CleanFeature { set: s, sha, time } => {
-            let run = clean_run(scenario, set, *time, sha, BRANCH_FEATURE, false, |b| {
-                scenario.feature_clean_value(b, *s)
-            });
-            (set.clean_key(PROJECT, sha), run.to_json()?)
+        Task::CleanFeature {
+            set: s,
+            commit_id,
+            time,
+        } => {
+            let run = clean_run(
+                scenario,
+                set,
+                *time,
+                commit_id,
+                BRANCH_FEATURE,
+                false,
+                |b| scenario.feature_clean_value(b, *s),
+            );
+            (set.clean_key(PROJECT, commit_id), run.to_json()?)
         }
         Task::Dirty {
             set: s,
             k,
-            sha,
+            commit_id,
             time,
             observation,
         } => {
-            let run = clean_run(scenario, set, *time, sha, BRANCH_FEATURE, true, |b| {
+            let run = clean_run(scenario, set, *time, commit_id, BRANCH_FEATURE, true, |b| {
                 scenario.dirty_value(b, *s, *k)
             });
-            (set.dirty_key(PROJECT, sha, *observation), run.to_json()?)
+            (
+                set.dirty_key(PROJECT, commit_id, *observation),
+                run.to_json()?,
+            )
         }
-        Task::Bless { sha, issued, .. } => {
+        Task::Bless {
+            commit_id, issued, ..
+        } => {
             let prefix = BenchmarkIdPrefix::new(scenario::blessable_family_prefix())
                 .map_err(|error| fail(error.to_string()))?;
             let record = BlessingRecord::new(
-                sha.clone(),
+                commit_id.clone(),
                 Timestamp::from_second(*issued)
                     .map_err(|error| fail(format!("invalid blessing time: {error}")))?,
                 vec![prefix],
                 TOOL_VERSION.to_owned(),
             );
-            (set.bless_key(PROJECT, sha, *issued), record.to_json()?)
+            (
+                set.bless_key(PROJECT, commit_id, *issued),
+                record.to_json()?,
+            )
         }
     };
 
@@ -289,7 +307,7 @@ fn clean_run(
     scenario: Scenario,
     set: &DiscriminantSet,
     time: Timestamp,
-    sha: &str,
+    commit_id: &str,
     branch: &str,
     dirty: bool,
     value: impl Fn(usize) -> f64,
@@ -304,19 +322,19 @@ fn clean_run(
             )
         })
         .collect();
-    Run::new(run_context(set, time, sha, branch, dirty), results)
+    Run::new(run_context(set, time, commit_id, branch, dirty), results)
 }
 
 /// Builds the run context shared by every seeded run.
 fn run_context(
     set: &DiscriminantSet,
     time: Timestamp,
-    sha: &str,
+    commit_id: &str,
     branch: &str,
     dirty: bool,
 ) -> RunContext {
     let git = GitInfo {
-        commit: Some(sha.to_owned()),
+        commit: Some(commit_id.to_owned()),
         branch: Some(branch.to_owned()),
         dirty,
     };
@@ -366,7 +384,7 @@ mod tests {
         SeededRepo {
             main: (0..commits)
                 .map(|i| Commit {
-                    sha: format!("main{i:02}"),
+                    commit_id: format!("main{i:02}"),
                     time: ts(1_000_i64.saturating_add(i64_from(i))),
                 })
                 .collect(),
@@ -420,7 +438,7 @@ mod tests {
             set_index(&Task::CleanMain {
                 set: 7,
                 index: 0,
-                sha: "a".to_owned(),
+                commit_id: "a".to_owned(),
                 time: ts(1),
             }),
             7
@@ -428,7 +446,7 @@ mod tests {
         assert_eq!(
             set_index(&Task::CleanFeature {
                 set: 4,
-                sha: "b".to_owned(),
+                commit_id: "b".to_owned(),
                 time: ts(2),
             }),
             4
@@ -437,7 +455,7 @@ mod tests {
             set_index(&Task::Dirty {
                 set: 5,
                 k: 0,
-                sha: "c".to_owned(),
+                commit_id: "c".to_owned(),
                 time: ts(3),
                 observation: 10,
             }),
@@ -446,7 +464,7 @@ mod tests {
         assert_eq!(
             set_index(&Task::Bless {
                 set: 9,
-                sha: "d".to_owned(),
+                commit_id: "d".to_owned(),
                 issued: 11,
             }),
             9

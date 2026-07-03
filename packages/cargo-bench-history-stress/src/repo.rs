@@ -2,7 +2,7 @@
 //!
 //! The whole history is created in one `git fast-import` stream: a `main` branch
 //! of dated first-parent commits plus a feature branch forked from `main`'s tip.
-//! `analyze` shells out to real `git` against this repository, so the commit SHAs
+//! `analyze` shells out to real `git` against this repository, so the commit IDs
 //! the seeded storage keys are named by must be the SHAs `git rev-list` reports —
 //! hence the import runs first and the SHAs are read back from the export-marks
 //! file before any storage object is written.
@@ -19,11 +19,11 @@ use crate::error::{Error, fail};
 use crate::logging::Logger;
 use crate::scenario::{BRANCH_FEATURE, BRANCH_MAIN};
 
-/// A single seeded commit: its SHA and the committer date it carries.
+/// A single seeded commit: its commit ID and the committer date it carries.
 #[derive(Clone, Debug)]
 pub(crate) struct Commit {
-    /// Full 40-character commit SHA, as `git rev-list` reports it.
-    pub(crate) sha: String,
+    /// Full 40-character commit ID, as `git rev-list` reports it.
+    pub(crate) commit_id: String,
     /// Committer date, mirrored into each run's context for `--since` windowing.
     pub(crate) time: Timestamp,
 }
@@ -82,7 +82,7 @@ pub(crate) async fn build_repo(
     let repo = resolve_commits(&marks, main_times, feature_times)?;
     logger.detail_with(|| {
         format!(
-            "read back {} commit SHAs from the export-marks file",
+            "read back {} commit IDs from the export-marks file",
             repo.main.len().saturating_add(repo.feature.len())
         )
     });
@@ -193,7 +193,7 @@ async fn import_stream(dir: &Path, marks_path: &Path, stream: &[u8]) -> Result<(
     Ok(())
 }
 
-/// Parses the export-marks file into a `mark -> SHA` map.
+/// Parses the export-marks file into a `mark -> commit ID` map.
 #[cfg_attr(coverage_nightly, coverage(off))]
 async fn read_marks(marks_path: &Path) -> Result<HashMap<usize, String>, Error> {
     let text = tokio::fs::read_to_string(marks_path)
@@ -201,19 +201,19 @@ async fn read_marks(marks_path: &Path) -> Result<HashMap<usize, String>, Error> 
         .map_err(|error| fail(format!("failed to read the fast-import marks: {error}")))?;
     let mut marks = HashMap::new();
     for line in text.lines() {
-        // Each line is ":<mark> <sha>".
-        let Some((mark, sha)) = line.split_once(' ') else {
+        // Each line is ":<mark> <commit_id>".
+        let Some((mark, commit_id)) = line.split_once(' ') else {
             continue;
         };
         let mark = mark.strip_prefix(':').unwrap_or(mark);
         if let Ok(mark) = mark.parse::<usize>() {
-            marks.insert(mark, sha.to_owned());
+            marks.insert(mark, commit_id.to_owned());
         }
     }
     Ok(marks)
 }
 
-/// Resolves the `mark -> SHA` map back into per-branch commit lists.
+/// Resolves the `mark -> commit ID` map back into per-branch commit lists.
 fn resolve_commits(
     marks: &HashMap<usize, String>,
     main_times: &[Timestamp],
@@ -221,16 +221,17 @@ fn resolve_commits(
 ) -> Result<SeededRepo, Error> {
     let main_count = main_times.len();
     let lookup = |mark: usize| -> Result<String, Error> {
-        marks
-            .get(&mark)
-            .cloned()
-            .ok_or_else(|| fail(format!("fast-import did not report a SHA for mark :{mark}")))
+        marks.get(&mark).cloned().ok_or_else(|| {
+            fail(format!(
+                "fast-import did not report a commit ID for mark :{mark}"
+            ))
+        })
     };
 
     let mut main = Vec::with_capacity(main_count);
     for (i, time) in main_times.iter().enumerate() {
         main.push(Commit {
-            sha: lookup(i.saturating_add(1))?,
+            commit_id: lookup(i.saturating_add(1))?,
             time: *time,
         });
     }
@@ -238,7 +239,7 @@ fn resolve_commits(
     let mut feature = Vec::with_capacity(feature_times.len());
     for (j, time) in feature_times.iter().enumerate() {
         feature.push(Commit {
-            sha: lookup(main_count.saturating_add(j).saturating_add(1))?,
+            commit_id: lookup(main_count.saturating_add(j).saturating_add(1))?,
             time: *time,
         });
     }
