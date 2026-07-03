@@ -19,7 +19,9 @@
     GitHub release, so `just install-tools` is reproducible. The published SHA-256 of each archive
     is baked in below and verified after download, so a tampered or corrupted archive is rejected.
     Bump the version and the digests together when upgrading; the digests are the `digest` fields of
-    the release assets (visible via `gh api repos/koalaman/shellcheck/releases/latest`).
+    the pinned release's assets (visible via `gh api repos/koalaman/shellcheck/releases/tags/v<version>`,
+    where `<version>` matches $script:ShellcheckVersion — not `releases/latest`, which would show the
+    digests of whatever the newest release happens to be rather than the one this script pins).
 
     The default destination is the cargo bin directory. That is a deliberate, if pragmatic, choice:
     ShellCheck has no standard home to prefer instead, and the cargo bin directory is the one

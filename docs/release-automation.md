@@ -132,8 +132,8 @@ publish:
 
 Each step is a thin `pwsh` call into a `just` recipe; the publishing logic — deriving
 the binary crates, injecting `git_release_enable`, and the retry loop — lives in
-[`justfiles/just_automation.just`](../../justfiles/just_automation.just), which delegates in
-turn to the [`scripts/release/ReleaseAutomation.psm1`](../../scripts/release/ReleaseAutomation.psm1)
+[`justfiles/just_automation.just`](../justfiles/just_automation.just), which delegates in
+turn to the [`scripts/release/ReleaseAutomation.psm1`](../scripts/release/ReleaseAutomation.psm1)
 module, so it can be run and tested on a developer PC rather than only by pushing to `main`.
 The module is covered by a Pester suite run via `just test-scripts` (a required CI check); the
 suite exercises the real logic against fixture workspaces with `cargo metadata` and real file

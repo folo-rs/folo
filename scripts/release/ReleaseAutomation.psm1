@@ -323,7 +323,7 @@ function Get-CratePublishStatus {
 }
 
 function Test-NeverPublishedCrate {
-    # Preflight for `just prepare-release`: warns about publishable crates crates.io has never
+    # Preflight for `just prepare-release`: warns about publishable crates that crates.io has never
     # seen. Trusted Publishing cannot perform a crate's first-ever publish (the crate must already
     # exist so a trusted publisher can be configured on it), so a brand-new crate's first release
     # must be done by hand. Best-effort and never a gate: a status that cannot be confirmed

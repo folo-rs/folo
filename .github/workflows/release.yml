@@ -31,8 +31,10 @@ jobs:
   publish:
     # crates.io Trusted Publishing federates only this repository's identity; a fork
     # cannot mint a matching OIDC token, so gate to the canonical repo (a fork's push
-    # skips cleanly instead of failing at the token exchange).
-    if: github.repository == 'folo-rs/folo'
+    # skips cleanly instead of failing at the token exchange). The `main` gate matters
+    # only for `workflow_dispatch`, which can target any ref: the `push` trigger is
+    # already main-only, so this stops a dispatch on a feature branch from publishing.
+    if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # Generous ceiling: covers up to 3 publish attempts (release-plz publish_timeout is
     # 45m) with 15-minute waits between retries, comfortably under this cap.
@@ -77,7 +79,7 @@ jobs:
     # re-run or a bare workflow_dispatch reconciles the actual published state against the
     # uploaded assets and rebuilds only what is missing — no manual crate list.
     needs: publish
-    if: github.repository == 'folo-rs/folo'
+    if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -153,7 +155,7 @@ jobs:
     # release is tracked individually (not folded into a rolling issue). `failure()` fires
     # only on a real failure — a skipped build-binaries (nothing to build) does not count.
     needs: [publish, plan-binaries, build-binaries]
-    if: failure() && github.repository == 'folo-rs/folo'
+    if: failure() && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 

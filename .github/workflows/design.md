@@ -88,11 +88,15 @@ regressions never fail the run.
 
 ## Failure alerting
 
-The history and release workflows share a failure-alerting pattern: on failure they open a
-deduplicated tracking issue (keyed on a fixed title, labelled for discovery), and a
-companion job closes that issue automatically once the workflow is green again. This keeps
-exactly one open issue per persistent failure and clears it without manual intervention when
-the underlying problem is fixed.
+The history and release workflows both open a GitHub issue on failure, but with
+deliberately different lifecycles matched to what failed. A benchmark-history failure is
+a recurring condition on a rolling target, so it opens a *deduplicated* tracking issue
+(keyed on a fixed title) that a companion job closes automatically once the workflow is
+green again — exactly one open issue per persistent failure, cleared without manual
+intervention. A release failure is a discrete event tied to one publish attempt, so it
+opens a *per-run* issue (identified by the failing run) that stays open until a human
+investigates; each failed release is tracked individually rather than folded into a
+rolling issue.
 
 ## Release automation
 
