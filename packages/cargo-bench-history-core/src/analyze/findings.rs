@@ -2426,7 +2426,7 @@ mod tests {
     }
 
     #[test]
-    fn reports_improvements_matches_improvement_keeps() {
+    fn reports_improvements_reflects_the_mode() {
         let context = |mode, include_improvements| AnalysisContext {
             mode,
             config: AnalysisConfig::default(),
@@ -2434,8 +2434,9 @@ mod tests {
             include_improvements,
             include_inactive: false,
         };
-        // The improvement tally is emitted exactly when an improvement finding would be
-        // kept: history mode only when opted in, branch mode always, tip mode never.
+        // History reports improvements only when opted in; branch always compares
+        // both directions; tip (regressions-only) never reports them. Pinning both a
+        // true and a false case keeps the flag from collapsing to a constant.
         assert!(!context(AnalysisMode::History, false).reports_improvements());
         assert!(context(AnalysisMode::History, true).reports_improvements());
         assert!(context(AnalysisMode::Branch, false).reports_improvements());

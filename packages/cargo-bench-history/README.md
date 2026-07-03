@@ -38,6 +38,11 @@ cargo bench-history backfill --local=./bench-history <from-commit> <to-commit>
 
 # Analyze the recorded history for regressions and drift.
 cargo bench-history analyze --local=./bench-history
+
+# Inspect the raw per-commit data points behind a finding, to correlate a change
+# with the commit that caused it (both --benchmark and --metric are required).
+cargo bench-history examine --local=./bench-history \
+    --benchmark my_pkg/my_group/my_case --metric instruction_count
 ```
 
 ## See also

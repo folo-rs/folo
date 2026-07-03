@@ -20,6 +20,7 @@
 use std::path::Path;
 
 use jiff::Timestamp;
+use tick::Clock;
 
 use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
@@ -35,18 +36,20 @@ use crate::{BlessOptions, RunError, RunOutcome, UnblessOptions, finish_with_flus
 use super::StorageKey;
 use super::{
     AutoFacets, Selection, detect_auto_facets, facet_filtered_candidates, resolve_base_ref,
-    resolve_facets,
+    resolve_facets, resolve_now,
 };
 
 /// The real `bless`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
 ///
-/// `now_override` pins the issue time so end-to-end tests are deterministic;
-/// production passes `None` and uses the wall clock.
+/// `clock_override` injects the [`tick::Clock`] that stamps each blessing's issue
+/// time: `None` reads the runtime wall clock (`Clock::new_tokio`) in production,
+/// while tests inject a frozen clock (`Clock::new_frozen_at`) so the recorded time
+/// is deterministic.
 pub(crate) async fn bless(
     options: &BlessOptions,
     workspace_dir: &Path,
-    now_override: Option<Timestamp>,
+    clock_override: Option<Clock>,
 ) -> Result<RunOutcome, RunError> {
     let reporter = StderrReporter::new(options.verbose);
 
@@ -61,7 +64,7 @@ pub(crate) async fn bless(
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
     let auto = detect_auto_facets().await?;
 
-    let now = now_override.unwrap_or_else(Timestamp::now);
+    let now = resolve_now(clock_override);
     let result = bless_with(
         &git,
         &storage,
