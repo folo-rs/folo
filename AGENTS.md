@@ -26,11 +26,20 @@ directly:
   thing to one instance of a problem in a file, check for other instances. You
   must solve the entire class of problems at once, not expect each instance to
   be pointed out to you in instructions.
-* **Do not execute `just release`** — this is a critical tool reserved for
-  human use.
+* **Do not execute `just gh-release`** — it performs real crates.io publishes and is
+  a CI-only entry point (driven by the release workflow); never run it manually.
 * **Check for a package-local `AGENTS.md`** before doing nontrivial work in a
   specific crate (e.g. `packages/events_once/AGENTS.md`). Package-local
   guidance refines and sometimes overrides the workspace-wide rules.
+* **`AGENTS.md` files are agent instructions, not design docs.** A package-local
+  `AGENTS.md` holds only actionable guidance for working in that package —
+  conventions to follow, gotchas, invariants to preserve, how to run and test.
+  It must **not** duplicate design documentation (that lives in the
+  `docs/design.md`-style files), restate implementation detail, or keep a
+  decision/change history. If a fact explains *what* the code is or *why* it is
+  shaped that way, it belongs in a design doc; if it is trivia that does not
+  change how an agent works, leave it out. Point at the design doc instead of
+  repeating it.
 
 ## Chapters
 
@@ -253,6 +262,20 @@ threads, and the no-version-bumps-on-feature-branches rule.
 
 **Open this when**: creating a pull request; addressing review comments;
 tempted to edit a `Cargo.toml` version field on a feature branch.
+
+### [docs/release-automation.md](docs/release-automation.md)
+
+How crates.io publishing and `cargo-binstall` prebuilt binaries are automated from
+CI on merge to `main`: the `release.yml` flow (publish via Trusted Publishing →
+reconcile which binary-crate releases are missing per-target archives → matrix-build
++ upload checksummed archives → alert on failure), the asset-naming contract that
+keeps the archive filenames and each crate's `[package.metadata.binstall]` block in
+lockstep, the `release-plz.toml` configuration, and the
+rate-limit/idempotency/self-healing-retry/new-crate-bootstrap handling.
+
+**Open this when**: implementing or debugging automated releases, the
+crates.io/OIDC publish flow, the prebuilt-binary matrix, or a `cargo binstall`
+resolution failure; adding a new published binary crate.
 
 ### [docs/standalone-binaries.md](docs/standalone-binaries.md)
 

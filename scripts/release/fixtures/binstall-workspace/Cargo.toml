@@ -1,0 +1,11 @@
+# Fixture workspace for exercising the binstall-metadata validation with a real `cargo metadata`
+# call. It is a self-contained [workspace] so the parent repo (members = ["packages/*"]) never
+# pulls it in. Members deliberately cover every branch of the validator:
+#   good-tool      publishable + bin, compliant binstall block   -> selected, passes
+#   bad-tool       publishable + bin, drifted binstall block      -> selected, fails
+#   nometa-tool    publishable + bin, no binstall block           -> selected, fails
+#   some-lib       publishable + lib                              -> excluded (library)
+#   nopublish-tool publish = false + bin, no binstall block       -> excluded (not publishable)
+[workspace]
+resolver = "2"
+members = ["good-tool", "bad-tool", "nometa-tool", "some-lib", "nopublish-tool"]

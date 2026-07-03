@@ -1,0 +1,6 @@
+[package]
+name = "nometa-tool"
+version = "3.0.0"
+edition = "2021"
+# Publishable binary with no [package.metadata.binstall] block at all: the validator must flag
+# the missing section.

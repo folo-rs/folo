@@ -16,7 +16,8 @@ use jiff::Timestamp;
 
 use crate::process::capture;
 
-/// A commit on a first-parent ancestry, paired with its committer timestamp.
+/// A commit on a first-parent ancestry, paired with its committer timestamp and
+/// its subject line.
 ///
 /// `analyze` orders a series by first-parent topology and filters it by the
 /// `--since`/`--until` window. The window is a per-commit property — a commit's
@@ -24,6 +25,10 @@ use crate::process::capture;
 /// skipped before any stored object is fetched. `committer_time` is `None` only
 /// when `git` emitted an unparseable date, which a real commit never does; such a
 /// commit is treated as in-window (never excluded by the window).
+///
+/// `subject` is the commit's title (`git`'s `%s`), harvested on the same walk so
+/// `examine` can label each data point with what its commit changed. It is empty
+/// when `git` reported no subject; commands other than `examine` ignore it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FirstParentCommit {
     /// The commit's full SHA.
@@ -31,6 +36,8 @@ pub(crate) struct FirstParentCommit {
     /// The commit's committer timestamp (`git`'s `%cI`), or `None` when absent or
     /// unparseable.
     pub(crate) committer_time: Option<Timestamp>,
+    /// The commit's subject line (`git`'s `%s`), or empty when absent.
+    pub(crate) subject: String,
 }
 
 /// Read-only access to a repository's commit topology.
@@ -60,7 +67,8 @@ pub(crate) trait GitHistory {
     ///
     /// This is the linear mainline of the ref — the timeline `analyze` orders a
     /// series by. Each commit carries its committer timestamp, which `analyze`
-    /// uses to apply the `--since`/`--until` window before fetching any object.
+    /// uses to apply the `--since`/`--until` window before fetching any object,
+    /// and its subject line, which `examine` uses to label each data point.
     /// An unresolvable ref yields an empty list.
     fn first_parent(
         &self,
@@ -156,14 +164,20 @@ impl GitHistory for SystemGitHistory {
 
     #[cfg_attr(test, mutants::skip)] // Shells out to `git`; parsing delegated to `parse_first_parent_log`.
     async fn first_parent(&self, reference: &str) -> io::Result<Vec<FirstParentCommit>> {
-        // `%H %cI` pairs each first-parent commit with its committer date (strict
-        // ISO 8601), so the window can be decided from topology before any fetch.
+        // `%H`, `%cI`, `%s` pair each first-parent commit with its committer date
+        // (strict ISO 8601) and subject, so the window can be decided from
+        // topology before any fetch and `examine` can label each point. `-z`
+        // NUL-terminates each commit's record and the fields are NUL-delimited
+        // (`%x00`): NUL cannot occur in git object content, so no field — the
+        // subject, which may contain any printable character, included — can be
+        // confused with a delimiter.
         let output = self
             .run(&[
                 "log",
                 "--first-parent",
                 "--reverse",
-                "--format=%H %cI",
+                "-z",
+                "--format=%H%x00%cI%x00%s",
                 reference,
             ])
             .await?;
@@ -205,23 +219,34 @@ fn parse_sha(stdout: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// Parses `git log --first-parent --reverse --format=%H %cI` output into
-/// [`FirstParentCommit`]s in line order, dropping blank lines. Each line is
-/// `<sha> <committer-date>`; a line missing the date — or carrying an unparseable
-/// one — yields `committer_time: None`. With `--reverse` the input is oldest-first.
+/// Parses `git log --first-parent --reverse -z --format=%H%x00%cI%x00%s` output
+/// into [`FirstParentCommit`]s in stream order. `-z` NUL-terminates each commit's
+/// record and the three fields are NUL-delimited, so the stream is a flat run of
+/// `<sha>\0<committer-date>\0<subject>` triples with a trailing empty token from
+/// the final terminator. A field carrying an unparseable date yields
+/// `committer_time: None` and an empty subject field yields an empty string. With
+/// `--reverse` the input is oldest-first.
 fn parse_first_parent_log(stdout: &str) -> Vec<FirstParentCommit> {
-    stdout
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(|line| {
-            let (sha, rest) = line.split_once(' ').unwrap_or((line, ""));
-            FirstParentCommit {
-                sha: sha.to_owned(),
-                committer_time: rest.trim().parse::<Timestamp>().ok(),
-            }
-        })
-        .collect()
+    let mut fields = stdout.split('\0');
+    let mut commits = Vec::new();
+    while let Some(sha) = fields.next() {
+        let sha = sha.trim();
+        // A real commit's SHA is never empty; the only empty leading token is the
+        // one following the final record's terminator, which ends the stream.
+        if sha.is_empty() {
+            break;
+        }
+        let committer_time = fields
+            .next()
+            .and_then(|field| field.trim().parse::<Timestamp>().ok());
+        let subject = fields.next().unwrap_or_default().to_owned();
+        commits.push(FirstParentCommit {
+            sha: sha.to_owned(),
+            committer_time,
+            subject,
+        });
+    }
+    commits
 }
 
 /// Parses `git log -1 --format=%cI` output into a single committer [`Timestamp`]:
@@ -279,6 +304,8 @@ mod fake {
         parents: HashMap<String, Option<String>>,
         /// Commit SHA -> its committer timestamp, for commits seeded with one.
         times: HashMap<String, Timestamp>,
+        /// Commit SHA -> its subject line, for commits seeded with one.
+        subjects: HashMap<String, String>,
         /// The detected default branch, if the repository advertises one.
         default_branch: Option<String>,
         /// Whether the working tree has uncommitted changes.
@@ -292,6 +319,7 @@ mod fake {
                 refs: HashMap::new(),
                 parents: HashMap::new(),
                 times: HashMap::new(),
+                subjects: HashMap::new(),
                 default_branch: None,
                 dirty: false,
             }
@@ -314,6 +342,14 @@ mod fake {
         ) -> &mut Self {
             self.commit(sha, parent);
             self.times.insert(sha.to_owned(), time);
+            self
+        }
+
+        /// Records the subject line of a commit, so `examine`'s point labeling can
+        /// be exercised. The commit itself must be recorded separately (via
+        /// [`commit`](Self::commit) or [`commit_at`](Self::commit_at)).
+        pub(crate) fn subject(&mut self, sha: &str, subject: &str) -> &mut Self {
+            self.subjects.insert(sha.to_owned(), subject.to_owned());
             self
         }
 
@@ -407,6 +443,7 @@ mod fake {
                 .into_iter()
                 .map(|sha| FirstParentCommit {
                     committer_time: self.times.get(&sha).copied(),
+                    subject: self.subjects.get(&sha).cloned().unwrap_or_default(),
                     sha,
                 })
                 .collect();
@@ -447,9 +484,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_first_parent_log_keeps_order_times_and_drops_blanks() {
+    fn parse_first_parent_log_keeps_order_times_subjects_and_drops_blanks() {
+        // `-z` NUL-terminates each `<sha>\0<date>\0<subject>` record, so the input
+        // is a flat NUL-separated run of triples ending in a terminator.
         let parsed = parse_first_parent_log(
-            "c0 2024-01-01T00:00:00+00:00\nc1 2024-02-01T00:00:00+00:00\n\n  c2 2024-03-01T00:00:00+00:00  \n",
+            "c0\x002024-01-01T00:00:00+00:00\x00First commit\x00c1\x002024-02-01T00:00:00+00:00\x00Fix the thing\x00c2\x002024-03-01T00:00:00+00:00\x00Subject with spaces  \x00",
         );
         assert_eq!(
             parsed,
@@ -457,32 +496,56 @@ mod tests {
                 FirstParentCommit {
                     sha: "c0".to_owned(),
                     committer_time: Some("2024-01-01T00:00:00+00:00".parse().unwrap()),
+                    subject: "First commit".to_owned(),
                 },
                 FirstParentCommit {
                     sha: "c1".to_owned(),
                     committer_time: Some("2024-02-01T00:00:00+00:00".parse().unwrap()),
+                    subject: "Fix the thing".to_owned(),
                 },
                 FirstParentCommit {
                     sha: "c2".to_owned(),
                     committer_time: Some("2024-03-01T00:00:00+00:00".parse().unwrap()),
+                    subject: "Subject with spaces  ".to_owned(),
                 },
             ]
         );
-        // A line missing the date, or carrying an unparseable one, is timeless.
+        // An unparseable date is timeless; an empty subject field yields an empty
+        // subject.
         assert_eq!(
-            parse_first_parent_log("c0\nc1 not-a-date\n"),
+            parse_first_parent_log(
+                "c0\x002024-01-01T00:00:00+00:00\x00\x00c1\x00not-a-date\x00has subject\x00"
+            ),
             vec![
                 FirstParentCommit {
                     sha: "c0".to_owned(),
-                    committer_time: None,
+                    committer_time: Some("2024-01-01T00:00:00+00:00".parse().unwrap()),
+                    subject: String::new(),
                 },
                 FirstParentCommit {
                     sha: "c1".to_owned(),
                     committer_time: None,
+                    subject: "has subject".to_owned(),
                 },
             ]
         );
-        assert!(parse_first_parent_log("\n   \n").is_empty());
+        assert!(parse_first_parent_log("").is_empty());
+        assert!(parse_first_parent_log("\x00").is_empty());
+    }
+
+    #[test]
+    fn parse_first_parent_log_preserves_delimiter_like_bytes_in_subjects() {
+        // NUL-delimiting (rather than the unit separator `\x1f`) keeps a subject
+        // that happens to contain the old delimiter intact: only NUL, which git
+        // object content can never hold, separates fields.
+        assert_eq!(
+            parse_first_parent_log("c0\x002024-01-01T00:00:00+00:00\x00Weird\u{1f}subject\x00"),
+            vec![FirstParentCommit {
+                sha: "c0".to_owned(),
+                committer_time: Some("2024-01-01T00:00:00+00:00".parse().unwrap()),
+                subject: "Weird\u{1f}subject".to_owned(),
+            }]
+        );
     }
 
     #[test]
@@ -591,13 +654,15 @@ mod tests {
     }
 
     #[test]
-    fn fake_first_parent_carries_committer_times() {
+    fn fake_first_parent_carries_committer_times_and_subjects() {
         let mut git = FakeGitHistory::new();
         let t0: Timestamp = "2024-01-01T00:00:00+00:00".parse().unwrap();
         let t1: Timestamp = "2024-02-01T00:00:00+00:00".parse().unwrap();
         git.commit_at("c0", None, t0)
             .commit_at("c1", Some("c0"), t1)
             .commit("c2", Some("c1")) // A commit seeded without a time stays None.
+            .subject("c0", "Initial commit")
+            .subject("c1", "Fix the thing")
             .branch("master", "c2")
             .head("master");
         assert_eq!(
@@ -606,14 +671,18 @@ mod tests {
                 FirstParentCommit {
                     sha: "c0".to_owned(),
                     committer_time: Some(t0),
+                    subject: "Initial commit".to_owned(),
                 },
                 FirstParentCommit {
                     sha: "c1".to_owned(),
                     committer_time: Some(t1),
+                    subject: "Fix the thing".to_owned(),
                 },
                 FirstParentCommit {
+                    // A commit seeded without a subject carries an empty one.
                     sha: "c2".to_owned(),
                     committer_time: None,
+                    subject: String::new(),
                 },
             ]
         );

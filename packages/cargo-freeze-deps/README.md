@@ -5,7 +5,9 @@ dependency version requirement to its literal `=X.Y.Z` form.
 
 ## Usage
 
-Install via `cargo install cargo-freeze-deps` and then:
+Install with [`cargo binstall cargo-freeze-deps`](https://github.com/cargo-bins/cargo-binstall)
+to fetch a prebuilt binary on supported targets (transparently building from source
+elsewhere), or `cargo install cargo-freeze-deps` to always build from source. Then:
 
 ```text
 cargo freeze-deps [--path PATH] [--output PATH]

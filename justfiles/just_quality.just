@@ -53,6 +53,32 @@ format-check:
     cargo sort --workspace --check
     cargo sort-derives --check
 
+# Statically validates the GitHub Actions workflow files under .github/workflows with actionlint
+# (installed by `just install-tools`), catching invalid `${{ }}` expressions, unknown `runs-on`
+# labels, misuse of `needs`/`if`, deprecated action versions and similar mistakes before they
+# reach CI. Run with no arguments, actionlint discovers the workflow files itself. Repo-wide, not
+# package-scoped.
+[group('quality')]
+[script]
+validate-workflows:
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    actionlint -color
+
+# Validates that every publishable binary crate declares the `[package.metadata.binstall]` block
+# the release workflow relies on, so a binary crate can never ship without installable prebuilt
+# binaries (see scripts/release/BinstallValidation.psm1 and docs/release-automation.md). Fast and
+# repo-wide (not package-scoped); folded into the same CI job as the other script checks.
+[group('quality')]
+[script]
+validate-binstall:
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+    Import-Module ./scripts/release/BinstallValidation.psm1 -Force
+
+    Invoke-BinstallValidation
+
 [group('quality')]
 hack:
     cargo hack check {{ target_package }} --feature-powerset --locked
@@ -101,6 +127,8 @@ validate-linux:
 [group('quality')]
 validate-local:
     just package="{{ package }}" format-check
+    just package="{{ package }}" validate-workflows
+    just package="{{ package }}" validate-binstall
     just package="{{ package }}" check dev
     just package="{{ package }}" clippy dev
     just package="{{ package }}" test

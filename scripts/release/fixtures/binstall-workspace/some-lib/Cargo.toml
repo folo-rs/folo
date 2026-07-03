@@ -1,0 +1,5 @@
+[package]
+name = "some-lib"
+version = "4.0.0"
+edition = "2021"
+# Publishable library (no bin target): excluded from binstall validation.

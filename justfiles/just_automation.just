@@ -50,3 +50,64 @@ gh-analyze-bench-history:
     $notable = if ($json.notable) { 'true' } else { 'false' }
     Set-Content -Path $notablePath -Value $notable -Encoding utf8
     Write-Verbose "Analysis complete: notable=$notable (report at $reportPath)." -Verbose
+
+# The release-automation logic lives in scripts/release/ReleaseAutomation.psm1, with a Pester
+# suite (scripts/release/ReleaseAutomation.Tests.ps1) that exercises it against fixtures via
+# `just test-scripts`. The recipes below are thin wrappers that import the module and call its
+# functions, which keeps the logic (crate derivation, config injection, retry loop, binary
+# reconciliation, and the triple -> runner mapping) testable on a developer PC rather than only
+# via a push to `main`.
+
+# Writes a CI-only copy of release-plz.toml to {{output}} with `git_release_enable = true`
+# set for each publishable binary crate (derived from cargo metadata), leaving everything
+# else untouched. The committed config keeps releases OFF at the workspace level so the many
+# library/`_impl` crates never spawn GitHub releases; enabling it only for the derived binary
+# crates means a newly-added binary tool is covered with no config edit and no library crate
+# is ever released. The caller writes this OUTSIDE the working tree so `cargo publish` never
+# sees a dirty repo. See .github/workflows/release.yml and docs/release-automation.md.
+[group('automation')]
+[script]
+gh-compose-release-config output:
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+    Import-Module ./scripts/release/ReleaseAutomation.psm1 -Force
+
+    $crates = @(Get-PublishableBinaryCrate)
+    Write-Verbose "Publishable binary crates: $($crates.Name -join ', ')" -Verbose
+    New-ReleasePlzConfig -SourcePath 'release-plz.toml' -OutputPath '{{output}}' -CrateName $crates.Name
+    Write-Verbose "Wrote CI release-plz config to {{output}}." -Verbose
+
+# Publishes changed crates to crates.io via release-plz using the composed CI config, with
+# bounded retries (3 attempts, 15 minutes apart) to ride out crates.io rate limits and the
+# short-lived OIDC token. release-plz is idempotent — it re-checks the registry and skips
+# already-published versions — so a retry (or a whole re-run) safely resumes a partially
+# published release, and each attempt mints a fresh OIDC token. NOT for local use: it
+# performs real publishes. See docs/release-automation.md.
+[group('automation')]
+[script]
+gh-release config:
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+    Import-Module ./scripts/release/ReleaseAutomation.psm1 -Force
+
+    Invoke-ReleasePublish -ConfigPath '{{config}}'
+
+# Reconciles the desired prebuilt-binary archives against what is already uploaded to each
+# published binary crate's GitHub release, and emits the matrix of missing (crate, target)
+# pairs still to build as the `matrix` / `has_binaries` step outputs (also printed). This is
+# what makes retries self-healing: a re-run rebuilds only whatever is still missing, with no
+# hardcoded crate list. Safe to run locally — with no releases yet it reports an empty
+# matrix. See .github/workflows/release.yml and docs/release-automation.md.
+[group('automation')]
+[script]
+gh-plan-release-binaries:
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+    Import-Module ./scripts/release/ReleaseAutomation.psm1 -Force
+
+    $crates = @(Get-PublishableBinaryCrate)
+    $rows = if ($crates.Count -gt 0) { @(Get-MissingBinaryMatrix -Crate $crates) } else { @() }
+
+    Write-Host "Missing (crate, target) archives: $($rows.Count)"
+    Set-GitHubOutput -Name 'matrix' -Value (ConvertTo-MatrixJson -Row $rows)
+    Set-GitHubOutput -Name 'has_binaries' -Value $(if ($rows.Count -gt 0) { 'true' } else { 'false' })

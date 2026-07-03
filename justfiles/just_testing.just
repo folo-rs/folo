@@ -148,6 +148,24 @@ test FILTER="":
     $env:MOCK_BENCH_ENGINE = just _mock-engine-path | Select-Object -Last 1
     cargo +$env:RUST_MSRV nextest run {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast
 
+# Run the PowerShell test suites for the standalone scripts under scripts/ (currently the
+# release-automation module, scripts/release/ReleaseAutomation.psm1). Uses Pester 5, installed by
+# `just install-tools`. The suites run real `cargo metadata` and file I/O against fixtures and
+# mock the tools that would touch crates.io / GitHub for real (`release-plz`, `gh`). Discovers
+# every *.Tests.ps1 under scripts/. See scripts/release/ReleaseAutomation.Tests.ps1.
+[group('testing')]
+[script]
+test-scripts:
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    Import-Module Pester -MinimumVersion 5.0 -Force
+    $config = New-PesterConfiguration
+    $config.Run.Path = 'scripts'
+    $config.Run.Exit = $true
+    $config.Output.Verbosity = 'Detailed'
+    Invoke-Pester -Configuration $config
+
 # Build the test-support `mock_bench_engine` binary and print its path. The mock is a
 # fake benchmark engine the cargo-bench-history integration tests drive; it lives in
 # its own never-published package (see packages/mock_bench_engine and issue #289), so

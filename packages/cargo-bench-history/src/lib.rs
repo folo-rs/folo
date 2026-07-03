@@ -141,6 +141,22 @@
 //! `--prune-base` confirms it. Narrow the selection with a facet, a `<commit>`
 //! argument, `--since`, or `--until`. `--dry-run` previews without deleting.
 //!
+//! ## `examine`
+//!
+//! A drill-down sibling of `list runs` over the same `analyze`/`list` selection: it
+//! pivots the small chart `analyze` draws into its raw data points. Given the two
+//! required options `--benchmark <qualified-id>` and `--metric <name>` — the one
+//! command that names a metric, meant to be pasted from an `analyze` finding — it
+//! prints one row per recorded observation of that series, in git first-parent
+//! order and once per matching discriminant set, pairing the value with the short
+//! commit id and the first 50 characters of the commit's title (JSON keeps the full
+//! title and full-precision value). It requires a repository, runs no detection or
+//! re-baselining, and shows every selected point (clean before dirty, each flagged).
+//! An unknown metric name is rejected. An empty pivot is explained by one of two
+//! hints: when no run enters the selection at all, the same "matched no runs" hint
+//! `analyze` gives; when runs enter but none carry the named `(benchmark, metric)`
+//! pair, a distinct hint pointing at the unmatched benchmark id or metric name.
+//!
 //! ## `bless` / `unbless`
 //!
 //! `bless` accepts an intentional performance change on the base branch so history
@@ -158,8 +174,8 @@
 //!
 //! # Selecting data: options shared by the query commands
 //!
-//! `analyze`, `list`, and `prune` share one selection model, organized in `--help`
-//! into named groups:
+//! `analyze`, `list`, `prune`, and `examine` share one selection model, organized
+//! in `--help` into named groups:
 //!
 //! * **Discriminant selection** (`--engine`, `--target-triple`, `--machine-key`) —
 //!   chooses which discriminant sets to operate on. Each facet is repeatable
@@ -292,7 +308,8 @@ pub(crate) use cargo_bench_history_core::model;
 pub use cli::{Cli, EarlyExit};
 pub use command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
-    InstallOptions, ListOptions, ListSubject, LocalStorageSelection, PruneOptions, UnblessOptions,
+    ExamineOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection, PruneOptions,
+    UnblessOptions,
 };
 pub use config::{ConfigError, default_template};
 pub use dispatch::{Overrides, run, run_with_overrides};

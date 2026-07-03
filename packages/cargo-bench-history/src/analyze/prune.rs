@@ -21,7 +21,9 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
+use jiff::Timestamp;
 use serde::Serialize;
+use tick::Clock;
 
 use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
@@ -38,7 +40,7 @@ use super::ReportFormat;
 use super::{
     AutoFacets, DirtyTipPolicy, ResolvedHistory, Selection, WindowEdge, detect_auto_facets,
     facet_filtered_candidates, parse_since, parse_until, resolve_base_name, resolve_facets,
-    resolve_history, window_excludes,
+    resolve_history, resolve_now, window_excludes,
 };
 use crate::model::DiscriminantSet;
 use crate::output::{OutputSelection, OutputWriter, TokioOutputWriter, emit};
@@ -84,9 +86,14 @@ impl Scope {
 
 /// The real `prune`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
+///
+/// `clock_override` injects the [`tick::Clock`] that anchors a relative
+/// `--since`/`--until` bound (see [`resolve_now`](super::resolve_now)); production
+/// passes `None` for the runtime wall clock.
 pub(crate) async fn execute(
     options: &PruneOptions,
     workspace_dir: &Path,
+    clock_override: Option<Clock>,
     storage_override: Option<StorageFacade>,
 ) -> Result<RunOutcome, RunError> {
     let reporter = StderrReporter::new(options.verbose);
@@ -112,6 +119,7 @@ pub(crate) async fn execute(
     let auto = detect_auto_facets().await?;
 
     let writer = TokioOutputWriter::new(workspace_dir.to_path_buf());
+    let now = resolve_now(clock_override);
     let result = prune_with(
         &git,
         &storage,
@@ -119,6 +127,7 @@ pub(crate) async fn execute(
         &config,
         options,
         &auto,
+        now,
         &reporter,
         &writer,
     )
@@ -147,6 +156,7 @@ pub(crate) async fn prune_with<G, S, W>(
     config: &Config,
     options: &PruneOptions,
     auto: &AutoFacets,
+    now: Timestamp,
     reporter: &dyn Reporter,
     writer: &W,
 ) -> Result<RunOutcome, RunError>
@@ -160,8 +170,8 @@ where
         options.markdown.as_deref(),
         options.json.as_deref(),
     )?;
-    let since = parse_since(options.since.as_deref())?;
-    let until = parse_until(options.until.as_deref())?;
+    let since = parse_since(options.since.as_deref(), now)?;
+    let until = parse_until(options.until.as_deref(), now)?;
     let scope = Scope::from_options(options)?;
     let selection = Selection::from_prune(options);
 
@@ -852,6 +862,15 @@ mod tests {
         MemoryOutputWriter::new()
     }
 
+    /// A fixed analysis anchor for prune tests. These exercise absolute or
+    /// unset `--since`/`--until` windows, so the exact instant is immaterial; it
+    /// only stands in for the clock reading `prune::execute` supplies in production.
+    fn now() -> Timestamp {
+        "2024-06-01T00:00:00Z"
+            .parse()
+            .expect("valid RFC 3339 instant")
+    }
+
     /// Drives `prune_with` and unwraps the rendered message.
     fn prune(storage: &MemoryStorage, git: &FakeGitHistory, options: &PruneOptions) -> String {
         let outcome = block_on(prune_with(
@@ -861,6 +880,7 @@ mod tests {
             &config(),
             options,
             &auto(),
+            now(),
             &RecordingReporter::new(),
             &writer(),
         ))
@@ -887,6 +907,7 @@ mod tests {
             &config(),
             &options,
             &auto(),
+            now(),
             &RecordingReporter::new(),
             &writer,
         ))
@@ -915,6 +936,7 @@ mod tests {
             &config(),
             &options,
             &auto(),
+            now(),
             &RecordingReporter::new(),
             &writer,
         ))
@@ -937,6 +959,7 @@ mod tests {
             &config(),
             &dirty_options(),
             &auto(),
+            now(),
             &reporter,
             &writer(),
         ))
@@ -1116,6 +1139,7 @@ mod tests {
             &config(),
             &PruneOptions::default(),
             &auto(),
+            now(),
             &RecordingReporter::new(),
             &writer(),
         ))
@@ -1153,6 +1177,7 @@ mod tests {
             &config(),
             &opts,
             &auto(),
+            now(),
             &RecordingReporter::new(),
             &writer(),
         ))
@@ -1214,6 +1239,7 @@ mod tests {
             &config(),
             &opts,
             &auto(),
+            now(),
             &RecordingReporter::new(),
             &writer(),
         ))
@@ -1317,6 +1343,7 @@ mod tests {
             &config(),
             &dirty_options(),
             &auto(),
+            now(),
             &RecordingReporter::new(),
             &writer(),
         ))

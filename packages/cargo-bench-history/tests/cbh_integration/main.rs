@@ -16,6 +16,7 @@ mod backfill;
 mod bless;
 mod cli;
 mod collect;
+mod examine;
 mod harness;
 mod install;
 mod list;
