@@ -5,10 +5,10 @@ allow_dirty = true
 # Changelogs do not offer much value, not worth the effort.
 changelog_update = false
 
-# All we care about is crates.io, Git releases are not used.
-# Enabled per binary crate at CI time (release.yml injects git_release_enable = true
-# for the derived binary crates) so their prebuilt-binary uploads have a release to
-# attach to; the committed config stays free of per-binary release flags.
+# Git releases are off by default because most crates are libraries that only publish to
+# crates.io. The binary crates are the exception: release.yml injects git_release_enable = true
+# for them at CI time so their prebuilt-binary uploads have a GitHub release to attach to. The
+# committed config stays free of per-binary release flags.
 git_release_enable = false
 
 # Pin the tag format explicitly (this is already the multi-package-workspace default).
