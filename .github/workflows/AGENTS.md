@@ -36,10 +36,10 @@ Split from the monolithic `just validate-local` into individual jobs:
   - Rationale: Code formatting rules are platform-agnostic
   - Commands: `cargo +nightly fmt --check`, `cargo sort-derives --check`
 
-- **lint-workflows** and **test-scripts** — Runs only on `ubuntu-latest`, and
+- **validate-workflows** and **test-scripts** — Runs only on `ubuntu-latest`, and
   **unconditionally**: unlike the package-scoped jobs below, these do not depend on the
   `delta` job and have no `skip_all` gate. Their inputs are not Cargo packages — the workflow
-  files under `.github/workflows/` for `lint-workflows` (via `just lint-workflows`, actionlint,
+  files under `.github/workflows/` for `validate-workflows` (via `just validate-workflows`, actionlint,
   which delegates to ShellCheck for embedded shell steps)
   and the standalone scripts under `scripts/` for `test-scripts` (via `just test-scripts`,
   Pester) — so a PR touching only those files produces `skip_all=true` from the delta analysis

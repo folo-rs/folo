@@ -6,7 +6,7 @@
 
 .DESCRIPTION
     actionlint statically checks the workflow files under `.github/workflows` (run via
-    `just lint-workflows`, both locally and in the `lint-workflows` CI job). It is not a
+    `just validate-workflows`, both locally and in the `validate-workflows` CI job). It is not a
     cargo crate, and its author ships it as a standalone, portable binary with no installer,
     so this script downloads the official static build for the current OS/architecture and
     drops it on PATH.
@@ -128,7 +128,7 @@ if ($null -eq $build) {
 }
 
 $url = "https://github.com/rhysd/actionlint/releases/download/v$($script:ActionlintVersion)/$($build.Asset)"
-Write-Host "Installing actionlint $($script:ActionlintVersion) (used by 'just lint-workflows')..."
+Write-Host "Installing actionlint $($script:ActionlintVersion) (used by 'just validate-workflows')..."
 Write-Verbose "Platform '$platformKey' maps to asset '$($build.Asset)'; downloading from '$url'."
 
 Write-Verbose "Ensuring the destination directory '$Destination' exists."

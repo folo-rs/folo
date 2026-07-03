@@ -126,11 +126,11 @@ jobs:
       - name: Run script test suites
         run: just test-scripts
 
-  # Lints the GitHub Actions workflow files with actionlint. Runs unconditionally — independent
+  # Validates the GitHub Actions workflow files with actionlint. Runs unconditionally — independent
   # of the `delta` package analysis — because the workflow files are not Cargo packages, so a
   # change touching only .github/workflows/ would otherwise be validated by nothing. actionlint
   # is a fast static check, so running it on every PR is cheap.
-  lint-workflows:
+  validate-workflows:
     runs-on: ubuntu-latest
 
     steps:
@@ -140,8 +140,8 @@ jobs:
       - name: Setup environment
         uses: ./.github/actions/setup-environment
 
-      - name: Lint workflows
-        run: just lint-workflows
+      - name: Validate workflows
+        run: just validate-workflows
 
   # Formatting is platform-agnostic, so run only on Ubuntu for efficiency.
   format-check:

@@ -7,8 +7,8 @@
 .DESCRIPTION
     actionlint (see install-actionlint.ps1) delegates linting of `run:` steps that use a POSIX
     shell to ShellCheck when it is present on PATH. GitHub's Linux runners ship ShellCheck, so the
-    `lint-workflows` CI job shellchecks every bash step; without ShellCheck installed locally,
-    `just lint-workflows` would silently skip those checks and give false confidence. This script
+    `validate-workflows` CI job shellchecks every bash step; without ShellCheck installed locally,
+    `just validate-workflows` would silently skip those checks and give false confidence. This script
     installs ShellCheck so local linting matches CI.
 
     ShellCheck is not a cargo crate, and its author ships it as a standalone, portable binary with
@@ -133,7 +133,7 @@ if ($null -eq $build) {
 }
 
 $url = "https://github.com/koalaman/shellcheck/releases/download/v$($script:ShellcheckVersion)/$($build.Asset)"
-Write-Host "Installing ShellCheck $($script:ShellcheckVersion) (used by actionlint via 'just lint-workflows')..."
+Write-Host "Installing ShellCheck $($script:ShellcheckVersion) (used by actionlint via 'just validate-workflows')..."
 Write-Verbose "Platform '$platformKey' maps to asset '$($build.Asset)'; downloading from '$url'."
 
 Write-Verbose "Ensuring the destination directory '$Destination' exists."

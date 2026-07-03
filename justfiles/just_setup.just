@@ -95,17 +95,17 @@ install-tools:
     }
 
     # ShellCheck is what actionlint delegates to for linting embedded shell (`run:`) steps. GitHub's
-    # Linux runners ship it, so the CI lint-workflows job shellchecks every bash step; installing it
-    # here keeps local `just lint-workflows` faithful to CI instead of silently skipping those
+    # Linux runners ship it, so the CI validate-workflows job shellchecks every bash step; installing
+    # it here keeps local `just validate-workflows` faithful to CI instead of silently skipping those
     # checks. Like actionlint it is a pinned, checksum-verified standalone binary; see
     # scripts/install-shellcheck.ps1. Installed on every platform with no CI skip. No-op when the
     # pinned ShellCheck is already present.
     & "{{justfile_directory()}}/scripts/install-shellcheck.ps1"
 
-    # actionlint lints the GitHub Actions workflow files (`just lint-workflows`, run both locally
-    # and by the CI lint-workflows job). It is not a cargo crate and has no installer, so a helper
-    # script fetches the pinned official binary and verifies its checksum; see
+    # actionlint validates the GitHub Actions workflow files (`just validate-workflows`, run both
+    # locally and by the CI validate-workflows job). It is not a cargo crate and has no installer, so a
+    # helper script fetches the pinned official binary and verifies its checksum; see
     # scripts/install-actionlint.ps1. Unlike azcopy/Azurite this IS needed in CI (the workflow
-    # linting job runs it), so it is installed on every platform with no CI skip. No-op when the
+    # validation job runs it), so it is installed on every platform with no CI skip. No-op when the
     # pinned actionlint is already present.
     & "{{justfile_directory()}}/scripts/install-actionlint.ps1"
