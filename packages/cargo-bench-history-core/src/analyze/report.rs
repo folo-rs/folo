@@ -662,7 +662,8 @@ fn describe_id(id: &BenchmarkId) -> String {
 /// `96.7664` becomes `96.77`, `0.000001234` keeps all four (`0.000001234`), and a
 /// large `1234567.89` drops its fraction entirely (`1234568`). Trailing zeros are
 /// trimmed. The machine-readable JSON keeps full precision.
-fn format_value(value: f64) -> String {
+#[must_use]
+pub fn format_value(value: f64) -> String {
     if value.fract().abs() <= f64::EPSILON {
         return format!("{value:.0}");
     }

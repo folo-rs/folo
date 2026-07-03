@@ -57,6 +57,9 @@ pub enum Command {
     /// Delete stored runs (and their blessing sidecars) from the data set a
     /// matching `analyze`/`list` pass resolves.
     Prune(PruneOptions),
+    /// Show the raw per-commit data points of one `(benchmark, metric)` series
+    /// from the data set a matching `analyze`/`list` pass resolves.
+    Examine(ExamineOptions),
     /// Replay `collect` across a range of historical commits.
     Backfill(BackfillOptions),
     /// Accept a benchmark's current level on the base branch as intentional.
@@ -269,10 +272,66 @@ pub struct ListOptions {
     pub verbose: bool,
 }
 
+/// Options for the `examine` command.
+///
+/// The data-set-selection options mirror [`AnalyzeOptions`]/[`ListOptions`] so an
+/// `examine` invocation drills into exactly the data set the same `analyze`/`list`
+/// invocation would resolve. Unlike them, it names a single `(benchmark, metric)`
+/// series to pivot into raw per-commit data points.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ExamineOptions {
+    /// Path to the configuration file, if overridden.
+    pub config_path: Option<PathBuf>,
+    /// Repository to resolve git topology from; defaults to the working directory.
+    pub repo: Option<PathBuf>,
+    /// Local-storage selection from `--local`; overrides the configured cloud
+    /// backend. `None` means `--local` was not given (use the configured backend).
+    pub local: Option<LocalStorageSelection>,
+    /// Read-through cache selection from `--cache`; mirrors fetched cloud objects
+    /// under a local directory so repeated reads avoid re-downloading the history.
+    /// `None` means `--cache` was not given. Ignored with a `--local` backend.
+    pub cache: Option<CacheSelection>,
+    /// Target ref whose history is examined; defaults to `HEAD`.
+    pub context: Option<String>,
+    /// Base ref the target's history is split at; defaults to the detected (or
+    /// configured) default branch.
+    pub base: Option<String>,
+    /// Exclude dirty (uncommitted-tree) snapshots from the target side.
+    pub no_dirty: bool,
+    /// Only consider commits made on or after this cutoff, if set.
+    pub since: Option<String>,
+    /// Only consider commits made on or before this cutoff, if set.
+    pub until: Option<String>,
+    /// Restrict the examination to these engines (repeatable). Empty auto-detects
+    /// every engine; the `all` keyword is an explicit synonym for no filter.
+    pub engine: Vec<String>,
+    /// Restrict the examination to these full target triples (repeatable). Empty
+    /// auto-detects the current machine's triple; `all` matches every triple.
+    pub target_triple: Vec<String>,
+    /// Restrict the examination to these machine keys (repeatable). Empty
+    /// auto-detects the current machine's fingerprint; `all` matches every machine.
+    pub machine_key: Vec<String>,
+    /// The exact qualified benchmark id whose series is examined (required).
+    pub benchmark: String,
+    /// The metric name (a [`MetricKind`](crate::model::MetricKind) `as_str` value)
+    /// whose series is examined (required).
+    pub metric: String,
+    /// Suppress the default text report on standard output (`--no-text`).
+    pub no_text: bool,
+    /// Write the Markdown report to this path, if set (`--markdown <path>`). A
+    /// relative path resolves against the working directory.
+    pub markdown: Option<PathBuf>,
+    /// Write the JSON report to this path, if set (`--json <path>`). A relative
+    /// path resolves against the working directory.
+    pub json: Option<PathBuf>,
+    /// Emit detailed diagnostic notes to standard error describing each step.
+    pub verbose: bool,
+}
+
 /// Options for the `prune` command.
 ///
 /// The data-set-selection options mirror [`AnalyzeOptions`]/[`ListOptions`] so a
-/// `prune` invocation deletes runs from exactly the data set the same
 /// `analyze`/`list` invocation would resolve. The caller must say which kinds of
 /// run to delete: `clean` removes clean runs (plus the blessing sidecars on every
 /// commit whose clean run is removed), `dirty` removes dirty (uncommitted-tree)

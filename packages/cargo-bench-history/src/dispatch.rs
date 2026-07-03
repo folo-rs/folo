@@ -101,6 +101,9 @@ pub async fn run_with_overrides(
         Command::List(options) => {
             commands::list(options, workspace_dir, now, storage_override).await
         }
+        Command::Examine(options) => {
+            commands::examine(options, workspace_dir, now, storage_override).await
+        }
         Command::Prune(options) => commands::prune(options, workspace_dir, storage_override).await,
         Command::Backfill(options) => {
             commands::backfill(options, workspace_dir, bench_command).await

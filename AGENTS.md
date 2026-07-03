@@ -31,6 +31,15 @@ directly:
 * **Check for a package-local `AGENTS.md`** before doing nontrivial work in a
   specific crate (e.g. `packages/events_once/AGENTS.md`). Package-local
   guidance refines and sometimes overrides the workspace-wide rules.
+* **`AGENTS.md` files are agent instructions, not design docs.** A package-local
+  `AGENTS.md` holds only actionable guidance for working in that package —
+  conventions to follow, gotchas, invariants to preserve, how to run and test.
+  It must **not** duplicate design documentation (that lives in the
+  `docs/design.md`-style files), restate implementation detail, or keep a
+  decision/change history. If a fact explains *what* the code is or *why* it is
+  shaped that way, it belongs in a design doc; if it is trivia that does not
+  change how an agent works, leave it out. Point at the design doc instead of
+  repeating it.
 
 ## Chapters
 

@@ -13,14 +13,15 @@
 //! storage- and git-generic orchestrator the in-memory tests drive.
 
 pub(crate) mod bless;
+pub(crate) mod examine;
 pub(crate) mod list;
 pub(crate) mod prune;
 
 pub(crate) use cargo_bench_history_core::analyze::{
     AnalysisConfig, AnalysisContext, AnalysisMode, BlessingPlacement, DiscriminantSetQuery,
     FacetFilter, ReportFormat, ReportInput, RunPoints, Series, SeriesBuilder, SeriesFilter,
-    SetSummary, StorageKey, apply_blessings, balanced_chunk_sizes, find_changes_spawned, parse_key,
-    render, select_commits, worker_count,
+    SetSummary, StorageKey, apply_blessings, balanced_chunk_sizes, find_changes_spawned,
+    format_value, parse_key, render, select_commits, worker_count,
 };
 
 use std::collections::{BTreeMap, HashMap};
@@ -51,7 +52,8 @@ use crate::wiring::{
     resolve_repo, storage_env,
 };
 use crate::{
-    AnalyzeOptions, BlessOptions, ListOptions, PruneOptions, RunError, RunOutcome, UnblessOptions,
+    AnalyzeOptions, BlessOptions, ExamineOptions, ListOptions, PruneOptions, RunError, RunOutcome,
+    UnblessOptions,
 };
 
 /// The real `analyze`: load configuration, wire the configured storage and git
@@ -338,6 +340,20 @@ impl<'a> Selection<'a> {
         }
     }
 
+    fn from_examine(options: &'a ExamineOptions) -> Self {
+        Self {
+            context: options.context.as_deref(),
+            base: options.base.as_deref(),
+            no_dirty: options.no_dirty,
+            since: options.since.as_deref(),
+            until: options.until.as_deref(),
+            engine: &options.engine,
+            target_triple: &options.target_triple,
+            machine_key: &options.machine_key,
+            mode_override: None,
+        }
+    }
+
     fn from_prune(options: &'a PruneOptions) -> Self {
         Self {
             context: options.context.as_deref(),
@@ -529,6 +545,10 @@ struct SelectedDataSet {
     included_dirty_base_exception: bool,
     /// The target ref the timeline was resolved against (for diagnostics).
     target_ref: String,
+    /// Subject line of each in-history commit that has one, so `examine` can label
+    /// each data point with what its commit changed. A commit absent here has an
+    /// empty subject; only `examine` reads this.
+    commit_subjects: HashMap<String, String>,
     /// The resolved analysis mode (auto-detected from topology, or overridden).
     mode: AnalysisMode,
     /// First-parent topological index of the merge-base, used by branch mode to
@@ -875,6 +895,7 @@ where
         target_ref,
         order,
         commit_times,
+        commit_subjects,
         admit_dirty,
         dirty_base_exception,
         merge_base_index,
@@ -1182,6 +1203,7 @@ where
         },
         included_dirty_base_exception,
         target_ref,
+        commit_subjects,
         mode,
         merge_base_index,
         blessings,
@@ -1308,6 +1330,10 @@ struct ResolvedHistory {
     /// `--since`/`--until` window from topology before any object is fetched. A
     /// commit absent here has an unknown time and is treated as in-window.
     commit_times: HashMap<String, Timestamp>,
+    /// Subject line of each first-parent commit that has one, for labeling
+    /// `examine`'s per-commit data points. A commit absent here has an empty
+    /// subject; only `examine` reads this.
+    commit_subjects: HashMap<String, String>,
     /// Whether each selected commit admits dirty (uncommitted-tree) snapshots.
     admit_dirty: HashMap<String, bool>,
     /// Whether a commit's dirty runs are admitted *only* by the base-branch
@@ -1361,9 +1387,13 @@ where
     let commit_count = first_parent.len();
     let mut ancestry: Vec<String> = Vec::with_capacity(commit_count);
     let mut commit_times: HashMap<String, Timestamp> = HashMap::new();
+    let mut commit_subjects: HashMap<String, String> = HashMap::new();
     for commit in first_parent {
         if let Some(time) = commit.committer_time {
             commit_times.insert(commit.sha.clone(), time);
+        }
+        if !commit.subject.is_empty() {
+            commit_subjects.insert(commit.sha.clone(), commit.subject);
         }
         ancestry.push(commit.sha);
     }
@@ -1442,6 +1472,7 @@ where
         target_ref: target_ref.to_owned(),
         order,
         commit_times,
+        commit_subjects,
         admit_dirty,
         dirty_base_exception,
         merge_base_index,
