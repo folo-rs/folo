@@ -1,15 +1,16 @@
 //! The finding algorithms: locate *sustained* level shifts and slow drifts in
 //! each series and flag only those that survive engine-aware significance,
-//! practical-magnitude, and false-discovery gates.
+//! practical-magnitude, and false-discovery gates, then a basic noise filter that
+//! drops any move below a minimum relative magnitude regardless of engine.
 //!
 //! The design deliberately distinguishes the two engine families this tool
 //! records:
 //!
 //! * **Deterministic** engines (Callgrind: instruction counts, estimated cycles,
 //!   cache hits, branch counts; `alloc_tracker`: allocations) produce noise-free
-//!   numbers. A real step is real no matter how small, so a deterministic change
-//!   is flagged on persistence alone — no significance test, no false-discovery
-//!   correction.
+//!   numbers. A real step is flagged on persistence alone — no significance test, no
+//!   false-discovery correction — provided it clears the basic noise floor: a sub-1%
+//!   move is meaningless even when exact, so it is still suppressed.
 //! * **Noisy** engines (Criterion wall time, `all_the_time` processor time) jitter
 //!   from run to run. A move is flagged only when a Pettitt change-point locates a
 //!   split that a Mann–Whitney rank test then confirms, the confidence intervals of
@@ -70,6 +71,14 @@ pub struct AnalysisConfig {
     /// Multiple of the per-measurement noise floor a noisy branch/tip move with too
     /// few points to rank-test must exceed before it is trusted.
     pub branch_noise_multiple: f64,
+    /// Minimum relative magnitude (1%) any finding must reach to be reported, applied
+    /// as a final basic noise filter across every detector and engine. Even at full
+    /// statistical confidence a sub-1% move is treated as measurement noise: it is too
+    /// small to be worth a human's attention, so it is suppressed regardless of
+    /// direction. This floor sits below the per-engine practical-magnitude floors
+    /// (`practical_relative`, `branch_practical_relative`), which already exceed it for
+    /// noisy engines; it is what gates the otherwise-unbounded deterministic engines.
+    pub noise_floor: f64,
 }
 
 impl Default for AnalysisConfig {
@@ -84,6 +93,7 @@ impl Default for AnalysisConfig {
             compare_window: 8,
             branch_practical_relative: 0.05,
             branch_noise_multiple: 2.0,
+            noise_floor: 0.01,
         }
     }
 }
@@ -1076,6 +1086,14 @@ fn finalize_findings(
                 source_index,
                 ..
             } = candidate;
+            // Basic noise filter: a sub-`noise_floor` move is measurement noise even at
+            // full confidence, so it is suppressed regardless of direction or engine.
+            // This gates the otherwise-unbounded deterministic engines and backstops the
+            // per-engine practical-magnitude floors. Applied before charting points are
+            // materialised so a dropped finding never pays for them.
+            if finding.relative_delta.abs() < config.noise_floor {
+                return None;
+            }
             if !context.keeps(finding.direction) {
                 return None;
             }
@@ -1610,14 +1628,34 @@ mod tests {
     }
 
     #[test]
-    fn deterministic_tiny_exact_step_is_still_flagged() {
-        // A one-instruction step is real on a deterministic engine, so it flags
-        // despite being far below any practical-magnitude floor.
+    fn deterministic_step_below_the_noise_floor_is_suppressed() {
+        // A one-instruction step is real on a deterministic engine, but a sub-1% move
+        // is meaningless even at full confidence, so the basic noise filter suppresses
+        // it: 1000 -> 1001 is a 0.1% move.
         let series = series_of(&[1000.0, 1000.0, 1000.0, 1001.0, 1001.0, 1001.0]);
+        assert!(changes(&[series]).is_empty());
+    }
+
+    #[test]
+    fn deterministic_step_at_the_noise_floor_is_flagged() {
+        // The noise floor is a strict `<` rejection, so a deterministic step whose
+        // relative move EQUALS the 1% floor is still reported: 1000 -> 1010 is exactly
+        // a 1% move.
+        let series = series_of(&[1000.0, 1000.0, 1000.0, 1010.0, 1010.0, 1010.0]);
         let finding = only(changes(&[series]));
         assert_eq!(finding.method, FindingMethod::ChangePoint);
-        assert_eq!(finding.delta, 1.0);
+        assert_eq!(finding.delta, 10.0);
+        assert!((finding.relative_delta - 0.01).abs() <= 1e-9);
         assert_eq!(finding.confidence, 1.0);
+    }
+
+    #[test]
+    fn sub_noise_floor_improvement_is_also_suppressed() {
+        // The noise filter applies in any direction: a sub-1% improvement on a
+        // deterministic engine is just as meaningless as a sub-1% regression, so
+        // 1000 -> 999 (a 0.1% drop) raises nothing.
+        let series = series_of(&[1000.0, 1000.0, 1000.0, 999.0, 999.0, 999.0]);
+        assert!(changes(&[series]).is_empty());
     }
 
     #[test]

@@ -569,14 +569,13 @@ async fn analyze_criterion_slow_drift_is_flagged_as_drift() {
     assert_eq!(parsed["findings"][0]["direction"], "regression", "{report}");
 }
 
-/// A Callgrind series whose instruction count steps up by a single count - far
-/// below the 3% practical floor a noisy engine demands - is still flagged, because
-/// deterministic engines carry no measurement noise and trust any sustained step.
-/// This proves the engine-aware split: the same tiny move would be discarded as
-/// noise on a Criterion series but is a real change on a deterministic one.
+/// A Callgrind series whose instruction count steps up by a single count - a 0.1%
+/// move - is suppressed by the basic 1% noise filter even though the engine is
+/// deterministic and reports the step with certainty. A sub-percent change is
+/// meaningless regardless of confidence, so it never reaches the report.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_callgrind_tiny_deterministic_step_is_flagged() {
+async fn analyze_callgrind_step_below_the_noise_floor_is_suppressed() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.commit_dated("2024-01-01", "c1");
     workspace.seed_callgrind("c1", 1000.0);
@@ -594,8 +593,44 @@ async fn analyze_callgrind_tiny_deterministic_step_is_flagged() {
     let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
+        parsed["regressions"], 0,
+        "a 0.1% deterministic step is below the 1% noise floor and must not flag: {report}"
+    );
+    let findings = parsed["findings"].as_array().expect("findings is an array");
+    assert!(
+        findings.is_empty(),
+        "the sub-floor move is fully suppressed, so no finding of any direction reaches \
+         the report: {report}"
+    );
+}
+
+/// A Callgrind series that steps up by 2% - above the 1% basic noise filter yet
+/// still below the 3% practical-magnitude floor a *noisy* engine would demand - is
+/// flagged, because deterministic engines carry no measurement noise and trust any
+/// sustained step that clears the basic floor. This proves the engine-aware split:
+/// the same 2% move would be discarded as noise on a Criterion series.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn analyze_callgrind_deterministic_step_above_the_noise_floor_is_flagged() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 1000.0);
+    workspace.commit_dated("2024-01-02", "c2");
+    workspace.seed_callgrind("c2", 1000.0);
+    workspace.commit_dated("2024-01-03", "c3");
+    workspace.seed_callgrind("c3", 1000.0);
+    workspace.commit_dated("2024-01-04", "c4");
+    workspace.seed_callgrind("c4", 1020.0);
+    workspace.commit_dated("2024-01-05", "c5");
+    workspace.seed_callgrind("c5", 1020.0);
+    workspace.commit_dated("2024-01-06", "c6");
+    workspace.seed_callgrind("c6", 1020.0);
+
+    let report = workspace.drive_json(&["analyze"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(
         parsed["regressions"], 1,
-        "a one-count deterministic step is real and must flag below the noise floor: {report}"
+        "a 2% deterministic step clears the 1% noise floor and must flag: {report}"
     );
     assert_eq!(parsed["findings"][0]["method"], "change_point", "{report}");
     assert_eq!(parsed["findings"][0]["direction"], "regression", "{report}");
@@ -603,14 +638,15 @@ async fn analyze_callgrind_tiny_deterministic_step_is_flagged() {
 
 /// An `alloc_tracker` series whose allocated-bytes count steps up is flagged as a
 /// `change_point`: allocation statistics are a deterministic property of the code,
-/// so - like Callgrind instruction counts - any sustained step is a real change,
-/// trusted below the noise floor a noisy engine would demand.
+/// so - like Callgrind instruction counts - a sustained step that clears the basic
+/// noise floor is a real change, even when it stays below the practical-magnitude
+/// floor a noisy engine would demand.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn analyze_alloc_tracker_step_is_flagged_as_change_point() {
     let workspace = Workspace::repo(&storage_only_config());
-    // A flat allocated-bytes baseline that steps up by one byte at the fourth
-    // commit; the allocation count stays constant throughout.
+    // A flat allocated-bytes baseline that steps up by 2% at the fourth commit; the
+    // allocation count stays constant throughout.
     workspace.commit_dated("2024-03-01", "a1");
     workspace.seed_alloc_tracker("a1", "allocate_vec", 200.0, 2.0);
     workspace.commit_dated("2024-03-02", "a2");
@@ -618,17 +654,17 @@ async fn analyze_alloc_tracker_step_is_flagged_as_change_point() {
     workspace.commit_dated("2024-03-03", "a3");
     workspace.seed_alloc_tracker("a3", "allocate_vec", 200.0, 2.0);
     workspace.commit_dated("2024-03-04", "a4");
-    workspace.seed_alloc_tracker("a4", "allocate_vec", 201.0, 2.0);
+    workspace.seed_alloc_tracker("a4", "allocate_vec", 204.0, 2.0);
     workspace.commit_dated("2024-03-05", "a5");
-    workspace.seed_alloc_tracker("a5", "allocate_vec", 201.0, 2.0);
+    workspace.seed_alloc_tracker("a5", "allocate_vec", 204.0, 2.0);
     workspace.commit_dated("2024-03-06", "a6");
-    workspace.seed_alloc_tracker("a6", "allocate_vec", 201.0, 2.0);
+    workspace.seed_alloc_tracker("a6", "allocate_vec", 204.0, 2.0);
 
     let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
         parsed["regressions"], 1,
-        "a one-byte deterministic step is real and must flag: {report}"
+        "a 2% deterministic step clears the noise floor and must flag: {report}"
     );
     assert_eq!(parsed["findings"][0]["method"], "change_point", "{report}");
     assert_eq!(parsed["findings"][0]["direction"], "regression", "{report}");
