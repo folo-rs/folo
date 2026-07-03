@@ -104,9 +104,8 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # The recipe defaults its Write-Verbose decision history ON in CI (the runner sets
-        # $env:CI), so the step log records how the missing-archive plan was derived per crate
-        # and target — not just the final count.
+        # The recipe always emits its Write-Verbose decision history, so the step log records how
+        # the missing-archive plan was derived per crate and target — not just the final count.
         run: just gh-plan-release-binaries
 
   build-binaries:

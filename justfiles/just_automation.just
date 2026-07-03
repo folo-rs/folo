@@ -112,15 +112,12 @@ gh-plan-release-binaries:
     Import-Module ./scripts/release/ReleaseAutomation.psm1 -Force
 
     # Get-MissingBinaryMatrix emits its decision history (per crate: expected tag, whether the
-    # release exists, and the per-target present/missing verdict) via Write-Verbose. Default it
-    # ON in CI so the workflow log explains how the plan was derived, not just the final count.
-    # GitHub Actions sets CI=true; the exact-string match avoids treating CI=false/0 (which some
-    # local shells export) as on. To enable it locally, run with $env:CI = 'true' set.
-    $verbose = @{ Verbose = ($env:CI -eq 'true') }
-
+    # release exists, and the per-target present/missing verdict) via Write-Verbose. This is an
+    # automation-only recipe, so always emit it: the reasoning is worth capturing in every run
+    # (CI log or a local diagnostic invocation), not just the final count.
     $crates = @(Get-PublishableBinaryCrate)
-    Write-Verbose "Publishable binary crates: $($crates.Name -join ', ')" @verbose
-    $rows = if ($crates.Count -gt 0) { @(Get-MissingBinaryMatrix -Crate $crates @verbose) } else { @() }
+    Write-Verbose "Publishable binary crates: $($crates.Name -join ', ')" -Verbose
+    $rows = if ($crates.Count -gt 0) { @(Get-MissingBinaryMatrix -Crate $crates -Verbose) } else { @() }
 
     Write-Host "Missing (crate, target) archives: $($rows.Count)"
     Set-GitHubOutput -Name 'matrix' -Value (ConvertTo-MatrixJson -Row $rows)
