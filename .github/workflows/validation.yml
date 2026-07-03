@@ -42,56 +42,72 @@ jobs:
 
       - name: Compute delta
         id: compute
-        shell: bash
+        shell: pwsh
         run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "Push to main detected, running full workspace validation."
-            echo "packages=" >> $GITHUB_OUTPUT
-            echo "packages_json=[]" >> $GITHUB_OUTPUT
-            echo "skip_all=false" >> $GITHUB_OUTPUT
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          if ($env:GITHUB_EVENT_NAME -eq 'push') {
+            Write-Host 'Push to main detected, running full workspace validation.'
+            @(
+              'packages='
+              'packages_json=[]'
+              'skip_all=false'
+            ) | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
             exit 0
-          fi
-
-          CONFIG_PATH="$(pwd)/delta.toml"
-          WORKTREE_DIR="$(mktemp -d)"
-          BASELINE_JSON="$(mktemp)"
-
-          cleanup_worktree() {
-            git worktree remove "$WORKTREE_DIR" --force >/dev/null 2>&1 || true
-            rm -rf "$WORKTREE_DIR" >/dev/null 2>&1 || true
-            rm -f "$BASELINE_JSON" >/dev/null 2>&1 || true
           }
-          trap cleanup_worktree EXIT
 
-          echo "Analyzing current branch..."
-          cargo delta -c "$CONFIG_PATH" analyze > current.json
+          $configPath = Join-Path (Get-Location) 'delta.toml'
+          $worktreeDir = Join-Path ([System.IO.Path]::GetTempPath()) ('delta-baseline-' + [guid]::NewGuid().ToString('n'))
+          $baselineJson = [System.IO.Path]::GetTempFileName()
 
-          echo "Analyzing baseline (origin/main)..."
-          git worktree add "$WORKTREE_DIR" origin/main
-          pushd "$WORKTREE_DIR"
-          cargo delta -c "$CONFIG_PATH" analyze > "$BASELINE_JSON"
-          popd
-          git worktree remove "$WORKTREE_DIR" --force
+          try {
+            Write-Host 'Analyzing current branch...'
+            cargo delta -c $configPath analyze | Set-Content -Path 'current.json' -Encoding utf8
 
-          echo "Computing delta..."
-          cargo delta -c "$CONFIG_PATH" run --baseline "$BASELINE_JSON" --current current.json > delta.json
+            Write-Host 'Analyzing baseline (origin/main)...'
+            git worktree add $worktreeDir origin/main
+            Push-Location $worktreeDir
+            try {
+              cargo delta -c $configPath analyze | Set-Content -Path $baselineJson -Encoding utf8
+            } finally {
+              Pop-Location
+            }
 
-          cat delta.json
+            Write-Host 'Computing delta...'
+            cargo delta -c $configPath run --baseline $baselineJson --current current.json |
+              Set-Content -Path 'delta.json' -Encoding utf8
 
-          PACKAGES=$(jq -r '.Affected // [] | join(" ")' delta.json)
-          PACKAGES_JSON=$(jq -c '.Affected // []' delta.json)
+            Get-Content 'delta.json' -Raw | Write-Host
 
-          if [ -z "$PACKAGES" ]; then
-            echo "No packages affected by changes."
-            echo "packages=" >> $GITHUB_OUTPUT
-            echo "packages_json=[]" >> $GITHUB_OUTPUT
-            echo "skip_all=true" >> $GITHUB_OUTPUT
-          else
-            echo "Affected packages: $PACKAGES"
-            echo "packages=$PACKAGES" >> $GITHUB_OUTPUT
-            echo "packages_json=$PACKAGES_JSON" >> $GITHUB_OUTPUT
-            echo "skip_all=false" >> $GITHUB_OUTPUT
-          fi
+            $delta = Get-Content 'delta.json' -Raw | ConvertFrom-Json
+            $affected = @()
+            if ($delta.Affected) { $affected = @($delta.Affected) }
+            $packages = $affected -join ' '
+            $packagesJson = if ($affected.Count -eq 0) {
+              '[]'
+            } else {
+              '[' + (($affected | ForEach-Object { ConvertTo-Json $_ -Compress }) -join ',') + ']'
+            }
+
+            if ($affected.Count -eq 0) {
+              Write-Host 'No packages affected by changes.'
+              $skipAll = 'true'
+            } else {
+              Write-Host "Affected packages: $packages"
+              $skipAll = 'false'
+            }
+
+            @(
+              "packages=$packages"
+              "packages_json=$packagesJson"
+              "skip_all=$skipAll"
+            ) | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
+          } finally {
+            git worktree remove $worktreeDir --force 2>$null
+            if (Test-Path $worktreeDir) { Remove-Item -Recurse -Force $worktreeDir -ErrorAction SilentlyContinue }
+            if (Test-Path $baselineJson) { Remove-Item -Force $baselineJson -ErrorAction SilentlyContinue }
+          }
 
   # PowerShell test suite for the standalone scripts under scripts/ (the release-automation
   # module). Runs unconditionally — independent of the `delta` package analysis — because those
