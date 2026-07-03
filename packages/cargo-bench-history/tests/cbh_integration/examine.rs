@@ -461,3 +461,112 @@ async fn examine_without_a_repository_errors() {
     };
     assert!(message.contains("requires a git repository"), "{message}");
 }
+
+/// The benchmark id names the series to pivot, so it must be present: an empty
+/// `--benchmark` is rejected up front, before any load.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn examine_rejects_an_empty_benchmark() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
+
+    let error = workspace
+        .drive(&[
+            "examine",
+            "--benchmark",
+            "",
+            "--metric",
+            "instruction_count",
+        ])
+        .await
+        .unwrap_err();
+    let RunError::Analyze { message } = error else {
+        panic!("expected an analyze error, got {error:?}");
+    };
+    assert!(
+        message.contains("--benchmark must not be empty"),
+        "{message}"
+    );
+}
+
+/// `--no-text` suppresses the text report, so with no file output requested there
+/// is nothing left to emit — an error rather than a silent no-op.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn examine_requires_an_output() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
+
+    let error = workspace
+        .drive(&[
+            "examine",
+            "--benchmark",
+            "nm/nm::observe/pull",
+            "--metric",
+            "instruction_count",
+            "--no-text",
+        ])
+        .await
+        .unwrap_err();
+    let RunError::Analyze { message } = error else {
+        panic!("expected an analyze error, got {error:?}");
+    };
+    assert!(message.contains("no output selected"), "{message}");
+}
+
+/// When runs exist but the selection window excludes them all, `examine` gives the
+/// same self-explaining empty-history hint `analyze` does (distinct from the
+/// unmatched-series hint): the pivot is empty because no run entered the analysis,
+/// not because the pair was unmatched.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn examine_empty_after_since_reports_the_analyze_hint() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_rising_callgrind_history();
+
+    // Every seeded run lands in January 2024; a March cutoff excludes them all.
+    let message = workspace
+        .drive_json(&[
+            "examine",
+            "--benchmark",
+            "nm/nm::observe/pull",
+            "--metric",
+            "instruction_count",
+            "--since",
+            "2024-03-01",
+        ])
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
+    assert!(
+        parsed["sets"].as_array().unwrap().is_empty(),
+        "the --since cutoff excludes every run: {message}"
+    );
+    let hint = parsed["hint"].as_str().unwrap();
+    assert!(hint.contains("entered the analysis"), "{hint}");
+    assert!(hint.contains("--since cutoff"), "{hint}");
+}
+
+/// The Markdown report of an empty pivot states plainly that nothing matched
+/// rather than emitting a headerless, rowless table.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn examine_markdown_renders_an_empty_pivot() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_rising_callgrind_history();
+
+    let markdown = workspace
+        .drive_markdown(&[
+            "examine",
+            "--benchmark",
+            "nm/nm::observe/does-not-exist",
+            "--metric",
+            "instruction_count",
+        ])
+        .await;
+    assert!(
+        markdown.contains("No data point matches the selection."),
+        "{markdown}"
+    );
+}
