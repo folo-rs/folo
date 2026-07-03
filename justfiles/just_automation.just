@@ -113,9 +113,10 @@ gh-plan-release-binaries:
 
     # Get-MissingBinaryMatrix emits its decision history (per crate: expected tag, whether the
     # release exists, and the per-target present/missing verdict) via Write-Verbose. Default it
-    # ON in CI ($env:CI is set by GitHub Actions) so the workflow log explains how the plan was
-    # derived, not just the final count; a local run stays quiet unless the caller passes -Verbose.
-    $verbose = @{ Verbose = [bool]$env:CI }
+    # ON in CI so the workflow log explains how the plan was derived, not just the final count.
+    # GitHub Actions sets CI=true; the exact-string match avoids treating CI=false/0 (which some
+    # local shells export) as on. To enable it locally, run with $env:CI = 'true' set.
+    $verbose = @{ Verbose = ($env:CI -eq 'true') }
 
     $crates = @(Get-PublishableBinaryCrate)
     Write-Verbose "Publishable binary crates: $($crates.Name -join ', ')" @verbose
