@@ -97,6 +97,16 @@ async fn analyze_json_output_is_structured() {
     let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["project"], "testproj");
+    // The report names the analyzed tip commit (a full-length hex commit ID) so a
+    // reader can identify exactly which commit it describes; the seeded checkout is
+    // clean. Accept either length Git may use (40 for SHA-1, 64 for SHA-256).
+    let tip = parsed["tip_commit"].as_str().unwrap();
+    assert!(
+        (tip.len() == 40 || tip.len() == 64)
+            && tip.chars().all(|character| character.is_ascii_hexdigit()),
+        "tip_commit should be a full-length hex commit ID: {tip:?}"
+    );
+    assert_eq!(parsed["tip_dirty"], false);
     assert_eq!(parsed["regressions"], 1);
     assert_eq!(parsed["findings"][0]["direction"], "regression");
 }
@@ -113,6 +123,9 @@ async fn analyze_markdown_output_renders_blocks() {
         report.contains("# Benchmark history analysis: testproj"),
         "{report}"
     );
+    // The header names the analyzed tip commit so the reader knows which commit the
+    // findings describe.
+    assert!(report.contains("- Commit: "), "{report}");
     // A bold percentage headline leads each finding block; there is no table.
     assert!(!report.contains("| Change | Direction |"), "{report}");
     // The headline format is a bold signed percentage joined to the benchmark id —

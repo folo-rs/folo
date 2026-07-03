@@ -632,7 +632,10 @@ from the inactive context kept only for continuity.
 ### 8.7 Report formats
 
 The three report formats carry the **same data** and differ only in presentation; the text
-layout is canonical. Text goes to stdout as one paragraph per finding (a
+layout is canonical. Each report names the **analyzed tip commit** — the commit whose line
+of history the findings describe — annotated `+ uncommitted changes` when the working tree
+was dirty, so a reader (or the auto-filed regression issue) can tie the report to an exact
+commit. Text goes to stdout as one paragraph per finding (a
 direction-coloured headline leading with the relative-change percent, a dimmed detail line,
 and — in history mode only — a small line chart of the series), with colour enabled only
 when stdout is a terminal and not disabled by environment. Markdown is that data with
