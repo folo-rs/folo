@@ -77,6 +77,12 @@ gh-compose-release-config output:
     New-ReleasePlzConfig -SourcePath 'release-plz.toml' -OutputPath '{{output}}' -CrateName $crates.Name
     Write-Verbose "Wrote CI release-plz config to {{output}}." -Verbose
 
+    # Print the composed config so the CI log records exactly what release-plz will run with
+    # (which crates got `git_release_enable = true`), without needing to unpack the runner temp.
+    Write-Host "----- Composed CI release-plz config ({{output}}) -----"
+    Get-Content -Path '{{output}}' -Raw | Write-Host
+    Write-Host "----- End composed CI release-plz config -----"
+
 # Publishes changed crates to crates.io via release-plz using the composed CI config, with
 # bounded retries (3 attempts, 15 minutes apart) to ride out crates.io rate limits and the
 # short-lived OIDC token. release-plz is idempotent — it re-checks the registry and skips
@@ -105,8 +111,13 @@ gh-plan-release-binaries:
     $PSNativeCommandUseErrorActionPreference = $true
     Import-Module ./scripts/release/ReleaseAutomation.psm1 -Force
 
+    # Get-MissingBinaryMatrix emits its decision history (per crate: expected tag, whether the
+    # release exists, and the per-target present/missing verdict) via Write-Verbose. This is an
+    # automation-only recipe, so always emit it: the reasoning is worth capturing in every run
+    # (CI log or a local diagnostic invocation), not just the final count.
     $crates = @(Get-PublishableBinaryCrate)
-    $rows = if ($crates.Count -gt 0) { @(Get-MissingBinaryMatrix -Crate $crates) } else { @() }
+    Write-Verbose "Publishable binary crates: $($crates.Name -join ', ')" -Verbose
+    $rows = if ($crates.Count -gt 0) { @(Get-MissingBinaryMatrix -Crate $crates -Verbose) } else { @() }
 
     Write-Host "Missing (crate, target) archives: $($rows.Count)"
     Set-GitHubOutput -Name 'matrix' -Value (ConvertTo-MatrixJson -Row $rows)

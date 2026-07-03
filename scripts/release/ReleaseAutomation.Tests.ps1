@@ -357,6 +357,48 @@ Describe 'Get-MissingBinaryMatrix (mocked gh release view)' {
         $rows = Get-MissingBinaryMatrix -Crate $crates -Target $script:TwoTargets
         $rows.Count | Should -Be 1
     }
+
+    Context 'verbose decision history (-Verbose)' {
+        BeforeAll {
+            function Get-VerboseMessage {
+                # Runs the reconciliation with -Verbose and returns just the verbose-stream
+                # messages (dropping the matrix rows the function also emits on the success stream).
+                param([object[]] $Crate)
+                Get-MissingBinaryMatrix -Crate $Crate -Target $script:TwoTargets -Verbose 4>&1 |
+                    Where-Object { $_ -is [System.Management.Automation.VerboseRecord] } |
+                    ForEach-Object { $_.Message }
+            }
+        }
+
+        It 'is silent on the verbose stream without -Verbose' {
+            $crate = [pscustomobject]@{ Name = 'have-some'; Version = '2.0.0' }
+            $verbose = Get-MissingBinaryMatrix -Crate $crate -Target $script:TwoTargets 4>&1 |
+                Where-Object { $_ -is [System.Management.Automation.VerboseRecord] }
+            $verbose | Should -BeNullOrEmpty
+        }
+
+        It 'logs the expected tag, the present verdict and the missing verdict for a partial release' {
+            $messages = Get-VerboseMessage -Crate ([pscustomobject]@{ Name = 'have-some'; Version = '2.0.0' })
+            ($messages -join "`n") | Should -Match "expected release tag 'have-some-v2.0.0'"
+            ($messages -join "`n") | Should -Match 'x86_64-unknown-linux-gnu.*already uploaded'
+            ($messages -join "`n") | Should -Match 'aarch64-apple-darwin.*missing.*macos-latest'
+        }
+
+        It 'explains why a crate with no release yet is skipped' {
+            $messages = Get-VerboseMessage -Crate ([pscustomobject]@{ Name = 'no-release'; Version = '3.0.0' })
+            ($messages -join "`n") | Should -Match "No GitHub release 'no-release-v3.0.0' found yet"
+        }
+
+        It 'reports the final missing-archive count' {
+            $messages = Get-VerboseMessage -Crate ([pscustomobject]@{ Name = 'empty-release'; Version = '4.0.0' })
+            ($messages -join "`n") | Should -Match 'Reconciliation complete: 2 missing \(crate, target\) archives'
+        }
+
+        It 'uses the singular noun for a single missing archive' {
+            $messages = Get-VerboseMessage -Crate ([pscustomobject]@{ Name = 'have-some'; Version = '2.0.0' })
+            ($messages -join "`n") | Should -Match 'Reconciliation complete: 1 missing \(crate, target\) archive queued to build\.'
+        }
+    }
 }
 
 Describe 'ConvertTo-MatrixJson' {
