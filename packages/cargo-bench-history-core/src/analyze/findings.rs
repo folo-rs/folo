@@ -170,6 +170,14 @@ impl AnalysisContext {
             AnalysisMode::Tip => direction == Direction::Regression,
         }
     }
+
+    /// Whether this analysis reports improvements at all. `false` for the
+    /// regressions-only cases (history mode's default drift watch, and tip mode),
+    /// where an always-zero improvement tally is noise the report omits.
+    #[must_use]
+    pub fn reports_improvements(&self) -> bool {
+        self.keeps(Direction::Improvement)
+    }
 }
 
 /// Which detector produced a finding.
@@ -867,7 +875,7 @@ fn stamp_history(finding: &mut Finding, series: &Series) {
 }
 
 /// Abbreviates a commit SHA for display (first 12 hex digits).
-fn short_commit(commit: &str) -> String {
+pub(crate) fn short_commit(commit: &str) -> String {
     commit.get(..12).unwrap_or(commit).to_owned()
 }
 
