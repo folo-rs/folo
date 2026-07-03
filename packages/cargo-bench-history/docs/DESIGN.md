@@ -519,9 +519,11 @@ Two required options name the series, and they are the one place a command names
 filter because a user is not expected to know the internal metric names — but `examine`'s
 input is an `analyze` *finding*, which already prints both the benchmark identity and the
 metric, so pasting them back in is natural rather than guesswork. An unknown metric name is
-rejected up front against the known set; an unknown or unmatched benchmark id is not an error
-but yields an empty pivot with the same "matched no runs" hint `analyze` gives, since whether
-an id exists is data-dependent.
+rejected up front against the known set. An unknown or unmatched benchmark id is not an error
+— whether an id exists is data-dependent — but yields an empty pivot explained by one of two
+hints: when no run enters the selection at all, the same "matched no runs" hint `analyze`
+gives; when runs enter but none carry the named `(benchmark, metric)` pair, a distinct hint
+pointing at the unmatched benchmark id or metric name.
 
 `examine` runs **no detection and no re-baselining** — it has no findings, modes, or
 blessings. It shows every selected point exactly as the chart would plot it (a commit

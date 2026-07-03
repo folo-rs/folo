@@ -18,6 +18,7 @@ use cargo_bench_history::{
 };
 use jiff::Timestamp;
 use serde::Deserialize;
+use tick::Clock;
 
 use crate::cli::ModeArg;
 use crate::error::{Error, fail};
@@ -284,7 +285,7 @@ fn overrides(workspace: &Path, anchor: Timestamp) -> Overrides {
         workspace_dir: Some(workspace.to_path_buf()),
         target_root: None,
         bench_command: None,
-        now: Some(anchor),
+        clock: Some(Clock::new_frozen_at(anchor)),
         storage_override: None,
     }
 }
@@ -309,7 +310,10 @@ mod tests {
         // measurement read synthetic data at a reproducible "now"; the other
         // overrides stay unset so production defaults apply.
         assert_eq!(overrides.workspace_dir.as_deref(), Some(workspace));
-        assert_eq!(overrides.now, Some(anchor));
+        assert_eq!(
+            overrides.clock.map(|c| c.system_time_as::<Timestamp>()),
+            Some(anchor)
+        );
         assert!(overrides.target_root.is_none());
         assert!(overrides.bench_command.is_none());
     }

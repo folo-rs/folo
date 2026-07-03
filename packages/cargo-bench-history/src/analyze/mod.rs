@@ -36,6 +36,7 @@ use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use jiff::{Span, Timestamp};
 use nonempty::NonEmpty;
+use tick::Clock;
 
 use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
@@ -59,14 +60,16 @@ use crate::{
 /// The real `analyze`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
 ///
-/// `now_override` anchors the history-mode default `--since` lookback to a fixed
-/// instant; production passes `None` so the anchor is the wall clock, while tests
-/// pass a deterministic instant (the relative-`--since` parsing keeps using the
-/// real clock regardless — only the *default* lookback uses this anchor).
+/// `clock_override` injects the [`tick::Clock`] the analysis anchors its "now" to:
+/// `None` reads the runtime wall clock (`Clock::new_tokio`), while tests pass a
+/// frozen clock (`Clock::new_frozen_at`) so the anchor is deterministic. That
+/// single anchor drives both the history-mode default `--since` look-back and the
+/// resolution of any relative `--since`/`--until` duration, so the whole window is
+/// deterministic under a frozen clock.
 pub(crate) async fn execute(
     options: &AnalyzeOptions,
     workspace_dir: &Path,
-    now_override: Option<Timestamp>,
+    clock_override: Option<Clock>,
     storage_override: Option<StorageFacade>,
 ) -> Result<RunOutcome, RunError> {
     // Per-object notes follow `--verbose`; stage timings are emitted under either
@@ -96,7 +99,7 @@ pub(crate) async fn execute(
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
     let auto = detect_auto_facets().await?;
 
-    let now = now_override.unwrap_or_else(Timestamp::now);
+    let now = resolve_now(clock_override);
     let color = should_colorize(
         std::io::stdout().is_terminal(),
         std::env::var_os("NO_COLOR").is_some(),
@@ -126,6 +129,20 @@ pub(crate) async fn execute(
     // diagnosed as a cold or invalidated mirror regardless of the load's outcome.
     storage.report_cache_tally(&reporter);
     outcome
+}
+
+/// Reads the analysis anchor instant from a [`tick::Clock`], the single source of
+/// wall-clock time for the whole analyze family (`analyze`/`list`/`examine`/`prune`/
+/// `bless`).
+///
+/// Production passes `clock_override: None` and reads the runtime clock
+/// (`Clock::new_tokio`); tests inject a frozen clock (`Clock::new_frozen_at`) so the
+/// resolved window is deterministic. Sourcing the instant through the clock keeps
+/// time injectable rather than minting it from a bare `Timestamp::now()`.
+pub(super) fn resolve_now(clock_override: Option<Clock>) -> Timestamp {
+    clock_override
+        .unwrap_or_else(Clock::new_tokio)
+        .system_time_as::<Timestamp>()
 }
 
 /// Whether colored output should be emitted: only to an interactive terminal with
@@ -1004,7 +1021,7 @@ where
             since_cutoff_reason(selection.since.is_some(), mode)
         )
     });
-    let until = parse_until(selection.until)?;
+    let until = parse_until(selection.until, now)?;
     reporter.note_with(|| {
         format!(
             "until cutoff: {}",
@@ -1296,7 +1313,7 @@ fn resolve_since(
     now: Timestamp,
 ) -> Result<Option<Timestamp>, RunError> {
     if value.is_some() {
-        return parse_since(value);
+        return parse_since(value, now);
     }
     if mode == AnalysisMode::History {
         return default_history_since(now).map(Some);
@@ -1696,16 +1713,18 @@ fn parse_engine(name: Option<&str>) -> Result<Option<Engine>, RunError> {
 
 /// Parses the `--since` option into an absolute lower-bound instant, if set.
 ///
-/// See [`parse_instant`] for the accepted input forms.
-fn parse_since(value: Option<&str>) -> Result<Option<Timestamp>, RunError> {
-    parse_instant(value, "--since")
+/// See [`parse_instant`] for the accepted input forms. `now` anchors a relative
+/// duration.
+fn parse_since(value: Option<&str>, now: Timestamp) -> Result<Option<Timestamp>, RunError> {
+    parse_instant(value, "--since", now)
 }
 
 /// Parses the `--until` option into an absolute upper-bound instant, if set.
 ///
-/// See [`parse_instant`] for the accepted input forms.
-fn parse_until(value: Option<&str>) -> Result<Option<Timestamp>, RunError> {
-    parse_instant(value, "--until")
+/// See [`parse_instant`] for the accepted input forms. `now` anchors a relative
+/// duration.
+fn parse_until(value: Option<&str>, now: Timestamp) -> Result<Option<Timestamp>, RunError> {
+    parse_instant(value, "--until", now)
 }
 
 /// Which edge of the `--since`/`--until` window a commit falls outside of.
@@ -1749,14 +1768,22 @@ fn window_excludes(
 /// * a bare `YYYY-MM-DD` date, interpreted at UTC midnight, and
 /// * a relative duration in jiff's friendly or ISO 8601 form (`5 months`,
 ///   `5 months ago`, `P6M`, `2w`), interpreted as *that far in the past* —
-///   resolved against the current instant via calendar-correct zoned arithmetic.
+///   resolved against `now` via calendar-correct zoned arithmetic.
+///
+/// `now` is the analysis anchor sourced from the injected clock (see
+/// [`resolve_now`]), so the relative form is deterministic under a frozen clock
+/// rather than reading the wall clock afresh.
 ///
 /// The relative form is normalized through [`Span::abs`] before subtracting, so a
 /// duration written with the friendly `ago` suffix (which jiff parses as a
 /// *negative* span) still means "this far back" rather than flipping into the
 /// future. A cutoff in the future is never a sensible bound, so both `5 months`
 /// and `5 months ago` resolve to the same past instant.
-fn parse_instant(value: Option<&str>, flag: &str) -> Result<Option<Timestamp>, RunError> {
+fn parse_instant(
+    value: Option<&str>,
+    flag: &str,
+    now: Timestamp,
+) -> Result<Option<Timestamp>, RunError> {
     let Some(value) = value else {
         return Ok(None);
     };
@@ -1772,7 +1799,7 @@ fn parse_instant(value: Option<&str>, flag: &str) -> Result<Option<Timestamp>, R
         return Ok(Some(zoned.timestamp()));
     }
     if let Ok(span) = value.parse::<Span>() {
-        return Ok(Some(instant_before_now(span, flag)?));
+        return Ok(Some(instant_before(span, flag, now)?));
     }
     Err(RunError::Analyze {
         message: format!(
@@ -1782,14 +1809,14 @@ fn parse_instant(value: Option<&str>, flag: &str) -> Result<Option<Timestamp>, R
     })
 }
 
-/// Resolves a relative [`Span`] to the instant that far before now, treating the
+/// Resolves a relative [`Span`] to the instant that far before `now`, treating the
 /// span's magnitude as a look-back regardless of its sign (see [`parse_instant`]).
 ///
 /// Calendar units (months, years) have no fixed length, so the subtraction is
-/// anchored to the current UTC zoned datetime rather than to a bare duration.
-fn instant_before_now(span: Span, flag: &str) -> Result<Timestamp, RunError> {
-    let now = Timestamp::now().to_zoned(TimeZone::UTC);
-    now.checked_sub(span.abs())
+/// anchored to `now`'s UTC zoned datetime rather than to a bare duration.
+fn instant_before(span: Span, flag: &str, now: Timestamp) -> Result<Timestamp, RunError> {
+    now.to_zoned(TimeZone::UTC)
+        .checked_sub(span.abs())
         .map(|zoned| zoned.timestamp())
         .map_err(|error| RunError::Analyze {
             message: format!("{flag} duration is out of the representable range: {error}"),
@@ -3487,54 +3514,50 @@ mod tests {
 
     #[test]
     fn since_accepts_timestamp_and_date() {
+        let now: Timestamp = "2024-06-01T00:00:00Z".parse().unwrap();
         assert_eq!(
-            parse_since(Some("2024-01-01T00:00:00Z")).unwrap(),
+            parse_since(Some("2024-01-01T00:00:00Z"), now).unwrap(),
             Some("2024-01-01T00:00:00Z".parse().unwrap())
         );
         assert_eq!(
-            parse_since(Some("2024-01-01")).unwrap(),
+            parse_since(Some("2024-01-01"), now).unwrap(),
             Some("2024-01-01T00:00:00Z".parse().unwrap())
         );
-        assert_eq!(parse_since(None).unwrap(), None);
+        assert_eq!(parse_since(None, now).unwrap(), None);
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "relative `--since` parsing reads the wall clock")]
     fn since_accepts_relative_durations_as_look_back() {
         // A friendly duration resolves to an instant in the past, and the `ago`
         // suffix (which jiff parses as a negative span) means the same look-back
-        // rather than flipping into the future.
-        let now = Timestamp::now();
-        let plain = parse_since(Some("5 months")).unwrap().unwrap();
-        let with_ago = parse_since(Some("5 months ago")).unwrap().unwrap();
-        assert!(plain < now, "a look-back must be in the past");
-        assert!(with_ago < now, "the `ago` suffix must still look back");
-        // The cutoff is `now - 5 months`, NOT the 1970 epoch: a constant default
-        // would also satisfy `< now`, so bound it from below at roughly a year back.
-        let one_year_back = now.as_second() - 400 * 24 * 60 * 60;
-        assert!(
-            plain.as_second() > one_year_back,
-            "a 5-month look-back must land near now, not the epoch"
+        // rather than flipping into the future. Anchored to a fixed `now`, both
+        // spellings land on exactly the same instant — five calendar months
+        // before 2024-06-01 is 2024-01-01.
+        let now: Timestamp = "2024-06-01T00:00:00Z".parse().unwrap();
+        let expected: Timestamp = "2024-01-01T00:00:00Z".parse().unwrap();
+        let plain = parse_since(Some("5 months"), now).unwrap().unwrap();
+        let with_ago = parse_since(Some("5 months ago"), now).unwrap().unwrap();
+        assert_eq!(plain, expected, "5 months before 2024-06-01 is 2024-01-01");
+        assert_eq!(
+            with_ago, expected,
+            "the `ago` suffix looks back the same amount"
         );
-        // Both spellings denote the same magnitude, so they land within a tiny
-        // wall-clock window of each other (the two `now` reads differ by µs).
-        let gap = (plain.as_second() - with_ago.as_second()).abs();
-        assert!(gap <= 1, "`5 months` and `5 months ago` agree (gap {gap}s)");
+        assert!(plain < now, "a look-back must be in the past");
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "relative `--since` parsing reads the wall clock")]
     fn since_accepts_iso_and_week_durations() {
-        let now = Timestamp::now();
+        let now: Timestamp = "2024-06-01T00:00:00Z".parse().unwrap();
         for input in ["P6M", "2w", "30 days", "-P1Y"] {
-            let cutoff = parse_since(Some(input)).unwrap().unwrap();
+            let cutoff = parse_since(Some(input), now).unwrap().unwrap();
             assert!(cutoff < now, "{input:?} must resolve to the past");
         }
     }
 
     #[test]
     fn since_rejects_garbage() {
-        let error = parse_since(Some("not-a-date")).unwrap_err();
+        let now: Timestamp = "2024-06-01T00:00:00Z".parse().unwrap();
+        let error = parse_since(Some("not-a-date"), now).unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
     }
 

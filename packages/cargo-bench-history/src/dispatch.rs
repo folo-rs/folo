@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use jiff::Timestamp;
+use tick::Clock;
 
 use crate::commands;
 use crate::storage::StorageOverride;
@@ -30,8 +30,10 @@ pub struct Overrides {
     pub target_root: Option<PathBuf>,
     /// The benchmark command `collect`/`backfill` invoke instead of `cargo bench`.
     pub bench_command: Option<Vec<String>>,
-    /// The clock anchor for the analysis default `--since` lookback window.
-    pub now: Option<Timestamp>,
+    /// The clock the analysis family reads "now" from — the default `--since`
+    /// lookback anchor and each blessing's issue time. `None` uses the runtime
+    /// wall clock; tests inject a frozen `Clock` for deterministic windows.
+    pub clock: Option<Clock>,
     /// A pre-built storage backend for `collect`/`analyze` to use instead of the one
     /// resolved from configuration. End-to-end tests use this to drive commands
     /// against an Azurite backend behind a locally-faked Entra token and a
@@ -58,8 +60,9 @@ pub async fn run(command: &Command) -> Result<RunOutcome, RunError> {
 /// This exists so end-to-end tests can drive the full `collect`/`backfill` flow
 /// against a mock benchmark program instead of `cargo bench`, operate on a
 /// temporary workspace without mutating the process environment or current
-/// directory, and pin a deterministic `now` for the analysis default `--since`
-/// window. Production code calls [`run`], which passes [`Overrides::default`].
+/// directory, and inject a deterministic [`tick::Clock`] for the analysis default
+/// `--since` window. Production code calls [`run`], which passes
+/// [`Overrides::default`].
 ///
 /// # Errors
 ///
@@ -74,7 +77,7 @@ pub async fn run_with_overrides(
         workspace_dir,
         target_root,
         bench_command,
-        now,
+        clock,
         storage_override,
     } = overrides;
     let workspace_dir = match workspace_dir {
@@ -96,19 +99,21 @@ pub async fn run_with_overrides(
         }
         Command::Install(options) => commands::install(options, workspace_dir).await,
         Command::Analyze(options) => {
-            commands::analyze(options, workspace_dir, now, storage_override).await
+            commands::analyze(options, workspace_dir, clock, storage_override).await
         }
         Command::List(options) => {
-            commands::list(options, workspace_dir, now, storage_override).await
+            commands::list(options, workspace_dir, clock, storage_override).await
         }
         Command::Examine(options) => {
-            commands::examine(options, workspace_dir, now, storage_override).await
+            commands::examine(options, workspace_dir, clock, storage_override).await
         }
-        Command::Prune(options) => commands::prune(options, workspace_dir, storage_override).await,
+        Command::Prune(options) => {
+            commands::prune(options, workspace_dir, clock, storage_override).await
+        }
         Command::Backfill(options) => {
             commands::backfill(options, workspace_dir, bench_command).await
         }
-        Command::Bless(options) => commands::bless(options, workspace_dir, now).await,
+        Command::Bless(options) => commands::bless(options, workspace_dir, clock).await,
         Command::Unbless(options) => commands::unbless(options, workspace_dir).await,
     }
 }

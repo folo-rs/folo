@@ -36,10 +36,11 @@ use crate::{ExamineOptions, RunError, RunOutcome};
 
 use anyspawn::Spawner;
 use jiff::Timestamp;
+use tick::Clock;
 
 use super::{
     AutoFacets, Selection, detect_auto_facets, dirty_base_exception_warning, empty_history_hint,
-    format_value, select_dataset,
+    format_value, resolve_now, select_dataset,
 };
 use super::{ReportFormat, Series, SeriesFilter};
 use crate::model::{BenchmarkIdPrefix, DiscriminantSet, MetricKind};
@@ -53,12 +54,13 @@ const TITLE_LIMIT: usize = 50;
 /// The real `examine`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
 ///
-/// `now_override` anchors the history-mode default `--since` lookback to a fixed
-/// instant (see [`execute`](super::execute)); production passes `None`.
+/// `clock_override` injects the [`tick::Clock`] the shared selection anchors its
+/// "now" to (see [`execute`](super::execute)); production passes `None` for the
+/// runtime wall clock.
 pub(crate) async fn execute(
     options: &ExamineOptions,
     workspace_dir: &Path,
-    now_override: Option<Timestamp>,
+    clock_override: Option<Clock>,
     storage_override: Option<StorageFacade>,
 ) -> Result<RunOutcome, RunError> {
     let reporter = StderrReporter::new(options.verbose);
@@ -83,7 +85,7 @@ pub(crate) async fn execute(
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
     let auto = detect_auto_facets().await?;
 
-    let now = now_override.unwrap_or_else(Timestamp::now);
+    let now = resolve_now(clock_override);
     // The object-load work shares the ambient Tokio worker threads (mirrors
     // `analyze::execute`).
     let spawner = Spawner::new_tokio();

@@ -166,16 +166,18 @@ impl GitHistory for SystemGitHistory {
     async fn first_parent(&self, reference: &str) -> io::Result<Vec<FirstParentCommit>> {
         // `%H`, `%cI`, `%s` pair each first-parent commit with its committer date
         // (strict ISO 8601) and subject, so the window can be decided from
-        // topology before any fetch and `examine` can label each point. The fields
-        // are joined by a unit separator (`%x1f`) rather than a space, because the
-        // subject contains spaces and would otherwise be indistinguishable from the
-        // preceding fields.
+        // topology before any fetch and `examine` can label each point. `-z`
+        // NUL-terminates each commit's record and the fields are NUL-delimited
+        // (`%x00`): NUL cannot occur in git object content, so no field — the
+        // subject, which may contain any printable character, included — can be
+        // confused with a delimiter.
         let output = self
             .run(&[
                 "log",
                 "--first-parent",
                 "--reverse",
-                "--format=%H%x1f%cI%x1f%s",
+                "-z",
+                "--format=%H%x00%cI%x00%s",
                 reference,
             ])
             .await?;
@@ -217,31 +219,34 @@ fn parse_sha(stdout: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// Parses `git log --first-parent --reverse --format=%H%x1f%cI%x1f%s` output into
-/// [`FirstParentCommit`]s in line order, dropping blank lines. Each line is
-/// `<sha>\x1f<committer-date>\x1f<subject>`; a line missing the date — or carrying
-/// an unparseable one — yields `committer_time: None`, and a missing subject
-/// yields an empty string. With `--reverse` the input is oldest-first.
+/// Parses `git log --first-parent --reverse -z --format=%H%x00%cI%x00%s` output
+/// into [`FirstParentCommit`]s in stream order. `-z` NUL-terminates each commit's
+/// record and the three fields are NUL-delimited, so the stream is a flat run of
+/// `<sha>\0<committer-date>\0<subject>` triples with a trailing empty token from
+/// the final terminator. A field carrying an unparseable date yields
+/// `committer_time: None` and an empty subject field yields an empty string. With
+/// `--reverse` the input is oldest-first.
 fn parse_first_parent_log(stdout: &str) -> Vec<FirstParentCommit> {
-    stdout
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| {
-            let mut fields = line.split('\u{1f}');
-            // The first field is always the SHA; the record separator keeps the
-            // subject (which may contain spaces) cleanly distinct from it.
-            let sha = fields.next().unwrap_or_default().trim().to_owned();
-            let committer_time = fields
-                .next()
-                .and_then(|field| field.trim().parse::<Timestamp>().ok());
-            let subject = fields.next().unwrap_or_default().to_owned();
-            FirstParentCommit {
-                sha,
-                committer_time,
-                subject,
-            }
-        })
-        .collect()
+    let mut fields = stdout.split('\0');
+    let mut commits = Vec::new();
+    while let Some(sha) = fields.next() {
+        let sha = sha.trim();
+        // A real commit's SHA is never empty; the only empty leading token is the
+        // one following the final record's terminator, which ends the stream.
+        if sha.is_empty() {
+            break;
+        }
+        let committer_time = fields
+            .next()
+            .and_then(|field| field.trim().parse::<Timestamp>().ok());
+        let subject = fields.next().unwrap_or_default().to_owned();
+        commits.push(FirstParentCommit {
+            sha: sha.to_owned(),
+            committer_time,
+            subject,
+        });
+    }
+    commits
 }
 
 /// Parses `git log -1 --format=%cI` output into a single committer [`Timestamp`]:
@@ -480,8 +485,10 @@ mod tests {
 
     #[test]
     fn parse_first_parent_log_keeps_order_times_subjects_and_drops_blanks() {
+        // `-z` NUL-terminates each `<sha>\0<date>\0<subject>` record, so the input
+        // is a flat NUL-separated run of triples ending in a terminator.
         let parsed = parse_first_parent_log(
-            "c0\u{1f}2024-01-01T00:00:00+00:00\u{1f}First commit\nc1\u{1f}2024-02-01T00:00:00+00:00\u{1f}Fix the thing\n\n  c2\u{1f}2024-03-01T00:00:00+00:00\u{1f}Subject with spaces  \n",
+            "c0\x002024-01-01T00:00:00+00:00\x00First commit\x00c1\x002024-02-01T00:00:00+00:00\x00Fix the thing\x00c2\x002024-03-01T00:00:00+00:00\x00Subject with spaces  \x00",
         );
         assert_eq!(
             parsed,
@@ -503,14 +510,16 @@ mod tests {
                 },
             ]
         );
-        // A line missing the date, or carrying an unparseable one, is timeless; a
-        // missing subject field yields an empty subject.
+        // An unparseable date is timeless; an empty subject field yields an empty
+        // subject.
         assert_eq!(
-            parse_first_parent_log("c0\nc1\u{1f}not-a-date\u{1f}has subject\n"),
+            parse_first_parent_log(
+                "c0\x002024-01-01T00:00:00+00:00\x00\x00c1\x00not-a-date\x00has subject\x00"
+            ),
             vec![
                 FirstParentCommit {
                     sha: "c0".to_owned(),
-                    committer_time: None,
+                    committer_time: Some("2024-01-01T00:00:00+00:00".parse().unwrap()),
                     subject: String::new(),
                 },
                 FirstParentCommit {
@@ -520,7 +529,23 @@ mod tests {
                 },
             ]
         );
-        assert!(parse_first_parent_log("\n   \n").is_empty());
+        assert!(parse_first_parent_log("").is_empty());
+        assert!(parse_first_parent_log("\x00").is_empty());
+    }
+
+    #[test]
+    fn parse_first_parent_log_preserves_delimiter_like_bytes_in_subjects() {
+        // NUL-delimiting (rather than the unit separator `\x1f`) keeps a subject
+        // that happens to contain the old delimiter intact: only NUL, which git
+        // object content can never hold, separates fields.
+        assert_eq!(
+            parse_first_parent_log("c0\x002024-01-01T00:00:00+00:00\x00Weird\u{1f}subject\x00"),
+            vec![FirstParentCommit {
+                sha: "c0".to_owned(),
+                committer_time: Some("2024-01-01T00:00:00+00:00".parse().unwrap()),
+                subject: "Weird\u{1f}subject".to_owned(),
+            }]
+        );
     }
 
     #[test]

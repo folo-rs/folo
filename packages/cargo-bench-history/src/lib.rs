@@ -152,8 +152,10 @@
 //! commit id and the first 50 characters of the commit's title (JSON keeps the full
 //! title and full-precision value). It requires a repository, runs no detection or
 //! re-baselining, and shows every selected point (clean before dirty, each flagged).
-//! An unknown metric name is rejected; an unmatched benchmark yields an empty pivot
-//! with the same "matched no runs" hint `analyze` gives.
+//! An unknown metric name is rejected. An empty pivot is explained by one of two
+//! hints: when no run enters the selection at all, the same "matched no runs" hint
+//! `analyze` gives; when runs enter but none carry the named `(benchmark, metric)`
+//! pair, a distinct hint pointing at the unmatched benchmark id or metric name.
 //!
 //! ## `bless` / `unbless`
 //!
