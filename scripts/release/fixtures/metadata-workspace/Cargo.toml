@@ -1,0 +1,11 @@
+# Fixture workspace for exercising Get-PublishableBinaryCrate with a real `cargo metadata`
+# call. It is a self-contained [workspace] so the parent repo (members = ["packages/*"]) never
+# pulls it in. Members deliberately cover every branch of the publishable-binary filter:
+#   pub-bin        publishable + bin  -> selected
+#   demo-tool      publishable + bin  -> selected (name-prefix pair with demo-tool-core)
+#   demo-tool-core publishable + lib  -> excluded (library)
+#   pub-lib        publishable + lib  -> excluded (library)
+#   nopub-bin      publish = false    -> excluded (not publishable)
+[workspace]
+resolver = "2"
+members = ["pub-bin", "demo-tool", "demo-tool-core", "pub-lib", "nopub-bin"]

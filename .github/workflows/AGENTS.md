@@ -15,9 +15,12 @@ Workflow `run:` steps use `shell: pwsh` (PowerShell 7 is available on every runn
 PowerShell over Bash, matching the repository-wide convention
 ([`docs/build-and-tooling.md`](../../docs/build-and-tooling.md)). Keep steps thin: put any
 non-trivial logic in a PowerShell `[script]` `just` recipe the step calls, so the logic can be
-run and tested locally instead of only by triggering the workflow. (The `setup-environment`
-composite action still uses Bash internally, because it bootstraps the Linux system packages —
-including PowerShell itself — before `pwsh` is available.)
+run and tested locally instead of only by triggering the workflow. Logic complex enough to
+warrant unit tests goes one level deeper, into a module under `scripts/` that the recipe
+imports, so it can be covered by a Pester suite (see `scripts/release/ReleaseAutomation.psm1`
+and `just test-scripts`). (The `setup-environment` composite action still uses Bash internally,
+because it bootstraps the Linux system packages — including PowerShell itself — before `pwsh`
+is available.)
 
 ## Overview
 
@@ -323,9 +326,11 @@ rationale that lives with the workflow.
 
 The workflow steps are thin: the non-trivial logic lives in PowerShell `just` recipes in
 [`justfiles/just_automation.just`](../../justfiles/just_automation.just)
-(`gh-compose-release-config`, `gh-release`, `gh-plan-release-binaries`), so it can be run
-and tested locally rather than only exercised by pushing to `main`. Every `run:` step uses
-`shell: pwsh`.
+(`gh-compose-release-config`, `gh-release`, `gh-plan-release-binaries`), which are themselves
+thin wrappers over the [`scripts/release/ReleaseAutomation.psm1`](../../scripts/release/ReleaseAutomation.psm1)
+module. That module is covered by a Pester suite (`just test-scripts`, gated in CI), so the
+release logic can be run and tested locally rather than only exercised by pushing to `main`.
+Every `run:` step uses `shell: pwsh`.
 
 - **One workflow, not two.** Publishing and the binary build/upload jobs share a single
   run on purpose: a git tag or GitHub release created with the ambient `GITHUB_TOKEN`

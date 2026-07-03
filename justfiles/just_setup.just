@@ -83,3 +83,13 @@ install-tools:
     } else {
         Write-Warning "npm not found; skipping Azurite install. Install Node.js/npm (see DEVELOPMENT.md), then re-run 'just install-tools' to enable 'just test-azurite'."
     }
+
+    # Pester 5 powers `just test-scripts`, the PowerShell test suite for the standalone scripts
+    # under scripts/. GitHub runners preinstall it, and a fresh local PC may only have the
+    # Windows-bundled Pester 3, so install a 5.x into the CurrentUser scope when one is not
+    # already available. -SkipPublisherCheck sidesteps the signed Windows-bundled Pester 3.
+    if (Get-Module -ListAvailable Pester | Where-Object { $_.Version.Major -ge 5 }) {
+        Write-Host "Pester 5+ already available; skipping install."
+    } else {
+        Install-Module Pester -MinimumVersion 5.0 -Scope CurrentUser -Force -SkipPublisherCheck
+    }

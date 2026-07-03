@@ -93,6 +93,23 @@ jobs:
             echo "skip_all=false" >> $GITHUB_OUTPUT
           fi
 
+  # PowerShell test suite for the standalone scripts under scripts/ (the release-automation
+  # module). Runs unconditionally — independent of the `delta` package analysis — because those
+  # scripts are not Cargo packages, so a change touching only scripts/ would otherwise be
+  # validated by nothing. The suite is seconds long, so running it on every PR is cheap.
+  test-scripts:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run script test suites
+        run: just test-scripts
+
   # Formatting is platform-agnostic, so run only on Ubuntu for efficiency.
   format-check:
     needs: [delta]

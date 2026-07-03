@@ -132,10 +132,14 @@ publish:
 
 Each step is a thin `pwsh` call into a `just` recipe; the publishing logic — deriving
 the binary crates, injecting `git_release_enable`, and the retry loop — lives in
-[`justfiles/just_automation.just`](../../justfiles/just_automation.just) so it can be
-run and tested on a developer PC rather than only by pushing to `main`. The binary jobs
-downstream do **not** consume any "what was published this run" output: a matrix driven
-off that cannot heal a partial failure on a later re-run (release-plz skips the
+[`justfiles/just_automation.just`](../../justfiles/just_automation.just), which delegates in
+turn to the [`scripts/release/ReleaseAutomation.psm1`](../../scripts/release/ReleaseAutomation.psm1)
+module, so it can be run and tested on a developer PC rather than only by pushing to `main`.
+The module is covered by a Pester suite run via `just test-scripts` (a required CI check); the
+suite exercises the real logic against fixture workspaces with `cargo metadata` and real file
+I/O, mocking only the tools that would mutate crates.io / GitHub (`release-plz`, `gh`). The
+binary jobs downstream do **not** consume any "what was published this run" output: a matrix
+driven off that cannot heal a partial failure on a later re-run (release-plz skips the
 already-published crate, so it vanishes from the output). Instead the binary jobs
 **reconcile** against the actual published state, described next.
 

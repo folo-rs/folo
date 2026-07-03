@@ -1,0 +1,4 @@
+[package]
+name = "demo-tool"
+version = "2.3.4"
+edition = "2021"
