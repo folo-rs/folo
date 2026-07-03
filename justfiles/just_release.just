@@ -4,56 +4,26 @@ audit:
     
 [group('release')]
 [script]
-prepare-release:
+prepare-release: && check-never-published
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
     Write-Verbose "Bumping versions and changelogs via 'release-plz update'" -Verbose
     release-plz update
 
-    # Trusted Publishing cannot publish a crate that has never been published before:
-    # crates.io only lets you configure a trusted publisher on a crate that already
-    # exists, so the very first release of a brand-new crate must be done by hand.
-    # Warn about any such crate now, while the release is being prepared, instead of
-    # letting the CI publish job discover it and fail. See docs/release-automation.md.
+# Warns about publishable crates that crates.io has never seen. Trusted Publishing cannot
+# perform a crate's first-ever publish (it can only be configured on a crate that already
+# exists), so a brand-new crate's first release must be done by hand (cargo publish), after
+# which Trusted Publishing is configured and subsequent releases flow through the workflow.
+# Run as a post-step of `prepare-release`, so the warning surfaces while a release is being
+# prepared instead of failing the CI publish job later. Best-effort, never a gate: a transient
+# crates.io failure degrades to a warning and continues. See docs/release-automation.md.
+[group('release')]
+[script]
+check-never-published:
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+    Import-Module ./scripts/release/ReleaseAutomation.psm1 -Force
+
     Write-Verbose "Checking crates.io for never-before-published crates" -Verbose
-    $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
-
-    # `publish` is null when publishable to any registry and an array otherwise;
-    # an empty array means "never publish", a non-empty one names allowed registries.
-    $publishable = $metadata.packages |
-        Where-Object { $null -eq $_.publish -or $_.publish.Count -gt 0 }
-
-    foreach ($pkg in $publishable) {
-        $name = $pkg.name.ToLowerInvariant()
-
-        # crates.io sparse-index path layout, keyed by crate-name length.
-        $path = switch ($name.Length) {
-            1 { "1/$name" }
-            2 { "2/$name" }
-            3 { "3/$($name.Substring(0, 1))/$name" }
-            default { "$($name.Substring(0, 2))/$($name.Substring(2, 2))/$name" }
-        }
-        $url = "https://index.crates.io/$path"
-
-        Write-Verbose "Querying $url for '$($pkg.name)'" -Verbose
-        # This is a best-effort preflight warning, never a gate: a transient failure (rate limit,
-        # 5xx, DNS/connection error) must not block `prepare-release`. -SkipHttpErrorCheck stops
-        # Invoke-WebRequest throwing on 4xx/5xx, and the try/catch handles genuine network errors;
-        # anything other than a clean 200/404 degrades to a warning and continues.
-        try {
-            $response = Invoke-WebRequest -Uri $url -Method Get -SkipHttpErrorCheck
-        } catch {
-            Write-Warning "Could not reach crates.io to check '$($pkg.name)' ($($_.Exception.Message)); skipping its never-published preflight. Verify manually if it is a brand-new crate."
-            continue
-        }
-        switch ($response.StatusCode) {
-            200 { }
-            404 {
-                Write-Warning "$($pkg.name) has never been published. Its first release must be done manually (cargo publish); afterwards configure Trusted Publishing for it on crates.io and re-publish via the GitHub workflow."
-            }
-            default {
-                Write-Warning "Unexpected HTTP $($response.StatusCode) checking crates.io for '$($pkg.name)'; skipping its never-published preflight. Verify manually if it is a brand-new crate."
-            }
-        }
-    }
+    Test-NeverPublishedCrate -Verbose

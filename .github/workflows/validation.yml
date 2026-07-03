@@ -109,10 +109,11 @@ jobs:
             if (Test-Path $baselineJson) { Remove-Item -Force $baselineJson -ErrorAction SilentlyContinue }
           }
 
-  # PowerShell test suite for the standalone scripts under scripts/ (the release-automation
-  # module). Runs unconditionally — independent of the `delta` package analysis — because those
-  # scripts are not Cargo packages, so a change touching only scripts/ would otherwise be
-  # validated by nothing. The suite is seconds long, so running it on every PR is cheap.
+  # PowerShell test suite for the standalone scripts under scripts/ (the release-automation and
+  # binstall-validation modules), plus the binstall-metadata check on the real workspace. Runs
+  # unconditionally — independent of the `delta` package analysis — because the scripts are not
+  # Cargo packages, so a change touching only scripts/ would otherwise be validated by nothing;
+  # the binstall check rides along here because it reuses the same environment and is seconds long.
   test-scripts:
     runs-on: ubuntu-latest
 
@@ -125,6 +126,9 @@ jobs:
 
       - name: Run script test suites
         run: just test-scripts
+
+      - name: Validate binstall metadata
+        run: just validate-binstall
 
   # Validates the GitHub Actions workflow files with actionlint. Runs unconditionally — independent
   # of the `delta` package analysis — because the workflow files are not Cargo packages, so a

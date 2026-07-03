@@ -1,9 +1,10 @@
-# Release-automation logic for the `Release` GitHub workflow (.github/workflows/release.yml).
+# Release-automation logic for the `Release` GitHub workflow (.github/workflows/release.yml)
+# and the local `just prepare-release` / `just check-never-published` recipes.
 #
-# The workflow steps are thin `just` recipes (gh-compose-release-config / gh-release /
-# gh-plan-release-binaries in justfiles/just_automation.just) that import this module and call
-# its functions, so the non-trivial logic lives here where it can be exercised by the Pester
-# suite (ReleaseAutomation.Tests.ps1) against fixtures rather than only by pushing to `main`.
+# The workflow steps and release recipes are thin `just` wrappers (in justfiles/just_automation.just
+# and justfiles/just_release.just) that import this module and call its functions, so the
+# non-trivial logic lives here where it can be exercised by the Pester suite
+# (ReleaseAutomation.Tests.ps1) against fixtures rather than only by pushing to `main`.
 #
 # The functions run real external tools where that is safe on fixtures (`cargo metadata`, file
 # I/O) and isolate the ones that would touch crates.io / GitHub for real (`release-plz`, `gh`)
@@ -255,6 +256,95 @@ function Invoke-ReleasePublish {
     }
 }
 
+function Get-PublishableCrate {
+    # Every crate publishable to a registry (unlike Get-PublishableBinaryCrate, not filtered to
+    # binaries), as {Name, Version} objects sorted by name. Used by the never-published preflight,
+    # which must warn about any brand-new crate, library or binary. Runs the real `cargo metadata`
+    # (offline with --no-deps); tests point it at a fixture workspace via -ManifestPath.
+    [CmdletBinding()]
+    param(
+        [string] $ManifestPath
+    )
+
+    $cargoArgs = @('metadata', '--no-deps', '--format-version', '1')
+    if ($ManifestPath) { $cargoArgs += @('--manifest-path', $ManifestPath) }
+
+    $metadata = & cargo @cargoArgs | ConvertFrom-Json
+    $metadata.packages |
+        Where-Object { ($null -eq $_.publish) -or ($_.publish.Count -gt 0) } |
+        ForEach-Object { [pscustomobject]@{ Name = $_.name; Version = $_.version } } |
+        Sort-Object -Property Name -Unique
+}
+
+function Get-CrateIndexPath {
+    # crates.io sparse-index path for a crate, keyed by (lowercased) name length. Pure, so the
+    # length-branch logic is unit-tested without touching the network. 1 and 2-char names live
+    # under `1/` and `2/`; 3-char under `3/<first-letter>/`; everything else under
+    # `<first-two>/<next-two>/`.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $Name
+    )
+
+    $n = $Name.ToLowerInvariant()
+    switch ($n.Length) {
+        1 { "1/$n" }
+        2 { "2/$n" }
+        3 { "3/$($n.Substring(0, 1))/$n" }
+        default { "$($n.Substring(0, 2))/$($n.Substring(2, 2))/$n" }
+    }
+}
+
+function Get-CratePublishStatus {
+    # Best-effort crates.io presence check for one crate. Returns 'Published' (HTTP 200),
+    # 'NeverPublished' (HTTP 404), or 'Unknown' (a transient rate-limit / 5xx / network error).
+    # Isolates the single HTTP call so the preflight loop and its tests stay off the network.
+    # -SkipHttpErrorCheck stops Invoke-WebRequest throwing on 4xx/5xx so 404 is classified rather
+    # than caught; the try/catch handles genuine network failures.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $Name
+    )
+
+    $url = "https://index.crates.io/$(Get-CrateIndexPath -Name $Name)"
+    try {
+        $response = Invoke-WebRequest -Uri $url -Method Get -SkipHttpErrorCheck
+    } catch {
+        return 'Unknown'
+    }
+
+    switch ([int] $response.StatusCode) {
+        200 { 'Published' }
+        404 { 'NeverPublished' }
+        default { 'Unknown' }
+    }
+}
+
+function Test-NeverPublishedCrate {
+    # Preflight for `just prepare-release`: warns about publishable crates crates.io has never
+    # seen. Trusted Publishing cannot perform a crate's first-ever publish (the crate must already
+    # exist so a trusted publisher can be configured on it), so a brand-new crate's first release
+    # must be done by hand. Best-effort and never a gate: a status that cannot be confirmed
+    # degrades to a warning and continues, so a transient failure never blocks preparing a release.
+    [CmdletBinding()]
+    param(
+        [string] $ManifestPath
+    )
+
+    foreach ($crate in @(Get-PublishableCrate -ManifestPath $ManifestPath)) {
+        Write-Verbose "Checking crates.io publish status for '$($crate.Name)'"
+        switch (Get-CratePublishStatus -Name $crate.Name) {
+            'Published' { }
+            'NeverPublished' {
+                Write-Warning "$($crate.Name) has never been published. Its first release must be done manually (cargo publish); afterwards configure Trusted Publishing for it on crates.io and re-publish via the GitHub workflow."
+            }
+            default {
+                Write-Warning "Could not confirm crates.io publish status for '$($crate.Name)'; skipping its never-published preflight. Verify manually if it is a brand-new crate."
+            }
+        }
+    }
+}
+
 function Set-GitHubOutput {
     # Emits a `name=value` step output for the workflow (and echoes it for the run log). No-ops
     # the file append when GITHUB_OUTPUT is unset, so the recipes are runnable locally.
@@ -273,6 +363,10 @@ function Set-GitHubOutput {
 Export-ModuleMember -Function `
     Get-ReleaseTarget, `
     Get-PublishableBinaryCrate, `
+    Get-PublishableCrate, `
+    Get-CrateIndexPath, `
+    Get-CratePublishStatus, `
+    Test-NeverPublishedCrate, `
     Add-GitReleaseEnableFlag, `
     New-ReleasePlzConfig, `
     Get-BinaryReleaseAsset, `

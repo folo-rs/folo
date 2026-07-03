@@ -12,8 +12,8 @@ to `main`; version bumping is the only manual step.
   asset-naming contract, or a publish that hit crates.io rate limits.
 * **Cross-links**: [`git-workflow.md`](git-workflow.md) (version bumps happen off
   feature branches), [`build-and-tooling.md`](build-and-tooling.md) (`just`
-  recipes), [`.github/workflows/AGENTS.md`](../.github/workflows/AGENTS.md) (the
-  nightly bench matrix this reuses), [`RELEASING.md`](../RELEASING.md) (the
+  recipes), [`.github/workflows/design.md`](../.github/workflows/design.md) (the
+  bench matrix this reuses), [`RELEASING.md`](../RELEASING.md) (the
   maintainer-facing procedure).
 
 ## The flow
@@ -386,7 +386,10 @@ Windows. The `.sha256` sidecar is picked up for verification automatically.
 The convention table is the contract: any change to it must touch, together,
 `taiki-e`'s `archive:` input, the `git_tag_name` pin, and every crate's binstall
 block. A new binary crate copies the block above verbatim into its `Cargo.toml`
-(the build/upload side is already handled by the derivation).
+(the build/upload side is already handled by the derivation). CI enforces this:
+`just validate-binstall` fails the build when a publishable binary crate is
+missing the block or has let it drift from the contract, so a forgotten or stale
+block is caught before release rather than by a user hitting a 404.
 
 ## Manual publishing
 

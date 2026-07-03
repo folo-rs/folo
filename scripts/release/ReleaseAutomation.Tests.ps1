@@ -140,6 +140,111 @@ Describe 'New-ReleasePlzConfig (real file write)' {
     }
 }
 
+Describe 'Get-PublishableCrate (real cargo metadata on a fixture workspace)' {
+    BeforeAll {
+        $script:AllCrates = Get-PublishableCrate -ManifestPath $script:MetadataManifest
+    }
+
+    It 'includes publishable crates regardless of target kind (libraries and binaries)' {
+        $script:AllCrates.Name | Should -Contain 'pub-bin'
+        $script:AllCrates.Name | Should -Contain 'pub-lib'
+        $script:AllCrates.Name | Should -Contain 'demo-tool'
+        $script:AllCrates.Name | Should -Contain 'demo-tool-core'
+    }
+
+    It 'excludes non-publishable crates' {
+        $script:AllCrates.Name | Should -Not -Contain 'nopub-bin'
+    }
+
+    It 'returns crates sorted by name with versions' {
+        $script:AllCrates.Name | Should -Be @('demo-tool', 'demo-tool-core', 'pub-bin', 'pub-lib')
+        ($script:AllCrates | Where-Object Name -EQ 'demo-tool').Version | Should -Be '2.3.4'
+    }
+}
+
+Describe 'Get-CrateIndexPath (pure sparse-index path)' {
+    It 'places a one-character name under 1/' {
+        Get-CrateIndexPath -Name 'a' | Should -Be '1/a'
+    }
+
+    It 'places a two-character name under 2/' {
+        Get-CrateIndexPath -Name 'ab' | Should -Be '2/ab'
+    }
+
+    It 'places a three-character name under the 3/x/ prefix' {
+        Get-CrateIndexPath -Name 'abc' | Should -Be '3/a/abc'
+    }
+
+    It 'places a longer name under the first-two/next-two prefix' {
+        Get-CrateIndexPath -Name 'cargo-bench-history' | Should -Be 'ca/rg/cargo-bench-history'
+    }
+
+    It 'lowercases the name before computing the path' {
+        Get-CrateIndexPath -Name 'Cargo-Detect-Package' | Should -Be 'ca/rg/cargo-detect-package'
+    }
+}
+
+Describe 'Get-CratePublishStatus (mocked HTTP)' {
+    It 'reports Published on HTTP 200' {
+        Mock Invoke-WebRequest -ModuleName ReleaseAutomation { [pscustomobject]@{ StatusCode = 200 } }
+        Get-CratePublishStatus -Name 'serde' | Should -Be 'Published'
+    }
+
+    It 'reports NeverPublished on HTTP 404' {
+        Mock Invoke-WebRequest -ModuleName ReleaseAutomation { [pscustomobject]@{ StatusCode = 404 } }
+        Get-CratePublishStatus -Name 'brand-new-crate' | Should -Be 'NeverPublished'
+    }
+
+    It 'reports Unknown on an unexpected status code' {
+        Mock Invoke-WebRequest -ModuleName ReleaseAutomation { [pscustomobject]@{ StatusCode = 503 } }
+        Get-CratePublishStatus -Name 'serde' | Should -Be 'Unknown'
+    }
+
+    It 'reports Unknown when the request throws (network error)' {
+        Mock Invoke-WebRequest -ModuleName ReleaseAutomation { throw 'connection refused' }
+        Get-CratePublishStatus -Name 'serde' | Should -Be 'Unknown'
+    }
+
+    It 'queries the crate''s sparse-index URL' {
+        Mock Invoke-WebRequest -ModuleName ReleaseAutomation { [pscustomobject]@{ StatusCode = 200 } }
+        Get-CratePublishStatus -Name 'cargo-bench-history' | Out-Null
+        Should -Invoke Invoke-WebRequest -ModuleName ReleaseAutomation -Times 1 -Exactly `
+            -ParameterFilter { $Uri -eq 'https://index.crates.io/ca/rg/cargo-bench-history' }
+    }
+}
+
+Describe 'Test-NeverPublishedCrate (mocked crate list and status)' {
+    BeforeEach {
+        Mock Get-PublishableCrate -ModuleName ReleaseAutomation {
+            @(
+                [pscustomobject]@{ Name = 'existing-crate'; Version = '1.0.0' }
+                [pscustomobject]@{ Name = 'brand-new-crate'; Version = '0.1.0' }
+                [pscustomobject]@{ Name = 'flaky-crate'; Version = '0.1.0' }
+            )
+        }
+        Mock Get-CratePublishStatus -ModuleName ReleaseAutomation {
+            switch ($Name) {
+                'existing-crate' { 'Published' }
+                'brand-new-crate' { 'NeverPublished' }
+                default { 'Unknown' }
+            }
+        }
+    }
+
+    It 'warns once per never-published crate and once per unconfirmed crate, but not for published ones' {
+        Test-NeverPublishedCrate -WarningVariable warnings -WarningAction SilentlyContinue 4>$null
+        @($warnings).Count | Should -Be 2
+        ($warnings -join "`n") | Should -Match 'brand-new-crate has never been published'
+        ($warnings -join "`n") | Should -Match "Could not confirm crates.io publish status for 'flaky-crate'"
+        ($warnings -join "`n") | Should -Not -Match 'existing-crate'
+    }
+
+    It 'checks the status of every publishable crate' {
+        Test-NeverPublishedCrate -WarningAction SilentlyContinue 4>$null
+        Should -Invoke Get-CratePublishStatus -ModuleName ReleaseAutomation -Times 3 -Exactly
+    }
+}
+
 Describe 'Get-ReleaseTarget' {
     BeforeAll {
         $script:Targets = Get-ReleaseTarget

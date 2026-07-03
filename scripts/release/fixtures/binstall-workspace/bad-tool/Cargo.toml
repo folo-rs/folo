@@ -1,0 +1,10 @@
+[package]
+name = "bad-tool"
+version = "2.0.0"
+edition = "2021"
+
+# Drifted binstall block: pkg-fmt is wrong and bin-dir is missing entirely. The validator must
+# report both problems.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-v{ version }-{ target }.zip"
+pkg-fmt = "tgz"

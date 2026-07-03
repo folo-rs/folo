@@ -1048,7 +1048,7 @@ and `BENCH_HISTORY_TEST_AZURE_ACCOUNT` set.
   leaves the real-Azure tests skipped.
 
 In CI these tests run only in the Linux-only, same-repo-only `test-azure` job (see
-`.github/workflows/validation.yml` and `.github/workflows/AGENTS.md`). It collects
+`.github/workflows/validation.yml` and `.github/workflows/design.md`). It collects
 no coverage — `test-azurite` already covers `azure.rs`; its value is proving the
 real Entra + real Blob endpoint round-trip.
 
