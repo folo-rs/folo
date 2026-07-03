@@ -537,7 +537,7 @@ smooth ramps to drift, and the two never double-report one event.
 ### 8.2 Engine-aware gating
 
 For a **deterministic** series a change-point is reported once both regimes reach the
-persistence minimum and their medians differ at all — no significance test and no
+persistence minimum and their medians differ — no significance test and no
 multiple-comparison filter, which would wrongly drop genuine small exact steps.
 
 For a **noisy** series the Pettitt test is used only to *locate* the split (its analytic
@@ -549,6 +549,13 @@ wobble stays silent. Drift additionally requires the endpoint movement to exceed
 floor derived from the confidence-interval width, so run-to-run jitter never reads as a
 trend. When an engine reports no confidence interval (older mean-only output), the
 CI-non-overlap gate is skipped and the decision rests on the rank and trend tests alone.
+
+Underneath every engine's gates sits one **basic noise floor**: any finding whose relative
+move is below a minimum magnitude is dropped regardless of direction, engine, or
+confidence. A sub-percent change is not worth a human's attention even when a deterministic
+engine reports it with certainty, so this floor is what keeps the otherwise-unbounded
+deterministic path from surfacing trivia; it sits below the noisy engines' higher
+practical-magnitude floors, which already subsume it.
 
 ### 8.3 Multiple-comparison discipline
 
@@ -632,7 +639,10 @@ from the inactive context kept only for continuity.
 ### 8.7 Report formats
 
 The three report formats carry the **same data** and differ only in presentation; the text
-layout is canonical. Text goes to stdout as one paragraph per finding (a
+layout is canonical. Each report names the **analyzed tip commit** — the commit whose line
+of history the findings describe — annotated `+ uncommitted changes` when the working tree
+was dirty, so a reader (or the auto-filed regression issue) can tie the report to an exact
+commit. Text goes to stdout as one paragraph per finding (a
 direction-coloured headline leading with the relative-change percent, a dimmed detail line,
 and — in history mode only — a small line chart of the series), with colour enabled only
 when stdout is a terminal and not disabled by environment. Markdown is that data with

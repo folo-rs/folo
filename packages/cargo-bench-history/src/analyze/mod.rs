@@ -263,10 +263,14 @@ where
 
     let input = ReportInput {
         project: project_id,
+        tip_commit: &dataset.tip_commit,
+        tip_dirty: dataset.tip_dirty,
         mode: dataset.mode.as_str(),
         notable,
         runs: dataset.run_index.total(),
         series: series.len(),
+        commit_span: dataset.run_index.commit_span(),
+        report_improvements: context.reports_improvements(),
         findings: &findings,
         sets: &summaries,
         hint: hint.as_deref(),
@@ -508,6 +512,26 @@ impl RunIndex {
     ) -> impl Iterator<Item = (&DiscriminantSet, &BTreeMap<usize, CommitCounts>)> {
         self.sets.iter()
     }
+
+    /// The oldest and newest commit that contributed a run, by first-parent
+    /// topological position, as `(first, last)` full SHAs. `None` when no run was
+    /// admitted. The report header uses it to state the span of analyzed history.
+    pub(crate) fn commit_span(&self) -> Option<(&str, &str)> {
+        let mut first: Option<(usize, &str)> = None;
+        let mut last: Option<(usize, &str)> = None;
+        for by_commit in self.sets.values() {
+            for (&topo_index, counts) in by_commit {
+                let commit = counts.commit.as_str();
+                if first.is_none_or(|(index, _)| topo_index < index) {
+                    first = Some((topo_index, commit));
+                }
+                if last.is_none_or(|(index, _)| topo_index > index) {
+                    last = Some((topo_index, commit));
+                }
+            }
+        }
+        Some((first?.1, last?.1))
+    }
 }
 
 /// The data an analysis (or listing) draws on, plus the bookkeeping needed to
@@ -529,6 +553,12 @@ struct SelectedDataSet {
     included_dirty_base_exception: bool,
     /// The target ref the timeline was resolved against (for diagnostics).
     target_ref: String,
+    /// The full SHA of the analyzed tip commit (the resolved `--context`/HEAD),
+    /// carried into the report so it names the exact commit the findings describe.
+    tip_commit: String,
+    /// Whether the working tree carried uncommitted changes when the analysis ran;
+    /// the report annotates the tip `+ uncommitted changes` when set.
+    tip_dirty: bool,
     /// The resolved analysis mode (auto-detected from topology, or overridden).
     mode: AnalysisMode,
     /// First-parent topological index of the merge-base, used by branch mode to
@@ -873,6 +903,8 @@ where
     let topology_started = Instant::now();
     let ResolvedHistory {
         target_ref,
+        tip_commit,
+        tip_dirty,
         order,
         commit_times,
         admit_dirty,
@@ -1182,6 +1214,8 @@ where
         },
         included_dirty_base_exception,
         target_ref,
+        tip_commit,
+        tip_dirty,
         mode,
         merge_base_index,
         blessings,
@@ -1301,6 +1335,14 @@ enum DirtyTipPolicy {
 struct ResolvedHistory {
     /// The target ref the timeline was resolved against (for diagnostics).
     target_ref: String,
+    /// The full SHA the target ref resolved to — the analyzed tip commit, carried
+    /// into the report so it names the exact commit the findings describe.
+    tip_commit: String,
+    /// Whether the working tree carried uncommitted changes when the topology was
+    /// resolved. Probed only under [`DirtyTipPolicy::WhenWorkingTreeDirty`] (and
+    /// not under `--no-dirty`); `false` otherwise. The report annotates the tip
+    /// `+ uncommitted changes` when set.
+    tip_dirty: bool,
     /// First-parent position of each selected commit, for series ordering. An
     /// object whose commit is absent is outside the analyzed history.
     order: HashMap<String, usize>,
@@ -1390,15 +1432,17 @@ where
     // The base-branch dirty-tip exception: `analyze`/`list` admit a base-side tip's
     // dirty runs only when the working tree is currently dirty (`--no-dirty` skips
     // both the probe and the exception); `prune` admits them unconditionally so it
-    // can remove them regardless of the present working-tree state.
+    // can remove them regardless of the present working-tree state. The probe result
+    // is reused for the report's tip annotation, so `analyze` never runs it twice.
+    let working_tree_dirty = match policy {
+        DirtyTipPolicy::WhenWorkingTreeDirty if !selection.no_dirty => {
+            git.is_dirty().await.map_err(RunError::Io)?
+        }
+        _ => false,
+    };
     let dirty_tip_exception = match policy {
         DirtyTipPolicy::Always => !selection.no_dirty,
         DirtyTipPolicy::WhenWorkingTreeDirty => {
-            let working_tree_dirty = if selection.no_dirty {
-                false
-            } else {
-                git.is_dirty().await.map_err(RunError::Io)?
-            };
             if working_tree_dirty {
                 reporter.note_with(|| {
                     "working tree is dirty: dirty snapshots on a base-side tip will be admitted"
@@ -1440,6 +1484,8 @@ where
 
     Ok(ResolvedHistory {
         target_ref: target_ref.to_owned(),
+        tip_commit: target_sha,
+        tip_dirty: working_tree_dirty,
         order,
         commit_times,
         admit_dirty,
@@ -2771,6 +2817,14 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 5, "both dirty tip snapshots are admitted");
         assert_eq!(regressions, 1, "the dirty tip snapshots complete the step");
+        assert_eq!(
+            parsed["tip_commit"], "c3",
+            "the report names the analyzed tip"
+        );
+        assert_eq!(
+            parsed["tip_dirty"], true,
+            "the currently-dirty working tree annotates the tip"
+        );
         let warning = parsed["warning"].as_str().unwrap();
         assert!(
             warning.contains("dirty runs") && warning.contains("Switch to a new branch"),
@@ -2803,6 +2857,14 @@ mod tests {
         let (report, _, _) = analyze_json(&git, &storage, "folo", &options());
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 3, "the dirty tip run stays excluded");
+        assert_eq!(
+            parsed["tip_commit"], "c3",
+            "the report names the analyzed tip"
+        );
+        assert_eq!(
+            parsed["tip_dirty"], false,
+            "a clean working tree leaves the tip unannotated"
+        );
         assert!(
             parsed["warning"].is_null(),
             "no warning when the tree is clean"
@@ -3529,6 +3591,54 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(summarize(&first), summarize(&reference));
+    }
+
+    #[test]
+    fn commit_span_spans_the_oldest_and_newest_analyzed_commit() {
+        let set = DiscriminantSet {
+            engine: "criterion".to_owned(),
+            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
+            machine_key: "synthetic".to_owned(),
+        };
+        let other_set = DiscriminantSet {
+            engine: "callgrind".to_owned(),
+            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
+            machine_key: "synthetic".to_owned(),
+        };
+
+        let mut index = RunIndex::new();
+        assert_eq!(index.commit_span(), None, "an empty index spans nothing");
+
+        // Record out of topological order and across two sets: the span must key off
+        // the first-parent position, not the insertion order, and must consider every
+        // set so the header covers the whole analyzed history.
+        index.record(&set, 2, "c2", false);
+        index.record(&set, 0, "c0", false);
+        index.record(&other_set, 1, "c1", false);
+
+        assert_eq!(
+            index.commit_span(),
+            Some(("c0", "c2")),
+            "the span runs from the lowest to the highest topological position"
+        );
+    }
+
+    #[test]
+    fn commit_span_collapses_to_a_single_commit() {
+        let set = DiscriminantSet {
+            engine: "criterion".to_owned(),
+            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
+            machine_key: "synthetic".to_owned(),
+        };
+        let mut index = RunIndex::new();
+        index.record(&set, 0, "solo", false);
+        index.record(&set, 0, "solo", true);
+
+        assert_eq!(
+            index.commit_span(),
+            Some(("solo", "solo")),
+            "a single analyzed commit is both ends of the span"
+        );
     }
 
     #[test]

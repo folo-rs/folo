@@ -171,11 +171,18 @@ jobs:
       # JasonEtco/create-an-issue derives the issue title/labels from the file's YAML
       # front matter; the report the tool renders has none, so prepend a fixed header.
       # The fixed title is also the dedup key that turns findings into one rolling issue.
+      # A lifecycle footer is appended so a reader understands the issue is refreshed
+      # only on runs that still have findings, is never auto-closed, and that an
+      # accepted regression must be blessed (not merely closed) — see the File step.
       - name: Compose regression issue
         if: steps.notable.outputs.value == 'true'
         shell: bash
         run: |
-          { printf -- '---\ntitle: Benchmark regressions detected\nlabels: bench-history, regression\n---\n\n'; cat bench-history-report.md; } > bench-history-issue.md
+          {
+            printf -- '---\ntitle: Benchmark regressions detected\nlabels: bench-history, regression\n---\n\n'
+            cat bench-history-report.md
+            printf -- '\n\n---\n\n**Issue lifecycle:** This issue is maintained automatically by the `bench-history` workflow. Its body is refreshed on every push to `main` whose analysis still reports findings, so it always reflects the **latest run that had findings** — a run that finds nothing leaves it untouched rather than closing it. This issue is **not** closed automatically, and closing it by hand does **not** accept the regression: unless the change is blessed, the next analysis that still finds it just files a fresh issue. To accept an intentional change, bless the affected benchmarks at the commit named above, e.g. `cargo bench-history bless <benchmark-id-prefix> --context <commit>` (or `cargo bench-history bless --all --context <commit>` to accept every benchmark at that commit), then close the issue.\n'
+          } > bench-history-issue.md
 
       # One rolling issue, updated rather than duplicated each run (the fixed title is
       # the dedup key), so a regression that persists does not spam new issues. Opened
