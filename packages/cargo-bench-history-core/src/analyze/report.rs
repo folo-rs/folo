@@ -64,6 +64,15 @@ pub struct SetSummary<'a> {
 pub struct ReportInput<'a> {
     /// The project the history belongs to.
     pub project: &'a str,
+    /// The commit the analysis was run against (the resolved `--context`, HEAD by
+    /// default) — the tip whose line of history the report describes, so a reader
+    /// can identify exactly which state the findings pertain to.
+    pub tip_commit: &'a str,
+    /// Whether the working tree carried uncommitted changes when the analysis ran.
+    /// When set, the tip is annotated `+ uncommitted changes` because the analyzed
+    /// checkout differs from the committed tip. False for a clean tree (the CI
+    /// collection case).
+    pub tip_dirty: bool,
     /// The analysis mode the report was produced in (`history`/`branch`/`tip`).
     pub mode: &'a str,
     /// Whether any finding survived — the at-a-glance signal a downstream
@@ -183,6 +192,11 @@ impl<'a> JsonFinding<'a> {
 struct JsonReport<'a> {
     /// The project the history belongs to.
     project: &'a str,
+    /// The commit the analysis was run against (resolved `--context`, HEAD by
+    /// default): the full SHA, so a consumer can link the report to a commit.
+    tip_commit: &'a str,
+    /// Whether the working tree carried uncommitted changes when the analysis ran.
+    tip_dirty: bool,
     /// The analysis mode (`history`/`branch`/`tip`).
     mode: &'a str,
     /// Whether any finding survived — the downstream automation signal.
@@ -256,6 +270,18 @@ fn set_label(set: &DiscriminantSet) -> String {
     set.to_string()
 }
 
+/// The commit label shared by the text and Markdown headers: the analyzed tip
+/// commit, annotated `+ uncommitted changes` when the working tree carried
+/// uncommitted changes so a reader knows the analyzed checkout differed from the
+/// committed tip.
+fn tip_label(commit: &str, dirty: bool) -> String {
+    if dirty {
+        format!("{commit} + uncommitted changes")
+    } else {
+        commit.to_owned()
+    }
+}
+
 /// Forces `colored`'s process-global override to `value` until dropped, then
 /// restores ambient auto-detection. Bundling the set with the matching restore keeps
 /// the override scoped to a single render call so it can never leak into later output,
@@ -293,6 +319,7 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
 
     let mut lines = vec![
         format!("Analyzed project {} ({} mode)", input.project, input.mode),
+        format!("  commit: {}", tip_label(input.tip_commit, input.tip_dirty)),
         format!(
             "  runs: {}  series: {}  regressions: {regressions}  improvements: {improvements}",
             input.runs, input.series
@@ -501,6 +528,7 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
     let mut lines = vec![
         format!("# Benchmark history analysis: {}", input.project),
         String::new(),
+        format!("- Commit: {}", tip_label(input.tip_commit, input.tip_dirty)),
         format!("- Mode: {}", input.mode),
         format!("- Runs analyzed: {}", input.runs),
         format!("- Series compared: {}", input.series),
@@ -606,6 +634,8 @@ fn render_json(input: &ReportInput<'_>) -> String {
 
     let report = JsonReport {
         project: input.project,
+        tip_commit: input.tip_commit,
+        tip_dirty: input.tip_dirty,
         mode: input.mode,
         notable: input.notable,
         runs: input.runs,
@@ -768,6 +798,8 @@ mod tests {
         });
         ReportInput {
             project,
+            tip_commit: "1234567890abcdef1234",
+            tip_dirty: false,
             mode: "history",
             notable: !findings.is_empty(),
             runs: findings.len().saturating_add(3),
@@ -795,6 +827,8 @@ mod tests {
     fn text_report_with_no_findings_is_explicit() {
         let input = ReportInput {
             project: "folo",
+            tip_commit: "1234567890abcdef1234",
+            tip_dirty: false,
             mode: "history",
             notable: false,
             runs: 3,
@@ -814,6 +848,8 @@ mod tests {
     fn text_report_renders_hint_when_present() {
         let input = ReportInput {
             project: "folo",
+            tip_commit: "1234567890abcdef1234",
+            tip_dirty: false,
             mode: "history",
             notable: false,
             runs: 0,
@@ -865,6 +901,8 @@ mod tests {
         }];
         let input = ReportInput {
             project: "folo",
+            tip_commit: "1234567890abcdef1234",
+            tip_dirty: false,
             mode: "history",
             notable: true,
             runs: 99,
@@ -1054,6 +1092,8 @@ mod tests {
     fn markdown_report_with_no_findings() {
         let input = ReportInput {
             project: "folo",
+            tip_commit: "1234567890abcdef1234",
+            tip_dirty: false,
             mode: "history",
             notable: false,
             runs: 0,
@@ -1072,6 +1112,8 @@ mod tests {
     fn json_report_includes_hint_field_when_present() {
         let input = ReportInput {
             project: "folo",
+            tip_commit: "1234567890abcdef1234",
+            tip_dirty: false,
             mode: "history",
             notable: false,
             runs: 0,
@@ -1115,6 +1157,8 @@ mod tests {
     fn warning_renders_even_when_there_are_no_findings() {
         let input = ReportInput {
             project: "folo",
+            tip_commit: "1234567890abcdef1234",
+            tip_dirty: false,
             mode: "history",
             notable: false,
             runs: 1,
@@ -1136,6 +1180,8 @@ mod tests {
     fn omitted_warning_is_absent_from_json() {
         let input = ReportInput {
             project: "folo",
+            tip_commit: "1234567890abcdef1234",
+            tip_dirty: false,
             mode: "history",
             notable: false,
             runs: 0,
@@ -1159,6 +1205,8 @@ mod tests {
         let report = render(&input, ReportFormat::Json, false);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["project"], "folo");
+        assert_eq!(parsed["tip_commit"], "1234567890abcdef1234");
+        assert_eq!(parsed["tip_dirty"], false);
         assert_eq!(parsed["regressions"], 1);
         assert_eq!(parsed["improvements"], 0);
         let finding = &parsed["findings"][0];
@@ -1178,6 +1226,59 @@ mod tests {
         assert_eq!(set_json["target_triple"], "x86_64-unknown-linux-gnu");
         assert_eq!(set_json["regressions"], 1);
         assert!(set_json.get("findings").is_none(), "{report}");
+    }
+
+    #[test]
+    fn report_header_names_the_analyzed_tip_commit() {
+        let set = discriminant_set();
+        let findings = vec![regression()];
+        let mut summaries = Vec::new();
+        let input = single_set_input("folo", &set, &findings, &mut summaries);
+
+        // A clean tip is named without annotation in both human formats.
+        let text = render(&input, ReportFormat::Text, false);
+        assert!(text.contains("commit: 1234567890abcdef1234"), "{text}");
+        assert!(
+            !text.contains("uncommitted changes"),
+            "a clean tip must not be annotated: {text}"
+        );
+        let markdown = render(&input, ReportFormat::Markdown, false);
+        assert!(
+            markdown.contains("- Commit: 1234567890abcdef1234"),
+            "{markdown}"
+        );
+    }
+
+    #[test]
+    fn dirty_tip_is_annotated_with_uncommitted_changes() {
+        let input = ReportInput {
+            project: "folo",
+            tip_commit: "1234567890abcdef1234",
+            tip_dirty: true,
+            mode: "history",
+            notable: false,
+            runs: 1,
+            series: 1,
+            findings: &[],
+            sets: &[],
+            hint: None,
+            warning: None,
+        };
+
+        let text = render(&input, ReportFormat::Text, false);
+        assert!(
+            text.contains("commit: 1234567890abcdef1234 + uncommitted changes"),
+            "{text}"
+        );
+        let markdown = render(&input, ReportFormat::Markdown, false);
+        assert!(
+            markdown.contains("- Commit: 1234567890abcdef1234 + uncommitted changes"),
+            "{markdown}"
+        );
+        let json = render(&input, ReportFormat::Json, false);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["tip_commit"], "1234567890abcdef1234");
+        assert_eq!(parsed["tip_dirty"], true);
     }
 
     #[test]
@@ -1415,6 +1516,8 @@ mod tests {
         ];
         let input = ReportInput {
             project: "folo",
+            tip_commit: "1234567890abcdef1234",
+            tip_dirty: false,
             mode: "history",
             notable: true,
             runs: 10,
@@ -1454,6 +1557,8 @@ mod tests {
         ];
         let input = ReportInput {
             project: "folo",
+            tip_commit: "1234567890abcdef1234",
+            tip_dirty: false,
             mode: "history",
             notable: true,
             runs: 10,
