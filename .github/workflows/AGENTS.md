@@ -9,6 +9,16 @@ Rust toolchain versions are defined in `constants.env` (loaded via just's dotenv
 version numbers. The GitHub workflows call `just install-tools` and `just <command>`, so
 toolchain versions flow automatically from `constants.env` without any duplication in workflows.
 
+## Shell conventions
+
+Workflow `run:` steps use `shell: pwsh` (PowerShell 7 is available on every runner). Prefer
+PowerShell over Bash, matching the repository-wide convention
+([`docs/build-and-tooling.md`](../../docs/build-and-tooling.md)). Keep steps thin: put any
+non-trivial logic in a PowerShell `[script]` `just` recipe the step calls, so the logic can be
+run and tested locally instead of only by triggering the workflow. (The `setup-environment`
+composite action still uses Bash internally, because it bootstraps the Linux system packages —
+including PowerShell itself — before `pwsh` is available.)
+
 ## Overview
 
 The CI workflows in this repository run individual `just` commands as separate parallel jobs instead of combined `validate-local` and `validate-extra-local` commands. This design provides faster feedback by parallelizing checks and clearer failure identification.
@@ -311,40 +321,48 @@ manual step (`just prepare-release`, then commit and push); everything downstrea
 automatic. `docs/release-automation.md` holds the full design; this section captures the
 rationale that lives with the workflow.
 
+The workflow steps are thin: the non-trivial logic lives in PowerShell `just` recipes in
+[`justfiles/just_automation.just`](../../justfiles/just_automation.just)
+(`gh-compose-release-config`, `gh-release`, `gh-plan-release-binaries`), so it can be run
+and tested locally rather than only exercised by pushing to `main`. Every `run:` step uses
+`shell: pwsh`.
+
 - **One workflow, not two.** Publishing and the binary build/upload jobs share a single
   run on purpose: a git tag or GitHub release created with the ambient `GITHUB_TOKEN`
   does **not** trigger downstream `on: release` / `on: push: tags` workflows. Driving the
   binary jobs from within the same run (rather than a separate tag-triggered workflow)
   is what lets the built-in token suffice — no PAT or GitHub App token is needed.
-- **`publish` job — Trusted Publishing + bounded retries.** Runs `release-plz release`.
-  crates.io Trusted Publishing is auto-detected from `permissions: id-token: write` with
-  no `CARGO_REGISTRY_TOKEN` present: release-plz exchanges a GitHub OIDC token for a
-  short-lived crates.io token itself, so no long-lived registry secret is stored. A bash
-  loop retries up to three times, 15 minutes apart, because crates.io rate-limits and the
-  OIDC token is short-lived. release-plz is idempotent (it re-checks the registry and
-  publishes only versions not already there), so a retry — or a whole re-run — safely
-  resumes a partially-published release, and each attempt mints a fresh OIDC token so a
-  publish that overruns the token lifetime simply fails that attempt and the next proceeds.
-  `GIT_TOKEN` (the built-in `GITHUB_TOKEN`) lets release-plz push tags and create releases.
+- **`publish` job — Trusted Publishing + bounded retries.** Calls `just gh-release`, which
+  runs `release-plz release`. crates.io Trusted Publishing is auto-detected from
+  `permissions: id-token: write` with no `CARGO_REGISTRY_TOKEN` present: release-plz
+  exchanges a GitHub OIDC token for a short-lived crates.io token itself, so no long-lived
+  registry secret is stored. The recipe retries up to three times, 15 minutes apart,
+  because crates.io rate-limits and the OIDC token is short-lived. release-plz is idempotent
+  (it re-checks the registry and publishes only versions not already there), so a retry — or
+  a whole re-run — safely resumes a partially-published release, and each attempt mints a
+  fresh OIDC token so a publish that overruns the token lifetime simply fails that attempt
+  and the next proceeds. `GIT_TOKEN` (the built-in `GITHUB_TOKEN`) lets release-plz push
+  tags and create releases.
 - **Dynamic `git_release_enable` injection.** The committed `release-plz.toml` keeps
   `git_release_enable = false` (most crates are libraries and must not get GitHub
-  releases). Before releasing, the job derives the publishable **binary** crates from
-  `cargo metadata` (publishable AND owning a `bin` target) and, using `tomlkit`, writes a
-  CI-only copy of the config with `git_release_enable = true` set on exactly those crates,
+  releases). Before releasing, `just gh-compose-release-config` derives the publishable
+  **binary** crates from `cargo metadata` (publishable AND owning a `bin` target) and writes
+  a CI-only copy of the config with `git_release_enable = true` set on exactly those crates,
   passed via `--config`. The copy is written under `$RUNNER_TEMP` (outside the working
   tree) so `cargo publish` never sees a dirty repo. Because the enabled set is always
   derived, a newly-added binary crate is covered with no config edit and no library crate
   is ever released.
-- **`plan-binaries` job — self-healing reconciliation.** Runs after every successful
-  publish, **not** gated on whether anything was published this run. It re-derives the
-  publishable binary crates at their current manifest versions, and for each computes the
-  expected tag `{name}-v{version}` and queries the release's existing assets
-  (`gh release view`). For every (crate, target) whose `{name}-v{version}-{triple}.zip`
-  archive is missing, it emits a matrix entry. This is why retries heal: a plain re-run or
-  a bare `workflow_dispatch` reconciles the actually-published state against uploaded
-  assets and rebuilds only what is missing — never a hand-maintained crate list. A matrix
-  keyed off "published this run" could not do this, because a re-run skips the
-  already-published crate and it drops out of release-plz's output.
+- **`plan-binaries` job — self-healing reconciliation.** Calls `just
+  gh-plan-release-binaries`, which runs after every successful publish, **not** gated on
+  whether anything was published this run. It re-derives the publishable binary crates at
+  their current manifest versions, and for each computes the expected tag `{name}-v{version}`
+  and queries the release's existing assets (`gh release view`). For every (crate, target)
+  whose `{name}-v{version}-{triple}.zip` archive is missing, it emits a matrix entry (as the
+  step's `matrix` / `has_binaries` outputs). This is why retries heal: a plain re-run or a
+  bare `workflow_dispatch` reconciles the actually-published state against uploaded assets
+  and rebuilds only what is missing — never a hand-maintained crate list. A matrix keyed off
+  "published this run" could not do this, because a re-run skips the already-published crate
+  and it drops out of release-plz's output.
 - **`build-binaries` job — native per-target archives.** `if:
   needs.plan-binaries.outputs.has_binaries == 'true'`, `fail-fast: false` so one target's
   failure does not abandon the others (the next run's reconciliation rebuilds whatever is
@@ -361,10 +379,12 @@ rationale that lives with the workflow.
   cross-compilation. The ARM Linux/Windows images are pinned by version because GitHub
   offers no `-latest` alias for them; bump the pins when newer images ship. Intel macOS is
   intentionally not built.
-- **Standard environment in build jobs.** `publish` and `build-binaries` both use the
-  shared `setup-environment` composite action rather than a bespoke minimal toolchain:
-  deviating from the standard environment causes more trouble than the (mostly cached)
-  setup time it saves.
+- **Standard environment.** `publish`, `plan-binaries` and `build-binaries` all use the
+  shared `setup-environment` composite action (which installs `just`, `pwsh`, the Rust
+  toolchain and release-plz) rather than a bespoke minimal toolchain: deviating from the
+  standard environment causes more trouble than the (mostly cached) setup time it saves,
+  and every job needs `just` to call its recipe. The trivial `alert` job is the exception —
+  it only needs the preinstalled `gh` and `pwsh`, so it skips setup to alert quickly.
 - **`alert` job — one issue per failed run.** `needs: [publish, plan-binaries,
   build-binaries]`, `if: failure() && github.repository == 'folo-rs/folo'`. It files a
   GitHub issue whose title includes the run id (so every failed release is tracked

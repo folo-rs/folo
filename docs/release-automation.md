@@ -114,9 +114,6 @@ publish:
     contents: write   # release-plz creates tags + GitHub releases
     id-token: write   # crates.io Trusted Publishing (OIDC)
   timeout-minutes: 180   # generous: covers up to 3 retry attempts (see below)
-  outputs:
-    releases: ${{ steps.release-plz.outputs.releases }}
-    releases_created: ${{ steps.release-plz.outputs.releases_created }}
   steps:
     - uses: actions/checkout@v6
       with:
@@ -124,51 +121,50 @@ publish:
         # persist-credentials stays at its default (true): release-plz pushes the
         # release tags via git, which uses the checkout-persisted token.
     - uses: ./.github/actions/setup-environment
-    - name: Enable git releases for the derived binary crates
-      run: ...   # inject git_release_enable = true per bin crate (see release-plz config)
-    - id: release-plz
-      run: ...   # release-plz release, wrapped in the retry loop (see Robust publishing)
+    - name: Compose the CI release-plz config
+      shell: pwsh
+      run: just gh-compose-release-config "$env:RUNNER_TEMP/release-plz.ci.toml"
+    - shell: pwsh
+      run: just gh-release "$env:RUNNER_TEMP/release-plz.ci.toml"
       env:
         GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # forge API (tags + GitHub releases)
 ```
 
-The `release-plz` invocation exposes `releases_created` (`"true"` when at least one
-crate was published this run) and `releases` (a JSON array of the crates published
-this run). These are used for the run summary and logging only — the binary jobs
-do **not** consume them, because a binary matrix driven off "what was published
-*this run*" cannot heal a partial failure on a later re-run (release-plz skips the
-already-published crate, so it vanishes from `releases`). Instead the binary jobs
+Each step is a thin `pwsh` call into a `just` recipe; the publishing logic — deriving
+the binary crates, injecting `git_release_enable`, and the retry loop — lives in
+[`justfiles/just_automation.just`](../../justfiles/just_automation.just) so it can be
+run and tested on a developer PC rather than only by pushing to `main`. The binary jobs
+downstream do **not** consume any "what was published this run" output: a matrix driven
+off that cannot heal a partial failure on a later re-run (release-plz skips the
+already-published crate, so it vanishes from the output). Instead the binary jobs
 **reconcile** against the actual published state, described next.
+
 
 ### `plan-binaries` — reconcile missing binary assets
 
-Runs after `publish` on every workflow run (not gated on `releases_created`), so a
-plain re-run or a bare `workflow_dispatch` heals binaries without republishing.
+Runs after `publish` on every workflow run (not gated on whether anything was
+published this run), so a plain re-run or a bare `workflow_dispatch` heals binaries
+without republishing.
 
 It **auto-determines** the work by reconciling desired state against actual state,
-with no hardcoded or human-supplied crate list:
+with no hardcoded or human-supplied crate list. The `just gh-plan-release-binaries`
+recipe:
 
-1. Derive the publishable binary crates and their current manifest versions from
+1. Derives the publishable binary crates and their current manifest versions from
    `cargo metadata` (the filter below). Each crate's expected release tag is
    `{crate}-v{version}`.
-2. For each such crate whose release exists, list the release's assets (`gh release
-   view`) and compute which of the expected per-target archives
+2. For each such crate whose release exists, lists the release's assets (`gh release
+   view`) and computes which of the expected per-target archives
    (`{crate}-v{version}-{target}.zip`) are absent.
-3. Emit a matrix of exactly the missing `(crate, target)` pairs.
+3. Emits a matrix of exactly the missing `(crate, target)` pairs (as its `matrix` and
+   `has_binaries` step outputs).
 
 The binary-crate derivation is a single filter, reused here and by the
-git-release-enable injection step so the two can never disagree. In
+git-release-enable injection so the two can never disagree. In
 `cargo metadata --format-version 1` the `publish` field is `null` (publishable to
-any registry), `[]` (never publish), or a non-empty registry list, so
-"publishable" is `publish == null or (publish | length > 0)`:
-
-```bash
-cargo metadata --no-deps --format-version 1 \
-  | jq -r '.packages[]
-      | select(.publish == null or (.publish | length > 0))
-      | select(any(.targets[]; (.kind | index("bin")) != null))
-      | .name'
-```
+any registry), `[]` (never publish), or a non-empty registry list, so a crate is a
+release candidate when it is publishable (`publish` is `null` or a non-empty list)
+**and** owns a `bin` target.
 
 Against the current workspace this yields exactly `cargo-bench-history`,
 `cargo-detect-package`, `cargo-freeze-deps`. On a normal push that just published,
@@ -272,13 +268,16 @@ alert:
     issues: write
   steps:
     - name: Open failure issue for this run
+      shell: pwsh
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GH_REPO: ${{ github.repository }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      run: gh issue create --label ci-failure
-             --title "Release workflow failed (run ${{ github.run_id }})"
-             --body "A release run failed: $RUN_URL"
+      run: |
+        gh label create ci-failure --force *> $null
+        gh issue create --label ci-failure `
+          --title "Release workflow failed (run ${{ github.run_id }})" `
+          --body "A release run failed: $env:RUN_URL"
 ```
 
 ## Robust publishing
@@ -314,8 +313,8 @@ publish step is built to ride out both without bespoke complexity:
   identical checksummed archives.
 
 (Because a GitHub Actions `uses:` step cannot be retried in place, the retry is
-implemented by running the release-plz invocation inside a small shell loop that
-re-runs it.)
+implemented as a PowerShell loop inside the `gh-release` recipe that re-runs the
+release-plz invocation.)
 
 ## release-plz configuration
 
@@ -334,13 +333,13 @@ re-runs it.)
 **Per-binary-crate git releases, injected dynamically.** Rather than committing
 `git_release_enable = true` into each binary crate's `[[package]]` entry (which
 must be remembered for every new tool, and drifts out of sync with the derived
-set), the `publish` job injects it at CI time: a step derives the binary-crate set
-(the same jq filter as `plan-binaries`) and, for each, sets `git_release_enable =
-true` in the working-copy `release-plz.toml` (merging into any existing
-`[[package]]` entry). The committed config stays free of per-binary release flags,
-and the release-enabled set is *always* exactly the derived binary-crate set — so
-a newly-added binary crate gets its release with no config edit, and no library
-crate is ever released.
+set), the `publish` job injects it at CI time: the `gh-compose-release-config`
+recipe derives the binary-crate set (the same filter as `plan-binaries`) and, for
+each, sets `git_release_enable = true` in a CI-only copy of `release-plz.toml`
+(merging into any existing `[[package]]` entry). The committed config stays free of
+per-binary release flags, and the release-enabled set is *always* exactly the
+derived binary-crate set — so a newly-added binary crate gets its release with no
+config edit, and no library crate is ever released.
 
 ## The asset-naming contract
 
