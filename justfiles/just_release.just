@@ -37,14 +37,23 @@ prepare-release:
         $url = "https://index.crates.io/$path"
 
         Write-Verbose "Querying $url for '$($pkg.name)'" -Verbose
-        $response = Invoke-WebRequest -Uri $url -Method Get -SkipHttpErrorCheck
+        # This is a best-effort preflight warning, never a gate: a transient failure (rate limit,
+        # 5xx, DNS/connection error) must not block `prepare-release`. -SkipHttpErrorCheck stops
+        # Invoke-WebRequest throwing on 4xx/5xx, and the try/catch handles genuine network errors;
+        # anything other than a clean 200/404 degrades to a warning and continues.
+        try {
+            $response = Invoke-WebRequest -Uri $url -Method Get -SkipHttpErrorCheck
+        } catch {
+            Write-Warning "Could not reach crates.io to check '$($pkg.name)' ($($_.Exception.Message)); skipping its never-published preflight. Verify manually if it is a brand-new crate."
+            continue
+        }
         switch ($response.StatusCode) {
             200 { }
             404 {
                 Write-Warning "$($pkg.name) has never been published. Its first release must be done manually (cargo publish); afterwards configure Trusted Publishing for it on crates.io and re-publish via the GitHub workflow."
             }
             default {
-                throw "Unexpected HTTP $($response.StatusCode) checking $url"
+                Write-Warning "Unexpected HTTP $($response.StatusCode) checking crates.io for '$($pkg.name)'; skipping its never-published preflight. Verify manually if it is a brand-new crate."
             }
         }
     }

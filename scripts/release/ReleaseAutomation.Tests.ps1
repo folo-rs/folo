@@ -157,19 +157,30 @@ Describe 'Get-MissingBinaryMatrix (mocked gh release view)' {
             $tag = $args[2]
             switch ($tag) {
                 'have-all-v1.0.0' {
+                    $global:LASTEXITCODE = 0
                     '{"assets":[{"name":"have-all-v1.0.0-x86_64-unknown-linux-gnu.zip"},{"name":"have-all-v1.0.0-aarch64-apple-darwin.zip"}]}'
                 }
                 'have-some-v2.0.0' {
+                    $global:LASTEXITCODE = 0
                     '{"assets":[{"name":"have-some-v2.0.0-x86_64-unknown-linux-gnu.zip"}]}'
                 }
                 'empty-release-v4.0.0' {
+                    $global:LASTEXITCODE = 0
                     '{"assets":[]}'
                 }
                 'no-release-v3.0.0' {
-                    throw 'release not found'
+                    # gh prints this to stderr and exits 1 when the release does not exist.
+                    $global:LASTEXITCODE = 1
+                    'release not found'
+                }
+                'api-error-v5.0.0' {
+                    # A non-"not found" failure (auth / network / API) must NOT be swallowed.
+                    $global:LASTEXITCODE = 1
+                    'HTTP 503: Service Unavailable (https://api.github.com/repos/o/r/releases)'
                 }
                 default {
-                    throw "unexpected tag: $tag"
+                    $global:LASTEXITCODE = 1
+                    "unexpected tag: $tag"
                 }
             }
         }
@@ -196,6 +207,13 @@ Describe 'Get-MissingBinaryMatrix (mocked gh release view)' {
         $crate = [pscustomobject]@{ Name = 'no-release'; Version = '3.0.0' }
         $rows = Get-MissingBinaryMatrix -Crate $crate -Target $script:TwoTargets
         $rows.Count | Should -Be 0
+    }
+
+    It 'rethrows a gh failure that is not a missing release' {
+        # An auth/network/API error must propagate, not be treated as "no release" — otherwise
+        # the workflow could build an empty matrix and look successful while binaries are missing.
+        $crate = [pscustomobject]@{ Name = 'api-error'; Version = '5.0.0' }
+        { Get-MissingBinaryMatrix -Crate $crate -Target $script:TwoTargets } | Should -Throw '*503*'
     }
 
     It 'emits one row per target when the release exists but has no assets' {

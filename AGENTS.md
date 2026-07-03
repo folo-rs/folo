@@ -26,8 +26,8 @@ directly:
   thing to one instance of a problem in a file, check for other instances. You
   must solve the entire class of problems at once, not expect each instance to
   be pointed out to you in instructions.
-* **Do not execute `just release`** — this is a critical tool reserved for
-  human use.
+* **Do not execute `just gh-release`** — it performs real crates.io publishes and is
+  a CI-only entry point (driven by the release workflow); never run it manually.
 * **Check for a package-local `AGENTS.md`** before doing nontrivial work in a
   specific crate (e.g. `packages/events_once/AGENTS.md`). Package-local
   guidance refines and sometimes overrides the workspace-wide rules.

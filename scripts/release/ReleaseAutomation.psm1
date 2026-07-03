@@ -120,24 +120,33 @@ function New-ReleasePlzConfig {
 function Get-BinaryReleaseAsset {
     # Returns the names of the assets already attached to the GitHub release for $Tag, or $null
     # if no such release exists yet. Isolates the real `gh release view` call so the tests can
-    # mock it. A missing release makes `gh` exit non-zero (a terminating error under the caller's
-    # native-error preference), which is caught and reported as "no release yet".
+    # mock it.
+    #
+    # A non-zero `gh` exit is treated as "no release yet" ONLY when it is the specific "release
+    # not found" case; any other failure (auth, network, GitHub API error) is rethrown. Swallowing
+    # those would let the caller build an empty/partial matrix, so the binary build is skipped and
+    # the workflow looks successful while binaries are still missing.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string] $Tag
     )
 
-    $json = $null
-    try {
-        $json = gh release view $Tag --json assets 2>$null
-    } catch {
-        return $null
+    # Disable the native-error preference locally so a non-zero exit does not terminate here
+    # before we can classify it; we inspect the exit code and output ourselves. 2>&1 merges
+    # stderr (where gh prints "release not found") into the captured output.
+    $PSNativeCommandUseErrorActionPreference = $false
+    $output = gh release view $Tag --json assets 2>&1
+    $exitCode = $LASTEXITCODE
+
+    if ($exitCode -ne 0) {
+        $text = ($output | Out-String).Trim()
+        if ($text -match 'release not found') { return $null }
+        throw "gh release view '$Tag' failed (exit $exitCode): $text"
     }
-    if (-not $json) { return $null }
 
     # An existing-but-empty release returns @() (all targets missing), distinct from $null
     # ("no release yet", skip). The guard also keeps member enumeration strict-mode-safe.
-    $parsed = $json | ConvertFrom-Json
+    $parsed = ($output | Out-String) | ConvertFrom-Json
     if (-not $parsed.assets) { return , @() }
     , @($parsed.assets.name)
 }
