@@ -62,7 +62,8 @@ jobs:
         shell: pwsh
         # git_release_enable stays false in the committed release-plz.toml; this writes a
         # CI-only copy under RUNNER_TEMP (outside the working tree, so cargo publish sees a
-        # clean repo) with the flag enabled for exactly the derived binary crates.
+        # clean repo) with the flag enabled for exactly the derived binary crates. The
+        # composed file is printed to the step log so the effective config is inspectable.
         run: just gh-compose-release-config "$env:RUNNER_TEMP/release-plz.ci.toml"
 
       - name: Release to crates.io (Trusted Publishing) with retries
@@ -103,6 +104,9 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # The recipe defaults its Write-Verbose decision history ON in CI (the runner sets
+        # $env:CI), so the step log records how the missing-archive plan was derived per crate
+        # and target — not just the final count.
         run: just gh-plan-release-binaries
 
   build-binaries:

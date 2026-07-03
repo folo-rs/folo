@@ -175,15 +175,31 @@ function Get-MissingBinaryMatrix {
         [object[]] $Target = (Get-ReleaseTarget)
     )
 
+    # Verbose emits the full decision history — every crate, its expected tag, whether the
+    # release exists, and the per-target present/missing verdict — so a CI run's log explains
+    # exactly how the plan (and its emptiness or non-emptiness) was derived, not just the total.
+    Write-Verbose "Reconciling desired vs. uploaded binary archives. Crates: $($Crate.Name -join ', '). Target triples: $(($Target.Triple) -join ', ')."
+
     $rows = [System.Collections.Generic.List[object]]::new()
     foreach ($crate in $Crate) {
         $tag = "$($crate.Name)-v$($crate.Version)"
+        Write-Verbose "Crate '$($crate.Name)' v$($crate.Version): expected release tag '$tag'."
         $assets = Get-BinaryReleaseAsset -Tag $tag
-        if ($null -eq $assets) { continue }
+        if ($null -eq $assets) {
+            Write-Verbose "  No GitHub release '$tag' found yet; skipping this crate (nothing to reconcile until its release exists)."
+            continue
+        }
+
+        $uploaded = if ($assets.Count -gt 0) { $assets -join ', ' } else { '(none)' }
+        Write-Verbose "  Release '$tag' found; already-uploaded archives: $uploaded."
 
         foreach ($target in $Target) {
             $archive = "$($crate.Name)-v$($crate.Version)-$($target.Triple).zip"
-            if ($assets -contains $archive) { continue }
+            if ($assets -contains $archive) {
+                Write-Verbose "  Target $($target.Triple): '$archive' already uploaded — skipping."
+                continue
+            }
+            Write-Verbose "  Target $($target.Triple): '$archive' missing — queuing a build on runner '$($target.Os)'."
             $rows.Add([pscustomobject]@{
                     name    = $crate.Name
                     version = $crate.Version
@@ -193,6 +209,9 @@ function Get-MissingBinaryMatrix {
                 })
         }
     }
+
+    $noun = if ($rows.Count -eq 1) { 'archive' } else { 'archives' }
+    Write-Verbose "Reconciliation complete: $($rows.Count) missing (crate, target) $noun queued to build."
 
     , $rows.ToArray()
 }
