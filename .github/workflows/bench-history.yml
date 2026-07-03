@@ -178,6 +178,9 @@ jobs:
         if: steps.notable.outputs.value == 'true'
         shell: bash
         run: |
+          # The lifecycle note printed below is literal Markdown: its backticks delimit inline
+          # code spans, not shell command substitutions, and the single quotes keep them literal.
+          # shellcheck disable=SC2016
           {
             printf -- '---\ntitle: Benchmark regressions detected\nlabels: bench-history, regression\n---\n\n'
             cat bench-history-report.md
