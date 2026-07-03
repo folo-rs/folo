@@ -80,6 +80,21 @@ Describe 'Add-GitReleaseEnableFlag (pure line-based injection)' {
         ($twice | Where-Object { $_ -eq 'git_release_enable = true' }).Count | Should -Be 1
     }
 
+    It 'forces an existing git_release_enable = false to true' {
+        $lines = @(
+            '[[package]]'
+            'name = "demo-tool"'
+            'git_release_enable = false'
+            'version_group = "demo"'
+        )
+        $result = Add-GitReleaseEnableFlag -Line $lines -CrateName 'demo-tool'
+        $result | Should -Contain 'git_release_enable = true'
+        $result | Should -Not -Contain 'git_release_enable = false'
+        # Replaced in place, not duplicated, and the sibling key is preserved.
+        ($result | Where-Object { $_ -match '^git_release_enable' }).Count | Should -Be 1
+        $result | Should -Contain 'version_group = "demo"'
+    }
+
     It 'enables every requested crate in one pass' {
         $result = Add-GitReleaseEnableFlag -Line $script:SourceLines -CrateName @('demo-tool', 'pub-bin')
         ($result | Where-Object { $_ -eq 'git_release_enable = true' }).Count | Should -Be 2

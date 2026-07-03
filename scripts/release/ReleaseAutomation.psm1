@@ -59,7 +59,9 @@ function Add-GitReleaseEnableFlag {
     # `name = "<crate>"` is unique and is the first key of its [[package]] block, so inserting
     # right after that line lands the flag inside the block. The match is exact (trimmed) so
     # `cargo-bench-history` does not collide with `cargo-bench-history-core`. A crate with no
-    # existing entry gets a fresh [[package]] block. Idempotent: an existing flag is left alone.
+    # existing entry gets a fresh [[package]] block. An existing `git_release_enable` line is
+    # forced to `true` (so a per-package `= false` override cannot defeat enabling a binary
+    # crate); idempotent when it is already `true`.
     [CmdletBinding()]
     param(
         [string[]] $Line,
@@ -77,13 +79,19 @@ function Add-GitReleaseEnableFlag {
         }
 
         if ($nameIndex -ge 0) {
-            $alreadySet = $false
+            $existingIndex = -1
             for ($j = $nameIndex + 1; $j -lt $lines.Count; $j++) {
                 $trimmed = $lines[$j].Trim()
                 if ($trimmed.StartsWith('[')) { break }
-                if ($trimmed -match '^git_release_enable\s*=') { $alreadySet = $true; break }
+                if ($trimmed -match '^git_release_enable\s*=') { $existingIndex = $j; break }
             }
-            if (-not $alreadySet) {
+            if ($existingIndex -ge 0) {
+                # Force an existing assignment to true: a per-package `git_release_enable = false`
+                # must not defeat enabling releases for a binary crate. Preserve the original
+                # indentation of the line being replaced.
+                $indent = if ($lines[$existingIndex] -match '^(\s*)') { $Matches[1] } else { '' }
+                $lines[$existingIndex] = "${indent}git_release_enable = true"
+            } else {
                 $lines.Insert($nameIndex + 1, 'git_release_enable = true')
             }
         } else {
