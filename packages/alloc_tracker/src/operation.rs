@@ -153,13 +153,13 @@ impl Operation {
 
     /// Calculates the mean bytes allocated per iteration.
     ///
-    /// Returns 0 if no iterations have been recorded.
+    /// Returns 0 if no iterations have been recorded. This is the pooled mean
+    /// across all recorded spans; the warmup-robust slope and its dispersion are
+    /// available on [`ReportOperation`](crate::ReportOperation) via a report.
     #[must_use]
     pub fn mean(&self) -> u64 {
         let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
-        data.total_bytes_allocated
-            .checked_div(data.total_iterations)
-            .unwrap_or(0)
+        data.mean_bytes()
     }
 
     /// Returns the total number of iterations recorded.
@@ -167,14 +167,14 @@ impl Operation {
     #[cfg(test)]
     fn total_iterations(&self) -> u64 {
         let data = self.metrics.lock().unwrap();
-        data.total_iterations
+        data.total_iterations()
     }
 
     /// Returns the total bytes allocated across all iterations.
     #[must_use]
     pub fn total_bytes_allocated(&self) -> u64 {
         let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
-        data.total_bytes_allocated
+        data.total_bytes_allocated()
     }
 }
 

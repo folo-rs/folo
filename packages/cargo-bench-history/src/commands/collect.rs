@@ -1947,8 +1947,8 @@ mod tests {
         };
         assert!(message.contains("Stored 1"), "{message}");
 
-        // Allocation counts are deterministic, so the partition is `synthetic`
-        // rather than a machine key.
+        // Allocation counts are hardware-independent, so the partition is
+        // `synthetic` rather than a machine key.
         let keys = storage.keys();
         assert_eq!(keys.len(), 1, "{keys:?}");
         assert!(keys[0].contains("/alloc_tracker/"), "{keys:?}");

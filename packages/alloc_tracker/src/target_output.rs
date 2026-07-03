@@ -12,6 +12,10 @@ use crate::Report;
 const OUTPUT_SUBDIRECTORY: &str = "alloc_tracker";
 
 /// Machine-readable allocation statistics for a single operation.
+///
+/// Carries both the pooled per-iteration means and the warmup-robust dispersion
+/// (slope, standard deviation, bootstrap interval and extremes) for each metric,
+/// mirroring the shape `all_the_time` writes for processor time.
 #[derive(Serialize)]
 struct OperationOutput<'a> {
     operation: &'a str,
@@ -20,6 +24,19 @@ struct OperationOutput<'a> {
     total_allocations_count: u64,
     mean_bytes_per_iteration: u64,
     mean_allocations_per_iteration: u64,
+    span_count: u64,
+    slope_bytes_per_iteration: f64,
+    std_dev_bytes_per_iteration: f64,
+    interval_low_bytes_per_iteration: f64,
+    interval_high_bytes_per_iteration: f64,
+    min_bytes_per_iteration: f64,
+    max_bytes_per_iteration: f64,
+    slope_allocations_per_iteration: f64,
+    std_dev_allocations_per_iteration: f64,
+    interval_low_allocations_per_iteration: f64,
+    interval_high_allocations_per_iteration: f64,
+    min_allocations_per_iteration: f64,
+    max_allocations_per_iteration: f64,
 }
 
 impl Report {
@@ -76,9 +93,11 @@ impl Report {
         let mut file_names: HashMap<String, &str> = HashMap::new();
         let mut outputs: Vec<(PathBuf, String)> = Vec::new();
         for (name, operation) in self.operations() {
-            if operation.total_iterations() == 0 {
+            let Some(statistics) = operation.statistics() else {
+                // Registered but never measured operations have no spans and thus
+                // no statistics, so they leave no output file behind.
                 continue;
-            }
+            };
 
             let file_name = format!("{}.json", folo_utils::sanitize_file_name(name));
             if let Some(previous) = file_names.insert(file_name.clone(), name) {
@@ -96,6 +115,19 @@ impl Report {
                 total_allocations_count: operation.total_allocations_count(),
                 mean_bytes_per_iteration: operation.mean_bytes(),
                 mean_allocations_per_iteration: operation.mean_allocations(),
+                span_count: statistics.span_count,
+                slope_bytes_per_iteration: statistics.bytes.slope,
+                std_dev_bytes_per_iteration: statistics.bytes.std_dev,
+                interval_low_bytes_per_iteration: statistics.bytes.interval_low,
+                interval_high_bytes_per_iteration: statistics.bytes.interval_high,
+                min_bytes_per_iteration: statistics.bytes.min,
+                max_bytes_per_iteration: statistics.bytes.max,
+                slope_allocations_per_iteration: statistics.allocations.slope,
+                std_dev_allocations_per_iteration: statistics.allocations.std_dev,
+                interval_low_allocations_per_iteration: statistics.allocations.interval_low,
+                interval_high_allocations_per_iteration: statistics.allocations.interval_high,
+                min_allocations_per_iteration: statistics.allocations.min,
+                max_allocations_per_iteration: statistics.allocations.max,
             };
 
             let json = serde_json::to_string_pretty(&output)
@@ -191,6 +223,40 @@ mod tests {
                 .get("mean_allocations_per_iteration")
                 .and_then(Value::as_u64),
             Some(2)
+        );
+        // A single recorded span yields a span count of one, per-metric slopes
+        // equal to the per-iteration means, and degenerate intervals that
+        // collapse onto them.
+        assert_eq!(value.get("span_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            value
+                .get("slope_bytes_per_iteration")
+                .and_then(Value::as_f64),
+            Some(200.0)
+        );
+        assert_eq!(
+            value
+                .get("interval_low_bytes_per_iteration")
+                .and_then(Value::as_f64),
+            Some(200.0)
+        );
+        assert_eq!(
+            value
+                .get("interval_high_bytes_per_iteration")
+                .and_then(Value::as_f64),
+            Some(200.0)
+        );
+        assert_eq!(
+            value
+                .get("std_dev_bytes_per_iteration")
+                .and_then(Value::as_f64),
+            Some(0.0)
+        );
+        assert_eq!(
+            value
+                .get("slope_allocations_per_iteration")
+                .and_then(Value::as_f64),
+            Some(2.0)
         );
     }
 

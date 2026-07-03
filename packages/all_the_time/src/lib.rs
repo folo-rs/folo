@@ -150,5 +150,6 @@ pub(crate) use operation_metrics::*;
 pub use process_span::*;
 pub use report::*;
 pub use session::*;
-pub(crate) use statistics::*;
+pub use statistics::OperationStatistics;
+pub(crate) use statistics::{SpanRecord, compute_statistics};
 pub use thread_span::*;

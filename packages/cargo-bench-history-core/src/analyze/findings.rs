@@ -1,26 +1,31 @@
 //! The finding algorithms: locate *sustained* level shifts and slow drifts in
-//! each series and flag only those that survive engine-aware significance,
-//! practical-magnitude, and false-discovery gates, then a basic noise filter that
-//! drops any move below a minimum relative magnitude regardless of engine.
+//! each series and flag only those that survive significance, practical-magnitude,
+//! series-intrinsic-noise, and false-discovery gates.
 //!
-//! The design deliberately distinguishes the two engine families this tool
-//! records:
+//! No benchmark engine is treated as noise-free. Callgrind instruction and event
+//! counts jitter a few percent run to run, and `alloc_tracker`'s per-iteration
+//! figures carry warmup and buffer-resize allocations amortized over a
+//! Criterion-chosen iteration count; Criterion wall time and `all_the_time`
+//! processor time jitter more visibly still. Every series is therefore judged
+//! noise-aware:
 //!
-//! * **Deterministic** engines (Callgrind: instruction counts, estimated cycles,
-//!   cache hits, branch counts; `alloc_tracker`: allocations) produce noise-free
-//!   numbers. A real step is flagged on persistence alone — no significance test, no
-//!   false-discovery correction — provided it clears the basic noise floor: a sub-1%
-//!   move is meaningless even when exact, so it is still suppressed.
-//! * **Noisy** engines (Criterion wall time, `all_the_time` processor time) jitter
-//!   from run to run. A move is flagged only when a Pettitt change-point locates a
-//!   split that a Mann–Whitney rank test then confirms, the confidence intervals of
-//!   the two regimes do not overlap, and the move clears a practical-magnitude
-//!   floor — then the surviving candidates pass a Benjamini–Hochberg false-discovery
-//!   filter so a batch of series does not manufacture spurious findings.
+//! * A Pettitt change-point *locates* a candidate split (its analytic p-value is
+//!   too conservative on short series to gate significance); both regimes must
+//!   hold at least `min_regime` points (persistence).
+//! * A Mann–Whitney rank test must then confirm the two regimes differ, the move
+//!   must clear a practical-magnitude floor, and it must exceed the series' own
+//!   between-commit residual scatter (the primary, series-intrinsic noise gate).
+//! * Where the engine reports a per-point confidence interval (Criterion,
+//!   `all_the_time`, `alloc_tracker`) the two regimes' intervals must also be
+//!   disjoint — an *additional* veto that can only tighten the decision, never
+//!   loosen it.
+//! * Surviving candidates then pass a Benjamini–Hochberg false-discovery filter so
+//!   a batch of series does not manufacture spurious findings.
 //!
 //! A separate slow-[`Drift`](FindingMethod::Drift) finding is raised from a
-//! Mann–Kendall trend test plus a Theil–Sen slope, and is suppressed when a
-//! single step on the same series already explains at least as much movement.
+//! Mann–Kendall trend test plus a Theil–Sen slope, gated by the same practical
+//! floor and residual-scatter check, and is suppressed when a single step on the
+//! same series already explains at least as much movement.
 //!
 //! Polarity: most metrics are "lower is better" (instruction counts, cycle
 //! estimates, branch counts, allocations, wall time), so a rise is a
@@ -69,14 +74,14 @@ pub struct AnalysisConfig {
     /// Multiple of the per-measurement noise floor a noisy branch/tip move with too
     /// few points to rank-test must exceed before it is trusted.
     pub branch_noise_multiple: f64,
-    /// Minimum relative magnitude (1%) any finding must reach to be reported, applied
-    /// as a final basic noise filter across every detector and engine. Even at full
-    /// statistical confidence a sub-1% move is treated as measurement noise: it is too
-    /// small to be worth a human's attention, so it is suppressed regardless of
-    /// direction. This floor sits below the per-engine practical-magnitude floors
-    /// (`practical_relative`, `branch_practical_relative`), which already exceed it for
-    /// noisy engines; it is what gates the otherwise-unbounded deterministic engines.
-    pub noise_floor: f64,
+    /// Multiple of a series' own between-commit residual scatter (median absolute
+    /// residual of the fitted step or line model) that a move must exceed before it
+    /// is trusted. This is the primary, series-intrinsic noise gate applied to every
+    /// engine: a clean series has near-zero residual scatter, so any persistent move
+    /// clears it, while a jittery series demands a move that stands out above its own
+    /// run-to-run wobble. It composes with (and is independent of) the optional
+    /// confidence-interval veto available on dispersion-reporting engines.
+    pub residual_noise_multiple: f64,
 }
 
 impl Default for AnalysisConfig {
@@ -91,7 +96,7 @@ impl Default for AnalysisConfig {
             compare_window: 8,
             branch_practical_relative: 0.05,
             branch_noise_multiple: 2.0,
-            noise_floor: 0.01,
+            residual_noise_multiple: 3.0,
         }
     }
 }
@@ -243,8 +248,8 @@ pub struct Finding {
     pub delta: f64,
     /// The change relative to the baseline (`delta / baseline`).
     pub relative_delta: f64,
-    /// How confident the detector is (`1 - p_value`; `1.0` for an exact
-    /// deterministic step).
+    /// How confident the detector is (`1 - p_value` of the significance test that
+    /// confirmed the move).
     pub confidence: f64,
     /// Commit the change is attributed to, if known.
     pub commit: Option<String>,
@@ -282,8 +287,8 @@ impl Finding {
 }
 
 /// A finding before false-discovery filtering, carrying the p-value the
-/// Benjamini–Hochberg pool needs, whether it came from a deterministic engine, and
-/// the fitted model parameters used to arbitrate between the two detectors.
+/// Benjamini–Hochberg pool needs and the fitted model parameters used to arbitrate
+/// between the two detectors.
 struct Candidate {
     /// The finding that will be emitted if it survives filtering.
     finding: Finding,
@@ -291,10 +296,8 @@ struct Candidate {
     /// points ([`Finding::series`]) are materialised from it only once the
     /// candidate survives filtering, so a dropped candidate never pays for them.
     source_index: usize,
-    /// The p-value contributed to the false-discovery pool (noisy candidates only).
+    /// The p-value contributed to the false-discovery pool.
     bh_p: f64,
-    /// Whether the source engine is deterministic (bypasses the FDR filter).
-    deterministic: bool,
     /// The Pettitt split index, for a change-point candidate.
     split: Option<usize>,
     /// The Theil–Sen `(slope, intercept)`, for a drift candidate.
@@ -433,6 +436,32 @@ fn line_model_residual(values: &[f64], slope: f64, intercept: f64) -> Option<f64
     stats::median_in_place(&mut residuals)
 }
 
+/// The median absolute residual of a two-sample step model: each sample's points'
+/// distance from their own sample median.
+fn sample_step_residual(before: &[f64], after: &[f64]) -> Option<f64> {
+    let before_median = stats::median(before)?;
+    let after_median = stats::median(after)?;
+    let mut residuals: Vec<f64> = before
+        .iter()
+        .map(|value| (value - before_median).abs())
+        .chain(after.iter().map(|value| (value - after_median).abs()))
+        .collect();
+    stats::median_in_place(&mut residuals)
+}
+
+/// Whether `delta` stands clear of a series' own between-commit scatter: it must
+/// exceed `config.residual_noise_multiple` times the model's median absolute
+/// residual. A clean series has a near-zero residual, so any persistent move
+/// passes; a jittery one demands a move that stands out above its wobble. A missing
+/// residual (an empty model) is treated as no evidence of noise, so the move is
+/// trusted.
+fn exceeds_residual_noise(delta: f64, residual: Option<f64>, config: &AnalysisConfig) -> bool {
+    match residual {
+        Some(residual) => delta.abs() > config.residual_noise_multiple * residual,
+        None => true,
+    }
+}
+
 /// Chooses between a change-point and a drift candidate for the same series.
 ///
 /// When both detectors fire, the data is described as whichever model fits it
@@ -464,14 +493,15 @@ fn arbitrate(
 }
 
 /// Locates a sustained level shift in `series`, returning a [`Candidate`] when the
-/// engine-appropriate gates pass.
+/// noise-aware gates pass.
 ///
 /// The Pettitt test *locates* the split (its analytic p-value is conservative for
 /// short series, so it is not used as a significance gate); both regimes must hold
-/// at least `min_regime` points (persistence). A deterministic engine flags any
-/// non-zero step. A noisy engine additionally requires a significant Mann–Whitney
-/// rank-sum difference between the regimes, non-overlapping regime confidence
-/// intervals (when reported), and a practically meaningful relative magnitude.
+/// at least `min_regime` points (persistence). The move must then be confirmed by a
+/// significant Mann–Whitney rank-sum difference between the regimes, clear the
+/// practical-magnitude floor, stand above the series' own between-commit residual
+/// scatter, and — when the engine reports per-point confidence intervals — separate
+/// the two regimes' intervals.
 fn evaluate_change_point(
     series: &Series,
     values: &[f64],
@@ -498,28 +528,26 @@ fn evaluate_change_point(
     }
     let relative_delta = relative_delta_of(delta, baseline);
 
-    let deterministic = series.kind.is_deterministic();
-    let effective_p = if deterministic {
-        0.0
-    } else {
-        let mann_whitney = stats::mann_whitney_u_pvalue(before, after);
-        if mann_whitney >= config.change_alpha {
-            return None;
-        }
-        if relative_delta.abs() < config.practical_relative {
-            return None;
-        }
-        let before_points: Vec<&SeriesPoint> = points.iter().take(tau).collect();
-        let after_points: Vec<&SeriesPoint> = points.iter().skip(tau).collect();
-        if let (Some(before_ci), Some(after_ci)) = (
-            regime_interval(&before_points),
-            regime_interval(&after_points),
-        ) && !intervals_disjoint(before_ci, after_ci)
-        {
-            return None;
-        }
-        mann_whitney
-    };
+    let mann_whitney = stats::mann_whitney_u_pvalue(before, after);
+    if mann_whitney >= config.change_alpha {
+        return None;
+    }
+    if relative_delta.abs() < config.practical_relative {
+        return None;
+    }
+    if !exceeds_residual_noise(delta, step_model_residual(values, tau), config) {
+        return None;
+    }
+    let before_points: Vec<&SeriesPoint> = points.iter().take(tau).collect();
+    let after_points: Vec<&SeriesPoint> = points.iter().skip(tau).collect();
+    if let (Some(before_ci), Some(after_ci)) = (
+        regime_interval(&before_points),
+        regime_interval(&after_points),
+    ) && !intervals_disjoint(before_ci, after_ci)
+    {
+        return None;
+    }
+    let effective_p = mann_whitney;
 
     let commit = points.get(tau).and_then(owned_commit);
     Some(Candidate {
@@ -544,7 +572,6 @@ fn evaluate_change_point(
         },
         source_index: 0,
         bh_p: effective_p,
-        deterministic,
         split: Some(tau),
         line: None,
     })
@@ -554,10 +581,11 @@ fn evaluate_change_point(
 /// trend is significant and practically meaningful.
 ///
 /// The trend is established by the Mann–Kendall test and quantified by the
-/// Theil–Sen line, so a single outlier cannot manufacture a drift. For a noisy
-/// engine the total movement must also exceed the per-measurement noise floor
-/// (twice the median confidence-interval half-width), so jitter does not read as a
-/// trend.
+/// Theil–Sen line, so a single outlier cannot manufacture a drift. The total
+/// movement must clear the practical-magnitude floor and stand above the series'
+/// own residual scatter about the fitted line; where the engine reports confidence
+/// intervals it must additionally exceed the per-measurement noise floor (twice the
+/// median half-width), so jitter does not read as a trend.
 fn evaluate_drift(series: &Series, values: &[f64], config: &AnalysisConfig) -> Option<Candidate> {
     let points = &series.points;
     let n = points.len();
@@ -581,12 +609,13 @@ fn evaluate_drift(series: &Series, values: &[f64], config: &AnalysisConfig) -> O
     if relative_delta.abs() < config.practical_relative {
         return None;
     }
-
-    let deterministic = series.kind.is_deterministic();
-    // A noisy trend must clear the measurement noise floor: the endpoints have to
-    // separate by more than the run-to-run dispersion, or it is just jitter.
-    if !deterministic
-        && let Some(half_width) = median_half_width(points)
+    if !exceeds_residual_noise(delta, line_model_residual(values, slope, intercept), config) {
+        return None;
+    }
+    // Where the engine reports dispersion, a trend must also clear the measurement
+    // noise floor: the endpoints have to separate by more than the run-to-run
+    // dispersion, or it is just jitter.
+    if let Some(half_width) = median_half_width(points)
         && delta.abs() <= 2.0 * half_width
     {
         return None;
@@ -615,7 +644,6 @@ fn evaluate_drift(series: &Series, values: &[f64], config: &AnalysisConfig) -> O
         },
         source_index: 0,
         bh_p: trend.p_value,
-        deterministic,
         split: None,
         line: Some((slope, intercept)),
     })
@@ -699,15 +727,16 @@ fn latest_regime<'a>(
 }
 
 /// Compares a `before` sample against an `after` sample on the same series and, if
-/// the engine-appropriate gates pass, returns a change-point [`Candidate`].
+/// the noise-aware gates pass, returns a change-point [`Candidate`].
 ///
-/// Deterministic engines flag any non-zero move (their numbers carry no noise). A
-/// noisy engine requires the relative move to clear `practical_floor` and then
-/// either — when both samples have at least two points — a significant Mann–Whitney
-/// difference with non-overlapping confidence intervals, or — when a sample is too
-/// small to rank-test — a move exceeding the per-measurement noise floor. When the
-/// noise floor cannot be estimated for a tiny sample the comparison is skipped: we
-/// would rather miss than flag on jitter.
+/// The relative move must clear `practical_floor` and stand above the two samples'
+/// own between-commit residual scatter (the primary, series-intrinsic noise gate,
+/// which for a single-run engine like Callgrind is the only dispersion available).
+/// It must then either — when both samples have at least two points — pass a
+/// significant Mann–Whitney difference, or — when a sample is too small to
+/// rank-test — rest on that residual gate alone. Where the engine additionally
+/// reports per-point confidence intervals, the two samples' intervals must also be
+/// disjoint; this is an extra veto that can only tighten the decision.
 fn compare_samples(
     series: &Series,
     before: &[&SeriesPoint],
@@ -727,41 +756,43 @@ fn compare_samples(
     }
     let relative_delta = relative_delta_of(delta, baseline);
 
-    let deterministic = series.kind.is_deterministic();
-    let effective_p = if deterministic {
-        0.0
-    } else {
-        if relative_delta.abs() < practical_floor {
+    if relative_delta.abs() < practical_floor {
+        return None;
+    }
+    if !exceeds_residual_noise(
+        delta,
+        sample_step_residual(&before_values, &after_values),
+        config,
+    ) {
+        return None;
+    }
+    let effective_p = if before_values.len() >= 2 && after_values.len() >= 2 {
+        let mann_whitney = stats::mann_whitney_u_pvalue(&before_values, &after_values);
+        if mann_whitney >= config.change_alpha {
             return None;
         }
-        if before_values.len() >= 2 && after_values.len() >= 2 {
-            let mann_whitney = stats::mann_whitney_u_pvalue(&before_values, &after_values);
-            if mann_whitney >= config.change_alpha {
-                return None;
-            }
-            if let (Some(before_ci), Some(after_ci)) =
-                (regime_interval(before), regime_interval(after))
-                && !intervals_disjoint(before_ci, after_ci)
-            {
-                return None;
-            }
-            mann_whitney
-        } else {
-            // Too few points to rank-test: trust the move only when its magnitude
-            // clears the measurement noise floor; with no dispersion to compare
-            // against, prefer to miss.
-            let points: Vec<SeriesPoint> = before
-                .iter()
-                .chain(after.iter())
-                .map(|point| (*point).clone())
-                .collect();
-            match median_half_width(&points) {
-                Some(half_width) if delta.abs() > config.branch_noise_multiple * half_width => {
-                    config.change_alpha
-                }
-                _ => return None,
-            }
+        if let (Some(before_ci), Some(after_ci)) = (regime_interval(before), regime_interval(after))
+            && !intervals_disjoint(before_ci, after_ci)
+        {
+            return None;
         }
+        mann_whitney
+    } else {
+        // Too few points to rank-test (typically a single fresh tip or branch run):
+        // the residual gate above is the significance proxy. Where per-point
+        // confidence intervals exist, require the move to also clear the measurement
+        // noise band as an additional veto.
+        let points: Vec<SeriesPoint> = before
+            .iter()
+            .chain(after.iter())
+            .map(|point| (*point).clone())
+            .collect();
+        if let Some(half_width) = median_half_width(&points)
+            && delta.abs() <= config.branch_noise_multiple * half_width
+        {
+            return None;
+        }
+        config.change_alpha
     };
 
     Some(Candidate {
@@ -786,7 +817,6 @@ fn compare_samples(
         },
         source_index: 0,
         bh_p: effective_p,
-        deterministic,
         split: None,
         line: None,
     })
@@ -897,9 +927,10 @@ const RESOLVED_SPIKE_MAX_POINTS: usize = 200;
 /// Such a change is no longer reflected in the latest state, so it is emitted as an
 /// *inactive* finding (only surfaced with `--include-inactive`): `commit` names where
 /// the level rose, `flipped_at` where it recovered, `baseline` the pre-spike level,
-/// and `latest` the spike's own level (its magnitude is what is notable). A
-/// deterministic engine accepts any sustained non-zero plateau; a noisy engine
-/// requires both the rise and the recovery to be Mann–Whitney significant.
+/// and `latest` the spike's own level (its magnitude is what is notable). Both the
+/// rise and the recovery must be Mann–Whitney significant, the plateau must clear
+/// the practical-magnitude floor, and the deviation must stand above the rise's own
+/// residual scatter.
 fn evaluate_resolved_spike(
     series: &Series,
     values: &[f64],
@@ -952,20 +983,18 @@ fn evaluate_resolved_spike(
         return None;
     }
 
-    let deterministic = series.kind.is_deterministic();
-    let effective_p = if deterministic {
-        0.0
-    } else {
-        let before = values.get(..rise)?;
-        let segment = values.get(rise..recovery)?;
-        let after = values.get(recovery..)?;
-        let rise_p = stats::mann_whitney_u_pvalue(before, segment);
-        let recovery_p = stats::mann_whitney_u_pvalue(segment, after);
-        if rise_p >= config.change_alpha || recovery_p >= config.change_alpha {
-            return None;
-        }
-        rise_p.max(recovery_p)
-    };
+    let before = values.get(..rise)?;
+    let segment = values.get(rise..recovery)?;
+    let after = values.get(recovery..)?;
+    if !exceeds_residual_noise(deviation, sample_step_residual(before, segment), config) {
+        return None;
+    }
+    let rise_p = stats::mann_whitney_u_pvalue(before, segment);
+    let recovery_p = stats::mann_whitney_u_pvalue(segment, after);
+    if rise_p >= config.change_alpha || recovery_p >= config.change_alpha {
+        return None;
+    }
+    let effective_p = rise_p.max(recovery_p);
 
     let relative_delta = relative_delta_of(deviation, baseline);
     Some(Candidate {
@@ -990,7 +1019,6 @@ fn evaluate_resolved_spike(
         },
         source_index: 0,
         bh_p: effective_p,
-        deterministic,
         split: Some(rise),
         line: None,
     })
@@ -1016,10 +1044,10 @@ fn find_changes(series: &[Series], context: &AnalysisContext) -> Vec<Finding> {
 /// The [`AnalysisContext`] selects the per-series detector: history mode locates a
 /// change-point and a drift and keeps the better-fitting one; branch mode compares
 /// the branch's latest state against its base; tip mode guards the newest point.
-/// Surviving noisy candidates pass a Benjamini–Hochberg false-discovery filter at
-/// `config.fdr_q`; deterministic candidates bypass it. Findings are then filtered
-/// to the directions the mode reports and ordered by descending relative move,
-/// then method, then a deterministic identity tie-break.
+/// Surviving candidates pass a Benjamini–Hochberg false-discovery filter at
+/// `config.fdr_q`. Findings are then filtered to the directions the mode reports and
+/// ordered by descending relative move, then method, then a stable identity
+/// tie-break.
 ///
 /// Detection is per-series independent, so the series are split into one balanced
 /// contiguous chunk per worker and each chunk runs on its own blocking task via
@@ -1046,7 +1074,7 @@ pub async fn find_changes_spawned(
 /// spawner-distributed detection passes.
 ///
 /// `candidates` must be in series order (the order both detection paths produce) so
-/// the Benjamini–Hochberg mask built over the noisy candidates stays aligned.
+/// the Benjamini–Hochberg mask stays aligned.
 fn finalize_findings(
     candidates: Vec<Candidate>,
     series: &[Series],
@@ -1054,29 +1082,20 @@ fn finalize_findings(
 ) -> Vec<Finding> {
     let config = &context.config;
 
-    // Control the false-discovery rate across the noisy candidates only; the
-    // deterministic ones are exact and need no correction.
-    let noisy_p: Vec<f64> = candidates
-        .iter()
-        .filter(|candidate| !candidate.deterministic)
-        .map(|candidate| candidate.bh_p)
-        .collect();
-    let keep = stats::benjamini_hochberg(&noisy_p, config.fdr_q);
+    // Control the false-discovery rate across every candidate: no engine is exact, so
+    // each contributes its significance-test p-value to the shared pool.
+    let candidate_p: Vec<f64> = candidates.iter().map(|candidate| candidate.bh_p).collect();
+    let keep = stats::benjamini_hochberg(&candidate_p, config.fdr_q);
     let mut keep_iter = keep.into_iter();
 
-    // `candidates` and `noisy_p` were built in the same order, so advancing
-    // `keep_iter` exactly for the noisy candidates keeps the mask aligned. A
-    // surviving finding that the mode keeps materialises its charting points here —
-    // a dropped candidate never pays for them.
+    // `candidates` and `candidate_p` were built in the same order, so advancing
+    // `keep_iter` for each candidate keeps the mask aligned. A surviving finding that
+    // the mode keeps materialises its charting points here — a dropped candidate never
+    // pays for them.
     let mut findings: Vec<Finding> = candidates
         .into_iter()
         .filter_map(|candidate| {
-            let survive = if candidate.deterministic {
-                true
-            } else {
-                keep_iter.next().unwrap_or(false)
-            };
-            if !survive {
+            if !keep_iter.next().unwrap_or(false) {
                 return None;
             }
             let Candidate {
@@ -1084,14 +1103,6 @@ fn finalize_findings(
                 source_index,
                 ..
             } = candidate;
-            // Basic noise filter: a sub-`noise_floor` move is measurement noise even at
-            // full confidence, so it is suppressed regardless of direction or engine.
-            // This gates the otherwise-unbounded deterministic engines and backstops the
-            // per-engine practical-magnitude floors. Applied before charting points are
-            // materialised so a dropped finding never pays for them.
-            if finding.relative_delta.abs() < config.noise_floor {
-                return None;
-            }
             if !context.keeps(finding.direction) {
                 return None;
             }
@@ -1233,14 +1244,14 @@ mod tests {
     use crate::analyze::{Blessing, SeriesPoint};
     use crate::model::{DiscriminantSet, MetricKind};
 
-    /// Builds a deterministic (Callgrind) series carrying `values` in topological
-    /// order, with no dispersion.
+    /// Builds a Callgrind-style series carrying `values` in topological order, with
+    /// no dispersion (no confidence interval).
     fn series_of(values: &[f64]) -> Series {
         series_with(values, MetricKind::InstructionCount, &[])
     }
 
-    /// Builds a deterministic series whose benchmark id carries a distinct `name`,
-    /// so a batch of series stays individually identifiable in the findings.
+    /// Builds a series whose benchmark id carries a distinct `name`, so a batch of
+    /// series stays individually identifiable in the findings.
     fn named_series(name: &str, values: &[f64]) -> Series {
         let mut series = series_of(values);
         series.id = BenchmarkId::new(nonempty![name.to_owned(), "case".to_owned()]);
@@ -1299,6 +1310,21 @@ mod tests {
         series.points.iter().map(|point| point.value).collect()
     }
 
+    /// Builds a Callgrind-style history with a two-point plateau at `peak`
+    /// bracketed by `shoulder`-length baseline and recovery regimes at `base`: a
+    /// spike that rose and has since fully recovered.
+    ///
+    /// Every engine is now treated as noisy, so a recovered spike is only
+    /// significant once each side is long enough for its Mann-Whitney gate; a
+    /// two-point plateau needs eight-point shoulders to clear both rank tests.
+    fn recovered_spike(base: f64, peak: f64, shoulder: usize) -> Series {
+        let mut values = vec![base; shoulder];
+        values.push(peak);
+        values.push(peak);
+        values.extend(std::iter::repeat_n(base, shoulder));
+        series_of(&values)
+    }
+
     /// Builds a minimal [`Candidate`] carrying only the fields [`arbitrate`]
     /// inspects (`method`, `split`, `line`); every other field is a placeholder.
     fn candidate(
@@ -1332,7 +1358,6 @@ mod tests {
             },
             source_index: 0,
             bh_p: 0.0,
-            deterministic: true,
             split,
             line,
         }
@@ -1455,15 +1480,6 @@ mod tests {
     }
 
     #[test]
-    fn allocation_metrics_are_deterministic_but_processor_time_is_not() {
-        // Allocation byte/count totals are an exact property of the code, so they
-        // are treated as deterministic; processor time is noisy like wall time.
-        assert!(MetricKind::AllocatedBytes.is_deterministic());
-        assert!(MetricKind::AllocationCount.is_deterministic());
-        assert!(!MetricKind::ProcessorTime.is_deterministic());
-    }
-
-    #[test]
     fn direction_of_classifies_a_zero_delta_as_an_improvement() {
         // The classification is total: a zero delta (never reached in practice) is
         // defined as an improvement for every polarity.
@@ -1549,6 +1565,33 @@ mod tests {
     }
 
     #[test]
+    fn sample_step_residual_is_the_median_absolute_deviation_across_samples() {
+        // before [10,12,20] -> median 12 -> residuals 2,0,8; after [30,33,40] ->
+        // median 33 -> residuals 3,0,7; the median of [2,0,8,3,0,7] is 2.5.
+        assert_eq!(
+            sample_step_residual(&[10.0, 12.0, 20.0], &[30.0, 33.0, 40.0]),
+            Some(2.5)
+        );
+    }
+
+    #[test]
+    fn sample_step_residual_of_an_empty_sample_is_none() {
+        assert_eq!(sample_step_residual(&[], &[1.0, 2.0]), None);
+    }
+
+    #[test]
+    fn exceeds_residual_noise_requires_the_move_to_clear_the_scatter_band() {
+        let config = AnalysisConfig::default();
+        // A residual of 1.0 puts the band at 3x = 3.0. A move inside the band is
+        // not clear of it, a move exactly at the band is still not (the comparison
+        // is strict), a move above it is, and a missing residual trusts the move.
+        assert!(!exceeds_residual_noise(1.0, Some(1.0), &config));
+        assert!(!exceeds_residual_noise(3.0, Some(1.0), &config));
+        assert!(exceeds_residual_noise(3.5, Some(1.0), &config));
+        assert!(exceeds_residual_noise(0.0, None, &config));
+    }
+
+    #[test]
     fn arbitrate_breaks_a_residual_tie_in_favour_of_the_change_point() {
         // Both models fit a flat series perfectly (residual 0): the tie favours the
         // more specific change-point, so a `line < step` -> `line <= step` slip that
@@ -1589,7 +1632,11 @@ mod tests {
     fn change_point_accepts_a_minimal_before_regime() {
         // Pettitt splits at tau=2, so the before regime holds exactly `min_regime`
         // points: a `<=`/`==` slip on the before-regime bound would reject the step.
-        let finding = only(changes(&[series_of(&[100.0, 100.0, 130.0, 130.0, 130.0])]));
+        // The after regime is padded so the rank test has enough points to confirm
+        // the move (a 2-vs-5 clean step is Mann–Whitney significant).
+        let finding = only(changes(&[series_of(&[
+            100.0, 100.0, 130.0, 130.0, 130.0, 130.0, 130.0,
+        ])]));
         assert_eq!(finding.method, FindingMethod::ChangePoint);
         assert_eq!(finding.baseline, 100.0);
         assert_eq!(finding.latest, 130.0);
@@ -1597,17 +1644,21 @@ mod tests {
 
     #[test]
     fn change_point_accepts_a_minimal_after_regime() {
-        // Pettitt splits at tau=3, so the after regime holds exactly `min_regime`
-        // points: a `<=` slip on the after-regime bound would reject the step.
-        let finding = only(changes(&[series_of(&[100.0, 100.0, 100.0, 130.0, 130.0])]));
+        // Pettitt splits at tau=5, so the after regime holds exactly `min_regime`
+        // points: a `<=` slip on the after-regime bound would reject the step. The
+        // before regime is padded so the 5-vs-2 clean step is rank-test significant.
+        let finding = only(changes(&[series_of(&[
+            100.0, 100.0, 100.0, 100.0, 100.0, 130.0, 130.0,
+        ])]));
         assert_eq!(finding.method, FindingMethod::ChangePoint);
         assert_eq!(finding.baseline, 100.0);
         assert_eq!(finding.latest, 130.0);
     }
 
     #[test]
-    fn deterministic_sustained_step_is_flagged_as_a_change_point() {
-        // A clean step from 100 to 130 with three points each side.
+    fn sustained_step_is_flagged_as_a_change_point() {
+        // A clean step from 100 to 130 with three points each side: a 3-vs-3 clean
+        // step is Mann–Whitney significant.
         let series = series_of(&[100.0, 100.0, 100.0, 130.0, 130.0, 130.0]);
         let finding = only(changes(&[series]));
         assert_eq!(finding.method, FindingMethod::ChangePoint);
@@ -1616,45 +1667,43 @@ mod tests {
         assert_eq!(finding.latest, 130.0);
         assert_eq!(finding.delta, 30.0);
         assert!((finding.relative_delta - 0.30).abs() <= 1e-9);
-        // An exact engine reports full confidence and attributes the change to the
-        // first commit of the after regime.
-        assert_eq!(finding.confidence, 1.0);
+        // Confidence derives from the rank-test p-value (below 1) and the change is
+        // attributed to the first commit of the after regime.
+        assert!(finding.confidence > 0.9 && finding.confidence < 1.0);
         assert_eq!(finding.commit.as_deref(), Some("commit3"));
     }
 
     #[test]
-    fn deterministic_step_below_the_noise_floor_is_suppressed() {
-        // A one-instruction step is real on a deterministic engine, but a sub-1% move
-        // is meaningless even at full confidence, so the basic noise filter suppresses
-        // it: 1000 -> 1001 is a 0.1% move.
+    fn step_below_the_practical_floor_is_suppressed() {
+        // A sub-3% move is treated as measurement noise even when it looks clean, so
+        // the practical-magnitude floor suppresses it: 1000 -> 1001 is a 0.1% move.
         let series = series_of(&[1000.0, 1000.0, 1000.0, 1001.0, 1001.0, 1001.0]);
         assert!(changes(&[series]).is_empty());
     }
 
     #[test]
-    fn deterministic_step_at_the_noise_floor_is_flagged() {
-        // The noise floor is a strict `<` rejection, so a deterministic step whose
-        // relative move EQUALS the 1% floor is still reported: 1000 -> 1010 is exactly
-        // a 1% move.
-        let series = series_of(&[1000.0, 1000.0, 1000.0, 1010.0, 1010.0, 1010.0]);
+    fn step_at_the_practical_floor_is_flagged() {
+        // The practical floor is a strict `<` rejection, so a step whose relative move
+        // EQUALS the 3% floor is still reported: 1000 -> 1030 is exactly a 3% move.
+        let series = series_of(&[1000.0, 1000.0, 1000.0, 1030.0, 1030.0, 1030.0]);
         let finding = only(changes(&[series]));
         assert_eq!(finding.method, FindingMethod::ChangePoint);
-        assert_eq!(finding.delta, 10.0);
-        assert!((finding.relative_delta - 0.01).abs() <= 1e-9);
-        assert_eq!(finding.confidence, 1.0);
+        assert_eq!(finding.delta, 30.0);
+        assert!((finding.relative_delta - 0.03).abs() <= 1e-9);
+        assert!(finding.confidence > 0.9 && finding.confidence < 1.0);
     }
 
     #[test]
-    fn sub_noise_floor_improvement_is_also_suppressed() {
-        // The noise filter applies in any direction: a sub-1% improvement on a
-        // deterministic engine is just as meaningless as a sub-1% regression, so
-        // 1000 -> 999 (a 0.1% drop) raises nothing.
+    fn sub_practical_floor_improvement_is_also_suppressed() {
+        // The floor applies in any direction: a sub-3% improvement is just as
+        // meaningless as a sub-3% regression, so 1000 -> 999 (a 0.1% drop) raises
+        // nothing.
         let series = series_of(&[1000.0, 1000.0, 1000.0, 999.0, 999.0, 999.0]);
         assert!(changes(&[series]).is_empty());
     }
 
     #[test]
-    fn deterministic_l1_hit_drop_is_a_regression() {
+    fn l1_hit_drop_is_a_regression() {
         // L1 hits are higher-is-better, so a drop in L1 hits is a regression
         // (the access shifted to a slower tier).
         let series = series_with(
@@ -1668,7 +1717,7 @@ mod tests {
     }
 
     #[test]
-    fn deterministic_ram_hit_rise_is_a_regression() {
+    fn ram_hit_rise_is_a_regression() {
         // RAM hits are the expensive tier (lower-is-better), so a rise in RAM
         // hits is a regression.
         let series = series_with(
@@ -1828,7 +1877,7 @@ mod tests {
     }
 
     #[test]
-    fn deterministic_monotonic_drift_is_flagged() {
+    fn monotonic_drift_is_flagged() {
         // A steady climb with no single dominant step surfaces as a drift finding.
         let series = series_of(&[100.0, 104.0, 108.0, 112.0, 116.0, 120.0]);
         let finding = only(changes(&[series]));
@@ -1843,8 +1892,10 @@ mod tests {
     #[test]
     fn a_sharp_step_is_reported_as_a_change_point_not_a_drift() {
         // A series that both trends and steps: the two-regime model fits the sharp
-        // jump better than a line, so it is reported once, as a change-point.
-        let series = series_of(&[100.0, 101.0, 102.0, 160.0, 161.0, 162.0]);
+        // jump better than a line, so it is reported once, as a change-point. Four
+        // distinct points each side make the rank test significant despite the
+        // within-regime spread.
+        let series = series_of(&[100.0, 101.0, 102.0, 103.0, 160.0, 161.0, 162.0, 163.0]);
         let findings = changes(&[series]);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].method, FindingMethod::ChangePoint);
@@ -1902,12 +1953,12 @@ mod tests {
     #[test]
     fn find_changes_ranks_larger_relative_move_first() {
         let larger = series_of(&[100.0, 100.0, 100.0, 200.0, 200.0, 200.0]);
-        let smaller = series_of(&[1000.0, 1000.0, 1000.0, 1020.0, 1020.0, 1020.0]);
+        let smaller = series_of(&[1000.0, 1000.0, 1000.0, 1050.0, 1050.0, 1050.0]);
         let findings = changes(&[smaller, larger]);
         assert_eq!(findings.len(), 2);
         assert!(findings[0].relative_delta.abs() > findings[1].relative_delta.abs());
         assert_eq!(findings[0].latest, 200.0);
-        assert_eq!(findings[1].latest, 1020.0);
+        assert_eq!(findings[1].latest, 1050.0);
     }
 
     #[test]
@@ -1933,9 +1984,9 @@ mod tests {
 
     // -- Branch and tip modes -------------------------------------------------
 
-    /// Builds a deterministic (Callgrind) series from explicit
-    /// `(topo_index, value, dirty)` points, so branch/tip splits can be modelled
-    /// precisely. Points are taken in the given order (already topological).
+    /// Builds a Callgrind-style series from explicit `(topo_index, value, dirty)`
+    /// points, so branch/tip splits can be modelled precisely. Points are taken in
+    /// the given order (already topological).
     fn placed_series(points: &[(usize, f64, bool)]) -> Series {
         let points = points
             .iter()
@@ -2072,11 +2123,13 @@ mod tests {
     #[test]
     fn branch_mode_admits_a_dirty_snapshot_at_the_merge_base_tip() {
         // The merge-base is the branch tip (topo 2); a dirty snapshot there is the
-        // branch side, the clean runs at the same/earlier commits are the base.
+        // branch side, the clean runs at the same/earlier commits are the base. Three
+        // dirty runs give the rank test enough points to confirm the regression.
         let series = placed_series(&[
             (0, 100.0, false),
             (1, 100.0, false),
             (2, 100.0, false),
+            (2, 130.0, true),
             (2, 130.0, true),
             (2, 130.0, true),
         ]);
@@ -2191,9 +2244,11 @@ mod tests {
 
     #[test]
     fn resolved_spike_is_detected_and_marked_inactive() {
-        // A sustained interior plateau (20) between baseline regimes (10) that has
-        // since recovered: a deterministic engine accepts any non-zero plateau.
-        let spike = series_of(&[10.0, 10.0, 10.0, 10.0, 20.0, 20.0, 10.0, 10.0, 10.0, 10.0]);
+        // A two-point plateau (20) between baseline regimes (10) that has since
+        // recovered. Every engine is now treated as noisy, so the elevated span
+        // must clear a Mann-Whitney gate on both sides; the baseline and recovery
+        // shoulders are long enough to make the rise and the fall significant.
+        let spike = recovered_spike(10.0, 20.0, 8);
         let candidate =
             evaluate_resolved_spike(&spike, &values_of(&spike), &AnalysisConfig::default())
                 .unwrap();
@@ -2201,16 +2256,17 @@ mod tests {
         assert_eq!(candidate.finding.baseline, 10.0);
         assert_eq!(candidate.finding.latest, 20.0);
         assert_eq!(candidate.finding.direction, Direction::Regression);
-        // `commit` names where the level rose, `flipped_at` where it recovered.
-        assert_eq!(candidate.finding.commit.as_deref(), Some("commit3"));
-        assert_eq!(candidate.finding.flipped_at.as_deref(), Some("commit6"));
+        // `commit` names where the median-plateau search brackets the rise,
+        // `flipped_at` where it recovered.
+        assert_eq!(candidate.finding.commit.as_deref(), Some("commit7"));
+        assert_eq!(candidate.finding.flipped_at.as_deref(), Some("commit10"));
     }
 
     #[test]
     fn history_surfaces_a_resolved_spike_only_with_include_inactive() {
         // The spike rose and recovered, so no active change remains: the default
         // history pass is silent.
-        let spike = series_of(&[10.0, 10.0, 10.0, 10.0, 20.0, 20.0, 10.0, 10.0, 10.0, 10.0]);
+        let spike = recovered_spike(10.0, 20.0, 8);
         assert!(changes(std::slice::from_ref(&spike)).is_empty());
 
         // Requesting inactive findings surfaces it as a recovered spike that is no
@@ -2351,7 +2407,7 @@ mod tests {
 
     #[test]
     fn drift_at_the_practical_floor_is_flagged_with_real_confidence() {
-        // A deterministic climb whose relative drift (0.20) is exactly the floor: the
+        // A steady climb whose relative drift (0.20) is exactly the floor: the
         // floor gate must be a strict `<`, not a `<=`. Its confidence is 1 - p with
         // p > 0, so a mutated `1 + p` / `1 / p` would clamp to 1.
         let series = series_of(&[100.0, 104.0, 108.0, 112.0, 116.0, 120.0]);
@@ -2439,12 +2495,10 @@ mod tests {
     }
 
     #[test]
-    fn resolved_spike_at_the_minimum_length_reports_the_deviation() {
-        // Exactly min_regime * 3 (6) points is the shortest detectable spike; the
-        // `n < min * 3` gate must be a strict `<`. The plateau (20) deviates from the
-        // baseline (10) by 10 -- the `level - baseline` difference, not a sum or
-        // quotient.
-        let series = series_of(&[10.0, 10.0, 20.0, 20.0, 10.0, 10.0]);
+    fn resolved_spike_reports_the_level_minus_baseline_deviation() {
+        // The reported deviation is the plateau level (20) minus the baseline (10) --
+        // the `level - baseline` difference, not a sum or a quotient.
+        let series = recovered_spike(10.0, 20.0, 8);
         let candidate =
             evaluate_resolved_spike(&series, &values_of(&series), &AnalysisConfig::default())
                 .unwrap();
@@ -2495,7 +2549,7 @@ mod tests {
         // A plateau (1010) only 1% above baseline (1000) is below the 3% practical
         // floor. The reject gate is `deviation <= 0 || relative < floor`; an `&&`
         // mutant (needing BOTH) would wrongly surface it.
-        let series = series_of(&[1000.0, 1000.0, 1010.0, 1010.0, 1000.0, 1000.0]);
+        let series = recovered_spike(1000.0, 1010.0, 8);
         assert!(
             evaluate_resolved_spike(&series, &values_of(&series), &AnalysisConfig::default())
                 .is_none()
@@ -2507,7 +2561,7 @@ mod tests {
         // A plateau (103) exactly 3% above baseline (100) meets the floor; the
         // `relative < floor` gate must be a strict `<` (a `<=`/`==` mutant suppresses
         // it).
-        let series = series_of(&[100.0, 100.0, 103.0, 103.0, 100.0, 100.0]);
+        let series = recovered_spike(100.0, 103.0, 8);
         let config = AnalysisConfig {
             practical_relative: 3.0 / 100.0,
             ..AnalysisConfig::default()

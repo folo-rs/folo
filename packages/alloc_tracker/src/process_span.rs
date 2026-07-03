@@ -99,9 +99,12 @@ impl ProcessSpan {
         self
     }
 
-    /// Calculates the allocation deltas since this span was created.
+    /// Calculates the raw allocation deltas since this span was created.
+    ///
+    /// The whole-span deltas are returned undivided; per-iteration figures are
+    /// derived later by the shared span-statistics estimator, which weights each
+    /// span by its iteration count.
     #[must_use]
-    #[cfg_attr(test, mutants::skip)] // The != 1 fork is broadly applicable, so mutations fail. Intentional.
     fn to_deltas(&self) -> (u64, u64) {
         let AllocationTotals {
             bytes: current_bytes,
@@ -116,18 +119,7 @@ impl ProcessSpan {
             .checked_sub(self.start_count)
             .expect("total allocations count could not possibly decrease");
 
-        if self.iterations > 1 {
-            // Divide total allocation by iterations to get per-iteration allocation
-            let bytes_delta = total_bytes_delta
-                .checked_div(self.iterations)
-                .expect("guarded by if condition");
-            let count_delta = total_count_delta
-                .checked_div(self.iterations)
-                .expect("guarded by if condition");
-            (bytes_delta, count_delta)
-        } else {
-            (total_bytes_delta, total_count_delta)
-        }
+        (total_bytes_delta, total_count_delta)
     }
 }
 
@@ -135,7 +127,7 @@ impl Drop for ProcessSpan {
     fn drop(&mut self) {
         let (bytes_delta, count_delta) = self.to_deltas();
         let mut data = self.metrics.lock().expect(ERR_POISONED_LOCK);
-        data.add_iterations(bytes_delta, count_delta, self.iterations);
+        data.add_span(self.iterations, bytes_delta, count_delta);
     }
 }
 

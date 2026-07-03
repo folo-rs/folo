@@ -156,7 +156,8 @@ struct JsonFinding<'a> {
     latest: f64,
     /// The change relative to the baseline (`(latest - baseline) / baseline`).
     relative_delta: f64,
-    /// The detector's confidence (`1 - p_value`; `1.0` for an exact step).
+    /// The detector's confidence (`1 - p_value`), approaching `1.0` as the change
+    /// becomes statistically unambiguous.
     confidence: f64,
     /// Commit the change is attributed to, if known.
     #[serde(skip_serializing_if = "Option::is_none")]

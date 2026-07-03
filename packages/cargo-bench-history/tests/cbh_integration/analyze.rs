@@ -417,7 +417,7 @@ async fn analyze_rising_ram_hits_is_a_regression() {
 #[cfg_attr(miri, ignore)]
 async fn analyze_ranks_findings_by_relative_move_across_benchmarks() {
     let workspace = Workspace::repo(&storage_only_config());
-    // `alpha` doubles (+100%); `beta` ticks up ~2%.
+    // `alpha` doubles (+100%); `beta` steps up +5%.
     workspace.commit_dated("2024-01-01", "c1");
     workspace.seed_two_benchmarks("c1", 100.0, 100.0);
     workspace.commit_dated("2024-01-02", "c2");
@@ -425,11 +425,11 @@ async fn analyze_ranks_findings_by_relative_move_across_benchmarks() {
     workspace.commit_dated("2024-01-03", "c3");
     workspace.seed_two_benchmarks("c3", 100.0, 100.0);
     workspace.commit_dated("2024-01-04", "c4");
-    workspace.seed_two_benchmarks("c4", 200.0, 102.0);
+    workspace.seed_two_benchmarks("c4", 200.0, 105.0);
     workspace.commit_dated("2024-01-05", "c5");
-    workspace.seed_two_benchmarks("c5", 200.0, 102.0);
+    workspace.seed_two_benchmarks("c5", 200.0, 105.0);
     workspace.commit_dated("2024-01-06", "c6");
-    workspace.seed_two_benchmarks("c6", 200.0, 102.0);
+    workspace.seed_two_benchmarks("c6", 200.0, 105.0);
 
     let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
@@ -440,7 +440,7 @@ async fn analyze_ranks_findings_by_relative_move_across_benchmarks() {
 
     let findings = parsed["findings"].as_array().unwrap();
     assert_eq!(findings.len(), 2, "{report}");
-    // The larger relative move (alpha, +100%) ranks ahead of the smaller (beta, +2%).
+    // The larger relative move (alpha, +100%) ranks ahead of the smaller (beta, +5%).
     assert_eq!(findings[0]["segments"][0], "alpha", "{report}");
     assert_eq!(findings[0]["segments"][1], "alpha::bench", "{report}");
     assert_eq!(findings[1]["segments"][0], "beta", "{report}");
@@ -530,8 +530,8 @@ async fn analyze_criterion_jitter_is_not_flagged() {
 /// A slow, monotonic Criterion `wall_time` drift is flagged as a `drift` finding
 /// (not a change-point): the Mann-Kendall trend is significant, the Theil-Sen line
 /// fits the gentle ramp better than any single step, and the total movement clears
-/// the noise floor. This exercises the second detector and the model-fit
-/// arbitration that routes ramps to drift and steps to change-point.
+/// the practical-magnitude floor. This exercises the second detector and the
+/// model-fit arbitration that routes ramps to drift and steps to change-point.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn analyze_criterion_slow_drift_is_flagged_as_drift() {
@@ -570,12 +570,13 @@ async fn analyze_criterion_slow_drift_is_flagged_as_drift() {
 }
 
 /// A Callgrind series whose instruction count steps up by a single count - a 0.1%
-/// move - is suppressed by the basic 1% noise filter even though the engine is
-/// deterministic and reports the step with certainty. A sub-percent change is
-/// meaningless regardless of confidence, so it never reaches the report.
+/// move - is below the practical-magnitude floor every engine now shares, so it is
+/// suppressed. No engine is exact (even a CPU simulator's counts jitter run to run),
+/// and a sub-percent change is not worth a human's attention regardless of how
+/// certainly it was measured.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_callgrind_step_below_the_noise_floor_is_suppressed() {
+async fn analyze_callgrind_sub_floor_step_is_suppressed() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.commit_dated("2024-01-01", "c1");
     workspace.seed_callgrind("c1", 1000.0);
@@ -594,7 +595,7 @@ async fn analyze_callgrind_step_below_the_noise_floor_is_suppressed() {
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
         parsed["regressions"], 0,
-        "a 0.1% deterministic step is below the 1% noise floor and must not flag: {report}"
+        "a 0.1% step is below the practical-magnitude floor and must not flag: {report}"
     );
     let findings = parsed["findings"].as_array().expect("findings is an array");
     assert!(
@@ -604,14 +605,13 @@ async fn analyze_callgrind_step_below_the_noise_floor_is_suppressed() {
     );
 }
 
-/// A Callgrind series that steps up by 2% - above the 1% basic noise filter yet
-/// still below the 3% practical-magnitude floor a *noisy* engine would demand - is
-/// flagged, because deterministic engines carry no measurement noise and trust any
-/// sustained step that clears the basic floor. This proves the engine-aware split:
-/// the same 2% move would be discarded as noise on a Criterion series.
+/// A Callgrind series that steps up by 5% clears the practical-magnitude floor and is
+/// flagged as a `change_point`. Callgrind is low-noise but not exact, so it passes
+/// through the same rank test, practical floor and residual gate as any other engine
+/// rather than being trusted as deterministic.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_callgrind_deterministic_step_above_the_noise_floor_is_flagged() {
+async fn analyze_callgrind_step_above_the_practical_floor_is_flagged() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.commit_dated("2024-01-01", "c1");
     workspace.seed_callgrind("c1", 1000.0);
@@ -620,32 +620,31 @@ async fn analyze_callgrind_deterministic_step_above_the_noise_floor_is_flagged()
     workspace.commit_dated("2024-01-03", "c3");
     workspace.seed_callgrind("c3", 1000.0);
     workspace.commit_dated("2024-01-04", "c4");
-    workspace.seed_callgrind("c4", 1020.0);
+    workspace.seed_callgrind("c4", 1050.0);
     workspace.commit_dated("2024-01-05", "c5");
-    workspace.seed_callgrind("c5", 1020.0);
+    workspace.seed_callgrind("c5", 1050.0);
     workspace.commit_dated("2024-01-06", "c6");
-    workspace.seed_callgrind("c6", 1020.0);
+    workspace.seed_callgrind("c6", 1050.0);
 
     let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
         parsed["regressions"], 1,
-        "a 2% deterministic step clears the 1% noise floor and must flag: {report}"
+        "a 5% Callgrind step clears the practical floor and must flag: {report}"
     );
     assert_eq!(parsed["findings"][0]["method"], "change_point", "{report}");
     assert_eq!(parsed["findings"][0]["direction"], "regression", "{report}");
 }
 
-/// An `alloc_tracker` series whose allocated-bytes count steps up is flagged as a
-/// `change_point`: allocation statistics are a deterministic property of the code,
-/// so - like Callgrind instruction counts - a sustained step that clears the basic
-/// noise floor is a real change, even when it stays below the practical-magnitude
-/// floor a noisy engine would demand.
+/// An `alloc_tracker` series whose allocated-bytes figure steps up by 5% is flagged as
+/// a `change_point`. Allocation figures are not deterministic - warmup and
+/// buffer-resize allocations jitter the per-iteration count - so they clear the same
+/// gates as any other engine; the constant allocation count produces no finding.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn analyze_alloc_tracker_step_is_flagged_as_change_point() {
     let workspace = Workspace::repo(&storage_only_config());
-    // A flat allocated-bytes baseline that steps up by 2% at the fourth commit; the
+    // A flat allocated-bytes baseline that steps up by 5% at the fourth commit; the
     // allocation count stays constant throughout.
     workspace.commit_dated("2024-03-01", "a1");
     workspace.seed_alloc_tracker("a1", "allocate_vec", 200.0, 2.0);
@@ -654,17 +653,17 @@ async fn analyze_alloc_tracker_step_is_flagged_as_change_point() {
     workspace.commit_dated("2024-03-03", "a3");
     workspace.seed_alloc_tracker("a3", "allocate_vec", 200.0, 2.0);
     workspace.commit_dated("2024-03-04", "a4");
-    workspace.seed_alloc_tracker("a4", "allocate_vec", 204.0, 2.0);
+    workspace.seed_alloc_tracker("a4", "allocate_vec", 210.0, 2.0);
     workspace.commit_dated("2024-03-05", "a5");
-    workspace.seed_alloc_tracker("a5", "allocate_vec", 204.0, 2.0);
+    workspace.seed_alloc_tracker("a5", "allocate_vec", 210.0, 2.0);
     workspace.commit_dated("2024-03-06", "a6");
-    workspace.seed_alloc_tracker("a6", "allocate_vec", 204.0, 2.0);
+    workspace.seed_alloc_tracker("a6", "allocate_vec", 210.0, 2.0);
 
     let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
         parsed["regressions"], 1,
-        "a 2% deterministic step clears the noise floor and must flag: {report}"
+        "a 5% allocated-bytes step clears the practical floor and must flag: {report}"
     );
     assert_eq!(parsed["findings"][0]["method"], "change_point", "{report}");
     assert_eq!(parsed["findings"][0]["direction"], "regression", "{report}");
@@ -682,18 +681,16 @@ async fn analyze_alloc_tracker_ignores_gaps_in_a_sparse_history() {
     let workspace = Workspace::repo(&storage_only_config());
     // `allocate_vec` is measured only at every other commit; the intervening
     // commits measure `free_box` instead, leaving `allocate_vec` unobserved there.
-    workspace.commit_dated("2024-04-01", "g1");
-    workspace.seed_alloc_tracker("g1", "allocate_vec", 200.0, 2.0);
-    workspace.commit_dated("2024-04-02", "g2");
-    workspace.seed_alloc_tracker("g2", "free_box", 8.0, 1.0);
-    workspace.commit_dated("2024-04-03", "g3");
-    workspace.seed_alloc_tracker("g3", "allocate_vec", 200.0, 2.0);
-    workspace.commit_dated("2024-04-04", "g4");
-    workspace.seed_alloc_tracker("g4", "free_box", 8.0, 1.0);
-    workspace.commit_dated("2024-04-05", "g5");
-    workspace.seed_alloc_tracker("g5", "allocate_vec", 260.0, 2.0);
-    workspace.commit_dated("2024-04-06", "g6");
-    workspace.seed_alloc_tracker("g6", "allocate_vec", 260.0, 2.0);
+    // Its step spans the gaps: three baseline observations, then three raised ones.
+    let mut day = 1;
+    for bytes in [200.0, 200.0, 200.0, 260.0, 260.0, 260.0] {
+        workspace.commit_dated(&format!("2024-04-{day:02}"), &format!("g{day}"));
+        workspace.seed_alloc_tracker(&format!("g{day}"), "allocate_vec", bytes, 2.0);
+        day += 1;
+        workspace.commit_dated(&format!("2024-04-{day:02}"), &format!("g{day}"));
+        workspace.seed_alloc_tracker(&format!("g{day}"), "free_box", 8.0, 1.0);
+        day += 1;
+    }
 
     let report = workspace.drive_json(&["analyze"]).await;
     // Only `allocate_vec`'s allocated-bytes step is a finding. A gap read as a drop
@@ -708,15 +705,16 @@ async fn analyze_alloc_tracker_ignores_gaps_in_a_sparse_history() {
     assert!(report.contains("allocate_vec"), "{report}");
     assert!(
         !report.contains("free_box"),
-        "the flat two-point free_box series produces no finding: {report}"
+        "the flat free_box series produces no finding: {report}"
     );
 }
 
 /// A slow, monotonic `all_the_time` processor-time drift is flagged as a `drift`
 /// finding. Processor time is a noisy, hardware-dependent measurement (like
-/// Criterion wall time), so a gentle ramp clears the noise floor only via the
-/// trend detector - even though `all_the_time` reports no confidence interval, the
-/// detector falls back gracefully to the Mann-Kendall trend and practical floor.
+/// Criterion wall time), so a gentle ramp clears the practical-magnitude floor only
+/// via the trend detector - even though `all_the_time` reports no confidence
+/// interval, the detector falls back gracefully to the Mann-Kendall trend and
+/// practical floor.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn analyze_all_the_time_slow_drift_is_flagged_as_drift() {
@@ -985,10 +983,11 @@ async fn analyze_dirty_tree_on_the_base_admits_the_tip_with_a_warning() {
     workspace.seed_callgrind("c2", 100.0);
     workspace.commit_dated("2024-01-03", "c3");
     workspace.seed_callgrind("c3", 100.0);
-    // Two dirty regression snapshots on the tip commit (c3) complete a sustained
-    // step over the clean baseline.
+    // Three dirty regression snapshots on the tip commit (c3) complete a sustained
+    // step over the clean baseline (three raised points clear the change-point gate).
     workspace.seed_dirty_callgrind("2024-01-04", "c3", 130.0);
     workspace.seed_dirty_callgrind("2024-01-05", "c3", 130.0);
+    workspace.seed_dirty_callgrind("2024-01-06", "c3", 130.0);
     // Make the working tree genuinely dirty (an uncommitted, non-ignored file),
     // matching the "evaluating the tool" / "working on the base branch" scenario.
     workspace.make_dirty("uncommitted.txt");
@@ -1000,7 +999,7 @@ async fn analyze_dirty_tree_on_the_base_admits_the_tip_with_a_warning() {
         "the dirty tip regression is admitted: {report}"
     );
     assert_eq!(
-        parsed["runs"], 5,
+        parsed["runs"], 6,
         "the dirty tip snapshots join the three clean runs: {report}"
     );
     let warning = parsed["warning"].as_str().unwrap();
@@ -1083,13 +1082,14 @@ async fn analyze_feature_branch_admits_dirty_snapshots() {
     workspace.seed_callgrind("c2", 100.0);
     workspace.commit_dated("2024-01-03", "c3");
     workspace.seed_callgrind("c3", 100.0);
-    // Branch off master and add a clean point plus two dirty regression snapshots
-    // on it (two raised points satisfy the change-point persistence requirement).
+    // Branch off master and add a clean point plus three dirty regression snapshots
+    // on it (three raised points satisfy the change-point persistence requirement).
     workspace.checkout_new_branch("feature");
     workspace.commit_dated("2024-01-04", "f1");
     workspace.seed_callgrind("f1", 100.0);
     workspace.seed_dirty_callgrind("2024-01-05", "f1", 200.0);
     workspace.seed_dirty_callgrind("2024-01-06", "f1", 200.0);
+    workspace.seed_dirty_callgrind("2024-01-07", "f1", 200.0);
 
     // By default (feature is HEAD; base is the detected master) the dirty snapshot
     // on the target side is admitted, so the spike flags.

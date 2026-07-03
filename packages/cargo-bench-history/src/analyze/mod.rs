@@ -1986,6 +1986,32 @@ mod tests {
         git
     }
 
+    /// A master history `c0 - c1 - c2 - c3` with a feature branch off the tip `c3`:
+    ///
+    /// ```text
+    /// master:  c0 - c1 - c2 - c3
+    ///                          \
+    /// feature:                  f1 - f2   (HEAD)
+    /// ```
+    ///
+    /// The four-commit base line gives a branch comparison a baseline large enough
+    /// to reach rank-test significance against a raised feature regime; branching at
+    /// the tip keeps every base commit an ancestor of the feature tip.
+    fn feature_tip_git() -> FakeGitHistory {
+        let mut git = FakeGitHistory::new();
+        git.commit("c0", None)
+            .commit("c1", Some("c0"))
+            .commit("c2", Some("c1"))
+            .commit("c3", Some("c2"))
+            .commit("f1", Some("c3"))
+            .commit("f2", Some("f1"))
+            .branch("master", "c3")
+            .branch("feature", "f2")
+            .head("feature")
+            .mark_default("master");
+        git
+    }
+
     /// A linear master history `c0 - c1 - c2 - c3 - c4 - c5`, HEAD at the tip.
     ///
     /// Long enough to host a sustained level shift with at least two points on
@@ -2780,20 +2806,25 @@ mod tests {
 
     #[test]
     fn feature_view_admits_dirty_after_the_merge_base() {
-        // feature branched at c1; the target side rises at f1 and the dirty f2
-        // snapshot sustains the new level. The dirty run is admitted (runs == 4)
-        // and is essential to the flag: without it the lone f1 point cannot satisfy
-        // the change-point detector's persistence requirement.
+        // feature branched at the master tip c3; the target side rises at f1 and a
+        // dirty f2 snapshot sustains the new level. The dirty run is admitted
+        // (runs == 7) and is essential to the flag: no engine is exact, so the raised
+        // regime must clear a rank test against the baseline. With only the two clean
+        // feature points the 4-vs-2 split is underpowered; the dirty f2 snapshot tips
+        // it to a significant 4-vs-3 difference.
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
         store(&storage, &clean_key("c1"), &ir_set(1, "c1", 100.0));
-        store(&storage, &clean_key("f1"), &ir_set(2, "f1", 130.0));
-        store(&storage, &dirty_key("f2", 3), &ir_set(3, "f2", 130.0));
-        let git = feature_git();
+        store(&storage, &clean_key("c2"), &ir_set(2, "c2", 100.0));
+        store(&storage, &clean_key("c3"), &ir_set(3, "c3", 100.0));
+        store(&storage, &clean_key("f1"), &ir_set(4, "f1", 130.0));
+        store(&storage, &clean_key("f2"), &ir_set(5, "f2", 130.0));
+        store(&storage, &dirty_key("f2", 6), &ir_set(6, "f2", 130.0));
+        let git = feature_tip_git();
 
         let (report, regressions, _) = analyze_json(&git, &storage, "folo", &options());
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-        assert_eq!(parsed["runs"], 4, "the dirty f2 snapshot is admitted");
+        assert_eq!(parsed["runs"], 7, "the dirty f2 snapshot is admitted");
         assert_eq!(regressions, 1, "the admitted dirty f2 completes the step");
     }
 
@@ -2870,8 +2901,9 @@ mod tests {
     fn dirty_tree_on_base_branch_admits_tip_dirty_runs_with_a_warning() {
         // On the base branch (official view) with a currently-dirty working tree,
         // the dirty snapshots on the tip are the user's in-flight work and ARE
-        // admitted, with a warning that they are ephemeral. Two snapshots at the
-        // raised level complete a sustained step over the clean baseline.
+        // admitted, with a warning that they are ephemeral. Three snapshots at the
+        // raised level form a regime large enough to clear the rank test against the
+        // clean baseline.
         let storage = MemoryStorage::new();
         for (index, value) in [100.0, 100.0, 100.0].into_iter().enumerate() {
             let commit = format!("c{index}");
@@ -2884,13 +2916,17 @@ mod tests {
         }
         store(&storage, &dirty_key("c3", 300), &ir_set(300, "c3", 130.0));
         store(&storage, &dirty_key("c3", 400), &ir_set(400, "c3", 130.0));
+        store(&storage, &dirty_key("c3", 500), &ir_set(500, "c3", 130.0));
         let mut git = linear_git();
         git.mark_dirty();
 
         let (report, regressions, reporter) = analyze_json(&git, &storage, "folo", &options());
 
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-        assert_eq!(parsed["runs"], 5, "both dirty tip snapshots are admitted");
+        assert_eq!(
+            parsed["runs"], 6,
+            "all three dirty tip snapshots are admitted"
+        );
         assert_eq!(regressions, 1, "the dirty tip snapshots complete the step");
         assert_eq!(
             parsed["tip_commit"], "c3",
@@ -3106,15 +3142,19 @@ mod tests {
     fn within_a_commit_clean_precedes_dirty() {
         // On a target-side commit, a clean run and dirty snapshots both load; the
         // clean run is the baseline and the later dirty values are the latest
-        // points. Two dirty snapshots at the raised level complete a sustained step.
+        // points. Three dirty snapshots at the raised level form a regime large
+        // enough to clear the rank test against the four-commit clean baseline.
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
         store(&storage, &clean_key("c1"), &ir_set(1, "c1", 100.0));
-        store(&storage, &clean_key("f1"), &ir_set(2, "f1", 100.0));
-        store(&storage, &clean_key("f2"), &ir_set(3, "f2", 100.0));
-        store(&storage, &dirty_key("f2", 4), &ir_set(4, "f2", 130.0));
-        store(&storage, &dirty_key("f2", 5), &ir_set(5, "f2", 130.0));
-        let git = feature_git();
+        store(&storage, &clean_key("c2"), &ir_set(2, "c2", 100.0));
+        store(&storage, &clean_key("c3"), &ir_set(3, "c3", 100.0));
+        store(&storage, &clean_key("f1"), &ir_set(4, "f1", 100.0));
+        store(&storage, &clean_key("f2"), &ir_set(5, "f2", 100.0));
+        store(&storage, &dirty_key("f2", 6), &ir_set(6, "f2", 130.0));
+        store(&storage, &dirty_key("f2", 7), &ir_set(7, "f2", 130.0));
+        store(&storage, &dirty_key("f2", 8), &ir_set(8, "f2", 130.0));
+        let git = feature_tip_git();
 
         let (_, regressions, _) = analyze_json(&git, &storage, "folo", &options());
         assert_eq!(regressions, 1, "the dirty f2 values are the latest points");

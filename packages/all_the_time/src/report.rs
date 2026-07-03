@@ -247,9 +247,39 @@ impl ReportOperation {
 
     /// Computes dispersion statistics over the recorded spans.
     ///
-    /// Returns `None` when no spans were recorded.
+    /// Returns `None` when no spans were recorded. The returned
+    /// [`OperationStatistics`] carries the same warmup-robust slope, bootstrap
+    /// confidence interval, standard deviation and extremes that are written to
+    /// the machine-readable JSON output.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use all_the_time::Session;
+    ///
+    /// # fn main() {
+    /// let session = Session::new();
+    /// # let session = session.no_stdout().no_file();
+    /// let operation = session.operation("work");
+    /// let _span = operation.measure_thread().iterations(100);
+    /// for _ in 0..100 {
+    ///     std::hint::black_box(42 * 2);
+    /// }
+    /// drop(_span);
+    ///
+    /// let report = session.to_report();
+    /// for (_name, op) in report.operations() {
+    ///     if let Some(stats) = op.statistics() {
+    ///         println!(
+    ///             "slope: {} ns/iter over {} spans",
+    ///             stats.slope_nanos, stats.span_count
+    ///         );
+    ///     }
+    /// }
+    /// # }
+    /// ```
     #[must_use]
-    pub(crate) fn statistics(&self) -> Option<OperationStatistics> {
+    pub fn statistics(&self) -> Option<OperationStatistics> {
         self.metrics.statistics()
     }
 }

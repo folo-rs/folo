@@ -1,0 +1,21 @@
+{
+  "operation": "allocate_vec",
+  "total_iterations": 600000,
+  "total_bytes_allocated": 120000000,
+  "total_allocations_count": 1200000,
+  "mean_bytes_per_iteration": 200,
+  "mean_allocations_per_iteration": 2,
+  "span_count": 6,
+  "slope_bytes_per_iteration": 200.0,
+  "std_dev_bytes_per_iteration": 0.7071067811865476,
+  "interval_low_bytes_per_iteration": 199.5,
+  "interval_high_bytes_per_iteration": 200.5,
+  "min_bytes_per_iteration": 199.0,
+  "max_bytes_per_iteration": 201.0,
+  "slope_allocations_per_iteration": 2.0,
+  "std_dev_allocations_per_iteration": 0.0,
+  "interval_low_allocations_per_iteration": 2.0,
+  "interval_high_allocations_per_iteration": 2.0,
+  "min_allocations_per_iteration": 2.0,
+  "max_allocations_per_iteration": 2.0
+}

@@ -10,7 +10,7 @@
 //! ```text
 //! mock_bench_engine [--exit-code N] [--summary GROUP=KIND]...
 //!                   [--criterion GROUP|FUNCTION|VALUE=NANOS]...
-//!                   [--alloc-tracker OPERATION=BYTES/COUNT]...
+//!                   [--alloc-tracker OPERATION=BYTES/COUNT[@BLOW:BHIGH/CLOW:CHIGH]]...
 //!                   [--all-the-time OPERATION=NANOS[@LOW:HIGH]]...
 //!                   [--fail-if-exists PATH]
 //! ```
@@ -37,15 +37,19 @@
 //! whose wall-clock slope estimate is `NANOS` nanoseconds. The on-disk directory is
 //! derived from the identity, so distinct identities never share a directory.
 //!
-//! `--alloc-tracker OPERATION=BYTES/COUNT` writes an `alloc_tracker`
-//! `<OPERATION>.json` file reporting `BYTES` mean bytes and `COUNT` mean
-//! allocations per iteration. `--all-the-time OPERATION=NANOS[@LOW:HIGH]` writes
-//! an `all_the_time` `<OPERATION>.json` file reporting `NANOS` mean (and slope)
-//! processor-time nanoseconds per iteration; an optional `@LOW:HIGH` suffix
-//! additionally records a bootstrap confidence interval (and a matching standard
-//! deviation, span count and min/max), mirroring the real tool's dispersion
-//! output. Both write one flat JSON file per operation under their respective
-//! engine directory, mirroring the real tools.
+//! `--alloc-tracker OPERATION=BYTES/COUNT[@BLOW:BHIGH/CLOW:CHIGH]` writes an
+//! `alloc_tracker` `<OPERATION>.json` file reporting `BYTES` mean bytes and
+//! `COUNT` mean allocations per iteration; an optional `@BLOW:BHIGH/CLOW:CHIGH`
+//! suffix additionally records a bootstrap confidence interval (and matching
+//! slope, standard deviation, span count and min/max) for the bytes and
+//! allocation-count metrics respectively, mirroring the real tool's dispersion
+//! output. `--all-the-time OPERATION=NANOS[@LOW:HIGH]` writes an `all_the_time`
+//! `<OPERATION>.json` file reporting `NANOS` mean (and slope) processor-time
+//! nanoseconds per iteration; an optional `@LOW:HIGH` suffix additionally records
+//! a bootstrap confidence interval (and a matching standard deviation, span count
+//! and min/max), mirroring the real tool's dispersion output. Both write one flat
+//! JSON file per operation under their respective engine directory, mirroring the
+//! real tools.
 //!
 //! `--fail-if-exists PATH` exits with code 1 and writes no output when `PATH`
 //! (relative to the working directory) exists. Backfill runs each engine in a
@@ -101,11 +105,16 @@ struct CriterionCase {
     nanos: f64,
 }
 
-/// A parsed `alloc_tracker` operation request: its name and per-iteration means.
+/// A parsed `alloc_tracker` operation request: its name, per-iteration means, and
+/// optional per-metric bootstrap intervals `((bytes_low, bytes_high), (count_low,
+/// count_high))`. When the intervals are present the operation file additionally
+/// records slopes, standard deviations, span count and min/max for both metrics,
+/// mirroring dispersion-bearing output.
 struct AllocOperation {
     operation: String,
     mean_bytes: u64,
     mean_allocations: u64,
+    intervals: Option<((f64, f64), (f64, f64))>,
 }
 
 /// A parsed `all_the_time` operation request: its name, per-iteration mean, and
@@ -319,23 +328,37 @@ fn write_criterion_case(target_root: &std::path::Path, case: &CriterionCase) {
         .expect("estimates.json should be writable");
 }
 
-/// Parses an `OPERATION=BYTES/COUNT` argument into an [`AllocOperation`].
+/// Parses an `OPERATION=BYTES/COUNT[@BLOW:BHIGH/CLOW:CHIGH]` argument into an
+/// [`AllocOperation`].
 #[cfg_attr(coverage_nightly, coverage(off))]
 fn parse_alloc_arg(value: &str) -> AllocOperation {
-    let (operation, stats) = value
+    let (operation, rest) = value
         .split_once('=')
-        .expect("--alloc-tracker value must be OPERATION=BYTES/COUNT");
-    let (bytes, count) = stats
-        .split_once('/')
-        .expect("--alloc-tracker stats must be BYTES/COUNT");
+        .expect("--alloc-tracker value must be OPERATION=BYTES/COUNT[@BLOW:BHIGH/CLOW:CHIGH]");
     assert!(
         !operation.is_empty(),
         "--alloc-tracker OPERATION must be non-empty"
     );
+    let (stats, intervals) = match rest.split_once('@') {
+        Some((stats, bounds)) => {
+            let (bytes_bounds, count_bounds) = bounds
+                .split_once('/')
+                .expect("--alloc-tracker dispersion must be BLOW:BHIGH/CLOW:CHIGH");
+            (
+                stats,
+                Some((parse_bounds(bytes_bounds), parse_bounds(count_bounds))),
+            )
+        }
+        None => (rest, None),
+    };
+    let (bytes, count) = stats
+        .split_once('/')
+        .expect("--alloc-tracker stats must be BYTES/COUNT");
     AllocOperation {
         operation: operation.to_owned(),
         mean_bytes: bytes.parse().expect("BYTES must be a number"),
         mean_allocations: count.parse().expect("COUNT must be a number"),
+        intervals,
     }
 }
 
@@ -350,18 +373,7 @@ fn parse_time_arg(value: &str) -> TimeOperation {
         "--all-the-time OPERATION must be non-empty"
     );
     let (nanos, interval) = match rest.split_once('@') {
-        Some((nanos, bounds)) => {
-            let (low, high) = bounds
-                .split_once(':')
-                .expect("--all-the-time interval must be LOW:HIGH");
-            (
-                nanos,
-                Some((
-                    low.parse().expect("LOW must be a number"),
-                    high.parse().expect("HIGH must be a number"),
-                )),
-            )
-        }
+        Some((nanos, bounds)) => (nanos, Some(parse_bounds(bounds))),
         None => (rest, None),
     };
     TimeOperation {
@@ -371,17 +383,31 @@ fn parse_time_arg(value: &str) -> TimeOperation {
     }
 }
 
+/// Parses a `LOW:HIGH` interval into a `(low, high)` pair of nanoseconds.
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn parse_bounds(bounds: &str) -> (f64, f64) {
+    let (low, high) = bounds.split_once(':').expect("interval must be LOW:HIGH");
+    (
+        low.parse().expect("LOW must be a number"),
+        high.parse().expect("HIGH must be a number"),
+    )
+}
+
 /// Writes one `alloc_tracker` `<operation>.json` file under `alloc_tracker/`.
 ///
 /// The shape mirrors the real tool: `total_*` fields derive from the per-iteration
-/// means over a fixed iteration count, though the harvest reads only the means.
+/// means over a fixed iteration count. When the request carries per-metric
+/// intervals the file additionally records the slope, standard deviation, span
+/// count and min/max for both the bytes and allocation-count metrics, so the
+/// adapter's dispersion path is exercised end to end.
 #[cfg_attr(coverage_nightly, coverage(off))]
 fn write_alloc_operation(target_root: &std::path::Path, operation: &AllocOperation) {
     const ITERATIONS: u64 = 4;
+    const SPANS: u64 = 6;
     let dir = target_root.join("alloc_tracker");
     std::fs::create_dir_all(&dir).expect("alloc_tracker directory should be creatable");
 
-    let output = serde_json::json!({
+    let mut output = serde_json::json!({
         "operation": operation.operation,
         "total_iterations": ITERATIONS,
         "total_bytes_allocated": operation.mean_bytes.saturating_mul(ITERATIONS),
@@ -389,8 +415,47 @@ fn write_alloc_operation(target_root: &std::path::Path, operation: &AllocOperati
         "mean_bytes_per_iteration": operation.mean_bytes,
         "mean_allocations_per_iteration": operation.mean_allocations,
     });
+    if let Some((bytes_interval, count_interval)) = operation.intervals {
+        let fields = output
+            .as_object_mut()
+            .expect("the operation output is a JSON object");
+        fields.insert("span_count".to_owned(), serde_json::json!(SPANS));
+        insert_metric_dispersion(
+            fields,
+            "bytes_per_iteration",
+            operation.mean_bytes,
+            bytes_interval,
+        );
+        insert_metric_dispersion(
+            fields,
+            "allocations_per_iteration",
+            operation.mean_allocations,
+            count_interval,
+        );
+    }
     let file = dir.join(format!("{}.json", safe_segment(&operation.operation)));
     std::fs::write(file, output.to_string()).expect("alloc_tracker file should be writable");
+}
+
+/// Inserts the six dispersion fields for one metric (identified by `suffix`) into
+/// an operation output object. The slope is emitted as the integer mean, which
+/// deserializes to the adapter's `f64` slope; the interval bounds double as the
+/// min/max and imply the standard deviation `(high - low) / 2`.
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn insert_metric_dispersion(
+    fields: &mut serde_json::Map<String, serde_json::Value>,
+    suffix: &str,
+    mean: u64,
+    interval: (f64, f64),
+) {
+    let (low, high) = interval;
+    let std_dev = (high - low) / 2.0;
+    fields.insert(format!("slope_{suffix}"), serde_json::json!(mean));
+    fields.insert(format!("std_dev_{suffix}"), serde_json::json!(std_dev));
+    fields.insert(format!("interval_low_{suffix}"), serde_json::json!(low));
+    fields.insert(format!("interval_high_{suffix}"), serde_json::json!(high));
+    fields.insert(format!("min_{suffix}"), serde_json::json!(low));
+    fields.insert(format!("max_{suffix}"), serde_json::json!(high));
 }
 
 /// Writes one `all_the_time` `<operation>.json` file under `all_the_time/`.
@@ -413,37 +478,15 @@ fn write_time_operation(target_root: &std::path::Path, operation: &TimeOperation
         "mean_processor_time_nanos": operation.mean_nanos,
     });
     if let Some((low, high)) = operation.interval {
-        let std_dev = (high - low) / 2.0;
         let fields = output
             .as_object_mut()
             .expect("the operation output is a JSON object");
-        // The slope is emitted as the integer mean, which deserializes to the
-        // adapter's `f64` slope; the interval bounds and standard deviation
-        // carry the dispersion the noise detector reads.
         fields.insert("span_count".to_owned(), serde_json::json!(SPANS));
-        fields.insert(
-            "slope_processor_time_nanos".to_owned(),
-            serde_json::json!(operation.mean_nanos),
-        );
-        fields.insert(
-            "std_dev_processor_time_nanos".to_owned(),
-            serde_json::json!(std_dev),
-        );
-        fields.insert(
-            "interval_low_processor_time_nanos".to_owned(),
-            serde_json::json!(low),
-        );
-        fields.insert(
-            "interval_high_processor_time_nanos".to_owned(),
-            serde_json::json!(high),
-        );
-        fields.insert(
-            "min_processor_time_nanos".to_owned(),
-            serde_json::json!(low),
-        );
-        fields.insert(
-            "max_processor_time_nanos".to_owned(),
-            serde_json::json!(high),
+        insert_metric_dispersion(
+            fields,
+            "processor_time_nanos",
+            operation.mean_nanos,
+            (low, high),
         );
     }
     let file = dir.join(format!("{}.json", safe_segment(&operation.operation)));

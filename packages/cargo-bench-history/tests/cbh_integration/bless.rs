@@ -170,27 +170,19 @@ async fn bless_on_a_feature_branch_is_rejected() {
 #[cfg_attr(miri, ignore)]
 async fn analyze_include_inactive_surfaces_a_recovered_spike() {
     let workspace = Workspace::clean_repo(&storage_only_config());
-    // A flat baseline, a sustained spike, then a return to the baseline level.
-    workspace.commit_dated("2024-01-01", "c1");
-    workspace.seed_callgrind("c1", 10.0);
-    workspace.commit_dated("2024-01-02", "c2");
-    workspace.seed_callgrind("c2", 10.0);
-    workspace.commit_dated("2024-01-03", "c3");
-    workspace.seed_callgrind("c3", 10.0);
-    workspace.commit_dated("2024-01-04", "c4");
-    workspace.seed_callgrind("c4", 10.0);
-    workspace.commit_dated("2024-01-05", "c5");
-    workspace.seed_callgrind("c5", 20.0);
-    workspace.commit_dated("2024-01-06", "c6");
-    workspace.seed_callgrind("c6", 20.0);
-    workspace.commit_dated("2024-01-07", "c7");
-    workspace.seed_callgrind("c7", 10.0);
-    workspace.commit_dated("2024-01-08", "c8");
-    workspace.seed_callgrind("c8", 10.0);
-    workspace.commit_dated("2024-01-09", "c9");
-    workspace.seed_callgrind("c9", 10.0);
-    workspace.commit_dated("2024-01-10", "c10");
-    workspace.seed_callgrind("c10", 10.0);
+    // An eight-point baseline, a two-point spike, then an eight-point return to the
+    // baseline level. No engine is exact, so the spike's rise and recovery must each
+    // be long enough to clear a Mann-Whitney gate before it registers at all.
+    for (day, value) in std::iter::repeat_n(10.0, 8)
+        .chain([20.0, 20.0])
+        .chain(std::iter::repeat_n(10.0, 8))
+        .enumerate()
+    {
+        let day = day + 1;
+        let label = format!("c{day}");
+        workspace.commit_dated(&format!("2024-01-{day:02}"), &label);
+        workspace.seed_callgrind(&label, value);
+    }
 
     // By default, a fully recovered spike is not reported.
     let report = workspace.drive_json(&["analyze"]).await;

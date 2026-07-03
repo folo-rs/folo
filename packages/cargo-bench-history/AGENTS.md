@@ -87,9 +87,11 @@ not conclusion-only** (see `docs/standalone-binaries.md`). Tests use the `#[cfg(
 * The backend is chosen at run time by `--local` / configured cloud (never a local path in the
   committed config); read commands add a `--cache` read-through mirror. `--machine-key` is
   CLI-only for the same reason (the config is committed). Details: DESIGN §4, §6.
-* Four engines are parsed in `bench/` — deterministic (`callgrind`, `alloc_tracker`) vs noisy
-  (`criterion`, `all_the_time`). `collect`/`backfill` invoke `cargo bench` once and harvest
-  whatever ran; `--engine` is an `analyze` facet, not a collect flag. Details: DESIGN §1.
+* Four engines are parsed in `bench/`. None is deterministic; they differ by whether each
+  point carries a confidence interval (`criterion`, `all_the_time`, and `alloc_tracker` when
+  its output records one) or is a single value (`callgrind`, and mean-only output).
+  `collect`/`backfill` invoke `cargo bench` once and harvest whatever ran; `--engine` is an
+  `analyze` facet, not a collect flag. Details: DESIGN §1.
 
 ## Testing
 
