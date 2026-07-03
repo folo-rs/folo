@@ -97,12 +97,14 @@ async fn analyze_json_output_is_structured() {
     let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["project"], "testproj");
-    // The report names the analyzed tip commit (a real 40-hex SHA) so a reader can
-    // identify exactly which commit it describes; the seeded checkout is clean.
+    // The report names the analyzed tip commit (a full-length hex commit ID) so a
+    // reader can identify exactly which commit it describes; the seeded checkout is
+    // clean. Accept either length Git may use (40 for SHA-1, 64 for SHA-256).
     let tip = parsed["tip_commit"].as_str().unwrap();
     assert!(
-        tip.len() == 40 && tip.chars().all(|character| character.is_ascii_hexdigit()),
-        "tip_commit should be a full commit SHA: {tip:?}"
+        (tip.len() == 40 || tip.len() == 64)
+            && tip.chars().all(|character| character.is_ascii_hexdigit()),
+        "tip_commit should be a full-length hex commit ID: {tip:?}"
     );
     assert_eq!(parsed["tip_dirty"], false);
     assert_eq!(parsed["regressions"], 1);
