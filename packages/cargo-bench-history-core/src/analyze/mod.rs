@@ -23,7 +23,7 @@ pub use findings::{
     find_changes_spawned,
 };
 pub use parallel::{balanced_chunk_sizes, worker_count};
-pub use report::{ReportFormat, ReportInput, SetSummary, render};
+pub use report::{ReportFormat, ReportInput, SetSummary, format_value, render};
 pub use run_points::{MetricPoint, ResultPoints, RunPoints};
 pub use selection::{SelectedCommit, select_commits};
 pub use series::{

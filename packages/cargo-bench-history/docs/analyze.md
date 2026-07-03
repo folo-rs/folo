@@ -38,6 +38,12 @@ else is bookkeeping. Each analysis mode (`history`, `branch`, `tip`) is a separa
 invocation with its own load — there is no dataset cache across modes — and the mode is
 auto-detected once per run from git topology.
 
+The read-only `examine` command is a **lighter consumer of the same load**: it runs Phase 1
+and Phase 2/3 through the identical `select_dataset` pipeline, then narrows to a single
+`(benchmark, metric)` series and prints its points instead of running the detect stage — the
+tabular pivot of a finding's chart, with no per-series statistics. See the `examine` command
+in [`DESIGN.md`](DESIGN.md).
+
 ## The load
 
 ```mermaid

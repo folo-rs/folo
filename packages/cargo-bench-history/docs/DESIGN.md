@@ -11,8 +11,8 @@ analyzes that history for trends that snapshot / "previous run" tools cannot see
 
 It stores every result over time (local path or Azure blob), runs in multiple
 environments (dev PC, GitHub Actions, ADO), and partitions data only where results are
-not otherwise comparable. Its commands are `collect`, `install`, `analyze`, `backfill`,
-`list`, `prune`, `bless`, and `unbless`.
+not otherwise comparable. Its commands are `collect`, `install`, `analyze`, `examine`,
+`backfill`, `list`, `prune`, `bless`, and `unbless`.
 
 ## 1. Benchmark engines and what they emit
 
@@ -495,6 +495,47 @@ blessings at later commits stay in effect, so the timeline may remain blessed pa
 unblessed commit. `list blessings` audits them — the sidecars at the current commit by
 default, or the most recent blessing of every benchmark across the analysis window.
 
+### 7.8 `examine`
+
+`examine` answers the question a finding raises: *which commits actually moved this
+number?* Where `analyze` reports that a benchmark's metric shifted and draws a small chart,
+`examine` **pivots that chart into its data points** — one row per recorded observation of a
+single `(benchmark, metric)` series, in git first-parent order, each row pairing the value
+with the short commit id and the start of the commit's title. A maintainer reads the values
+down the column, spots where one jumps, and reads across to the title to correlate the move
+with what that commit changed.
+
+It is a **drill-down sibling of `list runs`**: both are read-only previews over `analyze`'s
+exact data-set selection that never analyze, so `examine` reuses that selection pipeline
+unchanged and stays in the same lockstep — a selection parameter added to `analyze` is added
+to `list`, `prune`, and `examine` alike. Like `analyze` it requires a resolvable repository
+(it needs first-parent topology to order the points and each commit's title to label them)
+and repeats the pivot once **per matching discriminant set**, since the same series can exist
+under several triples or machine keys.
+
+Two required options name the series, and they are the one place a command names a
+**metric**: `--benchmark <qualified-id>` selects exactly one benchmark identity and
+`--metric <name>` one metric by its stable name. `analyze` deliberately exposes no metric
+filter because a user is not expected to know the internal metric names — but `examine`'s
+input is an `analyze` *finding*, which already prints both the benchmark identity and the
+metric, so pasting them back in is natural rather than guesswork. An unknown metric name is
+rejected up front against the known set. An unknown or unmatched benchmark id is not an error
+— whether an id exists is data-dependent — but yields an empty pivot explained by one of two
+hints: when no run enters the selection at all, the same "matched no runs" hint `analyze`
+gives; when runs enter but none carry the named `(benchmark, metric)` pair, a distinct hint
+pointing at the unmatched benchmark id or metric name.
+
+`examine` runs **no detection and no re-baselining** — it has no findings, modes, or
+blessings. It shows every selected point exactly as the chart would plot it (a commit
+carrying both a clean run and dirty snapshots contributes a row each, ordered
+clean-before-dirty and flagged, so a value's provenance is unambiguous), which is why the
+analysis-only flags (mode, improvements, inactive findings) are not part of its surface. The
+three output renderings compose from one pass as everywhere else: the per-commit table on
+stdout by default, the same table in Markdown, and a machine-readable JSON form that carries,
+per discriminant set, the ordered points with full-precision values and each commit's full
+title — the 50-character title truncation is a readability convenience of the text and
+Markdown tables, not of the data.
+
 ## 8. Analysis
 
 A series is built per `(discriminant set, benchmark identity, metric)`, ordered by git
@@ -609,9 +650,9 @@ or two branch points, which is why the techniques differ by mode:
 | Improvements reported | opt-in | ✅ | — |
 | Resolved (inactive) findings reported | opt-in | — | — |
 
-Modes apply to `analyze` only; `list` and `prune` reuse the same data-set *selection* but
-never analyze, so the mode and improvement/inactive flags are analyze-only and not part of
-the selection lockstep.
+Modes apply to `analyze` only; `list`, `prune`, and `examine` reuse the same data-set
+*selection* but never analyze, so the mode and improvement/inactive flags are analyze-only
+and not part of the selection lockstep.
 
 ### 8.6 Re-baselining: blessings and resolved spikes
 

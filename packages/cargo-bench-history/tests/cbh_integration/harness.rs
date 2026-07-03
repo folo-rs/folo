@@ -16,6 +16,7 @@ pub(crate) use jiff::Timestamp;
 use nonempty::nonempty;
 pub(crate) use serial_test::serial;
 pub(crate) use testing::CwdGuard;
+use tick::Clock;
 
 /// The tool version recorded with each run. The integration test compiles within
 /// the package, so its `CARGO_PKG_VERSION` matches the version `collect` records.
@@ -819,7 +820,7 @@ impl Workspace {
                 workspace_dir: Some(self.root().to_path_buf()),
                 target_root: Some(target_root),
                 bench_command: Some(bench_command),
-                now: Some(analysis_now()),
+                clock: Some(Clock::new_frozen_at(analysis_now())),
                 storage_override: None,
             },
         )
@@ -846,7 +847,7 @@ impl Workspace {
                 workspace_dir: Some(self.root().to_path_buf()),
                 target_root: None,
                 bench_command: Some(bench_command),
-                now: Some(analysis_now()),
+                clock: Some(Clock::new_frozen_at(analysis_now())),
                 storage_override: None,
             },
         )

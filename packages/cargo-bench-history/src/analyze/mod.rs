@@ -13,14 +13,15 @@
 //! storage- and git-generic orchestrator the in-memory tests drive.
 
 pub(crate) mod bless;
+pub(crate) mod examine;
 pub(crate) mod list;
 pub(crate) mod prune;
 
 pub(crate) use cargo_bench_history_core::analyze::{
     AnalysisConfig, AnalysisContext, AnalysisMode, BlessingPlacement, DiscriminantSetQuery,
     FacetFilter, ReportFormat, ReportInput, RunPoints, Series, SeriesBuilder, SeriesFilter,
-    SetSummary, StorageKey, apply_blessings, balanced_chunk_sizes, find_changes_spawned, parse_key,
-    render, select_commits, worker_count,
+    SetSummary, StorageKey, apply_blessings, balanced_chunk_sizes, find_changes_spawned,
+    format_value, parse_key, render, select_commits, worker_count,
 };
 
 use std::collections::{BTreeMap, HashMap};
@@ -35,6 +36,7 @@ use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use jiff::{Span, Timestamp};
 use nonempty::NonEmpty;
+use tick::Clock;
 
 use crate::config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
@@ -51,20 +53,23 @@ use crate::wiring::{
     resolve_repo, storage_env,
 };
 use crate::{
-    AnalyzeOptions, BlessOptions, ListOptions, PruneOptions, RunError, RunOutcome, UnblessOptions,
+    AnalyzeOptions, BlessOptions, ExamineOptions, ListOptions, PruneOptions, RunError, RunOutcome,
+    UnblessOptions,
 };
 
 /// The real `analyze`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
 ///
-/// `now_override` anchors the history-mode default `--since` lookback to a fixed
-/// instant; production passes `None` so the anchor is the wall clock, while tests
-/// pass a deterministic instant (the relative-`--since` parsing keeps using the
-/// real clock regardless — only the *default* lookback uses this anchor).
+/// `clock_override` injects the [`tick::Clock`] the analysis anchors its "now" to:
+/// `None` reads the runtime wall clock (`Clock::new_tokio`), while tests pass a
+/// frozen clock (`Clock::new_frozen_at`) so the anchor is deterministic. That
+/// single anchor drives both the history-mode default `--since` look-back and the
+/// resolution of any relative `--since`/`--until` duration, so the whole window is
+/// deterministic under a frozen clock.
 pub(crate) async fn execute(
     options: &AnalyzeOptions,
     workspace_dir: &Path,
-    now_override: Option<Timestamp>,
+    clock_override: Option<Clock>,
     storage_override: Option<StorageFacade>,
 ) -> Result<RunOutcome, RunError> {
     // Per-object notes follow `--verbose`; stage timings are emitted under either
@@ -94,7 +99,7 @@ pub(crate) async fn execute(
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
     let auto = detect_auto_facets().await?;
 
-    let now = now_override.unwrap_or_else(Timestamp::now);
+    let now = resolve_now(clock_override);
     let color = should_colorize(
         std::io::stdout().is_terminal(),
         std::env::var_os("NO_COLOR").is_some(),
@@ -124,6 +129,20 @@ pub(crate) async fn execute(
     // diagnosed as a cold or invalidated mirror regardless of the load's outcome.
     storage.report_cache_tally(&reporter);
     outcome
+}
+
+/// Reads the analysis anchor instant from a [`tick::Clock`], the single source of
+/// wall-clock time for the whole analyze family (`analyze`/`list`/`examine`/`prune`/
+/// `bless`).
+///
+/// Production passes `clock_override: None` and reads the runtime clock
+/// (`Clock::new_tokio`); tests inject a frozen clock (`Clock::new_frozen_at`) so the
+/// resolved window is deterministic. Sourcing the instant through the clock keeps
+/// time injectable rather than minting it from a bare `Timestamp::now()`.
+pub(super) fn resolve_now(clock_override: Option<Clock>) -> Timestamp {
+    clock_override
+        .unwrap_or_else(Clock::new_tokio)
+        .system_time_as::<Timestamp>()
 }
 
 /// Whether colored output should be emitted: only to an interactive terminal with
@@ -342,6 +361,20 @@ impl<'a> Selection<'a> {
         }
     }
 
+    fn from_examine(options: &'a ExamineOptions) -> Self {
+        Self {
+            context: options.context.as_deref(),
+            base: options.base.as_deref(),
+            no_dirty: options.no_dirty,
+            since: options.since.as_deref(),
+            until: options.until.as_deref(),
+            engine: &options.engine,
+            target_triple: &options.target_triple,
+            machine_key: &options.machine_key,
+            mode_override: None,
+        }
+    }
+
     fn from_prune(options: &'a PruneOptions) -> Self {
         Self {
             context: options.context.as_deref(),
@@ -517,20 +550,27 @@ impl RunIndex {
     /// topological position, as `(first, last)` full SHAs. `None` when no run was
     /// admitted. The report header uses it to state the span of analyzed history.
     pub(crate) fn commit_span(&self) -> Option<(&str, &str)> {
-        let mut first: Option<(usize, &str)> = None;
-        let mut last: Option<(usize, &str)> = None;
-        for by_commit in self.sets.values() {
-            for (&topo_index, counts) in by_commit {
-                let commit = counts.commit.as_str();
-                if first.is_none_or(|(index, _)| topo_index < index) {
-                    first = Some((topo_index, commit));
-                }
-                if last.is_none_or(|(index, _)| topo_index > index) {
-                    last = Some((topo_index, commit));
-                }
-            }
-        }
-        Some((first?.1, last?.1))
+        // A given first-parent position maps to exactly one commit, so every set records
+        // the same commit under it: the span is simply the commit at the lowest position
+        // and the one at the highest. Reading those extremes with `min_by_key`/`max_by_key`
+        // keeps the ordering in the standard library rather than a hand-rolled comparison.
+        let first = self
+            .sets
+            .values()
+            .flat_map(|by_commit| by_commit.iter())
+            .min_by_key(|entry| *entry.0)?
+            .1
+            .commit
+            .as_str();
+        let last = self
+            .sets
+            .values()
+            .flat_map(|by_commit| by_commit.iter())
+            .max_by_key(|entry| *entry.0)?
+            .1
+            .commit
+            .as_str();
+        Some((first, last))
     }
 }
 
@@ -553,6 +593,10 @@ struct SelectedDataSet {
     included_dirty_base_exception: bool,
     /// The target ref the timeline was resolved against (for diagnostics).
     target_ref: String,
+    /// Subject line of each in-history commit that has one, so `examine` can label
+    /// each data point with what its commit changed. A commit absent here has an
+    /// empty subject; only `examine` reads this.
+    commit_subjects: HashMap<String, String>,
     /// The full SHA of the analyzed tip commit (the resolved `--context`/HEAD),
     /// carried into the report so it names the exact commit the findings describe.
     tip_commit: String,
@@ -907,6 +951,7 @@ where
         tip_dirty,
         order,
         commit_times,
+        commit_subjects,
         admit_dirty,
         dirty_base_exception,
         merge_base_index,
@@ -983,7 +1028,7 @@ where
             since_cutoff_reason(selection.since.is_some(), mode)
         )
     });
-    let until = parse_until(selection.until)?;
+    let until = parse_until(selection.until, now)?;
     reporter.note_with(|| {
         format!(
             "until cutoff: {}",
@@ -1214,6 +1259,7 @@ where
         },
         included_dirty_base_exception,
         target_ref,
+        commit_subjects,
         tip_commit,
         tip_dirty,
         mode,
@@ -1274,7 +1320,7 @@ fn resolve_since(
     now: Timestamp,
 ) -> Result<Option<Timestamp>, RunError> {
     if value.is_some() {
-        return parse_since(value);
+        return parse_since(value, now);
     }
     if mode == AnalysisMode::History {
         return default_history_since(now).map(Some);
@@ -1350,6 +1396,10 @@ struct ResolvedHistory {
     /// `--since`/`--until` window from topology before any object is fetched. A
     /// commit absent here has an unknown time and is treated as in-window.
     commit_times: HashMap<String, Timestamp>,
+    /// Subject line of each first-parent commit that has one, for labeling
+    /// `examine`'s per-commit data points. A commit absent here has an empty
+    /// subject; only `examine` reads this.
+    commit_subjects: HashMap<String, String>,
     /// Whether each selected commit admits dirty (uncommitted-tree) snapshots.
     admit_dirty: HashMap<String, bool>,
     /// Whether a commit's dirty runs are admitted *only* by the base-branch
@@ -1403,9 +1453,13 @@ where
     let commit_count = first_parent.len();
     let mut ancestry: Vec<String> = Vec::with_capacity(commit_count);
     let mut commit_times: HashMap<String, Timestamp> = HashMap::new();
+    let mut commit_subjects: HashMap<String, String> = HashMap::new();
     for commit in first_parent {
         if let Some(time) = commit.committer_time {
             commit_times.insert(commit.sha.clone(), time);
+        }
+        if !commit.subject.is_empty() {
+            commit_subjects.insert(commit.sha.clone(), commit.subject);
         }
         ancestry.push(commit.sha);
     }
@@ -1488,6 +1542,7 @@ where
         tip_dirty: working_tree_dirty,
         order,
         commit_times,
+        commit_subjects,
         admit_dirty,
         dirty_base_exception,
         merge_base_index,
@@ -1665,16 +1720,18 @@ fn parse_engine(name: Option<&str>) -> Result<Option<Engine>, RunError> {
 
 /// Parses the `--since` option into an absolute lower-bound instant, if set.
 ///
-/// See [`parse_instant`] for the accepted input forms.
-fn parse_since(value: Option<&str>) -> Result<Option<Timestamp>, RunError> {
-    parse_instant(value, "--since")
+/// See [`parse_instant`] for the accepted input forms. `now` anchors a relative
+/// duration.
+fn parse_since(value: Option<&str>, now: Timestamp) -> Result<Option<Timestamp>, RunError> {
+    parse_instant(value, "--since", now)
 }
 
 /// Parses the `--until` option into an absolute upper-bound instant, if set.
 ///
-/// See [`parse_instant`] for the accepted input forms.
-fn parse_until(value: Option<&str>) -> Result<Option<Timestamp>, RunError> {
-    parse_instant(value, "--until")
+/// See [`parse_instant`] for the accepted input forms. `now` anchors a relative
+/// duration.
+fn parse_until(value: Option<&str>, now: Timestamp) -> Result<Option<Timestamp>, RunError> {
+    parse_instant(value, "--until", now)
 }
 
 /// Which edge of the `--since`/`--until` window a commit falls outside of.
@@ -1718,14 +1775,22 @@ fn window_excludes(
 /// * a bare `YYYY-MM-DD` date, interpreted at UTC midnight, and
 /// * a relative duration in jiff's friendly or ISO 8601 form (`5 months`,
 ///   `5 months ago`, `P6M`, `2w`), interpreted as *that far in the past* —
-///   resolved against the current instant via calendar-correct zoned arithmetic.
+///   resolved against `now` via calendar-correct zoned arithmetic.
+///
+/// `now` is the analysis anchor sourced from the injected clock (see
+/// [`resolve_now`]), so the relative form is deterministic under a frozen clock
+/// rather than reading the wall clock afresh.
 ///
 /// The relative form is normalized through [`Span::abs`] before subtracting, so a
 /// duration written with the friendly `ago` suffix (which jiff parses as a
 /// *negative* span) still means "this far back" rather than flipping into the
 /// future. A cutoff in the future is never a sensible bound, so both `5 months`
 /// and `5 months ago` resolve to the same past instant.
-fn parse_instant(value: Option<&str>, flag: &str) -> Result<Option<Timestamp>, RunError> {
+fn parse_instant(
+    value: Option<&str>,
+    flag: &str,
+    now: Timestamp,
+) -> Result<Option<Timestamp>, RunError> {
     let Some(value) = value else {
         return Ok(None);
     };
@@ -1741,7 +1806,7 @@ fn parse_instant(value: Option<&str>, flag: &str) -> Result<Option<Timestamp>, R
         return Ok(Some(zoned.timestamp()));
     }
     if let Ok(span) = value.parse::<Span>() {
-        return Ok(Some(instant_before_now(span, flag)?));
+        return Ok(Some(instant_before(span, flag, now)?));
     }
     Err(RunError::Analyze {
         message: format!(
@@ -1751,14 +1816,14 @@ fn parse_instant(value: Option<&str>, flag: &str) -> Result<Option<Timestamp>, R
     })
 }
 
-/// Resolves a relative [`Span`] to the instant that far before now, treating the
+/// Resolves a relative [`Span`] to the instant that far before `now`, treating the
 /// span's magnitude as a look-back regardless of its sign (see [`parse_instant`]).
 ///
 /// Calendar units (months, years) have no fixed length, so the subtraction is
-/// anchored to the current UTC zoned datetime rather than to a bare duration.
-fn instant_before_now(span: Span, flag: &str) -> Result<Timestamp, RunError> {
-    let now = Timestamp::now().to_zoned(TimeZone::UTC);
-    now.checked_sub(span.abs())
+/// anchored to `now`'s UTC zoned datetime rather than to a bare duration.
+fn instant_before(span: Span, flag: &str, now: Timestamp) -> Result<Timestamp, RunError> {
+    now.to_zoned(TimeZone::UTC)
+        .checked_sub(span.abs())
         .map(|zoned| zoned.timestamp())
         .map_err(|error| RunError::Analyze {
             message: format!("{flag} duration is out of the representable range: {error}"),
@@ -2929,10 +2994,15 @@ mod tests {
             no_dirty: true,
             ..options()
         };
-        let (report, _, _) = analyze_json(&git, &storage, "folo", &opts);
+        let (report, _, reporter) = analyze_json(&git, &storage, "folo", &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 3, "--no-dirty drops the dirty tip snapshot");
         assert!(parsed["warning"].is_null(), "no warning under --no-dirty");
+        assert!(
+            !reporter.contains("dirty snapshots on a base-side tip will be admitted"),
+            "--no-dirty skips the dirtiness probe, so the dirty-tree exception never fires: {:?}",
+            reporter.notes()
+        );
     }
 
     #[test]
@@ -3456,54 +3526,50 @@ mod tests {
 
     #[test]
     fn since_accepts_timestamp_and_date() {
+        let now: Timestamp = "2024-06-01T00:00:00Z".parse().unwrap();
         assert_eq!(
-            parse_since(Some("2024-01-01T00:00:00Z")).unwrap(),
+            parse_since(Some("2024-01-01T00:00:00Z"), now).unwrap(),
             Some("2024-01-01T00:00:00Z".parse().unwrap())
         );
         assert_eq!(
-            parse_since(Some("2024-01-01")).unwrap(),
+            parse_since(Some("2024-01-01"), now).unwrap(),
             Some("2024-01-01T00:00:00Z".parse().unwrap())
         );
-        assert_eq!(parse_since(None).unwrap(), None);
+        assert_eq!(parse_since(None, now).unwrap(), None);
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "relative `--since` parsing reads the wall clock")]
     fn since_accepts_relative_durations_as_look_back() {
         // A friendly duration resolves to an instant in the past, and the `ago`
         // suffix (which jiff parses as a negative span) means the same look-back
-        // rather than flipping into the future.
-        let now = Timestamp::now();
-        let plain = parse_since(Some("5 months")).unwrap().unwrap();
-        let with_ago = parse_since(Some("5 months ago")).unwrap().unwrap();
-        assert!(plain < now, "a look-back must be in the past");
-        assert!(with_ago < now, "the `ago` suffix must still look back");
-        // The cutoff is `now - 5 months`, NOT the 1970 epoch: a constant default
-        // would also satisfy `< now`, so bound it from below at roughly a year back.
-        let one_year_back = now.as_second() - 400 * 24 * 60 * 60;
-        assert!(
-            plain.as_second() > one_year_back,
-            "a 5-month look-back must land near now, not the epoch"
+        // rather than flipping into the future. Anchored to a fixed `now`, both
+        // spellings land on exactly the same instant — five calendar months
+        // before 2024-06-01 is 2024-01-01.
+        let now: Timestamp = "2024-06-01T00:00:00Z".parse().unwrap();
+        let expected: Timestamp = "2024-01-01T00:00:00Z".parse().unwrap();
+        let plain = parse_since(Some("5 months"), now).unwrap().unwrap();
+        let with_ago = parse_since(Some("5 months ago"), now).unwrap().unwrap();
+        assert_eq!(plain, expected, "5 months before 2024-06-01 is 2024-01-01");
+        assert_eq!(
+            with_ago, expected,
+            "the `ago` suffix looks back the same amount"
         );
-        // Both spellings denote the same magnitude, so they land within a tiny
-        // wall-clock window of each other (the two `now` reads differ by µs).
-        let gap = (plain.as_second() - with_ago.as_second()).abs();
-        assert!(gap <= 1, "`5 months` and `5 months ago` agree (gap {gap}s)");
+        assert!(plain < now, "a look-back must be in the past");
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "relative `--since` parsing reads the wall clock")]
     fn since_accepts_iso_and_week_durations() {
-        let now = Timestamp::now();
+        let now: Timestamp = "2024-06-01T00:00:00Z".parse().unwrap();
         for input in ["P6M", "2w", "30 days", "-P1Y"] {
-            let cutoff = parse_since(Some(input)).unwrap().unwrap();
+            let cutoff = parse_since(Some(input), now).unwrap().unwrap();
             assert!(cutoff < now, "{input:?} must resolve to the past");
         }
     }
 
     #[test]
     fn since_rejects_garbage() {
-        let error = parse_since(Some("not-a-date")).unwrap_err();
+        let now: Timestamp = "2024-06-01T00:00:00Z".parse().unwrap();
+        let error = parse_since(Some("not-a-date"), now).unwrap_err();
         assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
     }
 
@@ -3639,6 +3705,15 @@ mod tests {
             Some(("solo", "solo")),
             "a single analyzed commit is both ends of the span"
         );
+    }
+
+    #[test]
+    fn resolve_now_reads_the_injected_clock() {
+        // The analyze family sources its wall-clock anchor through an injectable
+        // `tick::Clock`; a frozen clock must surface its own instant verbatim rather than
+        // any default minted independently of the clock.
+        let anchor = ts(1_700_000_000);
+        assert_eq!(resolve_now(Some(Clock::new_frozen_at(anchor))), anchor);
     }
 
     #[test]

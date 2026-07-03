@@ -14,7 +14,8 @@ use clap::{ArgGroup, Args, Parser, Subcommand as ClapSubcommand, ValueEnum};
 use crate::model::BenchmarkIdPrefix;
 use crate::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
-    InstallOptions, ListOptions, ListSubject, LocalStorageSelection, PruneOptions, UnblessOptions,
+    ExamineOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection, PruneOptions,
+    UnblessOptions,
 };
 
 const HEADING_ENV: &str = "Environment and execution";
@@ -91,6 +92,7 @@ impl Cli {
             Subcommand::Backfill(command) => Command::Backfill(command.into_options()),
             Subcommand::Bless(command) => Command::Bless(command.into_options()),
             Subcommand::Collect(command) => Command::Collect(command.into_options()),
+            Subcommand::Examine(command) => Command::Examine(command.into_options()),
             Subcommand::Install(command) => Command::Install(command.into_options()),
             Subcommand::List(command) => Command::List(command.into_options()),
             Subcommand::Prune(command) => Command::Prune(command.into_options()),
@@ -127,6 +129,8 @@ enum Subcommand {
     Install(InstallCommand),
     /// List the data set a matching `analyze` would include, without analyzing it.
     List(ListCommand),
+    /// Show the raw per-commit data points of one `(benchmark, metric)` series.
+    Examine(ExamineCommand),
     /// Delete stored runs (and their blessing sidecars) from the resolved data set.
     Prune(PruneCommand),
     /// Remove blessings recorded at the current commit.
@@ -578,6 +582,70 @@ impl ListCommand {
     }
 }
 
+/// Show the raw per-commit data points of one `(benchmark, metric)` series.
+///
+/// A drill-down sibling of `list runs`: it resolves exactly the data set a matching
+/// `analyze`/`list` would, then pivots one named series into its data points — one
+/// row per recorded observation, in git first-parent order, pairing the value with
+/// the short commit id and the start of the commit's title. Both `--benchmark` and
+/// `--metric` are required.
+#[derive(Args, Debug)]
+struct ExamineCommand {
+    #[command(flatten)]
+    env: EnvArgs,
+
+    #[command(flatten)]
+    cache: CacheArg,
+
+    #[command(flatten)]
+    output: OutputArgs,
+
+    #[command(flatten)]
+    facets: QueryFacetArgs,
+
+    #[command(flatten)]
+    timeline: TimelineArgs,
+
+    /// The exact qualified benchmark id to examine, e.g.
+    /// `nm/nm::observe/pull` (required). Copy it from an `analyze` finding.
+    #[arg(long, value_name = "ID", help_heading = HEADING_SCOPE)]
+    benchmark: String,
+
+    /// The metric to examine by its stable name, e.g. `instruction_count` or
+    /// `wall_time` (required). Copy it from an `analyze` finding.
+    #[arg(long, value_name = "NAME", help_heading = HEADING_SCOPE)]
+    metric: String,
+
+    /// Exclude dirty (uncommitted-tree) snapshots from the pivot.
+    #[arg(long, help_heading = HEADING_FILTER)]
+    no_dirty: bool,
+}
+
+impl ExamineCommand {
+    fn into_options(self) -> ExamineOptions {
+        ExamineOptions {
+            config_path: self.env.config,
+            repo: self.env.repo,
+            local: local_selection(self.env.local),
+            cache: cache_selection(self.cache.cache),
+            context: self.timeline.context,
+            base: self.timeline.base,
+            no_dirty: self.no_dirty,
+            since: self.timeline.since,
+            until: self.timeline.until,
+            engine: self.facets.engine,
+            target_triple: self.facets.target_triple,
+            machine_key: self.facets.machine_key,
+            benchmark: self.benchmark,
+            metric: self.metric,
+            no_text: self.output.no_text,
+            markdown: self.output.markdown,
+            json: self.output.json,
+            verbose: self.env.verbose,
+        }
+    }
+}
+
 /// Delete stored runs (and their blessing sidecars) from the data set a matching
 /// `analyze`/`list` would resolve.
 ///
@@ -895,7 +963,8 @@ mod tests {
         let help = Cli::help("cargo-bench-history");
         assert!(!help.is_empty(), "help text is non-empty");
         for command in [
-            "analyze", "backfill", "bless", "collect", "install", "list", "prune", "unbless",
+            "analyze", "backfill", "bless", "collect", "examine", "install", "list", "prune",
+            "unbless",
         ] {
             assert!(help.contains(command), "help lists {command}: {help}");
         }
@@ -1485,6 +1554,86 @@ mod tests {
             panic!("expected list command");
         };
         assert!(!options.all);
+    }
+
+    #[test]
+    fn examine_collects_selection_scope_and_output() {
+        let command = parse(&[
+            "examine",
+            "--benchmark",
+            "nm/nm::observe/pull",
+            "--metric",
+            "instruction_count",
+            "--repo",
+            "/work/folo",
+            "--context",
+            "feature",
+            "--base",
+            "master",
+            "--no-dirty",
+            "--engine",
+            "callgrind",
+            "--target-triple",
+            "x86_64-unknown-linux-gnu",
+            "--machine-key",
+            "ci-pool",
+            "--since",
+            "2024-01-01",
+            "--until",
+            "2024-02-01",
+            "--no-text",
+            "--markdown",
+            "examine.md",
+            "--json",
+            "examine.json",
+            "--verbose",
+        ]);
+        let Command::Examine(options) = command else {
+            panic!("expected examine command");
+        };
+        assert_eq!(options.benchmark, "nm/nm::observe/pull");
+        assert_eq!(options.metric, "instruction_count");
+        assert_eq!(options.repo, Some(PathBuf::from("/work/folo")));
+        assert_eq!(options.context.as_deref(), Some("feature"));
+        assert_eq!(options.base.as_deref(), Some("master"));
+        assert!(options.no_dirty);
+        assert_eq!(options.engine, vec!["callgrind".to_owned()]);
+        assert_eq!(
+            options.target_triple,
+            vec!["x86_64-unknown-linux-gnu".to_owned()]
+        );
+        assert_eq!(options.machine_key, vec!["ci-pool".to_owned()]);
+        assert_eq!(options.since.as_deref(), Some("2024-01-01"));
+        assert_eq!(options.until.as_deref(), Some("2024-02-01"));
+        assert!(options.no_text);
+        assert_eq!(options.markdown, Some(PathBuf::from("examine.md")));
+        assert_eq!(options.json, Some(PathBuf::from("examine.json")));
+        assert!(options.verbose);
+    }
+
+    #[test]
+    fn examine_requires_benchmark_and_metric() {
+        // With neither required scope flag, clap reports both as missing.
+        let early = Cli::from_args(&["cargo-bench-history"], &["examine"]).unwrap_err();
+        assert!(
+            early.status.is_err(),
+            "missing required flags are a parse error"
+        );
+        assert!(early.output.contains("--benchmark"), "{}", early.output);
+        assert!(early.output.contains("--metric"), "{}", early.output);
+
+        // Supplying only one still fails, naming the other.
+        let missing_metric = Cli::from_args(
+            &["cargo-bench-history"],
+            &["examine", "--benchmark", "nm/nm::observe/pull"],
+        )
+        .unwrap_err();
+        assert!(missing_metric.status.is_err());
+        assert!(
+            missing_metric.output.contains("--metric"),
+            "{}",
+            missing_metric.output
+        );
     }
 
     #[test]

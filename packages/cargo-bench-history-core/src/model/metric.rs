@@ -103,6 +103,27 @@ pub enum MetricKind {
 }
 
 impl MetricKind {
+    /// Every metric kind, in declaration order.
+    ///
+    /// The single source of truth for enumerating the kinds — used to list the
+    /// valid names when a name lookup fails (see [`from_name`](Self::from_name))
+    /// and to exercise every kind in tests.
+    pub const ALL: [Self; 13] = [
+        Self::WallTime,
+        Self::ProcessorTime,
+        Self::InstructionCount,
+        Self::EstimatedCycles,
+        Self::L1CacheHits,
+        Self::LastLevelCacheHits,
+        Self::RamHits,
+        Self::ConditionalBranches,
+        Self::ConditionalBranchMisses,
+        Self::IndirectBranches,
+        Self::IndirectBranchMisses,
+        Self::AllocatedBytes,
+        Self::AllocationCount,
+    ];
+
     /// The stable `snake_case` label for this kind, matching its serialized wire
     /// name. Used as the metric's display name in reports.
     #[must_use]
@@ -122,6 +143,14 @@ impl MetricKind {
             Self::AllocatedBytes => "allocated_bytes",
             Self::AllocationCount => "allocation_count",
         }
+    }
+
+    /// Parses a stable `snake_case` metric name (as produced by
+    /// [`as_str`](Self::as_str)) back into its kind, or `None` when the name is
+    /// not one of the known metrics.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == name)
     }
 
     /// The unit this kind is always measured in, for display.
@@ -180,26 +209,24 @@ mod tests {
     fn metric_kind_wire_name_matches_as_str() {
         // The kinds round-trip through stored JSON, so the serialized wire name
         // and the display label must stay in lockstep.
-        for kind in [
-            MetricKind::WallTime,
-            MetricKind::ProcessorTime,
-            MetricKind::InstructionCount,
-            MetricKind::EstimatedCycles,
-            MetricKind::L1CacheHits,
-            MetricKind::LastLevelCacheHits,
-            MetricKind::RamHits,
-            MetricKind::ConditionalBranches,
-            MetricKind::ConditionalBranchMisses,
-            MetricKind::IndirectBranches,
-            MetricKind::IndirectBranchMisses,
-            MetricKind::AllocatedBytes,
-            MetricKind::AllocationCount,
-        ] {
+        for kind in MetricKind::ALL {
             let json = serde_json::to_string(&kind).unwrap();
             assert_eq!(json, format!("\"{}\"", kind.as_str()));
             let parsed: MetricKind = serde_json::from_str(&json).unwrap();
             assert_eq!(parsed, kind);
         }
+    }
+
+    #[test]
+    fn from_name_round_trips_every_kind_and_rejects_unknown() {
+        for kind in MetricKind::ALL {
+            assert_eq!(MetricKind::from_name(kind.as_str()), Some(kind));
+        }
+        assert_eq!(MetricKind::from_name("not_a_metric"), None);
+        assert_eq!(MetricKind::from_name(""), None);
+        // The match is exact, not a prefix or case-insensitive one.
+        assert_eq!(MetricKind::from_name("Instruction_Count"), None);
+        assert_eq!(MetricKind::from_name("instruction"), None);
     }
 
     #[test]
@@ -214,20 +241,10 @@ mod tests {
     #[test]
     fn only_l1_cache_hits_is_higher_is_better() {
         assert!(MetricKind::L1CacheHits.higher_is_better());
-        for kind in [
-            MetricKind::WallTime,
-            MetricKind::ProcessorTime,
-            MetricKind::InstructionCount,
-            MetricKind::EstimatedCycles,
-            MetricKind::LastLevelCacheHits,
-            MetricKind::RamHits,
-            MetricKind::ConditionalBranches,
-            MetricKind::ConditionalBranchMisses,
-            MetricKind::IndirectBranches,
-            MetricKind::IndirectBranchMisses,
-            MetricKind::AllocatedBytes,
-            MetricKind::AllocationCount,
-        ] {
+        for kind in MetricKind::ALL
+            .into_iter()
+            .filter(|kind| *kind != MetricKind::L1CacheHits)
+        {
             assert!(!kind.higher_is_better(), "{kind:?}");
         }
     }

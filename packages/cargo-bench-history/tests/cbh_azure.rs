@@ -533,7 +533,7 @@ impl AzureWorkspace {
                 workspace_dir: Some(self.dir.path().to_path_buf()),
                 target_root: Some(target_root),
                 bench_command: Some(bench_command),
-                now: None,
+                clock: None,
                 storage_override,
             },
         )
