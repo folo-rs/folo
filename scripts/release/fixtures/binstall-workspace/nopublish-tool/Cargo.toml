@@ -1,0 +1,6 @@
+[package]
+name = "nopublish-tool"
+version = "9.9.9"
+edition = "2021"
+# Not publishable: excluded even though it owns a bin target and lacks a binstall block.
+publish = false

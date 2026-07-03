@@ -1,0 +1,10 @@
+[package]
+name = "good-tool"
+version = "1.0.0"
+edition = "2021"
+
+# Compliant binstall block: matches the exact contract the release workflow publishes.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-v{ version }-{ target }.zip"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "zip"

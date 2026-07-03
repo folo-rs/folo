@@ -549,6 +549,11 @@ impl RunIndex {
     /// The oldest and newest commit that contributed a run, by first-parent
     /// topological position, as `(first, last)` full SHAs. `None` when no run was
     /// admitted. The report header uses it to state the span of analyzed history.
+    // The oldest/newest tie-break is unobservable, so its comparison mutants are
+    // equivalent: a first-parent topological position denotes exactly one commit, so
+    // every set records the same SHA at a given position and `<` vs `<=` (or `>` vs
+    // `>=`) only ever chooses between identical strings.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn commit_span(&self) -> Option<(&str, &str)> {
         // A given first-parent position maps to exactly one commit, so every set records
         // the same commit under it: the span is simply the commit at the lowest position
@@ -2997,6 +3002,10 @@ mod tests {
         let (report, _, reporter) = analyze_json(&git, &storage, "folo", &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 3, "--no-dirty drops the dirty tip snapshot");
+        assert_eq!(
+            parsed["tip_dirty"], false,
+            "--no-dirty skips the dirtiness probe, so the tip is never annotated dirty"
+        );
         assert!(parsed["warning"].is_null(), "no warning under --no-dirty");
         assert!(
             !reporter.contains("dirty snapshots on a base-side tip will be admitted"),

@@ -1,0 +1,6 @@
+[package]
+name = "nopub-bin"
+version = "9.9.9"
+edition = "2021"
+# Not publishable: excluded even though it owns a bin target.
+publish = false
