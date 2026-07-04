@@ -156,7 +156,7 @@ and a single sort for the false-discovery filter across all noisy candidates.
   worker (each worker awaits its chunk's reads sequentially), which is well below the
   blessing-sidecar load's wider pipeline — so the win from the parallel design is on the
   CPU-bound parse+fold, not on remote I/O. With the shared connection pool (below) the
-  per-object handshake is amortised across a keep-alive pool, leaving path bandwidth and,
+  per-object handshake is amortized across a keep-alive pool, leaving path bandwidth and,
   for small objects, a per-request round-trip rate as the two ceilings; fewer, larger blobs
   help more than more concurrency.
 

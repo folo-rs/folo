@@ -3,10 +3,18 @@
 //!
 //! `alloc_tracker` writes one file per operation under `target/alloc_tracker/`,
 //! recording how many bytes and how many allocations a benchmark performs per
-//! iteration. Both quantities are a deterministic property of the code, so they
-//! are stored without a machine key (see [`Engine::is_hardware_dependent`]).
-//! The committed fixtures under `tests/fixtures/alloc_tracker/` are real
-//! `alloc_tracker` output and act as a schema-drift canary.
+//! iteration, together with bootstrap dispersion statistics over the operation's
+//! measured spans. Allocation behavior does not depend on the host hardware, so
+//! this engine stores its history without a machine key (see
+//! [`Engine::is_hardware_dependent`]). It is *not* deterministic, however:
+//! warmup and buffer-resize allocations are amortized over a Criterion-chosen
+//! iteration count, so the per-iteration figures jitter run to run. The adapter
+//! therefore prefers the warmup-robust slope. Current `alloc_tracker` output
+//! always carries a bootstrap confidence interval, so the adapter normally reads
+//! one; the interval fields are parsed as optional purely to tolerate legacy
+//! mean-only files, which then fall back to a single figure. The committed
+//! fixtures under `tests/fixtures/alloc_tracker/` are real `alloc_tracker` output
+//! and act as a schema-drift canary.
 //!
 //! [`Engine::is_hardware_dependent`]: crate::model::Engine::is_hardware_dependent
 
@@ -52,21 +60,34 @@ pub(crate) fn parse_alloc_tracker_operation(
 /// `alloc_tracker`'s flat `target/alloc_tracker/` tree carries no package
 /// attribution, so the operation name alone identifies the series (mirroring the
 /// Criterion adapter).
+///
+/// For each metric the through-origin slope is preferred as the per-iteration
+/// point estimate, matching the Criterion and `all_the_time` adapters; output
+/// that records no slope falls back to the mean. When the bootstrap confidence
+/// interval is present it is recorded on the metric, so analysis can apply its
+/// interval-overlap gate to allocation figures the same way it does for wall
+/// time.
 fn output_to_record(output: &OperationOutput) -> BenchmarkResult {
+    let bytes_value = output
+        .slope_bytes_per_iteration
+        .unwrap_or_else(|| as_f64(output.mean_bytes_per_iteration));
+    let bytes = Metric::new(MetricKind::AllocatedBytes, bytes_value).with_dispersion(
+        output.std_dev_bytes_per_iteration,
+        output.interval_low_bytes_per_iteration,
+        output.interval_high_bytes_per_iteration,
+    );
+
+    let allocations_value = output
+        .slope_allocations_per_iteration
+        .unwrap_or_else(|| as_f64(output.mean_allocations_per_iteration));
+    let allocations = Metric::new(MetricKind::AllocationCount, allocations_value).with_dispersion(
+        output.std_dev_allocations_per_iteration,
+        output.interval_low_allocations_per_iteration,
+        output.interval_high_allocations_per_iteration,
+    );
+
     let id = BenchmarkId::new(NonEmpty::new(output.operation.clone()));
-
-    let metrics = vec![
-        Metric::new(
-            MetricKind::AllocatedBytes,
-            as_f64(output.mean_bytes_per_iteration),
-        ),
-        Metric::new(
-            MetricKind::AllocationCount,
-            as_f64(output.mean_allocations_per_iteration),
-        ),
-    ];
-
-    BenchmarkResult::new(id, metrics)
+    BenchmarkResult::new(id, vec![bytes, allocations])
 }
 
 /// Casts an allocation statistic to `f64`, the model's storage type.
@@ -79,13 +100,30 @@ fn as_f64(value: u64) -> f64 {
 }
 
 /// The subset of an `alloc_tracker` operation file the tool reads. The `total_*`
-/// fields are ignored in favor of the per-iteration means, which are comparable
-/// across runs with differing iteration counts.
+/// fields are ignored in favor of the per-iteration slope (or mean), which is
+/// comparable across runs with differing iteration counts. The dispersion fields
+/// are optional so that output recording only a mean still parses.
 #[derive(Debug, Deserialize)]
 struct OperationOutput {
     operation: String,
     mean_bytes_per_iteration: u64,
     mean_allocations_per_iteration: u64,
+    #[serde(default)]
+    slope_bytes_per_iteration: Option<f64>,
+    #[serde(default)]
+    std_dev_bytes_per_iteration: Option<f64>,
+    #[serde(default)]
+    interval_low_bytes_per_iteration: Option<f64>,
+    #[serde(default)]
+    interval_high_bytes_per_iteration: Option<f64>,
+    #[serde(default)]
+    slope_allocations_per_iteration: Option<f64>,
+    #[serde(default)]
+    std_dev_allocations_per_iteration: Option<f64>,
+    #[serde(default)]
+    interval_low_allocations_per_iteration: Option<f64>,
+    #[serde(default)]
+    interval_high_allocations_per_iteration: Option<f64>,
 }
 
 #[cfg(test)]
@@ -101,6 +139,9 @@ mod tests {
 
     const ALLOCATE_VEC_FIXTURE: &str =
         include_str!("../../tests/fixtures/alloc_tracker/allocate_vec.json");
+
+    const ALLOCATE_VEC_DISPERSION_FIXTURE: &str =
+        include_str!("../../tests/fixtures/alloc_tracker/allocate_vec_dispersion.json");
 
     #[test]
     fn parses_identity_from_operation_name() {
@@ -133,15 +174,55 @@ mod tests {
     }
 
     #[test]
-    fn allocation_metrics_carry_no_dispersion() {
-        // Allocation counts are deterministic, so no confidence interval or
-        // standard deviation is reported.
+    fn minimal_output_carries_no_dispersion() {
+        // Output that records only means (no slope or interval) carries no
+        // dispersion, so each point estimate falls back to the mean and analysis
+        // relies on rank-testing across regimes rather than interval overlap.
         let record = parse_alloc_tracker_operation(ALLOCATE_VEC_FIXTURE).unwrap();
         for metric in &record.metrics {
             assert_eq!(metric.std_dev, None);
             assert_eq!(metric.interval_low, None);
             assert_eq!(metric.interval_high, None);
         }
+    }
+
+    #[test]
+    fn records_dispersion_when_present() {
+        use std::f64::consts::FRAC_1_SQRT_2;
+
+        let record = parse_alloc_tracker_operation(ALLOCATE_VEC_DISPERSION_FIXTURE).unwrap();
+
+        let bytes = metric(&record, MetricKind::AllocatedBytes);
+        // The slope is preferred as the point estimate, and the bytes metric
+        // carries the jitter from warmup and buffer-resize allocations: a sample
+        // standard deviation of exactly sqrt(0.5) = 1/sqrt(2) bytes.
+        assert_eq!(bytes.value, 200.0);
+        assert_eq!(bytes.std_dev, Some(FRAC_1_SQRT_2));
+        assert_eq!(bytes.interval_low, Some(199.5));
+        assert_eq!(bytes.interval_high, Some(200.5));
+
+        let count = metric(&record, MetricKind::AllocationCount);
+        // The allocation count is stable across spans, so its interval collapses
+        // onto the slope and the standard deviation is zero.
+        assert_eq!(count.value, 2.0);
+        assert_eq!(count.std_dev, Some(0.0));
+        assert_eq!(count.interval_low, Some(2.0));
+        assert_eq!(count.interval_high, Some(2.0));
+    }
+
+    #[test]
+    fn prefers_the_slope_over_the_mean() {
+        // Slopes distinct from the means prove the slope is the chosen point
+        // estimate for each metric, matching the Criterion adapter's preference.
+        let json = concat!(
+            "{\"operation\":\"op\",\"mean_bytes_per_iteration\":200,",
+            "\"mean_allocations_per_iteration\":2,",
+            "\"slope_bytes_per_iteration\":201.5,",
+            "\"slope_allocations_per_iteration\":3.25}"
+        );
+        let record = parse_alloc_tracker_operation(json).unwrap();
+        assert_eq!(metric(&record, MetricKind::AllocatedBytes).value, 201.5);
+        assert_eq!(metric(&record, MetricKind::AllocationCount).value, 3.25);
     }
 
     #[test]

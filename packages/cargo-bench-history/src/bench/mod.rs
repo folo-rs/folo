@@ -1,9 +1,10 @@
 //! Benchmark-engine adapters: per-engine environment injection, the WSL env
 //! propagation rule, and parsing of each engine's output into the model.
 //!
-//! Four engines are supported: Callgrind (via Gungraun, deterministic
-//! instruction counts), Criterion (wall-clock timings), `alloc_tracker`
-//! (deterministic allocation counts) and `all_the_time` (processor time).
+//! Four engines are supported: Callgrind (via Gungraun, low-noise instruction
+//! counts), Criterion (wall-clock timings), `alloc_tracker` (allocation counts
+//! and bytes) and `all_the_time` (processor time). None is exact — every metric
+//! carries run-to-run noise.
 
 pub(crate) mod all_the_time;
 pub(crate) mod alloc_tracker;

@@ -18,7 +18,9 @@ not otherwise comparable. Its commands are `collect`, `install`, `analyze`, `exa
 
 Understanding the producers is mandatory: comparability and parsing both depend on it.
 Four engines are supported, and they split along two axes that drive the whole data
-model — **hardware-dependent vs. hardware-independent**, and **noisy vs. deterministic**.
+model — **hardware-dependent vs. hardware-independent** (which decides partitioning), and
+**whether each measurement carries a confidence interval** (which decides how dispersion is
+gated). No engine is exempt from run-to-run noise.
 
 * **Criterion** — wall-clock time. Hardware-dependent and noisy. Each measured case
   yields a stable identity (group / function / value) and a point estimate (the
@@ -26,12 +28,14 @@ model — **hardware-dependent vs. hardware-independent**, and **noisy vs. deter
   deviation and bootstrap confidence interval. It records no timestamp, commit, machine,
   or package, so the tool supplies all run context.
 * **Callgrind (via Gungraun)** — simulated instruction counts and cache/branch events.
-  Hardware-independent and deterministic (a CPU simulator), so any persistent change is
-  real signal. Its machine-readable summary is the one output that must be opted into
-  with an environment variable — the narrow "special need" that justifies `collect`
-  existing at all.
-* **`alloc_tracker`** — heap allocations (bytes and counts). Hardware-independent and
-  deterministic, with no dispersion (an allocation count is exact).
+  Hardware-independent but not exact: a CPU simulator is low-noise, yet its counts still
+  drift by a few percent run to run. Its machine-readable summary is the one output that
+  must be opted into with an environment variable — the narrow "special need" that justifies
+  `collect` existing at all.
+* **`alloc_tracker`** — heap allocations (bytes and counts). Hardware-independent but not
+  deterministic: warmup and buffer-resize allocations are amortized over a Criterion-chosen
+  iteration count, so the per-iteration figures jitter. It prefers a warmup-robust slope and
+  records a bootstrap confidence interval over its measured spans when its output carries one.
 * **`all_the_time`** — processor (CPU) time. Hardware-dependent and noisy, carrying a
   bootstrap confidence interval like Criterion.
 
@@ -100,7 +104,7 @@ A discriminant set is `{ project, engine, target_triple, machine_key? }`:
 * `target_triple` — even hardware-independent counts are not comparable across
   architectures (`…-windows-msvc` and `…-windows-gnu` are genuinely different binaries).
 * `machine_key` — present only for hardware-dependent engines; a literal `synthetic`
-  placeholder for the deterministic ones.
+  placeholder for the hardware-independent ones.
 
 Deliberately **metadata, not partition** — so a change shows up as a timeline step, which
 is the whole point of the tool — are the toolchain versions, OS/libc, commit, branch, and
@@ -540,18 +544,30 @@ Markdown tables, not of the data.
 
 A series is built per `(discriminant set, benchmark identity, metric)`, ordered by git
 first-parent topology. The goal is **high signal-to-noise**: report level shifts and trends
-that are real and stay silent on measurement jitter. The design is *engine-aware* because
-the engines have fundamentally different noise profiles and a single detector cannot serve
-both well:
+that are real and stay silent on measurement jitter. **No engine is deterministic** — even
+Callgrind's simulated counts drift by a few percent run to run, and an `alloc_tracker`
+figure amortizes first-touch and buffer-resize allocations over a Criterion-chosen iteration
+count, so its per-iteration figure wobbles too. The detector therefore treats every metric as
+noisy and never trusts a value as exact.
 
-* **Deterministic engines** (Callgrind, `alloc_tracker`) produce exact, reproducible
-  output, so any persistent change is real signal. Significance testing is neither needed
-  nor appropriate — a perfect integer step over few points has a *high* nonparametric
-  p-value.
-* **Noisy engines** (Criterion, `all_the_time`) produce noisy estimates carrying a
-  standard deviation and confidence interval. A change must clear both a
-  statistical-significance bar *and* a practical-magnitude bar, and the family of tests
-  across all series is corrected for multiple comparisons.
+This surprises people, because re-running Callgrind on one *unchanged* machine often prints
+the same count every time — the counter is deterministic for a fixed binary and fixed input.
+What is not fixed is everything feeding it across the commits we compare: a different OS or
+CPU-microcode patch level, a different compiler patch release, the compiler's own run-to-run
+nondeterministic code-generation choices (inlining, ordering, layout) even at the same
+version, and Criterion scheduling a different iteration count when background load differs
+(which changes how first-touch and buffer-resize costs are amortized). Any one of these moves
+the measured number without the code under test changing, so no metric is reproducible commit
+to commit.
+
+Engines differ only in *how much* dispersion they expose, and the gating adapts per point
+rather than per engine. Most points carry an explicit bootstrap confidence interval:
+Criterion, `all_the_time`, and `alloc_tracker` all record one on every operation they emit.
+Only single-figure engines (Callgrind, and any legacy mean-only file the adapter still
+tolerates) report a point without an interval. An interval, when present, is read as an
+additional veto that can only *suppress* a candidate the other gates would report (never
+create one); the gates' *primary* noise check needs no interval at all: it is the series' own
+residual scatter about its fitted model, which covers every engine uniformly.
 
 Every metric is lower-is-better except cache *hits* (higher is better); the higher cache
 tiers are miss-escalation costs, so polarity keys off the metric, not just its category.
@@ -575,40 +591,40 @@ When both fire on one series, the **better-fitting model wins**: the step and li
 are each scored by their residual, so sharp steps route to the change-point method and
 smooth ramps to drift, and the two never double-report one event.
 
-### 8.2 Engine-aware gating
+### 8.2 Noise-aware gating
 
-For a **deterministic** series a change-point is reported once both regimes reach the
-persistence minimum and their medians differ — no significance test and no
-multiple-comparison filter, which would wrongly drop genuine small exact steps.
+The same gates run for every engine; only their inputs differ. Pettitt *locates* the split
+(its analytic p-value is too conservative on short series to gate on), and a change-point is
+reported only when all of these hold: a **Mann–Whitney** rank test finds the two regimes
+statistically distinguishable; the move clears a **practical-magnitude floor**, so a
+statistically-real but trivial wobble stays silent; and the move stands above the series'
+own **residual scatter** about the fitted step — the median-absolute-residual gate that is
+the primary noise check for *every* engine, in place of trusting a value as exact. Where the
+points carry confidence intervals, non-overlap of the regime intervals is an *additional*
+veto — it can only *suppress* a candidate the other gates would report (declaring the move
+noise when the intervals overlap), never manufacture a finding; where they do not, the
+residual gate stands alone.
 
-For a **noisy** series the Pettitt test is used only to *locate* the split (its analytic
-p-value is too conservative on short series to serve as a gate). A change-point is reported
-only when all of these hold: a **Mann–Whitney** rank test finds the two regimes
-statistically distinguishable; the regime confidence intervals do not overlap (when
-present); and the move clears a practical-magnitude floor, so a statistically-real but tiny
-wobble stays silent. Drift additionally requires the endpoint movement to exceed a noise
-floor derived from the confidence-interval width, so run-to-run jitter never reads as a
-trend. When an engine reports no confidence interval (older mean-only output), the
-CI-non-overlap gate is skipped and the decision rests on the rank and trend tests alone.
+Drift mirrors this: Mann–Kendall establishes the trend, Theil–Sen sizes it, and the total
+movement must clear the practical floor and exceed the residual scatter about the fitted
+line; the confidence-interval-width gate is applied additionally when intervals are present,
+again only able to suppress a candidate and never to create one.
 
-Underneath every engine's gates sits one **basic noise floor**: any finding whose relative
-move is below a minimum magnitude is dropped regardless of direction, engine, or
-confidence. A sub-percent change is not worth a human's attention even when a deterministic
-engine reports it with certainty, so this floor is what keeps the otherwise-unbounded
-deterministic path from surfacing trivia; it sits below the noisy engines' higher
-practical-magnitude floors, which already subsume it.
+The **practical-magnitude floor** is a single hard threshold below which no finding surfaces,
+regardless of engine, direction, or how confidently it was measured. A change too small to
+warrant a human's attention is dropped even when the statistics are certain — this is what
+keeps a low-noise engine like Callgrind from surfacing sub-threshold trivia.
 
 ### 8.3 Multiple-comparison discipline
 
 A repository has many benchmarks × metrics; testing each independently would flood the
-report with false positives. Every **noisy** candidate's p-value enters a single
-**Benjamini–Hochberg** false-discovery-rate procedure, and only survivors are reported.
-Deterministic candidates bypass it — they carry no measurement-noise false-positive risk
-and their exact steps would otherwise be discarded.
+report with false positives. Because no engine is exempt from noise, **every** candidate's
+p-value enters a single **Benjamini–Hochberg** false-discovery-rate procedure — there is no
+bypass — and only survivors are reported.
 
-All of this math lives in a pure, deterministic, Miri-safe statistics module in the core
-crate, unit-tested with named, value-asserting cases on hand-computable inputs rather than
-threshold-mutation guards, so the whole detector is verifiable without real-time delays.
+All of this math lives in a pure, Miri-safe statistics module in the core crate, unit-tested
+with named, value-asserting cases on hand-computable inputs rather than threshold-mutation
+guards, so the whole detector is verifiable without real-time delays.
 
 ### 8.4 Ranking and polarity
 

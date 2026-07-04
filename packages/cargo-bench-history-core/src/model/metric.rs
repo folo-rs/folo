@@ -14,14 +14,16 @@ pub struct Metric {
     pub kind: MetricKind,
     /// The per-iteration point estimate, in the unit implied by `kind`.
     ///
-    /// For noisy engines (Criterion wall time, `all_the_time` processor time)
-    /// this is the through-origin regression slope when the engine reports one,
-    /// otherwise the mean. For deterministic engines (Callgrind instruction
-    /// counts and cache/branch events, `alloc_tracker` allocations) it is the
-    /// exact measured count.
+    /// This is the through-origin regression slope when the engine reports one
+    /// (Criterion wall time, `all_the_time` processor time, `alloc_tracker`
+    /// allocations), otherwise the mean or the single measured value. No engine is
+    /// treated as noise-free: even Callgrind instruction and event counts jitter a
+    /// few percent from run to run, so this is always a point estimate rather than
+    /// an exact truth.
     pub value: f64,
     /// Estimated standard deviation of the measurement, when the engine reports
-    /// one (Criterion, `all_the_time`). Absent for deterministic engines.
+    /// one (Criterion, `all_the_time`, `alloc_tracker`). Absent for engines that
+    /// report no dispersion (Callgrind).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub std_dev: Option<f64>,
     /// Lower bound of the value's confidence interval, when reported.
@@ -75,9 +77,10 @@ pub enum MetricKind {
     /// Processor time per iteration in nanoseconds (`all_the_time`);
     /// hardware-dependent and noisy.
     ProcessorTime,
-    /// Retired instruction count (Callgrind); deterministic.
+    /// Retired instruction count (Callgrind); low-noise but not exact.
     InstructionCount,
-    /// Estimated CPU cycles from the Callgrind cache model; deterministic.
+    /// Estimated CPU cycles from the Callgrind cache model; low-noise but not
+    /// exact.
     EstimatedCycles,
     /// Accesses served by the L1 cache (Callgrind); the cheap outcome, so higher
     /// is better.
@@ -88,17 +91,20 @@ pub enum MetricKind {
     /// Accesses served by main memory (Callgrind); the most expensive tier, so
     /// lower is better.
     RamHits,
-    /// Executed conditional branches (Callgrind); deterministic.
+    /// Executed conditional branches (Callgrind); low-noise but not exact.
     ConditionalBranches,
-    /// Mispredicted conditional branches (Callgrind); deterministic.
+    /// Mispredicted conditional branches (Callgrind); low-noise but not exact.
     ConditionalBranchMisses,
-    /// Executed indirect branches (Callgrind); deterministic.
+    /// Executed indirect branches (Callgrind); low-noise but not exact.
     IndirectBranches,
-    /// Mispredicted indirect branches (Callgrind); deterministic.
+    /// Mispredicted indirect branches (Callgrind); low-noise but not exact.
     IndirectBranchMisses,
-    /// Bytes allocated per iteration (`alloc_tracker`); deterministic.
+    /// Bytes allocated per iteration (`alloc_tracker`); hardware-independent but
+    /// not deterministic (warmup and buffer-resize allocations jitter the
+    /// per-iteration figure).
     AllocatedBytes,
-    /// Allocation count per iteration (`alloc_tracker`); deterministic.
+    /// Allocation count per iteration (`alloc_tracker`); hardware-independent but
+    /// not deterministic.
     AllocationCount,
 }
 
@@ -181,16 +187,6 @@ impl MetricKind {
     #[must_use]
     pub fn higher_is_better(self) -> bool {
         matches!(self, Self::L1CacheHits)
-    }
-
-    /// Whether this kind is measured by a deterministic engine.
-    ///
-    /// Wall time and processor time are the noisy metrics; every Callgrind- and
-    /// `alloc_tracker`-derived metric is exact. Analysis uses this to decide
-    /// whether a change needs noise-aware gating or can be judged exactly.
-    #[must_use]
-    pub fn is_deterministic(self) -> bool {
-        !matches!(self, Self::WallTime | Self::ProcessorTime)
     }
 }
 

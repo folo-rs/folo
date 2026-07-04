@@ -1,16 +1,20 @@
-//! Mean processor time tracking.
+//! Per-iteration processor time tracking.
 
 use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::pal::PlatformFacade;
+use crate::statistics::nanos_to_duration;
 use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessSpan, ThreadSpan};
 
-/// Calculates mean processor time per operation across multiple iterations.
+/// Measures per-iteration processor time for a repeated operation.
 ///
 /// This utility is particularly useful for benchmarking scenarios where you want
-/// to understand the mean processor time footprint of repeated operations.
+/// to understand the processor time footprint of repeated operations. The
+/// headline figure is the warmup-robust per-iteration slope (see the crate-level
+/// "Primary metric" documentation), with the pooled [`mean`](Self::mean) still
+/// available.
 ///
 /// Operations share data directly with the session - data is merged when spans are dropped.
 ///
@@ -192,7 +196,14 @@ impl Operation {
 
 impl fmt::Display for Operation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?} (mean)", self.mean())
+        // The summary shows only the slope, so take the cheap slope-only path and
+        // skip the bootstrap confidence interval the full statistics would resample.
+        match self.metrics.lock().expect(ERR_POISONED_LOCK).slope_nanos() {
+            Some(slope_nanos) => {
+                write!(f, "{:?} per iteration", nanos_to_duration(slope_nanos))
+            }
+            None => write!(f, "no measurements"),
+        }
     }
 }
 
@@ -317,22 +328,36 @@ mod tests {
     );
 
     #[test]
-    fn display_shows_mean() {
+    fn display_shows_robust_per_iteration_estimate() {
         let session = create_test_session();
         let operation = session.operation("test");
 
-        // Add some data: 100ms per iteration * 2 iterations = 200ms total, mean = 100ms
+        // One span of 100ms per iteration across 2 iterations: the through-origin
+        // slope recovers 100ms, and with a single span the interval collapses onto
+        // it.
         {
             let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
             metrics.add_iterations(Duration::from_millis(100), 2);
         }
 
         let display = operation.to_string();
-        assert!(display.contains("mean"), "Display should mention 'mean'");
-        // Duration debug format varies, but should contain '100' for 100ms mean
+        assert!(
+            display.contains("per iteration"),
+            "Display should report the per-iteration estimate: got {display}"
+        );
+        // Duration debug format varies, but should contain '100' for the 100ms slope.
         assert!(
             display.contains("100"),
-            "Display should show the mean duration containing '100' (for 100ms): got {display}"
+            "Display should show the 100ms per-iteration slope: got {display}"
         );
+    }
+
+    #[test]
+    fn display_reports_no_measurements_when_empty() {
+        // An operation with no recorded spans has no statistics, so its Display takes
+        // the `None` leg.
+        let session = create_test_session();
+        let operation = session.operation("test");
+        assert_eq!(operation.to_string(), "no measurements");
     }
 }

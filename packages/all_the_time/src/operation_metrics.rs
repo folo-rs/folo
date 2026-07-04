@@ -1,13 +1,16 @@
 use std::time::Duration;
 
-use crate::{OperationStatistics, SpanRecord, compute_statistics};
+use crate::{OperationStatistics, SpanRecord, compute_slope_nanos, compute_statistics};
 
 /// Initial capacity reserved for an operation's span buffer.
 ///
 /// Sized to cover Criterion's default sample count (100) plus its warm-up calls
 /// with headroom, so that recording a span is an allocation-free push in the
-/// common case. The buffer is allocated once, when the operation is created,
-/// keeping the measured region free of allocations.
+/// common case. A benchmark configured with a larger `sample_size` eventually
+/// exceeds this and the next push grows the buffer. That growth is harmless to
+/// the measurement: a span records itself from `Drop`, after it has already
+/// captured its elapsed delta and before the next span starts, so the
+/// reallocation falls between measured spans and never lands inside one.
 const DEFAULT_SPAN_CAPACITY: usize = 256;
 
 /// Metrics tracked for each operation in the session.
@@ -97,6 +100,16 @@ impl OperationMetrics {
     /// spans were recorded.
     pub(crate) fn statistics(&self) -> Option<OperationStatistics> {
         compute_statistics(&self.spans)
+    }
+
+    /// The warmup-robust per-iteration slope in nanoseconds, or `None` when no
+    /// spans were recorded.
+    ///
+    /// The cheap path for the console summary: it computes only the headline
+    /// slope, skipping the bootstrap confidence interval that
+    /// [`statistics`](Self::statistics) resamples.
+    pub(crate) fn slope_nanos(&self) -> Option<f64> {
+        compute_slope_nanos(&self.spans)
     }
 
     /// Appends another operation's spans onto this one.

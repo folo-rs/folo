@@ -1,17 +1,19 @@
-//! Mean allocation tracking.
+//! Per-iteration allocation tracking.
 
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
+use crate::report::format_count;
 use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessSpan, ThreadSpan};
 
-/// A measurement handle for tracking mean memory allocation per operation across multiple iterations.
+/// A measurement handle for tracking per-iteration memory allocation of a repeated operation.
 ///
 /// This utility is particularly useful for benchmarking scenarios where you want
-/// to understand the mean memory footprint and allocation behavior of repeated operations.
-/// It tracks both the number of bytes allocated and the count of allocations.
-/// Operations share data with their parent session via reference counting, and data is
-/// merged when the operation is dropped.
+/// to understand the memory footprint and allocation behavior of repeated operations.
+/// It tracks both the number of bytes allocated and the count of allocations. The
+/// headline figures are warmup-robust per-iteration slopes (see the crate-level
+/// "Primary metric" documentation), with the pooled [`mean`](Self::mean) still
+/// available.
 ///
 /// Multiple operations with the same name can be created concurrently.
 ///
@@ -153,13 +155,13 @@ impl Operation {
 
     /// Calculates the mean bytes allocated per iteration.
     ///
-    /// Returns 0 if no iterations have been recorded.
+    /// Returns 0 if no iterations have been recorded. This is the pooled mean
+    /// across all recorded spans; the warmup-robust slope and its dispersion are
+    /// available on [`ReportOperation`](crate::ReportOperation) via a report.
     #[must_use]
     pub fn mean(&self) -> u64 {
         let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
-        data.total_bytes_allocated
-            .checked_div(data.total_iterations)
-            .unwrap_or(0)
+        data.mean_bytes()
     }
 
     /// Returns the total number of iterations recorded.
@@ -167,20 +169,31 @@ impl Operation {
     #[cfg(test)]
     fn total_iterations(&self) -> u64 {
         let data = self.metrics.lock().unwrap();
-        data.total_iterations
+        data.total_iterations()
     }
 
     /// Returns the total bytes allocated across all iterations.
     #[must_use]
     pub fn total_bytes_allocated(&self) -> u64 {
         let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
-        data.total_bytes_allocated
+        data.total_bytes_allocated()
     }
 }
 
 impl fmt::Display for Operation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} bytes (mean)", self.mean())
+        // The summary shows only the slopes, so take the cheap slope-only path and
+        // skip the bootstrap confidence intervals the full statistics would resample.
+        let metrics = self.metrics.lock().expect(ERR_POISONED_LOCK);
+        match (metrics.bytes_slope(), metrics.allocations_slope()) {
+            (Some(bytes), Some(allocations)) => write!(
+                f,
+                "{} bytes/iter, {} allocations/iter",
+                format_count(bytes),
+                format_count(allocations),
+            ),
+            _ => write!(f, "no measurements"),
+        }
     }
 }
 
@@ -370,10 +383,23 @@ mod tests {
         let report = session.to_report();
         assert!(!report.is_empty());
 
-        // Verify the session shows the data was merged
+        // Verify the session shows the data was merged. A single span of 100
+        // bytes/iter over 5 iterations yields a slope of 100; the two
+        // allocations/iter behave the same way. The stdout table shows the slope
+        // only (no interval).
+        let report = session.to_report();
+        let (_, op) = report.operations().next().expect("one operation");
+        let stats = op.statistics().expect("operation has spans");
         let session_display = format!("{session}");
         println!("Actual session display: '{session_display}'");
-        assert!(session_display.contains("| test      |        100 |          2 |")); // 500 bytes / 5 iterations = 100, 10 allocations / 5 iterations = 2
+        assert!(
+            session_display.contains(&format_count(stats.bytes.slope)),
+            "table should show the byte slope: got {session_display}"
+        );
+        assert!(
+            session_display.contains(&format_count(stats.allocations.slope)),
+            "table should show the allocation slope: got {session_display}"
+        );
     }
 
     #[test]
@@ -399,9 +425,12 @@ mod tests {
         drop(op1);
         drop(op2);
 
-        // Session should show merged results: 800 bytes, 5 iterations = 160 bytes mean, 8 allocations / 5 iterations = 1.6 ≈ 1 (integer division)
+        // Session should show merged results. The iterations²-weighted
+        // through-origin slope over spans (200 bytes / 2 iters) and (600 bytes /
+        // 3 iters) is (2·200 + 3·600) / (2² + 3²) = 2200 / 13 ≈ 169.23 bytes/iter,
+        // which differs from the pooled mean of 160.
         let session_display = format!("{session}");
-        assert!(session_display.contains("| test      |        160 |          1 |"));
+        assert!(session_display.contains("169.23"), "got {session_display}");
     }
 
     static_assertions::assert_impl_all!(Operation: Send, Sync);
@@ -410,18 +439,29 @@ mod tests {
     );
 
     #[test]
-    fn operation_display_shows_mean_bytes() {
+    fn operation_display_shows_robust_per_iteration_estimate() {
         let operation = create_test_operation();
 
-        // Add some data to have a non-zero mean.
+        // Add some data to have a non-zero slope.
         // add_iterations(bytes_delta, count_delta, iterations) means bytes_delta * iterations total bytes.
         {
             let mut metrics = operation.metrics.lock().unwrap();
-            metrics.add_iterations(250, 5, 2); // 250 * 2 = 500 total bytes / 2 = 250 mean
+            metrics.add_iterations(250, 5, 2); // Single span → slope of 250 bytes/iter.
         }
 
         let display_output = operation.to_string();
-        assert!(display_output.contains("bytes (mean)"));
-        assert!(display_output.contains("250")); // 500 / 2 = 250 mean bytes
+        assert!(
+            display_output.contains("bytes/iter"),
+            "got {display_output}"
+        );
+        assert!(display_output.contains("250"), "got {display_output}");
+    }
+
+    #[test]
+    fn operation_display_reports_no_measurements_when_empty() {
+        // An operation with no recorded spans has no dispersion statistics, so its
+        // Display takes the "no measurements" leg.
+        let operation = create_test_operation();
+        assert_eq!(operation.to_string(), "no measurements");
     }
 }

@@ -283,9 +283,10 @@ async fn collect_harvests_every_engine_that_produced_output() {
 
     let objects = workspace.stored_objects();
     assert_eq!(objects.len(), 4, "{objects:?}");
-    // Deterministic engines (Callgrind instruction counts, allocation statistics)
-    // land in the `synthetic` partition; hardware-dependent engines (Criterion
-    // wall time, `all_the_time` processor time) carry a machine fingerprint.
+    // Hardware-independent engines (Callgrind instruction counts, allocation
+    // statistics) land in the `synthetic` partition; hardware-dependent engines
+    // (Criterion wall time, `all_the_time` processor time) carry a machine
+    // fingerprint.
     assert!(
         objects
             .iter()
@@ -313,8 +314,8 @@ async fn collect_harvests_every_engine_that_produced_output() {
 }
 
 /// An `alloc_tracker` run stores allocation statistics in the `synthetic`
-/// partition (allocation counts are a deterministic property of the code, not the
-/// hardware), carrying both the byte and the count metric.
+/// partition (allocation behavior depends on the code, not the hardware),
+/// carrying both the byte and the count metric.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_alloc_tracker_stores_results() {
@@ -389,6 +390,36 @@ async fn collect_all_the_time_records_dispersion() {
     assert_eq!(processor_time.interval_low, Some(19.0));
     assert_eq!(processor_time.interval_high, Some(21.0));
     assert_eq!(processor_time.std_dev, Some(1.0));
+}
+
+/// An `alloc_tracker` run whose emitted output carries per-metric bootstrap
+/// confidence intervals stores that dispersion on both the bytes and the
+/// allocation-count metric, so the noise detector can later apply its
+/// interval-overlap gate to allocation figures. This proves the dispersion fields
+/// flow from the engine's JSON through the harvest and adapter into the stored
+/// result set, end to end through the real adapter.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn collect_alloc_tracker_records_dispersion() {
+    let workspace = Workspace::new(&storage_only_config())
+        .with_bench(&["--alloc-tracker", "allocate_vec=200/2@199:201/2:2"]);
+
+    workspace.drive(&["collect"]).await.unwrap();
+
+    let (_key, set) = workspace.single_object();
+    let record = &set.results[0];
+
+    let bytes = metric_of(record, MetricKind::AllocatedBytes);
+    assert_eq!(bytes.value, 200.0);
+    assert_eq!(bytes.interval_low, Some(199.0));
+    assert_eq!(bytes.interval_high, Some(201.0));
+    assert_eq!(bytes.std_dev, Some(1.0));
+
+    let count = metric_of(record, MetricKind::AllocationCount);
+    assert_eq!(count.value, 2.0);
+    assert_eq!(count.interval_low, Some(2.0));
+    assert_eq!(count.interval_high, Some(2.0));
+    assert_eq!(count.std_dev, Some(0.0));
 }
 
 /// `--machine-key` overrides the machine fingerprint in a Criterion partition.

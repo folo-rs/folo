@@ -1083,7 +1083,7 @@ impl Workspace {
 
     /// Seeds one clean `alloc_tracker` result set for `operation` on the previously
     /// created commit `label`, recording `bytes` mean bytes and `allocs` mean
-    /// allocations per iteration. Allocation counts are deterministic, so the
+    /// allocations per iteration. Allocation counts are hardware-independent, so the
     /// partition is `synthetic` (no machine key).
     pub(crate) fn seed_alloc_tracker(&self, label: &str, operation: &str, bytes: f64, allocs: f64) {
         let commit_id = self.commit_id(label);

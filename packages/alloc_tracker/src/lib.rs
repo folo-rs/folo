@@ -13,7 +13,7 @@
 //! - [`Report`] - Thread-safe memory allocation statistics that can be merged and processed independently
 //! - [`ProcessSpan`] - Tracks process-wide memory allocation changes over a time period
 //! - [`ThreadSpan`] - Tracks thread-local memory allocation changes over a time period
-//! - [`Operation`] - Calculates mean memory allocation per operation
+//! - [`Operation`] - Measures per-iteration memory allocation of a repeated operation
 //!
 //! Additionally, when the `panic_on_next_alloc` feature is enabled:
 #![cfg_attr(
@@ -26,6 +26,27 @@
 )]
 //!
 //! This package is not meant for use in production, serving only as a development tool.
+//!
+//! # Primary metric
+//!
+//! Allocation counts are not deterministic across benchmark runs. Even when the
+//! code under test allocates by a fixed rule, the first iterations pay one-off
+//! costs (lazily initialized caches, growing a buffer to its steady-state
+//! capacity) that later iterations do not, and Criterion decides how many
+//! iterations to run and how many to discard as warm-up. A raw pooled **mean**
+//! therefore folds those one-off allocations into the per-iteration figure and
+//! drifts as that sample mix changes between runs.
+//!
+//! The headline metric for both bytes and allocation count is instead the
+//! **warmup-robust slope**: an iterations-weighted, through-origin fit of each
+//! span's total against its iteration count, which recovers the marginal
+//! per-iteration cost even when the blend of warm-up and steady-state spans
+//! shifts. Each figure is paired with a bootstrap 95% confidence interval so its
+//! run-to-run uncertainty can be inspected (it collapses to a point when every
+//! iteration allocates identically). The stdout summary leads with the slopes
+//! alone for readability; the JSON output records the slopes together with their
+//! confidence intervals, and the pooled means stay available through
+//! [`Operation::mean`] and the report accessors for callers that still want them.
 //!
 //! # Features
 #![cfg_attr(
@@ -68,13 +89,17 @@
 //!
 //! Dropping a [`Session`] writes machine-readable JSON files (one per operation)
 //! into the Cargo target directory at `target/alloc_tracker/<operation>.json`,
-//! with operation names sanitized to be filesystem-safe. A human-readable
-//! summary is also printed to stdout.
+//! with operation names sanitized to be filesystem-safe. Each file records, for
+//! both bytes and allocation count, the warmup-robust slope point estimate, a 95%
+//! bootstrap confidence interval, the standard deviation, the observed minimum and
+//! maximum, and the pooled mean. A human-readable summary leading with the same
+//! slopes (see "Primary metric"), without the intervals, is also printed to
+//! stdout.
 //!
 //! These outputs are produced automatically, so a typical benchmark only needs
 //! to create a session and record work.
 //!
-//! # Tracking mean allocations
+//! # Tracking allocations per iteration
 //!
 //! For benchmarking scenarios, where you run multiple iterations of an operation, use [`Operation`]:
 //!
@@ -88,7 +113,8 @@
 //!     let session = Session::new();
 //! #   let session = session.no_stdout().no_file();
 //!
-//!     // Track mean over multiple operations (batched for efficiency)
+//!     // Record multiple iterations (batched for efficiency) so the
+//!     // per-iteration slope can separate steady-state cost from warm-up.
 //!     {
 //!         let mut string_op = session.operation("string_allocations");
 //!         let _span = string_op.measure_process().iterations(10);

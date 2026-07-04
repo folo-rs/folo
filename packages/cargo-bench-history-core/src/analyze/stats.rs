@@ -453,8 +453,9 @@ mod tests {
         let change = pettitt(&[1.0, 1.0, 1.0, 5.0, 5.0, 5.0]).unwrap();
         assert_eq!(change.index, 3);
         assert_eq!(change.k_statistic, 9.0);
-        // p ≈ 2·exp(−6·81/252) ≈ 0.291 — deliberately not tiny, which is why
-        // deterministic series must not gate a real step on significance.
+        // p ≈ 2·exp(−6·81/252) ≈ 0.291 — deliberately not tiny, which is why a
+        // clean step must be confirmed by a second test (Mann–Whitney), never by
+        // Pettitt's p-value alone.
         close(change.p_value, 0.291, 1e-3);
     }
 

@@ -20,8 +20,9 @@ pub enum Engine {
     Criterion,
     /// Callgrind (via Gungraun) instruction counts: simulated, hardware-independent.
     Callgrind,
-    /// `alloc_tracker` allocation counts and bytes: deterministic and
-    /// hardware-independent (the same code allocates the same way on any machine).
+    /// `alloc_tracker` allocation counts and bytes: hardware-independent but not
+    /// deterministic — warmup and buffer-resize allocations jitter the per-iteration
+    /// figure, which is amortized over a Criterion-chosen iteration count.
     AllocTracker,
     /// `all_the_time` processor-time measurements: hardware-dependent and noisy.
     AllTheTime,
