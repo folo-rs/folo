@@ -972,6 +972,18 @@ mod tests {
         }
     }
 
+    /// An improvement finding named `name` with the given (negative) relative move, so
+    /// a summary test can exercise the optional improvements tally alongside
+    /// regressions.
+    fn named_improvement(name: &str, relative_delta: f64) -> Finding {
+        Finding {
+            id: BenchmarkId::new(nonempty![name.to_owned()]),
+            direction: Direction::Improvement,
+            relative_delta,
+            ..regression()
+        }
+    }
+
     /// Five regressions in the descending-magnitude order the ranking produces, so a
     /// summary render can cap the leading few and drop the tail.
     fn ranked_five() -> Vec<Finding> {
@@ -1056,6 +1068,34 @@ mod tests {
         assert!(report.contains("```text"), "{report}");
         assert!(report.contains('┤') || report.contains('┼'), "{report}");
         assert!(!report.contains('\u{1b}'), "{report}");
+    }
+
+    #[test]
+    fn markdown_summary_reports_improvements_only_when_enabled() {
+        // Magnitudes descend so the list already reads as globally ranked; two
+        // regressions and three improvements are interleaved.
+        let findings = vec![
+            named_regression("reg_a", 0.50),
+            named_improvement("imp_b", -0.40),
+            named_regression("reg_c", 0.30),
+            named_improvement("imp_d", -0.20),
+            named_improvement("imp_e", -0.10),
+        ];
+
+        // Disabled (the `flat_input` default): the header carries no improvements tally.
+        let without = render_markdown_summary(&flat_input(&findings), NonZero::new(2).unwrap());
+        assert!(!without.contains("Improvements:"), "{without}");
+
+        // Enabled: the header carries an improvements tally counted from *every*
+        // finding — like the regressions tally — even though the cap of two drops
+        // `imp_d` and `imp_e` from the rendered list.
+        let input = ReportInput {
+            report_improvements: true,
+            ..flat_input(&findings)
+        };
+        let with = render_markdown_summary(&input, NonZero::new(2).unwrap());
+        assert!(with.contains("- Regressions: 2"), "{with}");
+        assert!(with.contains("- Improvements: 3"), "{with}");
     }
 
     #[test]
