@@ -74,7 +74,7 @@ with named, value-asserting tests rather than threshold guards (see
 `docs/testing.md`). All of `analyze::stats` must stay deterministic and
 Miri-safe.
 
-## Signal-validation tests are correctness-critical — changing expectations needs human approval
+## Signal-validation tests are correctness-critical — every change needs human approval
 
 `src/analyze/signal_validation.rs` is the suite of hand-curated "obvious right
 answer" series (an obvious doubling, a dead-flat line, …) paired with the verdict
@@ -90,16 +90,25 @@ analysis, not a stale test. Adjusting the expected outcome to match the new
 behaviour silently ratifies that regression and defeats the entire purpose of the
 suite.
 
-If, while maintaining this crate, you come to believe an expectation genuinely
-needs to change (e.g. a deliberate, approved change to the detection semantics):
+**Every change to this suite needs explicit human approval before you commit
+it** — not only editing or removing an expectation, but also *adding* a new
+curated case. Approval for additions is not a rubber stamp: a weak or
+ill-considered "trash case" dilutes the suite and, worse, normalizes casually
+approving expectation changes to it when its outcome later shifts in the regular
+course of business. Every case must earn its place as an unambiguous, obviously
+correct answer.
 
-* **Stop and get explicit human approval before touching any expectation.** This
-  is a hard gate, not a courtesy. Do not commit an expectation change without it.
-* **Propose the adjustment to the user with evidence, not just a diff.** Show the
-  affected series, the old vs. new verdict per mode/polarity, and *why* the new
-  verdict is the correct answer for that input. Include illustrative material —
-  worked examples, plots of the series and the detector's decision, before/after
-  comparisons — enough for a human to judge the real-world impact without
-  re-deriving it.
-* Adding *new* curated cases (more coverage) is welcome and does not need this
-  gate; **changing or removing an existing expectation does.**
+If, while maintaining this crate, you come to believe the suite needs to change —
+an expectation adjusted, a case removed, or a new case added:
+
+* **Stop and get explicit human approval before touching the suite.** This is a
+  hard gate, not a courtesy. Do not commit any change to the curated cases or
+  their expectations without it.
+* **Propose the change to the user with evidence, not just a diff.** For an
+  expectation change, show the affected series, the old vs. new verdict per
+  mode/polarity, and *why* the new verdict is the correct answer for that input.
+  For a new case, show the series and argue why its verdict is unambiguously
+  correct and what class of regression it guards against. Include illustrative
+  material — worked examples, plots of the series and the detector's decision,
+  before/after comparisons — enough for a human to judge the real-world impact
+  without re-deriving it.
