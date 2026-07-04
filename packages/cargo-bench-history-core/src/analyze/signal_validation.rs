@@ -4,9 +4,15 @@
 //! Each case is a data series with an unambiguous shape (an obvious step, a dead-flat
 //! line) paired with, per polarity, whether the analysis *should* report a finding.
 //! The point is not to exercise a particular detector but to pin the end-to-end
-//! verdict of the real production entry point ([`find_changes_spawned`]) on inputs a
-//! human would answer without hesitation — so a future change to the math that starts
-//! calling a doubling "no change", or a flat line "a regression", fails here loudly.
+//! verdict of the analysis on inputs a human would answer without hesitation — so a
+//! future change to the math that starts calling a doubling "no change", or a flat
+//! line "a regression", fails here loudly.
+//!
+//! The verdict is taken through the serial detection oracle [`find_changes`], the same
+//! spawner-free entry the rest of the [`findings`](super::findings) unit tests use;
+//! `find_changes_spawned_matches_the_serial_pass` proves it produces exactly the
+//! findings the spawner-distributed production path
+//! ([`find_changes_spawned`](super::find_changes_spawned)) does.
 //!
 //! Every case is run through a 2×2 matrix:
 //!
@@ -34,14 +40,11 @@
 
 use std::sync::Arc;
 
-use futures::executor::block_on;
 use nonempty::nonempty;
 
-use crate::analyze::{
-    AnalysisConfig, AnalysisContext, AnalysisMode, Series, SeriesPoint, find_changes_spawned,
-};
+use crate::analyze::findings::find_changes;
+use crate::analyze::{AnalysisConfig, AnalysisContext, AnalysisMode, Series, SeriesPoint};
 use crate::model::{BenchmarkId, DiscriminantSet, MetricKind};
-use crate::testing::synchronous_spawner;
 
 /// How a rise in the measured metric is judged.
 ///
@@ -161,15 +164,11 @@ fn history_context() -> AnalysisContext {
     }
 }
 
-/// Runs the real detection entry point on a single series and reports whether it
-/// raised any finding.
+/// Runs the serial detection oracle on a single series and reports whether it raised
+/// any finding.
 fn raises_finding(values: &[f64], kind: MetricKind) -> bool {
     let series = deterministic_series(values, kind);
-    let findings = block_on(find_changes_spawned(
-        Arc::from(vec![series]),
-        history_context(),
-        &synchronous_spawner(),
-    ));
+    let findings = find_changes(&[series], &history_context());
     !findings.is_empty()
 }
 

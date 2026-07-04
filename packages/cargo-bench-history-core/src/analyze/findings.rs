@@ -1001,11 +1001,12 @@ fn evaluate_resolved_spike(
 ///
 /// Exists only as test scaffolding — the independent oracle for
 /// `find_changes_spawned_matches_the_serial_pass` (the spawned path chunks and
-/// recombines; this one never chunks) and a synchronous convenience for the unit
-/// tests below. Production detection goes through [`find_changes_spawned`].
+/// recombines; this one never chunks) and a spawner-free convenience for the crate's
+/// unit tests (the tests below and the `signal_validation` suite). Production
+/// detection goes through [`find_changes_spawned`].
 #[cfg(test)]
 #[must_use]
-fn find_changes(series: &[Series], context: &AnalysisContext) -> Vec<Finding> {
+pub(super) fn find_changes(series: &[Series], context: &AnalysisContext) -> Vec<Finding> {
     let candidates = detect_all(series, context);
     finalize_findings(candidates, series, context)
 }

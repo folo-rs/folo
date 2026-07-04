@@ -15,7 +15,7 @@ pub(crate) mod report;
 pub(crate) mod run_points;
 pub(crate) mod selection;
 pub(crate) mod series;
-#[cfg(all(test, feature = "private-test-util"))]
+#[cfg(test)]
 mod signal_validation;
 pub(crate) mod stats;
 
