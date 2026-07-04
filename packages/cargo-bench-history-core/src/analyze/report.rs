@@ -9,6 +9,8 @@
 //! ranked findings, and a per-set breakdown follows so each comparable partition
 //! reads as its own section.
 
+use std::num::NonZero;
+
 use colored::{Color, Colorize};
 use rasciigraph::{Config, plot_colored, plot_many_colored};
 use serde::Serialize;
@@ -27,7 +29,7 @@ const CHART_WIDTH: u32 = 48;
 /// Enough to convey the most significant movers while keeping the rendered report
 /// comfortably within a GitHub issue body's size limit even when an analysis flags
 /// many changes.
-pub const DEFAULT_SUMMARY_LIMIT: usize = 20;
+pub const DEFAULT_SUMMARY_LIMIT: NonZero<usize> = NonZero::new(20).expect("20 is non-zero");
 
 /// The selectable output format of an analysis report.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -641,7 +643,7 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
 /// total are shown so a reader knows the report is partial and to consult the full
 /// report for the rest.
 #[must_use]
-pub fn render_markdown_summary(input: &ReportInput<'_>, limit: usize) -> String {
+pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -> String {
     // Charts embed ANSI color when `colored` is active; force it off so the fenced
     // blocks carry plain characters, matching `render_markdown`. The guard restores
     // ambient auto-detection on return.
@@ -680,9 +682,9 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: usize) -> String 
 
     // The findings are already globally ranked by descending magnitude, so the leading
     // `limit` are the top movers. When any were dropped, name the total so a reader
-    // knows to reach for the full report (`limit` and the total are both > 1 here, so
-    // "findings" is unconditionally plural).
-    if input.findings.len() > limit {
+    // knows to reach for the full report (the total exceeds `limit`, which is at least
+    // one, so the total is at least two and "findings" is unconditionally plural).
+    if input.findings.len() > limit.get() {
         lines.push(String::new());
         lines.push(format!(
             "> Showing the top {limit} of {} findings by magnitude.",
@@ -693,7 +695,7 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: usize) -> String 
     // A per-commit chart is meaningful only for a history timeline, matching the full
     // reports; branch/tip modes compare against a baseline.
     let chart_enabled = input.mode == "history";
-    for finding in input.findings.iter().take(limit) {
+    for finding in input.findings.iter().take(limit.get()) {
         push_finding_markdown(&mut lines, finding, chart_enabled);
     }
     push_warning(&mut lines, input.warning);
@@ -987,7 +989,7 @@ mod tests {
         let findings = ranked_five();
         let input = flat_input(&findings);
 
-        let report = render_markdown_summary(&input, 3);
+        let report = render_markdown_summary(&input, NonZero::new(3).unwrap());
 
         // The header tally counts every finding, not the retained subset.
         assert!(report.contains("- Regressions: 5"), "{report}");
@@ -1014,14 +1016,14 @@ mod tests {
 
         // A limit at or above the finding count keeps every finding and shows no
         // truncation note.
-        let report = render_markdown_summary(&input, 5);
+        let report = render_markdown_summary(&input, NonZero::new(5).unwrap());
 
         assert!(!report.contains("Showing the top"), "{report}");
         assert!(report.contains("mover_a"), "{report}");
         assert!(report.contains("dropped_e"), "{report}");
 
         // A limit beyond the count behaves the same as an exact fit.
-        let generous = render_markdown_summary(&input, 20);
+        let generous = render_markdown_summary(&input, NonZero::new(20).unwrap());
         assert_eq!(generous, report);
     }
 
