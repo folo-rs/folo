@@ -287,13 +287,11 @@ impl ReportOperation {
 
 impl fmt::Display for ReportOperation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.statistics() {
-            Some(stats) => {
-                write!(
-                    f,
-                    "{:?} per iteration",
-                    nanos_to_duration(stats.slope_nanos)
-                )
+        // The summary shows only the slope, so take the cheap slope-only path and
+        // skip the bootstrap confidence interval the full statistics would resample.
+        match self.metrics.slope_nanos() {
+            Some(slope_nanos) => {
+                write!(f, "{:?} per iteration", nanos_to_duration(slope_nanos))
             }
             None => write!(f, "no measurements"),
         }
@@ -318,12 +316,13 @@ impl fmt::Display for Report {
         // folds warmup and one-off costs into the figure, while the slope recovers
         // the marginal per-iteration cost. The bootstrap confidence interval is
         // kept out of this summary for readability; it is preserved in the JSON
-        // output and the `statistics()` API.
+        // output and the `statistics()` API. Rendering the slope alone also lets the
+        // table skip the bootstrap resampling the full statistics would perform.
         let cells: Vec<(&str, String)> = sorted_ops
             .iter()
             .map(|(name, operation)| {
-                let value = match operation.statistics() {
-                    Some(stats) => format!("{:?}", nanos_to_duration(stats.slope_nanos)),
+                let value = match operation.metrics.slope_nanos() {
+                    Some(slope_nanos) => format!("{:?}", nanos_to_duration(slope_nanos)),
                     None => "n/a".to_owned(),
                 };
                 (name.as_str(), value)

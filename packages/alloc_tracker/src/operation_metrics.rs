@@ -159,6 +159,35 @@ impl OperationMetrics {
         SpanStats::from_spans(&spans)
     }
 
+    /// The warmup-robust per-iteration byte slope, or `None` when no spans were
+    /// recorded.
+    ///
+    /// The cheap path for the console summary: it computes only the headline
+    /// slope, skipping the bootstrap confidence interval that
+    /// [`bytes_stats`](Self::bytes_stats) resamples.
+    pub(crate) fn bytes_slope(&self) -> Option<f64> {
+        let spans: Vec<Span> = self
+            .spans
+            .iter()
+            .map(|span| Span::new(span.iterations, span.bytes))
+            .collect();
+        folo_utils::slope_of(&spans)
+    }
+
+    /// The warmup-robust per-iteration allocation-count slope, or `None` when no
+    /// spans were recorded.
+    ///
+    /// The cheap counterpart to [`allocations_stats`](Self::allocations_stats),
+    /// skipping the bootstrap resampling for the console summary.
+    pub(crate) fn allocations_slope(&self) -> Option<f64> {
+        let spans: Vec<Span> = self
+            .spans
+            .iter()
+            .map(|span| Span::new(span.iterations, span.count))
+            .collect();
+        folo_utils::slope_of(&spans)
+    }
+
     /// Appends another operation's spans onto this one.
     pub(crate) fn extend_from(&mut self, other: &Self) {
         self.spans.extend_from_slice(&other.spans);

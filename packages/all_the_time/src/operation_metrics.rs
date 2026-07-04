@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::{OperationStatistics, SpanRecord, compute_statistics};
+use crate::{OperationStatistics, SpanRecord, compute_slope_nanos, compute_statistics};
 
 /// Initial capacity reserved for an operation's span buffer.
 ///
@@ -100,6 +100,16 @@ impl OperationMetrics {
     /// spans were recorded.
     pub(crate) fn statistics(&self) -> Option<OperationStatistics> {
         compute_statistics(&self.spans)
+    }
+
+    /// The warmup-robust per-iteration slope in nanoseconds, or `None` when no
+    /// spans were recorded.
+    ///
+    /// The cheap path for the console summary: it computes only the headline
+    /// slope, skipping the bootstrap confidence interval that
+    /// [`statistics`](Self::statistics) resamples.
+    pub(crate) fn slope_nanos(&self) -> Option<f64> {
+        compute_slope_nanos(&self.spans)
     }
 
     /// Appends another operation's spans onto this one.

@@ -171,5 +171,5 @@ pub use process_span::*;
 pub use report::*;
 pub use session::*;
 pub use statistics::OperationStatistics;
-pub(crate) use statistics::{SpanRecord, compute_statistics};
+pub(crate) use statistics::{SpanRecord, compute_slope_nanos, compute_statistics};
 pub use thread_span::*;

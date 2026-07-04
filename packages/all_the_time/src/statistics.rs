@@ -89,6 +89,20 @@ pub(crate) fn compute_statistics(spans: &[SpanRecord]) -> Option<OperationStatis
     })
 }
 
+/// Computes just the warmup-robust per-iteration slope in nanoseconds, or `None`
+/// when `spans` is empty.
+///
+/// The cheap counterpart to [`compute_statistics`] for the console summary, which
+/// shows only the slope: it skips the bootstrap confidence-interval resampling
+/// that dominates the full computation.
+pub(crate) fn compute_slope_nanos(spans: &[SpanRecord]) -> Option<f64> {
+    let owned: Vec<Span> = spans
+        .iter()
+        .map(|span| Span::new(span.iterations, span.total_nanos))
+        .collect();
+    folo_utils::slope_of(&owned)
+}
+
 /// Converts a per-iteration processor-time figure in nanoseconds to a `Duration`
 /// for human-readable rendering.
 ///

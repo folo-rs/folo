@@ -196,13 +196,11 @@ impl Operation {
 
 impl fmt::Display for Operation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.metrics.lock().expect(ERR_POISONED_LOCK).statistics() {
-            Some(stats) => {
-                write!(
-                    f,
-                    "{:?} per iteration",
-                    nanos_to_duration(stats.slope_nanos)
-                )
+        // The summary shows only the slope, so take the cheap slope-only path and
+        // skip the bootstrap confidence interval the full statistics would resample.
+        match self.metrics.lock().expect(ERR_POISONED_LOCK).slope_nanos() {
+            Some(slope_nanos) => {
+                write!(f, "{:?} per iteration", nanos_to_duration(slope_nanos))
             }
             None => write!(f, "no measurements"),
         }

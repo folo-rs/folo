@@ -182,13 +182,15 @@ impl Operation {
 
 impl fmt::Display for Operation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The summary shows only the slopes, so take the cheap slope-only path and
+        // skip the bootstrap confidence intervals the full statistics would resample.
         let metrics = self.metrics.lock().expect(ERR_POISONED_LOCK);
-        match (metrics.bytes_stats(), metrics.allocations_stats()) {
+        match (metrics.bytes_slope(), metrics.allocations_slope()) {
             (Some(bytes), Some(allocations)) => write!(
                 f,
                 "{} bytes/iter, {} allocations/iter",
-                format_count(bytes.slope),
-                format_count(allocations.slope),
+                format_count(bytes),
+                format_count(allocations),
             ),
             _ => write!(f, "no measurements"),
         }

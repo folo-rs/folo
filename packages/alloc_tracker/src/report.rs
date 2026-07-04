@@ -408,14 +408,16 @@ pub(crate) fn format_count(value: f64) -> String {
 
 impl fmt::Display for ReportOperation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.statistics() {
-            Some(stats) => write!(
+        // The summary shows only the slopes, so take the cheap slope-only path and
+        // skip the bootstrap confidence intervals the full statistics would resample.
+        match (self.metrics.bytes_slope(), self.metrics.allocations_slope()) {
+            (Some(bytes), Some(allocations)) => write!(
                 f,
                 "{} bytes/iter, {} allocations/iter",
-                format_count(stats.bytes.slope),
-                format_count(stats.allocations.slope),
+                format_count(bytes),
+                format_count(allocations),
             ),
-            None => write!(f, "no measurements"),
+            _ => write!(f, "no measurements"),
         }
     }
 }
@@ -440,16 +442,22 @@ impl fmt::Display for Report {
         // widths and the printed rows are computed from the exact same strings. The
         // bootstrap confidence interval is kept out of this summary for
         // readability; it is preserved in the JSON output and the `statistics()`
-        // API.
+        // API. Rendering the slopes alone also lets the table skip the bootstrap
+        // resampling the full statistics would perform for both metrics.
         let rows: Vec<(&str, String, String)> = sorted_ops
             .iter()
-            .map(|(name, operation)| match operation.statistics() {
-                Some(stats) => (
-                    name.as_str(),
-                    format_count(stats.bytes.slope),
-                    format_count(stats.allocations.slope),
-                ),
-                None => (name.as_str(), "n/a".to_string(), "n/a".to_string()),
+            .map(|(name, operation)| {
+                match (
+                    operation.metrics.bytes_slope(),
+                    operation.metrics.allocations_slope(),
+                ) {
+                    (Some(bytes), Some(allocations)) => (
+                        name.as_str(),
+                        format_count(bytes),
+                        format_count(allocations),
+                    ),
+                    _ => (name.as_str(), "n/a".to_string(), "n/a".to_string()),
+                }
             })
             .collect();
 

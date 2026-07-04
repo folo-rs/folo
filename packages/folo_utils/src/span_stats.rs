@@ -143,6 +143,21 @@ impl SpanStats {
     }
 }
 
+/// The warmup-robust per-iteration slope of the spans on its own, without the
+/// bootstrap confidence interval or the other dispersion statistics.
+///
+/// Returns `None` for an empty span set (no measured work), matching
+/// [`SpanStats::from_spans`]. This is the cheap counterpart for callers that need
+/// only the headline point estimate — a console summary, say — and must not pay
+/// for the bootstrap resampling that [`SpanStats::from_spans`] performs.
+#[must_use]
+pub fn slope_of(spans: &[Span]) -> Option<f64> {
+    if spans.is_empty() {
+        return None;
+    }
+    Some(slope(spans))
+}
+
 /// Per-iteration value of a span: its total divided by its iteration count.
 fn per_iteration(span: Span) -> f64 {
     let iterations = span.iterations as f64;
@@ -292,6 +307,16 @@ mod tests {
     #[test]
     fn empty_spans_have_no_statistics() {
         assert!(SpanStats::from_spans(&[]).is_none());
+    }
+
+    #[test]
+    fn slope_of_matches_the_full_estimator_without_bootstrapping() {
+        // The cheap slope-only path must return exactly the slope the full
+        // estimator computes, and `None` for an empty set like `from_spans`.
+        assert!(slope_of(&[]).is_none());
+        let spans = [span(2, 10), span(8, 40)];
+        let full = SpanStats::from_spans(&spans).unwrap();
+        assert_eq!(slope_of(&spans), Some(full.slope));
     }
 
     #[test]
