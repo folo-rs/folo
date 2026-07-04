@@ -322,8 +322,7 @@ mod tests {
         let operation = session.operation("test");
 
         // One span of 100ms per iteration across 2 iterations: the through-origin
-        // slope recovers 100ms, and with a single span the interval collapses onto
-        // it.
+        // slope recovers 100ms (the Display shows only slopes, not intervals).
         {
             let mut metrics = operation.metrics.lock().expect(ERR_POISONED_LOCK);
             metrics.add_iterations(Duration::from_millis(100), 2);

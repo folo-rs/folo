@@ -228,7 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn single_span_interval_collapses_to_the_point_estimate() {
+    fn single_span_has_no_interval() {
         let mut metrics = OperationMetrics::default();
         metrics.add_span(4, 80);
 
