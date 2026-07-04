@@ -238,10 +238,10 @@ jobs:
       # front matter; the summary the tool renders has none, so prepend a fixed header.
       # The fixed title is also the dedup key that turns findings into one rolling issue.
       # The body carries the CONDENSED summary (not the full report) so it fits the issue
-      # limit, followed by a link to the attached full reports and a lifecycle footer
-      # explaining that the issue is refreshed only on runs that still have findings, is
-      # never auto-closed, and that an accepted regression must be blessed (not merely
-      # closed) — see the File step.
+      # limit, followed by a link to the attached full reports and a footer with two parts:
+      # a minimal "Issue lifecycle" summary (refreshed only on runs that still have findings,
+      # never auto-closed) and a "What do I do?" section pointing at `examine` and the
+      # bless-an-intentional-change vs. fix-a-defect decision — see the File step.
       - name: Compose regression issue
         if: steps.notable.outputs.value == 'true'
         shell: pwsh
@@ -255,7 +255,22 @@ jobs:
           # Literal Markdown: the backticks are inline code spans, kept verbatim by the
           # single-quoted here-string.
           $lifecycle = @'
-          **Issue lifecycle:** This issue is maintained automatically by the `bench-history` workflow. Its body is refreshed on every push to `main` whose analysis still reports findings, so it always reflects the **latest run that had findings** — a run that finds nothing leaves it untouched rather than closing it. This issue is **not** closed automatically, and closing it by hand does **not** accept the regression: unless the change is blessed, the next analysis that still finds it just files a fresh issue. To accept an intentional change, bless the affected benchmarks at the commit named above, e.g. `cargo bench-history bless <benchmark-id-prefix> --context <commit>` (or `cargo bench-history bless --all --context <commit>` to accept every benchmark at that commit), then close the issue.
+          **Issue lifecycle**
+
+          - Filed and refreshed automatically by the `bench-history` workflow; the body always reflects the latest `main` run that still had findings.
+          - A run that finds nothing leaves it untouched — the issue is **never** closed automatically.
+          - Closing it by hand does **not** accept the regression. A closed issue is never reopened; instead, the next run that still finds the regression files a new one.
+
+          **What do I do?**
+
+          First, see exactly how the series moved over time. Copy the benchmark id and metric from the finding above and run:
+
+          `cargo bench-history examine --benchmark <id> --metric <name>`
+
+          Then decide what the change is:
+
+          - **An intentional tradeoff** — accept it by blessing the affected benchmarks at the named commit, e.g. `cargo bench-history bless <benchmark-id-prefix> --context <commit>` (or `cargo bench-history bless --all --context <commit>` to accept every benchmark at that commit), then close the issue.
+          - **A defect to fix** — fix it as usual. A fixed finding self-clears on its own several runs after the fix, even without a blessing. This is **not** immediate: clearing it needs statistical evidence from multiple post-fix runs.
           '@
 
           $parts = @(
