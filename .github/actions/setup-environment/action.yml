@@ -82,7 +82,33 @@ runs:
         # toolchain are identical. ImageVersion is set automatically on every GitHub-hosted
         # runner. env-vars is additive on top of the rust-cache defaults.
         env-vars: ImageVersion
-    
+
+    - name: Cache Rust toolchains
+      # rust-cache above caches ~/.cargo and ./target but never ~/.rustup, so without this
+      # every job re-downloads all three toolchains that `just install-tools` installs:
+      # stable, the MSRV, and the pinned nightly (whose profile pulls rust-src,
+      # llvm-tools-preview and miri). That is the single largest uncached cost of this
+      # composite. Caching the installed toolchains turns the `rustup toolchain install`
+      # calls into no-ops on a hit.
+      #
+      # Placed AFTER the rust-cache step on purpose: rust-cache derives its key from the
+      # toolchains installed when it runs (here, only stable). Restoring the nightly/MSRV
+      # toolchains before it would fold their hashes into the shared `prerequisites` key
+      # and invalidate the large compilation cache for every job at once.
+      #
+      # Keyed on OS + arch + a hash of the files that pin every toolchain version
+      # (constants.env holds RUST_MSRV/RUST_NIGHTLY; rust-toolchain.toml holds the stable
+      # channel), so any version bump invalidates the cache automatically. Unlike the
+      # compiled cargo-tool binaries in ~/.cargo/bin, rustup toolchains are prebuilt,
+      # relocatable artifacts that do not link against image-specific dylibs, so the runner
+      # ImageVersion is deliberately left out of the key.
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.rustup/toolchains
+          ~/.rustup/update-hashes
+        key: rustup-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('constants.env', 'rust-toolchain.toml') }}
+
     - name: Install just
       shell: bash
       run: cargo install just --locked
