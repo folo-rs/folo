@@ -73,3 +73,33 @@ ecosystem pattern (see `docs/performance.md`) and cover the numeric boundaries
 with named, value-asserting tests rather than threshold guards (see
 `docs/testing.md`). All of `analyze::stats` must stay deterministic and
 Miri-safe.
+
+## Signal-validation tests are correctness-critical — changing expectations needs human approval
+
+`src/analyze/signal_validation.rs` is the suite of hand-curated "obvious right
+answer" series (an obvious doubling, a dead-flat line, …) paired with the verdict
+each analysis mode *must* reach. It exists to catch the analysis math drifting
+into illogical territory — calling a doubling "no change", or a flat line "a
+regression". The curated expectations **are** the specification of correct
+behaviour here.
+
+**Never change a signal-validation expectation to make a failing test pass.** A
+failure in this suite is a signal that a change altered what the analysis
+concludes about an unambiguous input, which is almost always a regression in the
+analysis, not a stale test. Adjusting the expected outcome to match the new
+behaviour silently ratifies that regression and defeats the entire purpose of the
+suite.
+
+If, while maintaining this crate, you come to believe an expectation genuinely
+needs to change (e.g. a deliberate, approved change to the detection semantics):
+
+* **Stop and get explicit human approval before touching any expectation.** This
+  is a hard gate, not a courtesy. Do not commit an expectation change without it.
+* **Propose the adjustment to the user with evidence, not just a diff.** Show the
+  affected series, the old vs. new verdict per mode/polarity, and *why* the new
+  verdict is the correct answer for that input. Include illustrative material —
+  worked examples, plots of the series and the detector's decision, before/after
+  comparisons — enough for a human to judge the real-world impact without
+  re-deriving it.
+* Adding *new* curated cases (more coverage) is welcome and does not need this
+  gate; **changing or removing an existing expectation does.**
