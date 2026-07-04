@@ -97,9 +97,21 @@ jobs:
               $values[$Matches[1].Trim()] = $Matches[2].Trim()
             }
           }
+
+          # Fail fast if either identifier is missing or empty: an empty
+          # AZURE_CLIENT_ID / AZURE_TENANT_ID would otherwise silently break the tool's
+          # OIDC federation far later with an opaque error, whereas the previous bash
+          # step's `set -u` errored here.
+          function Get-RequiredConstant($name) {
+            $value = $values[$name]
+            if ([string]::IsNullOrWhiteSpace($value)) {
+              throw "constants.env is missing a non-empty '$name' (required for Azure federation)."
+            }
+            return $value
+          }
           @(
-            "AZURE_CLIENT_ID=$($values['AZURE_PROD_CLIENT_ID'])"
-            "AZURE_TENANT_ID=$($values['AZURE_TENANT_ID'])"
+            "AZURE_CLIENT_ID=$(Get-RequiredConstant 'AZURE_PROD_CLIENT_ID')"
+            "AZURE_TENANT_ID=$(Get-RequiredConstant 'AZURE_TENANT_ID')"
           ) | Add-Content -Path $env:GITHUB_ENV -Encoding utf8
 
       # The deterministic engines (Callgrind, allocation/time counters) are
@@ -155,9 +167,21 @@ jobs:
               $values[$Matches[1].Trim()] = $Matches[2].Trim()
             }
           }
+
+          # Fail fast if either identifier is missing or empty: an empty
+          # AZURE_CLIENT_ID / AZURE_TENANT_ID would otherwise silently break the tool's
+          # OIDC federation far later with an opaque error, whereas the previous bash
+          # step's `set -u` errored here.
+          function Get-RequiredConstant($name) {
+            $value = $values[$name]
+            if ([string]::IsNullOrWhiteSpace($value)) {
+              throw "constants.env is missing a non-empty '$name' (required for Azure federation)."
+            }
+            return $value
+          }
           @(
-            "AZURE_CLIENT_ID=$($values['AZURE_PROD_CLIENT_ID'])"
-            "AZURE_TENANT_ID=$($values['AZURE_TENANT_ID'])"
+            "AZURE_CLIENT_ID=$(Get-RequiredConstant 'AZURE_PROD_CLIENT_ID')"
+            "AZURE_TENANT_ID=$(Get-RequiredConstant 'AZURE_TENANT_ID')"
           ) | Add-Content -Path $env:GITHUB_ENV -Encoding utf8
 
       # Persist the read-through cache (cargo-bench-history's --cache directory) across
