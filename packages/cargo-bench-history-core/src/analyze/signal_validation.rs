@@ -180,8 +180,9 @@ fn scaled(case: &SignalCase, scale: f64) -> Vec<f64> {
 
 #[test]
 fn curated_signals_match_expected_verdicts() {
-    // Absolute-scale multiples the reference (as-is) verdict must survive. Relative
-    // analysis means none of these may change the outcome.
+    // Scale multiples applied on top of each as-is series; the as-is verdict is the
+    // reference every scaled verdict must match. The analysis is relative, so no
+    // multiple may change the outcome.
     let scale_multiples = [1000.0_f64];
 
     for case in cases() {
