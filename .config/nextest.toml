@@ -10,11 +10,12 @@ path = "junit.xml"
 # The one true end-to-end test (packages/cargo-bench-history/tests/cbh_real_engine.rs) runs a
 # real `cargo bench` in an isolated throwaway fixture that must resolve `criterion` from
 # crates.io, so a transient crates.io DNS/network blip on the runner fails it through no fault
-# of the code (issue #324). Retry it a couple of times with a short backoff so a momentary
-# outage is absorbed rather than failing the whole run. Scoped narrowly to this test by exact
-# name: it is the only test that touches the network for dependency resolution — every other
-# test is hermetic (mock engine, in-memory fakes, or plain TOML-text parsing), and those must
-# keep the default no-retry policy so genuine flakiness stays visible instead of being masked.
+# of the code (issue #324). Retry it a couple of times with a generous backoff so even a
+# minutes-long outage is absorbed rather than failing the whole run — this exceptional single
+# test is worth waiting on. Scoped narrowly to this test by exact name: it is the only test
+# that touches the network for dependency resolution — every other test is hermetic (mock
+# engine, in-memory fakes, or plain TOML-text parsing), and those must keep the default
+# no-retry policy so genuine flakiness stays visible instead of being masked.
 [[profile.default.overrides]]
 filter = 'test(=collect_against_real_criterion_bench_stores_wall_time)'
-retries = { backoff = "exponential", count = 2, delay = "5s", jitter = true }
+retries = { backoff = "exponential", count = 2, delay = "2m", jitter = true }
