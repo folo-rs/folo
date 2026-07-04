@@ -26,8 +26,27 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Read pinned Rust toolchain channel
+        # dtolnay/rust-toolchain cannot read rust-toolchain.toml, so extract the pinned stable
+        # channel here and hand it to the install step below (mirrors the setup-environment
+        # composite). Pinning stops @stable from rolling the toolchain forward every ~6 weeks,
+        # which — because Swatinem/rust-cache keys on every installed toolchain — would
+        # otherwise bust this job's cargo-delta cache on each upstream release. The version is
+        # never hardcoded; rust-toolchain.toml stays the single source of truth.
+        id: rust-toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $match = Select-String -Path 'rust-toolchain.toml' -Pattern '^\s*channel\s*=\s*"([^"]+)"' | Select-Object -First 1
+          if (-not $match) { throw 'Could not read the pinned channel from rust-toolchain.toml' }
+          $channel = $match.Matches[0].Groups[1].Value
+          Write-Host "Pinned Rust channel from rust-toolchain.toml: $channel"
+          "channel=$channel" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.rust-toolchain.outputs.channel }}
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
