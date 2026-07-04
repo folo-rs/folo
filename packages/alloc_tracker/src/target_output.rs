@@ -13,9 +13,10 @@ const OUTPUT_SUBDIRECTORY: &str = "alloc_tracker";
 
 /// Machine-readable allocation statistics for a single operation.
 ///
-/// Carries both the pooled per-iteration means and the warmup-robust dispersion
-/// (slope, standard deviation, bootstrap interval and extremes) for each metric,
-/// mirroring the shape `all_the_time` writes for processor time.
+/// Carries both the pooled per-iteration means and the warmup-robust per-iteration
+/// slope with its confidence interval for each metric, mirroring the shape
+/// `all_the_time` writes for processor time. Interval fields are omitted when the
+/// interval cannot be estimated.
 #[derive(Serialize)]
 struct OperationOutput<'a> {
     operation: &'a str,
@@ -26,17 +27,15 @@ struct OperationOutput<'a> {
     mean_allocations_per_iteration: u64,
     span_count: u64,
     slope_bytes_per_iteration: f64,
-    std_dev_bytes_per_iteration: f64,
-    interval_low_bytes_per_iteration: f64,
-    interval_high_bytes_per_iteration: f64,
-    min_bytes_per_iteration: f64,
-    max_bytes_per_iteration: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interval_low_bytes_per_iteration: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interval_high_bytes_per_iteration: Option<f64>,
     slope_allocations_per_iteration: f64,
-    std_dev_allocations_per_iteration: f64,
-    interval_low_allocations_per_iteration: f64,
-    interval_high_allocations_per_iteration: f64,
-    min_allocations_per_iteration: f64,
-    max_allocations_per_iteration: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interval_low_allocations_per_iteration: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interval_high_allocations_per_iteration: Option<f64>,
 }
 
 impl Report {
@@ -117,17 +116,17 @@ impl Report {
                 mean_allocations_per_iteration: operation.mean_allocations(),
                 span_count: statistics.span_count,
                 slope_bytes_per_iteration: statistics.bytes.slope,
-                std_dev_bytes_per_iteration: statistics.bytes.std_dev,
-                interval_low_bytes_per_iteration: statistics.bytes.interval_low,
-                interval_high_bytes_per_iteration: statistics.bytes.interval_high,
-                min_bytes_per_iteration: statistics.bytes.min,
-                max_bytes_per_iteration: statistics.bytes.max,
+                interval_low_bytes_per_iteration: statistics.bytes.interval.map(|(low, _)| low),
+                interval_high_bytes_per_iteration: statistics.bytes.interval.map(|(_, high)| high),
                 slope_allocations_per_iteration: statistics.allocations.slope,
-                std_dev_allocations_per_iteration: statistics.allocations.std_dev,
-                interval_low_allocations_per_iteration: statistics.allocations.interval_low,
-                interval_high_allocations_per_iteration: statistics.allocations.interval_high,
-                min_allocations_per_iteration: statistics.allocations.min,
-                max_allocations_per_iteration: statistics.allocations.max,
+                interval_low_allocations_per_iteration: statistics
+                    .allocations
+                    .interval
+                    .map(|(low, _)| low),
+                interval_high_allocations_per_iteration: statistics
+                    .allocations
+                    .interval
+                    .map(|(_, high)| high),
             };
 
             let json = serde_json::to_string_pretty(&output)
@@ -224,9 +223,9 @@ mod tests {
                 .and_then(Value::as_u64),
             Some(2)
         );
-        // A single recorded span yields a span count of one, per-metric slopes
-        // equal to the per-iteration means, and degenerate intervals that
-        // collapse onto them.
+        // A single recorded span yields a span count of one and per-metric slopes
+        // equal to the per-iteration means, but no interval (a single span carries
+        // no dispersion information), so the interval fields are omitted.
         assert_eq!(value.get("span_count").and_then(Value::as_u64), Some(1));
         assert_eq!(
             value
@@ -234,6 +233,36 @@ mod tests {
                 .and_then(Value::as_f64),
             Some(200.0)
         );
+        assert!(value.get("interval_low_bytes_per_iteration").is_none());
+        assert!(value.get("interval_high_bytes_per_iteration").is_none());
+        assert!(value.get("std_dev_bytes_per_iteration").is_none());
+        assert!(value.get("min_bytes_per_iteration").is_none());
+        assert!(value.get("max_bytes_per_iteration").is_none());
+        assert_eq!(
+            value
+                .get("slope_allocations_per_iteration")
+                .and_then(Value::as_f64),
+            Some(2.0)
+        );
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
+    fn writes_interval_when_multiple_spans_recorded() {
+        // Two identical spans clear the two-span threshold with zero residual
+        // dispersion, so the interval collapses onto the slope and is written out.
+        let session = Session::new().no_stdout().no_file();
+        for _ in 0..2 {
+            let operation = session.operation("allocate_vec");
+            let _span = operation.measure_thread().iterations(4);
+            register_fake_allocation(800, 8);
+        }
+        let directory = tempfile::tempdir().unwrap();
+
+        session.to_report().write_to_directory(directory.path());
+
+        let value = read_json(&directory.path().join("allocate_vec.json"));
+        assert_eq!(value.get("span_count").and_then(Value::as_u64), Some(2));
         assert_eq!(
             value
                 .get("interval_low_bytes_per_iteration")
@@ -245,18 +274,6 @@ mod tests {
                 .get("interval_high_bytes_per_iteration")
                 .and_then(Value::as_f64),
             Some(200.0)
-        );
-        assert_eq!(
-            value
-                .get("std_dev_bytes_per_iteration")
-                .and_then(Value::as_f64),
-            Some(0.0)
-        );
-        assert_eq!(
-            value
-                .get("slope_allocations_per_iteration")
-                .and_then(Value::as_f64),
-            Some(2.0)
         );
     }
 

@@ -1,37 +1,29 @@
 //! Example that demonstrates the exact usage shown in the README.md file.
 //!
-//! This shows how to use the `all_the_time` package for tracking processor time
-//! with multiple iterations.
-#![expect(
-    clippy::arithmetic_side_effects,
-    clippy::unseparated_literal_suffix,
-    reason = "this is example code that does not need production-level safety"
-)]
+//! This shows the recommended `iter_custom` pattern for tracking processor time,
+//! feeding the Criterion-chosen iteration count into each recorded span.
+
+use std::hint::black_box;
+use std::time::Instant;
 
 use all_the_time::Session;
+use criterion::Criterion;
 
 fn main() {
     let session = Session::new();
+    let operation = session.operation("my_operation");
 
-    // Track multiple iterations efficiently
-    {
-        let operation = session.operation("my_operation");
-        let iterations = 10;
-        let _span = operation.measure_thread().iterations(iterations);
-
-        for i in 0u64..iterations {
-            // More processor-intensive work to get measurable CPU time
-            let mut sum = 0u64;
-            for j in 0u64..50000 {
-                for k in 0u64..10 {
-                    sum += (j * k * i) % 1000;
-                    // Add some more computation to make it heavier
-                    sum = sum.wrapping_mul(1103515245).wrapping_add(12345);
-                }
+    let mut criterion = Criterion::default();
+    criterion.bench_function("my_operation", |b| {
+        b.iter_custom(|iters| {
+            let start = Instant::now();
+            let _span = operation.measure_thread().iterations(iters);
+            for _ in 0..iters {
+                black_box(42_u64.wrapping_mul(2));
             }
-            std::hint::black_box(sum);
-        }
-    } // Total time measured once and divided by iteration count for mean
+            start.elapsed()
+        });
+    });
 
     // When `session` is dropped it prints a human-readable summary to stdout and
     // writes machine-readable JSON files (one per operation) into the Cargo

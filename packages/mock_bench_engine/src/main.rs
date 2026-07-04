@@ -40,16 +40,15 @@
 //! `--alloc-tracker OPERATION=BYTES/COUNT[@BLOW:BHIGH/CLOW:CHIGH]` writes an
 //! `alloc_tracker` `<OPERATION>.json` file reporting `BYTES` mean bytes and
 //! `COUNT` mean allocations per iteration; an optional `@BLOW:BHIGH/CLOW:CHIGH`
-//! suffix additionally records a bootstrap confidence interval (and matching
-//! slope, standard deviation, span count and min/max) for the bytes and
-//! allocation-count metrics respectively, mirroring the real tool's dispersion
-//! output. `--all-the-time OPERATION=NANOS[@LOW:HIGH]` writes an `all_the_time`
-//! `<OPERATION>.json` file reporting `NANOS` mean (and slope) processor-time
-//! nanoseconds per iteration; an optional `@LOW:HIGH` suffix additionally records
-//! a bootstrap confidence interval (and a matching standard deviation, span count
-//! and min/max), mirroring the real tool's dispersion output. Both write one flat
-//! JSON file per operation under their respective engine directory, mirroring the
-//! real tools.
+//! suffix additionally records a confidence interval (and matching slope and
+//! span count) for the bytes and allocation-count metrics respectively,
+//! mirroring the real tool's dispersion output. `--all-the-time
+//! OPERATION=NANOS[@LOW:HIGH]` writes an `all_the_time` `<OPERATION>.json` file
+//! reporting `NANOS` mean (and slope) processor-time nanoseconds per iteration;
+//! an optional `@LOW:HIGH` suffix additionally records a confidence interval
+//! (and a matching slope and span count), mirroring the real tool's dispersion
+//! output. Both write one flat JSON file per operation under their respective
+//! engine directory, mirroring the real tools.
 //!
 //! `--fail-if-exists PATH` exits with code 1 and writes no output when `PATH`
 //! (relative to the working directory) exists. Backfill runs each engine in a
@@ -106,10 +105,10 @@ struct CriterionCase {
 }
 
 /// A parsed `alloc_tracker` operation request: its name, per-iteration means, and
-/// optional per-metric bootstrap intervals `((bytes_low, bytes_high), (count_low,
+/// optional per-metric confidence intervals `((bytes_low, bytes_high), (count_low,
 /// count_high))`. When the intervals are present the operation file additionally
-/// records slopes, standard deviations, span count and min/max for both metrics,
-/// mirroring dispersion-bearing output.
+/// records slopes and span count for both metrics, mirroring dispersion-bearing
+/// output.
 struct AllocOperation {
     operation: String,
     mean_bytes: u64,
@@ -118,10 +117,9 @@ struct AllocOperation {
 }
 
 /// A parsed `all_the_time` operation request: its name, per-iteration mean, and
-/// an optional bootstrap confidence interval `(low, high)` in nanoseconds. When
-/// the interval is present the operation file additionally records a slope,
-/// standard deviation, span count and min/max, mirroring dispersion-bearing
-/// output.
+/// an optional confidence interval `(low, high)` in nanoseconds. When the
+/// interval is present the operation file additionally records a slope and span
+/// count, mirroring dispersion-bearing output.
 struct TimeOperation {
     operation: String,
     mean_nanos: u64,
@@ -400,9 +398,9 @@ fn parse_bounds(bounds: &str) -> (f64, f64) {
 ///
 /// The shape mirrors the real tool: `total_*` fields derive from the per-iteration
 /// means over a fixed iteration count. When the request carries per-metric
-/// intervals the file additionally records the slope, standard deviation, span
-/// count and min/max for both the bytes and allocation-count metrics, so the
-/// adapter's dispersion path is exercised end to end.
+/// intervals the file additionally records the slope, span count and confidence
+/// interval for both the bytes and allocation-count metrics, so the adapter's
+/// dispersion path is exercised end to end.
 #[cfg_attr(coverage_nightly, coverage(off))]
 fn write_alloc_operation(target_root: &std::path::Path, operation: &AllocOperation) {
     const ITERATIONS: u64 = 4;
@@ -440,10 +438,10 @@ fn write_alloc_operation(target_root: &std::path::Path, operation: &AllocOperati
     std::fs::write(file, output.to_string()).expect("alloc_tracker file should be writable");
 }
 
-/// Inserts the six dispersion fields for one metric (identified by `suffix`) into
+/// Inserts the dispersion fields for one metric (identified by `suffix`) into
 /// an operation output object. The slope is emitted as the integer mean, which
-/// deserializes to the adapter's `f64` slope; the interval bounds double as the
-/// min/max and imply the standard deviation `(high - low) / 2`.
+/// deserializes to the adapter's `f64` slope; the interval bounds are the analytic
+/// confidence interval the adapter reads.
 #[cfg_attr(coverage_nightly, coverage(off))]
 fn insert_metric_dispersion(
     fields: &mut serde_json::Map<String, serde_json::Value>,
@@ -452,21 +450,17 @@ fn insert_metric_dispersion(
     interval: (f64, f64),
 ) {
     let (low, high) = interval;
-    let std_dev = (high - low) / 2.0;
     fields.insert(format!("slope_{suffix}"), serde_json::json!(mean));
-    fields.insert(format!("std_dev_{suffix}"), serde_json::json!(std_dev));
     fields.insert(format!("interval_low_{suffix}"), serde_json::json!(low));
     fields.insert(format!("interval_high_{suffix}"), serde_json::json!(high));
-    fields.insert(format!("min_{suffix}"), serde_json::json!(low));
-    fields.insert(format!("max_{suffix}"), serde_json::json!(high));
 }
 
 /// Writes one `all_the_time` `<operation>.json` file under `all_the_time/`.
 ///
 /// The shape mirrors the real tool: `total_*` fields derive from the per-iteration
 /// mean over a fixed iteration count. When the request carries a confidence
-/// interval the file additionally records the slope, standard deviation, span
-/// count and min/max, so the adapter's dispersion path is exercised end to end.
+/// interval the file additionally records the slope, span count and interval, so
+/// the adapter's dispersion path is exercised end to end.
 #[cfg_attr(coverage_nightly, coverage(off))]
 fn write_time_operation(target_root: &std::path::Path, operation: &TimeOperation) {
     const ITERATIONS: u64 = 4;

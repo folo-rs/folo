@@ -3,18 +3,18 @@
 //!
 //! `alloc_tracker` writes one file per operation under `target/alloc_tracker/`,
 //! recording how many bytes and how many allocations a benchmark performs per
-//! iteration, together with bootstrap dispersion statistics over the operation's
-//! measured spans. Allocation behavior does not depend on the host hardware, so
-//! this engine stores its history without a machine key (see
-//! [`Engine::is_hardware_dependent`]). It is *not* deterministic, however:
-//! warmup and buffer-resize allocations are amortized over a Criterion-chosen
-//! iteration count, so the per-iteration figures jitter run to run. The adapter
-//! therefore prefers the warmup-robust slope. Current `alloc_tracker` output
-//! always carries a bootstrap confidence interval, so the adapter normally reads
-//! one; the interval fields are parsed as optional purely to tolerate legacy
-//! mean-only files, which then fall back to a single figure. The committed
-//! fixtures under `tests/fixtures/alloc_tracker/` are real `alloc_tracker` output
-//! and act as a schema-drift canary.
+//! iteration, together with a per-iteration slope and its confidence interval
+//! estimated over the operation's measured spans. Allocation behavior does not
+//! depend on the host hardware, so this engine stores its history without a
+//! machine key (see [`Engine::is_hardware_dependent`]). It is *not* deterministic,
+//! however: warmup and buffer-resize allocations are amortized over a
+//! Criterion-chosen iteration count, so the per-iteration figures jitter run to
+//! run. The adapter therefore prefers the warmup-robust slope. Multi-span output
+//! carries a confidence interval, so the adapter normally reads one; the interval
+//! fields are parsed as optional to tolerate single-span or legacy mean-only
+//! files, which then fall back to a single figure. The committed fixtures under
+//! `tests/fixtures/alloc_tracker/` are real `alloc_tracker` output and act as a
+//! schema-drift canary.
 //!
 //! [`Engine::is_hardware_dependent`]: crate::model::Engine::is_hardware_dependent
 
@@ -63,16 +63,15 @@ pub(crate) fn parse_alloc_tracker_operation(
 ///
 /// For each metric the through-origin slope is preferred as the per-iteration
 /// point estimate, matching the Criterion and `all_the_time` adapters; output
-/// that records no slope falls back to the mean. When the bootstrap confidence
-/// interval is present it is recorded on the metric, so analysis can apply its
-/// interval-overlap gate to allocation figures the same way it does for wall
-/// time.
+/// that records no slope falls back to the mean. When the confidence interval is
+/// present it is recorded on the metric, so analysis can apply its interval-overlap
+/// gate to allocation figures the same way it does for wall time.
 fn output_to_record(output: &OperationOutput) -> BenchmarkResult {
     let bytes_value = output
         .slope_bytes_per_iteration
         .unwrap_or_else(|| as_f64(output.mean_bytes_per_iteration));
     let bytes = Metric::new(MetricKind::AllocatedBytes, bytes_value).with_dispersion(
-        output.std_dev_bytes_per_iteration,
+        None,
         output.interval_low_bytes_per_iteration,
         output.interval_high_bytes_per_iteration,
     );
@@ -81,7 +80,7 @@ fn output_to_record(output: &OperationOutput) -> BenchmarkResult {
         .slope_allocations_per_iteration
         .unwrap_or_else(|| as_f64(output.mean_allocations_per_iteration));
     let allocations = Metric::new(MetricKind::AllocationCount, allocations_value).with_dispersion(
-        output.std_dev_allocations_per_iteration,
+        None,
         output.interval_low_allocations_per_iteration,
         output.interval_high_allocations_per_iteration,
     );
@@ -111,15 +110,11 @@ struct OperationOutput {
     #[serde(default)]
     slope_bytes_per_iteration: Option<f64>,
     #[serde(default)]
-    std_dev_bytes_per_iteration: Option<f64>,
-    #[serde(default)]
     interval_low_bytes_per_iteration: Option<f64>,
     #[serde(default)]
     interval_high_bytes_per_iteration: Option<f64>,
     #[serde(default)]
     slope_allocations_per_iteration: Option<f64>,
-    #[serde(default)]
-    std_dev_allocations_per_iteration: Option<f64>,
     #[serde(default)]
     interval_low_allocations_per_iteration: Option<f64>,
     #[serde(default)]
@@ -188,24 +183,23 @@ mod tests {
 
     #[test]
     fn records_dispersion_when_present() {
-        use std::f64::consts::FRAC_1_SQRT_2;
-
         let record = parse_alloc_tracker_operation(ALLOCATE_VEC_DISPERSION_FIXTURE).unwrap();
 
         let bytes = metric(&record, MetricKind::AllocatedBytes);
         // The slope is preferred as the point estimate, and the bytes metric
-        // carries the jitter from warmup and buffer-resize allocations: a sample
-        // standard deviation of exactly sqrt(0.5) = 1/sqrt(2) bytes.
+        // carries the jitter from warmup and buffer-resize allocations as an
+        // analytic confidence interval straddling the slope. The adapter no longer
+        // surfaces a standard deviation.
         assert_eq!(bytes.value, 200.0);
-        assert_eq!(bytes.std_dev, Some(FRAC_1_SQRT_2));
-        assert_eq!(bytes.interval_low, Some(199.5));
-        assert_eq!(bytes.interval_high, Some(200.5));
+        assert_eq!(bytes.std_dev, None);
+        assert_eq!(bytes.interval_low, Some(199.346_678_671_825_4));
+        assert_eq!(bytes.interval_high, Some(200.653_321_328_174_6));
 
         let count = metric(&record, MetricKind::AllocationCount);
         // The allocation count is stable across spans, so its interval collapses
-        // onto the slope and the standard deviation is zero.
+        // onto the slope.
         assert_eq!(count.value, 2.0);
-        assert_eq!(count.std_dev, Some(0.0));
+        assert_eq!(count.std_dev, None);
         assert_eq!(count.interval_low, Some(2.0));
         assert_eq!(count.interval_high, Some(2.0));
     }

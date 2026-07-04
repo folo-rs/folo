@@ -56,11 +56,11 @@ use crate::{OperationMetrics, OperationStatistics};
 ///
 /// // Record some work in each
 /// let op1 = session1.operation("work");
-/// let _span1 = op1.measure_thread();
+/// let _span1 = op1.measure_thread().iterations(1);
 /// std::hint::black_box(42);
 ///
 /// let op2 = session2.operation("work");
-/// let _span2 = op2.measure_thread();
+/// let _span2 = op2.measure_thread().iterations(1);
 /// std::hint::black_box(42);
 ///
 /// // Convert to reports and merge
@@ -161,7 +161,7 @@ impl Report {
         for (name, b_op) in &b.operations {
             merged_operations
                 .entry(name.clone())
-                .and_modify(|a_op| a_op.metrics.extend_from(&b_op.metrics))
+                .and_modify(|a_op| a_op.metrics.merge(&b_op.metrics))
                 .or_insert_with(|| b_op.clone());
         }
 
@@ -246,12 +246,11 @@ impl ReportOperation {
         self.metrics.mean()
     }
 
-    /// Computes dispersion statistics over the recorded spans.
+    /// Computes warmup-robust per-iteration statistics over the recorded spans.
     ///
     /// Returns `None` when no spans were recorded. The returned
-    /// [`OperationStatistics`] carries the same warmup-robust slope, bootstrap
-    /// confidence interval, standard deviation and extremes that are written to
-    /// the machine-readable JSON output.
+    /// [`OperationStatistics`] carries the same warmup-robust slope and confidence
+    /// interval that are written to the machine-readable JSON output.
     ///
     /// # Examples
     ///
@@ -287,8 +286,7 @@ impl ReportOperation {
 
 impl fmt::Display for ReportOperation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // The summary shows only the slope, so take the cheap slope-only path and
-        // skip the bootstrap confidence interval the full statistics would resample.
+        // The summary shows only the slope, so take the cheap slope-only path.
         match self.metrics.slope_nanos() {
             Some(slope_nanos) => {
                 write!(f, "{:?} per iteration", nanos_to_duration(slope_nanos))
@@ -314,10 +312,9 @@ impl fmt::Display for Report {
 
         // Render the warmup-robust per-iteration slope, not the raw mean: the mean
         // folds warmup and one-off costs into the figure, while the slope recovers
-        // the marginal per-iteration cost. The bootstrap confidence interval is
-        // kept out of this summary for readability; it is preserved in the JSON
-        // output and the `statistics()` API. Rendering the slope alone also lets the
-        // table skip the bootstrap resampling the full statistics would perform.
+        // the marginal per-iteration cost. The confidence interval is kept out of
+        // this summary for readability; it is preserved in the JSON output and the
+        // `statistics()` API.
         let cells: Vec<(&str, String)> = sorted_ops
             .iter()
             .map(|(name, operation)| {
@@ -407,7 +404,7 @@ mod tests {
         let session = create_test_session();
         {
             let operation = session.operation("test");
-            let _span = operation.measure_thread();
+            let _span = operation.measure_thread().iterations(1);
         } // Span drops here, releasing the mutable borrow
 
         let report = session.to_report();
@@ -427,7 +424,7 @@ mod tests {
         let session = create_test_session();
         {
             let operation = session.operation("test");
-            let _span = operation.measure_thread();
+            let _span = operation.measure_thread().iterations(1);
         } // Span drops here
 
         let report1 = Report::new();
@@ -447,12 +444,12 @@ mod tests {
 
         {
             let op1 = session1.operation("test1");
-            let _span1 = op1.measure_thread();
+            let _span1 = op1.measure_thread().iterations(1);
         } // Span drops here
 
         {
             let op2 = session2.operation("test2");
-            let _span2 = op2.measure_thread();
+            let _span2 = op2.measure_thread().iterations(1);
         } // Span drops here
 
         let report1 = session1.to_report();
@@ -493,7 +490,7 @@ mod tests {
         let session = create_test_session();
         {
             let operation = session.operation("test");
-            let _span = operation.measure_thread();
+            let _span = operation.measure_thread().iterations(1);
         } // Span drops here
 
         let report1 = session.to_report();

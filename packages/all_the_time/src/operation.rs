@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use crate::pal::PlatformFacade;
 use crate::statistics::nanos_to_duration;
-use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessSpan, ThreadSpan};
+use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessMeasurement, ThreadMeasurement};
 
 /// Measures per-iteration processor time for a repeated operation.
 ///
@@ -22,27 +22,28 @@ use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessSpan, ThreadSpan};
 ///
 /// # Examples
 ///
-/// ```
+/// ```no_run
+/// use std::hint::black_box;
+/// use std::time::Instant;
+///
 /// use all_the_time::Session;
+/// use criterion::Criterion;
 ///
+/// # fn main() {
 /// let session = Session::new();
-/// # let session = session.no_stdout().no_file();
 /// let operation = session.operation("processor_intensive_work");
-///
-/// // Simulate multiple operations - note explicit iteration count
-/// for i in 0..5 {
-///     {
-///         let _span = operation.measure_thread();
-///         // Perform some processor-intensive work
-///         let mut sum = 0;
-///         for j in 0..i * 1000 {
-///             sum += j;
+/// let mut criterion = Criterion::default();
+/// criterion.bench_function("processor_intensive_work", |b| {
+///     b.iter_custom(|iters| {
+///         let start = Instant::now();
+///         let _span = operation.measure_thread().iterations(iters);
+///         for _ in 0..iters {
+///             black_box(42_u64.wrapping_mul(2));
 ///         }
-///     } // Span is dropped here, ensuring measurement is recorded
-/// }
-///
-/// let mean_duration = operation.mean();
-/// println!("Mean processor time: {:?} per operation", mean_duration);
+///         start.elapsed()
+///     });
+/// });
+/// # }
 /// ```
 #[derive(Debug)]
 pub struct Operation {
@@ -76,93 +77,82 @@ impl Operation {
         Arc::clone(&self.metrics)
     }
 
-    /// Creates a span that tracks thread processor time from creation until it is dropped.
+    /// Begins measuring processor time consumed by the current thread only.
     ///
-    /// This method tracks processor time consumed by the current thread only.
-    /// Use this when you want to measure processor time for single-threaded operations
-    /// or when you want to track per-thread processor usage.
-    ///
-    /// The span defaults to 1 iteration but can be changed using the `iterations()` method.
+    /// Use this for single-threaded operations or when you want to track
+    /// per-thread processor usage. The returned [`ThreadMeasurement`] records
+    /// nothing until an iteration count is supplied — with
+    /// [`iterations(n)`](ThreadMeasurement::iterations) when the count is known in
+    /// advance (the `iter_custom` benchmark pattern), or with
+    /// [`complete(n)`](ThreadMeasurement::complete) when it is only known
+    /// afterwards.
     ///
     /// # Examples
     ///
-    /// ```
-    /// use all_the_time::Session;
+    /// ```no_run
+    /// use std::hint::black_box;
+    /// use std::time::Instant;
     ///
+    /// use all_the_time::Session;
+    /// use criterion::Criterion;
+    ///
+    /// # fn main() {
     /// let session = Session::new();
-    /// # let session = session.no_stdout().no_file();
     /// let operation = session.operation("thread_work");
-    /// {
-    ///     let _span = operation.measure_thread();
-    ///     // Perform some processor-intensive work in this thread
-    ///     let mut sum = 0;
-    ///     for i in 0..1000 {
-    ///         sum += i;
-    ///     }
-    /// } // Thread processor time is tracked for 1 iteration
+    /// let mut criterion = Criterion::default();
+    /// criterion.bench_function("thread_work", |b| {
+    ///     b.iter_custom(|iters| {
+    ///         let start = Instant::now();
+    ///         let _span = operation.measure_thread().iterations(iters);
+    ///         for _ in 0..iters {
+    ///             black_box(42_u64.wrapping_mul(2));
+    ///         }
+    ///         start.elapsed()
+    ///     });
+    /// });
+    /// # }
     /// ```
-    ///
-    /// For batch operations (reduces measurement overhead):
-    /// ```
-    /// use all_the_time::Session;
-    ///
-    /// let session = Session::new();
-    /// # let session = session.no_stdout().no_file();
-    /// let operation = session.operation("batch_ops");
-    /// {
-    ///     let _span = operation.measure_thread().iterations(10000);
-    ///     for _ in 0..10000 {
-    ///         // Fast operation that would be dominated by measurement overhead
-    ///         std::hint::black_box(42 * 2);
-    ///     }
-    /// } // Total time is measured once and divided by 10000
-    /// ```
-    pub fn measure_thread(&self) -> ThreadSpan {
-        ThreadSpan::new(self, 1)
+    pub fn measure_thread(&self) -> ThreadMeasurement {
+        ThreadMeasurement::new(self)
     }
 
-    /// Creates a span that tracks process processor time from creation until it is dropped.
+    /// Begins measuring processor time consumed by the entire process (all
+    /// threads).
     ///
-    /// This method tracks processor time consumed by the entire process (all threads).
-    /// Use this when you want to measure total processor time including multi-threaded
-    /// operations or when you want to track overall process processor usage.
-    ///
-    /// The span defaults to 1 iteration but can be changed using the `iterations()` method.
+    /// Use this to measure total processor time including multi-threaded work. The
+    /// returned [`ProcessMeasurement`] records nothing until an iteration count is
+    /// supplied — with [`iterations(n)`](ProcessMeasurement::iterations) when the
+    /// count is known in advance (the `iter_custom` benchmark pattern), or with
+    /// [`complete(n)`](ProcessMeasurement::complete) when it is only known
+    /// afterwards.
     ///
     /// # Examples
     ///
-    /// ```
-    /// use all_the_time::Session;
+    /// ```no_run
+    /// use std::hint::black_box;
+    /// use std::time::Instant;
     ///
+    /// use all_the_time::Session;
+    /// use criterion::Criterion;
+    ///
+    /// # fn main() {
     /// let session = Session::new();
-    /// # let session = session.no_stdout().no_file();
     /// let operation = session.operation("process_work");
-    /// {
-    ///     let _span = operation.measure_process();
-    ///     // Perform some processor-intensive work that might spawn threads
-    ///     let mut sum = 0;
-    ///     for i in 0..1000 {
-    ///         sum += i;
-    ///     }
-    /// } // Total process processor time is tracked for 1 iteration
+    /// let mut criterion = Criterion::default();
+    /// criterion.bench_function("process_work", |b| {
+    ///     b.iter_custom(|iters| {
+    ///         let start = Instant::now();
+    ///         let _span = operation.measure_process().iterations(iters);
+    ///         for _ in 0..iters {
+    ///             black_box(42_u64.wrapping_mul(2));
+    ///         }
+    ///         start.elapsed()
+    ///     });
+    /// });
+    /// # }
     /// ```
-    ///
-    /// For batch operations:
-    /// ```
-    /// use all_the_time::Session;
-    ///
-    /// let session = Session::new();
-    /// # let session = session.no_stdout().no_file();
-    /// let operation = session.operation("batch_work");
-    /// {
-    ///     let _span = operation.measure_process().iterations(1000);
-    ///     for _ in 0..1000 {
-    ///         // Perform the same operation 1000 times
-    ///     }
-    /// } // Total time is measured once and divided by 1000
-    /// ```
-    pub fn measure_process(&self) -> ProcessSpan {
-        ProcessSpan::new(self, 1)
+    pub fn measure_process(&self) -> ProcessMeasurement {
+        ProcessMeasurement::new(self)
     }
 
     /// Calculates the mean processor time per span.
@@ -196,8 +186,7 @@ impl Operation {
 
 impl fmt::Display for Operation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // The summary shows only the slope, so take the cheap slope-only path and
-        // skip the bootstrap confidence interval the full statistics would resample.
+        // The summary shows only the slope, so take the cheap slope-only path.
         match self.metrics.lock().expect(ERR_POISONED_LOCK).slope_nanos() {
             Some(slope_nanos) => {
                 write!(f, "{:?} per iteration", nanos_to_duration(slope_nanos))
@@ -288,7 +277,7 @@ mod tests {
         let session = create_test_session();
         let operation = session.operation("test");
         {
-            let _span = operation.measure_thread();
+            let _span = operation.measure_thread().iterations(1);
             // Perform some CPU work
             let mut sum = 0;
             for i in 0..1000 {

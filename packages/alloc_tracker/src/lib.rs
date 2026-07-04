@@ -41,11 +41,12 @@
 //! **warmup-robust slope**: an iterations-weighted, through-origin fit of each
 //! span's total against its iteration count, which recovers the marginal
 //! per-iteration cost even when the blend of warm-up and steady-state spans
-//! shifts. Each figure is paired with a bootstrap 95% confidence interval so its
-//! run-to-run uncertainty can be inspected (it collapses to a point when every
-//! iteration allocates identically). The stdout summary leads with the slopes
-//! alone for readability; the JSON output records the slopes together with their
-//! confidence intervals, and the pooled means stay available through
+//! shifts. Each figure is paired with a closed-form 95% confidence interval so its
+//! run-to-run uncertainty can be inspected: it collapses onto the point estimate
+//! when every span records the same per-iteration value, and is omitted entirely
+//! when a single span leaves it unestimable. The stdout summary leads with the
+//! slopes alone for readability; the JSON output records the slopes together with
+//! their confidence intervals, and the pooled means stay available through
 //! [`Operation::mean`] and the report accessors for callers that still want them.
 //!
 //! # Features
@@ -59,26 +60,37 @@
 )]
 //!   unexpected allocations. This feature adds some overhead to allocations, so it is optional.
 //!  
-//! # Simple usage
+//! # Benchmarking
 //!
-//! You can track allocations like this:
+//! The recommended pattern drives measurement from Criterion's `iter_custom`,
+//! feeding its chosen iteration count into [`iterations`](ProcessMeasurement::iterations)
+//! so each recorded span covers a whole sample rather than a single iteration:
 //!
-//! ```
+//! ```no_run
+//! use std::hint::black_box;
+//! use std::time::Instant;
+//!
 //! use alloc_tracker::{Allocator, Session};
+//! use criterion::Criterion;
 //!
 //! #[global_allocator]
 //! static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 //!
 //! fn main() {
 //!     let session = Session::new();
-//! #   let session = session.no_stdout().no_file();
+//!     let operation = session.operation("my_operation");
 //!
-//!     // Track a single operation
-//!     {
-//!         let operation = session.operation("my_operation");
-//!         let _span = operation.measure_process();
-//!         let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
-//!     }
+//!     let mut criterion = Criterion::default();
+//!     criterion.bench_function("my_operation", |b| {
+//!         b.iter_custom(|iters| {
+//!             let start = Instant::now();
+//!             let _span = operation.measure_process().iterations(iters);
+//!             for _ in 0..iters {
+//!                 black_box(vec![1, 2, 3, 4, 5]); // This allocates memory
+//!             }
+//!             start.elapsed()
+//!         });
+//!     });
 //!
 //!     // When `session` is dropped, the recorded statistics are printed to
 //!     // stdout and written to the Cargo target directory as JSON.
@@ -90,21 +102,23 @@
 //! Dropping a [`Session`] writes machine-readable JSON files (one per operation)
 //! into the Cargo target directory at `target/alloc_tracker/<operation>.json`,
 //! with operation names sanitized to be filesystem-safe. Each file records, for
-//! both bytes and allocation count, the warmup-robust slope point estimate, a 95%
-//! bootstrap confidence interval, the standard deviation, the observed minimum and
-//! maximum, and the pooled mean. A human-readable summary leading with the same
-//! slopes (see "Primary metric"), without the intervals, is also printed to
-//! stdout.
+//! both bytes and allocation count, the warmup-robust slope point estimate, its
+//! 95% confidence interval (when estimable) and the pooled mean. A human-readable
+//! summary leading with the same slopes (see "Primary metric"), without the
+//! intervals, is also printed to stdout.
 //!
 //! These outputs are produced automatically, so a typical benchmark only needs
 //! to create a session and record work.
 //!
-//! # Tracking allocations per iteration
+//! # Measuring a variable amount of work
 //!
-//! For benchmarking scenarios, where you run multiple iterations of an operation, use [`Operation`]:
+//! When the number of iterations is only known after the measured work has run —
+//! for example a loop that drains a queue or runs until a budget is exhausted —
+//! capture the measurement first and finalize it with
+//! [`complete`](ProcessMeasurement::complete) once the count is known:
 //!
 //! ```
-//! use alloc_tracker::{Allocator, Operation, Session};
+//! use alloc_tracker::{Allocator, Session};
 //!
 //! #[global_allocator]
 //! static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
@@ -112,16 +126,15 @@
 //! fn main() {
 //!     let session = Session::new();
 //! #   let session = session.no_stdout().no_file();
+//!     let operation = session.operation("drain_queue");
 //!
-//!     // Record multiple iterations (batched for efficiency) so the
-//!     // per-iteration slope can separate steady-state cost from warm-up.
-//!     {
-//!         let mut string_op = session.operation("string_allocations");
-//!         let _span = string_op.measure_process().iterations(10);
-//!         for i in 0..10 {
-//!             let _data = format!("String number {}", i); // This allocates memory
-//!         }
+//!     let measurement = operation.measure_process();
+//!     let mut processed = 0_u64;
+//!     for item in 0..10 {
+//!         let _data = format!("String number {item}"); // This allocates memory
+//!         processed += 1;
 //!     }
+//!     measurement.complete(processed);
 //!
 //!     // Statistics are emitted automatically when `session` is dropped.
 //! }
@@ -132,7 +145,8 @@
 //! In single-threaded scenarios, capturing a single measurement by calling
 //! `Operation::measure_xyz()` incurs an overhead of approximately 10-15 nanoseconds
 //! on an arbitrary sample machine. You are recommended to batch your measurements
-//! over multiple benchmark iterations to amortize this overhead via `.iterations(N)`.
+//! over a whole Criterion sample (via `.iterations(iters)` from `iter_custom`) to
+//! amortize this overhead.
 //!
 //! Memory allocator activity is likewise slightly impacted by the tracking logic.
 //!
@@ -157,7 +171,7 @@
 //! # let session = session.no_stdout().no_file();
 //! {
 //!     let operation = session.operation("work");
-//!     let _span = operation.measure_process();
+//!     let _span = operation.measure_process().iterations(1);
 //!     let _data = vec![1, 2, 3]; // Some allocation work
 //! }
 //!

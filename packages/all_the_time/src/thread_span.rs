@@ -1,4 +1,4 @@
-//! Thread-specific processor time tracking spans.
+//! Thread processor-time measurement and span.
 
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
@@ -7,47 +7,135 @@ use std::time::Duration;
 use crate::pal::{Platform, PlatformFacade};
 use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
 
-/// A tracked span of code that tracks thread processor time between creation and drop.
+/// An in-progress measurement of this thread's processor time, awaiting an
+/// explicit iteration count.
 ///
-/// This span tracks processor time consumed by the current thread only.
+/// Returned by [`Operation::measure_thread`](crate::Operation::measure_thread).
+/// It captures the thread's processor-time clock at creation but records nothing
+/// on its own — the caller must state how many iterations the measured work
+/// covers, either up front with [`iterations`](Self::iterations) (an RAII guard
+/// that records when its scope ends) or afterwards with [`complete`](Self::complete).
+/// Dropping the measurement without either **discards** it, so a panic or early
+/// return in the measured region records nothing.
 ///
 /// # Examples
 ///
-/// ```
+/// The canonical benchmark pattern feeds Criterion's chosen iteration count
+/// straight into [`iterations`](Self::iterations) from within `iter_custom`:
+///
+/// ```no_run
+/// use std::hint::black_box;
+/// use std::time::Instant;
+///
 /// use all_the_time::Session;
+/// use criterion::Criterion;
 ///
+/// # fn main() {
 /// let session = Session::new();
-/// # let session = session.no_stdout().no_file();
-/// let operation = session.operation("test");
-/// {
-///     let _span = operation.measure_thread();
-///     // Perform some processor-intensive operation
-///     let mut sum = 0;
-///     for i in 0..1000 {
-///         sum += i;
-///     }
-/// } // Thread processor time is automatically tracked and recorded here
-/// ```
-///
-/// For benchmarks with many iterations:
-///
-/// ```
-/// use all_the_time::Session;
-///
-/// let session = Session::new();
-/// # let session = session.no_stdout().no_file();
-/// let operation = session.operation("test");
-/// {
-///     let _span = operation.measure_thread().iterations(1000);
-///     for i in 0..1000 {
-///         // Perform the operation being benchmarked
-///         let mut sum = 0;
-///         sum += i;
-///     }
-/// } // Processor time is measured once and divided by 1000
+/// let operation = session.operation("hash_key");
+/// let mut criterion = Criterion::default();
+/// criterion.bench_function("hash_key", |b| {
+///     b.iter_custom(|iters| {
+///         let start = Instant::now();
+///         let _span = operation.measure_thread().iterations(iters);
+///         for _ in 0..iters {
+///             black_box(42_u64.wrapping_mul(2));
+///         }
+///         start.elapsed()
+///     });
+/// });
+/// # }
 /// ```
 #[derive(Debug)]
-#[must_use = "Measurements are taken between creation and drop"]
+#[must_use = "a measurement records nothing until `.iterations(n)` or `.complete(n)` is called"]
+pub struct ThreadMeasurement {
+    metrics: Arc<Mutex<OperationMetrics>>,
+    platform: PlatformFacade,
+    start_time: Duration,
+
+    _single_threaded: PhantomData<*const ()>,
+}
+
+impl ThreadMeasurement {
+    pub(crate) fn new(operation: &Operation) -> Self {
+        let platform = operation.platform().clone();
+        let start_time = platform.thread_time();
+
+        Self {
+            metrics: operation.metrics(),
+            platform,
+            start_time,
+            _single_threaded: PhantomData,
+        }
+    }
+
+    /// Binds this measurement to an iteration count known in advance, returning an
+    /// RAII guard that records the thread's processor-time delta when it is
+    /// dropped.
+    ///
+    /// Keep the measured work inside the returned span's scope so the delta is
+    /// captured at the right moment. This is the terminal used in the
+    /// `iter_custom` benchmark pattern (see the type-level example).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `iterations` is zero.
+    pub fn iterations(self, iterations: u64) -> ThreadSpan {
+        assert!(iterations != 0, "iterations cannot be zero");
+        ThreadSpan {
+            metrics: Arc::clone(&self.metrics),
+            platform: self.platform.clone(),
+            start_time: self.start_time,
+            iterations,
+            _single_threaded: PhantomData,
+        }
+    }
+
+    /// Records the thread's processor-time delta now, attributing it to
+    /// `iterations` iterations.
+    ///
+    /// Use this when the iteration count is only known after the measured work has
+    /// run — for example a loop that runs until some budget is exhausted.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use all_the_time::Session;
+    ///
+    /// # fn main() {
+    /// let session = Session::new();
+    /// # let session = session.no_stdout().no_file();
+    /// let operation = session.operation("drain_queue");
+    ///
+    /// // The iteration count is only known once the work has finished.
+    /// let measurement = operation.measure_thread();
+    /// let mut processed = 0_u64;
+    /// for item in 0..5 {
+    ///     std::hint::black_box(item * 2); // do work while draining
+    ///     processed += 1;
+    /// }
+    /// measurement.complete(processed);
+    /// # }
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `iterations` is zero.
+    pub fn complete(self, iterations: u64) {
+        assert!(iterations != 0, "iterations cannot be zero");
+        let total_nanos = measured_nanos(&self.platform, self.start_time);
+        let mut data = self.metrics.lock().expect(ERR_POISONED_LOCK);
+        data.add_span(iterations, total_nanos);
+    }
+}
+
+/// An active thread processor-time measurement bound to a known iteration count.
+///
+/// Created by [`ThreadMeasurement::iterations`]. It records the thread's
+/// processor-time delta when dropped, so the measured work should live inside the
+/// span's scope.
+#[derive(Debug)]
+#[must_use = "the measurement is recorded when the span is dropped, so it must be held for the measured work"]
 pub struct ThreadSpan {
     metrics: Arc<Mutex<OperationMetrics>>,
     platform: PlatformFacade,
@@ -57,98 +145,25 @@ pub struct ThreadSpan {
     _single_threaded: PhantomData<*const ()>,
 }
 
-impl ThreadSpan {
-    /// Creates a new thread span for the given operation and iteration count.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `iterations` is zero.
-    pub(crate) fn new(operation: &Operation, iterations: u64) -> Self {
-        assert!(iterations != 0, "Iterations cannot be zero");
-
-        let platform = operation.platform().clone();
-        let start_time = platform.thread_time();
-
-        Self {
-            metrics: operation.metrics(),
-            platform,
-            start_time,
-            iterations,
-            _single_threaded: PhantomData,
-        }
-    }
-
-    /// Sets the number of iterations for this span.
-    ///
-    /// This allows you to specify how many iterations this span represents,
-    /// which is used to calculate the mean duration per iteration when the span is dropped.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use all_the_time::Session;
-    ///
-    /// let session = Session::new();
-    /// # let session = session.no_stdout().no_file();
-    /// let operation = session.operation("batch_work");
-    /// {
-    ///     let _span = operation.measure_thread().iterations(1000);
-    ///     for _ in 0..1000 {
-    ///         // Perform the same operation 1000 times
-    ///         std::hint::black_box(42 * 2);
-    ///     }
-    /// } // Total time is measured once and divided by 1000
-    /// ```
-    ///
-    /// You can also call it after some work has been done:
-    /// ```
-    /// use all_the_time::Session;
-    ///
-    /// let session = Session::new();
-    /// # let session = session.no_stdout().no_file();
-    /// let operation = session.operation("dynamic_work");
-    /// {
-    ///     let span = operation.measure_thread();
-    ///     // Perform work and determine iteration count dynamically
-    ///     let mut iterations = 0;
-    ///     for i in 0..100 {
-    ///         // Do some work
-    ///         std::hint::black_box(i * 2);
-    ///         iterations += 1;
-    ///     }
-    ///     span.iterations(iterations);
-    /// } // Time is divided by the final iteration count
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics if `iterations` is zero.
-    pub fn iterations(mut self, iterations: u64) -> Self {
-        assert!(iterations != 0, "Iterations cannot be zero");
-        self.iterations = iterations;
-        self
-    }
-
-    /// Total thread processor time consumed since this span was created.
-    #[must_use]
-    fn measured_nanos(&self) -> u64 {
-        let current_time = self.platform.thread_time();
-        let total_duration = current_time.saturating_sub(self.start_time);
-        u64::try_from(total_duration.as_nanos()).unwrap_or(u64::MAX)
-    }
-}
-
 impl Drop for ThreadSpan {
     fn drop(&mut self) {
-        let total_nanos = self.measured_nanos();
+        let total_nanos = measured_nanos(&self.platform, self.start_time);
         let mut data = self.metrics.lock().expect(ERR_POISONED_LOCK);
         data.add_span(self.iterations, total_nanos);
     }
 }
 
+/// Total thread processor time consumed since a measurement's start clock.
+fn measured_nanos(platform: &PlatformFacade, start_time: Duration) -> u64 {
+    let current_time = platform.thread_time();
+    let total_duration = current_time.saturating_sub(start_time);
+    u64::try_from(total_duration.as_nanos()).unwrap_or(u64::MAX)
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::time::Duration;
 
     use crate::Session;
@@ -168,87 +183,72 @@ mod tests {
     }
 
     #[test]
-    fn creates_span_with_iterations() {
-        let session = create_test_session();
-        let operation = session.operation("test");
-        let span = operation.measure_thread().iterations(5);
-        assert_eq!(span.iterations, 5);
-    }
-
-    #[test]
     #[should_panic]
-    fn panics_on_zero_iterations() {
+    fn iterations_panics_on_zero() {
         let session = create_test_session();
         let operation = session.operation("test");
         let _span = operation.measure_thread().iterations(0);
     }
 
     #[test]
-    fn extracts_time_from_pal() {
+    #[should_panic]
+    fn complete_panics_on_zero() {
+        let session = create_test_session();
+        let operation = session.operation("test");
+        operation.measure_thread().complete(0);
+    }
+
+    #[test]
+    fn records_span_via_iterations() {
         let session = create_test_session_with_time(Duration::ZERO);
         let operation = session.operation("test");
 
         {
-            let _span = operation.measure_thread();
+            let _span = operation.measure_thread().iterations(1);
         }
 
-        // Should extract time from PAL and record one span with zero duration
+        // Should extract time from PAL and record one span with zero duration.
         assert_eq!(operation.total_iterations(), 1);
         assert_eq!(operation.total_processor_time(), Duration::ZERO);
     }
 
     #[test]
-    fn calculates_time_delta() {
-        let session = create_test_session();
+    fn records_span_via_complete() {
+        let session = create_test_session_with_time(Duration::ZERO);
         let operation = session.operation("test");
 
-        // We need to simulate time advancement by accessing the platform directly
-        // and changing the time between span creation and drop
-        {
-            let span = operation.measure_thread();
-
-            // Manually advance the fake platform time
-            // We need to get mutable access to the fake platform
-            // This test verifies the span correctly calculates time delta
-            drop(span);
-        }
-
-        // The span should have recorded some measurement
-        assert_eq!(operation.total_iterations(), 1);
-        // The exact time will depend on the fake platform behavior
-    }
-
-    #[test]
-    fn records_one_span_per_iteration() {
-        let session = create_test_session();
-        let operation = session.operation("test");
-
-        {
-            let _span = operation.measure_thread().iterations(5);
-            // Should record one span per iteration regardless of actual time measured
-        }
+        operation.measure_thread().complete(5);
 
         assert_eq!(operation.total_iterations(), 5);
+        assert_eq!(operation.total_processor_time(), Duration::ZERO);
     }
 
     #[test]
-    fn calculates_per_iteration_duration() {
+    fn dropping_measurement_without_terminal_records_nothing() {
         let session = create_test_session();
         let operation = session.operation("test");
 
-        // Create a span and test the duration calculation logic
+        drop(operation.measure_thread());
+
+        assert_eq!(operation.total_iterations(), 0);
+    }
+
+    #[test]
+    fn records_batch_iterations() {
+        let session = create_test_session();
+        let operation = session.operation("test");
+
         {
             let _span = operation.measure_thread().iterations(10);
-            // The span will calculate duration when dropped
         }
 
-        // Should have recorded 10 iterations
         assert_eq!(operation.total_iterations(), 10);
+        assert!(operation.total_processor_time() >= Duration::ZERO);
     }
 
     #[test]
     fn uses_thread_time_from_pal() {
-        // Verify that ThreadSpan specifically calls thread_time() from the PAL
+        // Verify that ThreadMeasurement specifically calls thread_time() from the PAL.
         let fake_platform = FakePlatform::new();
         fake_platform.set_thread_time(Duration::from_millis(50));
         fake_platform.set_process_time(Duration::from_millis(200)); // Different from thread time
@@ -258,157 +258,21 @@ mod tests {
         let operation = session.operation("test");
 
         {
-            let _span = operation.measure_thread();
-            // Should use thread_time (50ms), not process_time (200ms)
+            let _span = operation.measure_thread().iterations(1);
+            // Should use thread_time (50ms), not process_time (200ms).
         }
 
         assert_eq!(operation.total_iterations(), 1);
     }
-
-    #[test]
-    fn correctly_divides_by_iterations_count_single() {
-        // Test case for single iteration (no division)
-        // Since we cannot modify fake platform after creation, we will test
-        // the behavior with a zero-time scenario
-        let session = create_test_session();
-        let operation = session.operation("test");
-
-        {
-            let _span = operation.measure_thread();
-            // With fake platform, both start and end times are zero
-        }
-
-        // With single iteration, the duration calculation should work
-        assert_eq!(operation.total_iterations(), 1);
-        // Since fake platform starts at zero and does not advance, result should be zero
-        assert_eq!(operation.total_processor_time(), Duration::ZERO);
-    }
-
-    #[test]
-    fn correctly_divides_by_iterations_count_multiple() {
-        // Test division for multiple iterations
-        let session = create_test_session();
-        let operation = session.operation("test");
-
-        // Simulate a time measurement where we start at 0ms and end at 1000ms
-        // with 10 iterations, so each should be 100ms
-        {
-            let _span = operation.measure_thread().iterations(10);
-            // The span will divide total time by iterations when dropped
-        }
-
-        // Should record 10 spans
-        assert_eq!(operation.total_iterations(), 10);
-        // Each span should be the divided duration (but since we are using a fake platform
-        // that starts at 0 and does not advance, total will be 0)
-        assert_eq!(operation.total_processor_time(), Duration::ZERO);
-    }
-
-    #[test]
-    fn iterations_divisor_applied_correctly_single() {
-        // Test that single iteration does not divide (just returns total duration)
-        let test_cases = [
-            Duration::from_micros(1),
-            Duration::from_millis(5),
-            Duration::from_secs(1),
-        ];
-
-        for total_duration in test_cases {
-            let iterations = 1_u64;
-
-            // Simulate the logic from to_duration() method
-            let result = if iterations > 1 {
-                Duration::from_nanos(
-                    total_duration
-                        .as_nanos()
-                        .checked_div(u128::from(iterations))
-                        .unwrap_or(0)
-                        .try_into()
-                        .unwrap_or(0),
-                )
-            } else {
-                total_duration
-            };
-
-            // For single iteration, should return the original duration
-            assert_eq!(result, total_duration);
-        }
-    }
-
-    #[test]
-    fn iterations_divisor_applied_correctly_multiple() {
-        // Test that multiple iterations properly divide the duration
-        let test_cases = [
-            (Duration::from_micros(1), 5_u64, Duration::from_nanos(200)),
-            (Duration::from_millis(100), 4_u64, Duration::from_millis(25)),
-            (Duration::from_secs(1), 10_u64, Duration::from_millis(100)),
-        ];
-
-        for (total_duration, iterations, expected) in test_cases {
-            // Simulate the logic from to_duration() method
-            let result = if iterations > 1 {
-                Duration::from_nanos(
-                    total_duration
-                        .as_nanos()
-                        .checked_div(u128::from(iterations))
-                        .unwrap_or(0)
-                        .try_into()
-                        .unwrap_or(0),
-                )
-            } else {
-                total_duration
-            };
-
-            assert_eq!(
-                result, expected,
-                "Failed for total={total_duration:?}, iterations={iterations}"
-            );
-        }
-    }
-
-    #[test]
-    fn iterations_divisor_logic() {
-        // Test the core division logic more directly by setting up time advancement
-        let fake_platform = FakePlatform::new();
-        // Start with zero time
-        fake_platform.set_thread_time(Duration::ZERO);
-
-        let platform_facade = PlatformFacade::fake(fake_platform);
-        let session = Session::with_platform(platform_facade);
-        let operation = session.operation("test");
-
-        // Create span that should divide by iterations
-        let span = operation.measure_thread().iterations(5);
-
-        // Since our fake platform does not automatically advance time,
-        // and we cannot modify it after creation, let us test with
-        // a different approach - verify the logic through calculation
-        let test_total_duration = Duration::from_micros(1);
-        let iterations = 5_u64;
-
-        // This is what the division logic should produce
-        let expected_per_iteration = Duration::from_nanos(
-            test_total_duration
-                .as_nanos()
-                .checked_div(u128::from(iterations))
-                .unwrap_or(0)
-                .try_into()
-                .unwrap_or(0),
-        );
-
-        assert_eq!(expected_per_iteration, Duration::from_nanos(200));
-        drop(span);
-    }
-
-    use std::panic::{RefUnwindSafe, UnwindSafe};
 
     // Static assertions for thread safety.
-    // ThreadSpan should NOT be Send or Sync due to PhantomData<*const ()>.
+    // Both types should NOT be Send or Sync due to PhantomData<*const ()>.
+    static_assertions::assert_not_impl_all!(super::ThreadMeasurement: Send);
+    static_assertions::assert_not_impl_all!(super::ThreadMeasurement: Sync);
     static_assertions::assert_not_impl_all!(super::ThreadSpan: Send);
     static_assertions::assert_not_impl_all!(super::ThreadSpan: Sync);
 
     // Static assertions for unwind safety.
-    static_assertions::assert_impl_all!(
-        super::ThreadSpan: UnwindSafe, RefUnwindSafe
-    );
+    static_assertions::assert_impl_all!(super::ThreadMeasurement: UnwindSafe, RefUnwindSafe);
+    static_assertions::assert_impl_all!(super::ThreadSpan: UnwindSafe, RefUnwindSafe);
 }

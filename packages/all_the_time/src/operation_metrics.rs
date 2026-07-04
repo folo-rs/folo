@@ -1,44 +1,49 @@
+//! Per-operation processor-time metrics, folded into streaming statistics.
+//!
+//! Every measured span contributes its whole-span processor-time total together
+//! with the iteration count it covered. The spans are not retained: each is
+//! folded on arrival into running totals (for the pooled mean) and into a
+//! [`SpanAccumulator`] (for the warmup-robust per-iteration slope and its
+//! confidence interval). Processor time is not deterministic — first-run costs
+//! and scheduling jitter vary around the mean over a Criterion-chosen iteration
+//! count — so the slope down-weights low-iteration warmup spans and the interval
+//! quantifies the residual noise.
+
 use std::time::Duration;
 
-use crate::{OperationStatistics, SpanRecord, compute_slope_nanos, compute_statistics};
+use folo_utils::SpanAccumulator;
 
-/// Initial capacity reserved for an operation's span buffer.
-///
-/// Sized to cover Criterion's default sample count (100) plus its warm-up calls
-/// with headroom, so that recording a span is an allocation-free push in the
-/// common case. A benchmark configured with a larger `sample_size` eventually
-/// exceeds this and the next push grows the buffer. That growth is harmless to
-/// the measurement: a span records itself from `Drop`, after it has already
-/// captured its elapsed delta and before the next span starts, so the
-/// reallocation falls between measured spans and never lands inside one.
-const DEFAULT_SPAN_CAPACITY: usize = 256;
+use crate::OperationStatistics;
 
 /// Metrics tracked for each operation in the session.
 ///
-/// Every measured span contributes one [`SpanRecord`]. Retaining the raw spans
-/// (rather than collapsing them into running totals) lets the report derive both
-/// the headline mean and the dispersion statistics the history tool consumes.
-#[derive(Clone, Debug)]
+/// Holds the pooled totals (processor-time nanoseconds, iterations) and a shared
+/// [`SpanAccumulator`] over per-iteration processor time, folded in as each span
+/// is recorded. No per-span data is retained.
+#[derive(Clone, Debug, Default)]
 pub(crate) struct OperationMetrics {
-    spans: Vec<SpanRecord>,
-}
-
-impl Default for OperationMetrics {
-    fn default() -> Self {
-        Self {
-            spans: Vec::with_capacity(DEFAULT_SPAN_CAPACITY),
-        }
-    }
+    total_iterations: u64,
+    total_nanos: u128,
+    nanos: SpanAccumulator,
 }
 
 impl OperationMetrics {
     /// Records one span covering `iterations` iterations that consumed
     /// `total_nanos` nanoseconds of processor time in total.
+    ///
+    /// Folding a span is a handful of additions with no allocation, so it is
+    /// cheap enough to run inside a measured span.
     pub(crate) fn add_span(&mut self, iterations: u64, total_nanos: u64) {
-        self.spans.push(SpanRecord {
-            iterations,
-            total_nanos,
-        });
+        self.total_iterations = self
+            .total_iterations
+            .checked_add(iterations)
+            .expect("total iterations overflows u64 - this indicates an unrealistic scenario");
+        self.total_nanos = self
+            .total_nanos
+            .checked_add(u128::from(total_nanos))
+            .expect("total processor time overflows u128 - this indicates an unrealistic scenario");
+
+        self.nanos.add(iterations, total_nanos);
     }
 
     /// Records one span by its per-iteration duration and iteration count.
@@ -53,74 +58,76 @@ impl OperationMetrics {
         self.add_span(iterations, total_nanos);
     }
 
-    /// Number of spans recorded.
+    /// Number of spans recorded (distinct from the total iteration count).
     #[cfg(test)]
     pub(crate) fn span_count(&self) -> u64 {
-        self.spans.len() as u64
+        self.nanos.span_count()
     }
 
     /// Total iterations across all recorded spans.
     pub(crate) fn total_iterations(&self) -> u64 {
-        self.spans
-            .iter()
-            .fold(0_u64, |sum, span| sum.saturating_add(span.iterations))
+        self.total_iterations
     }
 
     /// Total processor time across all recorded spans.
     pub(crate) fn total_processor_time(&self) -> Duration {
-        let total_nanos = self.spans.iter().fold(0_u128, |sum, span| {
-            sum.saturating_add(u128::from(span.total_nanos))
-        });
-        Duration::from_nanos_u128(total_nanos)
+        Duration::from_nanos_u128(self.total_nanos)
     }
 
     /// Mean processor time per iteration across all recorded spans.
     ///
     /// Returns zero when no iterations were recorded.
     pub(crate) fn mean(&self) -> Duration {
-        let total_iterations = self.total_iterations();
-        if total_iterations == 0 {
-            Duration::ZERO
-        } else {
-            Duration::from_nanos_u128(
-                self.total_processor_time()
-                    .as_nanos()
-                    .checked_div(u128::from(total_iterations))
-                    .expect("guarded by the zero check above"),
-            )
-        }
+        let mean_nanos = self
+            .total_nanos
+            .checked_div(u128::from(self.total_iterations))
+            .unwrap_or(0);
+        Duration::from_nanos_u128(mean_nanos)
     }
 
     /// Whether the operation recorded any measurable work.
     pub(crate) fn is_empty(&self) -> bool {
-        self.total_iterations() == 0
-    }
-
-    /// Dispersion statistics derived from the recorded spans, or `None` when no
-    /// spans were recorded.
-    pub(crate) fn statistics(&self) -> Option<OperationStatistics> {
-        compute_statistics(&self.spans)
+        self.total_iterations == 0
     }
 
     /// The warmup-robust per-iteration slope in nanoseconds, or `None` when no
     /// spans were recorded.
-    ///
-    /// The cheap path for the console summary: it computes only the headline
-    /// slope, skipping the bootstrap confidence interval that
-    /// [`statistics`](Self::statistics) resamples.
     pub(crate) fn slope_nanos(&self) -> Option<f64> {
-        compute_slope_nanos(&self.spans)
+        self.nanos.slope()
     }
 
-    /// Appends another operation's spans onto this one.
-    pub(crate) fn extend_from(&mut self, other: &Self) {
-        self.spans.extend_from_slice(&other.spans);
+    /// Warmup-robust per-iteration statistics derived from the recorded spans, or
+    /// `None` when no spans were recorded.
+    pub(crate) fn statistics(&self) -> Option<OperationStatistics> {
+        Some(OperationStatistics {
+            span_count: self.nanos.span_count(),
+            slope_nanos: self.nanos.slope()?,
+            interval_nanos: self.nanos.interval(),
+        })
+    }
+
+    /// Merges another operation's statistics into this one.
+    pub(crate) fn merge(&mut self, other: &Self) {
+        self.total_iterations = self
+            .total_iterations
+            .checked_add(other.total_iterations)
+            .expect("total iterations overflows u64 - this indicates an unrealistic scenario");
+        self.total_nanos = self
+            .total_nanos
+            .checked_add(other.total_nanos)
+            .expect("total processor time overflows u128 - this indicates an unrealistic scenario");
+        self.nanos.merge(&other.nanos);
     }
 }
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    #![allow(
+        clippy::float_cmp,
+        reason = "slope assertions are exact integer-derived values in these fixtures"
+    )]
+
     use super::*;
 
     #[test]
@@ -130,24 +137,6 @@ mod tests {
         assert_eq!(metrics.total_iterations(), 0);
         assert_eq!(metrics.span_count(), 0);
         assert!(metrics.is_empty());
-    }
-
-    #[test]
-    fn default_preallocates_the_span_buffer() {
-        // The buffer is reserved up front so that recording spans does not
-        // allocate while the reserved capacity holds.
-        let metrics = OperationMetrics::default();
-        assert!(metrics.spans.capacity() >= DEFAULT_SPAN_CAPACITY);
-    }
-
-    #[test]
-    fn recording_within_capacity_does_not_reallocate() {
-        let mut metrics = OperationMetrics::default();
-        let capacity_before = metrics.spans.capacity();
-        for index in 0..DEFAULT_SPAN_CAPACITY {
-            metrics.add_span(1, index as u64);
-        }
-        assert_eq!(metrics.spans.capacity(), capacity_before);
     }
 
     #[test]
@@ -190,21 +179,75 @@ mod tests {
     }
 
     #[test]
-    fn extend_from_concatenates_spans() {
+    fn mean_divides_total_by_iterations() {
+        let mut metrics = OperationMetrics::default();
+        metrics.add_iterations(Duration::from_millis(100), 1);
+        metrics.add_iterations(Duration::from_millis(200), 1);
+        metrics.add_iterations(Duration::from_millis(300), 1);
+
+        // (100 + 200 + 300) / 3 = 200ms.
+        assert_eq!(metrics.mean(), Duration::from_millis(200));
+    }
+
+    #[test]
+    fn mean_of_empty_metrics_is_zero() {
+        let metrics = OperationMetrics::default();
+        assert_eq!(metrics.mean(), Duration::ZERO);
+    }
+
+    #[test]
+    fn merge_combines_metrics() {
         let mut first = OperationMetrics::default();
         first.add_iterations(Duration::from_millis(100), 2);
 
         let mut second = OperationMetrics::default();
         second.add_iterations(Duration::from_millis(50), 3);
 
-        first.extend_from(&second);
+        first.merge(&second);
         assert_eq!(first.span_count(), 2);
         assert_eq!(first.total_iterations(), 5);
+    }
+
+    #[test]
+    fn slope_weights_spans_by_iteration_count() {
+        // A perfectly linear series at 5 ns/iter: the slope recovers 5 regardless
+        // of the differing iteration counts across spans.
+        let mut metrics = OperationMetrics::default();
+        metrics.add_span(2, 10);
+        metrics.add_span(8, 40);
+
+        assert_eq!(metrics.span_count(), 2);
+        assert_eq!(metrics.slope_nanos(), Some(5.0));
     }
 
     #[test]
     fn empty_metrics_have_no_statistics() {
         let metrics = OperationMetrics::default();
         assert!(metrics.statistics().is_none());
+        assert!(metrics.slope_nanos().is_none());
+    }
+
+    #[test]
+    fn single_span_interval_collapses_to_the_point_estimate() {
+        let mut metrics = OperationMetrics::default();
+        metrics.add_span(4, 80);
+
+        let stats = metrics.statistics().unwrap();
+        assert_eq!(stats.span_count, 1);
+        assert_eq!(stats.slope_nanos, 20.0);
+        // With a single span there is no dispersion information, so the interval
+        // is absent.
+        assert!(stats.interval_nanos.is_none());
+    }
+
+    #[test]
+    fn repeated_identical_spans_collapse_the_interval_onto_the_slope() {
+        let mut metrics = OperationMetrics::default();
+        metrics.add_span(1, 20);
+        metrics.add_span(1, 20);
+
+        let stats = metrics.statistics().unwrap();
+        assert_eq!(stats.slope_nanos, 20.0);
+        assert_eq!(stats.interval_nanos, Some((20.0, 20.0)));
     }
 }

@@ -5,9 +5,6 @@
   "mean_processor_time_nanos": 20,
   "span_count": 6,
   "slope_processor_time_nanos": 20.0,
-  "std_dev_processor_time_nanos": 0.7071067811865476,
-  "interval_low_processor_time_nanos": 19.5,
-  "interval_high_processor_time_nanos": 20.5,
-  "min_processor_time_nanos": 19.0,
-  "max_processor_time_nanos": 21.0
+  "interval_low_processor_time_nanos": 19.346678671819987,
+  "interval_high_processor_time_nanos": 20.653321328180013
 }

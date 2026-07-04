@@ -9,6 +9,7 @@
 )]
 
 use std::hint::black_box;
+use std::time::Instant;
 
 use alloc_tracker::{Allocator, Session};
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -23,23 +24,39 @@ fn entrypoint(c: &mut Criterion) {
 
     let string_op = allocs.operation("string_formatting");
     group.bench_function("string_formatting", |b| {
-        b.iter(|| {
-            let _span = string_op.measure_process();
+        b.iter_custom(|iters| {
+            let start = Instant::now();
 
-            let part1 = black_box("Hello, ");
-            let part2 = black_box("world!");
-            let s = format!("{part1}{part2}!");
-            black_box(s);
+            {
+                let _span = string_op.measure_process().iterations(iters);
+
+                for _ in 0..iters {
+                    let part1 = black_box("Hello, ");
+                    let part2 = black_box("world!");
+                    let s = format!("{part1}{part2}!");
+                    black_box(s);
+                }
+            }
+
+            start.elapsed()
         });
     });
 
     let vector_op = allocs.operation("vector_creation");
     group.bench_function("vector_creation", |b| {
-        b.iter(|| {
-            let _span = vector_op.measure_process();
+        b.iter_custom(|iters| {
+            let start = Instant::now();
 
-            let data = (1..=100).collect::<Vec<_>>();
-            black_box(data);
+            {
+                let _span = vector_op.measure_process().iterations(iters);
+
+                for _ in 0..iters {
+                    let data = (1..=100).collect::<Vec<_>>();
+                    black_box(data);
+                }
+            }
+
+            start.elapsed()
         });
     });
 

@@ -1083,7 +1083,6 @@ name = "folo_utils"
 version = "0.1.9"
 dependencies = [
  "mutants",
- "rand 0.10.1",
  "serde",
  "serde_json",
 ]
