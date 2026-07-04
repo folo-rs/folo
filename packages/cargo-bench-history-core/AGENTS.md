@@ -73,3 +73,42 @@ ecosystem pattern (see `docs/performance.md`) and cover the numeric boundaries
 with named, value-asserting tests rather than threshold guards (see
 `docs/testing.md`). All of `analyze::stats` must stay deterministic and
 Miri-safe.
+
+## Signal-validation tests are correctness-critical — every change needs human approval
+
+`src/analyze/signal_validation.rs` is the suite of hand-curated "obvious right
+answer" series (an obvious doubling, a dead-flat line, …) paired with the verdict
+each analysis mode *must* reach. It exists to catch the analysis math drifting
+into illogical territory — calling a doubling "no change", or a flat line "a
+regression". The curated expectations **are** the specification of correct
+behaviour here.
+
+**Never change a signal-validation expectation to make a failing test pass.** A
+failure in this suite is a signal that a change altered what the analysis
+concludes about an unambiguous input, which is almost always a regression in the
+analysis, not a stale test. Adjusting the expected outcome to match the new
+behaviour silently ratifies that regression and defeats the entire purpose of the
+suite.
+
+**Every change to this suite needs explicit human approval before you commit
+it** — not only editing or removing an expectation, but also *adding* a new
+curated case. Approval for additions is not a rubber stamp: a weak or
+ill-considered "trash case" dilutes the suite and, worse, normalizes casually
+approving expectation changes to it when its outcome later shifts in the regular
+course of business. Every case must earn its place as an unambiguous, obviously
+correct answer.
+
+If, while maintaining this crate, you come to believe the suite needs to change —
+an expectation adjusted, a case removed, or a new case added:
+
+* **Stop and get explicit human approval before touching the suite.** This is a
+  hard gate, not a courtesy. Do not commit any change to the curated cases or
+  their expectations without it.
+* **Propose the change to the user with evidence, not just a diff.** For an
+  expectation change, show the affected series, the old vs. new verdict per
+  mode/polarity, and *why* the new verdict is the correct answer for that input.
+  For a new case, show the series and argue why its verdict is unambiguously
+  correct and what class of regression it guards against. Include illustrative
+  material — worked examples, plots of the series and the detector's decision,
+  before/after comparisons — enough for a human to judge the real-world impact
+  without re-deriving it.
