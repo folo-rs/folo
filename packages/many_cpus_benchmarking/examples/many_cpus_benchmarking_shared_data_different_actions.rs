@@ -73,7 +73,7 @@ impl Payload for ProducerConsumerChannels {
     fn prepare(&mut self) {
         // Pre-seed the channels with some initial messages to avoid deadlocks
         // and create a steady flow of data for benchmarking
-        const INITIAL_MESSAGE_COUNT: usize = 5000;
+        const INITIAL_MESSAGE_COUNT: usize = 1000;
 
         for i in 0..INITIAL_MESSAGE_COUNT {
             // Both workers send some initial messages
@@ -82,7 +82,7 @@ impl Payload for ProducerConsumerChannels {
     }
 
     fn process(&mut self) {
-        const OPERATION_COUNT: usize = 25000;
+        const OPERATION_COUNT: usize = 5000;
 
         if self.is_primary_producer {
             // Primary producer: mostly sends, occasionally receives
