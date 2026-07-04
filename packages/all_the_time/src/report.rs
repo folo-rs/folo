@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration;
 
+use crate::statistics::nanos_to_duration;
 use crate::{OperationMetrics, OperationStatistics};
 
 /// Thread-safe processor time tracking report.
@@ -286,7 +287,16 @@ impl ReportOperation {
 
 impl fmt::Display for ReportOperation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?} (mean)", self.mean())
+        match self.statistics() {
+            Some(stats) => write!(
+                f,
+                "{:?} per iteration [{:?}, {:?}]",
+                nanos_to_duration(stats.slope_nanos),
+                nanos_to_duration(stats.interval_low_nanos),
+                nanos_to_duration(stats.interval_high_nanos),
+            ),
+            None => write!(f, "no measurements"),
+        }
     }
 }
 
@@ -295,65 +305,75 @@ impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.operations.values().all(|op| op.metrics.is_empty()) {
             writeln!(f, "No processor time statistics captured.")?;
-        } else {
-            writeln!(f, "Processor time statistics:")?;
-            writeln!(f)?;
+            return Ok(());
+        }
+        writeln!(f, "Processor time statistics:")?;
+        writeln!(f)?;
 
-            // Sort operations by name for consistent output
-            let mut sorted_ops: Vec<_> = self.operations.iter().collect();
-            sorted_ops.sort_by_key(|(name, _)| *name);
+        // Sort operations by name for consistent output.
+        let mut sorted_ops: Vec<_> = self.operations.iter().collect();
+        sorted_ops.sort_by_key(|(name, _)| *name);
 
-            // Calculate the maximum width needed for the operation name column
-            let max_name_width = sorted_ops
-                .iter()
-                .map(|(name, _)| name.len())
-                .max()
-                .unwrap_or(0)
-                .max("Operation".len());
+        // Render the warmup-robust per-iteration slope and its bootstrap
+        // confidence interval, not the raw mean: the mean folds warmup and
+        // one-off costs into the figure, while the slope recovers the marginal
+        // per-iteration cost and the interval shows its run-to-run uncertainty.
+        let cells: Vec<(&str, String)> = sorted_ops
+            .iter()
+            .map(|(name, operation)| {
+                let value = match operation.statistics() {
+                    Some(stats) => format!(
+                        "{:?} [{:?}, {:?}]",
+                        nanos_to_duration(stats.slope_nanos),
+                        nanos_to_duration(stats.interval_low_nanos),
+                        nanos_to_duration(stats.interval_high_nanos),
+                    ),
+                    None => "n/a".to_owned(),
+                };
+                (name.as_str(), value)
+            })
+            .collect();
 
-            // Calculate the maximum width needed for the mean column
-            let max_mean_width = sorted_ops
-                .iter()
-                .map(|(_, operation)| format!("{:?}", operation.mean()).len())
-                .max()
-                .unwrap_or(0)
-                .max("Mean".len());
+        let max_name_width = cells
+            .iter()
+            .map(|(name, _)| name.len())
+            .max()
+            .unwrap_or(0)
+            .max("Operation".len());
+        let max_value_width = cells
+            .iter()
+            .map(|(_, value)| value.len())
+            .max()
+            .unwrap_or(0)
+            .max("Per iteration".len());
 
-            // Print table header
-            writeln!(
-                f,
-                "| {:<name_width$} | {:>mean_width$} |",
-                "Operation",
-                "Mean",
-                name_width = max_name_width,
-                mean_width = max_mean_width
-            )?;
-            let separator_name_width = max_name_width
-                .checked_add(2)
-                .expect("operation name width fits in memory, adding 2 cannot overflow");
-            let separator_mean_width = max_mean_width
-                .checked_add(2)
-                .expect("mean width fits in memory, adding 2 cannot overflow");
-            writeln!(
-                f,
-                "|{:-<name_width$}|{:-<mean_width$}|",
-                "",
-                "",
-                name_width = separator_name_width,
-                mean_width = separator_mean_width
-            )?;
+        // Print table header.
+        writeln!(
+            f,
+            "| {:<name_width$} | {:>value_width$} |",
+            "Operation",
+            "Per iteration",
+            name_width = max_name_width,
+            value_width = max_value_width
+        )?;
+        let separator_name_width = max_name_width
+            .checked_add(2)
+            .expect("operation name width fits in memory, adding 2 cannot overflow");
+        let separator_value_width = max_value_width
+            .checked_add(2)
+            .expect("value width fits in memory, adding 2 cannot overflow");
+        writeln!(
+            f,
+            "|{:-<name_width$}|{:-<value_width$}|",
+            "",
+            "",
+            name_width = separator_name_width,
+            value_width = separator_value_width
+        )?;
 
-            // Print table rows
-            for (name, operation) in sorted_ops {
-                writeln!(
-                    f,
-                    "| {:<name_width$} | {:>mean_width$} |",
-                    name,
-                    format!("{:?}", operation.mean()),
-                    name_width = max_name_width,
-                    mean_width = max_mean_width
-                )?;
-            }
+        // Print table rows.
+        for (name, value) in cells {
+            writeln!(f, "| {name:<max_name_width$} | {value:>max_value_width$} |",)?;
         }
         Ok(())
     }
@@ -543,14 +563,14 @@ mod tests {
     );
 
     #[test]
-    fn report_operation_display_shows_mean() {
+    fn report_operation_display_shows_robust_per_iteration_estimate() {
         use crate::pal::{FakePlatform, PlatformFacade};
 
         let fake_platform = FakePlatform::new();
         let platform_facade = PlatformFacade::fake(fake_platform.clone());
         let session = Session::with_platform(platform_facade);
 
-        // Set up timing: 100ms total for 2 iterations = 50ms mean
+        // 100ms total for 2 iterations: the through-origin slope recovers 50ms.
         fake_platform.set_thread_time(Duration::from_millis(0));
         {
             let operation = session.operation("test_op");
@@ -562,11 +582,14 @@ mod tests {
         let (_name, op) = report.operations().next().unwrap();
 
         let display = op.to_string();
-        assert!(display.contains("mean"), "Display should mention 'mean'");
-        // Duration debug format varies, but should contain '50' for 50ms
+        assert!(
+            display.contains("per iteration"),
+            "Display should report the per-iteration estimate: got {display}"
+        );
+        // Duration debug format varies, but should contain '50' for the 50ms slope.
         assert!(
             display.contains("50"),
-            "Display should show the mean duration containing '50' (for 50ms): got {display}"
+            "Display should show the 50ms per-iteration slope: got {display}"
         );
     }
 }

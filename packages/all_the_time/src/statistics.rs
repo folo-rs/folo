@@ -12,6 +12,8 @@
 //! All work here runs once, when a [`Report`](crate::Report) is materialized for
 //! output — never inside a measured span.
 
+use std::time::Duration;
+
 use folo_utils::{Span, SpanStats};
 
 /// One recorded span: the processor time a single measured span consumed and the
@@ -30,8 +32,13 @@ pub(crate) struct SpanRecord {
 
 /// Dispersion statistics for one operation, derived from its spans.
 ///
-/// A nanosecond-typed view of [`folo_utils::SpanStats`]: every value is a
-/// per-iteration processor time in nanoseconds. Exposed publicly through
+/// Every value is a per-iteration processor time in nanoseconds. Processor time
+/// is not deterministic — it jitters run to run with system load and scheduling,
+/// and the raw pooled mean silently folds warmup and one-off costs into the
+/// per-iteration figure — so the point estimate is a warmup-robust through-origin
+/// slope and the interval is a bootstrap confidence interval of that slope. When
+/// every span recorded the same per-iteration value the interval collapses onto
+/// the point estimate. Exposed through
 /// [`ReportOperation::statistics`](crate::ReportOperation::statistics) so callers
 /// can consume the same dispersion the JSON output records.
 #[derive(Clone, Copy, Debug)]
@@ -80,6 +87,15 @@ pub(crate) fn compute_statistics(spans: &[SpanRecord]) -> Option<OperationStatis
         min_nanos: stats.min,
         max_nanos: stats.max,
     })
+}
+
+/// Converts a per-iteration processor-time figure in nanoseconds to a `Duration`
+/// for human-readable rendering.
+///
+/// Tiny negative fits — possible from the bootstrap on near-zero data — are
+/// clamped to zero so the formatter never panics on a negative input.
+pub(crate) fn nanos_to_duration(nanos: f64) -> Duration {
+    Duration::from_secs_f64(nanos.max(0.0) / 1_000_000_000.0)
 }
 
 #[cfg(test)]

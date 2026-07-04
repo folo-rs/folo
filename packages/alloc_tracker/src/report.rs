@@ -389,9 +389,49 @@ impl ReportOperation {
     }
 }
 
+/// Formats a per-iteration count for human-readable output.
+///
+/// Counts are conceptually integers but the warmup-robust slope is a real number
+/// (a fitted per-iteration rate), so this rounds to two decimals and trims any
+/// trailing zeros: `200.0` renders as `200` and `199.5` as `199.5`.
+pub(crate) fn format_count(value: f64) -> String {
+    let rounded = (value.max(0.0) * 100.0).round() / 100.0;
+    let mut rendered = format!("{rounded:.2}");
+    if rendered.contains('.') {
+        rendered = rendered
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string();
+    }
+    rendered
+}
+
+/// Formats a metric's warmup-robust point estimate and its bootstrap confidence
+/// interval as `point [low, high]`.
+pub(crate) fn format_metric(stats: &MetricStatistics) -> String {
+    format!(
+        "{} [{}, {}]",
+        format_count(stats.slope),
+        format_count(stats.interval_low),
+        format_count(stats.interval_high),
+    )
+}
+
 impl fmt::Display for ReportOperation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} bytes (mean)", self.mean_bytes())
+        match self.statistics() {
+            Some(stats) => write!(
+                f,
+                "{} bytes/iter [{}, {}], {} allocations/iter [{}, {}]",
+                format_count(stats.bytes.slope),
+                format_count(stats.bytes.interval_low),
+                format_count(stats.bytes.interval_high),
+                format_count(stats.allocations.slope),
+                format_count(stats.allocations.interval_low),
+                format_count(stats.allocations.interval_high),
+            ),
+            None => write!(f, "no measurements"),
+        }
     }
 }
 
@@ -401,83 +441,83 @@ impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.operations.values().all(|op| op.metrics.is_empty()) {
             writeln!(f, "No allocation statistics captured.")?;
-        } else {
-            writeln!(f, "Allocation statistics:")?;
-            writeln!(f)?;
-
-            // Sort operations by name for consistent output
-            let mut sorted_ops: Vec<_> = self.operations.iter().collect();
-            sorted_ops.sort_by_key(|(name, _)| *name);
-
-            // Calculate column widths
-            let max_name_width = sorted_ops
-                .iter()
-                .map(|(name, _)| name.len())
-                .max()
-                .unwrap_or(0)
-                .max("Operation".len());
-
-            let max_bytes_width = sorted_ops
-                .iter()
-                .map(|(_, operation)| operation.mean_bytes().to_string().len())
-                .max()
-                .unwrap_or(0)
-                .max("Mean bytes".len());
-
-            let max_count_width = sorted_ops
-                .iter()
-                .map(|(_, operation)| operation.mean_allocations().to_string().len())
-                .max()
-                .unwrap_or(0)
-                .max("Mean count".len());
-
-            // Print table header
-            writeln!(
-                f,
-                "| {:<name_width$} | {:>bytes_width$} | {:>count_width$} |",
-                "Operation",
-                "Mean bytes",
-                "Mean count",
-                name_width = max_name_width,
-                bytes_width = max_bytes_width,
-                count_width = max_count_width
-            )?;
-
-            // Print separator
-            let separator_name_width = max_name_width
-                .checked_add(2)
-                .expect("operation name width fits in memory, adding 2 cannot overflow");
-            let separator_bytes_width = max_bytes_width
-                .checked_add(2)
-                .expect("bytes width fits in memory, adding 2 cannot overflow");
-            let separator_count_width = max_count_width
-                .checked_add(2)
-                .expect("count width fits in memory, adding 2 cannot overflow");
-            writeln!(
-                f,
-                "|{:-<name_width$}|{:-<bytes_width$}|{:-<count_width$}|",
-                "",
-                "",
-                "",
-                name_width = separator_name_width,
-                bytes_width = separator_bytes_width,
-                count_width = separator_count_width
-            )?;
-
-            // Print table rows
-            for (name, operation) in sorted_ops {
-                writeln!(
-                    f,
-                    "| {:<name_width$} | {:>bytes_width$} | {:>count_width$} |",
-                    name,
-                    operation.mean_bytes(),
-                    operation.mean_allocations(),
-                    name_width = max_name_width,
-                    bytes_width = max_bytes_width,
-                    count_width = max_count_width
-                )?;
-            }
+            return Ok(());
         }
+
+        writeln!(f, "Allocation statistics:")?;
+        writeln!(f)?;
+
+        // Sort operations by name for consistent output.
+        let mut sorted_ops: Vec<_> = self.operations.iter().collect();
+        sorted_ops.sort_by_key(|(name, _)| *name);
+
+        // Pre-render the warmup-robust per-iteration cells so the column widths
+        // and the printed rows are computed from the exact same strings.
+        let rows: Vec<(&str, String, String)> = sorted_ops
+            .iter()
+            .map(|(name, operation)| match operation.statistics() {
+                Some(stats) => (
+                    name.as_str(),
+                    format_metric(&stats.bytes),
+                    format_metric(&stats.allocations),
+                ),
+                None => (name.as_str(), "n/a".to_string(), "n/a".to_string()),
+            })
+            .collect();
+
+        let name_header = "Operation";
+        let bytes_header = "Bytes/iter";
+        let count_header = "Allocations/iter";
+
+        let max_name_width = rows
+            .iter()
+            .map(|(name, _, _)| name.len())
+            .max()
+            .unwrap_or(0)
+            .max(name_header.len());
+        let max_bytes_width = rows
+            .iter()
+            .map(|(_, bytes, _)| bytes.len())
+            .max()
+            .unwrap_or(0)
+            .max(bytes_header.len());
+        let max_count_width = rows
+            .iter()
+            .map(|(_, _, count)| count.len())
+            .max()
+            .unwrap_or(0)
+            .max(count_header.len());
+
+        // Print table header.
+        writeln!(
+            f,
+            "| {name_header:<max_name_width$} | {bytes_header:>max_bytes_width$} | {count_header:>max_count_width$} |",
+        )?;
+
+        // Print separator.
+        let separator_name_width = max_name_width
+            .checked_add(2)
+            .expect("operation name width fits in memory, adding 2 cannot overflow");
+        let separator_bytes_width = max_bytes_width
+            .checked_add(2)
+            .expect("bytes width fits in memory, adding 2 cannot overflow");
+        let separator_count_width = max_count_width
+            .checked_add(2)
+            .expect("count width fits in memory, adding 2 cannot overflow");
+        writeln!(
+            f,
+            "|{:-<separator_name_width$}|{:-<separator_bytes_width$}|{:-<separator_count_width$}|",
+            "", "", "",
+        )?;
+
+        // Print table rows.
+        for (name, bytes, count) in rows {
+            writeln!(
+                f,
+                "| {name:<max_name_width$} | {bytes:>max_bytes_width$} | {count:>max_count_width$} |",
+            )?;
+        }
+
         Ok(())
     }
 }
@@ -692,12 +732,16 @@ mod tests {
     );
 
     #[test]
-    fn report_operation_display_shows_mean_bytes() {
-        // 1000 bytes over 4 iterations → 250 mean bytes.
+    fn report_operation_display_shows_robust_per_iteration_estimate() {
+        // 250 bytes/iter over 4 iterations → a single-span slope of 250 with the
+        // interval collapsed onto it.
         let operation = report_operation(250, 3, 4);
         let display_output = operation.to_string();
-        assert!(display_output.contains("bytes (mean)"));
-        assert!(display_output.contains("250"));
+        assert!(
+            display_output.contains("bytes/iter"),
+            "got {display_output}"
+        );
+        assert!(display_output.contains("250"), "got {display_output}");
     }
 
     #[test]

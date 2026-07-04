@@ -547,16 +547,27 @@ first-parent topology. The goal is **high signal-to-noise**: report level shifts
 that are real and stay silent on measurement jitter. **No engine is deterministic** — even
 Callgrind's simulated counts drift by a few percent run to run, and an `alloc_tracker`
 figure amortizes first-touch and buffer-resize allocations over a Criterion-chosen iteration
-count, so its per-iteration mean wobbles too. The detector therefore treats every metric as
+count, so its per-iteration figure wobbles too. The detector therefore treats every metric as
 noisy and never trusts a value as exact.
 
+This surprises people, because re-running Callgrind on one *unchanged* machine often prints
+the same count every time — the counter is deterministic for a fixed binary and fixed input.
+What is not fixed is everything feeding it across the commits we compare: a different OS or
+CPU-microcode patch level, a different compiler patch release, the compiler's own run-to-run
+nondeterministic code-generation choices (inlining, ordering, layout) even at the same
+version, and Criterion scheduling a different iteration count when background load differs
+(which changes how first-touch and buffer-resize costs are amortized). Any one of these moves
+the measured number without the code under test changing, so no metric is reproducible commit
+to commit.
+
 Engines differ only in *how much* dispersion they expose, and the gating adapts per point
-rather than per engine. Some points carry an explicit bootstrap confidence interval
-(Criterion and `all_the_time` always; `alloc_tracker` when its output records one); others
-report a single figure (Callgrind, and any mean-only output). An interval, when present, is
-read as an additional veto, but the gates' *primary* noise check needs no interval: it is
-the series' own residual scatter about its fitted model, which covers every engine
-uniformly.
+rather than per engine. Most points carry an explicit bootstrap confidence interval:
+Criterion, `all_the_time`, and `alloc_tracker` all record one on every operation they emit.
+Only single-figure engines (Callgrind, and any legacy mean-only file the adapter still
+tolerates) report a point without an interval. An interval, when present, is read as an
+additional veto that can only *suppress* a candidate the other gates would report (never
+create one); the gates' *primary* noise check needs no interval at all: it is the series' own
+residual scatter about its fitted model, which covers every engine uniformly.
 
 Every metric is lower-is-better except cache *hits* (higher is better); the higher cache
 tiers are miss-escalation costs, so polarity keys off the metric, not just its category.
@@ -590,11 +601,14 @@ statistically-real but trivial wobble stays silent; and the move stands above th
 own **residual scatter** about the fitted step — the median-absolute-residual gate that is
 the primary noise check for *every* engine, in place of trusting a value as exact. Where the
 points carry confidence intervals, non-overlap of the regime intervals is an *additional*
-veto; where they do not, the residual gate stands alone.
+veto — it can only *suppress* a candidate the other gates would report (declaring the move
+noise when the intervals overlap), never manufacture a finding; where they do not, the
+residual gate stands alone.
 
 Drift mirrors this: Mann–Kendall establishes the trend, Theil–Sen sizes it, and the total
 movement must clear the practical floor and exceed the residual scatter about the fitted
-line; the confidence-interval-width gate is applied additionally when intervals are present.
+line; the confidence-interval-width gate is applied additionally when intervals are present,
+again only able to suppress a candidate and never to create one.
 
 The **practical-magnitude floor** is a single hard threshold below which no finding surfaces,
 regardless of engine, direction, or how confidently it was measured. A change too small to

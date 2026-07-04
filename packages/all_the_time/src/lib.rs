@@ -11,9 +11,26 @@
 //! - [`Report`] - Thread-safe processor time statistics that can be merged and processed independently
 //! - [`ThreadSpan`] - Tracks thread processor time over a time period
 //! - [`ProcessSpan`] - Tracks process processor time over a time period
-//! - [`Operation`] - Calculates mean processor time per operation
+//! - [`Operation`] - Measures per-iteration processor time for a repeated operation
 //!
 //! This package is not meant for use in production, serving only as a development tool.
+//!
+//! # Primary metric
+//!
+//! Processor time is not deterministic: it jitters run to run with system load
+//! and scheduling. On top of that, Criterion chooses how many iterations to time
+//! and how many to discard as warm-up, so a raw pooled **mean** silently folds
+//! warm-up and one-off costs into the per-iteration figure and drifts as that
+//! sample mix changes between runs.
+//!
+//! The headline metric is therefore the **warmup-robust slope**: an
+//! iterations-weighted, through-origin fit of each span's total time against its
+//! iteration count, which recovers the marginal per-iteration cost even when the
+//! blend of warm-up and steady-state spans shifts. Each figure is paired with a
+//! bootstrap 95% confidence interval so its run-to-run uncertainty is shown
+//! rather than implied. The stdout summary and the JSON output both lead with the
+//! slope and interval; the pooled mean stays available through
+//! [`ReportOperation::mean`] for callers that still want it.
 //!
 //! # Example
 //!
@@ -50,7 +67,8 @@
 //! spans: a through-origin slope point estimate, the standard deviation, a 95%
 //! bootstrap confidence interval, and the observed minimum and maximum. The
 //! bootstrap uses a fixed seed, so the confidence interval is reproducible across
-//! runs of identical measurements. The stdout summary remains mean-only.
+//! runs of identical measurements. The stdout summary leads with the same
+//! warmup-robust slope and its confidence interval (see "Primary metric").
 //!
 //! These outputs are produced automatically, so a typical benchmark only needs
 //! to create a session and record work.

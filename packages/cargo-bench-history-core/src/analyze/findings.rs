@@ -6,8 +6,19 @@
 //! counts jitter a few percent run to run, and `alloc_tracker`'s per-iteration
 //! figures carry warmup and buffer-resize allocations amortized over a
 //! Criterion-chosen iteration count; Criterion wall time and `all_the_time`
-//! processor time jitter more visibly still. Every series is therefore judged
-//! noise-aware:
+//! processor time jitter more visibly still.
+//!
+//! The jitter is easy to underestimate because a Callgrind run *repeated on one
+//! unchanged machine* often reports the same count every time — the counter is
+//! deterministic for a fixed binary and input. What is not fixed is everything
+//! feeding it across the commits we compare: a different OS or CPU-microcode
+//! patch level, a different compiler patch release, the compiler's own
+//! run-to-run nondeterministic code-generation choices (inlining, ordering,
+//! layout) even at the same version, and Criterion scheduling a different
+//! iteration count when background load differs (which shifts how warmup and
+//! buffer-resize costs are amortized). Any of these perturbs the measured count
+//! without the code under test changing, so no metric can be assumed
+//! reproducible commit to commit. Every series is therefore judged noise-aware:
 //!
 //! * A Pettitt change-point *locates* a candidate split (its analytic p-value is
 //!   too conservative on short series to gate significance); both regimes must
@@ -17,8 +28,10 @@
 //!   between-commit residual scatter (the primary, series-intrinsic noise gate).
 //! * Where the engine reports a per-point confidence interval (Criterion,
 //!   `all_the_time`, `alloc_tracker`) the two regimes' intervals must also be
-//!   disjoint — an *additional* veto that can only tighten the decision, never
-//!   loosen it.
+//!   disjoint; if they overlap this veto *withholds* the finding, treating the
+//!   move as measurement noise. The veto direction is one-way: it can only
+//!   suppress a candidate the other gates would have reported — it can never
+//!   promote a move into a finding.
 //! * Surviving candidates then pass a Benjamini–Hochberg false-discovery filter so
 //!   a batch of series does not manufacture spurious findings.
 //!
@@ -736,7 +749,9 @@ fn latest_regime<'a>(
 /// significant Mann–Whitney difference, or — when a sample is too small to
 /// rank-test — rest on that residual gate alone. Where the engine additionally
 /// reports per-point confidence intervals, the two samples' intervals must also be
-/// disjoint; this is an extra veto that can only tighten the decision.
+/// disjoint; this is an extra veto that can only *suppress* a candidate the other
+/// gates would have reported (treating the move as noise when the intervals
+/// overlap) — it never turns a non-finding into a finding.
 fn compare_samples(
     series: &Series,
     before: &[&SeriesPoint],
@@ -781,7 +796,8 @@ fn compare_samples(
         // Too few points to rank-test (typically a single fresh tip or branch run):
         // the residual gate above is the significance proxy. Where per-point
         // confidence intervals exist, require the move to also clear the measurement
-        // noise band as an additional veto.
+        // noise band as an additional veto that can only suppress this candidate
+        // (never create one).
         let points: Vec<SeriesPoint> = before
             .iter()
             .chain(after.iter())

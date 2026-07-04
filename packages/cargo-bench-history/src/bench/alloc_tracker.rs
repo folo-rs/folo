@@ -9,9 +9,12 @@
 //! [`Engine::is_hardware_dependent`]). It is *not* deterministic, however:
 //! warmup and buffer-resize allocations are amortized over a Criterion-chosen
 //! iteration count, so the per-iteration figures jitter run to run. The adapter
-//! therefore prefers the warmup-robust slope and records the confidence interval
-//! when present. The committed fixtures under `tests/fixtures/alloc_tracker/` are
-//! real `alloc_tracker` output and act as a schema-drift canary.
+//! therefore prefers the warmup-robust slope. Current `alloc_tracker` output
+//! always carries a bootstrap confidence interval, so the adapter normally reads
+//! one; the interval fields are parsed as optional purely to tolerate legacy
+//! mean-only files, which then fall back to a single figure. The committed
+//! fixtures under `tests/fixtures/alloc_tracker/` are real `alloc_tracker` output
+//! and act as a schema-drift canary.
 //!
 //! [`Engine::is_hardware_dependent`]: crate::model::Engine::is_hardware_dependent
 
