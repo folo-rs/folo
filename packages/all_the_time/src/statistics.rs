@@ -160,4 +160,13 @@ mod tests {
         assert_eq!(stats.interval_low_nanos, 20.0);
         assert_eq!(stats.interval_high_nanos, 20.0);
     }
+
+    #[test]
+    fn nanos_to_duration_clamps_negatives_to_zero() {
+        // A tiny negative fit (possible from the bootstrap on near-zero data) is
+        // clamped so the formatter never panics, while a positive figure converts
+        // faithfully.
+        assert_eq!(nanos_to_duration(-5.0), Duration::ZERO);
+        assert_eq!(nanos_to_duration(1_000_000_000.0), Duration::from_secs(1));
+    }
 }

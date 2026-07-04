@@ -733,6 +733,16 @@ mod tests {
     }
 
     #[test]
+    fn report_operation_display_reports_no_measurements_when_empty() {
+        // A report operation whose metrics recorded no spans has no statistics, so
+        // its Display takes the `None` leg.
+        let operation = ReportOperation {
+            metrics: OperationMetrics::default(),
+        };
+        assert_eq!(operation.to_string(), "no measurements");
+    }
+
+    #[test]
     fn empty_report_display_shows_no_statistics_message() {
         let report = Report::new();
         let display_output = report.to_string();

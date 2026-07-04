@@ -353,4 +353,13 @@ mod tests {
             "Display should show the 100ms per-iteration slope: got {display}"
         );
     }
+
+    #[test]
+    fn display_reports_no_measurements_when_empty() {
+        // An operation with no recorded spans has no statistics, so its Display takes
+        // the `None` leg.
+        let session = create_test_session();
+        let operation = session.operation("test");
+        assert_eq!(operation.to_string(), "no measurements");
+    }
 }

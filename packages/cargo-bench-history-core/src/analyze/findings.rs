@@ -1686,6 +1686,25 @@ mod tests {
     }
 
     #[test]
+    fn change_point_within_its_own_residual_scatter_is_suppressed() {
+        // A rank-significant step (medians 102 -> 132, delta 30) whose regimes each
+        // wobble by 2. Under the default residual multiple the move stands clear of
+        // that scatter and is flagged; a deliberately high multiple pushes the noise
+        // band above the move, so only the residual gate rejects it (every earlier
+        // gate — persistence, Mann-Whitney, practical floor — still passes).
+        let series = series_of(&[100.0, 104.0, 100.0, 104.0, 130.0, 134.0, 130.0, 134.0]);
+        assert!(
+            evaluate_change_point(&series, &values_of(&series), &AnalysisConfig::default())
+                .is_some()
+        );
+        let config = AnalysisConfig {
+            residual_noise_multiple: 20.0,
+            ..AnalysisConfig::default()
+        };
+        assert!(evaluate_change_point(&series, &values_of(&series), &config).is_none());
+    }
+
+    #[test]
     fn sustained_step_is_flagged_as_a_change_point() {
         // A clean step from 100 to 130 with three points each side: a 3-vs-3 clean
         // step is Mann–Whitney significant.
@@ -2461,6 +2480,22 @@ mod tests {
     }
 
     #[test]
+    fn drift_within_its_own_residual_scatter_is_suppressed() {
+        // A significant upward trend (100 -> 140) that scatters about its Theil-Sen
+        // line. Under the default residual multiple the total move dwarfs that
+        // scatter and is flagged as drift; a deliberately high multiple lifts the
+        // noise band above the move, so only the residual gate rejects it (the
+        // length, Mann-Kendall, and practical-floor gates still pass).
+        let series = series_of(&[100.0, 110.0, 109.0, 120.0, 130.0, 140.0]);
+        assert!(evaluate_drift(&series, &values_of(&series), &AnalysisConfig::default()).is_some());
+        let config = AnalysisConfig {
+            residual_noise_multiple: 1000.0,
+            ..AnalysisConfig::default()
+        };
+        assert!(evaluate_drift(&series, &values_of(&series), &config).is_none());
+    }
+
+    #[test]
     fn drift_needs_at_least_the_minimum_points() {
         // The length gate is `n < drift_min_points`: a series one point short is
         // rejected outright, while a longer series is still evaluated (so a gate
@@ -2629,6 +2664,32 @@ mod tests {
             evaluate_resolved_spike(&series, &values_of(&series), &AnalysisConfig::default())
                 .is_none()
         );
+    }
+
+    #[test]
+    fn resolved_spike_within_its_own_residual_scatter_is_suppressed() {
+        // A recovered plateau (200) far above a baseline (100) that itself wobbles by
+        // 2. Under the default residual multiple the deviation stands clear and the
+        // spike is flagged; a deliberately high multiple lifts the noise band above
+        // the deviation, so only the residual gate rejects it (the recovery,
+        // practical-floor, and both rank gates still pass).
+        let values: Vec<f64> = [98.0, 102.0]
+            .into_iter()
+            .cycle()
+            .take(8)
+            .chain([198.0, 202.0])
+            .chain([98.0, 102.0].into_iter().cycle().take(8))
+            .collect();
+        let series = series_of(&values);
+        assert!(
+            evaluate_resolved_spike(&series, &values_of(&series), &AnalysisConfig::default())
+                .is_some()
+        );
+        let config = AnalysisConfig {
+            residual_noise_multiple: 60.0,
+            ..AnalysisConfig::default()
+        };
+        assert!(evaluate_resolved_spike(&series, &values_of(&series), &config).is_none());
     }
 
     #[test]

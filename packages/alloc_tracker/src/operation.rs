@@ -454,4 +454,12 @@ mod tests {
         );
         assert!(display_output.contains("250"), "got {display_output}");
     }
+
+    #[test]
+    fn operation_display_reports_no_measurements_when_empty() {
+        // An operation with no recorded spans has no dispersion statistics, so its
+        // Display takes the "no measurements" leg.
+        let operation = create_test_operation();
+        assert_eq!(operation.to_string(), "no measurements");
+    }
 }

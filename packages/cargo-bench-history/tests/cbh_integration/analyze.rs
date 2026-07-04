@@ -712,9 +712,11 @@ async fn analyze_alloc_tracker_ignores_gaps_in_a_sparse_history() {
 /// A slow, monotonic `all_the_time` processor-time drift is flagged as a `drift`
 /// finding. Processor time is a noisy, hardware-dependent measurement (like
 /// Criterion wall time), so a gentle ramp clears the practical-magnitude floor only
-/// via the trend detector - even though `all_the_time` reports no confidence
-/// interval, the detector falls back gracefully to the Mann-Kendall trend and
-/// practical floor.
+/// via the trend detector. These synthetic points are seeded mean-only (no
+/// confidence interval), so the detector falls back gracefully to the Mann-Kendall
+/// trend and practical floor. In practice `all_the_time` does record a bootstrap
+/// CI, which would only ever act as an additional veto here, never change the
+/// outcome.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn analyze_all_the_time_slow_drift_is_flagged_as_drift() {

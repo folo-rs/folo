@@ -588,4 +588,14 @@ mod tests {
             "Display should show the 50ms per-iteration slope: got {display}"
         );
     }
+
+    #[test]
+    fn report_operation_display_reports_no_measurements_when_empty() {
+        // A report operation whose metrics recorded no spans has no statistics, so
+        // its Display takes the `None` leg.
+        let op = ReportOperation {
+            metrics: OperationMetrics::default(),
+        };
+        assert_eq!(op.to_string(), "no measurements");
+    }
 }
