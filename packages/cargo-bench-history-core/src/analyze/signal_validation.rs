@@ -118,6 +118,11 @@ impl Mode {
 
     /// The analysis context this mode is evaluated under. `merge_base_index` is consulted
     /// only by branch mode; the other modes ignore it.
+    ///
+    /// `include_improvements` is set from [`reports_improvements`](Self::reports_improvements)
+    /// so the context matches the mode's intended reporting semantics: branch (which
+    /// reports both directions) opts in, history and tip opt out. Branch mode ignores the
+    /// flag today, but pinning it consistently keeps the context correct if that changes.
     fn context(self, merge_base_index: Option<usize>) -> AnalysisContext {
         let mode = match self {
             Self::History => AnalysisMode::History,
@@ -128,7 +133,7 @@ impl Mode {
             mode,
             config: AnalysisConfig::default(),
             merge_base_index,
-            include_improvements: false,
+            include_improvements: self.reports_improvements(),
             include_inactive: false,
         }
     }
