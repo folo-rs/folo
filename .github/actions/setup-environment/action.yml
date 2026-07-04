@@ -4,71 +4,112 @@ description: Setup development environment for Folo project
 runs:
   using: composite
   steps:
-    - name: Install dependencies (Linux)
+    - name: Install APT packages (Linux)
+      # The GitHub-hosted Ubuntu images already ship git, git-lfs, gcc, make, curl,
+      # libssl-dev, pkg-config and PowerShell (apt reports them "already the newest"), so
+      # only build-essential, cmake and valgrind — plus their dependencies — are genuinely
+      # installed here. Package downloads are not the bottleneck (~1s for tens of MB on the
+      # Azure mirrors); the cost is the `apt-get update` index refresh and the dpkg
+      # unpack/configure. cache-apt-pkgs-action restores the already-configured files from
+      # an actions/cache entry and skips apt entirely on a hit, cutting this step from ~15s
+      # (amd64) / ~26s (arm64) to a few seconds. The action is in upstream maintenance mode,
+      # so `@v1` only rolls forward to backward-compatible fixes within its major line —
+      # there is no breaking v2 to chase.
+      #
+      # execute_install_scripts runs each package's postinst (e.g. ldconfig) on restore so
+      # valgrind's shared-library dependencies resolve. No PR-validation job runs valgrind
+      # (only the nightly bench-history workflow does), so the Verify step below actually
+      # executes valgrind to prove the restored fileset is functional before a regression
+      # could reach that workflow.
+      if: runner.os == 'Linux'
+      uses: awalsh128/cache-apt-pkgs-action@v1
+      with:
+        packages: build-essential cmake valgrind
+        version: "1"
+        execute_install_scripts: true
+
+    - name: Install PowerShell (Linux ARM64)
+      # amd64 Ubuntu runners preinstall PowerShell, but the arm64 images do not ship a pwsh
+      # the packages.microsoft.com apt repo can satisfy — that repo only publishes amd64
+      # packages, so `apt install powershell` fails on arm64 with "Depends: libc6:amd64 but
+      # it is not installable". Microsoft instead ships arm64 PowerShell as a tarball on the
+      # PowerShell GitHub releases page, which we install here. --retry-all-errors covers
+      # transient TLS failures against GitHub during early boot.
+      if: runner.os == 'Linux' && runner.arch == 'ARM64'
+      shell: bash
+      run: |
+        set -x
+        # Pinned to a current LTS release. Bump as newer 7.4.x patches ship.
+        PWSH_VERSION="7.4.6"
+        curl --fail --silent --show-error --location \
+          --retry 5 --retry-delay 2 --retry-all-errors \
+          --output /tmp/powershell.tar.gz \
+          "https://github.com/PowerShell/PowerShell/releases/download/v${PWSH_VERSION}/powershell-${PWSH_VERSION}-linux-arm64.tar.gz"
+        sudo mkdir -p /opt/microsoft/powershell/7
+        sudo tar zxf /tmp/powershell.tar.gz -C /opt/microsoft/powershell/7
+        sudo chmod +x /opt/microsoft/powershell/7/pwsh
+        sudo ln -sf /opt/microsoft/powershell/7/pwsh /usr/bin/pwsh
+
+    - name: Configure Git LFS (Linux)
       if: runner.os == 'Linux'
       shell: bash
-      env:
-        DEBIAN_FRONTEND: noninteractive
+      run: git lfs install
+    
+    - name: Cache Rust toolchains
+      # Restored BEFORE the toolchain is installed so the pinned stable, the MSRV and the
+      # pinned nightly (whose profile pulls rust-src, llvm-tools-preview and miri) are all
+      # served from cache, turning every `rustup toolchain install` — the dtolnay step below
+      # and the ones inside `just install-tools` — into a no-op on a hit. rust-cache below
+      # caches ~/.cargo and ./target but never ~/.rustup, so re-installing these toolchains is
+      # the single largest uncached cost of this composite.
+      #
+      # It also means every toolchain is already present when Swatinem/rust-cache runs, so its
+      # shared `prerequisites` key (which enumerates `rustup toolchain list`) reflects the
+      # exact toolchain set. A deliberate bump of any pin then rebuilds that cache, which is
+      # what we want.
+      #
+      # Keyed on OS + arch + a hash of the files that pin every toolchain version
+      # (constants.env holds RUST_MSRV/RUST_NIGHTLY; rust-toolchain.toml holds the stable
+      # channel), so any version bump invalidates the cache automatically. Unlike the
+      # compiled cargo-tool binaries in ~/.cargo/bin, rustup toolchains are prebuilt,
+      # relocatable artifacts that do not link against image-specific dylibs, so the runner
+      # ImageVersion is deliberately left out of the key.
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.rustup/toolchains
+          ~/.rustup/update-hashes
+        key: rustup-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('constants.env', 'rust-toolchain.toml') }}
+
+    - name: Read pinned Rust toolchain channel
+      # dtolnay/rust-toolchain cannot read rust-toolchain.toml — its channel comes from the
+      # action @rev or the `toolchain` input — so extract the pinned stable channel here and
+      # hand it to the install step below. Parsing in PowerShell keeps it portable across the
+      # Linux/macOS/Windows runners (macOS ships BSD grep, which has no -P). The version is
+      # never hardcoded; rust-toolchain.toml stays the single source of truth.
+      id: rust-toolchain
+      shell: pwsh
       run: |
-        # Print each command before executing so a future silent failure points at
-        # the offending line. The script previously used "wget -q" which masked an
-        # intermittent SSL verification failure as a context-free "exit code 5".
-        set -x
+        $ErrorActionPreference = 'Stop'
+        $match = Select-String -Path 'rust-toolchain.toml' -Pattern '^\s*channel\s*=\s*"([^"]+)"' | Select-Object -First 1
+        if (-not $match) { throw 'Could not read the pinned channel from rust-toolchain.toml' }
+        $channel = $match.Matches[0].Groups[1].Value
+        Write-Host "Pinned Rust channel from rust-toolchain.toml: $channel"
+        "channel=$channel" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-        # This supposedly speeds up installation by avoiding mandb updates.
-        sudo mv /usr/bin/mandb /usr/bin/mandb.deactivated && sudo cp -p /bin/true /usr/bin/mandb
-
-        ARCH="$(dpkg --print-architecture)"
-
-        # PowerShell on Linux is distributed differently per architecture:
-        # - amd64: Microsoft's apt repo ships a powershell package, so we register the
-        #   repo and install via apt alongside our other system packages.
-        # - arm64: The packages.microsoft.com apt repo for Ubuntu only ships amd64
-        #   PowerShell packages — installing the repo and apt-getting `powershell`
-        #   fails with "Depends: libc6:amd64 but it is not installable". Microsoft
-        #   instead ships ARM64 PowerShell as a tarball on the PowerShell GitHub
-        #   releases page, which is what we use here.
-        if [ "$ARCH" = "amd64" ]; then
-          # Add Microsoft package repository (for PowerShell and any other Microsoft packages).
-          # We use curl with --retry-all-errors because the runner can transiently fail
-          # TLS verification against packages.microsoft.com during early boot — likely a
-          # race with unattended-upgrades rewriting /etc/ssl/certs/ca-certificates.crt.
-          # --show-error ensures the failure is visible if all retries are exhausted.
-          curl --fail --silent --show-error --location \
-            --retry 5 --retry-delay 2 --retry-all-errors \
-            --output packages-microsoft-prod.deb \
-            "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb"
-          sudo dpkg -i --force-confnew packages-microsoft-prod.deb
-
-          sudo apt update
-          sudo apt install -y git git-lfs build-essential cmake gcc make curl libssl-dev pkg-config powershell valgrind
-        elif [ "$ARCH" = "arm64" ]; then
-          sudo apt update
-          sudo apt install -y git git-lfs build-essential cmake gcc make curl libssl-dev pkg-config valgrind
-
-          # Pinned to a current LTS release. Bump as newer 7.4.x patches ship.
-          PWSH_VERSION="7.4.6"
-          curl --fail --silent --show-error --location \
-            --retry 5 --retry-delay 2 --retry-all-errors \
-            --output /tmp/powershell.tar.gz \
-            "https://github.com/PowerShell/PowerShell/releases/download/v${PWSH_VERSION}/powershell-${PWSH_VERSION}-linux-arm64.tar.gz"
-          sudo mkdir -p /opt/microsoft/powershell/7
-          sudo tar zxf /tmp/powershell.tar.gz -C /opt/microsoft/powershell/7
-          sudo chmod +x /opt/microsoft/powershell/7/pwsh
-          sudo ln -sf /opt/microsoft/powershell/7/pwsh /usr/bin/pwsh
-        else
-          echo "ERROR: Unsupported Linux architecture '$ARCH'." >&2
-          echo "Extend the setup-environment action to add a PowerShell install path" >&2
-          echo "for this architecture before adding a runner of this type to CI." >&2
-          exit 1
-        fi
-
-        # Set up Git LFS
-        git lfs install
-    
     - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-    
+      # Pinned to the exact channel from rust-toolchain.toml (parsed above) via @master —
+      # dtolnay's documented ref for passing an explicit `toolchain`. Using @stable would
+      # instead install the *latest* stable and roll it forward every ~6 weeks; because
+      # Swatinem/rust-cache enumerates every installed toolchain (`rustup toolchain list`)
+      # into its key, that rolling stable would silently bust the shared compilation cache on
+      # each upstream release even though the workspace only ever builds with the pinned
+      # channel. Pinning it keeps the toolchain set — and thus the cache key — stable until we
+      # deliberately bump the pin.
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ steps.rust-toolchain.outputs.channel }}
+
     - name: Setup Rust cache
       uses: Swatinem/rust-cache@v2
       with:
@@ -82,7 +123,29 @@ runs:
         # toolchain are identical. ImageVersion is set automatically on every GitHub-hosted
         # runner. env-vars is additive on top of the rust-cache defaults.
         env-vars: ImageVersion
-    
+
+    - name: Cache actionlint and ShellCheck
+      # just install-tools fetches pinned actionlint and ShellCheck as standalone binaries
+      # (scripts/install-actionlint.ps1, scripts/install-shellcheck.ps1) into ~/.cargo/bin on
+      # every job and every platform. Unlike the cargo-installed tools that also live there,
+      # these are plain downloaded files with no cargo install-metadata, so Swatinem/rust-cache's
+      # bin caching never tracks them and they are otherwise re-downloaded and re-extracted every
+      # run. Caching the two binaries lets each script's "pinned version already present" check
+      # short-circuit the download on a hit, so this step is restored before Install development
+      # tools below (which runs install-tools).
+      #
+      # Keyed on OS + arch + a hash of the two install scripts, which embed both the pinned
+      # versions and their published checksums — so bumping either tool invalidates the cache
+      # automatically. Like rustup toolchains these are prebuilt, relocatable binaries that do not
+      # link against image-specific dylibs, so the runner ImageVersion is deliberately left out of
+      # the key.
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/actionlint*
+          ~/.cargo/bin/shellcheck*
+        key: lint-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-actionlint.ps1', 'scripts/install-shellcheck.ps1') }}
+
     - name: Install just
       shell: bash
       run: cargo install just --locked
@@ -103,4 +166,13 @@ runs:
         cargo --version
         rustc --version
         pwsh --version
+        if [ "$RUNNER_OS" = "Linux" ]; then
+          # Prove the APT packages restored from the cache are functional. valgrind is the
+          # one that matters: no PR-validation job runs it (only the nightly bench-history
+          # workflow does), and a fileset-only cache restore could leave its shared
+          # libraries unregistered — so actually run it against a trivial program rather
+          # than only printing a version.
+          cmake --version
+          valgrind --quiet --error-exitcode=1 /bin/true
+        fi
         echo "Environment setup complete"
