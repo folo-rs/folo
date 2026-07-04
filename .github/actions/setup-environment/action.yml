@@ -54,35 +54,18 @@ runs:
       shell: bash
       run: git lfs install
     
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-    
-    - name: Setup Rust cache
-      uses: Swatinem/rust-cache@v2
-      with:
-        # We use the same shared key for all the different workflows that use this action.
-        # This enables more reuse, e.g. the Copilot workflow can reuse artifacts from the
-        # validate workflow, which speeds up copilot executions.
-        shared-key: prerequisites
-        # Include the runner image version (e.g. macos-15-arm64 20260511.0048.1) in the
-        # cache key. Cached binaries can subtly depend on image-specific dylibs and tools,
-        # so caches must not flow across image versions even when the lockfile and rust
-        # toolchain are identical. ImageVersion is set automatically on every GitHub-hosted
-        # runner. env-vars is additive on top of the rust-cache defaults.
-        env-vars: ImageVersion
-
     - name: Cache Rust toolchains
-      # rust-cache above caches ~/.cargo and ./target but never ~/.rustup, so without this
-      # every job re-downloads all three toolchains that `just install-tools` installs:
-      # stable, the MSRV, and the pinned nightly (whose profile pulls rust-src,
-      # llvm-tools-preview and miri). That is the single largest uncached cost of this
-      # composite. Caching the installed toolchains turns the `rustup toolchain install`
-      # calls into no-ops on a hit.
+      # Restored BEFORE the toolchain is installed so the pinned stable, the MSRV and the
+      # pinned nightly (whose profile pulls rust-src, llvm-tools-preview and miri) are all
+      # served from cache, turning every `rustup toolchain install` — the dtolnay step below
+      # and the ones inside `just install-tools` — into a no-op on a hit. rust-cache below
+      # caches ~/.cargo and ./target but never ~/.rustup, so re-installing these toolchains is
+      # the single largest uncached cost of this composite.
       #
-      # Placed AFTER the rust-cache step on purpose: rust-cache derives its key from the
-      # toolchains installed when it runs (here, only stable). Restoring the nightly/MSRV
-      # toolchains before it would fold their hashes into the shared `prerequisites` key
-      # and invalidate the large compilation cache for every job at once.
+      # It also means every toolchain is already present when Swatinem/rust-cache runs, so its
+      # shared `prerequisites` key (which enumerates `rustup toolchain list`) reflects the
+      # exact toolchain set. A deliberate bump of any pin then rebuilds that cache, which is
+      # what we want.
       #
       # Keyed on OS + arch + a hash of the files that pin every toolchain version
       # (constants.env holds RUST_MSRV/RUST_NIGHTLY; rust-toolchain.toml holds the stable
@@ -96,6 +79,49 @@ runs:
           ~/.rustup/toolchains
           ~/.rustup/update-hashes
         key: rustup-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('constants.env', 'rust-toolchain.toml') }}
+
+    - name: Read pinned Rust toolchain channel
+      # dtolnay/rust-toolchain cannot read rust-toolchain.toml — its channel comes from the
+      # action @rev or the `toolchain` input — so extract the pinned stable channel here and
+      # hand it to the install step below. Parsing in PowerShell keeps it portable across the
+      # Linux/macOS/Windows runners (macOS ships BSD grep, which has no -P). The version is
+      # never hardcoded; rust-toolchain.toml stays the single source of truth.
+      id: rust-toolchain
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $match = Select-String -Path 'rust-toolchain.toml' -Pattern '^\s*channel\s*=\s*"([^"]+)"' | Select-Object -First 1
+        if (-not $match) { throw 'Could not read the pinned channel from rust-toolchain.toml' }
+        $channel = $match.Matches[0].Groups[1].Value
+        Write-Host "Pinned Rust channel from rust-toolchain.toml: $channel"
+        "channel=$channel" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+    - name: Install Rust toolchain
+      # Pinned to the exact channel from rust-toolchain.toml (parsed above) via @master —
+      # dtolnay's documented ref for passing an explicit `toolchain`. Using @stable would
+      # instead install the *latest* stable and roll it forward every ~6 weeks; because
+      # Swatinem/rust-cache enumerates every installed toolchain (`rustup toolchain list`)
+      # into its key, that rolling stable would silently bust the shared compilation cache on
+      # each upstream release even though the workspace only ever builds with the pinned
+      # channel. Pinning it keeps the toolchain set — and thus the cache key — stable until we
+      # deliberately bump the pin.
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ steps.rust-toolchain.outputs.channel }}
+
+    - name: Setup Rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        # We use the same shared key for all the different workflows that use this action.
+        # This enables more reuse, e.g. the Copilot workflow can reuse artifacts from the
+        # validate workflow, which speeds up copilot executions.
+        shared-key: prerequisites
+        # Include the runner image version (e.g. macos-15-arm64 20260511.0048.1) in the
+        # cache key. Cached binaries can subtly depend on image-specific dylibs and tools,
+        # so caches must not flow across image versions even when the lockfile and rust
+        # toolchain are identical. ImageVersion is set automatically on every GitHub-hosted
+        # runner. env-vars is additive on top of the rust-cache defaults.
+        env-vars: ImageVersion
 
     - name: Cache actionlint and ShellCheck
       # just install-tools fetches pinned actionlint and ShellCheck as standalone binaries
