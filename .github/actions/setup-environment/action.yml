@@ -4,67 +4,55 @@ description: Setup development environment for Folo project
 runs:
   using: composite
   steps:
-    - name: Install dependencies (Linux)
+    - name: Install APT packages (Linux)
+      # The GitHub-hosted Ubuntu images already ship git, git-lfs, gcc, make, curl,
+      # libssl-dev, pkg-config and PowerShell (apt reports them "already the newest"), so
+      # only build-essential, cmake and valgrind — plus their dependencies — are genuinely
+      # installed here. Package downloads are not the bottleneck (~1s for tens of MB on the
+      # Azure mirrors); the cost is the `apt-get update` index refresh and the dpkg
+      # unpack/configure. cache-apt-pkgs-action restores the already-configured files from
+      # an actions/cache entry and skips apt entirely on a hit, cutting this step from ~15s
+      # (amd64) / ~26s (arm64) to a few seconds. Its v1 line is in upstream maintenance
+      # lock, so the major tag will not shift under us.
+      #
+      # execute_install_scripts runs each package's postinst (e.g. ldconfig) on restore so
+      # valgrind's shared-library dependencies resolve. No PR-validation job runs valgrind
+      # (only the nightly bench-history workflow does), so the Verify step below actually
+      # executes valgrind to prove the restored fileset is functional before a regression
+      # could reach that workflow.
+      if: runner.os == 'Linux'
+      uses: awalsh128/cache-apt-pkgs-action@v1
+      with:
+        packages: build-essential cmake valgrind
+        version: "1"
+        execute_install_scripts: true
+
+    - name: Install PowerShell (Linux ARM64)
+      # amd64 Ubuntu runners preinstall PowerShell, but the arm64 images do not ship a pwsh
+      # the packages.microsoft.com apt repo can satisfy — that repo only publishes amd64
+      # packages, so `apt install powershell` fails on arm64 with "Depends: libc6:amd64 but
+      # it is not installable". Microsoft instead ships arm64 PowerShell as a tarball on the
+      # PowerShell GitHub releases page, which we install here. --retry-all-errors covers
+      # transient TLS failures against GitHub during early boot.
+      if: runner.os == 'Linux' && runner.arch == 'ARM64'
+      shell: bash
+      run: |
+        set -x
+        # Pinned to a current LTS release. Bump as newer 7.4.x patches ship.
+        PWSH_VERSION="7.4.6"
+        curl --fail --silent --show-error --location \
+          --retry 5 --retry-delay 2 --retry-all-errors \
+          --output /tmp/powershell.tar.gz \
+          "https://github.com/PowerShell/PowerShell/releases/download/v${PWSH_VERSION}/powershell-${PWSH_VERSION}-linux-arm64.tar.gz"
+        sudo mkdir -p /opt/microsoft/powershell/7
+        sudo tar zxf /tmp/powershell.tar.gz -C /opt/microsoft/powershell/7
+        sudo chmod +x /opt/microsoft/powershell/7/pwsh
+        sudo ln -sf /opt/microsoft/powershell/7/pwsh /usr/bin/pwsh
+
+    - name: Configure Git LFS (Linux)
       if: runner.os == 'Linux'
       shell: bash
-      env:
-        DEBIAN_FRONTEND: noninteractive
-      run: |
-        # Print each command before executing so a future silent failure points at
-        # the offending line. The script previously used "wget -q" which masked an
-        # intermittent SSL verification failure as a context-free "exit code 5".
-        set -x
-
-        # This supposedly speeds up installation by avoiding mandb updates.
-        sudo mv /usr/bin/mandb /usr/bin/mandb.deactivated && sudo cp -p /bin/true /usr/bin/mandb
-
-        ARCH="$(dpkg --print-architecture)"
-
-        # PowerShell on Linux is distributed differently per architecture:
-        # - amd64: Microsoft's apt repo ships a powershell package, so we register the
-        #   repo and install via apt alongside our other system packages.
-        # - arm64: The packages.microsoft.com apt repo for Ubuntu only ships amd64
-        #   PowerShell packages — installing the repo and apt-getting `powershell`
-        #   fails with "Depends: libc6:amd64 but it is not installable". Microsoft
-        #   instead ships ARM64 PowerShell as a tarball on the PowerShell GitHub
-        #   releases page, which is what we use here.
-        if [ "$ARCH" = "amd64" ]; then
-          # Add Microsoft package repository (for PowerShell and any other Microsoft packages).
-          # We use curl with --retry-all-errors because the runner can transiently fail
-          # TLS verification against packages.microsoft.com during early boot — likely a
-          # race with unattended-upgrades rewriting /etc/ssl/certs/ca-certificates.crt.
-          # --show-error ensures the failure is visible if all retries are exhausted.
-          curl --fail --silent --show-error --location \
-            --retry 5 --retry-delay 2 --retry-all-errors \
-            --output packages-microsoft-prod.deb \
-            "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb"
-          sudo dpkg -i --force-confnew packages-microsoft-prod.deb
-
-          sudo apt update
-          sudo apt install -y git git-lfs build-essential cmake gcc make curl libssl-dev pkg-config powershell valgrind
-        elif [ "$ARCH" = "arm64" ]; then
-          sudo apt update
-          sudo apt install -y git git-lfs build-essential cmake gcc make curl libssl-dev pkg-config valgrind
-
-          # Pinned to a current LTS release. Bump as newer 7.4.x patches ship.
-          PWSH_VERSION="7.4.6"
-          curl --fail --silent --show-error --location \
-            --retry 5 --retry-delay 2 --retry-all-errors \
-            --output /tmp/powershell.tar.gz \
-            "https://github.com/PowerShell/PowerShell/releases/download/v${PWSH_VERSION}/powershell-${PWSH_VERSION}-linux-arm64.tar.gz"
-          sudo mkdir -p /opt/microsoft/powershell/7
-          sudo tar zxf /tmp/powershell.tar.gz -C /opt/microsoft/powershell/7
-          sudo chmod +x /opt/microsoft/powershell/7/pwsh
-          sudo ln -sf /opt/microsoft/powershell/7/pwsh /usr/bin/pwsh
-        else
-          echo "ERROR: Unsupported Linux architecture '$ARCH'." >&2
-          echo "Extend the setup-environment action to add a PowerShell install path" >&2
-          echo "for this architecture before adding a runner of this type to CI." >&2
-          exit 1
-        fi
-
-        # Set up Git LFS
-        git lfs install
+      run: git lfs install
     
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
@@ -129,4 +117,13 @@ runs:
         cargo --version
         rustc --version
         pwsh --version
+        if [ "$RUNNER_OS" = "Linux" ]; then
+          # Prove the APT packages restored from the cache are functional. valgrind is the
+          # one that matters: no PR-validation job runs it (only the nightly bench-history
+          # workflow does), and a fileset-only cache restore could leave its shared
+          # libraries unregistered — so actually run it against a trivial program rather
+          # than only printing a version.
+          cmake --version
+          valgrind --quiet --error-exitcode=1 /bin/true
+        fi
         echo "Environment setup complete"
