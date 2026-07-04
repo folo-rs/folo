@@ -885,6 +885,21 @@ impl Workspace {
             .expect("the Markdown report was written to the requested path")
     }
 
+    /// Drives `analyze` requesting the condensed Markdown summary into a file and
+    /// returns its contents. Appends `--no-text --markdown-summary <unique path>`,
+    /// so the summary file is the only rendered output. Panics if the command fails.
+    pub(crate) async fn drive_markdown_summary(&self, args: &[&str]) -> String {
+        let name = format!(
+            "cbh-summary-{}.md",
+            OUTPUT_SEQ.fetch_add(1, Ordering::Relaxed)
+        );
+        let mut full: Vec<&str> = args.to_vec();
+        full.extend_from_slice(&["--no-text", "--markdown-summary", &name]);
+        self.drive(&full).await.unwrap();
+        self.read(&name)
+            .expect("the Markdown summary was written to the requested path")
+    }
+
     /// All stored objects as `(object key, parsed result set)` pairs, sorted by key.
     pub(crate) fn stored_objects(&self) -> Vec<(String, Run)> {
         let store = self.root().join("store");
@@ -1005,6 +1020,55 @@ impl Workspace {
         self.seed_callgrind("c5", 130.0);
         self.commit_dated("2024-01-06", "c6");
         self.seed_callgrind("c6", 130.0);
+    }
+
+    /// Seeds a rising Callgrind history for `count` distinct benchmarks sharing one
+    /// partition, so a single analysis pass yields `count` regression findings of
+    /// distinct magnitudes. Each benchmark holds a flat baseline of 100 across the
+    /// first three commits, then steps to a benchmark-specific higher value across
+    /// the last three — a sustained regression the change-point detector flags.
+    /// Benchmark `i` steps to `120 + i`, so magnitudes are distinct and strictly
+    /// increasing, giving the global ranking a deterministic order.
+    pub(crate) fn seed_many_rising_callgrind_history(&self, count: usize) {
+        let baseline = vec![100.0; count];
+        // `count` is a small test parameter; a u16 cast keeps the value exact and
+        // avoids a lossy `usize as f64` conversion.
+        let raised: Vec<f64> = (0..count)
+            .map(|index| {
+                120.0 + f64::from(u16::try_from(index).expect("benchmark count fits in u16"))
+            })
+            .collect();
+        for (date, label) in [
+            ("2024-01-01", "c1"),
+            ("2024-01-02", "c2"),
+            ("2024-01-03", "c3"),
+        ] {
+            self.commit_dated(date, label);
+            self.seed_many_callgrind(label, &baseline);
+        }
+        for (date, label) in [
+            ("2024-01-04", "c4"),
+            ("2024-01-05", "c5"),
+            ("2024-01-06", "c6"),
+        ] {
+            self.commit_dated(date, label);
+            self.seed_many_callgrind(label, &raised);
+        }
+    }
+
+    /// Seeds one Callgrind result set carrying one `Ir` benchmark per entry in
+    /// `values` for the previously created commit `label`, all in the shared
+    /// `x86_64`/`synthetic` partition.
+    fn seed_many_callgrind(&self, label: &str, values: &[f64]) {
+        let commit_id = self.commit_id(label);
+        let observed = self.committer_time(&commit_id);
+        let key = format!(
+            "v1/testproj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit_id}/clean.json"
+        );
+        self.seed(
+            &key,
+            &many_benchmark_result_set(observed.as_second(), &commit_id, values),
+        );
     }
 
     /// Seeds one Criterion `wall_time` result set on the previously created commit
@@ -1205,6 +1269,37 @@ pub(crate) fn two_benchmark_result_set(effective: i64, commit: &str, alpha: f64,
             ir(beta),
         ),
     ];
+    Run::new(context, records)
+}
+
+/// Builds a Callgrind result set carrying one `Ir` benchmark per entry in
+/// `values`, each under a distinct, zero-padded benchmark id so a single
+/// partition can host many independent series. Stamped with the effective second
+/// and `commit`.
+pub(crate) fn many_benchmark_result_set(effective: i64, commit: &str, values: &[f64]) -> Run {
+    let time = Timestamp::from_second(effective).unwrap();
+    let git = git_info(commit);
+    let context = RunContext::new(
+        time,
+        git,
+        EnvironmentInfo::default(),
+        ToolchainInfo::default(),
+        TOOL_VERSION.to_owned(),
+    );
+    let records = values
+        .iter()
+        .enumerate()
+        .map(|(index, &value)| {
+            BenchmarkResult::new(
+                BenchmarkId::new(nonempty![
+                    "many".to_owned(),
+                    format!("many::bench_{index:03}"),
+                    "wide".to_owned(),
+                ]),
+                vec![Metric::new(MetricKind::InstructionCount, value)],
+            )
+        })
+        .collect();
     Run::new(context, records)
 }
 

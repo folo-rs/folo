@@ -9,6 +9,8 @@
 //! ranked findings, and a per-set breakdown follows so each comparable partition
 //! reads as its own section.
 
+use std::num::NonZero;
+
 use colored::{Color, Colorize};
 use rasciigraph::{Config, plot_colored, plot_many_colored};
 use serde::Serialize;
@@ -21,6 +23,13 @@ use crate::model::{BenchmarkId, DiscriminantSet};
 const CHART_HEIGHT: u32 = 4;
 /// Width, in columns, of a history-mode finding chart.
 const CHART_WIDTH: u32 = 48;
+
+/// The number of findings a Markdown summary retains by default.
+///
+/// Enough to convey the most significant movers while keeping the rendered report
+/// comfortably within a GitHub issue body's size limit even when an analysis flags
+/// many changes.
+pub const DEFAULT_SUMMARY_LIMIT: NonZero<usize> = NonZero::new(20).expect("20 is non-zero");
 
 /// The selectable output format of an analysis report.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -622,6 +631,77 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
     finish(&lines)
 }
 
+/// Renders a condensed Markdown report carrying only the `limit` most significant
+/// findings, so a large analysis still fits within a downstream size limit (a GitHub
+/// issue body caps at 65,536 characters).
+///
+/// The header repeats the full Markdown report's totals — computed from *every*
+/// finding, not the retained subset — then a flat, globally-ranked list of the top
+/// `limit` findings follows. The per-set breakdown the full Markdown report groups by
+/// is deliberately dropped: a summary is a single ranked list, and that grouping is the
+/// main length driver. When findings were dropped, a note states how many of the
+/// total are shown so a reader knows the report is partial and to consult the full
+/// report for the rest.
+#[must_use]
+pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -> String {
+    // Charts embed ANSI color when `colored` is active; force it off so the fenced
+    // blocks carry plain characters, matching `render_markdown`. The guard restores
+    // ambient auto-detection on return.
+    let _color = ColorOverride::force(false);
+
+    let regressions = count_top(input.findings, Direction::Regression);
+
+    let mut lines = vec![
+        format!("# Benchmark history analysis: {}", input.project),
+        String::new(),
+        format!("- Commit: {}", tip_label(input.tip_commit, input.tip_dirty)),
+        format!("- Mode: {}", input.mode),
+        format!(
+            "- Runs analyzed: {}",
+            runs_with_span(input.runs, input.commit_span)
+        ),
+        format!("- Regressions: {regressions}"),
+    ];
+    if input.report_improvements {
+        lines.push(format!(
+            "- Improvements: {}",
+            count_top(input.findings, Direction::Improvement)
+        ));
+    }
+
+    if input.findings.is_empty() {
+        lines.push(String::new());
+        lines.push("No notable changes detected.".to_owned());
+        if let Some(hint) = input.hint {
+            lines.push(String::new());
+            lines.push(hint.to_owned());
+        }
+        push_warning(&mut lines, input.warning);
+        return finish(&lines);
+    }
+
+    // The findings are already globally ranked by descending magnitude, so the leading
+    // `limit` are the top movers. When any were dropped, name the total so a reader
+    // knows to reach for the full report (the total exceeds `limit`, which is at least
+    // one, so the total is at least two and "findings" is unconditionally plural).
+    if input.findings.len() > limit.get() {
+        lines.push(String::new());
+        lines.push(format!(
+            "> Showing the top {limit} of {} findings by magnitude.",
+            input.findings.len()
+        ));
+    }
+
+    // A per-commit chart is meaningful only for a history timeline, matching the full
+    // reports; branch/tip modes compare against a baseline.
+    let chart_enabled = input.mode == "history";
+    for finding in input.findings.iter().take(limit.get()) {
+        push_finding_markdown(&mut lines, finding, chart_enabled);
+    }
+    push_warning(&mut lines, input.warning);
+    finish(&lines)
+}
+
 /// Appends one finding as a Markdown block mirroring the text report: a bold
 /// percentage headline naming the benchmark and metric, the shared detail line, an
 /// optional blessing note, and — in history mode — the metric chart in a fenced
@@ -858,6 +938,164 @@ mod tests {
             hint: None,
             warning: None,
         }
+    }
+
+    /// Wraps a findings slice into a report with no per-set breakdown, for the
+    /// summary tests (which render a flat, globally-ranked list and never read
+    /// `sets`). Regressions only, so the header carries a single tally.
+    fn flat_input(findings: &[Finding]) -> ReportInput<'_> {
+        ReportInput {
+            project: "folo",
+            tip_commit: "1234567890abcdef1234",
+            tip_dirty: false,
+            mode: "history",
+            notable: !findings.is_empty(),
+            runs: findings.len().saturating_add(3),
+            series: findings.len().max(1),
+            commit_span: None,
+            report_improvements: false,
+            findings,
+            sets: &[],
+            hint: None,
+            warning: None,
+        }
+    }
+
+    /// A regression finding named `name` (a single-segment id) with the given
+    /// relative move, so a summary test can tell which findings the render kept by
+    /// their distinctive ids and magnitudes.
+    fn named_regression(name: &str, relative_delta: f64) -> Finding {
+        Finding {
+            id: BenchmarkId::new(nonempty![name.to_owned()]),
+            relative_delta,
+            ..regression()
+        }
+    }
+
+    /// An improvement finding named `name` with the given (negative) relative move, so
+    /// a summary test can exercise the optional improvements tally alongside
+    /// regressions.
+    fn named_improvement(name: &str, relative_delta: f64) -> Finding {
+        Finding {
+            id: BenchmarkId::new(nonempty![name.to_owned()]),
+            direction: Direction::Improvement,
+            relative_delta,
+            ..regression()
+        }
+    }
+
+    /// Five regressions in the descending-magnitude order the ranking produces, so a
+    /// summary render can cap the leading few and drop the tail.
+    fn ranked_five() -> Vec<Finding> {
+        vec![
+            named_regression("mover_a", 0.50),
+            named_regression("mover_b", 0.40),
+            named_regression("mover_c", 0.30),
+            named_regression("dropped_d", 0.20),
+            named_regression("dropped_e", 0.10),
+        ]
+    }
+
+    #[test]
+    fn markdown_summary_caps_to_the_limit_and_keeps_full_totals() {
+        let findings = ranked_five();
+        let input = flat_input(&findings);
+
+        let report = render_markdown_summary(&input, NonZero::new(3).unwrap());
+
+        // The header tally counts every finding, not the retained subset.
+        assert!(report.contains("- Regressions: 5"), "{report}");
+        // The truncation note names how many of the total are shown.
+        assert!(
+            report.contains("> Showing the top 3 of 5 findings by magnitude."),
+            "{report}"
+        );
+        // The three largest movers are kept; the two smallest are dropped.
+        assert!(report.contains("mover_a"), "{report}");
+        assert!(report.contains("mover_b"), "{report}");
+        assert!(report.contains("mover_c"), "{report}");
+        assert!(!report.contains("dropped_d"), "{report}");
+        assert!(!report.contains("dropped_e"), "{report}");
+        // The per-set breakdown the full Markdown report groups by is dropped: a
+        // summary is a single flat list, so no `## engine/triple/machine` heading.
+        assert!(!report.contains("## callgrind"), "{report}");
+    }
+
+    #[test]
+    fn markdown_summary_omits_the_note_when_within_the_limit() {
+        let findings = ranked_five();
+        let input = flat_input(&findings);
+
+        // A limit at or above the finding count keeps every finding and shows no
+        // truncation note.
+        let report = render_markdown_summary(&input, NonZero::new(5).unwrap());
+
+        assert!(!report.contains("Showing the top"), "{report}");
+        assert!(report.contains("mover_a"), "{report}");
+        assert!(report.contains("dropped_e"), "{report}");
+
+        // A limit beyond the count behaves the same as an exact fit.
+        let generous = render_markdown_summary(&input, NonZero::new(20).unwrap());
+        assert_eq!(generous, report);
+    }
+
+    #[test]
+    fn markdown_summary_with_no_findings_matches_the_empty_message() {
+        let input = ReportInput {
+            hint: Some("Found 2 stored runs ... dirty snapshots"),
+            ..flat_input(&[])
+        };
+
+        let report = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+
+        assert!(report.contains("No notable changes detected."), "{report}");
+        assert!(report.contains("Found 2 stored runs"), "{report}");
+        assert!(!report.contains("Showing the top"), "{report}");
+    }
+
+    #[test]
+    fn markdown_summary_draws_a_fenced_chart_in_history_mode() {
+        // `flat_input` fixes the mode to `history`, where a retained finding with a
+        // series is rendered with its per-commit chart — so the summary reuses the full
+        // report's chart-in-history behaviour rather than dropping it.
+        let findings = vec![regression_with_series()];
+        let input = flat_input(&findings);
+
+        let report = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+
+        // The chart sits inside a fenced `text` block (its axis marker proves a chart was
+        // drawn) and carries no ANSI escapes.
+        assert!(report.contains("```text"), "{report}");
+        assert!(report.contains('┤') || report.contains('┼'), "{report}");
+        assert!(!report.contains('\u{1b}'), "{report}");
+    }
+
+    #[test]
+    fn markdown_summary_reports_improvements_only_when_enabled() {
+        // Magnitudes descend so the list already reads as globally ranked; two
+        // regressions and three improvements are interleaved.
+        let findings = vec![
+            named_regression("reg_a", 0.50),
+            named_improvement("imp_b", -0.40),
+            named_regression("reg_c", 0.30),
+            named_improvement("imp_d", -0.20),
+            named_improvement("imp_e", -0.10),
+        ];
+
+        // Disabled (the `flat_input` default): the header carries no improvements tally.
+        let without = render_markdown_summary(&flat_input(&findings), NonZero::new(2).unwrap());
+        assert!(!without.contains("Improvements:"), "{without}");
+
+        // Enabled: the header carries an improvements tally counted from *every*
+        // finding — like the regressions tally — even though the cap of two drops
+        // `imp_d` and `imp_e` from the rendered list.
+        let input = ReportInput {
+            report_improvements: true,
+            ..flat_input(&findings)
+        };
+        let with = render_markdown_summary(&input, NonZero::new(2).unwrap());
+        assert!(with.contains("- Regressions: 2"), "{with}");
+        assert!(with.contains("- Improvements: 3"), "{with}");
     }
 
     #[test]

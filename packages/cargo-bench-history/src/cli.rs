@@ -470,6 +470,13 @@ struct AnalyzeCommand {
     /// findings, so this flag has no effect there.
     #[arg(long, help_heading = HEADING_ANALYSIS)]
     include_inactive: bool,
+
+    /// Also write a condensed Markdown summary — only the most significant findings
+    /// — to this path (a relative path resolves against the working directory). The
+    /// full `--markdown` report carries every finding; this summary is capped so a
+    /// large analysis still fits within a GitHub issue body.
+    #[arg(long, value_name = "PATH", help_heading = HEADING_OUTPUT)]
+    markdown_summary: Option<PathBuf>,
 }
 
 impl AnalyzeCommand {
@@ -491,6 +498,7 @@ impl AnalyzeCommand {
             no_text: self.output.no_text,
             markdown: self.output.markdown,
             json: self.output.json,
+            markdown_summary: self.markdown_summary,
             mode: self.mode,
             include_improvements: self.include_improvements,
             include_inactive: self.include_inactive,

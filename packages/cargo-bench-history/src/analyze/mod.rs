@@ -25,10 +25,11 @@ use std::time::Instant;
 
 use anyspawn::Spawner;
 pub(crate) use cargo_bench_history_core::analyze::{
-    AnalysisConfig, AnalysisContext, AnalysisMode, BlessingPlacement, DiscriminantSetQuery,
-    FacetFilter, ReportFormat, ReportInput, RunPoints, Series, SeriesBuilder, SeriesFilter,
-    SetSummary, StorageKey, apply_blessings, balanced_chunk_sizes, find_changes_spawned,
-    format_value, parse_key, render, select_commits, worker_count,
+    AnalysisConfig, AnalysisContext, AnalysisMode, BlessingPlacement, DEFAULT_SUMMARY_LIMIT,
+    DiscriminantSetQuery, FacetFilter, ReportFormat, ReportInput, RunPoints, Series, SeriesBuilder,
+    SeriesFilter, SetSummary, StorageKey, apply_blessings, balanced_chunk_sizes,
+    find_changes_spawned, format_value, parse_key, render, render_markdown_summary, select_commits,
+    worker_count,
 };
 use futures::{StreamExt as _, TryStreamExt as _};
 use jiff::civil::Date;
@@ -43,7 +44,9 @@ use crate::machine::resolve_machine_key;
 use crate::model::{
     BenchmarkIdPrefix, BlessingRecord, DiscriminantSet, Engine, STORAGE_VERSION, sanitize_segment,
 };
-use crate::output::{OutputSelection, OutputWriter, TokioOutputWriter, emit};
+use crate::output::{
+    OutputSelection, OutputWriter, TokioOutputWriter, emit, emit_markdown_summary,
+};
 use crate::probe::{EnvironmentProbe, SystemProbe};
 use crate::report::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, StorageFacade, project_objects_prefix, resolve_storage};
@@ -196,10 +199,11 @@ where
     S: Storage + Clone + 'static,
     W: OutputWriter,
 {
-    let output = OutputSelection::resolve(
+    let output = OutputSelection::resolve_analyze(
         options.no_text,
         options.markdown.as_deref(),
         options.json.as_deref(),
+        options.markdown_summary.as_deref(),
     )?;
     let selection = Selection::from_analyze(options)?;
     let filter = SeriesFilter {
@@ -298,6 +302,12 @@ where
     let render_started = Instant::now();
     let report = emit(&output, writer, reporter, |format| {
         render(&input, format, color)
+    })
+    .await?;
+    // The condensed summary is analyze-only and not one of the three shared formats,
+    // so it renders and writes through its own edge alongside the full reports.
+    emit_markdown_summary(&output, writer, reporter, || {
+        render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT)
     })
     .await?;
     reporter.timing("report render", render_started.elapsed());

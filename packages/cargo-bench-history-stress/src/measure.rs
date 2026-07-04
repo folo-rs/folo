@@ -271,6 +271,7 @@ fn build_options(
         no_text: true,
         markdown: None,
         json: Some(PathBuf::from(ANALYZE_REPORT_FILE)),
+        markdown_summary: None,
         mode: Some(mode.keyword().to_owned()),
         include_improvements: true,
         include_inactive: false,

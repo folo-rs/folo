@@ -18,12 +18,16 @@ gh-collect-bench-history:
     cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- collect --workspace --exclude benchmarks --skip-existing --verbose
 
 # Analyzes the collected history for regressions across ALL engines, target triples and
-# machine keys, writing two working-directory artefacts: bench-history-report.md (the
-# Markdown report) and bench-history-notable.txt (`true`/`false`, the JSON `notable`
-# flag). Findings never fail the recipe (the tool always exits 0); the workflow files a
-# rolling issue when notable. `auto` mode on a clean `main` checkout resolves to
-# long-range history-trend detection. A single analyze pass emits both the Markdown and
-# JSON reports via the per-format output toggles (`--no-text --markdown --json`).
+# machine keys, writing three working-directory artefacts: bench-history-report.md (the
+# full Markdown report), bench-history-report.json (the full JSON report) and
+# bench-history-summary.md (the Markdown report condensed to the top findings by
+# magnitude, so the rolling regression issue's body stays under GitHub's 65,536-character
+# limit) plus bench-history-notable.txt (`true`/`false`, the JSON `notable` flag). Findings
+# never fail the recipe (the tool always exits 0); the workflow files a rolling issue when
+# notable, posting the summary as the body and attaching the two full reports as run
+# artifacts. `auto` mode on a clean `main` checkout resolves to long-range history-trend
+# detection. A single analyze pass emits every report via the per-format output toggles
+# (`--no-text --markdown --json --markdown-summary`).
 #
 # `--cache` mirrors fetched cloud objects under `bench-history-cache/` (relative to the
 # repo root, the working directory here) so the bulk history is downloaded at most once
@@ -40,16 +44,17 @@ gh-analyze-bench-history:
 
     $reportPath = Join-Path (Get-Location) "bench-history-report.md"
     $jsonPath = Join-Path (Get-Location) "bench-history-report.json"
+    $summaryPath = Join-Path (Get-Location) "bench-history-summary.md"
     $notablePath = Join-Path (Get-Location) "bench-history-notable.txt"
     $common = @('--engine', 'all', '--target-triple', 'all', '--machine-key', 'all')
 
-    Write-Verbose "Analyzing benchmark history in a single pass; writing Markdown to $reportPath and JSON to $jsonPath, mirroring fetched cloud objects under bench-history-cache/ so the history is downloaded at most once across runs." -Verbose
-    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- analyze @common --cache=bench-history-cache --no-text --markdown $reportPath --json $jsonPath
+    Write-Verbose "Analyzing benchmark history in a single pass; writing the full Markdown to $reportPath, the full JSON to $jsonPath and the condensed top-findings Markdown summary to $summaryPath, mirroring fetched cloud objects under bench-history-cache/ so the history is downloaded at most once across runs." -Verbose
+    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- analyze @common --cache=bench-history-cache --no-text --markdown $reportPath --json $jsonPath --markdown-summary $summaryPath
     Write-Verbose "Computing the notable flag from the JSON report." -Verbose
     $json = Get-Content -Path $jsonPath -Raw | ConvertFrom-Json
     $notable = if ($json.notable) { 'true' } else { 'false' }
     Set-Content -Path $notablePath -Value $notable -Encoding utf8
-    Write-Verbose "Analysis complete: notable=$notable (report at $reportPath)." -Verbose
+    Write-Verbose "Analysis complete: notable=$notable (full report at $reportPath, condensed summary at $summaryPath)." -Verbose
 
 # The release-automation logic lives in scripts/release/ReleaseAutomation.psm1, with a Pester
 # suite (scripts/release/ReleaseAutomation.Tests.ps1) that exercises it against fixtures via

@@ -171,6 +171,11 @@ pub struct AnalyzeOptions {
     /// Write the JSON report to this path, if set (`--json <path>`). A relative
     /// path resolves against the working directory.
     pub json: Option<PathBuf>,
+    /// Write the condensed Markdown summary (the most significant findings only) to
+    /// this path, if set (`--markdown-summary <path>`). A relative path resolves
+    /// against the working directory. Analyze-only, so a large analysis still fits
+    /// within a GitHub issue body.
+    pub markdown_summary: Option<PathBuf>,
     /// Analysis-mode selector (`auto`, `history`, `branch`, or `tip`), if set.
     /// `auto` (the default) infers history vs branch mode from the git topology.
     pub mode: Option<String>,
