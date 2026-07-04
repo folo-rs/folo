@@ -12,8 +12,9 @@ runs:
       # Azure mirrors); the cost is the `apt-get update` index refresh and the dpkg
       # unpack/configure. cache-apt-pkgs-action restores the already-configured files from
       # an actions/cache entry and skips apt entirely on a hit, cutting this step from ~15s
-      # (amd64) / ~26s (arm64) to a few seconds. Its v1 line is in upstream maintenance
-      # lock, so the major tag will not shift under us.
+      # (amd64) / ~26s (arm64) to a few seconds. The action is in upstream maintenance mode,
+      # so `@v1` only rolls forward to backward-compatible fixes within its major line —
+      # there is no breaking v2 to chase.
       #
       # execute_install_scripts runs each package's postinst (e.g. ldconfig) on restore so
       # valgrind's shared-library dependencies resolve. No PR-validation job runs valgrind
