@@ -42,11 +42,11 @@
 //! span's total against its iteration count, which recovers the marginal
 //! per-iteration cost even when the blend of warm-up and steady-state spans
 //! shifts. Each figure is paired with a bootstrap 95% confidence interval so its
-//! run-to-run uncertainty is shown rather than implied (it collapses to a point
-//! when every iteration allocates identically). The stdout summary and the JSON
-//! output both lead with the slope and interval; the pooled means stay available
-//! through [`Operation::mean`] and the report accessors for callers that still
-//! want them.
+//! run-to-run uncertainty can be inspected (it collapses to a point when every
+//! iteration allocates identically). The stdout summary leads with the slopes
+//! alone for readability; the JSON output records the slopes together with their
+//! confidence intervals, and the pooled means stay available through
+//! [`Operation::mean`] and the report accessors for callers that still want them.
 //!
 //! # Features
 #![cfg_attr(
@@ -93,7 +93,8 @@
 //! both bytes and allocation count, the warmup-robust slope point estimate, a 95%
 //! bootstrap confidence interval, the standard deviation, the observed minimum and
 //! maximum, and the pooled mean. A human-readable summary leading with the same
-//! slope and interval (see "Primary metric") is also printed to stdout.
+//! slopes (see "Primary metric"), without the intervals, is also printed to
+//! stdout.
 //!
 //! These outputs are produced automatically, so a typical benchmark only needs
 //! to create a session and record work.

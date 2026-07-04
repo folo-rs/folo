@@ -27,10 +27,11 @@
 //! iterations-weighted, through-origin fit of each span's total time against its
 //! iteration count, which recovers the marginal per-iteration cost even when the
 //! blend of warm-up and steady-state spans shifts. Each figure is paired with a
-//! bootstrap 95% confidence interval so its run-to-run uncertainty is shown
-//! rather than implied. The stdout summary and the JSON output both lead with the
-//! slope and interval; the pooled mean stays available through
-//! [`ReportOperation::mean`] for callers that still want it.
+//! bootstrap 95% confidence interval so its run-to-run uncertainty can be
+//! inspected. The stdout summary leads with the slope alone for readability; the
+//! JSON output records the slope together with that confidence interval, and the
+//! pooled mean stays available through [`ReportOperation::mean`] for callers that
+//! still want it.
 //!
 //! # Example
 //!
@@ -68,7 +69,8 @@
 //! bootstrap confidence interval, and the observed minimum and maximum. The
 //! bootstrap uses a fixed seed, so the confidence interval is reproducible across
 //! runs of identical measurements. The stdout summary leads with the same
-//! warmup-robust slope and its confidence interval (see "Primary metric").
+//! warmup-robust slope (see "Primary metric"), without the interval, for
+//! readability.
 //!
 //! These outputs are produced automatically, so a typical benchmark only needs
 //! to create a session and record work.

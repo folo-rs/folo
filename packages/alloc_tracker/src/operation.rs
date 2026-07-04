@@ -186,13 +186,9 @@ impl fmt::Display for Operation {
         match (metrics.bytes_stats(), metrics.allocations_stats()) {
             (Some(bytes), Some(allocations)) => write!(
                 f,
-                "{} bytes/iter [{}, {}], {} allocations/iter [{}, {}]",
+                "{} bytes/iter, {} allocations/iter",
                 format_count(bytes.slope),
-                format_count(bytes.interval_low),
-                format_count(bytes.interval_high),
                 format_count(allocations.slope),
-                format_count(allocations.interval_low),
-                format_count(allocations.interval_high),
             ),
             _ => write!(f, "no measurements"),
         }
@@ -386,17 +382,21 @@ mod tests {
         assert!(!report.is_empty());
 
         // Verify the session shows the data was merged. A single span of 100
-        // bytes/iter over 5 iterations yields a slope of 100 with the interval
-        // collapsed onto it; the two allocations/iter behave the same way.
+        // bytes/iter over 5 iterations yields a slope of 100; the two
+        // allocations/iter behave the same way. The stdout table shows the slope
+        // only (no interval).
+        let report = session.to_report();
+        let (_, op) = report.operations().next().expect("one operation");
+        let stats = op.statistics().expect("operation has spans");
         let session_display = format!("{session}");
         println!("Actual session display: '{session_display}'");
         assert!(
-            session_display.contains("100 [100, 100]"),
-            "got {session_display}"
+            session_display.contains(&format_count(stats.bytes.slope)),
+            "table should show the byte slope: got {session_display}"
         );
         assert!(
-            session_display.contains("2 [2, 2]"),
-            "got {session_display}"
+            session_display.contains(&format_count(stats.allocations.slope)),
+            "table should show the allocation slope: got {session_display}"
         );
     }
 

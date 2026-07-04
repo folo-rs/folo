@@ -406,29 +406,14 @@ pub(crate) fn format_count(value: f64) -> String {
     rendered
 }
 
-/// Formats a metric's warmup-robust point estimate and its bootstrap confidence
-/// interval as `point [low, high]`.
-pub(crate) fn format_metric(stats: &MetricStatistics) -> String {
-    format!(
-        "{} [{}, {}]",
-        format_count(stats.slope),
-        format_count(stats.interval_low),
-        format_count(stats.interval_high),
-    )
-}
-
 impl fmt::Display for ReportOperation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.statistics() {
             Some(stats) => write!(
                 f,
-                "{} bytes/iter [{}, {}], {} allocations/iter [{}, {}]",
+                "{} bytes/iter, {} allocations/iter",
                 format_count(stats.bytes.slope),
-                format_count(stats.bytes.interval_low),
-                format_count(stats.bytes.interval_high),
                 format_count(stats.allocations.slope),
-                format_count(stats.allocations.interval_low),
-                format_count(stats.allocations.interval_high),
             ),
             None => write!(f, "no measurements"),
         }
@@ -451,15 +436,18 @@ impl fmt::Display for Report {
         let mut sorted_ops: Vec<_> = self.operations.iter().collect();
         sorted_ops.sort_by_key(|(name, _)| *name);
 
-        // Pre-render the warmup-robust per-iteration cells so the column widths
-        // and the printed rows are computed from the exact same strings.
+        // Pre-render the warmup-robust per-iteration slope cells so the column
+        // widths and the printed rows are computed from the exact same strings. The
+        // bootstrap confidence interval is kept out of this summary for
+        // readability; it is preserved in the JSON output and the `statistics()`
+        // API.
         let rows: Vec<(&str, String, String)> = sorted_ops
             .iter()
             .map(|(name, operation)| match operation.statistics() {
                 Some(stats) => (
                     name.as_str(),
-                    format_metric(&stats.bytes),
-                    format_metric(&stats.allocations),
+                    format_count(stats.bytes.slope),
+                    format_count(stats.allocations.slope),
                 ),
                 None => (name.as_str(), "n/a".to_string(), "n/a".to_string()),
             })

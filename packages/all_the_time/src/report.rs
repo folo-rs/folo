@@ -288,13 +288,13 @@ impl ReportOperation {
 impl fmt::Display for ReportOperation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.statistics() {
-            Some(stats) => write!(
-                f,
-                "{:?} per iteration [{:?}, {:?}]",
-                nanos_to_duration(stats.slope_nanos),
-                nanos_to_duration(stats.interval_low_nanos),
-                nanos_to_duration(stats.interval_high_nanos),
-            ),
+            Some(stats) => {
+                write!(
+                    f,
+                    "{:?} per iteration",
+                    nanos_to_duration(stats.slope_nanos)
+                )
+            }
             None => write!(f, "no measurements"),
         }
     }
@@ -314,20 +314,16 @@ impl fmt::Display for Report {
         let mut sorted_ops: Vec<_> = self.operations.iter().collect();
         sorted_ops.sort_by_key(|(name, _)| *name);
 
-        // Render the warmup-robust per-iteration slope and its bootstrap
-        // confidence interval, not the raw mean: the mean folds warmup and
-        // one-off costs into the figure, while the slope recovers the marginal
-        // per-iteration cost and the interval shows its run-to-run uncertainty.
+        // Render the warmup-robust per-iteration slope, not the raw mean: the mean
+        // folds warmup and one-off costs into the figure, while the slope recovers
+        // the marginal per-iteration cost. The bootstrap confidence interval is
+        // kept out of this summary for readability; it is preserved in the JSON
+        // output and the `statistics()` API.
         let cells: Vec<(&str, String)> = sorted_ops
             .iter()
             .map(|(name, operation)| {
                 let value = match operation.statistics() {
-                    Some(stats) => format!(
-                        "{:?} [{:?}, {:?}]",
-                        nanos_to_duration(stats.slope_nanos),
-                        nanos_to_duration(stats.interval_low_nanos),
-                        nanos_to_duration(stats.interval_high_nanos),
-                    ),
+                    Some(stats) => format!("{:?}", nanos_to_duration(stats.slope_nanos)),
                     None => "n/a".to_owned(),
                 };
                 (name.as_str(), value)
@@ -373,7 +369,7 @@ impl fmt::Display for Report {
 
         // Print table rows.
         for (name, value) in cells {
-            writeln!(f, "| {name:<max_name_width$} | {value:>max_value_width$} |",)?;
+            writeln!(f, "| {name:<max_name_width$} | {value:>max_value_width$} |")?;
         }
         Ok(())
     }

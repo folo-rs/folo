@@ -197,13 +197,13 @@ impl Operation {
 impl fmt::Display for Operation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.metrics.lock().expect(ERR_POISONED_LOCK).statistics() {
-            Some(stats) => write!(
-                f,
-                "{:?} per iteration [{:?}, {:?}]",
-                nanos_to_duration(stats.slope_nanos),
-                nanos_to_duration(stats.interval_low_nanos),
-                nanos_to_duration(stats.interval_high_nanos),
-            ),
+            Some(stats) => {
+                write!(
+                    f,
+                    "{:?} per iteration",
+                    nanos_to_duration(stats.slope_nanos)
+                )
+            }
             None => write!(f, "no measurements"),
         }
     }
