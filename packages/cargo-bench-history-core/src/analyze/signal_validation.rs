@@ -2,7 +2,7 @@
 //! against the analysis statistics yielding illogical results.
 //!
 //! Each case is a data series with an unambiguous shape (an obvious step, a dead-flat
-//! line) paired with the move each analysis mode's detector is expected to see. The
+//! line) paired with the outcome each analysis mode's detector is expected to see. The
 //! point is not to exercise a particular detector but to pin the end-to-end verdict of
 //! the analysis on inputs a human would answer without hesitation — so a future change
 //! to the math that starts calling a doubling "no change", or a flat line "a
@@ -22,11 +22,12 @@
 //!   latest regime against the base level across a merge-base split, and
 //!   [`Tip`](AnalysisMode::Tip) compares only the newest point against its recent
 //!   window. Because each inspects a different slice, the *same* series yields different
-//!   verdicts per mode, so mode is a curated dimension: every case states the move each
-//!   mode is expected to see. An obvious mid-series step is a rise to history and branch
-//!   but invisible to tip (whose window has already caught up); a lone final-point jump
-//!   is a rise to tip and branch but not a sustained historical trend. Branch mode also
-//!   needs a merge-base to have a base side at all — a case without one leaves it quiet.
+//!   verdicts per mode, so mode is a curated dimension: every case states the outcome
+//!   each mode is expected to see. An obvious mid-series step is a rise to history and
+//!   branch but invisible to tip (whose window has already caught up); a lone
+//!   final-point jump is a rise to tip and branch but not a sustained historical trend.
+//!   Branch mode also needs a base side to compare against at all — a case with an empty
+//!   base side leaves it quiet.
 //! * **Polarity (dimension 2).** The codebase's only polarity lever is the metric kind,
 //!   so *higher-is-worse* is modelled with a lower-is-better metric
 //!   ([`MetricKind::InstructionCount`]) and *lower-is-worse* with the one
@@ -139,7 +140,7 @@ impl Mode {
     }
 }
 
-/// The move a mode's detector is expected to see in a case — the hand-curated,
+/// The outcome a mode's detector is expected to see in a case — the hand-curated,
 /// polarity-independent judgment about the raw series shape.
 ///
 /// Combined with a [`Polarity`] and the mode's reporting contract this yields the
@@ -147,7 +148,7 @@ impl Mode {
 /// improvement by the metric's polarity, and reported only when the mode surfaces that
 /// direction.
 #[derive(Clone, Copy, Debug)]
-enum Move {
+enum Outcome {
     /// The values step up.
     Rise,
     /// The values step down.
@@ -156,7 +157,7 @@ enum Move {
     Quiet,
 }
 
-impl Move {
+impl Outcome {
     /// Whether this move surfaces as a finding under `polarity` in `mode`.
     fn is_finding(self, polarity: Polarity, mode: Mode) -> bool {
         match (self, polarity) {
@@ -172,30 +173,46 @@ impl Move {
     }
 }
 
-/// One curated series and the move each mode is expected to see in it.
+/// One curated series — its base and branch/tip sides — and the outcome each mode is
+/// expected to see in it.
 struct SignalCase {
     /// Human-readable case name, surfaced in assertion failures.
     name: &'static str,
-    /// The base (unscaled) series values, oldest-first.
-    values: Vec<f64>,
-    /// First-parent split index handed to branch mode; `None` leaves branch mode without
-    /// a base side, so it stays quiet. Ignored by history and tip.
-    merge_base_index: Option<usize>,
-    /// The move history mode's change-point detector is expected to see.
-    history: Move,
-    /// The move branch mode is expected to see (given `merge_base_index`).
-    branch: Move,
-    /// The move tip mode is expected to see.
-    tip: Move,
+    /// The base-side (unscaled) series values, oldest-first: the commits at or before
+    /// the merge-base. May be empty, which leaves branch mode without a base side to
+    /// compare against, so it stays quiet. Ignored by history and tip, which read the
+    /// whole series.
+    base: Vec<f64>,
+    /// The branch/tip-side (unscaled) series values, oldest-first: the commits past the
+    /// merge-base. May be empty.
+    branch: Vec<f64>,
+    /// The outcome history mode's change-point detector is expected to see.
+    expected_history: Outcome,
+    /// The outcome branch mode is expected to see.
+    expected_branch: Outcome,
+    /// The outcome tip mode is expected to see.
+    expected_tip: Outcome,
 }
 
 impl SignalCase {
-    /// The move `mode` is expected to see in this case.
-    fn expected_move(&self, mode: Mode) -> Move {
+    /// The whole series, the base side followed by the branch/tip side, oldest-first.
+    fn values(&self) -> Vec<f64> {
+        [self.base.as_slice(), self.branch.as_slice()].concat()
+    }
+
+    /// The first-parent merge-base split index handed to branch mode: the last base-side
+    /// point, or `None` when there is no base side (branch mode then has nothing to
+    /// compare against and stays quiet). History and tip ignore it.
+    fn merge_base_index(&self) -> Option<usize> {
+        self.base.len().checked_sub(1)
+    }
+
+    /// The outcome `mode` is expected to see in this case.
+    fn expected_outcome(&self, mode: Mode) -> Outcome {
         match mode {
-            Mode::History => self.history,
-            Mode::Branch => self.branch,
-            Mode::Tip => self.tip,
+            Mode::History => self.expected_history,
+            Mode::Branch => self.expected_branch,
+            Mode::Tip => self.expected_tip,
         }
     }
 }
@@ -213,61 +230,61 @@ fn cases() -> Vec<SignalCase> {
         // sits at the new, higher level.
         SignalCase {
             name: "doubling_step",
-            values: [run_of(100.0, 50), run_of(200.0, 50)].concat(),
-            merge_base_index: Some(49),
-            history: Move::Rise,
-            branch: Move::Rise,
-            tip: Move::Quiet,
+            base: run_of(100.0, 50),
+            branch: run_of(200.0, 50),
+            expected_history: Outcome::Rise,
+            expected_branch: Outcome::Rise,
+            expected_tip: Outcome::Quiet,
         },
         // The mirror image: a sustained halving. Same mode geometry, opposite direction,
         // so it exercises the other polarity's finding path.
         SignalCase {
             name: "halving_step",
-            values: [run_of(200.0, 50), run_of(100.0, 50)].concat(),
-            merge_base_index: Some(49),
-            history: Move::Fall,
-            branch: Move::Fall,
-            tip: Move::Quiet,
+            base: run_of(200.0, 50),
+            branch: run_of(100.0, 50),
+            expected_history: Outcome::Fall,
+            expected_branch: Outcome::Fall,
+            expected_tip: Outcome::Quiet,
         },
         // A jump confined to the final commit. Tip and branch (split just before the
         // jump) see the rise; history does not, since one trailing point is not a
         // sustained trend.
         SignalCase {
             name: "tip_spike",
-            values: [run_of(100.0, 99), run_of(200.0, 1)].concat(),
-            merge_base_index: Some(98),
-            history: Move::Quiet,
-            branch: Move::Rise,
-            tip: Move::Rise,
+            base: run_of(100.0, 99),
+            branch: run_of(200.0, 1),
+            expected_history: Outcome::Quiet,
+            expected_branch: Outcome::Rise,
+            expected_tip: Outcome::Rise,
         },
         // The mirror image at the tip: the final commit drops.
         SignalCase {
             name: "tip_drop",
-            values: [run_of(200.0, 99), run_of(100.0, 1)].concat(),
-            merge_base_index: Some(98),
-            history: Move::Quiet,
-            branch: Move::Fall,
-            tip: Move::Fall,
+            base: run_of(200.0, 99),
+            branch: run_of(100.0, 1),
+            expected_history: Outcome::Quiet,
+            expected_branch: Outcome::Fall,
+            expected_tip: Outcome::Fall,
         },
         // A dead-flat line: nothing moved, so no mode and no polarity should ever flag it.
         SignalCase {
             name: "flat_line",
-            values: run_of(100.0, 100),
-            merge_base_index: Some(49),
-            history: Move::Quiet,
-            branch: Move::Quiet,
-            tip: Move::Quiet,
+            base: run_of(100.0, 50),
+            branch: run_of(100.0, 50),
+            expected_history: Outcome::Quiet,
+            expected_branch: Outcome::Quiet,
+            expected_tip: Outcome::Quiet,
         },
-        // The same obvious doubling as the first case, but with no merge-base. Branch
-        // mode has no base side to compare against, so it must stay quiet even though
-        // history still sees the rise.
+        // The same obvious doubling as the first case, but with no base side. Branch
+        // mode has nothing to compare the branch against, so it must stay quiet even
+        // though history still sees the rise over the whole series.
         SignalCase {
             name: "doubling_without_base",
-            values: [run_of(100.0, 50), run_of(200.0, 50)].concat(),
-            merge_base_index: None,
-            history: Move::Rise,
-            branch: Move::Quiet,
-            tip: Move::Quiet,
+            base: Vec::new(),
+            branch: [run_of(100.0, 50), run_of(200.0, 50)].concat(),
+            expected_history: Outcome::Rise,
+            expected_branch: Outcome::Quiet,
+            expected_tip: Outcome::Quiet,
         },
     ]
 }
@@ -316,9 +333,9 @@ fn raises_finding(values: &[f64], kind: MetricKind, context: &AnalysisContext) -
     !findings.is_empty()
 }
 
-/// The values of `case`, multiplied by `scale`.
-fn scaled(case: &SignalCase, scale: f64) -> Vec<f64> {
-    case.values.iter().map(|&value| value * scale).collect()
+/// `values`, each multiplied by `scale`.
+fn scaled(values: &[f64], scale: f64) -> Vec<f64> {
+    values.iter().map(|&value| value * scale).collect()
 }
 
 #[test]
@@ -329,15 +346,16 @@ fn curated_signals_match_expected_verdicts() {
     let scale_multiples = [1000.0_f64];
 
     for case in cases() {
+        let values = case.values();
         for mode in Mode::ALL {
-            let context = mode.context(case.merge_base_index);
+            let context = mode.context(case.merge_base_index());
             for polarity in Polarity::ALL {
-                let expected = case.expected_move(mode).is_finding(polarity, mode);
+                let expected = case.expected_outcome(mode).is_finding(polarity, mode);
                 let kind = polarity.metric_kind();
 
                 // Dimensions 1 & 2: the as-is verdict under this mode and polarity
                 // matches the hand-picked expectation.
-                let reference = raises_finding(&case.values, kind, &context);
+                let reference = raises_finding(&values, kind, &context);
                 assert_eq!(
                     reference, expected,
                     "case '{}' mode={mode:?} polarity={polarity:?}: \
@@ -349,7 +367,7 @@ fn curated_signals_match_expected_verdicts() {
                 // verdict unchanged, because every comparison the analysis makes is
                 // relative.
                 for scale in scale_multiples {
-                    let scaled_verdict = raises_finding(&scaled(&case, scale), kind, &context);
+                    let scaled_verdict = raises_finding(&scaled(&values, scale), kind, &context);
                     assert_eq!(
                         scaled_verdict, reference,
                         "case '{}' mode={mode:?} polarity={polarity:?}: scaling by {scale} \
