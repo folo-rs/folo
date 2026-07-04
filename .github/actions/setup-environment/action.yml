@@ -97,6 +97,28 @@ runs:
           ~/.rustup/update-hashes
         key: rustup-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('constants.env', 'rust-toolchain.toml') }}
 
+    - name: Cache actionlint and ShellCheck
+      # just install-tools fetches pinned actionlint and ShellCheck as standalone binaries
+      # (scripts/install-actionlint.ps1, scripts/install-shellcheck.ps1) into ~/.cargo/bin on
+      # every job and every platform. Unlike the cargo-installed tools that also live there,
+      # these are plain downloaded files with no cargo install-metadata, so Swatinem/rust-cache's
+      # bin caching never tracks them and they are otherwise re-downloaded and re-extracted every
+      # run. Caching the two binaries lets each script's "pinned version already present" check
+      # short-circuit the download on a hit, so this step is restored before Install development
+      # tools below (which runs install-tools).
+      #
+      # Keyed on OS + arch + a hash of the two install scripts, which embed both the pinned
+      # versions and their published checksums — so bumping either tool invalidates the cache
+      # automatically. Like rustup toolchains these are prebuilt, relocatable binaries that do not
+      # link against image-specific dylibs, so the runner ImageVersion is deliberately left out of
+      # the key.
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/actionlint*
+          ~/.cargo/bin/shellcheck*
+        key: lint-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-actionlint.ps1', 'scripts/install-shellcheck.ps1') }}
+
     - name: Install just
       shell: bash
       run: cargo install just --locked
