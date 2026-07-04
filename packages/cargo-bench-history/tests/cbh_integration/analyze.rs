@@ -172,6 +172,92 @@ async fn analyze_writes_markdown_and_json_from_one_suppressed_text_pass() {
     assert_eq!(parsed["project"], "testproj");
 }
 
+/// `--markdown-summary <path>` renders a flat, ungrouped condensed report that omits
+/// the per-set headings the full Markdown report carries. With few findings there is
+/// no truncation note.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn analyze_markdown_summary_renders_a_flat_report() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_rising_callgrind_history();
+
+    let summary = workspace.drive_markdown_summary(&["analyze"]).await;
+
+    assert!(
+        summary.contains("# Benchmark history analysis: testproj"),
+        "{summary}"
+    );
+    // The condensed report leads each finding with the same bold-percentage headline
+    // the full report uses.
+    assert!(summary.contains("%** — `"), "{summary}");
+    // A single seeded regression is well within the top-20 cap, so no truncation note
+    // is added.
+    assert!(
+        !summary.contains("Showing the top"),
+        "an untruncated summary must not claim it is partial: {summary}"
+    );
+    // The per-set `## engine/triple/machine` grouping is deliberately dropped from the
+    // summary, unlike the full Markdown report.
+    assert!(
+        !summary.contains("\n## "),
+        "the summary must be flat, without per-set headings: {summary}"
+    );
+}
+
+/// When an analysis produces more findings than the summary cap, `--markdown-summary`
+/// keeps only the top 20 by magnitude and states the total, while a full `--markdown`
+/// report from the same run still lists every finding.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn analyze_markdown_summary_caps_findings_and_names_the_total() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // Seed more distinct rising benchmarks than the top-20 cap so truncation engages.
+    workspace.seed_many_rising_callgrind_history(25);
+
+    let outcome = workspace
+        .drive(&[
+            "analyze",
+            "--no-text",
+            "--markdown",
+            "full.md",
+            "--markdown-summary",
+            "summary.md",
+        ])
+        .await
+        .unwrap();
+    let RunOutcome::Analyzed { regressions, .. } = outcome else {
+        panic!("expected an analyzed outcome, got {outcome:?}");
+    };
+    assert_eq!(regressions, 25, "every seeded benchmark should regress");
+
+    let summary = workspace
+        .read("summary.md")
+        .expect("the Markdown summary should be written");
+    let full = workspace
+        .read("full.md")
+        .expect("the full Markdown report should be written");
+
+    // The header carries the *true* total (all 25), not the retained subset.
+    assert!(summary.contains("- Regressions: 25"), "{summary}");
+    // The truncation note names how many of the total are shown.
+    assert!(
+        summary.contains("Showing the top 20 of 25 findings by magnitude."),
+        "{summary}"
+    );
+    // Exactly the cap of finding headlines survives in the summary.
+    let summary_blocks = summary.matches("%** — `").count();
+    assert_eq!(
+        summary_blocks, 20,
+        "summary should keep only the cap: {summary}"
+    );
+    // The full report from the same run still lists every finding.
+    let full_blocks = full.matches("%** — `").count();
+    assert_eq!(
+        full_blocks, 25,
+        "full report should keep every finding: {full}"
+    );
+}
+
 /// `--no-text` suppresses stdout text while still writing a JSON report.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]

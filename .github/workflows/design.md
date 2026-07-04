@@ -84,7 +84,10 @@ use, so the long-lived data store never depends on test infrastructure. Collecti
 append-only and idempotent, which is what makes a re-run safe and lets a read-through cache
 of the bulk history persist between runs. A downstream analysis job reads the accumulated
 history and files a single rolling, advisory issue when it detects a notable regression;
-regressions never fail the run.
+regressions never fail the run. Because a GitHub issue body is size-capped and a large
+analysis can exceed it, the issue carries a **condensed summary** (the top findings) and
+links to the **full Markdown and JSON reports**, which the job uploads as a run artifact — so
+the issue always fits while the complete data stays one click away.
 
 ## Failure alerting
 

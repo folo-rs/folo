@@ -407,8 +407,14 @@ detail users are not expected to know.
 
 Output toggles select which renderings one analysis pass emits — text to stdout by default,
 with file toggles that compose so a single pass can emit text, Markdown, and JSON at once;
-requesting no output at all is an error. **Findings never affect the exit code**: the
-process exits non-zero only when the analysis fails to *run*. A finding is advisory, and
+requesting no output at all is an error. Beyond those three canonical renderings, `analyze`
+offers one **derived** output — a condensed Markdown *summary* — for a downstream consumer
+whose body has a hard size limit (the workflow posts it as a rolling GitHub issue, capped at
+65,536 characters). The summary keeps only the most significant findings and drops the
+per-facet grouping, so it is intentionally lossy; it is analyze-only because truncating a
+ranked list is meaningless for the enumerating commands, and it never displaces the full
+reports, which the workflow attaches alongside it. **Findings never affect the exit code**:
+the process exits non-zero only when the analysis fails to *run*. A finding is advisory, and
 the machine-readable signal lives in the JSON report. Downstream automation (a scheduled
 regression watch, a PR comment bot) reads that rather than the exit status. When
 facet-matching runs were stored but none entered the analysis, the report carries a plain
@@ -712,6 +718,14 @@ human reports draw from internally, not data a consumer reconstructs); the text 
 Markdown values round to four significant figures. A consumer keys off a top-level
 "notable" flag (post or stay silent) and reads each finding's direction, magnitude, and
 attribution.
+
+Separate from those three canonical formats, `analyze` can also render a condensed Markdown
+**summary** — a single derived view for a size-limited consumer. It reuses the Markdown
+finding blocks but keeps only the top findings by magnitude and drops the per-facet grouping,
+so it is deliberately **not** "same data": it is a lossy excerpt that names how many of the
+total it shows and leaves the full reports to be consulted separately. Because it exists to
+fit a downstream cap rather than to present the analysis, it is offered only by `analyze`,
+never by the enumerating commands, and the retained-count is a fixed policy of the renderer.
 
 ## 9. Architecture
 

@@ -8,9 +8,16 @@
 //! used by `install`) so the orchestrators stay storage- and filesystem-agnostic:
 //! production uses [`TokioOutputWriter`], while tests drive an in-memory fake.
 //!
-//! A relative `--markdown`/`--json` path resolves against the working directory
-//! (the same base as `--config`), so the resolution happens at the IO edge inside
-//! [`TokioOutputWriter`].
+//! `analyze` additionally offers `--markdown-summary <path>`: a condensed Markdown
+//! report carrying only the most significant findings, so a large analysis still
+//! fits within a GitHub issue body. It is analyze-only (the other commands do not
+//! rank findings), so it is not one of the three shared formats — it resolves and
+//! writes through [`OutputSelection::resolve_analyze`] and [`emit_markdown_summary`]
+//! rather than the shared [`emit`].
+//!
+//! A relative `--markdown`/`--markdown-summary`/`--json` path resolves against the
+//! working directory (the same base as `--config`), so the resolution happens at the
+//! IO edge inside [`TokioOutputWriter`].
 //!
 //! [`ConfigWriter`]: crate::config_writer::ConfigWriter
 
@@ -36,10 +43,15 @@ pub(crate) struct OutputSelection<'a> {
     markdown: Option<&'a Path>,
     /// Where to write the JSON report, if requested (`--json <path>`).
     json: Option<&'a Path>,
+    /// Where to write the condensed Markdown summary, if requested
+    /// (`--markdown-summary <path>`). Only `analyze` sets this; the other reporting
+    /// commands leave it `None` (they do not rank findings).
+    markdown_summary: Option<&'a Path>,
 }
 
 impl<'a> OutputSelection<'a> {
-    /// Resolves and validates the requested outputs.
+    /// Resolves and validates the requested outputs for the commands that emit only
+    /// the three shared formats (`list`, `prune`, `examine`).
     ///
     /// # Errors
     ///
@@ -63,6 +75,38 @@ impl<'a> OutputSelection<'a> {
             no_text,
             markdown,
             json,
+            markdown_summary: None,
+        })
+    }
+
+    /// Resolves and validates the requested outputs for `analyze`, which additionally
+    /// offers `--markdown-summary <path>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RunError::Analyze`] when nothing would be emitted — `--no-text`
+    /// suppresses the text report and none of `--markdown`, `--markdown-summary`, or
+    /// `--json` was requested — so a run that would produce nothing is rejected up
+    /// front rather than completing silently.
+    pub(crate) fn resolve_analyze(
+        no_text: bool,
+        markdown: Option<&'a Path>,
+        json: Option<&'a Path>,
+        markdown_summary: Option<&'a Path>,
+    ) -> Result<Self, RunError> {
+        if no_text && markdown.is_none() && json.is_none() && markdown_summary.is_none() {
+            return Err(RunError::Analyze {
+                message: "no output selected: --no-text suppresses the text report, so request at \
+                          least one of --markdown <path>, --markdown-summary <path>, or --json \
+                          <path>"
+                    .to_owned(),
+            });
+        }
+        Ok(Self {
+            no_text,
+            markdown,
+            json,
+            markdown_summary,
         })
     }
 }
@@ -145,6 +189,34 @@ where
     } else {
         render(ReportFormat::Text)
     })
+}
+
+/// Writes the condensed Markdown summary to its requested path, if one was selected.
+///
+/// This is `analyze`'s companion to [`emit`]: the top-N summary is not one of the
+/// three shared report formats (it is a truncated, derived view), so it renders
+/// through its own `render_summary` closure and writes via the same [`OutputWriter`]
+/// edge, announcing the result on the verbose trail like every other written report.
+/// A no-op when `--markdown-summary` was not requested.
+///
+/// # Errors
+///
+/// Returns [`RunError::Io`] if writing the summary file fails.
+pub(crate) async fn emit_markdown_summary<W, F>(
+    selection: &OutputSelection<'_>,
+    writer: &W,
+    reporter: &dyn Reporter,
+    render_summary: F,
+) -> Result<(), RunError>
+where
+    W: OutputWriter,
+    F: FnOnce() -> String,
+{
+    if let Some(path) = selection.markdown_summary {
+        let contents = render_summary();
+        write_report(writer, reporter, path, &contents, "Markdown summary").await?;
+    }
+    Ok(())
 }
 
 /// Writes one rendered report to `path` and records the result on the verbose
@@ -315,6 +387,94 @@ mod tests {
         let reporter = RecordingReporter::new();
 
         let error = block_on(emit(&selection, &writer, &reporter, render_label)).unwrap_err();
+
+        assert!(matches!(error, RunError::Io(_)), "{error:?}");
+    }
+
+    #[test]
+    fn resolve_analyze_allows_only_the_summary() {
+        let summary = PathBuf::from("summary.md");
+        OutputSelection::resolve_analyze(true, None, None, Some(&summary)).unwrap();
+    }
+
+    #[test]
+    fn resolve_analyze_rejects_a_run_that_would_emit_nothing() {
+        let error = OutputSelection::resolve_analyze(true, None, None, None).unwrap_err();
+        match error {
+            RunError::Analyze { message } => {
+                assert!(message.contains("no output selected"), "{message}");
+                // The analyze variant names its extra format in the guidance.
+                assert!(message.contains("--markdown-summary"), "{message}");
+            }
+            other => panic!("expected an analyze error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn emit_markdown_summary_writes_the_file_and_announces_it() {
+        let summary = PathBuf::from("summary.md");
+        let selection = OutputSelection::resolve_analyze(true, None, None, Some(&summary)).unwrap();
+        let writer = MemoryOutputWriter::new();
+        let reporter = RecordingReporter::new();
+
+        block_on(emit_markdown_summary(
+            &selection,
+            &writer,
+            &reporter,
+            || "SUMMARY".to_owned(),
+        ))
+        .unwrap();
+
+        assert_eq!(writer.written(&summary).as_deref(), Some("SUMMARY"));
+        assert!(
+            reporter.contains("wrote the Markdown summary report"),
+            "{:?}",
+            reporter.notes()
+        );
+    }
+
+    #[test]
+    fn emit_markdown_summary_is_a_noop_without_a_requested_path() {
+        let json = PathBuf::from("report.json");
+        // A selection with the summary unset: the renderer must not run and nothing
+        // is written or announced.
+        let selection = OutputSelection::resolve_analyze(true, None, Some(&json), None).unwrap();
+        let writer = MemoryOutputWriter::new();
+        let reporter = RecordingReporter::new();
+
+        let mut rendered = false;
+        block_on(emit_markdown_summary(
+            &selection,
+            &writer,
+            &reporter,
+            || {
+                rendered = true;
+                "SUMMARY".to_owned()
+            },
+        ))
+        .unwrap();
+
+        assert!(
+            !rendered,
+            "the summary renderer must not run when no path is set"
+        );
+        assert!(reporter.notes().is_empty(), "{:?}", reporter.notes());
+    }
+
+    #[test]
+    fn emit_markdown_summary_maps_a_write_failure_to_an_io_error() {
+        let summary = PathBuf::from("summary.md");
+        let selection = OutputSelection::resolve_analyze(true, None, None, Some(&summary)).unwrap();
+        let writer = FailingOutputWriter;
+        let reporter = RecordingReporter::new();
+
+        let error = block_on(emit_markdown_summary(
+            &selection,
+            &writer,
+            &reporter,
+            || "SUMMARY".to_owned(),
+        ))
+        .unwrap_err();
 
         assert!(matches!(error, RunError::Io(_)), "{error:?}");
     }
