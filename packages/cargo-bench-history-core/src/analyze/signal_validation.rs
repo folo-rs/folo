@@ -180,8 +180,9 @@ struct SignalCase {
     name: &'static str,
     /// The base-side (unscaled) series values, oldest-first: the commits at or before
     /// the merge-base. May be empty, which leaves branch mode without a base side to
-    /// compare against, so it stays quiet. Ignored by history and tip, which read the
-    /// whole series.
+    /// compare against, so it stays quiet. The base/branch split matters only to branch
+    /// mode; history and tip see the whole concatenated series and read these values as
+    /// ordinary leading points, indifferent to which side they came from.
     base: Vec<f64>,
     /// The branch/tip-side (unscaled) series values, oldest-first: the commits past the
     /// merge-base. May be empty.
