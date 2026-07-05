@@ -204,6 +204,10 @@ impl Report {
     /// of a "list available benchmarks" probe run instead of some real activity,
     /// in which case printing anything might violate the output protocol the tool
     /// is speaking.
+    // Pure stdout side effect: no computation to cover here (the report is
+    // finalized on the covered `Session::drop` path), and stdout output is not
+    // meaningfully assertable — matching the sibling `Display` impls.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     #[cfg_attr(test, mutants::skip)] // Too difficult to test stdout output reliably - manually tested.
     pub fn print_to_stdout(&self) {
         self.finalize().print_to_stdout();

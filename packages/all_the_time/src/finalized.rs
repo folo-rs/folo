@@ -73,6 +73,10 @@ impl FinalizedReport {
     /// indicate that the session was part of a "list available benchmarks" probe
     /// run instead of some real activity, in which case printing anything might
     /// violate the output protocol the tool is speaking.
+    // Pure stdout side effect: the empty-guard early return is unreachable from
+    // the covered `Session::drop` path (it pre-checks emptiness), and stdout
+    // output is not meaningfully assertable — matching the sibling `Display` impl.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     #[cfg_attr(test, mutants::skip)] // Too difficult to test stdout output reliably - manually tested.
     pub fn print_to_stdout(&self) {
         if self.is_empty() {
