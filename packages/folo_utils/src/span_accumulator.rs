@@ -316,6 +316,35 @@ mod tests {
     }
 
     #[test]
+    fn multi_iteration_interval_uses_the_fourth_moment() {
+        // Non-collinear spans with iterations > 1 (per-iteration 5 vs 3) make the
+        // Σnᵢ⁴ term of the robust variance load-bearing. Single-iteration spans
+        // leave nᵢ⁴ = 1 for every span, so they cannot tell a correct fourth
+        // moment apart from a degenerate one. slope = 68 / 20 = 3.4, residual sum
+        // of squares 81.92, SE = sqrt(81.92) / 20.
+        let accumulator = accumulate(&[(2, 10), (4, 12)]);
+        assert_close(accumulator.slope().unwrap(), 3.4);
+        let (low, high) = accumulator.interval().unwrap();
+        let expected_half = Z_95 * (81.92_f64.sqrt() / 20.0);
+        assert_close(low, 3.4 - expected_half);
+        assert_close(high, 3.4 + expected_half);
+    }
+
+    #[test]
+    fn a_non_finite_standard_error_withholds_the_interval() {
+        // Realistic span inputs cannot overflow the folded moments, but the
+        // public contract still defuses a non-finite standard error to `None`
+        // rather than emitting a bogus interval. Drive the residual sum of
+        // squares to infinity (via `s_nntt`) while the slope stays finite, and
+        // confirm the interval is withheld — exercising the finiteness guard's
+        // standard-error branch, which a finite slope alone would leave live.
+        let mut accumulator = accumulate(&[(2, 10), (4, 12)]);
+        assert!(accumulator.slope().unwrap().is_finite());
+        accumulator.s_nntt = f64::INFINITY;
+        assert_eq!(accumulator.interval(), None);
+    }
+
+    #[test]
     fn merge_is_equivalent_to_folding_both_populations() {
         let combined = accumulate(&[(2, 20), (4, 40), (1, 9), (3, 33)]);
 
