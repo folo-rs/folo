@@ -126,11 +126,12 @@ async fn analyze_markdown_output_renders_blocks() {
     // The header names the analyzed tip commit so the reader knows which commit the
     // findings describe.
     assert!(report.contains("- Commit: "), "{report}");
-    // A bold percentage headline leads each finding block; there is no table.
+    // Findings render as heading + bold-headline blocks; there is no table.
     assert!(!report.contains("| Change | Direction |"), "{report}");
-    // The headline format is a bold signed percentage joined to the benchmark id —
-    // far more specific than a bare `**` that any unrelated bold text would match.
-    assert!(report.contains("%** — `"), "{report}");
+    // Each finding leads with its benchmark id as a `###` chapter title (nested under
+    // the set `##`), then a bold percentage headline carrying the confidence.
+    assert!(report.contains("\n### `"), "{report}");
+    assert!(report.contains("% confidence)"), "{report}");
     assert!(report.contains("via change point"), "{report}");
 }
 
@@ -187,9 +188,11 @@ async fn analyze_markdown_summary_renders_a_flat_report() {
         summary.contains("# Benchmark history analysis: testproj"),
         "{summary}"
     );
-    // The condensed report leads each finding with the same bold-percentage headline
-    // the full report uses.
-    assert!(summary.contains("%** — `"), "{summary}");
+    // Each finding leads with its benchmark id as a `##` chapter title, then a bold
+    // percentage headline carrying the confidence — the same block the full report
+    // uses, one heading level up.
+    assert!(summary.contains("\n## `"), "{summary}");
+    assert!(summary.contains("% confidence)"), "{summary}");
     // A single seeded regression is well within the top-20 cap, so no truncation note
     // is added.
     assert!(
@@ -197,9 +200,9 @@ async fn analyze_markdown_summary_renders_a_flat_report() {
         "an untruncated summary must not claim it is partial: {summary}"
     );
     // The per-set `## engine/triple/machine` grouping is deliberately dropped from the
-    // summary, unlike the full Markdown report.
+    // summary, unlike the full Markdown report; only the flat finding headings remain.
     assert!(
-        !summary.contains("\n## "),
+        !summary.contains("## callgrind"),
         "the summary must be flat, without per-set headings: {summary}"
     );
 }
@@ -244,14 +247,15 @@ async fn analyze_markdown_summary_caps_findings_and_names_the_total() {
         summary.contains("Showing the top 20 of 25 findings by magnitude."),
         "{summary}"
     );
-    // Exactly the cap of finding headlines survives in the summary.
-    let summary_blocks = summary.matches("%** — `").count();
+    // Exactly the cap of finding headlines survives in the summary. Each finding
+    // headline carries the confidence, which appears nowhere else, so it counts blocks.
+    let summary_blocks = summary.matches("% confidence)").count();
     assert_eq!(
         summary_blocks, 20,
         "summary should keep only the cap: {summary}"
     );
     // The full report from the same run still lists every finding.
-    let full_blocks = full.matches("%** — `").count();
+    let full_blocks = full.matches("% confidence)").count();
     assert_eq!(
         full_blocks, 25,
         "full report should keep every finding: {full}"
