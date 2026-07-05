@@ -16,6 +16,38 @@
 
 Set-StrictMode -Version 3.0
 
+function Invoke-GhCapture {
+    # Runs `gh` with the given arguments, capturing stdout and stderr SEPARATELY. stderr is
+    # redirected to a temp file so it never contaminates stdout: `gh` can print warnings — e.g.
+    # deprecation or rate-limit notes — to stderr while still exiting 0, and folding those into
+    # stdout (a bare `2>&1`) would break the JSON/URL parsing the callers do. Returns the captured
+    # stdout as a single string on success; on a non-zero exit, throws with whatever `gh` wrote
+    # (stderr first, then any stdout) so the failure is never swallowed. Inspecting the exit code
+    # ourselves — rather than letting a non-zero `gh` abort — is why the native-error toggle is off.
+    # This is the single seam the Pester suite mocks (via `Mock gh`).
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object[]] $Arguments)
+
+    $PSNativeCommandUseErrorActionPreference = $false
+    $stderrFile = New-TemporaryFile
+    try {
+        $stderrPath = $stderrFile.FullName
+        $stdout = (gh @Arguments 2>$stderrPath | Out-String)
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) {
+            $stderr = Get-Content -LiteralPath $stderrPath -Raw
+            $parts = @()
+            if ($stderr -and $stderr.Trim()) { $parts += $stderr.Trim() }
+            if ($stdout -and $stdout.Trim()) { $parts += $stdout.Trim() }
+            throw "gh $($Arguments -join ' ') failed (exit $exitCode): $($parts -join ' ')"
+        }
+        return $stdout
+    }
+    finally {
+        Remove-Item -LiteralPath $stderrFile.FullName -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Get-OpenIssueByTitle {
     # Returns the first OPEN issue whose title equals $Title exactly, or $null when none matches.
     # The list is narrowed to $Label so only a handful of issues come back, then the exact-title
@@ -30,18 +62,15 @@ function Get-OpenIssueByTitle {
         [int] $Limit = 100
     )
 
-    # Inspect the exit code ourselves rather than letting a non-zero `gh` abort the function; 2>&1
-    # merges stderr (where `gh` prints its errors) into the captured output for the message.
-    $PSNativeCommandUseErrorActionPreference = $false
-    $output = gh issue list --state open --label $Label --limit $Limit --json number,title,url 2>&1
-    $exitCode = $LASTEXITCODE
-    if ($exitCode -ne 0) {
-        throw "gh issue list (label '$Label') failed (exit $exitCode): $(($output | Out-String).Trim())"
-    }
+    # Ask `gh` for the open issues carrying $Label as JSON; Invoke-GhCapture keeps stderr off
+    # stdout so ConvertFrom-Json below always sees clean JSON even if `gh` emitted a warning.
+    $output = Invoke-GhCapture -Arguments @(
+        'issue', 'list', '--state', 'open', '--label', $Label, '--limit', $Limit, '--json', 'number,title,url'
+    )
 
     # A no-match list is the literal `[]`, which ConvertFrom-Json yields as an empty array; the
     # @() wrapper keeps a single-object result enumerable under strict mode.
-    $issues = ($output | Out-String) | ConvertFrom-Json
+    $issues = $output | ConvertFrom-Json
     foreach ($issue in @($issues)) {
         if ($issue.title -eq $Title) { return $issue }
     }
@@ -70,28 +99,18 @@ function Publish-RollingIssue {
     Write-Verbose "Searching for an existing open issue titled '$Title' among issues labelled '$searchLabel' before filing, so a regression that persists across runs updates one rolling issue instead of opening a duplicate every run."
     $existing = Get-OpenIssueByTitle -Title $Title -Label $searchLabel
 
-    # As above: classify `gh`'s exit code ourselves and surface its output on failure.
-    $PSNativeCommandUseErrorActionPreference = $false
     if ($existing) {
         Write-Verbose "Found open issue #$($existing.number) ($($existing.url)); updating its body from '$BodyFile' rather than creating a duplicate."
-        $output = gh issue edit $existing.number --body-file $BodyFile 2>&1
-        $exitCode = $LASTEXITCODE
-        if ($exitCode -ne 0) {
-            throw "gh issue edit #$($existing.number) failed (exit $exitCode): $(($output | Out-String).Trim())"
-        }
+        Invoke-GhCapture -Arguments @('issue', 'edit', $existing.number, '--body-file', $BodyFile) | Out-Null
         return $existing.url
     }
 
     Write-Verbose "No open issue titled '$Title' found; creating a new one with labels '$Label' and body from '$BodyFile'."
-    $output = gh issue create --title $Title --label $Label --body-file $BodyFile 2>&1
-    $exitCode = $LASTEXITCODE
-    if ($exitCode -ne 0) {
-        throw "gh issue create failed (exit $exitCode): $(($output | Out-String).Trim())"
-    }
+    $output = Invoke-GhCapture -Arguments @('issue', 'create', '--title', $Title, '--label', $Label, '--body-file', $BodyFile)
 
-    # `gh issue create` prints the new issue's URL on success; extract it even if a stderr warning
-    # was merged in by 2>&1, falling back to the trimmed output if no URL is present.
-    $text = ($output | Out-String).Trim()
+    # `gh issue create` prints the new issue's URL on success; extract it (stderr is already kept
+    # off stdout by Invoke-GhCapture), falling back to the trimmed output if no URL is present.
+    $text = $output.Trim()
     $match = [regex]::Match($text, 'https://\S+')
     if ($match.Success) { return $match.Value }
     return $text

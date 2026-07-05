@@ -76,6 +76,39 @@ Describe 'Get-OpenIssueByTitle (mocked gh issue list)' {
                 Should -Throw '*503*'
         }
     }
+
+    Context 'when gh prints a warning to stderr but still exits 0' {
+        BeforeEach {
+            # Reproduce the real gotcha: gh emits a note on stderr (deprecation, rate-limit, etc.)
+            # while returning valid JSON on stdout and exiting 0. Write-Error lands on PowerShell's
+            # error stream, so a naive `2>&1` merge would corrupt the JSON — the module must parse
+            # stdout only.
+            Mock gh -ModuleName BenchHistoryIssue {
+                Write-Error 'gh: a new release of gh is available'
+                $global:LASTEXITCODE = 0
+                '[{"number":42,"title":"Benchmark regressions detected","url":"https://github.com/o/r/issues/42"}]'
+            }
+        }
+
+        It 'ignores the stderr note and still parses the issue from stdout' {
+            $issue = Get-OpenIssueByTitle -Title 'Benchmark regressions detected' -Label 'bench-history'
+            $issue.number | Should -Be 42
+        }
+    }
+
+    Context 'when gh fails and writes its error to stderr' {
+        BeforeEach {
+            Mock gh -ModuleName BenchHistoryIssue {
+                Write-Error 'GraphQL: rate limit exceeded'
+                $global:LASTEXITCODE = 1
+            }
+        }
+
+        It 'surfaces the stderr text in the thrown error' {
+            { Get-OpenIssueByTitle -Title 'Benchmark regressions detected' -Label 'bench-history' } |
+                Should -Throw '*rate limit exceeded*'
+        }
+    }
 }
 
 Describe 'Publish-RollingIssue (mocked gh)' {
