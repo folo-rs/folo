@@ -1,8 +1,12 @@
-//! Example that demonstrates the exact usage shown in the README.md file.
+//! Example that demonstrates the `iter_custom` pattern shown in the README.md file.
 //!
 //! This shows the recommended `iter_custom` pattern for tracking memory
 //! allocations, plus how to debug unexpected allocations with the
 //! `panic_on_next_alloc` feature.
+//!
+//! Criterion is configured with a small measurement budget so the example runs
+//! quickly and deterministically as a smoke test; a real benchmark would use
+//! `Criterion::default()`.
 //!
 //! To run the `panic_on_next_alloc` functionality, enable the feature:
 //! ```bash
@@ -10,7 +14,7 @@
 //! ```
 
 use std::hint::black_box;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[cfg(not(feature = "panic_on_next_alloc"))]
 use alloc_tracker::{Allocator, Session};
@@ -26,7 +30,11 @@ fn main() {
     let session = Session::new();
     let operation = session.operation("my_operation");
 
-    let mut criterion = Criterion::default();
+    let mut criterion = Criterion::default()
+        .warm_up_time(Duration::from_millis(100))
+        .measurement_time(Duration::from_millis(500))
+        .sample_size(10)
+        .without_plots();
     criterion.bench_function("my_operation", |b| {
         b.iter_custom(|iters| {
             let start = Instant::now();
