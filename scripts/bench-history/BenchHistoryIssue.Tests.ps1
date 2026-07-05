@@ -81,10 +81,12 @@ Describe 'Get-OpenIssueByTitle (mocked gh issue list)' {
         BeforeEach {
             # Reproduce the real gotcha: gh emits a note on stderr (deprecation, rate-limit, etc.)
             # while returning valid JSON on stdout and exiting 0. Write-Error lands on PowerShell's
-            # error stream, so a naive `2>&1` merge would corrupt the JSON — the module must parse
-            # stdout only.
+            # error stream (stream 2) — where a native gh's stderr also goes — so a naive `2>&1`
+            # merge would corrupt the JSON; the module must parse stdout only. `-ErrorAction
+            # Continue` keeps the note non-terminating even under the suite's `$ErrorActionPreference
+            # = 'Stop'`, so it stays a stream-2 write the module redirects away rather than a throw.
             Mock gh -ModuleName BenchHistoryIssue {
-                Write-Error 'gh: a new release of gh is available'
+                Write-Error 'gh: a new release of gh is available' -ErrorAction Continue
                 $global:LASTEXITCODE = 0
                 '[{"number":42,"title":"Benchmark regressions detected","url":"https://github.com/o/r/issues/42"}]'
             }
@@ -99,7 +101,7 @@ Describe 'Get-OpenIssueByTitle (mocked gh issue list)' {
     Context 'when gh fails and writes its error to stderr' {
         BeforeEach {
             Mock gh -ModuleName BenchHistoryIssue {
-                Write-Error 'GraphQL: rate limit exceeded'
+                Write-Error 'GraphQL: rate limit exceeded' -ErrorAction Continue
                 $global:LASTEXITCODE = 1
             }
         }
