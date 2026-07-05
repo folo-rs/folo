@@ -258,7 +258,7 @@ jobs:
           **Issue lifecycle**
 
           - Filed and refreshed automatically by the `bench-history` workflow; the body always reflects the latest `main` run that still had findings.
-          - A run that finds nothing leaves it untouched — the issue is **never** closed automatically.
+          - A run that finds nothing leaves it untouched; the issue is **never** closed automatically.
           - Closing it by hand does **not** accept the regression. A closed issue is never reopened; instead, the next run that still finds the regression files a new one.
 
           **What do I do?**
@@ -269,8 +269,8 @@ jobs:
 
           Then decide what the change is:
 
-          - **An intentional tradeoff** — accept it by blessing the affected benchmarks at the named commit, e.g. `cargo bench-history bless <benchmark-id-prefix> --context <commit>` (or `cargo bench-history bless --all --context <commit>` to accept every benchmark at that commit), then close the issue.
-          - **A defect to fix** — fix it as usual. A fixed finding self-clears on its own several runs after the fix, even without a blessing. This is **not** immediate: clearing it needs statistical evidence from multiple post-fix runs.
+          - **An intentional tradeoff**: accept it by blessing the affected benchmarks at the named commit, e.g. `cargo bench-history bless <benchmark-id-prefix> --context <commit>` (or `cargo bench-history bless --all --context <commit>` to accept every benchmark at that commit), then close the issue.
+          - **A defect to fix**: fix it as usual. A fixed finding self-clears on its own several runs after the fix, even without a blessing. This is **not** immediate: clearing it needs statistical evidence from multiple post-fix runs.
           '@
 
           $parts = @(
@@ -377,5 +377,5 @@ jobs:
           }
           foreach ($issue in $matching) {
             Write-Host "Closing #$($issue.number)"
-            gh issue close $issue.number --reason completed --comment "✅ The bench-history workflow is green again — auto-closing this alert. Successful run: $env:RUN_URL"
+            gh issue close $issue.number --reason completed --comment "✅ The bench-history workflow is green again. Auto-closing this alert. Successful run: $env:RUN_URL"
           }

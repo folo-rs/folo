@@ -705,11 +705,13 @@ The three report formats carry the **same data** and differ only in presentation
 layout is canonical. Each report names the **analyzed tip commit** — the commit whose line
 of history the findings describe — annotated `+ uncommitted changes` when the working tree
 was dirty, so a reader (or the auto-filed regression issue) can tie the report to an exact
-commit. Text goes to stdout as one paragraph per finding (a
-direction-coloured headline leading with the relative-change percent, a dimmed detail line,
-and — in history mode only — a small line chart of the series), with colour enabled only
+commit. Text goes to stdout as one paragraph per finding — the benchmark id on its own
+line as a chapter title, then a direction-coloured headline pairing the relative-change
+percent with the metric and its confidence, a dimmed detail line, and (in history mode
+only) a small line chart of the series — with colour enabled only
 when stdout is a terminal and not disabled by environment. Markdown is that data with
-Markdown formatting (per-finding blocks, not a table; charts as fenced code blocks without
+Markdown formatting (the id as a heading with the per-finding block nested beneath it, not
+a table; charts as fenced code blocks without
 ANSI). JSON is the machine-readable form: a flat, globally-ranked findings list where each
 finding is **self-describing** (it inlines its discriminant set and benchmark segments), so
 findings are never duplicated under the per-set breakdown, which carries only identity and
