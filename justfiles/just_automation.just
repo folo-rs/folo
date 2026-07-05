@@ -18,43 +18,71 @@ gh-collect-bench-history:
     cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- collect --workspace --exclude benchmarks --skip-existing --verbose
 
 # Analyzes the collected history for regressions across ALL engines, target triples and
-# machine keys, writing three working-directory artefacts: bench-history-report.md (the
-# full Markdown report), bench-history-report.json (the full JSON report) and
-# bench-history-summary.md (the Markdown report condensed to the top findings by
-# magnitude, so the rolling regression issue's body stays under GitHub's 65,536-character
-# limit) plus bench-history-notable.txt (`true`/`false`, the JSON `notable` flag). Findings
+# machine keys, writing four artefacts INTO the given {{dir}}: report.md (the full Markdown
+# report), report.json (the full JSON report), summary.md (the Markdown report condensed to
+# the top findings by magnitude, so the rolling regression issue's body stays under GitHub's
+# 65,536-character limit) and notable.txt (`true`/`false`, the JSON `notable` flag). Findings
 # never fail the recipe (the tool always exits 0); the workflow files a rolling issue when
 # notable, posting the summary as the body and attaching the two full reports as run
 # artifacts. `auto` mode on a clean `main` checkout resolves to long-range history-trend
 # detection. A single analyze pass emits every report via the per-format output toggles
 # (`--no-text --markdown --json --markdown-summary`).
 #
-# `--cache` mirrors fetched cloud objects under `bench-history-cache/` (relative to the
-# repo root, the working directory here) so the bulk history is downloaded at most once
-# across runs instead of in full every run. The bench-history.yml `analyze` job persists
-# that directory between runs via `actions/cache`; its `path:` MUST match the directory
-# named here. The cloud history is append-only (collection uses
-# `--skip-existing`), so the cache only ever tops up — a stale mirror is wiped via the
-# cloud-side marker only after a deliberate `--overwrite`/`prune`.
+# {{dir}} is a scratch directory OUTSIDE the repo checkout (the bench-history.yml `analyze`
+# job passes the runner temp dir). Keeping every artefact out of the working tree is what
+# stops `analyze`'s own `git status --porcelain` dirty-check from seeing these files and
+# wrongly annotating the analyzed tip `+ uncommitted changes` on an otherwise-clean `main`.
+#
+# `--cache` mirrors fetched cloud objects under `{{dir}}/cache` so the bulk history is
+# downloaded at most once across runs instead of in full every run. The bench-history.yml
+# `analyze` job persists that directory between runs via `actions/cache`; its `path:` and the
+# report/summary/notable filenames its steps read MUST match the names written here. The cloud
+# history is append-only (collection uses `--skip-existing`), so the cache only ever tops up —
+# a stale mirror is wiped via the cloud-side marker only after a deliberate `--overwrite`/`prune`.
 [group('automation')]
 [script]
-gh-analyze-bench-history:
+gh-analyze-bench-history dir:
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
-    $reportPath = Join-Path (Get-Location) "bench-history-report.md"
-    $jsonPath = Join-Path (Get-Location) "bench-history-report.json"
-    $summaryPath = Join-Path (Get-Location) "bench-history-summary.md"
-    $notablePath = Join-Path (Get-Location) "bench-history-notable.txt"
+    $dir = "{{dir}}"
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    $reportPath = Join-Path $dir "report.md"
+    $jsonPath = Join-Path $dir "report.json"
+    $summaryPath = Join-Path $dir "summary.md"
+    $notablePath = Join-Path $dir "notable.txt"
+    $cacheDir = Join-Path $dir "cache"
     $common = @('--engine', 'all', '--target-triple', 'all', '--machine-key', 'all')
 
-    Write-Verbose "Analyzing benchmark history in a single pass; writing the full Markdown to $reportPath, the full JSON to $jsonPath and the condensed top-findings Markdown summary to $summaryPath, mirroring fetched cloud objects under bench-history-cache/ so the history is downloaded at most once across runs." -Verbose
-    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- analyze @common --cache=bench-history-cache --no-text --markdown $reportPath --json $jsonPath --markdown-summary $summaryPath
+    Write-Verbose "Analyzing benchmark history in a single pass; writing the full Markdown to $reportPath, the full JSON to $jsonPath and the condensed top-findings Markdown summary to $summaryPath, mirroring fetched cloud objects under $cacheDir so the history is downloaded at most once across runs." -Verbose
+    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- analyze @common --cache=$cacheDir --no-text --markdown $reportPath --json $jsonPath --markdown-summary $summaryPath
     Write-Verbose "Computing the notable flag from the JSON report." -Verbose
     $json = Get-Content -Path $jsonPath -Raw | ConvertFrom-Json
     $notable = if ($json.notable) { 'true' } else { 'false' }
     Set-Content -Path $notablePath -Value $notable -Encoding utf8
     Write-Verbose "Analysis complete: notable=$notable (full report at $reportPath, condensed summary at $summaryPath)." -Verbose
+
+# Files (or updates in place) the single rolling "Benchmark regressions detected" issue from a
+# pre-rendered body file. Thin wrapper over Publish-RollingIssue in
+# scripts/bench-history/BenchHistoryIssue.psm1 (Pester-tested via `just test-scripts`), which
+# replaces the former JasonEtco/create-an-issue action so the body can live anywhere `gh` can read
+# it (--body-file takes any path) — in particular the runner temp dir, outside the repo checkout.
+# The fixed title is the dedup key: a persisting regression updates one rolling issue instead of
+# opening a new one each run. Needs GH_TOKEN in the environment (the workflow supplies it).
+[group('automation')]
+[script]
+gh-file-bench-history-issue body_file:
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+    Import-Module ./scripts/bench-history/BenchHistoryIssue.psm1 -Force
+
+    Write-Verbose "Filing or updating the rolling 'Benchmark regressions detected' issue from body file {{body_file}}." -Verbose
+    $url = Publish-RollingIssue `
+        -Title 'Benchmark regressions detected' `
+        -Label 'bench-history,regression' `
+        -BodyFile '{{body_file}}' `
+        -Verbose
+    Write-Verbose "Rolling regression issue is available at $url." -Verbose
 
 # The release-automation logic lives in scripts/release/ReleaseAutomation.psm1, with a Pester
 # suite (scripts/release/ReleaseAutomation.Tests.ps1) that exercises it against fixtures via
