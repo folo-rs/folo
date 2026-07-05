@@ -21,6 +21,7 @@ dependencies = [
 name = "all_the_time"
 version = "0.5.2"
 dependencies = [
+ "alloc_tracker",
  "cpu-time",
  "criterion",
  "folo_utils",
@@ -35,6 +36,7 @@ dependencies = [
 name = "alloc_tracker"
 version = "0.6.2"
 dependencies = [
+ "all_the_time",
  "criterion",
  "folo_utils",
  "mutants",

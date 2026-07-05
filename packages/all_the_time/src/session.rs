@@ -241,7 +241,9 @@ impl Drop for Session {
             return;
         }
 
-        let report = self.to_report();
+        // There is one report and it is always fully calculated: finalize once,
+        // then feed every enabled output from that single value.
+        let report = self.to_report().finalize();
         if self.emit_stdout {
             report.print_to_stdout();
         }

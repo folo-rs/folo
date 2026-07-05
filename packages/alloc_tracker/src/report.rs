@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::OperationMetrics;
+use crate::{FinalizedOperation, FinalizedReport, OperationMetrics};
 
 /// Thread-safe memory allocation tracking report.
 ///
@@ -217,17 +217,51 @@ impl Report {
         }
     }
 
+    /// Fully computes this report into a [`FinalizedReport`].
+    ///
+    /// Every operation's complete statistics — the warmup-robust per-metric
+    /// slopes *and* their confidence intervals — are resolved exactly once here.
+    /// Both the stdout summary and the machine-readable JSON output are rendered
+    /// from the returned value, so there is a single report that is always fully
+    /// calculated: the intervals are computed even when an output only displays
+    /// the slopes.
+    #[must_use]
+    pub fn finalize(&self) -> FinalizedReport {
+        let operations = self
+            .operations
+            .iter()
+            .map(|(name, operation)| {
+                FinalizedOperation::new(
+                    name.clone(),
+                    operation.total_iterations(),
+                    operation.total_bytes_allocated(),
+                    operation.total_allocations_count(),
+                    operation.mean_bytes(),
+                    operation.mean_allocations(),
+                    operation.statistics(),
+                )
+            })
+            .collect();
+
+        FinalizedReport::new(operations)
+    }
+
     /// Prints the memory allocation statistics to stdout.
     ///
-    /// Prints nothing if no operations were captured. This may indicate that the session
-    /// was part of a "list available benchmarks" probe run instead of some real activity,
-    /// in which case printing anything might violate the output protocol the tool is speaking.
+    /// Finalizes the report and prints the resulting summary. Prints nothing if
+    /// no operations were captured. This may indicate that the session was part
+    /// of a "list available benchmarks" probe run instead of some real activity,
+    /// in which case printing anything might violate the output protocol the tool
+    /// is speaking.
+    // Excluded from coverage as an un-assertable stdout side effect, matching the
+    // sibling `Display` impls. The `finalize()` computation it performs is covered
+    // independently — `Session::drop` finalizes on the measured path and
+    // `FinalizedReport` is unit-tested — so nothing computational is hidden here;
+    // only the stdout emission, which cannot be meaningfully asserted, is skipped.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     #[cfg_attr(test, mutants::skip)] // Too difficult to test stdout output reliably - manually tested.
     pub fn print_to_stdout(&self) {
-        if self.is_empty() {
-            return;
-        }
-        println!("{self}");
+        self.finalize().print_to_stdout();
     }
 
     /// Whether there is any recorded activity in this report.
@@ -400,97 +434,15 @@ impl fmt::Display for ReportOperation {
     }
 }
 
-// No API contract to test - output format is not guaranteed.
+// No API contract to test - output format is not guaranteed, and the rendering
+// itself is exercised through `FinalizedReport`.
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.operations.values().all(|op| op.metrics.is_empty()) {
-            writeln!(f, "No allocation statistics captured.")?;
-            return Ok(());
-        }
-
-        writeln!(f, "Allocation statistics:")?;
-        writeln!(f)?;
-
-        // Sort operations by name for consistent output.
-        let mut sorted_ops: Vec<_> = self.operations.iter().collect();
-        sorted_ops.sort_by_key(|(name, _)| *name);
-
-        // Pre-render the warmup-robust per-iteration slope cells so the column
-        // widths and the printed rows are computed from the exact same strings. The
-        // confidence interval is kept out of this summary for readability; it is
-        // preserved in the JSON output and the `statistics()` API.
-        let rows: Vec<(&str, String, String)> = sorted_ops
-            .iter()
-            .map(|(name, operation)| {
-                match (
-                    operation.metrics.bytes_slope(),
-                    operation.metrics.allocations_slope(),
-                ) {
-                    (Some(bytes), Some(allocations)) => (
-                        name.as_str(),
-                        format_count(bytes),
-                        format_count(allocations),
-                    ),
-                    _ => (name.as_str(), "n/a".to_string(), "n/a".to_string()),
-                }
-            })
-            .collect();
-
-        let name_header = "Operation";
-        let bytes_header = "Bytes/iter";
-        let count_header = "Allocations/iter";
-
-        let max_name_width = rows
-            .iter()
-            .map(|(name, _, _)| name.len())
-            .max()
-            .unwrap_or(0)
-            .max(name_header.len());
-        let max_bytes_width = rows
-            .iter()
-            .map(|(_, bytes, _)| bytes.len())
-            .max()
-            .unwrap_or(0)
-            .max(bytes_header.len());
-        let max_count_width = rows
-            .iter()
-            .map(|(_, _, count)| count.len())
-            .max()
-            .unwrap_or(0)
-            .max(count_header.len());
-
-        // Print table header.
-        writeln!(
-            f,
-            "| {name_header:<max_name_width$} | {bytes_header:>max_bytes_width$} | {count_header:>max_count_width$} |",
-        )?;
-
-        // Print separator.
-        let separator_name_width = max_name_width
-            .checked_add(2)
-            .expect("operation name width fits in memory, adding 2 cannot overflow");
-        let separator_bytes_width = max_bytes_width
-            .checked_add(2)
-            .expect("bytes width fits in memory, adding 2 cannot overflow");
-        let separator_count_width = max_count_width
-            .checked_add(2)
-            .expect("count width fits in memory, adding 2 cannot overflow");
-        writeln!(
-            f,
-            "|{:-<separator_name_width$}|{:-<separator_bytes_width$}|{:-<separator_count_width$}|",
-            "", "", "",
-        )?;
-
-        // Print table rows.
-        for (name, bytes, count) in rows {
-            writeln!(
-                f,
-                "| {name:<max_name_width$} | {bytes:>max_bytes_width$} | {count:>max_count_width$} |",
-            )?;
-        }
-
-        Ok(())
+        // There is one report and it is always fully calculated: rendering the
+        // human summary goes through the same finalized value the JSON output
+        // uses, rather than a cheaper slope-only path.
+        write!(f, "{}", self.finalize())
     }
 }
 
