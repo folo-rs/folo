@@ -172,13 +172,24 @@ test-scripts:
 # Cargo does not expose it via CARGO_BIN_EXE_* to the tests. The tests build and locate
 # it on demand, but a test runner can call this once up front and pass the path via
 # MOCK_BENCH_ENGINE so each per-test process skips a redundant Cargo freshness check.
+#
+# The build targets a dedicated `<target>/mock-engine` directory rather than the shared
+# workspace `target/` tree (matching the Rust-side `engine_target_dir`). Cargo relinks a
+# binary by unlinking it and hard-linking the replacement, so on the shared tree a
+# concurrent build could momentarily leave the engine absent under a test that is spawning
+# it; its own tree means only builds aimed here touch the file, closing that race (#332).
 [group('testing')]
 [script]
 _mock-engine-path:
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
-    $messages = cargo +$env:RUST_MSRV build -p mock_bench_engine --message-format=json-render-diagnostics --locked
+    # Nest under the ambient CARGO_TARGET_DIR (e.g. a coverage run's tree) when set, else the
+    # workspace `target/`, so the isolated tree stays git-ignored and cached like everything
+    # else. The Rust resolver derives the same path, so a pre-built MOCK_BENCH_ENGINE and an
+    # on-demand build resolve to the very same isolated binary.
+    $engineTargetDir = Join-Path ($env:CARGO_TARGET_DIR ?? "target") "mock-engine"
+    $messages = cargo +$env:RUST_MSRV build -p mock_bench_engine --target-dir $engineTargetDir --message-format=json-render-diagnostics --locked
     $exe = $messages |
         ForEach-Object {
             # Tolerate non-JSON lines (e.g. rendered diagnostics or blank lines), just

@@ -13,10 +13,12 @@ coverage-measure:
     cargo +{{ env_var('RUST_NIGHTLY') }} llvm-cov clean --workspace
 
     # Pre-build the mock benchmark engine once and hand each per-test process its path via
-    # MOCK_BENCH_ENGINE. nextest runs every test in its own process, so without this each
-    # cargo-bench-history integration test would build the engine on demand and those
-    # concurrent `cargo build` invocations would race over the shared coverage target tree
-    # (observed as transient "No such file or directory" engine-spawn failures on macOS).
+    # MOCK_BENCH_ENGINE. nextest runs every test in its own process, so this spares each
+    # cargo-bench-history integration test a redundant on-demand Cargo freshness check. The
+    # engine builds into its own dedicated target directory (see `_mock-engine-path`), so
+    # neither this pre-build nor any residual on-demand build relinks a binary out of the
+    # shared coverage tree while another test is spawning it — the transient "No such file or
+    # directory" engine-spawn races previously seen on macOS (issue #332).
     $env:MOCK_BENCH_ENGINE = just _mock-engine-path | Select-Object -Last 1
 
     # This will run tests and generate test coverage data files, to be analyzed separately.

@@ -93,6 +93,17 @@ fn run_cargo_build() -> BuildOutput {
     // change before first touching the engine. `--locked` matches the
     // `just _mock-engine-path` recipe and refuses to silently rewrite the lockfile.
     let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    // Build into a dedicated target directory (see `engine_target_dir`) instead of the
+    // shared workspace `target/` tree. Cargo swaps a binary into place by unlinking the old
+    // file and then hard-linking the new one, so anything that stats the path during that
+    // window observes it momentarily absent. On the shared tree any concurrent cargo
+    // invocation — the outer test harness, a sibling test thread, another test process —
+    // can open that window under our build. Giving the engine its own tree means only builds
+    // that target *this* directory ever touch the file, and Cargo's per-directory build lock
+    // serialises those, so no reader is exposed to a partial state: not this crate's own
+    // build-seam tests, not `binary_path`, and not the integration tests that spawn the
+    // resolved binary (issue #332).
+    let target_dir = engine_target_dir(std::env::var_os("CARGO_TARGET_DIR"));
     let output = std::process::Command::new(env!("CARGO"))
         .args([
             "build",
@@ -101,6 +112,8 @@ fn run_cargo_build() -> BuildOutput {
             "--manifest-path",
         ])
         .arg(&manifest_path)
+        .arg("--target-dir")
+        .arg(&target_dir)
         .output()
         .expect("spawning `cargo build` for mock_bench_engine should succeed");
     BuildOutput {
@@ -109,6 +122,29 @@ fn run_cargo_build() -> BuildOutput {
         stdout: output.stdout,
         stderr: output.stderr,
     }
+}
+
+/// The dedicated target directory the on-demand `cargo build` writes into, isolating the
+/// engine binary from the shared workspace `target/` tree (see [`run_cargo_build`] for why).
+///
+/// It nests under the active target directory — the ambient `CARGO_TARGET_DIR` when one is
+/// set (as coverage runs do), otherwise the workspace `target/` — so it stays git-ignored,
+/// is cached in CI alongside everything else, and is removed by `cargo clean`. The
+/// `just _mock-engine-path` recipe passes the same `--target-dir`, so a pre-built
+/// `MOCK_BENCH_ENGINE` and an on-demand build resolve to the very same isolated binary. The
+/// ambient value is taken as a parameter (rather than read here) so the mapping stays
+/// unit-testable without mutating process-wide environment.
+fn engine_target_dir(ambient_target_dir: Option<OsString>) -> PathBuf {
+    let base = ambient_target_dir.map_or_else(
+        || {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..")
+                .join("target")
+        },
+        PathBuf::from,
+    );
+    base.join("mock-engine")
 }
 
 /// Reads the built binary's path from Cargo's JSON build output, panicking with the
@@ -271,6 +307,29 @@ mod tests {
             ok_build(artifact_line("mock_bench_engine", "/tmp/mock_bench_engine"))
         });
         assert_eq!(resolved, "/tmp/mock_bench_engine");
+    }
+
+    #[test]
+    fn engine_target_dir_nests_under_an_ambient_target_dir() {
+        // A configured `CARGO_TARGET_DIR` (e.g. a coverage run) is honored as the base, so
+        // the isolated tree stays inside whatever tree the rest of the build uses.
+        let dir = engine_target_dir(Some(OsString::from("/some/custom/target")));
+        assert_eq!(dir, Path::new("/some/custom/target").join("mock-engine"));
+    }
+
+    #[test]
+    fn engine_target_dir_defaults_under_the_workspace_target() {
+        // With no override it anchors at the workspace `target/`, addressed absolutely from
+        // this crate's manifest so it does not depend on the current working directory.
+        let dir = engine_target_dir(None);
+        assert!(
+            dir.is_absolute(),
+            "the default target dir should be absolute: {dir:?}"
+        );
+        assert!(
+            dir.ends_with(Path::new("target").join("mock-engine")),
+            "the default should nest under the workspace target: {dir:?}"
+        );
     }
 
     // The remaining cases consult the filesystem (`Path::is_file`), which Miri's
