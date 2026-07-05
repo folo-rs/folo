@@ -134,15 +134,27 @@ fn run_cargo_build() -> BuildOutput {
 /// `MOCK_BENCH_ENGINE` and an on-demand build resolve to the very same isolated binary. The
 /// ambient value is taken as a parameter (rather than read here) so the mapping stays
 /// unit-testable without mutating process-wide environment.
+///
+/// A *relative* ambient `CARGO_TARGET_DIR` is absolutized against the workspace root rather
+/// than the process working directory. The result is handed to `cargo build` as
+/// `--target-dir`, and some callers change the working directory before first touching the
+/// engine, so a cwd-relative value would otherwise send the build to an unexpected tree —
+/// the same reason the harvester absolutizes `CARGO_TARGET_DIR` (see
+/// `cargo-bench-history`'s `commands::collect::target_root_from`).
 fn engine_target_dir(ambient_target_dir: Option<OsString>) -> PathBuf {
+    // The workspace root, two levels above this crate's own manifest
+    // (`<root>/packages/mock_bench_engine`).
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
     let base = ambient_target_dir.map_or_else(
-        || {
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("..")
-                .join("..")
-                .join("target")
+        || workspace_root.join("target"),
+        |configured| {
+            let configured = PathBuf::from(configured);
+            if configured.is_absolute() {
+                configured
+            } else {
+                workspace_root.join(configured)
+            }
         },
-        PathBuf::from,
     );
     base.join("mock-engine")
 }
@@ -310,11 +322,26 @@ mod tests {
     }
 
     #[test]
-    fn engine_target_dir_nests_under_an_ambient_target_dir() {
-        // A configured `CARGO_TARGET_DIR` (e.g. a coverage run) is honored as the base, so
-        // the isolated tree stays inside whatever tree the rest of the build uses.
-        let dir = engine_target_dir(Some(OsString::from("/some/custom/target")));
-        assert_eq!(dir, Path::new("/some/custom/target").join("mock-engine"));
+    fn engine_target_dir_uses_an_absolute_ambient_target_dir_as_is() {
+        // An absolute `CARGO_TARGET_DIR` (the normal case, e.g. a coverage run) is honored
+        // verbatim as the base, so the isolated tree stays inside that tree.
+        let ambient = Path::new(env!("CARGO_MANIFEST_DIR")).join("custom-target");
+        assert!(ambient.is_absolute());
+        let dir = engine_target_dir(Some(ambient.clone().into_os_string()));
+        assert_eq!(dir, ambient.join("mock-engine"));
+    }
+
+    #[test]
+    fn engine_target_dir_absolutizes_a_relative_ambient_target_dir_against_the_workspace() {
+        // A relative `CARGO_TARGET_DIR` is resolved against the workspace root, not the
+        // process working directory, so a later `--chdir` cannot redirect the build.
+        let dir = engine_target_dir(Some(OsString::from("rel-target")));
+        let expected = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("rel-target")
+            .join("mock-engine");
+        assert_eq!(dir, expected);
     }
 
     #[test]
@@ -322,13 +349,15 @@ mod tests {
         // With no override it anchors at the workspace `target/`, addressed absolutely from
         // this crate's manifest so it does not depend on the current working directory.
         let dir = engine_target_dir(None);
+        let expected = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("target")
+            .join("mock-engine");
+        assert_eq!(dir, expected);
         assert!(
             dir.is_absolute(),
             "the default target dir should be absolute: {dir:?}"
-        );
-        assert!(
-            dir.ends_with(Path::new("target").join("mock-engine")),
-            "the default should nest under the workspace target: {dir:?}"
         );
     }
 
