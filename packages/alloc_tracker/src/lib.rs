@@ -44,9 +44,11 @@
 //! shifts. Each figure is paired with a closed-form 95% confidence interval so its
 //! run-to-run uncertainty can be inspected: it collapses onto the point estimate
 //! when every span records the same per-iteration value, and is omitted entirely
-//! when a single span leaves it unestimable. The stdout summary leads with the
-//! slopes alone for readability; the JSON output records the slopes together with
-//! their confidence intervals, and the pooled means stay available through
+//! when a single span leaves it unestimable. The confidence intervals are always
+//! computed as part of finalizing a report — there is no cheaper "slope-only" path
+//! that skips them — so the stdout summary simply displays the slopes alone for
+//! readability while the JSON output records the slopes together with their
+//! confidence intervals. The pooled means stay available through
 //! [`Operation::mean`] and the report accessors for callers that still want them.
 //!
 //! # Features
@@ -198,6 +200,7 @@
 
 mod allocator;
 mod constants;
+mod finalized;
 mod operation;
 mod operation_metrics;
 mod process_span;
@@ -208,6 +211,7 @@ mod thread_span;
 
 pub use allocator::*;
 pub(crate) use constants::*;
+pub use finalized::*;
 pub use operation::*;
 pub(crate) use operation_metrics::*;
 pub use process_span::*;

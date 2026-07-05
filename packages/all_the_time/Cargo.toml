@@ -20,6 +20,10 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+# Dev-dependency loop with `alloc_tracker`: the lifecycle benchmarks measure this
+# crate's allocations using `alloc_tracker` while `alloc_tracker`'s own benchmarks
+# measure processor time using this crate. Cargo permits dev-dependency-only cycles.
+alloc_tracker = { path = "../alloc_tracker" }
 criterion = { workspace = true }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
@@ -27,6 +31,10 @@ tempfile = { workspace = true }
 
 [[bench]]
 name = "all_the_time_example"
+harness = false
+
+[[bench]]
+name = "all_the_time_report_lifecycle"
 harness = false
 
 [[bench]]

@@ -1,0 +1,299 @@
+//! The single, fully-computed memory allocation report.
+//!
+//! A [`Report`](crate::Report) is a mergeable snapshot of the streaming
+//! statistics; it is not yet resolved into the per-iteration figures that the
+//! outputs present. [`Report::finalize`](crate::Report::finalize) resolves it
+//! exactly once into a [`FinalizedReport`]: every operation's complete
+//! statistics — the warmup-robust slopes *and* their confidence intervals for
+//! both the byte and allocation-count metrics — are computed up front. Both the
+//! human-readable stdout summary and the machine-readable JSON files are then
+//! rendered from this one finalized value, so there is no cheap "slope-only"
+//! path that silently skips the interval computation and hides its cost from
+//! benchmarks.
+
+use std::fmt;
+
+use crate::OperationStatistics;
+use crate::report::format_count;
+
+/// A memory allocation report with every operation's statistics fully computed.
+///
+/// Produced by [`Report::finalize`](crate::Report::finalize). There is exactly
+/// one report and it is always fully calculated: the per-metric slopes and their
+/// confidence intervals are resolved for every operation up front, regardless of
+/// which outputs (if any) end up consuming them.
+#[derive(Clone, Debug)]
+pub struct FinalizedReport {
+    /// Operations sorted by name, so every output presents them in a stable order.
+    operations: Vec<FinalizedOperation>,
+}
+
+/// One operation's fully-computed memory allocation statistics.
+#[derive(Clone, Debug)]
+pub struct FinalizedOperation {
+    name: String,
+    total_iterations: u64,
+    total_bytes_allocated: u64,
+    total_allocations_count: u64,
+    mean_bytes: u64,
+    mean_allocations: u64,
+    statistics: Option<OperationStatistics>,
+}
+
+impl FinalizedReport {
+    /// Assembles a finalized report from the resolved per-operation figures.
+    ///
+    /// The operations are sorted by name so both outputs present them
+    /// identically.
+    pub(crate) fn new(mut operations: Vec<FinalizedOperation>) -> Self {
+        operations.sort_by(|a, b| a.name.cmp(&b.name));
+        Self { operations }
+    }
+
+    /// Whether the report captured any measurable work.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.operations
+            .iter()
+            .all(|operation| operation.statistics.is_none())
+    }
+
+    /// Returns an iterator over the finalized operations, sorted by name.
+    pub fn operations(&self) -> impl Iterator<Item = &FinalizedOperation> {
+        self.operations.iter()
+    }
+
+    /// Prints the memory allocation statistics to stdout.
+    ///
+    /// Prints nothing if no operations recorded measurable work. This may
+    /// indicate that the session was part of a "list available benchmarks" probe
+    /// run instead of some real activity, in which case printing anything might
+    /// violate the output protocol the tool is speaking.
+    #[cfg_attr(test, mutants::skip)] // Too difficult to test stdout output reliably - manually tested.
+    pub fn print_to_stdout(&self) {
+        if self.is_empty() {
+            return;
+        }
+        println!("{self}");
+    }
+}
+
+impl FinalizedOperation {
+    /// Creates a finalized operation from its resolved figures.
+    pub(crate) fn new(
+        name: String,
+        total_iterations: u64,
+        total_bytes_allocated: u64,
+        total_allocations_count: u64,
+        mean_bytes: u64,
+        mean_allocations: u64,
+        statistics: Option<OperationStatistics>,
+    ) -> Self {
+        Self {
+            name,
+            total_iterations,
+            total_bytes_allocated,
+            total_allocations_count,
+            mean_bytes,
+            mean_allocations,
+            statistics,
+        }
+    }
+
+    /// The operation name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Total iterations recorded across all spans.
+    #[must_use]
+    pub fn total_iterations(&self) -> u64 {
+        self.total_iterations
+    }
+
+    /// Total bytes allocated across all spans.
+    #[must_use]
+    pub fn total_bytes_allocated(&self) -> u64 {
+        self.total_bytes_allocated
+    }
+
+    /// Total number of allocations across all spans.
+    #[must_use]
+    pub fn total_allocations_count(&self) -> u64 {
+        self.total_allocations_count
+    }
+
+    /// Pooled mean bytes allocated per iteration.
+    #[must_use]
+    pub fn mean_bytes(&self) -> u64 {
+        self.mean_bytes
+    }
+
+    /// Pooled mean number of allocations per iteration.
+    #[must_use]
+    pub fn mean_allocations(&self) -> u64 {
+        self.mean_allocations
+    }
+
+    /// The warmup-robust per-iteration statistics, or `None` when no spans were
+    /// recorded.
+    #[must_use]
+    pub fn statistics(&self) -> Option<OperationStatistics> {
+        self.statistics
+    }
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))] // Too annoying to test every question mark operator.
+impl fmt::Display for FinalizedReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_empty() {
+            writeln!(f, "No allocation statistics captured.")?;
+            return Ok(());
+        }
+
+        writeln!(f, "Allocation statistics:")?;
+        writeln!(f)?;
+
+        // Pre-render the warmup-robust per-iteration slope cells so the column
+        // widths and the printed rows are computed from the exact same strings.
+        // The confidence interval is computed as part of finalization and
+        // preserved in the JSON output and the `statistics()` API; it is kept out
+        // of this summary purely for readability, not to save computation.
+        let rows: Vec<(&str, String, String)> = self
+            .operations
+            .iter()
+            .map(|operation| match operation.statistics {
+                Some(statistics) => (
+                    operation.name.as_str(),
+                    format_count(statistics.bytes.slope),
+                    format_count(statistics.allocations.slope),
+                ),
+                None => (operation.name.as_str(), "n/a".to_owned(), "n/a".to_owned()),
+            })
+            .collect();
+
+        let name_header = "Operation";
+        let bytes_header = "Bytes/iter";
+        let count_header = "Allocations/iter";
+
+        let max_name_width = rows
+            .iter()
+            .map(|(name, _, _)| name.len())
+            .max()
+            .unwrap_or(0)
+            .max(name_header.len());
+        let max_bytes_width = rows
+            .iter()
+            .map(|(_, bytes, _)| bytes.len())
+            .max()
+            .unwrap_or(0)
+            .max(bytes_header.len());
+        let max_count_width = rows
+            .iter()
+            .map(|(_, _, count)| count.len())
+            .max()
+            .unwrap_or(0)
+            .max(count_header.len());
+
+        // Print table header.
+        writeln!(
+            f,
+            "| {name_header:<max_name_width$} | {bytes_header:>max_bytes_width$} | {count_header:>max_count_width$} |",
+        )?;
+
+        // Print separator.
+        let separator_name_width = max_name_width
+            .checked_add(2)
+            .expect("operation name width fits in memory, adding 2 cannot overflow");
+        let separator_bytes_width = max_bytes_width
+            .checked_add(2)
+            .expect("bytes width fits in memory, adding 2 cannot overflow");
+        let separator_count_width = max_count_width
+            .checked_add(2)
+            .expect("count width fits in memory, adding 2 cannot overflow");
+        writeln!(
+            f,
+            "|{:-<separator_name_width$}|{:-<separator_bytes_width$}|{:-<separator_count_width$}|",
+            "", "", "",
+        )?;
+
+        // Print table rows.
+        for (name, bytes, count) in rows {
+            writeln!(
+                f,
+                "| {name:<max_name_width$} | {bytes:>max_bytes_width$} | {count:>max_count_width$} |",
+            )?;
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use super::*;
+    use crate::report::MetricStatistics;
+
+    // The finalized report is a plain owned value: thread-safe and unwind-safe.
+    static_assertions::assert_impl_all!(FinalizedReport: Send, Sync);
+    static_assertions::assert_impl_all!(FinalizedOperation: Send, Sync);
+    static_assertions::assert_impl_all!(FinalizedReport: UnwindSafe, RefUnwindSafe);
+    static_assertions::assert_impl_all!(FinalizedOperation: UnwindSafe, RefUnwindSafe);
+
+    fn operation(name: &str, bytes_slope: f64, allocations_slope: f64) -> FinalizedOperation {
+        FinalizedOperation::new(
+            name.to_owned(),
+            1,
+            0,
+            0,
+            0,
+            0,
+            Some(OperationStatistics {
+                span_count: 1,
+                bytes: MetricStatistics {
+                    slope: bytes_slope,
+                    interval: None,
+                },
+                allocations: MetricStatistics {
+                    slope: allocations_slope,
+                    interval: None,
+                },
+            }),
+        )
+    }
+
+    #[test]
+    fn empty_report_is_empty() {
+        let report = FinalizedReport::new(Vec::new());
+        assert!(report.is_empty());
+    }
+
+    #[test]
+    fn operations_are_sorted_by_name() {
+        let report = FinalizedReport::new(vec![
+            operation("zebra", 10.0, 1.0),
+            operation("alpha", 20.0, 2.0),
+        ]);
+
+        let names: Vec<&str> = report.operations().map(FinalizedOperation::name).collect();
+        assert_eq!(names, ["alpha", "zebra"]);
+    }
+
+    #[test]
+    fn report_with_only_unmeasured_operations_is_empty() {
+        let report = FinalizedReport::new(vec![FinalizedOperation::new(
+            "unmeasured".to_owned(),
+            0,
+            0,
+            0,
+            0,
+            0,
+            None,
+        )]);
+        assert!(report.is_empty());
+    }
+}

@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::Report;
+use crate::FinalizedReport;
 
 /// Subdirectory of the Cargo target directory that receives the JSON files.
 const OUTPUT_SUBDIRECTORY: &str = "all_the_time";
@@ -27,7 +27,7 @@ struct OperationOutput<'a> {
     interval_high_processor_time_nanos: Option<f64>,
 }
 
-impl Report {
+impl FinalizedReport {
     /// Writes machine-readable JSON statistics into the Cargo target directory.
     ///
     /// One file is written per operation, named after the operation, at
@@ -72,7 +72,7 @@ impl Report {
     ///
     /// Also panics if two operation names sanitize to the same file name, since
     /// writing both would silently discard one operation's results.
-    pub(crate) fn write_to_directory(&self, directory: impl AsRef<Path>) {
+    pub fn write_to_directory(&self, directory: impl AsRef<Path>) {
         let directory = directory.as_ref();
 
         // Build every output up front, detecting sanitized-name collisions before
@@ -80,7 +80,8 @@ impl Report {
         // file name would otherwise silently overwrite each other's results.
         let mut file_names: HashMap<String, &str> = HashMap::new();
         let mut outputs: Vec<(PathBuf, String)> = Vec::new();
-        for (name, operation) in self.operations() {
+        for operation in self.operations() {
+            let name = operation.name();
             let Some(statistics) = operation.statistics() else {
                 // Registered but never measured operations have no spans and thus
                 // no statistics, so they leave no output file behind.
@@ -192,7 +193,10 @@ mod tests {
         let session = session_with_recorded_work("read_cell");
         let directory = tempfile::tempdir().unwrap();
 
-        session.to_report().write_to_directory(directory.path());
+        session
+            .to_report()
+            .finalize()
+            .write_to_directory(directory.path());
 
         let file = directory.path().join("read_cell.json");
         let value = read_json(&file);
@@ -264,7 +268,10 @@ mod tests {
         }
 
         let directory = tempfile::tempdir().unwrap();
-        session.to_report().write_to_directory(directory.path());
+        session
+            .to_report()
+            .finalize()
+            .write_to_directory(directory.path());
 
         let value = read_json(&directory.path().join("read_cell.json"));
         assert_eq!(value.get("span_count").and_then(Value::as_u64), Some(2));
@@ -294,7 +301,10 @@ mod tests {
         let session = session_with_recorded_work("group/case name");
         let directory = tempfile::tempdir().unwrap();
 
-        session.to_report().write_to_directory(directory.path());
+        session
+            .to_report()
+            .finalize()
+            .write_to_directory(directory.path());
 
         let file = directory.path().join("group_case_name.json");
         assert!(file.exists());
@@ -316,7 +326,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let target = directory.path().join("nested");
 
-        session.to_report().write_to_directory(&target);
+        session.to_report().finalize().write_to_directory(&target);
 
         // Nothing is written, so the directory is not even created.
         assert!(!target.exists());
@@ -340,7 +350,10 @@ mod tests {
         let _unmeasured = session.operation("unmeasured");
 
         let directory = tempfile::tempdir().unwrap();
-        session.to_report().write_to_directory(directory.path());
+        session
+            .to_report()
+            .finalize()
+            .write_to_directory(directory.path());
 
         assert!(directory.path().join("measured.json").exists());
         assert!(!directory.path().join("unmeasured.json").exists());
@@ -354,7 +367,10 @@ mod tests {
         fs::write(&file, "stale contents").unwrap();
 
         let session = session_with_recorded_work("read_cell");
-        session.to_report().write_to_directory(directory.path());
+        session
+            .to_report()
+            .finalize()
+            .write_to_directory(directory.path());
 
         // Parsing succeeds only if the stale, non-JSON contents were replaced.
         let value = read_json(&file);
@@ -378,6 +394,7 @@ mod tests {
 
         session
             .to_report()
+            .finalize()
             .write_to_directory(blocker.join("nested"));
     }
 
@@ -391,7 +408,10 @@ mod tests {
         // A directory occupying the output file's path makes the file write fail.
         fs::create_dir_all(directory.path().join("read_cell.json")).unwrap();
 
-        session.to_report().write_to_directory(directory.path());
+        session
+            .to_report()
+            .finalize()
+            .write_to_directory(directory.path());
     }
 
     #[test]
@@ -414,6 +434,7 @@ mod tests {
         // never created.
         session
             .to_report()
+            .finalize()
             .write_to_directory("collision_is_detected_before_writing");
     }
 }

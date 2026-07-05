@@ -29,10 +29,11 @@
 //! closed-form 95% confidence interval so its run-to-run uncertainty can be
 //! inspected: it collapses onto the point estimate when every span records the
 //! same per-iteration value, and is omitted entirely when a single span leaves it
-//! unestimable. The stdout summary leads with the slope alone for readability; the
-//! JSON output records the slope together with that confidence interval, and the
-//! pooled mean stays available through [`ReportOperation::mean`] for callers that
-//! still want it.
+//! unestimable. The confidence interval is always computed as part of finalizing
+//! a report — there is no cheaper "slope-only" path that skips it — so the stdout
+//! summary simply displays the slope alone for readability while the JSON output
+//! records the slope together with that confidence interval. The pooled mean stays
+//! available through [`ReportOperation::mean`] for callers that still want it.
 //!
 //! # Benchmarking
 //!
@@ -80,8 +81,9 @@
 //! together with the warmup-robust slope point estimate and its 95% confidence
 //! interval (when estimable). The interval is a deterministic function of the
 //! measured spans, so identical measurements always yield identical bounds. The
-//! stdout summary leads with the same slope (see "Primary metric"), without the
-//! interval, for readability.
+//! stdout summary displays the same slope (see "Primary metric") without the
+//! interval purely for readability — the interval is computed regardless of which
+//! output consumes it.
 //!
 //! These outputs are produced automatically, so a typical benchmark only needs
 //! to create a session and record work.
@@ -195,6 +197,7 @@
 )]
 
 mod constants;
+mod finalized;
 mod operation;
 mod operation_metrics;
 mod pal;
@@ -206,6 +209,7 @@ mod target_output;
 mod thread_span;
 
 pub(crate) use constants::*;
+pub use finalized::*;
 pub use operation::*;
 pub(crate) use operation_metrics::*;
 pub use process_span::*;

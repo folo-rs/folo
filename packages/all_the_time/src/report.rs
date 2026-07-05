@@ -5,7 +5,7 @@ use std::fmt;
 use std::time::Duration;
 
 use crate::statistics::nanos_to_duration;
-use crate::{OperationMetrics, OperationStatistics};
+use crate::{FinalizedOperation, FinalizedReport, OperationMetrics, OperationStatistics};
 
 /// Thread-safe processor time tracking report.
 ///
@@ -170,17 +170,43 @@ impl Report {
         }
     }
 
+    /// Fully computes this report into a [`FinalizedReport`].
+    ///
+    /// Every operation's complete statistics — the warmup-robust slope *and* its
+    /// confidence interval — are resolved exactly once here. Both the stdout
+    /// summary and the machine-readable JSON output are rendered from the
+    /// returned value, so there is a single report that is always fully
+    /// calculated: the interval is computed even when an output only displays the
+    /// slope.
+    #[must_use]
+    pub fn finalize(&self) -> FinalizedReport {
+        let operations = self
+            .operations
+            .iter()
+            .map(|(name, operation)| {
+                FinalizedOperation::new(
+                    name.clone(),
+                    operation.total_iterations(),
+                    operation.total_processor_time(),
+                    operation.mean(),
+                    operation.statistics(),
+                )
+            })
+            .collect();
+
+        FinalizedReport::new(operations)
+    }
+
     /// Prints the processor time statistics to stdout.
     ///
-    /// Prints nothing if no operations were captured. This may indicate that the session
-    /// was part of a "list available benchmarks" probe run instead of some real activity,
-    /// in which case printing anything might violate the output protocol the tool is speaking.
+    /// Finalizes the report and prints the resulting summary. Prints nothing if
+    /// no operations were captured. This may indicate that the session was part
+    /// of a "list available benchmarks" probe run instead of some real activity,
+    /// in which case printing anything might violate the output protocol the tool
+    /// is speaking.
     #[cfg_attr(test, mutants::skip)] // Too difficult to test stdout output reliably - manually tested.
     pub fn print_to_stdout(&self) {
-        if self.is_empty() {
-            return;
-        }
-        println!("{self}");
+        self.finalize().print_to_stdout();
     }
 
     /// Whether there is any recorded activity in this report.
@@ -296,78 +322,15 @@ impl fmt::Display for ReportOperation {
     }
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))] // Too annoying to test every question mark operator.
+// No API contract to test - output format is not guaranteed, and the rendering
+// itself is exercised through `FinalizedReport`.
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.operations.values().all(|op| op.metrics.is_empty()) {
-            writeln!(f, "No processor time statistics captured.")?;
-            return Ok(());
-        }
-        writeln!(f, "Processor time statistics:")?;
-        writeln!(f)?;
-
-        // Sort operations by name for consistent output.
-        let mut sorted_ops: Vec<_> = self.operations.iter().collect();
-        sorted_ops.sort_by_key(|(name, _)| *name);
-
-        // Render the warmup-robust per-iteration slope, not the raw mean: the mean
-        // folds warmup and one-off costs into the figure, while the slope recovers
-        // the marginal per-iteration cost. The confidence interval is kept out of
-        // this summary for readability; it is preserved in the JSON output and the
-        // `statistics()` API.
-        let cells: Vec<(&str, String)> = sorted_ops
-            .iter()
-            .map(|(name, operation)| {
-                let value = match operation.metrics.slope_nanos() {
-                    Some(slope_nanos) => format!("{:?}", nanos_to_duration(slope_nanos)),
-                    None => "n/a".to_owned(),
-                };
-                (name.as_str(), value)
-            })
-            .collect();
-
-        let max_name_width = cells
-            .iter()
-            .map(|(name, _)| name.len())
-            .max()
-            .unwrap_or(0)
-            .max("Operation".len());
-        let max_value_width = cells
-            .iter()
-            .map(|(_, value)| value.len())
-            .max()
-            .unwrap_or(0)
-            .max("Per iteration".len());
-
-        // Print table header.
-        writeln!(
-            f,
-            "| {:<name_width$} | {:>value_width$} |",
-            "Operation",
-            "Per iteration",
-            name_width = max_name_width,
-            value_width = max_value_width
-        )?;
-        let separator_name_width = max_name_width
-            .checked_add(2)
-            .expect("operation name width fits in memory, adding 2 cannot overflow");
-        let separator_value_width = max_value_width
-            .checked_add(2)
-            .expect("value width fits in memory, adding 2 cannot overflow");
-        writeln!(
-            f,
-            "|{:-<name_width$}|{:-<value_width$}|",
-            "",
-            "",
-            name_width = separator_name_width,
-            value_width = separator_value_width
-        )?;
-
-        // Print table rows.
-        for (name, value) in cells {
-            writeln!(f, "| {name:<max_name_width$} | {value:>max_value_width$} |")?;
-        }
-        Ok(())
+        // There is one report and it is always fully calculated: rendering the
+        // human summary goes through the same finalized value the JSON output
+        // uses, rather than a cheaper slope-only path.
+        write!(f, "{}", self.finalize())
     }
 }
 

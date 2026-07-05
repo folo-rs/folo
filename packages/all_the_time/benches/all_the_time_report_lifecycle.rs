@@ -1,0 +1,225 @@
+//! Full-lifecycle benchmarks for the `all_the_time` processor time tracker.
+//!
+//! Where `all_the_time_tracking_overhead` measures only the per-span record
+//! path, this benchmark covers every remaining lifecycle stage — session and
+//! operation setup, report snapshotting, merging, **finalization** (assembling
+//! the recorded spans into the complete report, the phase that regressed in
+//! issue #328), human rendering, and JSON output. Each stage is measured for all
+//! three cost dimensions at once:
+//!
+//! * **wall-clock time** — Criterion, the harness.
+//! * **memory allocations** — `alloc_tracker` (a dev-dependency; this crate and
+//!   `alloc_tracker` form an allowed dev-dependency-only cycle).
+//! * **processor time** — `all_the_time` itself, measuring its own lifecycle.
+//!
+//! The finalization stage is scaled by operation count so that any regression
+//! back to super-linear or retained-span work surfaces immediately instead of
+//! hiding behind a cheap "slope-only" summary path.
+
+#![allow(
+    missing_docs,
+    reason = "No need for API documentation in benchmark code"
+)]
+
+use std::fmt::Write as _;
+use std::hint::black_box;
+use std::time::{Duration, Instant};
+
+use all_the_time::{Report, Session};
+use alloc_tracker::{Allocator, Session as AllocSession};
+use criterion::{Criterion, criterion_group, criterion_main};
+
+#[global_allocator]
+static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+
+/// Number of spans folded into each operation of the report fixtures.
+///
+/// Streaming statistics fold every span into O(1) accumulators, so this affects
+/// only the fixture's record cost, not the finalization cost — which is exactly
+/// the invariant the finalization benchmarks lock in.
+const SPANS_PER_OP: usize = 8;
+
+fn entrypoint(c: &mut Criterion) {
+    // The measuring sessions capture this benchmark's own allocation and
+    // processor-time cost and emit their JSON on drop at the end of `entrypoint`.
+    let alloc = AllocSession::new();
+    let time = Session::new();
+
+    setup(c, &alloc, &time);
+    snapshot(c, &alloc, &time);
+    merge(c, &alloc, &time);
+    finalize(c, &alloc, &time);
+    render(c, &alloc, &time);
+    write(c, &alloc, &time);
+}
+
+/// Wraps the measured `body` in an allocation span and a processor-time span so
+/// every Criterion sample also feeds the two side-channel measuring sessions.
+fn measured<F: FnMut()>(
+    iters: u64,
+    alloc_op: &alloc_tracker::Operation,
+    time_op: &all_the_time::Operation,
+    mut body: F,
+) -> Duration {
+    let start = Instant::now();
+    {
+        let _alloc_span = alloc_op.measure_thread().iterations(iters);
+        let _time_span = time_op.measure_thread().iterations(iters);
+
+        for _ in 0..iters {
+            body();
+        }
+    }
+    start.elapsed()
+}
+
+/// Builds a report fixture with `num_ops` operations, each carrying
+/// `SPANS_PER_OP` recorded spans, so downstream stages have realistic streaming
+/// state to work over.
+fn build_report(num_ops: usize) -> Report {
+    let session = Session::new().no_stdout().no_file();
+    for op_idx in 0..num_ops {
+        let op = session.operation(format!("op_{op_idx}"));
+        for _ in 0..SPANS_PER_OP {
+            let _span = op.measure_thread().iterations(10);
+            for value in 0..10_u64 {
+                black_box(value);
+            }
+        }
+    }
+    session.to_report()
+}
+
+fn setup(c: &mut Criterion, alloc: &AllocSession, time: &Session) {
+    let mut group = c.benchmark_group("all_the_time_report_lifecycle/setup");
+    let alloc_op = alloc.operation("all_the_time_report_lifecycle/setup/session_100_ops");
+    let time_op = time.operation("all_the_time_report_lifecycle/setup/session_100_ops");
+
+    group.bench_function("session_100_ops", |b| {
+        b.iter_custom(|iters| {
+            measured(iters, &alloc_op, &time_op, || {
+                let session = Session::new().no_stdout().no_file();
+                for op_idx in 0..100 {
+                    black_box(session.operation(format!("op_{op_idx}")));
+                }
+                black_box(&session);
+            })
+        });
+    });
+
+    group.finish();
+}
+
+fn snapshot(c: &mut Criterion, alloc: &AllocSession, time: &Session) {
+    let mut group = c.benchmark_group("all_the_time_report_lifecycle/snapshot");
+    let alloc_op = alloc.operation("all_the_time_report_lifecycle/snapshot/ops_100");
+    let time_op = time.operation("all_the_time_report_lifecycle/snapshot/ops_100");
+
+    // A populated session snapshotted repeatedly; `to_report` takes `&self`.
+    let session = Session::new().no_stdout().no_file();
+    for op_idx in 0..100 {
+        let op = session.operation(format!("op_{op_idx}"));
+        for _ in 0..SPANS_PER_OP {
+            let _span = op.measure_thread().iterations(10);
+            for value in 0..10_u64 {
+                black_box(value);
+            }
+        }
+    }
+
+    group.bench_function("ops_100", |b| {
+        b.iter_custom(|iters| {
+            measured(iters, &alloc_op, &time_op, || {
+                black_box(session.to_report());
+            })
+        });
+    });
+
+    group.finish();
+}
+
+fn merge(c: &mut Criterion, alloc: &AllocSession, time: &Session) {
+    let mut group = c.benchmark_group("all_the_time_report_lifecycle/merge");
+    let alloc_op = alloc.operation("all_the_time_report_lifecycle/merge/ops_100");
+    let time_op = time.operation("all_the_time_report_lifecycle/merge/ops_100");
+
+    let left = build_report(100);
+    let right = build_report(100);
+
+    group.bench_function("ops_100", |b| {
+        b.iter_custom(|iters| {
+            measured(iters, &alloc_op, &time_op, || {
+                black_box(Report::merge(black_box(&left), black_box(&right)));
+            })
+        });
+    });
+
+    group.finish();
+}
+
+fn finalize(c: &mut Criterion, alloc: &AllocSession, time: &Session) {
+    let mut group = c.benchmark_group("all_the_time_report_lifecycle/finalize");
+
+    // Scaling finalize by operation count is the core regression guard: streaming
+    // makes finalize O(operations), so the 10x jump in operation count must show
+    // a roughly 10x (not super-linear) jump in cost.
+    for num_ops in [10_usize, 100] {
+        let report = build_report(num_ops);
+        let name = format!("ops_{num_ops}");
+        let alloc_op = alloc.operation(format!("all_the_time_report_lifecycle/finalize/{name}"));
+        let time_op = time.operation(format!("all_the_time_report_lifecycle/finalize/{name}"));
+
+        group.bench_function(&name, |b| {
+            b.iter_custom(|iters| {
+                measured(iters, &alloc_op, &time_op, || {
+                    black_box(report.finalize());
+                })
+            });
+        });
+    }
+
+    group.finish();
+}
+
+fn render(c: &mut Criterion, alloc: &AllocSession, time: &Session) {
+    let mut group = c.benchmark_group("all_the_time_report_lifecycle/render");
+    let alloc_op = alloc.operation("all_the_time_report_lifecycle/render/ops_100");
+    let time_op = time.operation("all_the_time_report_lifecycle/render/ops_100");
+
+    let finalized = build_report(100).finalize();
+
+    group.bench_function("ops_100", |b| {
+        b.iter_custom(|iters| {
+            measured(iters, &alloc_op, &time_op, || {
+                let mut rendered = String::new();
+                write!(rendered, "{finalized}").expect("writing to a String cannot fail");
+                black_box(rendered);
+            })
+        });
+    });
+
+    group.finish();
+}
+
+fn write(c: &mut Criterion, alloc: &AllocSession, time: &Session) {
+    let mut group = c.benchmark_group("all_the_time_report_lifecycle/write");
+    let alloc_op = alloc.operation("all_the_time_report_lifecycle/write/ops_25");
+    let time_op = time.operation("all_the_time_report_lifecycle/write/ops_25");
+
+    // JSON output is I/O-bound, so keep the operation count modest.
+    let finalized = build_report(25).finalize();
+    let directory = tempfile::tempdir().expect("creating a temp directory cannot fail in a bench");
+
+    group.bench_function("ops_25", |b| {
+        b.iter_custom(|iters| {
+            measured(iters, &alloc_op, &time_op, || {
+                finalized.write_to_directory(directory.path());
+            })
+        });
+    });
+
+    group.finish();
+}
+
+criterion_group!(benches, entrypoint);
+criterion_main!(benches);
