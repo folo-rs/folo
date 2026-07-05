@@ -84,7 +84,10 @@ impl SpanAccumulator {
     /// For the common `iterations == 1` case every power of nᵢ is one, so this
     /// reduces to a few additions and a single multiply.
     pub fn add(&mut self, iterations: u64, total: u64) {
-        self.span_count = self.span_count.saturating_add(1);
+        self.span_count = self
+            .span_count
+            .checked_add(1)
+            .expect("span count overflows u64 - this indicates an unrealistic scenario");
 
         let n = iterations as f64;
         let t = total as f64;
@@ -103,7 +106,10 @@ impl SpanAccumulator {
     /// additive, so a merge is exactly the accumulator that would have resulted
     /// from folding both span populations into one.
     pub fn merge(&mut self, other: &Self) {
-        self.span_count = self.span_count.saturating_add(other.span_count);
+        self.span_count = self
+            .span_count
+            .checked_add(other.span_count)
+            .expect("span count overflows u64 - this indicates an unrealistic scenario");
         self.s_nn += other.s_nn;
         self.s_nt += other.s_nt;
         self.s_nntt += other.s_nntt;
