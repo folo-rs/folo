@@ -258,7 +258,7 @@ jobs:
           **Issue lifecycle**
 
           - Filed and refreshed automatically by the `bench-history` workflow; the body always reflects the latest `main` run that still had findings.
-          - A run that finds nothing leaves it untouched: the issue is **never** closed automatically.
+          - A run that finds nothing leaves it untouched; the issue is **never** closed automatically.
           - Closing it by hand does **not** accept the regression. A closed issue is never reopened; instead, the next run that still finds the regression files a new one.
 
           **What do I do?**
