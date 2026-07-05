@@ -62,27 +62,30 @@ gh-analyze-bench-history dir:
     Set-Content -Path $notablePath -Value $notable -Encoding utf8
     Write-Verbose "Analysis complete: notable=$notable (full report at $reportPath, condensed summary at $summaryPath)." -Verbose
 
-# Files (or updates in place) the single rolling "Benchmark regressions detected" issue from a
+# Files (or updates in place) a single rolling issue identified by its exact title, from a
 # pre-rendered body file. Thin wrapper over Publish-RollingIssue in
-# scripts/bench-history/BenchHistoryIssue.psm1 (Pester-tested via `just test-scripts`), which
-# replaces the former JasonEtco/create-an-issue action so the body can live anywhere `gh` can read
-# it (--body-file takes any path) — in particular the runner temp dir, outside the repo checkout.
-# The fixed title is the dedup key: a persisting regression updates one rolling issue instead of
-# opening a new one each run. Needs GH_TOKEN in the environment (the workflow supplies it).
+# scripts/bench-history/BenchHistoryIssue.psm1 (Pester-tested via `just test-scripts`), the one
+# way this workflow opens issues now that JasonEtco/create-an-issue is gone: `gh` reads the body
+# from any path (--body-file), so it can live in the runner temp dir, outside the repo checkout.
+# The title is the dedup key — a persisting condition updates one rolling issue instead of opening
+# a new one each run — so both the regression alert ('Benchmark regressions detected') and the
+# workflow-failure alert route through here with their own title/label. `label` is the
+# comma-separated label list applied on creation. Needs GH_TOKEN in the environment (the workflow
+# supplies it).
 [group('automation')]
 [script]
-gh-file-bench-history-issue body_file:
+gh-file-rolling-issue title label body_file:
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
     Import-Module ./scripts/bench-history/BenchHistoryIssue.psm1 -Force
 
-    Write-Verbose "Filing or updating the rolling 'Benchmark regressions detected' issue from body file {{body_file}}." -Verbose
+    Write-Verbose "Filing or updating the rolling issue titled '{{title}}' (labels '{{label}}') from body file {{body_file}}." -Verbose
     $url = Publish-RollingIssue `
-        -Title 'Benchmark regressions detected' `
-        -Label 'bench-history,regression' `
+        -Title '{{title}}' `
+        -Label '{{label}}' `
         -BodyFile '{{body_file}}' `
         -Verbose
-    Write-Verbose "Rolling regression issue is available at $url." -Verbose
+    Write-Verbose "Rolling issue is available at $url." -Verbose
 
 # The release-automation logic lives in scripts/release/ReleaseAutomation.psm1, with a Pester
 # suite (scripts/release/ReleaseAutomation.Tests.ps1) that exercises it against fixtures via

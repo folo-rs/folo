@@ -2,14 +2,16 @@
 
 # Rolling-issue filing for the benchmark-history workflow (.github/workflows/bench-history.yml).
 #
-# Replaces the former JasonEtco/create-an-issue action. Filing "one issue with a fixed title,
+# Replaces the former JasonEtco/create-an-issue action for BOTH issues this workflow files (the
+# regression alert and the workflow-failure alert). Filing "one issue with a fixed title,
 # updated in place when it already exists" is a short `gh` sequence, and hand-rolling it both drops
 # a third-party dependency AND lets the rendered body live anywhere `gh` can read it (--body-file
 # takes any path), so no scratch file has to sit in the repo checkout where `analyze`'s
-# `git status --porcelain` dirty-check would see it. The workflow step is a thin `just` wrapper
-# (justfiles/just_automation.just: gh-file-bench-history-issue) that imports this module and calls
-# Publish-RollingIssue, so the find-or-file logic lives here where the Pester suite
-# (BenchHistoryIssue.Tests.ps1) exercises it against a mocked `gh` rather than only via a push to
+# `git status --porcelain` dirty-check would see it. Both callers reach this one seam: the
+# regression path via the thin gh-file-rolling-issue `just` recipe (its job already has `just`),
+# the lightweight failure-alert job by importing this module directly (it skips the build-env
+# setup). Keeping the find-or-file logic here is what lets the Pester suite
+# (BenchHistoryIssue.Tests.ps1) exercise it against a mocked `gh` rather than only via a push to
 # `main`. The one real GitHub-touching tool (`gh`) is isolated behind small seams the tests mock.
 
 Set-StrictMode -Version 3.0
