@@ -1,0 +1,220 @@
+#Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
+
+# Pester suite for BenchHistoryIssue.psm1. The one tool that would touch GitHub for real -- `gh` --
+# is isolated behind the module's function seams and mocked here in the module's scope, so the
+# find-or-file logic (dedup by exact title, update-in-place vs. create, error propagation) is
+# exercised without opening or editing a real issue. The body-file existence guard is checked
+# against a real temp file so the on-disk behaviour is asserted, not faked.
+
+BeforeAll {
+    Import-Module (Join-Path $PSScriptRoot 'BenchHistoryIssue.psm1') -Force
+
+    # A real body file so Publish-RollingIssue's Test-Path guard passes; `gh` is mocked, so its
+    # contents never matter.
+    $script:BodyFile = Join-Path ([System.IO.Path]::GetTempPath()) ("bh-body-$([guid]::NewGuid().ToString('n')).md")
+    Set-Content -LiteralPath $script:BodyFile -Value 'rendered body' -Encoding utf8
+}
+
+AfterAll {
+    Remove-Item -LiteralPath $script:BodyFile -ErrorAction SilentlyContinue
+}
+
+Describe 'Get-OpenIssueByTitle (mocked gh issue list)' {
+    Context 'when an open issue with the exact title exists' {
+        BeforeEach {
+            Mock gh -ModuleName BenchHistoryIssue {
+                $global:LASTEXITCODE = 0
+                '[{"number":7,"title":"Something else","url":"https://github.com/o/r/issues/7"},{"number":42,"title":"Benchmark regressions detected","url":"https://github.com/o/r/issues/42"}]'
+            }
+        }
+
+        It 'returns that issue' {
+            $issue = Get-OpenIssueByTitle -Title 'Benchmark regressions detected' -Label 'bench-history'
+            $issue.number | Should -Be 42
+            $issue.url | Should -Be 'https://github.com/o/r/issues/42'
+        }
+
+        It 'narrows the list to the given label and open state' {
+            Get-OpenIssueByTitle -Title 'Benchmark regressions detected' -Label 'bench-history' | Out-Null
+            Should -Invoke gh -ModuleName BenchHistoryIssue -ParameterFilter {
+                ($args -contains '--label') -and ($args -contains 'bench-history') -and
+                ($args -contains '--state') -and ($args -contains 'open')
+            }
+        }
+    }
+
+    Context 'when no listed issue has a matching title' {
+        BeforeEach {
+            Mock gh -ModuleName BenchHistoryIssue {
+                $global:LASTEXITCODE = 0
+                '[{"number":7,"title":"Something else","url":"https://github.com/o/r/issues/7"}]'
+            }
+        }
+
+        It 'returns null' {
+            Get-OpenIssueByTitle -Title 'Benchmark regressions detected' -Label 'bench-history' | Should -BeNullOrEmpty
+        }
+    }
+
+    Context 'when the list is empty' {
+        BeforeEach {
+            Mock gh -ModuleName BenchHistoryIssue { $global:LASTEXITCODE = 0; '[]' }
+        }
+
+        It 'returns null' {
+            Get-OpenIssueByTitle -Title 'Benchmark regressions detected' -Label 'bench-history' | Should -BeNullOrEmpty
+        }
+    }
+
+    Context 'when gh fails' {
+        BeforeEach {
+            Mock gh -ModuleName BenchHistoryIssue { $global:LASTEXITCODE = 1; 'HTTP 503: Service Unavailable' }
+        }
+
+        It 'throws, surfacing the gh output' {
+            { Get-OpenIssueByTitle -Title 'Benchmark regressions detected' -Label 'bench-history' } |
+                Should -Throw '*503*'
+        }
+    }
+
+    Context 'when gh prints a warning to stderr but still exits 0' {
+        BeforeEach {
+            # Reproduce the real gotcha: gh emits a note on stderr (deprecation, rate-limit, etc.)
+            # while returning valid JSON on stdout and exiting 0. Write-Error lands on PowerShell's
+            # error stream (stream 2) — where a native gh's stderr also goes — so a naive `2>&1`
+            # merge would corrupt the JSON; the module must parse stdout only. `-ErrorAction
+            # Continue` keeps the note non-terminating even under the suite's `$ErrorActionPreference
+            # = 'Stop'`, so it stays a stream-2 write the module redirects away rather than a throw.
+            Mock gh -ModuleName BenchHistoryIssue {
+                Write-Error 'gh: a new release of gh is available' -ErrorAction Continue
+                $global:LASTEXITCODE = 0
+                '[{"number":42,"title":"Benchmark regressions detected","url":"https://github.com/o/r/issues/42"}]'
+            }
+        }
+
+        It 'ignores the stderr note and still parses the issue from stdout' {
+            $issue = Get-OpenIssueByTitle -Title 'Benchmark regressions detected' -Label 'bench-history'
+            $issue.number | Should -Be 42
+        }
+    }
+
+    Context 'when gh fails and writes its error to stderr' {
+        BeforeEach {
+            Mock gh -ModuleName BenchHistoryIssue {
+                Write-Error 'GraphQL: rate limit exceeded' -ErrorAction Continue
+                $global:LASTEXITCODE = 1
+            }
+        }
+
+        It 'surfaces the stderr text in the thrown error' {
+            { Get-OpenIssueByTitle -Title 'Benchmark regressions detected' -Label 'bench-history' } |
+                Should -Throw '*rate limit exceeded*'
+        }
+    }
+}
+
+Describe 'Publish-RollingIssue (mocked gh)' {
+    Context 'when an open issue with the title already exists' {
+        BeforeEach {
+            Mock gh -ModuleName BenchHistoryIssue {
+                switch ("$($args[0]) $($args[1])") {
+                    'issue list' {
+                        $global:LASTEXITCODE = 0
+                        '[{"number":42,"title":"Benchmark regressions detected","url":"https://github.com/o/r/issues/42"}]'
+                    }
+                    'issue edit' { $global:LASTEXITCODE = 0; 'https://github.com/o/r/issues/42' }
+                    'issue create' { $global:LASTEXITCODE = 0; 'https://github.com/o/r/issues/99' }
+                    default { $global:LASTEXITCODE = 1; "unexpected: $args" }
+                }
+            }
+        }
+
+        It 'updates the existing issue instead of creating a duplicate' {
+            Publish-RollingIssue -Title 'Benchmark regressions detected' -Label 'bench-history,regression' -BodyFile $script:BodyFile | Out-Null
+            Should -Invoke gh -ModuleName BenchHistoryIssue -ParameterFilter { $args[1] -eq 'edit' }
+            Should -Invoke gh -ModuleName BenchHistoryIssue -ParameterFilter { $args[1] -eq 'create' } -Times 0 -Exactly
+        }
+
+        It 'edits the matched issue number and passes the body file' {
+            Publish-RollingIssue -Title 'Benchmark regressions detected' -Label 'bench-history,regression' -BodyFile $script:BodyFile | Out-Null
+            Should -Invoke gh -ModuleName BenchHistoryIssue -ParameterFilter {
+                ($args[1] -eq 'edit') -and ($args -contains 42) -and
+                ($args -contains '--body-file') -and ($args -contains $script:BodyFile)
+            }
+        }
+
+        It 'returns the existing issue url' {
+            Publish-RollingIssue -Title 'Benchmark regressions detected' -Label 'bench-history,regression' -BodyFile $script:BodyFile |
+                Should -Be 'https://github.com/o/r/issues/42'
+        }
+    }
+
+    Context 'when no open issue with the title exists' {
+        BeforeEach {
+            Mock gh -ModuleName BenchHistoryIssue {
+                switch ("$($args[0]) $($args[1])") {
+                    'issue list' { $global:LASTEXITCODE = 0; '[]' }
+                    'issue create' { $global:LASTEXITCODE = 0; 'https://github.com/o/r/issues/99' }
+                    default { $global:LASTEXITCODE = 1; "unexpected: $args" }
+                }
+            }
+        }
+
+        It 'creates a new issue with the given title and full label list' {
+            Publish-RollingIssue -Title 'Benchmark regressions detected' -Label 'bench-history,regression' -BodyFile $script:BodyFile | Out-Null
+            Should -Invoke gh -ModuleName BenchHistoryIssue -ParameterFilter {
+                ($args[1] -eq 'create') -and
+                ($args -contains '--title') -and ($args -contains 'Benchmark regressions detected') -and
+                ($args -contains '--label') -and ($args -contains 'bench-history,regression') -and
+                ($args -contains '--body-file') -and ($args -contains $script:BodyFile)
+            }
+        }
+
+        It 'narrows the dedup search to the first label only' {
+            Publish-RollingIssue -Title 'Benchmark regressions detected' -Label 'bench-history,regression' -BodyFile $script:BodyFile | Out-Null
+            Should -Invoke gh -ModuleName BenchHistoryIssue -ParameterFilter {
+                ($args[1] -eq 'list') -and ($args -contains '--label') -and ($args -contains 'bench-history')
+            }
+        }
+
+        It 'returns the created issue url' {
+            Publish-RollingIssue -Title 'Benchmark regressions detected' -Label 'bench-history,regression' -BodyFile $script:BodyFile |
+                Should -Be 'https://github.com/o/r/issues/99'
+        }
+    }
+
+    Context 'error handling' {
+        It 'throws when the body file does not exist' {
+            $missing = Join-Path ([System.IO.Path]::GetTempPath()) "bh-missing-$([guid]::NewGuid().ToString('n')).md"
+            { Publish-RollingIssue -Title 'Benchmark regressions detected' -Label 'bench-history' -BodyFile $missing } |
+                Should -Throw '*does not exist*'
+        }
+
+        It 'throws when gh create fails, surfacing its output' {
+            Mock gh -ModuleName BenchHistoryIssue {
+                switch ("$($args[0]) $($args[1])") {
+                    'issue list' { $global:LASTEXITCODE = 0; '[]' }
+                    'issue create' { $global:LASTEXITCODE = 1; 'could not create issue' }
+                    default { $global:LASTEXITCODE = 1; "unexpected: $args" }
+                }
+            }
+            { Publish-RollingIssue -Title 'Benchmark regressions detected' -Label 'bench-history' -BodyFile $script:BodyFile } |
+                Should -Throw '*could not create issue*'
+        }
+
+        It 'throws when gh edit fails, surfacing its output' {
+            Mock gh -ModuleName BenchHistoryIssue {
+                switch ("$($args[0]) $($args[1])") {
+                    'issue list' {
+                        $global:LASTEXITCODE = 0
+                        '[{"number":42,"title":"Benchmark regressions detected","url":"https://github.com/o/r/issues/42"}]'
+                    }
+                    'issue edit' { $global:LASTEXITCODE = 1; 'could not edit issue' }
+                    default { $global:LASTEXITCODE = 1; "unexpected: $args" }
+                }
+            }
+            { Publish-RollingIssue -Title 'Benchmark regressions detected' -Label 'bench-history' -BodyFile $script:BodyFile } |
+                Should -Throw '*could not edit issue*'
+        }
+    }
+}

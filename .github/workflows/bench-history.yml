@@ -26,11 +26,10 @@ concurrency:
   cancel-in-progress: true
 
 # Title of the rolling failure-alert issue, defined once and shared by the two jobs that
-# reference it: the `alert` job stamps it as the issue title (via the
-# .github/bench-history-failure-issue.md front matter, which create-an-issue renders with
-# `{{ env.FAILURE_ISSUE_TITLE }}`), and the `resolve` job matches on it to close that issue.
-# create-an-issue dedups solely by exact title, so this string is the alert's identity; a
-# single definition keeps the open and close paths from drifting apart.
+# reference it: the `alert` job files it under this exact title (via the shared
+# gh-file-rolling-issue recipe), and the `resolve` job matches on it to close that issue.
+# The rolling-issue filing dedups solely by exact title, so this string is the alert's
+# identity; a single definition keeps the open and close paths from drifting apart.
 env:
   FAILURE_ISSUE_TITLE: Benchmark-history workflow failed
 
@@ -184,37 +183,59 @@ jobs:
             "AZURE_TENANT_ID=$(Get-RequiredConstant 'AZURE_TENANT_ID')"
           ) | Add-Content -Path $env:GITHUB_ENV -Encoding utf8
 
+      # All bench-history scratch — the read-through cache and every rendered report/summary/
+      # notable/issue-body file — lives under the runner temp directory, OUTSIDE the repo
+      # checkout. Keeping it out of the working tree is what stops `analyze`'s own
+      # `git status --porcelain` dirty-check from seeing these files (the cache is even restored
+      # BELOW, before analyze runs) and wrongly annotating the analyzed tip
+      # `+ uncommitted changes` on an otherwise-clean `main`. This step is the single source of
+      # truth for that location; every step below derives its paths from `dir`. The individual
+      # filenames (cache/, report.md, report.json, summary.md, notable.txt) are the contract the
+      # `gh-analyze-bench-history` recipe writes; issue-body.md is composed here.
+      - name: Resolve scratch directory
+        id: scratch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = Join-Path $env:RUNNER_TEMP 'bench-history'
+          New-Item -ItemType Directory -Path $dir -Force | Out-Null
+          "dir=$dir" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
+
       # Persist the read-through cache (cargo-bench-history's --cache directory) across
       # runs so the bulk history is downloaded at most once instead of in full every
       # run. The key is unique per run (cache entries are immutable per key), and
       # restore-keys falls back to the most recent prior `bench-history-cache-` entry, so
       # each run restores the latest mirror, the analyze step tops it up with this run's
       # new objects, and this run saves a fresh entry on success. The path MUST match the
-      # `--cache` directory the `gh-analyze-bench-history` recipe passes (relative to the
-      # repo root). The cloud history is append-only (collect uses --skip-existing), so a
+      # `--cache` directory the `gh-analyze-bench-history` recipe passes (`<scratch>/cache`).
+      # The cloud history is append-only (collect uses --skip-existing), so a
       # restored-but-slightly-stale mirror is always correct — a deliberate
       # --overwrite/prune bumps the cloud marker that wipes it on the next read.
       - name: Restore benchmark-history read-through cache
         uses: actions/cache@v4
         with:
-          path: bench-history-cache
+          path: ${{ steps.scratch.outputs.dir }}/cache
           key: bench-history-cache-${{ github.run_id }}
           restore-keys: |
             bench-history-cache-
 
-      # Renders bench-history-report.md (full Markdown), bench-history-report.json (full
-      # JSON), bench-history-summary.md (the condensed top-findings Markdown) and
-      # bench-history-notable.txt. Findings never fail the recipe (the tool always exits
-      # 0); the issue is advisory, not a gate.
+      # Renders report.md (full Markdown), report.json (full JSON), summary.md (the condensed
+      # top-findings Markdown) and notable.txt into the scratch directory. Findings never fail
+      # the recipe (the tool always exits 0); the issue is advisory, not a gate.
       - name: Analyze benchmark history
-        run: just gh-analyze-bench-history
+        shell: pwsh
+        env:
+          SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
+        run: just gh-analyze-bench-history "$env:SCRATCH_DIR"
 
       - name: Read notable flag
         id: notable
         shell: pwsh
+        env:
+          SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $value = (Get-Content bench-history-notable.txt -Raw).Trim()
+          $value = (Get-Content (Join-Path $env:SCRATCH_DIR 'notable.txt') -Raw).Trim()
           "value=$value" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
 
       # Attach the full Markdown and JSON reports to the run as a single artifact, so the
@@ -230,13 +251,13 @@ jobs:
         with:
           name: bench-history-full-report
           path: |
-            bench-history-report.md
-            bench-history-report.json
+            ${{ steps.scratch.outputs.dir }}/report.md
+            ${{ steps.scratch.outputs.dir }}/report.json
           if-no-files-found: error
 
-      # JasonEtco/create-an-issue derives the issue title/labels from the file's YAML
-      # front matter; the summary the tool renders has none, so prepend a fixed header.
-      # The fixed title is also the dedup key that turns findings into one rolling issue.
+      # The File step passes the title and labels to the gh-file-rolling-issue recipe as `gh`
+      # flags, so this body needs NO YAML front matter — it is the pure issue body. That fixed
+      # title is the dedup key that turns findings into one rolling issue.
       # The body carries the CONDENSED summary (not the full report) so it fits the issue
       # limit, followed by a link to the attached full reports and a footer with two parts:
       # a minimal "Issue lifecycle" summary (refreshed only on runs that still have findings,
@@ -247,10 +268,11 @@ jobs:
         shell: pwsh
         env:
           REPORT_ARTIFACT_URL: ${{ steps.full_reports.outputs.artifact-url }}
+          SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $summary = (Get-Content bench-history-summary.md -Raw).TrimEnd()
+          $summary = (Get-Content (Join-Path $env:SCRATCH_DIR 'summary.md') -Raw).TrimEnd()
           $fullReport = "**Full report:** the complete Markdown and JSON reports are attached to this workflow run. [Download the full report bundle]($env:REPORT_ARTIFACT_URL)."
           # Literal Markdown: the backticks are inline code spans, kept verbatim by the
           # single-quoted here-string.
@@ -273,12 +295,9 @@ jobs:
           - **A defect to fix**: fix it as usual. A fixed finding self-clears on its own several runs after the fix, even without a blessing. This is **not** immediate: clearing it needs statistical evidence from multiple post-fix runs.
           '@
 
+          # The title and labels are NOT front matter here — the File step passes them to the
+          # gh-file-rolling-issue recipe as `gh` flags — so this file is the pure issue body.
           $parts = @(
-            '---'
-            'title: Benchmark regressions detected'
-            'labels: bench-history, regression'
-            '---'
-            ''
             $summary
             ''
             '---'
@@ -289,20 +308,21 @@ jobs:
             ''
             $lifecycle
           )
-          Set-Content -Path bench-history-issue.md -Value ($parts -join "`n") -Encoding utf8
+          Set-Content -Path (Join-Path $env:SCRATCH_DIR 'issue-body.md') -Value ($parts -join "`n") -Encoding utf8
 
       # One rolling issue, updated rather than duplicated each run (the fixed title is
       # the dedup key), so a regression that persists does not spam new issues. Opened
-      # only when findings exist; runs with none touch nothing.
+      # only when findings exist; runs with none touch nothing. Filed over `gh` via the
+      # shared gh-file-rolling-issue recipe (the workflow's one issue-filing path) rather
+      # than a template action, so the body file can live in the runner temp dir, outside
+      # the repo checkout.
       - name: File rolling regression issue
         if: steps.notable.outputs.value == 'true'
-        uses: JasonEtco/create-an-issue@v2
+        shell: pwsh
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          filename: bench-history-issue.md
-          update_existing: true
-          search_existing: open
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
+        run: just gh-file-rolling-issue 'Benchmark regressions detected' 'bench-history,regression' (Join-Path $env:SCRATCH_DIR 'issue-body.md')
 
   alert:
     # Open a deduplicated issue whenever collection or analysis fails, so a broken
@@ -320,15 +340,44 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      # Compose the failure-alert body (interpolating the failed run's URL) into the runner temp
+      # dir, then file it with the same Publish-RollingIssue seam the regression path uses — one
+      # rolling issue keyed on $FAILURE_ISSUE_TITLE, updated rather than duplicated on each failing
+      # run, and auto-closed by the `resolve` job once the workflow is green again. The ci-failure
+      # label is what `resolve` narrows its close search to. The module is imported directly (not
+      # via `just`) because this lightweight notifier deliberately skips the build-environment
+      # setup — same raw-`gh`-in-pwsh weight as the sibling `resolve` job; only checkout + the
+      # preinstalled gh CLI are needed.
       - name: Open or update failure issue
-        uses: JasonEtco/create-an-issue@v2
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        with:
-          filename: .github/bench-history-failure-issue.md
-          update_existing: true
-          search_existing: open
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module ./scripts/bench-history/BenchHistoryIssue.psm1 -Force
+
+          # Single-quoted here-string keeps the ``main`` inline-code backticks literal; only
+          # $env:RUN_URL is interpolated, so build the body with an explicit format placeholder.
+          $template = @'
+          The **bench-history** workflow failed (collection or analysis). The
+          benchmark history may be missing the pushed `main` commit until this is fixed.
+
+          Failed run: {0}
+
+          This issue is updated, not duplicated, on each failing run, and is closed
+          automatically once the workflow runs green again.
+          '@
+          $body = $template -f $env:RUN_URL
+          $bodyFile = Join-Path $env:RUNNER_TEMP 'bench-history-failure-issue.md'
+          Set-Content -Path $bodyFile -Value $body -Encoding utf8
+
+          $url = Publish-RollingIssue `
+            -Title $env:FAILURE_ISSUE_TITLE `
+            -Label 'bench-history,ci-failure' `
+            -BodyFile $bodyFile `
+            -Verbose
+          Write-Host "Failure alert issue: $url"
 
   resolve:
     # Mirror of `alert`: when collection AND analysis are green again, auto-close the
@@ -355,9 +404,9 @@ jobs:
       # ci-failure label; find any still-open instance and close it with an audit trail
       # linking the green run. Uses the preinstalled gh CLI (GH_REPO lets it run without a
       # checkout). Listing by `--label ci-failure` already excludes the advisory regression
-      # issue (label `regression`, closed by hand); the exact-title match (the search the
-      # alert path dedups on is substring/word-based) is a further guard. `--limit` defeats
-      # the 30-result default so a backlog of historical duplicates would all be closed.
+      # issue (label `regression`, closed by hand); the exact-title match mirrors the alert
+      # path's own dedup key so the two stay in lockstep. `--limit` defeats the 30-result
+      # default so a backlog of historical duplicates would all be closed.
       - name: Close failure issue if open
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
