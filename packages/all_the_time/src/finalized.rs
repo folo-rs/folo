@@ -51,9 +51,15 @@ impl FinalizedReport {
     /// Whether the report captured any measurable work.
     #[must_use]
     pub fn is_empty(&self) -> bool {
+        // Emptiness tracks whether any work was *recorded*, not whether a slope
+        // could be fit. An operation may record spans yet still yield no
+        // statistics (the through-origin fit can be non-finite), and in that case
+        // the summary must still print the operation with an `n/a` value rather
+        // than suppress all output. Keying off `statistics.is_none()` here would
+        // wrongly treat such a report as empty and short-circuit `print_to_stdout`.
         self.operations
             .iter()
-            .all(|operation| operation.statistics.is_none())
+            .all(|operation| operation.total_iterations == 0)
     }
 
     /// Returns an iterator over the finalized operations, sorted by name.
@@ -261,5 +267,20 @@ mod tests {
             None,
         )]);
         assert!(report.is_empty());
+    }
+
+    #[test]
+    fn report_with_recorded_work_but_no_statistics_is_not_empty() {
+        // Spans were recorded (iterations > 0) but the slope fit yielded no
+        // statistics. The report must still be considered non-empty so the
+        // summary prints the operation with an `n/a` value.
+        let report = FinalizedReport::new(vec![FinalizedOperation::new(
+            "recorded".to_owned(),
+            5,
+            Duration::from_nanos(50),
+            Duration::from_nanos(10),
+            None,
+        )]);
+        assert!(!report.is_empty());
     }
 }
