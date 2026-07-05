@@ -253,9 +253,11 @@ impl Report {
     /// of a "list available benchmarks" probe run instead of some real activity,
     /// in which case printing anything might violate the output protocol the tool
     /// is speaking.
-    // Pure stdout side effect: no computation to cover here (the report is
-    // finalized on the covered `Session::drop` path), and stdout output is not
-    // meaningfully assertable — matching the sibling `Display` impls.
+    // Excluded from coverage as an un-assertable stdout side effect, matching the
+    // sibling `Display` impls. The `finalize()` computation it performs is covered
+    // independently — `Session::drop` finalizes on the measured path and
+    // `FinalizedReport` is unit-tested — so nothing computational is hidden here;
+    // only the stdout emission, which cannot be meaningfully asserted, is skipped.
     #[cfg_attr(coverage_nightly, coverage(off))]
     #[cfg_attr(test, mutants::skip)] // Too difficult to test stdout output reliably - manually tested.
     pub fn print_to_stdout(&self) {

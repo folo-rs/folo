@@ -51,12 +51,13 @@ impl FinalizedReport {
     /// Whether the report captured any measurable work.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        // Emptiness tracks whether any work was *recorded*, not whether a slope
-        // could be fit. An operation may record spans yet still yield no
-        // statistics (the through-origin fit can be non-finite), and in that case
-        // the summary must still print the operation with an `n/a` value rather
-        // than suppress all output. Keying off `statistics.is_none()` here would
-        // wrongly treat such a report as empty and short-circuit `print_to_stdout`.
+        // Emptiness means "no measurable work was recorded", matching the
+        // pre-finalize `OperationMetrics::is_empty` (total iterations == 0). It is
+        // deliberately independent of whether a slope could be fit: an operation
+        // can hold a span yet zero iterations (a fitted slope but no measurable
+        // work), or be created with no spans at all (no slope, rendered as `n/a`).
+        // Keying off `statistics.is_none()` instead would misclassify the former
+        // as non-empty and print a table for a run that recorded nothing.
         self.operations
             .iter()
             .all(|operation| operation.total_iterations == 0)
@@ -275,9 +276,10 @@ mod tests {
 
     #[test]
     fn report_with_recorded_work_but_no_statistics_is_not_empty() {
-        // Spans were recorded (iterations > 0) but the slope fit yielded no
-        // statistics. The report must still be considered non-empty so the
-        // summary prints the operation with an `n/a` value.
+        // is_empty reflects recorded work (iterations), independent of whether a
+        // slope was fit: an operation with recorded iterations is never empty even
+        // when its statistics are absent. Guards against regressing back to keying
+        // off `statistics.is_none()`.
         let report = FinalizedReport::new(vec![FinalizedOperation::new(
             "recorded".to_owned(),
             5,
