@@ -4,7 +4,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use crate::report::format_count;
-use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessSpan, ThreadSpan};
+use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessMeasurement, ThreadMeasurement};
 
 /// A measurement handle for tracking per-iteration memory allocation of a repeated operation.
 ///
@@ -19,24 +19,31 @@ use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessSpan, ThreadSpan};
 ///
 /// # Examples
 ///
-/// ```
-/// use alloc_tracker::{Allocator, Operation, Session};
+/// ```no_run
+/// use std::hint::black_box;
+/// use std::time::Instant;
+///
+/// use alloc_tracker::{Allocator, Session};
+/// use criterion::Criterion;
 ///
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 ///
+/// # fn main() {
 /// let session = Session::new();
-/// # let session = session.no_stdout().no_file();
-/// let mean_calc = session.operation("string_allocations");
-///
-/// // Simulate multiple operations
-/// for i in 0..5 {
-///     let _span = mean_calc.measure_process();
-///     let _data = vec![0; i + 1]; // Allocate different amounts
-/// }
-///
-/// let mean_bytes = mean_calc.mean();
-/// println!("Mean allocation: {} bytes per operation", mean_bytes);
+/// let string_allocations = session.operation("string_allocations");
+/// let mut criterion = Criterion::default();
+/// criterion.bench_function("string_allocations", |b| {
+///     b.iter_custom(|iters| {
+///         let start = Instant::now();
+///         let _span = string_allocations.measure_process().iterations(iters);
+///         for _ in 0..iters {
+///             black_box(String::from("Hello, world!"));
+///         }
+///         start.elapsed()
+///     });
+/// });
+/// # }
 /// ```
 #[derive(Debug)]
 pub struct Operation {
@@ -57,100 +64,87 @@ impl Operation {
         Arc::clone(&self.metrics)
     }
 
-    /// Creates a span that tracks thread allocations from creation until it is dropped.
+    /// Begins measuring allocations made by the current thread only.
     ///
-    /// This method tracks allocations made by the current thread only.
-    /// Use this when you want to measure allocations for single-threaded operations
-    /// or when you want to track per-thread allocation usage.
-    ///
-    /// The span defaults to 1 iteration but can be changed using the `iterations()` method.
+    /// Use this for single-threaded operations or when you want to track
+    /// per-thread allocation usage. The returned [`ThreadMeasurement`] records
+    /// nothing until an iteration count is supplied — with
+    /// [`iterations(n)`](ThreadMeasurement::iterations) when the count is known in
+    /// advance (the `iter_custom` benchmark pattern), or with
+    /// [`complete(n)`](ThreadMeasurement::complete) when it is only known
+    /// afterwards.
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```no_run
+    /// use std::hint::black_box;
+    /// use std::time::Instant;
+    ///
     /// use alloc_tracker::{Allocator, Session};
+    /// use criterion::Criterion;
     ///
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
+    /// # fn main() {
     /// let session = Session::new();
-    /// # let session = session.no_stdout().no_file();
     /// let operation = session.operation("thread_work");
-    /// {
-    ///     let _span = operation.measure_thread();
-    ///     // Perform some allocation in this thread
-    ///     let _data = vec![1, 2, 3, 4, 5];
-    /// } // Thread allocations are tracked for 1 iteration
+    /// let mut criterion = Criterion::default();
+    /// criterion.bench_function("thread_work", |b| {
+    ///     b.iter_custom(|iters| {
+    ///         let start = Instant::now();
+    ///         let _span = operation.measure_thread().iterations(iters);
+    ///         for _ in 0..iters {
+    ///             black_box(vec![1, 2, 3, 4, 5]);
+    ///         }
+    ///         start.elapsed()
+    ///     });
+    /// });
+    /// # }
     /// ```
-    ///
-    /// For batch operations:
-    /// ```
-    /// use alloc_tracker::{Allocator, Session};
-    ///
-    /// #[global_allocator]
-    /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
-    ///
-    /// let session = Session::new();
-    /// # let session = session.no_stdout().no_file();
-    /// let operation = session.operation("batch_work");
-    /// {
-    ///     let _span = operation.measure_thread().iterations(1000);
-    ///     for _ in 0..1000 {
-    ///         // Perform the same operation 1000 times
-    ///         let _data = vec![42];
-    ///     }
-    /// } // Total allocation is measured once and divided by 1000
-    /// ```
-    pub fn measure_thread(&self) -> ThreadSpan {
-        ThreadSpan::new(self, 1)
+    pub fn measure_thread(&self) -> ThreadMeasurement {
+        ThreadMeasurement::new(self)
     }
 
-    /// Creates a span that tracks process allocations from creation until it is dropped.
+    /// Begins measuring allocations made by the entire process (all threads).
     ///
-    /// This method tracks allocations made by the entire process (all threads).
-    /// Use this when you want to measure total allocations including multi-threaded
-    /// operations or when you want to track overall process allocation usage.
-    ///
-    /// The span defaults to 1 iteration but can be changed using the `iterations()` method.
+    /// Use this to measure total allocations including multi-threaded work. The
+    /// returned [`ProcessMeasurement`] records nothing until an iteration count is
+    /// supplied — with [`iterations(n)`](ProcessMeasurement::iterations) when the
+    /// count is known in advance (the `iter_custom` benchmark pattern), or with
+    /// [`complete(n)`](ProcessMeasurement::complete) when it is only known
+    /// afterwards.
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```no_run
+    /// use std::hint::black_box;
+    /// use std::time::Instant;
+    ///
     /// use alloc_tracker::{Allocator, Session};
+    /// use criterion::Criterion;
     ///
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
+    /// # fn main() {
     /// let session = Session::new();
-    /// # let session = session.no_stdout().no_file();
     /// let operation = session.operation("process_work");
-    /// {
-    ///     let _span = operation.measure_process();
-    ///     // Perform some allocation that might span threads
-    ///     let _data = vec![1, 2, 3, 4, 5];
-    /// } // Total process allocations are tracked for 1 iteration
+    /// let mut criterion = Criterion::default();
+    /// criterion.bench_function("process_work", |b| {
+    ///     b.iter_custom(|iters| {
+    ///         let start = Instant::now();
+    ///         let _span = operation.measure_process().iterations(iters);
+    ///         for _ in 0..iters {
+    ///             black_box(vec![1, 2, 3, 4, 5]);
+    ///         }
+    ///         start.elapsed()
+    ///     });
+    /// });
+    /// # }
     /// ```
-    ///
-    /// For batch operations:
-    /// ```
-    /// use alloc_tracker::{Allocator, Session};
-    ///
-    /// #[global_allocator]
-    /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
-    ///
-    /// let session = Session::new();
-    /// # let session = session.no_stdout().no_file();
-    /// let operation = session.operation("batch_work");
-    /// {
-    ///     let _span = operation.measure_process().iterations(1000);
-    ///     for _ in 0..1000 {
-    ///         // Perform the same operation 1000 times
-    ///         let _data = vec![42];
-    ///     }
-    /// } // Total allocation is measured once and divided by 1000
-    /// ```
-    pub fn measure_process(&self) -> ProcessSpan {
-        ProcessSpan::new(self, 1)
+    pub fn measure_process(&self) -> ProcessMeasurement {
+        ProcessMeasurement::new(self)
     }
 
     /// Calculates the mean bytes allocated per iteration.
@@ -167,7 +161,7 @@ impl Operation {
     /// Returns the total number of iterations recorded.
     #[must_use]
     #[cfg(test)]
-    fn total_iterations(&self) -> u64 {
+    pub(crate) fn total_iterations(&self) -> u64 {
         let data = self.metrics.lock().unwrap();
         data.total_iterations()
     }
@@ -182,8 +176,7 @@ impl Operation {
 
 impl fmt::Display for Operation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // The summary shows only the slopes, so take the cheap slope-only path and
-        // skip the bootstrap confidence intervals the full statistics would resample.
+        // The summary shows only the per-iteration slopes, not their intervals.
         let metrics = self.metrics.lock().expect(ERR_POISONED_LOCK);
         match (metrics.bytes_slope(), metrics.allocations_slope()) {
             (Some(bytes), Some(allocations)) => write!(
@@ -272,7 +265,7 @@ mod tests {
         let operation = create_test_operation();
 
         {
-            let _span = operation.measure_thread();
+            let _span = operation.measure_thread().iterations(1);
             // Simulate allocation
             register_fake_allocation(75, 1);
         }
@@ -287,12 +280,12 @@ mod tests {
         let operation = create_test_operation();
 
         {
-            let _span = operation.measure_thread();
+            let _span = operation.measure_thread().iterations(1);
             register_fake_allocation(100, 1);
         }
 
         {
-            let _span = operation.measure_thread();
+            let _span = operation.measure_thread().iterations(1);
             register_fake_allocation(200, 1);
         }
 
@@ -306,7 +299,7 @@ mod tests {
         let operation = create_test_operation();
 
         {
-            let _span = operation.measure_thread();
+            let _span = operation.measure_thread().iterations(1);
             register_fake_allocation(50, 1);
         }
 
@@ -320,12 +313,12 @@ mod tests {
         let operation = create_test_operation();
 
         {
-            let _span = operation.measure_thread();
+            let _span = operation.measure_thread().iterations(1);
             register_fake_allocation(100, 1);
         }
 
         {
-            let _span = operation.measure_thread();
+            let _span = operation.measure_thread().iterations(1);
             register_fake_allocation(200, 1);
         }
 
@@ -339,7 +332,7 @@ mod tests {
         let operation = create_test_operation();
 
         {
-            let _span = operation.measure_thread();
+            let _span = operation.measure_thread().iterations(1);
             // No allocation
         }
 

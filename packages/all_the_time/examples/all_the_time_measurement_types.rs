@@ -78,7 +78,7 @@ fn measure_thread_time(session: &Session) {
     let thread_op = session.operation("thread_span_multithreaded");
 
     for _ in 0..3 {
-        let _span = thread_op.measure_thread();
+        let _span = thread_op.measure_thread().iterations(1);
         multithreaded_work();
     }
 }
@@ -89,7 +89,7 @@ fn measure_process_time(session: &Session) {
     let process_op = session.operation("process_span_multithreaded");
 
     for _ in 0..3 {
-        let _span = process_op.measure_process();
+        let _span = process_op.measure_process().iterations(1);
         multithreaded_work();
     }
 }

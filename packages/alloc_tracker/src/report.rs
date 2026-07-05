@@ -3,8 +3,6 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use folo_utils::SpanStats;
-
 use crate::OperationMetrics;
 
 /// Thread-safe memory allocation tracking report.
@@ -26,7 +24,7 @@ use crate::OperationMetrics;
 /// # let session = session.no_stdout().no_file();
 /// {
 ///     let operation = session.operation("test_work");
-///     let _span = operation.measure_process();
+///     let _span = operation.measure_process().iterations(1);
 ///     let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
 /// }
 ///
@@ -59,13 +57,13 @@ use crate::OperationMetrics;
 /// // Record some work in each
 /// {
 ///     let op1 = session1.operation("work");
-///     let _span1 = op1.measure_process();
+///     let _span1 = op1.measure_process().iterations(1);
 ///     let _data1 = vec![1, 2, 3]; // This allocates memory
 /// }
 ///
 /// {
 ///     let op2 = session2.operation("work");
-///     let _span2 = op2.measure_process();
+///     let _span2 = op2.measure_process().iterations(1);
 ///     let _data2 = vec![4, 5, 6, 7]; // This allocates more memory
 /// }
 ///
@@ -93,56 +91,31 @@ pub struct ReportOperation {
     metrics: OperationMetrics,
 }
 
-/// Per-iteration dispersion statistics for a single allocation metric.
+/// Per-iteration statistics for a single allocation metric.
 ///
 /// Every value is expressed in the metric's own per-iteration unit (bytes, or a
 /// count of allocations). Allocation figures are not deterministic — first-run
 /// allocations and buffer resizing jitter around the mean over a
 /// Criterion-chosen iteration count — so the point estimate is a warmup-robust
-/// through-origin slope and the interval is a bootstrap confidence interval of
-/// that slope. When every span recorded the same per-iteration value the interval
-/// collapses onto the point estimate.
+/// through-origin slope and the interval is a closed-form confidence interval of
+/// that slope. The interval is absent when it cannot be estimated (fewer than two
+/// spans); when every span recorded the same per-iteration value it collapses
+/// onto the point estimate.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct MetricStatistics {
     /// Through-origin OLS slope: the per-iteration point estimate.
     pub slope: f64,
 
-    /// Sample standard deviation of the per-iteration values across spans.
-    pub std_dev: f64,
-
-    /// Lower bound of the slope's bootstrap confidence interval.
-    pub interval_low: f64,
-
-    /// Upper bound of the slope's bootstrap confidence interval.
-    pub interval_high: f64,
-
-    /// Smallest per-iteration value observed across spans.
-    pub min: f64,
-
-    /// Largest per-iteration value observed across spans.
-    pub max: f64,
+    /// The slope's confidence interval as `(low, high)`, or `None` when it cannot
+    /// be estimated.
+    pub interval: Option<(f64, f64)>,
 }
 
-impl MetricStatistics {
-    /// Re-labels a unit-agnostic [`SpanStats`] as this metric's per-iteration
-    /// statistics.
-    fn from_span_stats(stats: SpanStats) -> Self {
-        Self {
-            slope: stats.slope,
-            std_dev: stats.std_dev,
-            interval_low: stats.interval_low,
-            interval_high: stats.interval_high,
-            min: stats.min,
-            max: stats.max,
-        }
-    }
-}
-
-/// Dispersion statistics for one operation across both allocation metrics.
+/// Statistics for one operation across both allocation metrics.
 ///
 /// Exposed through [`ReportOperation::statistics`] so callers can consume the
-/// same warmup-robust dispersion that is written to the machine-readable JSON
+/// same warmup-robust estimates that are written to the machine-readable JSON
 /// output.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
@@ -151,10 +124,10 @@ pub struct OperationStatistics {
     /// iteration count).
     pub span_count: u64,
 
-    /// Per-iteration byte-count dispersion.
+    /// Per-iteration byte-count statistics.
     pub bytes: MetricStatistics,
 
-    /// Per-iteration allocation-count dispersion.
+    /// Per-iteration allocation-count statistics.
     pub allocations: MetricStatistics,
 }
 
@@ -211,13 +184,13 @@ impl Report {
     /// // Both sessions record the same operation name
     /// {
     ///     let op1 = session1.operation("common_work");
-    ///     let _span1 = op1.measure_process();
+    ///     let _span1 = op1.measure_process().iterations(1);
     ///     let _data1 = vec![1, 2, 3]; // 3 elements
     /// }
     ///
     /// {
     ///     let op2 = session2.operation("common_work");
-    ///     let _span2 = op2.measure_process();
+    ///     let _span2 = op2.measure_process().iterations(1);
     ///     let _data2 = vec![4, 5]; // 2 elements
     /// }
     ///
@@ -235,7 +208,7 @@ impl Report {
         for (name, b_op) in &b.operations {
             merged_operations
                 .entry(name.clone())
-                .and_modify(|a_op| a_op.metrics.extend_from(&b_op.metrics))
+                .and_modify(|a_op| a_op.metrics.merge(&b_op.metrics))
                 .or_insert_with(|| b_op.clone());
         }
 
@@ -281,7 +254,7 @@ impl Report {
     /// # let session = session.no_stdout().no_file();
     /// {
     ///     let operation = session.operation("test_work");
-    ///     let _span = operation.measure_process();
+    ///     let _span = operation.measure_process().iterations(1);
     ///     let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
     /// }
     ///
@@ -341,13 +314,12 @@ impl ReportOperation {
         self.mean_bytes()
     }
 
-    /// Computes warmup-robust dispersion statistics over the recorded spans.
+    /// Computes warmup-robust statistics over the recorded spans.
     ///
     /// Returns `None` when no spans were recorded. The returned
-    /// [`OperationStatistics`] carries the slope point estimate, bootstrap
-    /// confidence interval, standard deviation and extremes for both the byte and
-    /// allocation-count metrics — the same dispersion written to the
-    /// machine-readable JSON output.
+    /// [`OperationStatistics`] carries the slope point estimate and its confidence
+    /// interval for both the byte and allocation-count metrics — the same
+    /// estimates written to the machine-readable JSON output.
     ///
     /// # Examples
     ///
@@ -362,7 +334,7 @@ impl ReportOperation {
     /// # let session = session.no_stdout().no_file();
     /// {
     ///     let operation = session.operation("test_work");
-    ///     let _span = operation.measure_process();
+    ///     let _span = operation.measure_process().iterations(1);
     ///     let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
     /// }
     ///
@@ -379,12 +351,19 @@ impl ReportOperation {
     /// ```
     #[must_use]
     pub fn statistics(&self) -> Option<OperationStatistics> {
-        let bytes = self.metrics.bytes_stats()?;
-        let allocations = self.metrics.allocations_stats()?;
+        if self.metrics.span_count() == 0 {
+            return None;
+        }
         Some(OperationStatistics {
-            span_count: bytes.span_count,
-            bytes: MetricStatistics::from_span_stats(bytes),
-            allocations: MetricStatistics::from_span_stats(allocations),
+            span_count: self.metrics.span_count(),
+            bytes: MetricStatistics {
+                slope: self.metrics.bytes_slope()?,
+                interval: self.metrics.bytes_interval(),
+            },
+            allocations: MetricStatistics {
+                slope: self.metrics.allocations_slope()?,
+                interval: self.metrics.allocations_interval(),
+            },
         })
     }
 }
@@ -408,8 +387,7 @@ pub(crate) fn format_count(value: f64) -> String {
 
 impl fmt::Display for ReportOperation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // The summary shows only the slopes, so take the cheap slope-only path and
-        // skip the bootstrap confidence intervals the full statistics would resample.
+        // The summary shows only the per-iteration slopes, not their intervals.
         match (self.metrics.bytes_slope(), self.metrics.allocations_slope()) {
             (Some(bytes), Some(allocations)) => write!(
                 f,
@@ -440,10 +418,8 @@ impl fmt::Display for Report {
 
         // Pre-render the warmup-robust per-iteration slope cells so the column
         // widths and the printed rows are computed from the exact same strings. The
-        // bootstrap confidence interval is kept out of this summary for
-        // readability; it is preserved in the JSON output and the `statistics()`
-        // API. Rendering the slopes alone also lets the table skip the bootstrap
-        // resampling the full statistics would perform for both metrics.
+        // confidence interval is kept out of this summary for readability; it is
+        // preserved in the JSON output and the `statistics()` API.
         let rows: Vec<(&str, String, String)> = sorted_ops
             .iter()
             .map(|(name, operation)| {
@@ -558,7 +534,7 @@ mod tests {
         let session = Session::new().no_stdout().no_file();
         {
             let operation = session.operation("test");
-            let _span = operation.measure_thread();
+            let _span = operation.measure_thread().iterations(1);
             register_fake_allocation(100, 1);
         } // Span drops here, releasing the mutable borrow
 
@@ -579,7 +555,7 @@ mod tests {
         let session = Session::new().no_stdout().no_file();
         {
             let operation = session.operation("test");
-            let _span = operation.measure_thread();
+            let _span = operation.measure_thread().iterations(1);
             register_fake_allocation(100, 1);
         } // Span drops here
 
@@ -600,13 +576,13 @@ mod tests {
 
         {
             let op1 = session1.operation("test1");
-            let _span1 = op1.measure_thread();
+            let _span1 = op1.measure_thread().iterations(1);
             register_fake_allocation(100, 1);
         } // Span drops here
 
         {
             let op2 = session2.operation("test2");
-            let _span2 = op2.measure_thread();
+            let _span2 = op2.measure_thread().iterations(1);
             register_fake_allocation(200, 2);
         } // Span drops here
 
@@ -626,13 +602,13 @@ mod tests {
 
         {
             let op1 = session1.operation("test");
-            let _span1 = op1.measure_thread();
+            let _span1 = op1.measure_thread().iterations(1);
             register_fake_allocation(100, 1);
         } // Span drops here
 
         {
             let op2 = session2.operation("test");
-            let _span2 = op2.measure_thread();
+            let _span2 = op2.measure_thread().iterations(1);
             register_fake_allocation(200, 2);
         } // Span drops here
 
@@ -652,7 +628,7 @@ mod tests {
         let session = Session::new().no_stdout().no_file();
         {
             let operation = session.operation("test");
-            let _span = operation.measure_thread();
+            let _span = operation.measure_thread().iterations(1);
             register_fake_allocation(100, 1);
         } // Span drops here
 
@@ -680,7 +656,7 @@ mod tests {
         let session = Session::new().no_stdout().no_file();
         {
             let operation = session.operation("test_consistency");
-            let _span = operation.measure_thread();
+            let _span = operation.measure_thread().iterations(1);
             // Simulate 3 allocations
             register_fake_allocation(300, 3);
         } // Span drops here
@@ -703,16 +679,32 @@ mod tests {
     }
 
     #[test]
-    fn statistics_expose_both_metric_dispersions() {
-        // A single recorded span yields a span count of one, a slope equal to the
-        // per-iteration mean, and a degenerate interval that collapses onto it.
+    fn statistics_expose_both_metric_estimates() {
+        // A single recorded span yields a span count of one and a slope equal to
+        // the per-iteration mean, but carries no dispersion information, so the
+        // interval is withheld.
         let operation = report_operation(200, 2, 4);
         let stats = operation.statistics().unwrap();
         assert_eq!(stats.span_count, 1);
         assert_eq!(stats.bytes.slope, 200.0);
-        assert_eq!(stats.bytes.interval_low, 200.0);
-        assert_eq!(stats.bytes.interval_high, 200.0);
+        assert_eq!(stats.bytes.interval, None);
         assert_eq!(stats.allocations.slope, 2.0);
+        assert_eq!(stats.allocations.interval, None);
+    }
+
+    #[test]
+    fn repeated_identical_spans_collapse_the_interval_onto_the_slope() {
+        // Two identical spans clear the two-span threshold with zero residual
+        // dispersion, so the interval collapses onto the slope.
+        let mut metrics = OperationMetrics::default();
+        metrics.add_iterations(200, 2, 4);
+        metrics.add_iterations(200, 2, 4);
+        let operation = ReportOperation { metrics };
+
+        let stats = operation.statistics().unwrap();
+        assert_eq!(stats.span_count, 2);
+        assert_eq!(stats.bytes.slope, 200.0);
+        assert_eq!(stats.bytes.interval, Some((200.0, 200.0)));
     }
 
     // Static assertions for thread safety.

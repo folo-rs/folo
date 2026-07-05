@@ -1,71 +1,53 @@
-//! Per-operation allocation metrics, retained as raw spans.
+//! Per-operation allocation metrics, folded into streaming statistics.
 //!
-//! Every measured span contributes one [`SpanRecord`] carrying the whole-span
-//! byte and allocation-count deltas together with the iteration count it covered.
-//! Retaining the raw spans (rather than collapsing them into running totals) lets
-//! the report derive both the headline pooled means and the warmup-robust
-//! dispersion statistics the history tool consumes — allocation figures are not
-//! deterministic, since first-run allocations and buffer resizing jitter around
-//! the mean over a Criterion-chosen iteration count.
+//! Every measured span contributes its whole-span byte and allocation-count
+//! deltas together with the iteration count it covered. The spans are not
+//! retained: each is folded on arrival into running totals (for the pooled means)
+//! and into two [`SpanAccumulator`]s (for the warmup-robust per-iteration slope
+//! and its confidence interval). Allocation figures are not deterministic —
+//! first-run allocations and buffer resizing jitter around the mean over a
+//! Criterion-chosen iteration count — so the slope down-weights low-iteration
+//! warmup spans and the interval quantifies the residual noise.
 
-use folo_utils::{Span, SpanStats};
-
-/// Initial capacity reserved for an operation's span buffer.
-///
-/// Sized to cover Criterion's default sample count (100) plus its warm-up calls
-/// with headroom, so that recording a span is an allocation-free push in the
-/// common case. A benchmark configured with a larger `sample_size` eventually
-/// exceeds this and the next push grows the buffer. That growth allocation does
-/// not contaminate the measurement: a span records itself from `Drop`, after it
-/// has already captured its allocation delta and before the next span starts, so
-/// the reallocation falls between measured spans and is attributed to none of
-/// them.
-const DEFAULT_SPAN_CAPACITY: usize = 256;
-
-/// One recorded span: the whole-span byte and allocation-count deltas and the
-/// number of iterations they covered.
-///
-/// The raw whole-span totals are retained (not pre-divided per iteration) so that
-/// the slope regression can weight each span by its iteration count.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct SpanRecord {
-    /// Iterations the span measured.
-    pub(crate) iterations: u64,
-
-    /// Total bytes allocated during the span.
-    pub(crate) bytes: u64,
-
-    /// Total number of allocations during the span.
-    pub(crate) count: u64,
-}
+use folo_utils::SpanAccumulator;
 
 /// Metrics tracked for each operation in the session.
 ///
-/// Every measured span contributes one [`SpanRecord`]. The pooled means are
-/// derived from the summed totals; the dispersion statistics are derived from the
-/// per-span population via the shared [`folo_utils::SpanStats`] estimator.
-#[derive(Clone, Debug)]
+/// Holds the pooled totals (bytes, allocation count, iterations) and two shared
+/// [`SpanAccumulator`]s — one over per-iteration bytes, one over per-iteration
+/// allocation counts — folded in as each span is recorded. No per-span data is
+/// retained.
+#[derive(Clone, Debug, Default)]
 pub(crate) struct OperationMetrics {
-    spans: Vec<SpanRecord>,
-}
-
-impl Default for OperationMetrics {
-    fn default() -> Self {
-        Self {
-            spans: Vec::with_capacity(DEFAULT_SPAN_CAPACITY),
-        }
-    }
+    total_iterations: u64,
+    total_bytes: u64,
+    total_count: u64,
+    bytes: SpanAccumulator,
+    allocations: SpanAccumulator,
 }
 
 impl OperationMetrics {
     /// Records one span covering `iterations` iterations that allocated `bytes`
     /// bytes across `count` allocations in total.
+    ///
+    /// Folding a span is a handful of additions with no allocation, so it is
+    /// cheap enough to run inside a measured span.
     pub(crate) fn add_span(&mut self, iterations: u64, bytes: u64, count: u64) {
-        self.spans.push(SpanRecord {
-            iterations,
-            bytes,
-            count,
-        });
+        self.total_iterations = self
+            .total_iterations
+            .checked_add(iterations)
+            .expect("total iterations overflows u64 - this indicates an unrealistic scenario");
+        self.total_bytes = self
+            .total_bytes
+            .checked_add(bytes)
+            .expect("total bytes overflows u64 - this indicates an unrealistic scenario");
+        self.total_count = self
+            .total_count
+            .checked_add(count)
+            .expect("total allocations overflows u64 - this indicates an unrealistic scenario");
+
+        self.bytes.add(iterations, bytes);
+        self.allocations.add(iterations, count);
     }
 
     /// Records one span by its per-iteration deltas and iteration count.
@@ -85,41 +67,31 @@ impl OperationMetrics {
     }
 
     /// Number of spans recorded (distinct from the total iteration count).
-    #[cfg(test)]
     pub(crate) fn span_count(&self) -> u64 {
-        self.spans.len() as u64
+        self.bytes.span_count()
     }
 
     /// Total iterations across all recorded spans.
     pub(crate) fn total_iterations(&self) -> u64 {
-        self.spans.iter().fold(0_u64, |sum, span| {
-            sum.checked_add(span.iterations)
-                .expect("total iterations overflows u64 - this indicates an unrealistic scenario")
-        })
+        self.total_iterations
     }
 
     /// Total bytes allocated across all recorded spans.
     pub(crate) fn total_bytes_allocated(&self) -> u64 {
-        self.spans.iter().fold(0_u64, |sum, span| {
-            sum.checked_add(span.bytes)
-                .expect("total bytes overflows u64 - this indicates an unrealistic scenario")
-        })
+        self.total_bytes
     }
 
     /// Total number of allocations across all recorded spans.
     pub(crate) fn total_allocations_count(&self) -> u64 {
-        self.spans.iter().fold(0_u64, |sum, span| {
-            sum.checked_add(span.count)
-                .expect("total allocations overflows u64 - this indicates an unrealistic scenario")
-        })
+        self.total_count
     }
 
     /// Mean bytes allocated per iteration, pooled across all spans.
     ///
     /// Returns zero when no iterations were recorded.
     pub(crate) fn mean_bytes(&self) -> u64 {
-        self.total_bytes_allocated()
-            .checked_div(self.total_iterations())
+        self.total_bytes
+            .checked_div(self.total_iterations)
             .unwrap_or(0)
     }
 
@@ -127,76 +99,67 @@ impl OperationMetrics {
     ///
     /// Returns zero when no iterations were recorded.
     pub(crate) fn mean_allocations(&self) -> u64 {
-        self.total_allocations_count()
-            .checked_div(self.total_iterations())
+        self.total_count
+            .checked_div(self.total_iterations)
             .unwrap_or(0)
     }
 
     /// Whether the operation recorded any measurable work.
     pub(crate) fn is_empty(&self) -> bool {
-        self.total_iterations() == 0
-    }
-
-    /// Dispersion statistics of the per-iteration byte counts across spans, or
-    /// `None` when no spans were recorded.
-    pub(crate) fn bytes_stats(&self) -> Option<SpanStats> {
-        let spans: Vec<Span> = self
-            .spans
-            .iter()
-            .map(|span| Span::new(span.iterations, span.bytes))
-            .collect();
-        SpanStats::from_spans(&spans)
-    }
-
-    /// Dispersion statistics of the per-iteration allocation counts across spans,
-    /// or `None` when no spans were recorded.
-    pub(crate) fn allocations_stats(&self) -> Option<SpanStats> {
-        let spans: Vec<Span> = self
-            .spans
-            .iter()
-            .map(|span| Span::new(span.iterations, span.count))
-            .collect();
-        SpanStats::from_spans(&spans)
+        self.total_iterations == 0
     }
 
     /// The warmup-robust per-iteration byte slope, or `None` when no spans were
     /// recorded.
-    ///
-    /// The cheap path for the console summary: it computes only the headline
-    /// slope, skipping the bootstrap confidence interval that
-    /// [`bytes_stats`](Self::bytes_stats) resamples.
     pub(crate) fn bytes_slope(&self) -> Option<f64> {
-        let spans: Vec<Span> = self
-            .spans
-            .iter()
-            .map(|span| Span::new(span.iterations, span.bytes))
-            .collect();
-        folo_utils::slope_of(&spans)
+        self.bytes.slope()
     }
 
     /// The warmup-robust per-iteration allocation-count slope, or `None` when no
     /// spans were recorded.
-    ///
-    /// The cheap counterpart to [`allocations_stats`](Self::allocations_stats),
-    /// skipping the bootstrap resampling for the console summary.
     pub(crate) fn allocations_slope(&self) -> Option<f64> {
-        let spans: Vec<Span> = self
-            .spans
-            .iter()
-            .map(|span| Span::new(span.iterations, span.count))
-            .collect();
-        folo_utils::slope_of(&spans)
+        self.allocations.slope()
     }
 
-    /// Appends another operation's spans onto this one.
-    pub(crate) fn extend_from(&mut self, other: &Self) {
-        self.spans.extend_from_slice(&other.spans);
+    /// The confidence interval of the per-iteration byte slope, or `None` when it
+    /// cannot be estimated (fewer than two spans, or a non-finite estimate).
+    pub(crate) fn bytes_interval(&self) -> Option<(f64, f64)> {
+        self.bytes.interval()
+    }
+
+    /// The confidence interval of the per-iteration allocation-count slope, or
+    /// `None` when it cannot be estimated.
+    pub(crate) fn allocations_interval(&self) -> Option<(f64, f64)> {
+        self.allocations.interval()
+    }
+
+    /// Merges another operation's statistics into this one.
+    pub(crate) fn merge(&mut self, other: &Self) {
+        self.total_iterations = self
+            .total_iterations
+            .checked_add(other.total_iterations)
+            .expect("total iterations overflows u64 - this indicates an unrealistic scenario");
+        self.total_bytes = self
+            .total_bytes
+            .checked_add(other.total_bytes)
+            .expect("total bytes overflows u64 - this indicates an unrealistic scenario");
+        self.total_count = self
+            .total_count
+            .checked_add(other.total_count)
+            .expect("total allocations overflows u64 - this indicates an unrealistic scenario");
+        self.bytes.merge(&other.bytes);
+        self.allocations.merge(&other.allocations);
     }
 }
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    #![allow(
+        clippy::float_cmp,
+        reason = "slope assertions are exact integer-derived values in these fixtures"
+    )]
+
     use super::*;
 
     #[test]
@@ -207,24 +170,6 @@ mod tests {
         assert_eq!(metrics.total_iterations(), 0);
         assert_eq!(metrics.span_count(), 0);
         assert!(metrics.is_empty());
-    }
-
-    #[test]
-    fn default_preallocates_the_span_buffer() {
-        // The buffer is reserved up front so that recording spans does not
-        // allocate while the reserved capacity holds.
-        let metrics = OperationMetrics::default();
-        assert!(metrics.spans.capacity() >= DEFAULT_SPAN_CAPACITY);
-    }
-
-    #[test]
-    fn recording_within_capacity_does_not_reallocate() {
-        let mut metrics = OperationMetrics::default();
-        let capacity_before = metrics.spans.capacity();
-        for index in 0..DEFAULT_SPAN_CAPACITY {
-            metrics.add_span(1, index as u64, 1);
-        }
-        assert_eq!(metrics.spans.capacity(), capacity_before);
     }
 
     #[test]
@@ -290,39 +235,58 @@ mod tests {
     }
 
     #[test]
-    fn extend_from_concatenates_spans() {
+    fn merge_combines_metrics() {
         let mut first = OperationMetrics::default();
         first.add_iterations(100, 1, 2);
 
         let mut second = OperationMetrics::default();
         second.add_iterations(50, 1, 3);
 
-        first.extend_from(&second);
+        first.merge(&second);
         assert_eq!(first.span_count(), 2);
         assert_eq!(first.total_iterations(), 5);
         assert_eq!(first.total_bytes_allocated(), 350); // 200 + 150
     }
 
     #[test]
-    fn empty_metrics_have_no_statistics() {
+    fn empty_metrics_have_no_slope() {
         let metrics = OperationMetrics::default();
-        assert!(metrics.bytes_stats().is_none());
-        assert!(metrics.allocations_stats().is_none());
+        assert!(metrics.bytes_slope().is_none());
+        assert!(metrics.allocations_slope().is_none());
     }
 
     #[test]
-    fn statistics_weight_spans_by_iteration_count() {
+    fn slope_weights_spans_by_iteration_count() {
         // A perfectly linear byte series at 5 bytes/iter: the slope recovers 5
         // regardless of the differing iteration counts across spans.
         let mut metrics = OperationMetrics::default();
         metrics.add_span(2, 10, 2);
         metrics.add_span(8, 40, 8);
 
-        let bytes = metrics.bytes_stats().unwrap();
-        assert_eq!(bytes.span_count, 2);
-        #[expect(clippy::float_cmp, reason = "slope is an exact integer-derived value")]
-        {
-            assert_eq!(bytes.slope, 5.0);
-        }
+        assert_eq!(metrics.span_count(), 2);
+        assert_eq!(metrics.bytes_slope(), Some(5.0));
+    }
+
+    #[test]
+    fn intervals_reported_once_two_spans_recorded() {
+        // Two spans at a constant per-iteration rate (5 bytes/iter, 1 alloc/iter):
+        // with zero residual dispersion each interval collapses onto its slope.
+        let mut metrics = OperationMetrics::default();
+        metrics.add_span(2, 10, 2);
+        metrics.add_span(4, 20, 4);
+
+        assert_eq!(metrics.bytes_interval(), Some((5.0, 5.0)));
+        assert_eq!(metrics.allocations_interval(), Some((1.0, 1.0)));
+    }
+
+    #[test]
+    fn intervals_absent_with_a_single_span() {
+        // One span pins the slopes but carries no dispersion, so neither the byte
+        // nor the allocation-count interval is formed.
+        let mut metrics = OperationMetrics::default();
+        metrics.add_span(4, 20, 4);
+
+        assert!(metrics.bytes_interval().is_none());
+        assert!(metrics.allocations_interval().is_none());
     }
 }

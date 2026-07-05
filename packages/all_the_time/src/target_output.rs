@@ -21,11 +21,10 @@ struct OperationOutput<'a> {
     mean_processor_time_nanos: u64,
     span_count: u64,
     slope_processor_time_nanos: f64,
-    std_dev_processor_time_nanos: f64,
-    interval_low_processor_time_nanos: f64,
-    interval_high_processor_time_nanos: f64,
-    min_processor_time_nanos: f64,
-    max_processor_time_nanos: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interval_low_processor_time_nanos: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interval_high_processor_time_nanos: Option<f64>,
 }
 
 impl Report {
@@ -104,11 +103,8 @@ impl Report {
                 mean_processor_time_nanos: duration_as_nanos(operation.mean()),
                 span_count: statistics.span_count,
                 slope_processor_time_nanos: statistics.slope_nanos,
-                std_dev_processor_time_nanos: statistics.std_dev_nanos,
-                interval_low_processor_time_nanos: statistics.interval_low_nanos,
-                interval_high_processor_time_nanos: statistics.interval_high_nanos,
-                min_processor_time_nanos: statistics.min_nanos,
-                max_processor_time_nanos: statistics.max_nanos,
+                interval_low_processor_time_nanos: statistics.interval_nanos.map(|(low, _)| low),
+                interval_high_processor_time_nanos: statistics.interval_nanos.map(|(_, high)| high),
             };
 
             let json = serde_json::to_string_pretty(&output)
@@ -221,9 +217,57 @@ mod tests {
                 .and_then(Value::as_u64),
             Some(20_000_000)
         );
-        // A single recorded span yields a span count of one, a slope equal to the
-        // per-iteration mean, and a degenerate interval that collapses onto it.
+        // A single recorded span yields a span count of one and a slope equal to
+        // the per-iteration mean, but no dispersion information, so the interval
+        // fields are omitted.
         assert_eq!(value.get("span_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            value
+                .get("slope_processor_time_nanos")
+                .and_then(Value::as_f64),
+            Some(20_000_000.0)
+        );
+        assert!(
+            value.get("interval_low_processor_time_nanos").is_none(),
+            "a single span carries no interval, so the field must be omitted"
+        );
+        assert!(
+            value.get("interval_high_processor_time_nanos").is_none(),
+            "a single span carries no interval, so the field must be omitted"
+        );
+        // Standard deviation, minimum and maximum are no longer emitted.
+        assert!(value.get("std_dev_processor_time_nanos").is_none());
+        assert!(value.get("min_processor_time_nanos").is_none());
+        assert!(value.get("max_processor_time_nanos").is_none());
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
+    fn writes_interval_when_multiple_spans_recorded() {
+        let fake_platform = FakePlatform::new();
+        let platform = PlatformFacade::fake(fake_platform.clone());
+        let session = Session::with_platform(platform);
+
+        // Two spans at the same per-iteration rate collapse the interval onto the
+        // slope, so both bounds are present and equal.
+        {
+            let operation = session.operation("read_cell");
+            fake_platform.set_thread_time(Duration::from_millis(0));
+            {
+                let _span = operation.measure_thread().iterations(2);
+                fake_platform.set_thread_time(Duration::from_millis(40));
+            }
+            {
+                let _span = operation.measure_thread().iterations(2);
+                fake_platform.set_thread_time(Duration::from_millis(80));
+            }
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        session.to_report().write_to_directory(directory.path());
+
+        let value = read_json(&directory.path().join("read_cell.json"));
+        assert_eq!(value.get("span_count").and_then(Value::as_u64), Some(2));
         assert_eq!(
             value
                 .get("slope_processor_time_nanos")
@@ -241,12 +285,6 @@ mod tests {
                 .get("interval_high_processor_time_nanos")
                 .and_then(Value::as_f64),
             Some(20_000_000.0)
-        );
-        assert_eq!(
-            value
-                .get("std_dev_processor_time_nanos")
-                .and_then(Value::as_f64),
-            Some(0.0)
         );
     }
 

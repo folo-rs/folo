@@ -371,11 +371,12 @@ async fn collect_all_the_time_is_partitioned_by_machine_key() {
     assert_eq!(processor_time.kind.as_unit(), "ns");
 }
 
-/// An `all_the_time` run whose emitted output carries a bootstrap confidence
-/// interval stores that dispersion on the metric, so the noise detector can
-/// later apply its interval-overlap gate to processor time. This proves the
-/// dispersion fields flow from the engine's JSON through the harvest and adapter
-/// into the stored result set, end to end through the real adapter.
+/// An `all_the_time` run whose emitted output carries a confidence interval
+/// stores that dispersion on the metric, so the noise detector can later apply its
+/// interval-overlap gate to processor time. This proves the interval fields flow
+/// from the engine's JSON through the harvest and adapter into the stored result
+/// set, end to end through the real adapter. The adapter deliberately drops the
+/// standard deviation, so only the interval survives.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_all_the_time_records_dispersion() {
@@ -389,15 +390,16 @@ async fn collect_all_the_time_records_dispersion() {
     assert_eq!(processor_time.value, 20.0);
     assert_eq!(processor_time.interval_low, Some(19.0));
     assert_eq!(processor_time.interval_high, Some(21.0));
-    assert_eq!(processor_time.std_dev, Some(1.0));
+    assert_eq!(processor_time.std_dev, None);
 }
 
-/// An `alloc_tracker` run whose emitted output carries per-metric bootstrap
-/// confidence intervals stores that dispersion on both the bytes and the
-/// allocation-count metric, so the noise detector can later apply its
-/// interval-overlap gate to allocation figures. This proves the dispersion fields
-/// flow from the engine's JSON through the harvest and adapter into the stored
-/// result set, end to end through the real adapter.
+/// An `alloc_tracker` run whose emitted output carries per-metric confidence
+/// intervals stores that dispersion on both the bytes and the allocation-count
+/// metric, so the noise detector can later apply its interval-overlap gate to
+/// allocation figures. This proves the interval fields flow from the engine's JSON
+/// through the harvest and adapter into the stored result set, end to end through
+/// the real adapter. The adapter deliberately drops the standard deviation, so
+/// only the interval survives.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_alloc_tracker_records_dispersion() {
@@ -413,13 +415,13 @@ async fn collect_alloc_tracker_records_dispersion() {
     assert_eq!(bytes.value, 200.0);
     assert_eq!(bytes.interval_low, Some(199.0));
     assert_eq!(bytes.interval_high, Some(201.0));
-    assert_eq!(bytes.std_dev, Some(1.0));
+    assert_eq!(bytes.std_dev, None);
 
     let count = metric_of(record, MetricKind::AllocationCount);
     assert_eq!(count.value, 2.0);
     assert_eq!(count.interval_low, Some(2.0));
     assert_eq!(count.interval_high, Some(2.0));
-    assert_eq!(count.std_dev, Some(0.0));
+    assert_eq!(count.std_dev, None);
 }
 
 /// `--machine-key` overrides the machine fingerprint in a Criterion partition.

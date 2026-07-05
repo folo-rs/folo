@@ -136,7 +136,7 @@ pub(crate) async fn measure(
         let operation = session.operation(format!("analyze-{}", mode.keyword()));
 
         let started = Instant::now();
-        let span = operation.measure_process();
+        let span = operation.measure_process().iterations(1);
         let outcome = run_with_overrides(&command, overrides(workspace, anchor))
             .await
             .map_err(|error| fail(format!("{} analysis failed: {error}", mode.keyword())))?;
@@ -425,7 +425,7 @@ mod tests {
         let session = Session::new().no_stdout().no_file();
         let operation = session.operation("analyze-history");
         {
-            let span = operation.measure_process();
+            let span = operation.measure_process().iterations(1);
             let mut acc = 0_u64;
             for value in 0..50_000_000_u64 {
                 acc = acc.wrapping_add(value);

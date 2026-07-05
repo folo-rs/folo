@@ -9,9 +9,8 @@
 //! The core functionality includes:
 //! - [`Session`] - Configures processor time tracking and provides access to tracking data
 //! - [`Report`] - Thread-safe processor time statistics that can be merged and processed independently
-//! - [`ThreadSpan`] - Tracks thread processor time over a time period
-//! - [`ProcessSpan`] - Tracks process processor time over a time period
 //! - [`Operation`] - Measures per-iteration processor time for a repeated operation
+//! - [`ThreadMeasurement`] / [`ProcessMeasurement`] - In-progress measurements awaiting an iteration count
 //!
 //! This package is not meant for use in production, serving only as a development tool.
 //!
@@ -26,34 +25,48 @@
 //! The headline metric is therefore the **warmup-robust slope**: an
 //! iterations-weighted, through-origin fit of each span's total time against its
 //! iteration count, which recovers the marginal per-iteration cost even when the
-//! blend of warm-up and steady-state spans shifts. Each figure is paired with a
-//! bootstrap 95% confidence interval so its run-to-run uncertainty can be
-//! inspected. The stdout summary leads with the slope alone for readability; the
+//! blend of warm-up and steady-state spans shifts. The slope is paired with a
+//! closed-form 95% confidence interval so its run-to-run uncertainty can be
+//! inspected: it collapses onto the point estimate when every span records the
+//! same per-iteration value, and is omitted entirely when a single span leaves it
+//! unestimable. The stdout summary leads with the slope alone for readability; the
 //! JSON output records the slope together with that confidence interval, and the
 //! pooled mean stays available through [`ReportOperation::mean`] for callers that
 //! still want it.
 //!
-//! # Example
+//! # Benchmarking
 //!
-//! ```rust
+//! The recommended pattern drives measurement from Criterion's `iter_custom`,
+//! feeding its chosen iteration count into
+//! [`iterations`](ThreadMeasurement::iterations) so each recorded span covers a
+//! whole sample rather than a single iteration:
+//!
+//! ```no_run
+//! use std::hint::black_box;
+//! use std::time::Instant;
+//!
 //! use all_the_time::Session;
+//! use criterion::Criterion;
 //!
-//! # fn main() {
-//! let session = Session::new();
-//! # let session = session.no_stdout().no_file();
+//! fn main() {
+//!     let session = Session::new();
+//!     let operation = session.operation("my_operation");
 //!
-//! {
-//!     let batch_op = session.operation("batch_work");
-//!     let _span = batch_op.measure_thread().iterations(1000);
-//!     for _ in 0..1000 {
-//!         // Fast operation - measured once and divided by 1000
-//!         std::hint::black_box(42 * 2);
-//!     }
+//!     let mut criterion = Criterion::default();
+//!     criterion.bench_function("my_operation", |b| {
+//!         b.iter_custom(|iters| {
+//!             let start = Instant::now();
+//!             let _span = operation.measure_thread().iterations(iters);
+//!             for _ in 0..iters {
+//!                 black_box(42_u64.wrapping_mul(2));
+//!             }
+//!             start.elapsed()
+//!         });
+//!     });
+//!
+//!     // When `session` is dropped, the recorded statistics are printed to
+//!     // stdout and written to the Cargo target directory as JSON.
 //! }
-//!
-//! // When `session` is dropped, the recorded statistics are printed to stdout
-//! // and written to the Cargo target directory. No explicit call is required.
-//! # }
 //! ```
 //!
 //! # Machine-readable output
@@ -64,20 +77,48 @@
 //! summary is also printed to stdout.
 //!
 //! Each JSON file records the total and mean per-iteration processor time
-//! together with bootstrap dispersion statistics over the operation's measured
-//! spans: a through-origin slope point estimate, the standard deviation, a 95%
-//! bootstrap confidence interval, and the observed minimum and maximum. The
-//! bootstrap uses a fixed seed, so the confidence interval is reproducible across
-//! runs of identical measurements. The stdout summary leads with the same
-//! warmup-robust slope (see "Primary metric"), without the interval, for
-//! readability.
+//! together with the warmup-robust slope point estimate and its 95% confidence
+//! interval (when estimable). The interval is a deterministic function of the
+//! measured spans, so identical measurements always yield identical bounds. The
+//! stdout summary leads with the same slope (see "Primary metric"), without the
+//! interval, for readability.
 //!
 //! These outputs are produced automatically, so a typical benchmark only needs
 //! to create a session and record work.
 //!
+//! # Measuring a variable amount of work
+//!
+//! When the number of iterations is only known after the measured work has run —
+//! for example a loop that drains a queue or runs until a budget is exhausted —
+//! capture the measurement first and finalize it with
+//! [`complete`](ThreadMeasurement::complete) once the count is known:
+//!
+//! ```
+//! use all_the_time::Session;
+//!
+//! fn main() {
+//!     let session = Session::new();
+//! #   let session = session.no_stdout().no_file();
+//!     let operation = session.operation("drain_queue");
+//!
+//!     let measurement = operation.measure_thread();
+//!     let mut processed = 0_u64;
+//!     for item in 0..10 {
+//!         std::hint::black_box(item * 2); // do work while draining
+//!         processed += 1;
+//!     }
+//!     measurement.complete(processed);
+//!
+//!     // Statistics are emitted automatically when `session` is dropped.
+//! }
+//! ```
+//!
 //! # Thread vs process processor time
 //!
-//! You can choose between tracking thread processor time or process processor time:
+//! You can choose between tracking thread processor time or process processor
+//! time. Both begin with a `measure_*` call and finalize with an explicit
+//! iteration count (shown here with a single iteration for brevity; real
+//! benchmarks use the `iter_custom` pattern above):
 //!
 //! ```
 //! use all_the_time::Session;
@@ -89,14 +130,14 @@
 //! // Track thread processor time
 //! {
 //!     let op = session.operation("thread_work");
-//!     let _span = op.measure_thread();
+//!     let _span = op.measure_thread().iterations(1);
 //!     // Work done here is measured for the current thread only
 //! }
 //!
 //! // Track process processor time (all threads)
 //! {
 //!     let op = session.operation("process_work");
-//!     let _span = op.measure_process();
+//!     let _span = op.measure_process().iterations(1);
 //!     // Work done here is measured for the entire process
 //! }
 //! # }
@@ -105,9 +146,9 @@
 //! # Overhead
 //!
 //! Capturing a single measurement by calling `measure_xyz()` incurs an overhead of
-//! approximately 500 nanoseconds on an arbitrary sample machine. You are recommended to measure
-//! multiple consecutive iterations to minimize the impact of overhead on your benchmarks:
-//! `operation.measure_xyz().iterations(12345)`.
+//! approximately 500 nanoseconds on an arbitrary sample machine. You are recommended to batch
+//! your measurements over a whole Criterion sample (via `.iterations(iters)` from
+//! `iter_custom`) to amortize this overhead.
 //!
 //! # Session management
 //!
@@ -127,7 +168,7 @@
 //! let session = Session::new();
 //! # let session = session.no_stdout().no_file();
 //! let operation = session.operation("work");
-//! let _span = operation.measure_thread();
+//! let _span = operation.measure_thread().iterations(1);
 //! // Some work happens here
 //!
 //! let report = session.to_report();
@@ -171,5 +212,4 @@ pub use process_span::*;
 pub use report::*;
 pub use session::*;
 pub use statistics::OperationStatistics;
-pub(crate) use statistics::{SpanRecord, compute_slope_nanos, compute_statistics};
 pub use thread_span::*;

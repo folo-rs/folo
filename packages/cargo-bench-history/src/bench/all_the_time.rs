@@ -2,12 +2,12 @@
 //! [`BenchmarkResult`] model.
 //!
 //! `all_the_time` writes one file per operation under `target/all_the_time/`,
-//! recording the per-iteration processor time a benchmark spends together with
-//! bootstrap dispersion statistics over the operation's measured spans. Processor
-//! time depends on the host hardware, so this engine partitions its history by a
-//! machine key (see [`Engine::is_hardware_dependent`]). The committed
-//! fixtures under `tests/fixtures/all_the_time/` are real `all_the_time` output
-//! and act as a schema-drift canary.
+//! recording the per-iteration processor time a benchmark spends together with a
+//! per-iteration slope and its confidence interval estimated over the operation's
+//! measured spans. Processor time depends on the host hardware, so this engine
+//! partitions its history by a machine key (see [`Engine::is_hardware_dependent`]).
+//! The committed fixtures under `tests/fixtures/all_the_time/` are real
+//! `all_the_time` output and act as a schema-drift canary.
 //!
 //! [`Engine::is_hardware_dependent`]: crate::model::Engine::is_hardware_dependent
 
@@ -56,9 +56,9 @@ pub(crate) fn parse_all_the_time_operation(
 ///
 /// The through-origin slope is preferred as the per-iteration point estimate,
 /// matching the Criterion adapter; output that records no slope falls back to the
-/// mean. When the bootstrap confidence interval is present it is recorded on the
-/// metric, so analysis can apply its interval-overlap gate to processor time the
-/// same way it does for Criterion wall time.
+/// mean. When the confidence interval is present it is recorded on the metric, so
+/// analysis can apply its interval-overlap gate to processor time the same way it
+/// does for Criterion wall time.
 fn output_to_record(output: &OperationOutput) -> BenchmarkResult {
     let id = BenchmarkId::new(NonEmpty::new(output.operation.clone()));
 
@@ -67,7 +67,7 @@ fn output_to_record(output: &OperationOutput) -> BenchmarkResult {
         .unwrap_or_else(|| as_f64(output.mean_processor_time_nanos));
 
     let metric = Metric::new(MetricKind::ProcessorTime, value).with_dispersion(
-        output.std_dev_processor_time_nanos,
+        None,
         output.interval_low_processor_time_nanos,
         output.interval_high_processor_time_nanos,
     );
@@ -94,8 +94,6 @@ struct OperationOutput {
     mean_processor_time_nanos: u64,
     #[serde(default)]
     slope_processor_time_nanos: Option<f64>,
-    #[serde(default)]
-    std_dev_processor_time_nanos: Option<f64>,
     #[serde(default)]
     interval_low_processor_time_nanos: Option<f64>,
     #[serde(default)]
@@ -161,15 +159,15 @@ mod tests {
 
     #[test]
     fn records_dispersion_when_present() {
-        use std::f64::consts::FRAC_1_SQRT_2;
-
         let record = parse_all_the_time_operation(READ_CELL_DISPERSION_FIXTURE).unwrap();
         let metric = &record.metrics[0];
-        // The fixture's spans have a sample standard deviation of exactly
-        // sqrt(0.5) = 1/sqrt(2) nanoseconds.
-        assert_eq!(metric.std_dev, Some(FRAC_1_SQRT_2));
-        assert_eq!(metric.interval_low, Some(19.5));
-        assert_eq!(metric.interval_high, Some(20.5));
+        // The slope is preferred as the point estimate and the spans' jitter is
+        // carried as an analytic confidence interval straddling it. The adapter no
+        // longer surfaces a standard deviation.
+        assert_eq!(metric.value, 20.0);
+        assert_eq!(metric.std_dev, None);
+        assert_eq!(metric.interval_low, Some(19.346_678_671_819_987));
+        assert_eq!(metric.interval_high, Some(20.653_321_328_180_013));
     }
 
     #[test]

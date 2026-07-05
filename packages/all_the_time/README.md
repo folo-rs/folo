@@ -3,35 +3,41 @@ Processor time tracking utilities for benchmarks and performance analysis.
 This package provides utilities to track processor time during code execution,
 enabling analysis of processor usage patterns in benchmarks and performance tests.
 
+The recommended pattern drives measurement from Criterion's `iter_custom`, feeding
+its chosen iteration count into `iterations` so each recorded span covers a whole
+sample rather than a single iteration:
+
 ```rust
+use std::hint::black_box;
+use std::time::Instant;
+
 use all_the_time::Session;
+use criterion::Criterion;
 
 fn main() {
     let session = Session::new();
+    let operation = session.operation("my_operation");
 
-    // Track multiple iterations efficiently
-    {
-        let operation = session.operation("my_operation");
-        let iterations = 10;
-        let _span = operation.measure_thread().iterations(iterations);
-        
-        for i in 0..iterations {
-            let mut sum = 0;
-            for j in 0..50000 {
-                for k in 0..10 {
-                    sum += (j * k * i) % 1000;
-                    sum = sum.wrapping_mul(1103515245).wrapping_add(12345);
-                }
+    let mut criterion = Criterion::default();
+    criterion.bench_function("my_operation", |b| {
+        b.iter_custom(|iters| {
+            let start = Instant::now();
+            let _span = operation.measure_thread().iterations(iters);
+            for _ in 0..iters {
+                black_box(42_u64.wrapping_mul(2));
             }
-            std::hint::black_box(sum);
-        }
-    } // Total time measured once and divided by iteration count for mean
+            start.elapsed()
+        });
+    });
 
     // When `session` is dropped it prints a human-readable summary to stdout and
     // writes machine-readable JSON files (one per operation) into the Cargo
     // target directory: target/all_the_time/<operation>.json.
 }
 ```
+
+When the iteration count is only known after the measured work has run, capture
+the measurement first and finalize it with `complete(n)` once the count is known.
 
 ## See also
 

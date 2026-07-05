@@ -33,7 +33,7 @@ use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics, Report};
 /// let processor_op = session.operation("processor_intensive_work");
 ///
 /// for _ in 0..3 {
-///     let _span = processor_op.measure_thread();
+///     let _span = processor_op.measure_thread().iterations(1);
 ///     // Perform some processor-intensive work
 ///     let mut sum = 0;
 ///     for i in 0..1000 {
@@ -138,7 +138,7 @@ impl Session {
     /// let processor_op = session.operation("processor_operations");
     ///
     /// for _ in 0..3 {
-    ///     let _span = processor_op.measure_thread();
+    ///     let _span = processor_op.measure_thread().iterations(1);
     ///     // Perform some processor-intensive work
     ///     let mut sum = 0;
     ///     for i in 0..1000 {
@@ -177,7 +177,7 @@ impl Session {
     /// let session = Session::new();
     /// # let session = session.no_stdout().no_file();
     /// let operation = session.operation("test_work");
-    /// let _span = operation.measure_thread();
+    /// let _span = operation.measure_thread().iterations(1);
     /// // Work happens here
     ///
     /// let report = session.to_report();
@@ -296,7 +296,7 @@ mod tests {
 
             // Record a span
             {
-                let _span = operation.measure_thread();
+                let _span = operation.measure_thread().iterations(1);
             }
         } // operation is dropped here, merging data to session
 
@@ -315,7 +315,7 @@ mod tests {
         {
             let operation_with_spans = session.operation("with_spans");
             {
-                let _span = operation_with_spans.measure_process();
+                let _span = operation_with_spans.measure_process().iterations(1);
             }
         } // operation_with_spans is dropped here, merging data to session
 
@@ -342,7 +342,7 @@ mod tests {
         // Create multiple operations with spans
         for i in 0..3 {
             let operation = session.operation(format!("test_{i}"));
-            let _span = operation.measure_thread();
+            let _span = operation.measure_thread().iterations(1);
         }
 
         assert!(!session.is_empty());
@@ -368,7 +368,7 @@ mod tests {
         // Test 3: Add spans - both should be non-empty
         {
             let operation = session.operation("test_with_spans");
-            let _span = operation.measure_thread();
+            let _span = operation.measure_thread().iterations(1);
         } // Operation is dropped here, merging data to session
 
         let report = session.to_report();
@@ -391,7 +391,7 @@ mod tests {
 
         {
             let operation = session.operation("display_test_operation");
-            let _span = operation.measure_thread();
+            let _span = operation.measure_thread().iterations(1);
         }
 
         let display_output = session.to_string();

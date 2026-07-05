@@ -800,8 +800,8 @@ async fn analyze_alloc_tracker_ignores_gaps_in_a_sparse_history() {
 /// Criterion wall time), so a gentle ramp clears the practical-magnitude floor only
 /// via the trend detector. These synthetic points are seeded mean-only (no
 /// confidence interval), so the detector falls back gracefully to the Mann-Kendall
-/// trend and practical floor. In practice `all_the_time` does record a bootstrap
-/// CI, which would only ever act as an additional veto here, never change the
+/// trend and practical floor. In practice `all_the_time` does record a confidence
+/// interval, which would only ever act as an additional veto here, never change the
 /// outcome.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
@@ -885,9 +885,9 @@ async fn analyze_all_the_time_jitter_is_not_flagged() {
 
 /// A sustained processor-time step whose per-regime confidence intervals are
 /// tight and non-overlapping clears the noise detector's CI gate and is reported
-/// as a regression. This proves the bootstrap confidence interval the
-/// `all_the_time` engine now records flows through the adapter into the
-/// CI-non-overlap gate for processor time.
+/// as a regression. This proves the confidence interval the `all_the_time` engine
+/// now records flows through the adapter into the CI-non-overlap gate for
+/// processor time.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn analyze_all_the_time_step_with_disjoint_intervals_is_a_regression() {
