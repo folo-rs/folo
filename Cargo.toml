@@ -45,15 +45,15 @@ frozen-collections = { version = "0.9.1", default-features = false }
 future_deque = { version = "0.1.12", path = "packages/future_deque", default-features = false }
 futures = { version = "0.3.32", default-features = false, features = ["std"] }
 futures-core = { version = "0.3.32", default-features = false }
-# Keep this version in lockstep with the `gungraun-runner` install line in
-# `justfiles/just_setup.just` and the install command in `docs/callgrind-benchmarks.md`.
+# Keep this version in lockstep with `GUNGRAUN_RUNNER_VERSION` in `constants.env` (which the
+# `just install-tools` recipe installs) and the install command in `docs/callgrind-benchmarks.md`.
 # The runner is invoked by the Callgrind bench binaries via an encoded payload and
 # `gungraun-runner` enforces strict string equality on the version (see
 # `gungraun-runner::runner::compare_versions`), so any patch-level drift between the library
 # and the installed runner causes `*_cg` benches to fail at runtime with VersionMismatch.
 # Pinned with `=` to prevent `cargo update` from drifting Cargo.lock away from the installed
 # runner version. When bumping, update all three locations together.
-gungraun = { version = "=0.19.2", default-features = false }
+gungraun = { version = "=0.19.3", default-features = false }
 hash_hasher = { version = "2.0.0", default-features = false }
 hashbrown = { version = "0.17.1", default-features = false }
 heapless = { version = "0.9.1", default-features = false }

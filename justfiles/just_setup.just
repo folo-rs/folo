@@ -25,7 +25,29 @@ install-tools:
     rustup toolchain install $env:RUST_MSRV
     rustup toolchain install $env:RUST_NIGHTLY --component miri --component rustfmt --component rust-src --component llvm-tools-preview
 
-    cargo install cargo-machete cargo-nextest release-plz cargo-semver-checks cargo-audit cargo-hack cargo-llvm-cov cargo-sort cargo-sort-derives cargo-udeps cargo-careful cargo-ensure-no-default-features cargo-delta cargo-freeze-deps --locked
+    # Every tool is pinned to an explicit version from constants.env (dotenv, configured in the
+    # root justfile, exposes each `FOO_VERSION` as `$env:FOO_VERSION`). This is deliberate: a plain
+    # `cargo install <crate>` never upgrades an already-installed crate — it prints "already
+    # installed" and skips — so an unpinned tool would freeze at whatever version first landed. With
+    # a pin, `cargo install <crate>@<version>` replaces an installed version that differs from the
+    # pin and is a fast no-op when it already matches, so bumping a tool is just editing its version
+    # in constants.env. (cargo-mutants is installed further down because it is skipped on ARM.)
+    cargo install `
+        cargo-audit@$env:CARGO_AUDIT_VERSION `
+        cargo-careful@$env:CARGO_CAREFUL_VERSION `
+        cargo-delta@$env:CARGO_DELTA_VERSION `
+        cargo-ensure-no-default-features@$env:CARGO_ENSURE_NO_DEFAULT_FEATURES_VERSION `
+        cargo-freeze-deps@$env:CARGO_FREEZE_DEPS_VERSION `
+        cargo-hack@$env:CARGO_HACK_VERSION `
+        cargo-llvm-cov@$env:CARGO_LLVM_COV_VERSION `
+        cargo-machete@$env:CARGO_MACHETE_VERSION `
+        cargo-nextest@$env:CARGO_NEXTEST_VERSION `
+        cargo-semver-checks@$env:CARGO_SEMVER_CHECKS_VERSION `
+        cargo-sort@$env:CARGO_SORT_VERSION `
+        cargo-sort-derives@$env:CARGO_SORT_DERIVES_VERSION `
+        cargo-udeps@$env:CARGO_UDEPS_VERSION `
+        release-plz@$env:RELEASE_PLZ_VERSION `
+        --locked
 
     # cargo-mutants transitively depends on `winapi 0.2.8`, which only defines its
     # types for `target_arch = "x86"` / `"x86_64"` and fails to compile on aarch64
@@ -35,7 +57,7 @@ install-tools:
     # ARM machines (where running mutation testing locally is not supported).
     $arch = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
     if ($arch -ne [System.Runtime.InteropServices.Architecture]::Arm64) {
-        cargo install cargo-mutants --locked
+        cargo install cargo-mutants@$env:CARGO_MUTANTS_VERSION --locked
     } else {
         Write-Host "Skipping cargo-mutants install on ARM64 (winapi 0.2.8 has no aarch64 support)."
     }
@@ -50,14 +72,14 @@ install-tools:
     # any invocation of a `*_cg` bench binary fails with "Failed to run benchmarks: No such
     # file or directory", including the harmless --list call that nextest issues for `--benches`.
     #
-    # The version is pinned to the exact patch matching the `gungraun = "=0.19.2"` workspace
-    # entry in the root Cargo.toml. gungraun-runner enforces strict string equality on the
-    # version (see `gungraun-runner::runner::compare_versions`), so any drift between the
-    # installed runner and the library causes `*_cg` benches to fail at runtime with
-    # VersionMismatch. Keep this line, the workspace Cargo.toml entry, and the install command
-    # in `docs/callgrind-benchmarks.md` in sync when bumping.
+    # The version lives in constants.env (GUNGRAUN_RUNNER_VERSION) and must match the exact patch of
+    # the `gungraun = "=X.Y.Z"` workspace entry in the root Cargo.toml. gungraun-runner enforces
+    # strict string equality on the version (see `gungraun-runner::runner::compare_versions`), so
+    # any drift between the installed runner and the library causes `*_cg` benches to fail at
+    # runtime with VersionMismatch. Keep GUNGRAUN_RUNNER_VERSION, the workspace Cargo.toml entry,
+    # and the install command in `docs/callgrind-benchmarks.md` in sync when bumping.
     if ($IsLinux) {
-        cargo install gungraun-runner --version 0.19.2 --locked
+        cargo install gungraun-runner@$env:GUNGRAUN_RUNNER_VERSION --locked
     }
 
     # azcopy drives the bulk upload in the cargo-bench-history Azure stress harness
