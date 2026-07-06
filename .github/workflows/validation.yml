@@ -26,38 +26,14 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Read pinned Rust toolchain channel
-        # dtolnay/rust-toolchain cannot read rust-toolchain.toml, so extract the pinned stable
-        # channel here and hand it to the install step below (mirrors the setup-environment
-        # composite). Pinning stops @stable from rolling the toolchain forward every ~6 weeks,
-        # which — because Swatinem/rust-cache keys on every installed toolchain — would
-        # otherwise bust this job's cargo-delta cache on each upstream release. The version is
-        # never hardcoded; rust-toolchain.toml stays the single source of truth.
-        id: rust-toolchain
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $match = Select-String -Path 'rust-toolchain.toml' -Pattern '^\s*channel\s*=\s*"([^"]+)"' | Select-Object -First 1
-          if (-not $match) { throw 'Could not read the pinned channel from rust-toolchain.toml' }
-          $channel = $match.Matches[0].Groups[1].Value
-          Write-Host "Pinned Rust channel from rust-toolchain.toml: $channel"
-          "channel=$channel" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ steps.rust-toolchain.outputs.channel }}
-
-      - name: Setup Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: cargo-delta
-          # See setup-environment/action.yml for the rationale behind including
-          # the runner image version in the cache key.
-          env-vars: ImageVersion
-
-      - name: Install cargo-delta
-        run: cargo install cargo-delta --locked
+      - name: Setup environment
+        # The delta job runs before — and gates — every package-scoped job, so it uses the same
+        # setup-environment composite as they do rather than a hand-picked minimal toolchain. That
+        # keeps a single install path (cargo-delta comes from `just install-tools` like every other
+        # tool) and, on a cold cache, primes the shared `prerequisites` cache this job's dependents
+        # then restore instead of each recompiling from scratch. On a warm cache the setup is a
+        # ~30-second restore.
+        uses: ./.github/actions/setup-environment
 
       - name: Compute delta
         id: compute
@@ -744,6 +720,10 @@ jobs:
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
+        with:
+          # Only this job needs the Azurite emulator, so it is the sole opt-in; every other job
+          # skips its ~3-minute npm install. The start-azurite step below then just launches it.
+          install-azurite: "true"
 
       - name: Start Azurite
         uses: ./.github/actions/start-azurite
