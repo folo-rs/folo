@@ -112,12 +112,20 @@ suite under nextest pre-builds it once and passes `MOCK_BENCH_ENGINE` (avoids pe
 output on demand via repeatable flags (`--summary`/`--criterion`/`--alloc-tracker`/
 `--all-the-time`) and `--fail-if-exists` to simulate a failing commit.
 
-**CWD & target root.** The real-adapter e2e test changes CWD, so it is `#[serial]`; on Windows
-restore the original CWD **before** the `TempDir` drops. Each test pins its own tempdir target
-root through the `run_with_overrides` entry (injected as `CARGO_TARGET_DIR` for the engine) —
-**do not** reintroduce a `set_var("CARGO_TARGET_DIR", …)` guard. `tests/cbh_real_engine.rs` is
-the one true e2e (real `cargo bench` + Criterion) and the only exercise of
-`resolve_target_root`; keep it and its `resolve_target_root` guard test.
+**CWD & target root.** Almost every test — including the real-adapter e2e — pins its own
+tempdir workspace and target root through the `run_with_overrides` entry (`workspace_dir` +
+`target_root`, the latter injected as `CARGO_TARGET_DIR` for the engine), so it neither reads
+the ambient environment nor mutates the process CWD. **Do not** reintroduce a
+`set_var("CARGO_TARGET_DIR", …)` guard or a CWD-changing `#[serial]` e2e: an ambient
+`CARGO_TARGET_DIR` (a shared or per-worktree target dir) would point the harvest at foreign
+engine output. `tests/cbh_real_engine.rs` is the one true e2e (real `cargo bench` + Criterion).
+Production `resolve_target_root` is covered by its unit tests in `commands::collect`. The one
+deliberate exception to the pin rule is the mock
+`collect_harvests_output_when_the_engine_runs_in_a_package_directory` regression, which drives
+the no-override path (`Workspace::drive_resolving_target_root`) to prove `collect` calls
+`resolve_target_root` and injects an *absolute* `CARGO_TARGET_DIR`; it is therefore the sole
+integration coverage of that wiring — keep it, and keep the harvest hermetic there by other
+means than a target-root override.
 
 **Fixtures.** `tests/fixtures/**` are **real** committed engine output doubling as schema-drift
 canaries — do not hand-edit to make a test pass; regenerate from a real run.

@@ -2,12 +2,19 @@
 //! Criterion benchmark and harvests the output the genuine engine writes.
 //!
 //! Every other integration test drives `collect` against a mock engine through the
-//! `run_with_overrides` entry, pinning an absolute target root and launching the
-//! mock from the workspace-root current directory. That is fast and hermetic, but
-//! it cannot exercise the production `resolve_target_root`, real cargo argument
-//! passing, Criterion's actual on-disk layout, or the working directory cargo
-//! gives a benchmark binary. This test closes that gap with the smallest possible
-//! real benchmark.
+//! `run_with_overrides` entry. That is fast and hermetic, but it cannot exercise
+//! real cargo argument passing, Criterion's actual on-disk layout, or the working
+//! directory cargo gives a benchmark binary. This test closes that gap with the
+//! smallest possible real benchmark.
+//!
+//! Like the mock-engine tests, it pins its own tempdir workspace and target root
+//! through `run_with_overrides` rather than reading the ambient environment: the
+//! production `resolve_target_root` honours a `CARGO_TARGET_DIR` override (so a
+//! real `cargo llvm-cov`-style target directory is respected), which means an
+//! ambient value — a shared or per-worktree target directory set while
+//! benchmarking — would point the harvest at a tree already holding *other*
+//! engines' output and store foreign result sets. Pinning keeps the run hermetic;
+//! `resolve_target_root` itself is covered by its unit tests in `commands::collect`.
 //!
 //! It is deliberately heavyweight: it compiles Criterion and runs an actual
 //! benchmark process, so it is gated off under Miri (no real subprocesses) and
@@ -26,10 +33,10 @@
 
 use std::path::{Path, PathBuf};
 
-use cargo_bench_history::{Cli, Command, MetricKind, Run, RunOutcome, run};
+use cargo_bench_history::{
+    Cli, Command, MetricKind, Overrides, Run, RunOutcome, run_with_overrides,
+};
 use cargo_bench_history_core::codec;
-use serial_test::serial;
-use testing::CwdGuard;
 
 /// Parses CLI arguments into the typed [`Command`], exactly as the binary does.
 fn command_from(args: &[&str]) -> Command {
@@ -124,7 +131,6 @@ const FIXTURE_CONFIG: &str = "[project]\nid = \"e2e\"\n";
 /// `cargo bench` + Criterion build and asserts the genuine wall-time output is
 /// harvested and stored.
 #[tokio::test]
-#[serial]
 #[cfg_attr(miri, ignore)] // Spawns a real `cargo bench`, which Miri cannot run.
 #[cfg_attr(coverage_nightly, ignore)] // Heavy real build; llvm-cov shares one target dir.
 #[cfg_attr(
@@ -147,16 +153,23 @@ async fn collect_against_real_criterion_bench_stores_wall_time() {
     )
     .unwrap();
 
-    // Drive the production entry (no overrides) with the fixture as the current
-    // directory, so the real `resolve_target_root` injects `<root>/target` and
-    // `cargo bench` builds and runs Criterion there. Restore the directory before
-    // assertions and before the tempdir is dropped (required on Windows).
-    let outcome = {
-        let _cwd = CwdGuard::enter(root);
-        run(&command_from(&["collect", "--local=./store"]))
-            .await
-            .unwrap()
-    };
+    // Pin the fixture as the workspace and `<root>/target` as the target root,
+    // exactly as the mock-engine tests do, so the run never reads the ambient
+    // environment. This keeps `cargo bench` (run in the workspace) building and
+    // harvesting inside the fixture's own tempdir tree regardless of any ambient
+    // `CARGO_TARGET_DIR` — a shared target directory would otherwise expose the
+    // harvest to foreign engine output. The benchmark command and clock are left
+    // at their defaults (real `cargo bench`, real wall clock).
+    let outcome = run_with_overrides(
+        &command_from(&["collect", "--local=./store"]),
+        Overrides {
+            workspace_dir: Some(root.to_path_buf()),
+            target_root: Some(root.join("target")),
+            ..Overrides::default()
+        },
+    )
+    .await
+    .unwrap();
 
     let RunOutcome::Completed { message } = outcome else {
         panic!("expected completion, got {outcome:?}");
