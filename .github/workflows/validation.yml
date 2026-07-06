@@ -431,7 +431,8 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1/4, 2/4, 3/4, 4/4]
-    timeout-minutes: 90
+    # Many-seeds Miri work budget (~90 min) plus up to 90 min for a cold-cache setup-environment.
+    timeout-minutes: 180
     runs-on: windows-latest
 
     steps:
@@ -453,7 +454,8 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1/8, 2/8, 3/8, 4/8, 5/8, 6/8, 7/8, 8/8]
-    timeout-minutes: 90
+    # Many-seeds Miri work budget (~90 min) plus up to 90 min for a cold-cache setup-environment.
+    timeout-minutes: 180
     runs-on: windows-latest
 
     steps:
@@ -475,7 +477,8 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1/2, 2/2]
-    timeout-minutes: 90
+    # Many-seeds Miri work budget (~90 min) plus up to 90 min for a cold-cache setup-environment.
+    timeout-minutes: 180
     runs-on: windows-latest
 
     steps:
@@ -497,7 +500,8 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1/2, 2/2]
-    timeout-minutes: 90
+    # Many-seeds Miri work budget (~90 min) plus up to 90 min for a cold-cache setup-environment.
+    timeout-minutes: 180
     runs-on: windows-latest
 
     steps:
@@ -620,7 +624,8 @@ jobs:
   mutants:
     needs: [delta, test-x64]
     if: needs.delta.outputs.skip_all != 'true'
-    timeout-minutes: 90
+    # Sharded mutation-testing work budget (~90 min) plus up to 90 min for a cold-cache setup-environment.
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -642,7 +647,8 @@ jobs:
   run-examples:
     needs: [delta]
     if: needs.delta.outputs.skip_all != 'true'
-    timeout-minutes: 90
+    # Work budget (~90 min) plus up to 90 min for a cold-cache setup-environment.
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -663,7 +669,8 @@ jobs:
   hack:
     needs: [delta]
     if: needs.delta.outputs.skip_all != 'true'
-    timeout-minutes: 90
+    # Work budget (~90 min) plus up to 90 min for a cold-cache setup-environment.
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:

@@ -16,7 +16,9 @@ jobs:
         platform: [ubuntu-latest, windows-latest, macos-latest, ubuntu-24.04-arm, windows-11-arm]
 
     runs-on: ${{ matrix.platform }}
-    timeout-minutes: 90
+    # This job's whole purpose is the cold-cache setup-environment, which can take up to
+    # ~90 min; keep margin over that so a slightly-slower-than-usual warmup is not killed.
+    timeout-minutes: 120
 
     steps:
       - name: Checkout repository

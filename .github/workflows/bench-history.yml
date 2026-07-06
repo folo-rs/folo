@@ -126,9 +126,9 @@ jobs:
     needs: collect
     if: always() && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    # Analysis loads the whole store and reduces it; generous like collect, though it is
-    # far faster than benchmarking.
-    timeout-minutes: 60
+    # Analysis loads the whole store and reduces it; far faster than benchmarking, but the cap
+    # must still clear a cold-cache setup-environment (up to ~90 min) on top of the analysis.
+    timeout-minutes: 150
 
     # id-token to self-federate with Entra (reads the history; see collect's note),
     # contents for checkout, issues to file the rolling regression issue.
