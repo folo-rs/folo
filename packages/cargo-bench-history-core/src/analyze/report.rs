@@ -290,6 +290,17 @@ fn set_label(set: &DiscriminantSet) -> String {
     set.to_string()
 }
 
+/// The `analyze` facet flags that select exactly this discriminant set, ready to
+/// paste into a follow-up query. Naming every facet explicitly pins the one set, so a
+/// reader who spots a finding can drill into that partition without having to guess
+/// which engine / triple / machine it came from.
+fn set_filter_flags(set: &DiscriminantSet) -> String {
+    format!(
+        "--engine {} --target-triple {} --machine-key {}",
+        set.engine, set.target_triple, set.machine_key
+    )
+}
+
 /// The commit label shared by the text and Markdown headers: the analyzed tip
 /// commit, annotated `+ uncommitted changes` when the working tree carried
 /// uncommitted changes so a reader knows the analyzed checkout differed from the
@@ -373,6 +384,7 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
         lines.push(String::new());
         lines.push(set_label(summary.set));
         lines.push(set_counts_line(summary, input.report_improvements));
+        lines.push(format!("  filter: {}", set_filter_flags(summary.set)));
         for finding in &summary.findings {
             push_finding_block(&mut lines, finding, chart_enabled);
         }
@@ -627,6 +639,7 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
                 count_direction(&summary.findings, Direction::Improvement)
             ));
         }
+        lines.push(format!("- Filter: `{}`", set_filter_flags(summary.set)));
         for finding in &summary.findings {
             push_finding_markdown(&mut lines, finding, "###", chart_enabled);
         }
@@ -701,9 +714,21 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -
     let chart_enabled = input.mode == "history";
     for finding in input.findings.iter().take(limit.get()) {
         push_finding_markdown(&mut lines, finding, "##", chart_enabled);
+        push_set_filter_footer(&mut lines, &finding.set);
     }
     push_warning(&mut lines, input.warning);
     finish(&lines)
+}
+
+/// Appends the discriminant-set filter flags as a de-emphasized footer on a summary
+/// finding, after its chart. The summary drops the per-set grouping to stay within a
+/// downstream size cap, so without this a reader could not tell which partition a
+/// finding came from — or, when the same benchmark moved in several sets, tell the
+/// otherwise near-identical blocks apart. The flags trail the block rather than lead
+/// it because they are reference material for a follow-up query, not the headline.
+fn push_set_filter_footer(lines: &mut Vec<String>, set: &DiscriminantSet) {
+    lines.push(String::new());
+    lines.push(format!("_Filter:_ `{}`", set_filter_flags(set)));
 }
 
 /// Appends one finding as a Markdown block mirroring the text report: the benchmark
@@ -1083,6 +1108,68 @@ mod tests {
         assert!(report.contains("```text"), "{report}");
         assert!(report.contains('┤') || report.contains('┼'), "{report}");
         assert!(!report.contains('\u{1b}'), "{report}");
+        // The set-filter footer trails the fenced chart, not precedes it: it is
+        // reference material for a follow-up query, not the headline.
+        let chart_close = report.rfind("```").expect("fenced chart present");
+        let footer_at = report.find("_Filter:_").expect("filter footer present");
+        assert!(
+            footer_at > chart_close,
+            "the filter footer must follow the chart: {report}"
+        );
+    }
+
+    #[test]
+    fn markdown_summary_footers_each_finding_with_its_set_filter() {
+        // The summary drops the per-set grouping, so each finding carries the facet
+        // flags that isolate its partition as a trailing footer — enough to query that
+        // exact set without leading the block.
+        let findings = vec![named_regression("mover_a", 0.50)];
+        let input = flat_input(&findings);
+
+        let report = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+
+        let footer = "_Filter:_ `--engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key synthetic`";
+        assert!(report.contains(footer), "{report}");
+        // The footer trails the finding headline rather than leading it.
+        let headline_at = report.find("mover_a").expect("headline present");
+        let footer_at = report.find(footer).expect("footer present");
+        assert!(
+            footer_at > headline_at,
+            "footer must follow the finding: {report}"
+        );
+    }
+
+    #[test]
+    fn markdown_summary_distinguishes_the_same_benchmark_across_sets() {
+        // The same benchmark id regresses in two discriminant sets. Without the set
+        // footer their flat summary blocks would be indistinguishable; with it, each
+        // names the filter that isolates its own partition.
+        let linux = named_regression("shared", 0.50);
+        let windows = Finding {
+            set: DiscriminantSet {
+                engine: "criterion".to_owned(),
+                target_triple: "x86_64-pc-windows-msvc".to_owned(),
+                machine_key: "m1".to_owned(),
+            },
+            ..named_regression("shared", 0.40)
+        };
+        let findings = vec![linux, windows];
+        let input = flat_input(&findings);
+
+        let report = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+
+        assert!(
+            report.contains(
+                "--engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key synthetic"
+            ),
+            "{report}"
+        );
+        assert!(
+            report.contains(
+                "--engine criterion --target-triple x86_64-pc-windows-msvc --machine-key m1"
+            ),
+            "{report}"
+        );
     }
 
     #[test]
@@ -1182,7 +1269,14 @@ mod tests {
             report.contains("callgrind/x86_64-unknown-linux-gnu/synthetic"),
             "the set heading drops the redundant `Set ` prefix: {report}"
         );
-        // The percentage leads the finding paragraph; severity is gone.
+        // The set header names the facet flags that reproduce exactly this partition,
+        // so a reader who spots a finding knows how to query it directly.
+        assert!(
+            report.contains(
+                "  filter: --engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key synthetic"
+            ),
+            "{report}"
+        );
         assert!(report.contains("+30.00%"), "{report}");
         assert!(!report.contains("[major]"), "{report}");
         // The benchmark id leads on its own chapter-title line; the change headline
@@ -1342,6 +1436,13 @@ mod tests {
         );
         // The per-set tally mirrors the JSON metadata and the text header.
         assert!(report.contains("- Regressions: 1"), "{report}");
+        // The set header names the facet flags that reproduce exactly this partition.
+        assert!(
+            report.contains(
+                "- Filter: `--engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key synthetic`"
+            ),
+            "{report}"
+        );
         // Findings render as heading + bold-headline blocks, not a table.
         assert!(!report.contains("| Change | Direction |"), "{report}");
         // The benchmark id is its own heading, nested one level under the set heading
