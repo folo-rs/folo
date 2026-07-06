@@ -150,7 +150,9 @@
 //! Capturing a single measurement by calling `measure_xyz()` incurs an overhead of
 //! approximately 500 nanoseconds on an arbitrary sample machine. You are recommended to batch
 //! your measurements over a whole Criterion sample (via `.iterations(iters)` from
-//! `iter_custom`) to amortize this overhead.
+//! `iter_custom`) to amortize this overhead. Operating without batching, on individual
+//! iterations, is only viable for macrobenchmarks for which a single iteration is a
+//! large unit of work (e.g. an HTTP request).
 //!
 //! # Session management
 //!
