@@ -65,9 +65,10 @@ install-tools:
     # Azurite is the Azure Blob storage emulator that backs the cargo-bench-history
     # Azure backend tests, exercised locally via `just test-azurite`. It is a Node
     # package, so npm is a prerequisite (see DEVELOPMENT.md). We install it on every
-    # platform because the emulator and those tests are cross-platform. If npm is not
-    # present we warn and continue rather than fail, so the rest of the toolchain still
-    # installs.
+    # platform because the emulator and those tests are cross-platform. Azurite is only
+    # needed for the on-demand `just test-azurite`, so its install is best-effort: any
+    # failure (npm missing, or the install itself erroring) only warns and continues, so
+    # the rest of the toolchain still installs.
     #
     # The version is pinned to match the CI `start-azurite` action
     # (.github/actions/start-azurite/action.yml) so local and CI runs target the same
@@ -79,7 +80,22 @@ install-tools:
         # would add ~3 minutes of uncached work to every other CI job for no benefit.
         Write-Host "Skipping Azurite install in CI (the test-azurite job provisions its own via the start-azurite action)."
     } elseif (Get-Command npm -ErrorAction SilentlyContinue) {
-        npm install -g azurite@3.35.0
+        # A global npm install can fail for reasons unrelated to the rest of the toolchain
+        # — most commonly an npm global prefix pointing at a root-owned directory (e.g. the
+        # default /usr/local on a system Node), which yields EACCES without sudo. Since the
+        # cargo tools above have already installed, treat such a failure as non-fatal: warn
+        # and continue rather than aborting the whole recipe over an optional emulator.
+        try {
+            npm install -g azurite@3.35.0
+        } catch {
+            Write-Warning (
+                "Failed to install Azurite via 'npm install -g azurite@3.35.0': $_. " +
+                "Skipping it — the rest of the toolchain is unaffected and Azurite is only " +
+                "needed for 'just test-azurite'. This is usually an npm global-prefix " +
+                "permission issue (a root-owned prefix like /usr/local yields EACCES); fix it " +
+                "with 'npm config set prefix ~/.npm-global' or use a user-owned Node (nvm), " +
+                "then re-run 'just install-tools'.")
+        }
     } else {
         Write-Warning "npm not found; skipping Azurite install. Install Node.js/npm (see DEVELOPMENT.md), then re-run 'just install-tools' to enable 'just test-azurite'."
     }
