@@ -129,3 +129,17 @@ deviating from it to hand-pick a minimal per-job toolchain costs more in mainten
 the mostly-cached setup time it would save. Toolchain versions are defined once in
 `constants.env` and `rust-toolchain.toml` and reach the workflows through the `just`
 commands they call, so no version is ever duplicated into a workflow file.
+
+## Job timeouts
+
+Every job that runs `setup-environment` must budget for a *cold* cache. When the shared
+dependency and toolchain caches miss — the warmup workflow lapses, a runner image rolls, or a
+version pin changes — that step recompiles everything from scratch and can take up to ~90
+minutes (which is why the warmup job, whose only work *is* that setup, is itself capped
+generously). A job-level `timeout-minutes` bounds the whole job, setup included, so any
+explicit cap is sized as the job's own work budget *plus* that ~90-minute cold-setup
+allowance; sizing a cap to the warm-cache setup time alone would make a cache miss spuriously
+fail the job. Jobs whose work is comfortably bounded carry no explicit cap and rely on
+GitHub's default ceiling, which already clears a cold setup with room to spare. Explicit caps
+exist only to stop a genuinely stuck run, never to bound the expected duration.
+

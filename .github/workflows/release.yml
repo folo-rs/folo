@@ -37,8 +37,9 @@ jobs:
     if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # Generous ceiling: covers up to 3 publish attempts (release-plz publish_timeout is
-    # 45m) with 15-minute waits between retries, comfortably under this cap.
-    timeout-minutes: 180
+    # 45m) with 15-minute waits between retries (~165m), plus up to 90 min for a cold-cache
+    # setup-environment, comfortably under this cap.
+    timeout-minutes: 270
 
     permissions:
       # release-plz pushes the git tags and creates the GitHub releases.
@@ -82,7 +83,9 @@ jobs:
     needs: publish
     if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Fast reconcile work plus up to 90 min for a cold-cache setup-environment — which itself
+    # timed out the previous 30-minute cap on a cache miss.
+    timeout-minutes: 120
 
     permissions:
       # `gh release view` reads releases; checkout needs read.
@@ -119,7 +122,8 @@ jobs:
         # One entry per missing (crate, target) pair: {name, version, tag, triple, os}.
         include: ${{ fromJSON(needs.plan-binaries.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # Release build/package/upload budget plus up to 90 min for a cold-cache setup-environment.
+    timeout-minutes: 150
 
     permissions:
       # Upload the archive + checksum as assets on the crate's release.
