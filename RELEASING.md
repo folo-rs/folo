@@ -8,6 +8,10 @@ full design.
 1. Validate everything via `just validate` on Windows (will automatically invoke Linux validation).
 1. If you feel like it, also perform extra validation via `just validate-extra`.
 1. Execute `just prepare-release` on the `main` branch to increment version numbers and update changelogs.
+    * `just prepare-release` first verifies that `cargo semver-checks` can actually run
+      (it aborts if the installed tool is too old for the current toolchain's rustdoc
+      format); release-plz would otherwise silently treat a broken semver check as "no
+      breaking changes".
     * `just prepare-release` also warns if a crate has never been published — such a
       crate's first release must be done manually (see "First publish" below).
     * Verify pending changes manually and adjust as necessary.

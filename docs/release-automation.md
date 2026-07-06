@@ -40,6 +40,23 @@ flowchart TD
 Version bumping stays manual so the human review gate on version numbers is
 preserved; CI automates the *publish* and *binary* halves only.
 
+### Preflights around `release-plz update`
+
+`just prepare-release` wraps `release-plz update` in two guard rails, both of which
+fail *before* any version or changelog is touched:
+
+* **cargo-semver-checks canary** (`verify-semver-checks`, a pre-step). release-plz
+  runs cargo-semver-checks to decide whether a bump must be *major*, but when the
+  tool *fails to run* — classically an installed cargo-semver-checks too old for the
+  toolchain's rustdoc JSON format ("unsupported rustdoc format v…") — release-plz
+  silently treats that as "no breaking changes", turning a broken tool into an
+  undetected breaking release. The canary runs cargo-semver-checks on one small
+  package compared against its own `HEAD`, so the two sides are byte-identical and
+  the *only* way the check can fail is the tool failing to run. A non-zero exit
+  aborts the release with instructions to update the tool.
+* **never-published warning** (`check-never-published`, a post-step). See
+  [Manual publishing](#manual-publishing) below.
+
 ## What ships a binary (derived, never hardcoded)
 
 The set of published binary crates is **derived**, so new tools are covered
