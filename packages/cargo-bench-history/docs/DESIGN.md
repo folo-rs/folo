@@ -709,7 +709,10 @@ commit. Text goes to stdout as one paragraph per finding — the benchmark id on
 line as a chapter title, then a direction-coloured headline pairing the relative-change
 percent with the metric and its confidence, a dimmed detail line, and (in history mode
 only) a small line chart of the series — with colour enabled only
-when stdout is a terminal and not disabled by environment. Markdown is that data with
+when stdout is a terminal and not disabled by environment. The text and Markdown reports
+group findings under a per-set header, which also states the **facet-filter flags** that
+reproduce exactly that partition, so a reader who spots a change can drill into it without
+reconstructing the query by hand. Markdown is that data with
 Markdown formatting (the id as a heading with the per-finding block nested beneath it, not
 a table; charts as fenced code blocks without
 ANSI). JSON is the machine-readable form: a flat, globally-ranked findings list where each
@@ -725,7 +728,11 @@ Separate from those three canonical formats, `analyze` can also render a condens
 **summary** — a single derived view for a size-limited consumer. It reuses the Markdown
 finding blocks but keeps only the top findings by magnitude and drops the per-facet grouping,
 so it is deliberately **not** "same data": it is a lossy excerpt that names how many of the
-total it shows and leaves the full reports to be consulted separately. Because it exists to
+total it shows and leaves the full reports to be consulted separately. Because it drops the
+grouping, each retained finding instead carries its set's facet-filter flags as a trailing
+footer — reference material for a follow-up query rather than a headline — so the summary
+stays investigable and blocks for the same benchmark in different sets remain distinguishable.
+Because it exists to
 fit a downstream cap rather than to present the analysis, it is offered only by `analyze`,
 never by the enumerating commands, and the retained-count is a fixed policy of the renderer.
 

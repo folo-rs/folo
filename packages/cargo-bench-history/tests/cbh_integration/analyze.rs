@@ -205,6 +205,14 @@ async fn analyze_markdown_summary_renders_a_flat_report() {
         !summary.contains("## callgrind"),
         "the summary must be flat, without per-set headings: {summary}"
     );
+    // Each flat finding instead carries the facet flags of its partition as a footer,
+    // so a reader who loses the per-set grouping still knows how to query the exact set.
+    assert!(
+        summary.contains(
+            "_Filter:_ `--engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key synthetic`"
+        ),
+        "{summary}"
+    );
 }
 
 /// When an analysis produces more findings than the summary cap, `--markdown-summary`
