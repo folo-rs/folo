@@ -114,7 +114,9 @@ jobs:
           ) | Add-Content -Path $env:GITHUB_ENV -Encoding utf8
 
       # The deterministic engines (Callgrind, allocation/time counters) are
-      # hardware-independent; the wall-clock engines auto-detect a per-machine partition.
+      # hardware-independent; the wall-clock engines are pinned to the fixed `github` machine
+      # key (see the gh-collect-bench-history recipe) so a heterogeneous runner pool does not
+      # fork the series.
       - name: Collect benchmark history
         run: just gh-collect-bench-history
 

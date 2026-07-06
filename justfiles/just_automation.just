@@ -6,27 +6,35 @@
 # thin wrappers over the tool, free of local-developer conveniences.
 
 # Collects the whole workspace's benchmark history (excluding the slow, special-purpose
-# `benchmarks` package) into the prod Azure store, keyed by the current commit. The
-# machine partition for noisy wall-clock engines is auto-detected; deterministic engines
-# (Callgrind, allocation/time counters) are hardware-independent. `--skip-existing` makes a
-# re-run on an unchanged commit a no-op append (each already-stored object is skipped, not
-# overwritten), so a re-triggered run of an already-collected commit never bumps the
-# cache-invalidation marker the `analyze` job's read-through cache depends on — a re-run of
-# the same commit is not "better" data, so there is nothing to replace.
+# `benchmarks` package) into the prod Azure store, keyed by the current commit. The machine
+# partition for noisy wall-clock engines is pinned to the fixed key `github` rather than
+# auto-detected: the GitHub-hosted runner pool may contain differently-specced machines, and a
+# per-machine fingerprint would fork the series (and split the history) whenever a run lands on
+# a different SKU. Pinning keeps every push on one series (accepting the jitter a heterogeneous
+# pool causes); a genuine hardware migration is absorbed by blessing the resulting step change.
+# Deterministic engines (Callgrind, allocation/time counters) are hardware-independent and
+# ignore the key. `--skip-existing` makes a re-run on an unchanged commit a no-op append (each
+# already-stored object is skipped, not overwritten), so a re-triggered run of an
+# already-collected commit never bumps the cache-invalidation marker the `analyze` job's
+# read-through cache depends on — a re-run of the same commit is not "better" data, so there is
+# nothing to replace.
 [group('automation')]
 gh-collect-bench-history:
-    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- collect --workspace --exclude benchmarks --skip-existing --verbose
+    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- collect --workspace --exclude benchmarks --machine-key github --skip-existing --verbose
 
-# Analyzes the collected history for regressions across ALL engines, target triples and
-# machine keys, writing four artefacts INTO the given {{dir}}: report.md (the full Markdown
-# report), report.json (the full JSON report), summary.md (the Markdown report condensed to
-# the top findings by magnitude, so the rolling regression issue's body stays under GitHub's
-# 65,536-character limit) and notable.txt (`true`/`false`, the JSON `notable` flag). Findings
-# never fail the recipe (the tool always exits 0); the workflow files a rolling issue when
-# notable, posting the summary as the body and attaching the two full reports as run
-# artifacts. `auto` mode on a clean `main` checkout resolves to long-range history-trend
-# detection. A single analyze pass emits every report via the per-format output toggles
-# (`--no-text --markdown --json --markdown-summary`).
+# Analyzes the collected history for regressions across ALL engines and target triples, but
+# only the `github` machine key — the fixed key `gh-collect-bench-history` stamps on the
+# GitHub runner pool's data. Restricting it here (rather than `--machine-key all`) keeps this
+# job surveying only GitHub-pool history and never mixes in a stray key some other machine may
+# have inserted into the shared store. It writes four artefacts INTO the given {{dir}}:
+# report.md (the full Markdown report), report.json (the full JSON report), summary.md (the
+# Markdown report condensed to the top findings by magnitude, so the rolling regression issue's
+# body stays under GitHub's 65,536-character limit) and notable.txt (`true`/`false`, the JSON
+# `notable` flag). Findings never fail the recipe (the tool always exits 0); the workflow files
+# a rolling issue when notable, posting the summary as the body and attaching the two full
+# reports as run artifacts. `auto` mode on a clean `main` checkout resolves to long-range
+# history-trend detection. A single analyze pass emits every report via the per-format output
+# toggles (`--no-text --markdown --json --markdown-summary`).
 #
 # {{dir}} is a scratch directory OUTSIDE the repo checkout (the bench-history.yml `analyze`
 # job passes the runner temp dir). Keeping every artefact out of the working tree is what
@@ -52,7 +60,7 @@ gh-analyze-bench-history dir:
     $summaryPath = Join-Path $dir "summary.md"
     $notablePath = Join-Path $dir "notable.txt"
     $cacheDir = Join-Path $dir "cache"
-    $common = @('--engine', 'all', '--target-triple', 'all', '--machine-key', 'all')
+    $common = @('--engine', 'all', '--target-triple', 'all', '--machine-key', 'github')
 
     Write-Verbose "Analyzing benchmark history in a single pass; writing the full Markdown to $reportPath, the full JSON to $jsonPath and the condensed top-findings Markdown summary to $summaryPath, mirroring fetched cloud objects under $cacheDir so the history is downloaded at most once across runs." -Verbose
     cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- analyze @common --cache=$cacheDir --no-text --markdown $reportPath --json $jsonPath --markdown-summary $summaryPath

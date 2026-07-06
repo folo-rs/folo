@@ -82,7 +82,13 @@ intermediate commits. It writes to a dedicated production storage account under 
 production managed identity, kept entirely separate from the throwaway account the test jobs
 use, so the long-lived data store never depends on test infrastructure. Collection is
 append-only and idempotent, which is what makes a re-run safe and lets a read-through cache
-of the bulk history persist between runs. A downstream analysis job reads the accumulated
+of the bulk history persist between runs. Collection stamps the wall-clock (per-machine)
+engines with a fixed `github` machine key instead of the auto-detected hardware fingerprint,
+and analysis reads only that key: the GitHub-hosted runner pool may hold differently-specced
+machines, so fingerprinting would fork the series on every SKU change and let unrelated
+machines pollute the data set, whereas one fixed key keeps a single series (accepting the
+pool's jitter) that a deliberate blessing absorbs across a genuine hardware migration.
+A downstream analysis job reads the accumulated
 history and files a single rolling, advisory issue when it detects a notable regression;
 regressions never fail the run. Because a GitHub issue body is size-capped and a large
 analysis can exceed it, the issue carries a **condensed summary** (the top findings) and
