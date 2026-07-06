@@ -1,33 +1,35 @@
 name: Start Azurite
 description: >-
-  Installs and starts the Azurite blob storage emulator on the runner host so
-  that `azure`-feature tests can reach it at https://127.0.0.1:10000. It runs in
-  `--oauth basic` mode over HTTPS (behind a throwaway self-signed certificate),
-  because Microsoft Entra ID is the only supported auth mode and it requires TLS;
-  the tests trust the cert by disabling certificate validation. Linux-only: the
-  emulator runs directly on the host (not as a service container, which cannot
-  reliably bind Azurite to a reachable address).
-
-inputs:
-  azurite-version:
-    description: >-
-      Azurite npm version to install. Pinned by default so the `test-azurite` job
-      is reproducible and unaffected by upstream releases.
-    required: false
-    default: "3.35.0"
+  Starts the Azurite blob storage emulator on the runner host so that `azure`-feature
+  tests can reach it at https://127.0.0.1:10000. Azurite itself is installed by the
+  setup-environment composite action (run with `install-azurite: true`), which owns the
+  pinned version via `just install-tools` — this action only mints a certificate and
+  launches the already-installed emulator, so the version is never duplicated here. It runs
+  in `--oauth basic` mode over HTTPS (behind a throwaway self-signed certificate), because
+  Microsoft Entra ID is the only supported auth mode and it requires TLS; the tests trust
+  the cert by disabling certificate validation. Linux-only: the emulator runs directly on
+  the host (not as a service container, which cannot reliably bind Azurite to a reachable
+  address).
 
 runs:
   using: composite
   steps:
-    - name: Install and start Azurite
+    - name: Start Azurite
+      # Azurite is installed by setup-environment (run with install-azurite: true), so its version
+      # lives in one place — `just install-tools`. This step only mints a throwaway cert and
+      # launches the already-installed emulator.
       shell: bash
-      env:
-        AZURITE_VERSION: ${{ inputs.azurite-version }}
       run: |
         set -euo pipefail
 
-        echo "Installing Azurite ${AZURITE_VERSION}..."
-        npm install -g "azurite@${AZURITE_VERSION}"
+        # This action does not install Azurite; setup-environment does (run with
+        # install-azurite: true). If a job forgot to opt in, fail here with a targeted message
+        # rather than a bare "azurite-blob: command not found" further down.
+        if ! command -v azurite-blob >/dev/null 2>&1; then
+          echo "azurite-blob not found on PATH." >&2
+          echo "Run the setup-environment action with 'install-azurite: \"true\"' before this step." >&2
+          exit 1
+        fi
 
         echo "Generating a throwaway self-signed certificate for the HTTPS listener..."
         openssl req -x509 -newkey rsa:2048 -nodes \

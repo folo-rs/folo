@@ -1,6 +1,16 @@
 name: Setup Environment
 description: Setup development environment for Folo project
 
+inputs:
+  install-azurite:
+    description: >-
+      Whether `just install-tools` should also install the Azurite blob-storage emulator.
+      Off by default because only the test-azurite job needs it and its npm install adds
+      ~3 minutes; that job opts back in by setting this to "true". azcopy is never installed
+      in CI (only the on-demand `just bench-history-stress-azure` uses it), so it has no input.
+    required: false
+    default: "false"
+
 runs:
   using: composite
   steps:
@@ -155,8 +165,22 @@ runs:
       run: git config --local include.path ./.gitconfig
     
     - name: Install development tools
+      # Runs the exact install-tools recipe developers run locally, so the CI and local toolsets
+      # never diverge and every tool version has a single source of truth (the recipe). Two tools
+      # are trimmed here because no ordinary CI job needs them: azcopy is always skipped (only the
+      # on-demand `just bench-history-stress-azure` uses it), and Azurite is skipped unless a job
+      # opts in via install-azurite (the test-azurite job does) — its emulator install is not worth
+      # the ~3 minutes on every other job.
       shell: bash
-      run: just install-tools
+      env:
+        INSTALL_AZURITE: ${{ inputs.install-azurite }}
+      run: |
+        if [ "$INSTALL_AZURITE" = "true" ]; then
+          SKIP_AZURITE=false
+        else
+          SKIP_AZURITE=true
+        fi
+        just skip_azcopy=true skip_azurite="$SKIP_AZURITE" install-tools
     
     - name: Verify environment setup
       shell: bash

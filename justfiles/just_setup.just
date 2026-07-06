@@ -1,3 +1,11 @@
+# Whether `install-tools` installs azcopy / Azurite. Both default to installing, for a complete
+# local setup. CI overrides them via the setup-environment composite action (which runs this exact
+# recipe): it always sets skip_azcopy=true (only the on-demand `just bench-history-stress-azure`
+# uses azcopy) and sets skip_azurite=true on every job except test-azurite, because Azurite's npm
+# install adds ~3 minutes and only that job needs the emulator.
+skip_azcopy := "false"
+skip_azurite := "false"
+
 # Installs the complete set of Rust toolchains and other tools for local PC development.
 [group('setup')]
 [script]
@@ -5,8 +13,10 @@ install-tools:
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
-    # This "full install" logic is specific to local PC setup. The GitHub workflows reuse the same
-    # version numbers but have their own logic for what tooling needs to be installed in which jobs.
+    # This is the single source of truth for which tools — and which versions — get installed. CI
+    # runs this same recipe on nearly every job via the setup-environment composite action, so
+    # there is no separate CI install path to keep in sync. The only per-job variation is the
+    # skip_azcopy / skip_azurite flags above, which trim two tools no ordinary CI job needs.
 
     # First, we install/upgrade the stable toolchain in `rust-toolchain.toml`.
     rustup toolchain install
@@ -51,13 +61,12 @@ install-tools:
     }
 
     # azcopy drives the bulk upload in the cargo-bench-history Azure stress harness
-    # (`just bench-history-stress-azure`), which is on-demand only and never runs in
-    # CI — so, like the Azurite install below, skip the download in CI and only fetch
-    # azcopy for local PC setup. It is not a cargo crate and has no installer, so a
-    # helper script fetches the pinned official binary; see scripts/install-azcopy.ps1
-    # (including its rationale for the destination). No-op when azcopy is already present.
-    if ($env:CI) {
-        Write-Host "Skipping azcopy install in CI (only the on-demand 'just bench-history-stress-azure' needs it)."
+    # (`just bench-history-stress-azure`), which is on-demand only — no CI job needs it, so CI
+    # sets skip_azcopy=true. It is not a cargo crate and has no installer, so a helper script
+    # fetches the pinned official binary; see scripts/install-azcopy.ps1 (including its rationale
+    # for the destination). No-op when azcopy is already present.
+    if ("{{skip_azcopy}}" -eq "true") {
+        Write-Host "Skipping azcopy install (skip_azcopy=true)."
     } else {
         & "{{justfile_directory()}}/scripts/install-azcopy.ps1"
     }
@@ -65,20 +74,19 @@ install-tools:
     # Azurite is the Azure Blob storage emulator that backs the cargo-bench-history
     # Azure backend tests, exercised locally via `just test-azurite`. It is a Node
     # package, so npm is a prerequisite (see DEVELOPMENT.md). We install it on every
-    # platform because the emulator and those tests are cross-platform. Azurite is only
-    # needed for the on-demand `just test-azurite`, so its install is best-effort: any
-    # failure (npm missing, or the install itself erroring) only warns and continues, so
-    # the rest of the toolchain still installs.
+    # platform because the emulator and those tests are cross-platform. Its install is
+    # best-effort: any failure (npm missing, or the install itself erroring) only warns
+    # and continues, so the rest of the toolchain still installs.
     #
-    # The version is pinned to match the CI `start-azurite` action
-    # (.github/actions/start-azurite/action.yml) so local and CI runs target the same
-    # emulator — keep the two in sync when bumping.
-    if ($env:CI) {
-        # Skip in CI: `npm install -g azurite` takes ~3 minutes and `install-tools` runs
-        # on every CI job, but only the `test-azurite` job needs the emulator — and that
-        # job provisions its own copy via the start-azurite action. Installing it here too
-        # would add ~3 minutes of uncached work to every other CI job for no benefit.
-        Write-Host "Skipping Azurite install in CI (the test-azurite job provisions its own via the start-azurite action)."
+    # This is the single source of the pinned Azurite version. CI installs Azurite through this
+    # same recipe (the test-azurite job sets install-azurite on the setup-environment action,
+    # which clears skip_azurite) and the start-azurite action then only launches it, so there is
+    # no second copy of the version to keep in sync.
+    if ("{{skip_azurite}}" -eq "true") {
+        # CI sets skip_azurite=true on every job except test-azurite: `npm install -g azurite`
+        # takes ~3 minutes and only that job needs the emulator, so paying it on every other CI
+        # job would be uncached work for no benefit.
+        Write-Host "Skipping Azurite install (skip_azurite=true)."
     } elseif (Get-Command npm -ErrorAction SilentlyContinue) {
         # A global npm install can fail for reasons unrelated to the rest of the toolchain
         # — most commonly an npm global prefix pointing at a root-owned directory (e.g. the
