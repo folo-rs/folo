@@ -828,7 +828,17 @@ impl Workspace {
     }
 
     /// Like [`drive`], but leaves the target root unset so the harvester resolves
-    /// it the default way, exercising the no-override target-root path.
+    /// it the default way, exercising the production `resolve_target_root` wiring
+    /// (`collect`'s `target_root.unwrap_or_else(|| resolve_target_root_in(base))`).
+    ///
+    /// The ambient `CARGO_TARGET_DIR` is cleared for the duration of the run so the
+    /// resolution deterministically falls back to `<workspace>/target` (a fresh
+    /// tempdir tree). Without this, a developer's shared or per-worktree
+    /// `CARGO_TARGET_DIR` would send the harvest into a directory already holding
+    /// *other* engines' output, silently storing foreign result sets. `drive`
+    /// stays hermetic by pinning `target_root` instead; this method cannot, since
+    /// its whole purpose is the no-override path, so it clears the variable and
+    /// restores it on drop. Callers must therefore be `#[serial]`.
     ///
     /// [`drive`]: Self::drive
     pub(crate) async fn drive_resolving_target_root(
@@ -841,6 +851,7 @@ impl Workspace {
 
         let effective = self.effective_args(args);
         let refs: Vec<&str> = effective.iter().map(String::as_str).collect();
+        let _cleared = ClearedTargetDir::enter();
         run_with_overrides(
             &command_from(&refs),
             Overrides {
@@ -1213,6 +1224,44 @@ impl Workspace {
     }
 }
 
+/// Clears `CARGO_TARGET_DIR` from the process environment for its lifetime,
+/// restoring the previous value on drop.
+///
+/// [`Workspace::drive_resolving_target_root`] uses this so the production
+/// `resolve_target_root` deterministically falls back to `<workspace>/target`
+/// rather than picking up whatever shared target directory the developer's
+/// environment happens to point at.
+struct ClearedTargetDir {
+    previous: Option<std::ffi::OsString>,
+}
+
+impl ClearedTargetDir {
+    fn enter() -> Self {
+        let previous = std::env::var_os("CARGO_TARGET_DIR");
+        // SAFETY: The one caller is `#[serial]`, and the suite runs under nextest
+        // (a separate process per test), so no other thread reads or writes the
+        // environment concurrently with this mutation.
+        unsafe {
+            std::env::remove_var("CARGO_TARGET_DIR");
+        }
+        Self { previous }
+    }
+}
+
+impl Drop for ClearedTargetDir {
+    fn drop(&mut self) {
+        let Some(previous) = self.previous.take() else {
+            return;
+        };
+        // SAFETY: The one caller is `#[serial]`, and the suite runs under nextest
+        // (a separate process per test), so no other thread reads or writes the
+        // environment concurrently with this mutation.
+        unsafe {
+            std::env::set_var("CARGO_TARGET_DIR", previous);
+        }
+    }
+}
+
 /// A fixed clock anchor for `analyze`/`list`'s history-mode default `--since`
 /// window. Seed data lands across 2024; anchoring "now" at 2024-06-01 keeps the
 /// default six-month look-back (cutoff 2023-12-01) inclusive of that data, so the
@@ -1221,6 +1270,7 @@ pub(crate) fn analysis_now() -> Timestamp {
     "2024-06-01T00:00:00Z".parse::<Timestamp>().unwrap()
 }
 
+/// Parses CLI arguments into the typed [`Command`], exactly as the binary does.
 pub(crate) fn command_from(args: &[&str]) -> Command {
     Cli::from_args(&["cargo-bench-history"], args)
         .unwrap()

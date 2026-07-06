@@ -1,4 +1,4 @@
-use crate::harness::*;
+use crate::harness::{serial, *};
 
 /// End-to-end happy path: a successful no-op engine command, one harvested
 /// summary, and a stored set with the expected object key and context.
@@ -49,7 +49,12 @@ async fn collect_callgrind_end_to_end_stores_results() {
 /// exact symptom this guards against. Driving without a target-root override
 /// exercises the real `resolve_target_root`, and the mock changes into a package
 /// subdirectory before writing, standing in for cargo's per-package cwd.
+///
+/// [`Workspace::drive_resolving_target_root`] clears the ambient `CARGO_TARGET_DIR`
+/// so resolution deterministically falls back to `<workspace>/target`; the test is
+/// therefore `#[serial]` to keep that process-wide mutation from racing peers.
 #[tokio::test]
+#[serial]
 #[cfg_attr(miri, ignore)]
 async fn collect_harvests_output_when_the_engine_runs_in_a_package_directory() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&[
