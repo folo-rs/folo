@@ -223,9 +223,9 @@ impl Drop for Session {
             return;
         }
 
-        // There is one report and it is always fully calculated: finalize once,
+        // There is one report and it is always fully calculated: snapshot once,
         // then feed every enabled output from that single value.
-        let report = self.to_report().finalize();
+        let report = self.to_report();
         if self.emit_stdout {
             report.print_to_stdout();
         }

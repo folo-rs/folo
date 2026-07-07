@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::FinalizedReport;
+use crate::Report;
 
 /// Subdirectory of the Cargo target directory that receives the JSON files.
 const OUTPUT_SUBDIRECTORY: &str = "all_the_time";
@@ -18,7 +18,6 @@ struct OperationOutput<'a> {
     operation: &'a str,
     total_iterations: u64,
     total_processor_time_nanos: u64,
-    mean_processor_time_nanos: u64,
     span_count: u64,
     slope_processor_time_nanos: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -27,7 +26,7 @@ struct OperationOutput<'a> {
     interval_high_processor_time_nanos: Option<f64>,
 }
 
-impl FinalizedReport {
+impl Report {
     /// Writes machine-readable JSON statistics into the Cargo target directory.
     ///
     /// One file is written per operation, named after the operation, at
@@ -80,8 +79,7 @@ impl FinalizedReport {
         // file name would otherwise silently overwrite each other's results.
         let mut file_names: HashMap<String, &str> = HashMap::new();
         let mut outputs: Vec<(PathBuf, String)> = Vec::new();
-        for operation in self.operations() {
-            let name = operation.name();
+        for (name, operation) in self.sorted_operations() {
             let Some(statistics) = operation.statistics() else {
                 // Registered but never measured operations have no spans and thus
                 // no statistics, so they leave no output file behind.
@@ -101,7 +99,6 @@ impl FinalizedReport {
                 operation: name,
                 total_iterations: operation.total_iterations(),
                 total_processor_time_nanos: duration_as_nanos(operation.total_processor_time()),
-                mean_processor_time_nanos: duration_as_nanos(operation.mean()),
                 span_count: statistics.span_count,
                 slope_processor_time_nanos: statistics.slope_nanos,
                 interval_low_processor_time_nanos: statistics.interval_nanos.map(|(low, _)| low),
@@ -193,10 +190,7 @@ mod tests {
         let session = session_with_recorded_work("read_cell");
         let directory = tempfile::tempdir().unwrap();
 
-        session
-            .to_report()
-            .finalize()
-            .write_to_directory(directory.path());
+        session.to_report().write_to_directory(directory.path());
 
         let file = directory.path().join("read_cell.json");
         let value = read_json(&file);
@@ -214,12 +208,6 @@ mod tests {
                 .get("total_processor_time_nanos")
                 .and_then(Value::as_u64),
             Some(80_000_000)
-        );
-        assert_eq!(
-            value
-                .get("mean_processor_time_nanos")
-                .and_then(Value::as_u64),
-            Some(20_000_000)
         );
         // A single recorded span yields a span count of one and a slope equal to
         // the per-iteration mean, but no dispersion information, so the interval
@@ -239,7 +227,8 @@ mod tests {
             value.get("interval_high_processor_time_nanos").is_none(),
             "a single span carries no interval, so the field must be omitted"
         );
-        // Standard deviation, minimum and maximum are no longer emitted.
+        // Standard deviation, minimum, maximum and the raw mean are not emitted.
+        assert!(value.get("mean_processor_time_nanos").is_none());
         assert!(value.get("std_dev_processor_time_nanos").is_none());
         assert!(value.get("min_processor_time_nanos").is_none());
         assert!(value.get("max_processor_time_nanos").is_none());
@@ -268,10 +257,7 @@ mod tests {
         }
 
         let directory = tempfile::tempdir().unwrap();
-        session
-            .to_report()
-            .finalize()
-            .write_to_directory(directory.path());
+        session.to_report().write_to_directory(directory.path());
 
         let value = read_json(&directory.path().join("read_cell.json"));
         assert_eq!(value.get("span_count").and_then(Value::as_u64), Some(2));
@@ -311,10 +297,7 @@ mod tests {
         }
 
         let directory = tempfile::tempdir().unwrap();
-        session
-            .to_report()
-            .finalize()
-            .write_to_directory(directory.path());
+        session.to_report().write_to_directory(directory.path());
 
         let value = read_json(&directory.path().join("failed.json"));
         // A zero-iteration measurement has no per-iteration rate; the slope is
@@ -338,10 +321,7 @@ mod tests {
         let session = session_with_recorded_work("group/case name");
         let directory = tempfile::tempdir().unwrap();
 
-        session
-            .to_report()
-            .finalize()
-            .write_to_directory(directory.path());
+        session.to_report().write_to_directory(directory.path());
 
         let file = directory.path().join("group_case_name.json");
         assert!(file.exists());
@@ -363,7 +343,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let target = directory.path().join("nested");
 
-        session.to_report().finalize().write_to_directory(&target);
+        session.to_report().write_to_directory(&target);
 
         // Nothing is written, so the directory is not even created.
         assert!(!target.exists());
@@ -387,10 +367,7 @@ mod tests {
         let _unmeasured = session.operation("unmeasured");
 
         let directory = tempfile::tempdir().unwrap();
-        session
-            .to_report()
-            .finalize()
-            .write_to_directory(directory.path());
+        session.to_report().write_to_directory(directory.path());
 
         assert!(directory.path().join("measured.json").exists());
         assert!(!directory.path().join("unmeasured.json").exists());
@@ -404,10 +381,7 @@ mod tests {
         fs::write(&file, "stale contents").unwrap();
 
         let session = session_with_recorded_work("read_cell");
-        session
-            .to_report()
-            .finalize()
-            .write_to_directory(directory.path());
+        session.to_report().write_to_directory(directory.path());
 
         // Parsing succeeds only if the stale, non-JSON contents were replaced.
         let value = read_json(&file);
@@ -431,7 +405,6 @@ mod tests {
 
         session
             .to_report()
-            .finalize()
             .write_to_directory(blocker.join("nested"));
     }
 
@@ -445,10 +418,7 @@ mod tests {
         // A directory occupying the output file's path makes the file write fail.
         fs::create_dir_all(directory.path().join("read_cell.json")).unwrap();
 
-        session
-            .to_report()
-            .finalize()
-            .write_to_directory(directory.path());
+        session.to_report().write_to_directory(directory.path());
     }
 
     #[test]
@@ -471,7 +441,6 @@ mod tests {
         // never created.
         session
             .to_report()
-            .finalize()
             .write_to_directory("collision_is_detected_before_writing");
     }
 }

@@ -77,6 +77,7 @@ impl OperationMetrics {
     /// Mean processor time per iteration across all recorded spans.
     ///
     /// Returns zero when no iterations were recorded.
+    #[cfg(test)]
     pub(crate) fn mean(&self) -> Duration {
         let mean_nanos = self
             .total_nanos

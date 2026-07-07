@@ -196,7 +196,6 @@
 )]
 
 mod constants;
-mod finalized;
 mod operation;
 mod operation_metrics;
 mod pal;
@@ -208,7 +207,6 @@ mod target_output;
 mod thread_span;
 
 pub(crate) use constants::*;
-pub use finalized::*;
 pub use operation::*;
 pub(crate) use operation_metrics::*;
 pub use process_span::*;

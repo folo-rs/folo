@@ -89,6 +89,7 @@ impl OperationMetrics {
     /// Mean bytes allocated per iteration, pooled across all spans.
     ///
     /// Returns zero when no iterations were recorded.
+    #[cfg(test)]
     pub(crate) fn mean_bytes(&self) -> u64 {
         self.total_bytes
             .checked_div(self.total_iterations)
@@ -98,6 +99,7 @@ impl OperationMetrics {
     /// Mean number of allocations per iteration, pooled across all spans.
     ///
     /// Returns zero when no iterations were recorded.
+    #[cfg(test)]
     pub(crate) fn mean_allocations(&self) -> u64 {
         self.total_count
             .checked_div(self.total_iterations)

@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::{FinalizedOperation, FinalizedReport, OperationMetrics};
+use crate::OperationMetrics;
 
 /// Thread-safe memory allocation tracking report.
 ///
@@ -216,47 +216,36 @@ impl Report {
         }
     }
 
-    /// Fully computes this report into a [`FinalizedReport`].
+    /// Returns the operations sorted by name.
     ///
-    /// Both the stdout summary and the machine-readable JSON output are rendered
-    /// from the returned value.
-    #[must_use]
-    pub fn finalize(&self) -> FinalizedReport {
-        let operations = self
+    /// The report holds operations in an unordered map, so every output sorts
+    /// them by name to present a stable, reproducible order.
+    pub(crate) fn sorted_operations(&self) -> Vec<(&str, &ReportOperation)> {
+        let mut operations: Vec<(&str, &ReportOperation)> = self
             .operations
             .iter()
-            .map(|(name, operation)| {
-                FinalizedOperation::new(
-                    name.clone(),
-                    operation.total_iterations(),
-                    operation.total_bytes_allocated(),
-                    operation.total_allocations_count(),
-                    operation.metrics.mean_bytes(),
-                    operation.metrics.mean_allocations(),
-                    operation.statistics(),
-                )
-            })
+            .map(|(name, op)| (name.as_str(), op))
             .collect();
-
-        FinalizedReport::new(operations)
+        operations.sort_unstable_by_key(|(name, _)| *name);
+        operations
     }
 
     /// Prints the memory allocation statistics to stdout.
     ///
-    /// Finalizes the report and prints the resulting summary. Prints nothing if
-    /// no operations were captured. This may indicate that the session was part
-    /// of a "list available benchmarks" probe run instead of some real activity,
-    /// in which case printing anything might violate the output protocol the tool
-    /// is speaking.
+    /// Prints nothing if no operations were captured. This may indicate that the
+    /// session was part of a "list available benchmarks" probe run instead of
+    /// some real activity, in which case printing anything might violate the
+    /// output protocol the tool is speaking.
     // Excluded from coverage as an un-assertable stdout side effect, matching the
-    // sibling `Display` impls. The `finalize()` computation it performs is covered
-    // independently — `Session::drop` finalizes on the measured path and
-    // `FinalizedReport` is unit-tested — so nothing computational is hidden here;
-    // only the stdout emission, which cannot be meaningfully asserted, is skipped.
+    // sibling `Display` impl. The figures it prints are covered independently via
+    // `Display` and the JSON output, so nothing computational is hidden here.
     #[cfg_attr(coverage_nightly, coverage(off))]
     #[cfg_attr(test, mutants::skip)] // Too difficult to test stdout output reliably - manually tested.
     pub fn print_to_stdout(&self) {
-        self.finalize().print_to_stdout();
+        if self.is_empty() {
+            return;
+        }
+        println!("{self}");
     }
 
     /// Whether there is any recorded activity in this report.
@@ -433,15 +422,89 @@ impl fmt::Display for ReportOperation {
     }
 }
 
-// No API contract to test - output format is not guaranteed, and the rendering
-// itself is exercised through `FinalizedReport`.
-#[cfg_attr(coverage_nightly, coverage(off))]
+// No API contract to test - output format is not guaranteed.
+#[cfg_attr(coverage_nightly, coverage(off))] // Too annoying to test every question mark operator.
 impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // There is one report and it is always fully calculated: rendering the
-        // human summary goes through the same finalized value the JSON output
-        // uses, rather than a cheaper slope-only path.
-        write!(f, "{}", self.finalize())
+        if self.is_empty() {
+            writeln!(f, "No allocation statistics captured.")?;
+            return Ok(());
+        }
+
+        writeln!(f, "Allocation statistics:")?;
+        writeln!(f)?;
+
+        // Pre-render the per-iteration slope cells so the column widths and the
+        // printed rows are computed from the exact same strings. The confidence
+        // interval is kept out of this summary for readability; it remains in the
+        // JSON output and the `statistics()` API.
+        let rows: Vec<(&str, String, String)> = self
+            .sorted_operations()
+            .into_iter()
+            .map(|(name, operation)| match operation.statistics() {
+                Some(statistics) => (
+                    name,
+                    format_count(statistics.bytes.slope),
+                    format_count(statistics.allocations.slope),
+                ),
+                None => (name, "n/a".to_owned(), "n/a".to_owned()),
+            })
+            .collect();
+
+        let name_header = "Operation";
+        let bytes_header = "Bytes/iter";
+        let count_header = "Allocations/iter";
+
+        let max_name_width = rows
+            .iter()
+            .map(|(name, _, _)| name.len())
+            .max()
+            .unwrap_or(0)
+            .max(name_header.len());
+        let max_bytes_width = rows
+            .iter()
+            .map(|(_, bytes, _)| bytes.len())
+            .max()
+            .unwrap_or(0)
+            .max(bytes_header.len());
+        let max_count_width = rows
+            .iter()
+            .map(|(_, _, count)| count.len())
+            .max()
+            .unwrap_or(0)
+            .max(count_header.len());
+
+        // Print table header.
+        writeln!(
+            f,
+            "| {name_header:<max_name_width$} | {bytes_header:>max_bytes_width$} | {count_header:>max_count_width$} |",
+        )?;
+
+        // Print separator.
+        let separator_name_width = max_name_width
+            .checked_add(2)
+            .expect("operation name width fits in memory, adding 2 cannot overflow");
+        let separator_bytes_width = max_bytes_width
+            .checked_add(2)
+            .expect("bytes width fits in memory, adding 2 cannot overflow");
+        let separator_count_width = max_count_width
+            .checked_add(2)
+            .expect("count width fits in memory, adding 2 cannot overflow");
+        writeln!(
+            f,
+            "|{:-<separator_name_width$}|{:-<separator_bytes_width$}|{:-<separator_count_width$}|",
+            "", "", "",
+        )?;
+
+        // Print table rows.
+        for (name, bytes, count) in rows {
+            writeln!(
+                f,
+                "| {name:<max_name_width$} | {bytes:>max_bytes_width$} | {count:>max_count_width$} |",
+            )?;
+        }
+
+        Ok(())
     }
 }
 
@@ -491,6 +554,50 @@ mod tests {
 
         let report = session.to_report();
         assert!(!report.is_empty());
+    }
+
+    #[test]
+    fn report_with_registered_but_unmeasured_operation_is_empty() {
+        let session = Session::new().no_stdout().no_file();
+        let _operation = session.operation("unmeasured");
+
+        let report = session.to_report();
+        assert!(report.is_empty());
+    }
+
+    #[test]
+    fn report_with_only_zero_iteration_spans_is_empty() {
+        // A span that covered zero iterations records a span (so statistics can be
+        // fit) but no measurable work, so the report is still empty. Guards against
+        // `is_empty` regressing to key off whether statistics exist.
+        let session = Session::new().no_stdout().no_file();
+        {
+            let operation = session.operation("failed");
+            let _span = operation.measure_thread().iterations(0);
+            register_fake_allocation(800, 8);
+        }
+
+        let report = session.to_report();
+        assert!(report.is_empty());
+        // The operation still recorded a span, so it exposes statistics.
+        let operations = report.sorted_operations();
+        let (_name, operation) = operations.first().expect("the report has one operation");
+        assert!(operation.statistics().is_some());
+    }
+
+    #[test]
+    fn operations_are_sorted_by_name() {
+        let mut operations = HashMap::new();
+        operations.insert("zebra".to_owned(), report_operation(10, 1, 1));
+        operations.insert("alpha".to_owned(), report_operation(20, 2, 1));
+        let report = Report { operations };
+
+        let names: Vec<&str> = report
+            .sorted_operations()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(names, ["alpha", "zebra"]);
     }
 
     #[test]

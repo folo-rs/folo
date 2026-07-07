@@ -207,7 +207,6 @@
 
 mod allocator;
 mod constants;
-mod finalized;
 mod operation;
 mod operation_metrics;
 mod process_span;
@@ -218,7 +217,6 @@ mod thread_span;
 
 pub use allocator::*;
 pub(crate) use constants::*;
-pub use finalized::*;
 pub use operation::*;
 pub(crate) use operation_metrics::*;
 pub use process_span::*;
