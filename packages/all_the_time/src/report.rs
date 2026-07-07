@@ -262,7 +262,9 @@ impl ReportOperation {
     /// Returns the per-iteration processor time — the primary metric for this
     /// operation.
     ///
-    /// Returns `None` when there is not enough data to estimate it.
+    /// Returns `None` when no finite per-iteration rate is available — for example
+    /// when no spans were recorded, or the recorded spans covered zero iterations
+    /// (leaving the rate undefined).
     #[must_use]
     pub fn processor_time(&self) -> Option<Duration> {
         self.metrics

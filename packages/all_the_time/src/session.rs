@@ -241,8 +241,8 @@ impl Drop for Session {
             return;
         }
 
-        // There is one report and it is always fully calculated: snapshot once,
-        // then feed every enabled output from that single value.
+        // Snapshot the report once and feed every enabled output from that single
+        // value, so stdout and file outputs render identical figures.
         let report = self.to_report();
         if self.emit_stdout {
             report.print_to_stdout();

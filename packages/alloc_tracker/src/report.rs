@@ -315,7 +315,9 @@ impl ReportOperation {
     /// Returns the per-iteration bytes allocated — the primary allocation metric
     /// for this operation.
     ///
-    /// Returns `None` when there is not enough data to estimate it.
+    /// Returns `None` when no finite per-iteration rate is available — for example
+    /// when no spans were recorded, or the recorded spans covered zero iterations
+    /// (leaving the rate undefined).
     #[must_use]
     pub fn bytes(&self) -> Option<f64> {
         self.metrics.bytes_slope().filter(|slope| slope.is_finite())
@@ -323,7 +325,9 @@ impl ReportOperation {
 
     /// Returns the per-iteration allocation count for this operation.
     ///
-    /// Returns `None` when there is not enough data to estimate it.
+    /// Returns `None` when no finite per-iteration rate is available — for example
+    /// when no spans were recorded, or the recorded spans covered zero iterations
+    /// (leaving the rate undefined).
     #[must_use]
     pub fn allocations(&self) -> Option<f64> {
         self.metrics
