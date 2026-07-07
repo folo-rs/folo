@@ -52,15 +52,31 @@
 //! You **must** call [`iterations()`](ThreadSpan::iterations) on the span before
 //! it is dropped. Failure to do so will result in a panic.
 //!
+//! # Human-readable summary
+//!
+//! When a [`Session`] is dropped it prints a table of per-iteration figures to
+//! stdout, one row per operation:
+//!
+//! ```text
+//! Processor time statistics:
+//!
+//! | Operation    | Per iteration |
+//! |--------------|---------------|
+//! | decode_value |          84ns |
+//! | encode_value |         120ns |
+//! ```
+//!
+//! A cell reads `NaN` for an operation whose spans covered zero iterations and
+//! `n/a` for one that recorded no spans at all.
+//!
 //! # Machine-readable output
 //!
-//! Dropping a [`Session`] writes machine-readable JSON files (one per operation)
-//! into the Cargo target directory at `target/all_the_time/<operation>.json`,
-//! with operation names sanitized to be filesystem-safe. A human-readable summary
-//! is also printed to stdout.
+//! Dropping a [`Session`] also writes JSON files (one per operation) into the
+//! Cargo target directory at `target/all_the_time/<operation>.json`, with
+//! operation names sanitized to be filesystem-safe.
 //!
-//! These outputs are produced automatically, so a typical benchmark only needs
-//! to create a session and record work.
+//! Both outputs are produced automatically, so a typical benchmark only needs to
+//! create a session and record work.
 //!
 //! # Measuring a variable amount of work
 //!

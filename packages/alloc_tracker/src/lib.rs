@@ -80,15 +80,31 @@
 //! You **must** call [`iterations()`](ProcessSpan::iterations) on the span before
 //! it is dropped. Failure to do so will result in a panic.
 //!
+//! # Human-readable summary
+//!
+//! When a [`Session`] is dropped it prints a table of per-iteration figures to
+//! stdout, one row per operation:
+//!
+//! ```text
+//! Allocation statistics:
+//!
+//! | Operation       | Bytes/iter | Allocations/iter |
+//! |-----------------|------------|------------------|
+//! | allocate_buffer |       1024 |                3 |
+//! | build_map       |         64 |                1 |
+//! ```
+//!
+//! A cell reads `NaN` for an operation whose spans covered zero iterations and
+//! `n/a` for one that recorded no spans at all.
+//!
 //! # Machine-readable output
 //!
-//! Dropping a [`Session`] writes machine-readable JSON files (one per operation)
-//! into the Cargo target directory at `target/alloc_tracker/<operation>.json`,
-//! with operation names sanitized to be filesystem-safe. A human-readable summary
-//! is also printed to stdout.
+//! Dropping a [`Session`] also writes JSON files (one per operation) into the
+//! Cargo target directory at `target/alloc_tracker/<operation>.json`, with
+//! operation names sanitized to be filesystem-safe.
 //!
-//! These outputs are produced automatically, so a typical benchmark only needs
-//! to create a session and record work.
+//! Both outputs are produced automatically, so a typical benchmark only needs to
+//! create a session and record work.
 //!
 //! # Measuring a variable amount of work
 //!
