@@ -55,12 +55,13 @@ fn operation_can_be_moved_between_threads() {
 
     // Inspect the recorded measurement the way a user would: via a report.
     let report = session.to_report();
-    let mean_time = report
+    let processor_time = report
         .operations()
         .find(|&(name, _)| name == "test_op")
-        .map(|(_, op)| op.mean())
-        .expect("operation should appear in the report");
-    assert!(mean_time >= std::time::Duration::ZERO);
+        .and_then(|(_, op)| op.processor_time());
+    // A `Duration` is always non-negative; asserting `Some` confirms the report
+    // exposes an estimable per-iteration figure for the recorded span.
+    assert!(processor_time.is_some_and(|t| t >= std::time::Duration::ZERO));
 }
 
 #[test]

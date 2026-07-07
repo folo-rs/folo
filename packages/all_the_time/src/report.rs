@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration;
 
-use crate::statistics::format_slope_nanos;
+use crate::statistics::{format_slope_nanos, nanos_to_duration};
 use crate::{FinalizedOperation, FinalizedReport, OperationMetrics, OperationStatistics};
 
 /// Thread-safe processor time tracking report.
@@ -184,7 +184,7 @@ impl Report {
                     name.clone(),
                     operation.total_iterations(),
                     operation.total_processor_time(),
-                    operation.mean(),
+                    operation.metrics.mean(),
                     operation.statistics(),
                 )
             })
@@ -245,7 +245,7 @@ impl Report {
     ///         name,
     ///         op.total_iterations()
     ///     );
-    ///     println!("Mean time per iteration: {:?}", op.mean());
+    ///     println!("Processor time per iteration: {:?}", op.processor_time());
     ///     println!("Total time: {:?}", op.total_processor_time());
     /// }
     /// # }
@@ -268,10 +268,16 @@ impl ReportOperation {
         self.metrics.total_iterations()
     }
 
-    /// Calculates the mean processor time per iteration.
+    /// Returns the per-iteration processor time — the primary metric for this
+    /// operation.
+    ///
+    /// Returns `None` when there is not enough data to estimate it.
     #[must_use]
-    pub fn mean(&self) -> Duration {
-        self.metrics.mean()
+    pub fn processor_time(&self) -> Option<Duration> {
+        self.metrics
+            .slope_nanos()
+            .filter(|slope| slope.is_finite())
+            .map(nanos_to_duration)
     }
 
     /// Computes per-iteration statistics over the recorded spans.
@@ -502,7 +508,7 @@ mod tests {
         // Second operation: 40ms total / 2 iterations
         // Combined: (40ms + 40ms) total / (4 + 2) iterations = 80ms / 6 = ~13.33ms mean
         let expected_mean = Duration::from_nanos(13_333_333); // 80ms / 6 iterations
-        assert_eq!(op.mean(), expected_mean);
+        assert_eq!(op.metrics.mean(), expected_mean);
 
         // Verify total duration and iteration count
         assert_eq!(op.total_processor_time(), Duration::from_millis(80));

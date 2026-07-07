@@ -48,16 +48,19 @@ fn perform_measurable_cpu_work() -> u64 {
     iterations
 }
 
-/// Reads an operation's mean processor time the way a user inspects results:
-/// through the session report rather than the live `Operation` handle.
-fn report_mean(session: &Session, operation_name: &str) -> Duration {
+/// Reads an operation's per-iteration processor time the way a user inspects
+/// results: through the session report rather than the live `Operation` handle.
+fn report_processor_time(session: &Session, operation_name: &str) -> Duration {
     session
         .to_report()
         .operations()
         .find(|&(name, _)| name == operation_name)
         .map_or_else(
             || panic!("operation {operation_name:?} should appear in the report"),
-            |(_, op)| op.mean(),
+            |(_, op)| {
+                op.processor_time()
+                    .expect("operation with recorded spans has an estimable per-iteration time")
+            },
         )
 }
 
@@ -80,7 +83,7 @@ fn real_platform_thread_span_measures_nonzero_time() {
     );
 
     // Verify that the span recorded measurable processor time
-    let total_time = report_mean(&session, "thread_work");
+    let total_time = report_processor_time(&session, "thread_work");
 
     // With 50ms+ of intensive work, we must get a non-zero measurement
     assert!(
@@ -118,7 +121,7 @@ fn real_platform_process_span_measures_nonzero_time() {
     );
 
     // Verify that the span recorded measurable processor time
-    let total_time = report_mean(&session, "process_work");
+    let total_time = report_processor_time(&session, "process_work");
 
     // With 50ms+ of intensive work, we must get a non-zero measurement
     assert!(
@@ -151,7 +154,7 @@ fn real_platform_session_not_empty_after_work() {
         let _span = operation.measure_thread().iterations(1);
         perform_measurable_cpu_work();
     }
-    let measured_time = report_mean(&session, "integration_test");
+    let measured_time = report_processor_time(&session, "integration_test");
 
     // Session should no longer be empty
     assert!(!session.is_empty());

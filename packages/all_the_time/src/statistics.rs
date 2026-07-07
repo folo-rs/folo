@@ -17,13 +17,18 @@ use std::time::Duration;
 /// when there is not enough data to estimate them). Exposed through
 /// [`ReportOperation::statistics`](crate::ReportOperation::statistics) so callers
 /// can consume the same figures the JSON output records.
+///
+/// When the operation's spans covered zero iterations there is no per-iteration
+/// rate: [`slope_nanos`](Self::slope_nanos) is then `NaN` and
+/// [`interval_nanos`](Self::interval_nanos) is `None`.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct OperationStatistics {
     /// Number of spans recorded (distinct from the total iteration count).
     pub span_count: u64,
 
-    /// The per-iteration processor time, in nanoseconds.
+    /// The per-iteration processor time, in nanoseconds, or `NaN` when the spans
+    /// covered zero iterations.
     pub slope_nanos: f64,
 
     /// Confidence interval `(low, high)` for [`slope_nanos`](Self::slope_nanos),

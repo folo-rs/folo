@@ -58,22 +58,23 @@ fn resource_usage_output_provides_meaningful_allocation_data() {
         assert!(operation_stats.total_iterations() > 0);
         assert!(operation_stats.total_bytes_allocated() > 0);
 
-        // The mean should be reasonable (we allocate ~12KB per iteration)
-        let mean_bytes = operation_stats.mean();
+        // The per-iteration slope should be reasonable (we allocate ~12KB per iteration)
+        let bytes_per_iteration = operation_stats
+            .bytes()
+            .expect("operation with recorded spans has an estimable per-iteration slope");
         assert!(
-            mean_bytes > 10_000,
-            "Mean allocation per iteration should be reasonable, got {mean_bytes} bytes"
+            bytes_per_iteration > 10_000.0,
+            "Allocation per iteration should be reasonable, got {bytes_per_iteration} bytes"
         );
         assert!(
-            mean_bytes < 50_000,
-            "Mean allocation per iteration should not be excessive, got {mean_bytes} bytes"
+            bytes_per_iteration < 50_000.0,
+            "Allocation per iteration should not be excessive, got {bytes_per_iteration} bytes"
         );
 
         println!(
-            "Thread allocated {} bytes total across {} iterations (mean: {} bytes)",
+            "Thread allocated {} bytes total across {} iterations ({bytes_per_iteration} bytes per iteration)",
             operation_stats.total_bytes_allocated(),
             operation_stats.total_iterations(),
-            mean_bytes
         );
     }
 
@@ -143,18 +144,19 @@ fn resource_usage_output_provides_meaningful_processor_time_data() {
             );
             println!("This is expected on systems with low timer precision or fast execution");
         } else {
+            let per_iteration = operation_stats.processor_time();
             println!(
-                "Thread used {:?} processor time total across {} iterations (mean: {:?})",
+                "Thread used {:?} processor time total across {} iterations (per iteration: {per_iteration:?})",
                 operation_stats.total_processor_time(),
                 operation_stats.total_iterations(),
-                operation_stats.mean()
             );
 
             // If time was measured, it should be reasonable
-            let mean_time = operation_stats.mean();
+            let per_iteration = per_iteration
+                .expect("operation with recorded spans has an estimable per-iteration time");
             assert!(
-                mean_time < Duration::from_secs(1),
-                "Mean processor time per iteration should be reasonable, got {mean_time:?}"
+                per_iteration < Duration::from_secs(1),
+                "Processor time per iteration should be reasonable, got {per_iteration:?}"
             );
         }
     }
@@ -221,10 +223,10 @@ fn resource_usage_output_provides_meaningful_combined_data() {
         assert!(alloc_stats.total_bytes_allocated() > 0);
 
         println!(
-            "Combined work - Allocations: {} bytes total, {} iterations, {} bytes mean",
+            "Combined work - Allocations: {} bytes total, {} iterations, {:?} bytes per iteration",
             alloc_stats.total_bytes_allocated(),
             alloc_stats.total_iterations(),
-            alloc_stats.mean()
+            alloc_stats.bytes()
         );
 
         // Check processor time data
@@ -247,10 +249,10 @@ fn resource_usage_output_provides_meaningful_combined_data() {
             );
         } else {
             println!(
-                "Combined work - Processor time: {:?} total, {} iterations, {:?} mean",
+                "Combined work - Processor time: {:?} total, {} iterations, {:?} per iteration",
                 time_stats.total_processor_time(),
                 time_stats.total_iterations(),
-                time_stats.mean()
+                time_stats.processor_time()
             );
         }
 

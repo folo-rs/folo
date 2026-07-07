@@ -132,7 +132,7 @@
 //!         processed += 1;
 //!     }
 //!
-//!     span.iterations(processed);
+//!     drop(span.iterations(processed));
 //! }
 //! # fn get_next_item() -> Option<Item> {
 //! #     use std::sync::atomic::{AtomicU32, Ordering};

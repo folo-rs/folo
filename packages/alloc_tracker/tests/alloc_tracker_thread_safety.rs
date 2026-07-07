@@ -50,12 +50,12 @@ fn operation_can_be_moved_between_threads() {
 
     // Inspect the recorded measurement the way a user would: via a report.
     let report = session.to_report();
-    let mean_bytes = report
+    let bytes_per_iteration = report
         .operations()
         .find(|&(name, _)| name == "test_op")
-        .map(|(_, op)| op.mean())
-        .expect("operation should appear in the report");
-    assert_eq!(mean_bytes, 0); // No actual allocations in test
+        .and_then(|(_, op)| op.bytes())
+        .expect("operation with recorded spans has an estimable per-iteration slope");
+    assert!(bytes_per_iteration.abs() < f64::EPSILON); // No actual allocations in test
 }
 
 #[test]

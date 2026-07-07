@@ -97,10 +97,14 @@ pub struct ReportOperation {
 /// count of allocations). [`slope`](Self::slope) is the per-iteration value and
 /// [`interval`](Self::interval) its 95% confidence bounds, or `None` when there
 /// is not enough data to estimate them.
+///
+/// When the operation's spans covered zero iterations there is no per-iteration
+/// rate: [`slope`](Self::slope) is then `NaN` and [`interval`](Self::interval)
+/// is `None`.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct MetricStatistics {
-    /// The per-iteration value.
+    /// The per-iteration value, or `NaN` when the spans covered zero iterations.
     pub slope: f64,
 
     /// Confidence interval `(low, high)` for [`slope`](Self::slope), or `None`
@@ -227,8 +231,8 @@ impl Report {
                     operation.total_iterations(),
                     operation.total_bytes_allocated(),
                     operation.total_allocations_count(),
-                    operation.mean_bytes(),
-                    operation.mean_allocations(),
+                    operation.metrics.mean_bytes(),
+                    operation.metrics.mean_allocations(),
                     operation.statistics(),
                 )
             })
@@ -290,7 +294,7 @@ impl Report {
     ///         name,
     ///         op.total_iterations()
     ///     );
-    ///     println!("Mean bytes per iteration: {}", op.mean());
+    ///     println!("Bytes per iteration: {:?}", op.bytes());
     ///     println!("Total bytes: {}", op.total_bytes_allocated());
     /// }
     /// # }
@@ -319,24 +323,23 @@ impl ReportOperation {
         self.metrics.total_iterations()
     }
 
-    /// Calculates the mean bytes allocated per iteration.
-    #[must_use]
-    pub fn mean_bytes(&self) -> u64 {
-        self.metrics.mean_bytes()
-    }
-
-    /// Calculates the mean number of allocations per iteration.
-    #[must_use]
-    pub fn mean_allocations(&self) -> u64 {
-        self.metrics.mean_allocations()
-    }
-
-    /// Calculates the mean bytes allocated per iteration.
+    /// Returns the per-iteration bytes allocated — the primary allocation metric
+    /// for this operation.
     ///
-    /// This is an alias for [`mean_bytes`](Self::mean_bytes) to maintain backward compatibility.
+    /// Returns `None` when there is not enough data to estimate it.
     #[must_use]
-    pub fn mean(&self) -> u64 {
-        self.mean_bytes()
+    pub fn bytes(&self) -> Option<f64> {
+        self.metrics.bytes_slope().filter(|slope| slope.is_finite())
+    }
+
+    /// Returns the per-iteration allocation count for this operation.
+    ///
+    /// Returns `None` when there is not enough data to estimate it.
+    #[must_use]
+    pub fn allocations(&self) -> Option<f64> {
+        self.metrics
+            .allocations_slope()
+            .filter(|slope| slope.is_finite())
     }
 
     /// Computes per-iteration statistics over the recorded spans.
