@@ -44,11 +44,17 @@ fn operation_can_be_moved_between_threads() {
         let _span = operation.measure_thread().iterations(1);
 
         // Simulate some work (without actual allocations in test)
-
-        operation.mean()
     });
 
-    let mean_bytes = handle.join().unwrap();
+    handle.join().unwrap();
+
+    // Inspect the recorded measurement the way a user would: via a report.
+    let report = session.to_report();
+    let mean_bytes = report
+        .operations()
+        .find(|&(name, _)| name == "test_op")
+        .map(|(_, op)| op.mean())
+        .expect("operation should appear in the report");
     assert_eq!(mean_bytes, 0); // No actual allocations in test
 }
 

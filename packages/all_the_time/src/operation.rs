@@ -2,19 +2,14 @@
 
 use std::fmt;
 use std::sync::{Arc, Mutex};
+#[cfg(test)]
 use std::time::Duration;
 
 use crate::pal::PlatformFacade;
 use crate::statistics::format_slope_nanos;
 use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessSpan, ThreadSpan};
 
-/// Measures per-iteration processor time for a repeated operation.
-///
-/// This is useful in benchmarks where you want to understand the processor time
-/// cost of a repeated operation. It reports the per-iteration processor time; a
-/// plain [`mean`](Self::mean) is also available.
-///
-/// Operations share data directly with the session - data is merged when spans are dropped.
+/// Aggregates data from repeated measurements of a single operation.
 ///
 /// Multiple operations with the same name can be created concurrently.
 ///
@@ -51,7 +46,7 @@ pub struct Operation {
 }
 
 impl Operation {
-    /// Creates a new mean processor time calculator with the given name.
+    /// Creates a new operation with the given name.
     #[must_use]
     pub(crate) fn new(
         _name: String,
@@ -76,13 +71,16 @@ impl Operation {
         Arc::clone(&self.metrics)
     }
 
-    /// Begins measuring processor time consumed by the current thread only.
+    /// Starts a measurement of processor time consumed by the current thread.
     ///
     /// Use this for single-threaded operations or when you want to track
-    /// per-thread processor usage. Call
-    /// [`iterations(n)`](ThreadSpan::iterations) on the returned span to state how
-    /// many iterations the measured work covers; the span records its measurement
-    /// when it is dropped.
+    /// per-thread processor usage.
+    ///
+    /// You must call [`iterations(n)`](ThreadSpan::iterations) on the returned span
+    /// to define how many iterations the measured work covers. This is mandatory.
+    /// You may pass `0` to indicate that no work was performed (e.g. on failure).
+    ///
+    /// The returned span records its measurement when it is dropped.
     ///
     /// # Examples
     ///
@@ -114,13 +112,16 @@ impl Operation {
         ThreadSpan::new(self)
     }
 
-    /// Begins measuring processor time consumed by the entire process (all
-    /// threads).
+    /// Starts a measurement of processor time consumed by all threads.
     ///
-    /// Use this to measure total processor time including multi-threaded work. Call
-    /// [`iterations(n)`](ProcessSpan::iterations) on the returned span to state how
-    /// many iterations the measured work covers; the span records its measurement
-    /// when it is dropped.
+    /// Use this for multithreaded operations or when you want to track
+    /// total processor usage across all threads.
+    ///
+    /// You must call [`iterations(n)`](ProcessSpan::iterations) on the returned span
+    /// to define how many iterations the measured work covers. This is mandatory.
+    /// You may pass `0` to indicate that no work was performed (e.g. on failure).
+    ///
+    /// The returned span records its measurement when it is dropped.
     ///
     /// # Examples
     ///
@@ -156,7 +157,8 @@ impl Operation {
     ///
     /// Returns zero duration if no spans have been recorded.
     #[must_use]
-    pub fn mean(&self) -> Duration {
+    #[cfg(test)]
+    pub(crate) fn mean(&self) -> Duration {
         self.metrics.lock().expect(ERR_POISONED_LOCK).mean()
     }
 

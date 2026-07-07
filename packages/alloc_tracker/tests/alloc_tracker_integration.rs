@@ -11,6 +11,19 @@ use alloc_tracker::{Allocator, Session};
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
+/// Reads an operation's total bytes allocated the way a user inspects results:
+/// through the session report rather than the live `Operation` handle.
+fn report_total_bytes(session: &Session, operation_name: &str) -> u64 {
+    session
+        .to_report()
+        .operations()
+        .find(|&(name, _)| name == operation_name)
+        .map_or_else(
+            || panic!("operation {operation_name:?} should appear in the report"),
+            |(_, op)| op.total_bytes_allocated(),
+        )
+}
+
 #[test]
 #[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
 fn no_span_is_empty_session() {
@@ -46,26 +59,26 @@ fn single_thread_allocations() {
     let session = Session::new().no_stdout().no_file();
 
     // Test process span in single-threaded context
-    let process_total = {
+    {
         let process_op = session.operation("process_single_thread");
         for i in 1..=TEST_ITERATIONS {
             let _span = process_op.measure_process().iterations(1);
             let _data = vec![0_u8; i * BYTES_PER_ITERATION];
             black_box(&_data);
         }
-        process_op.total_bytes_allocated()
-    };
+    }
+    let process_total = report_total_bytes(&session, "process_single_thread");
 
     // Test thread span in single-threaded context
-    let thread_total = {
+    {
         let thread_op = session.operation("thread_single_thread");
         for i in 1..=TEST_ITERATIONS {
             let _span = thread_op.measure_thread().iterations(1);
             let _data = vec![0_u8; i * BYTES_PER_ITERATION];
             black_box(&_data);
         }
-        thread_op.total_bytes_allocated()
-    };
+    }
+    let thread_total = report_total_bytes(&session, "thread_single_thread");
 
     // Both should have allocated some memory
     assert!(process_total > 0);
@@ -115,24 +128,24 @@ fn multithreaded_allocations_show_span_differences() {
     };
 
     // Test process span with multithreaded work (should capture all threads)
-    let process_total = {
+    {
         let process_op = session.operation("process_multithreaded");
         for _ in 0..TEST_ITERATIONS {
             let _span = process_op.measure_process().iterations(1);
             spawn_workers();
         }
-        process_op.total_bytes_allocated()
-    };
+    }
+    let process_total = report_total_bytes(&session, "process_multithreaded");
 
     // Test thread span with multithreaded work (should only capture main thread)
-    let thread_total = {
+    {
         let thread_op = session.operation("thread_multithreaded");
         for _ in 0..TEST_ITERATIONS {
             let _span = thread_op.measure_thread().iterations(1);
             spawn_workers();
         }
-        thread_op.total_bytes_allocated()
-    };
+    }
+    let thread_total = report_total_bytes(&session, "thread_multithreaded");
 
     // Both should have allocated some memory
     assert!(process_total > 0);
@@ -180,7 +193,7 @@ fn mixed_span_types_in_multithreaded_context() {
         }
     }
 
-    let total = mixed_op.total_bytes_allocated();
+    let total = report_total_bytes(&session, "mixed_multithreaded");
     assert!(total > 0);
 }
 

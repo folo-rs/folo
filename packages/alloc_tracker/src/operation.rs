@@ -6,12 +6,7 @@ use std::sync::{Arc, Mutex};
 use crate::report::format_count;
 use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessSpan, ThreadSpan};
 
-/// A measurement handle for tracking per-iteration memory allocation of a repeated operation.
-///
-/// This is useful in benchmarks where you want to understand the memory footprint
-/// and allocation behavior of a repeated operation. It reports the per-iteration
-/// bytes allocated and allocation count; a plain [`mean`](Self::mean) is also
-/// available.
+/// Aggregates allocation data from repeated measurements of a single operation.
 ///
 /// Multiple operations with the same name can be created concurrently.
 ///
@@ -66,10 +61,13 @@ impl Operation {
     /// Begins measuring allocations made by the current thread only.
     ///
     /// Use this for single-threaded operations or when you want to track
-    /// per-thread allocation usage. Call
-    /// [`iterations(n)`](ThreadSpan::iterations) on the returned span to state how
-    /// many iterations the measured work covers; the span records its measurement
-    /// when it is dropped.
+    /// per-thread allocation usage.
+    ///
+    /// You must call [`iterations(n)`](ThreadSpan::iterations) on the returned span
+    /// to define how many iterations the measured work covers. This is mandatory.
+    /// You may pass `0` to indicate that no work was performed (e.g. on failure).
+    ///
+    /// The returned span records its measurement when it is dropped.
     ///
     /// # Examples
     ///
@@ -106,10 +104,13 @@ impl Operation {
 
     /// Begins measuring allocations made by the entire process (all threads).
     ///
-    /// Use this to measure total allocations including multi-threaded work. Call
-    /// [`iterations(n)`](ProcessSpan::iterations) on the returned span to state how
-    /// many iterations the measured work covers; the span records its measurement
-    /// when it is dropped.
+    /// Use this to measure total allocations including multi-threaded work.
+    ///
+    /// You must call [`iterations(n)`](ProcessSpan::iterations) on the returned span
+    /// to define how many iterations the measured work covers. This is mandatory.
+    /// You may pass `0` to indicate that no work was performed (e.g. on failure).
+    ///
+    /// The returned span records its measurement when it is dropped.
     ///
     /// # Examples
     ///
@@ -146,11 +147,10 @@ impl Operation {
 
     /// Calculates the mean bytes allocated per iteration.
     ///
-    /// Returns 0 if no iterations have been recorded. This is the plain mean
-    /// across all recorded spans; the per-iteration slope is available on
-    /// [`ReportOperation`](crate::ReportOperation) via a report.
+    /// Returns 0 if no iterations have been recorded.
     #[must_use]
-    pub fn mean(&self) -> u64 {
+    #[cfg(test)]
+    pub(crate) fn mean(&self) -> u64 {
         let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
         data.mean_bytes()
     }
@@ -165,7 +165,8 @@ impl Operation {
 
     /// Returns the total bytes allocated across all iterations.
     #[must_use]
-    pub fn total_bytes_allocated(&self) -> u64 {
+    #[cfg(test)]
+    pub(crate) fn total_bytes_allocated(&self) -> u64 {
         let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
         data.total_bytes_allocated()
     }
