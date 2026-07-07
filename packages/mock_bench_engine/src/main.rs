@@ -397,10 +397,11 @@ fn parse_bounds(bounds: &str) -> (f64, f64) {
 /// Writes one `alloc_tracker` `<operation>.json` file under `alloc_tracker/`.
 ///
 /// The shape mirrors the real tool: `total_*` fields derive from the per-iteration
-/// means over a fixed iteration count. When the request carries per-metric
-/// intervals the file additionally records the slope, span count and confidence
-/// interval for both the bytes and allocation-count metrics, so the adapter's
-/// dispersion path is exercised end to end.
+/// slope over a fixed iteration count, and every operation records a span count and
+/// per-metric slope. When the request carries per-metric intervals the file
+/// additionally records the confidence interval for both the bytes and
+/// allocation-count metrics, so the adapter's dispersion path is exercised end to
+/// end.
 #[cfg_attr(coverage_nightly, coverage(off))]
 fn write_alloc_operation(target_root: &std::path::Path, operation: &AllocOperation) {
     const ITERATIONS: u64 = 4;
@@ -413,44 +414,31 @@ fn write_alloc_operation(target_root: &std::path::Path, operation: &AllocOperati
         "total_iterations": ITERATIONS,
         "total_bytes_allocated": operation.mean_bytes.saturating_mul(ITERATIONS),
         "total_allocations_count": operation.mean_allocations.saturating_mul(ITERATIONS),
-        "mean_bytes_per_iteration": operation.mean_bytes,
-        "mean_allocations_per_iteration": operation.mean_allocations,
+        "span_count": if operation.intervals.is_some() { SPANS } else { 1 },
+        "slope_bytes_per_iteration": operation.mean_bytes,
+        "slope_allocations_per_iteration": operation.mean_allocations,
     });
     if let Some((bytes_interval, count_interval)) = operation.intervals {
         let fields = output
             .as_object_mut()
             .expect("the operation output is a JSON object");
-        fields.insert("span_count".to_owned(), serde_json::json!(SPANS));
-        insert_metric_dispersion(
-            fields,
-            "bytes_per_iteration",
-            operation.mean_bytes,
-            bytes_interval,
-        );
-        insert_metric_dispersion(
-            fields,
-            "allocations_per_iteration",
-            operation.mean_allocations,
-            count_interval,
-        );
+        insert_metric_interval(fields, "bytes_per_iteration", bytes_interval);
+        insert_metric_interval(fields, "allocations_per_iteration", count_interval);
     }
     let file = dir.join(format!("{}.json", safe_segment(&operation.operation)));
     std::fs::write(file, output.to_string()).expect("alloc_tracker file should be writable");
 }
 
-/// Inserts the dispersion fields for one metric (identified by `suffix`) into
-/// an operation output object. The slope is emitted as the integer mean, which
-/// deserializes to the adapter's `f64` slope; the interval bounds are the analytic
-/// confidence interval the adapter reads.
+/// Inserts the confidence-interval bounds for one metric (identified by `suffix`)
+/// into an operation output object. Only multi-span output carries an interval; the
+/// slope itself is emitted alongside the base fields.
 #[cfg_attr(coverage_nightly, coverage(off))]
-fn insert_metric_dispersion(
+fn insert_metric_interval(
     fields: &mut serde_json::Map<String, serde_json::Value>,
     suffix: &str,
-    mean: u64,
     interval: (f64, f64),
 ) {
     let (low, high) = interval;
-    fields.insert(format!("slope_{suffix}"), serde_json::json!(mean));
     fields.insert(format!("interval_low_{suffix}"), serde_json::json!(low));
     fields.insert(format!("interval_high_{suffix}"), serde_json::json!(high));
 }
@@ -458,9 +446,9 @@ fn insert_metric_dispersion(
 /// Writes one `all_the_time` `<operation>.json` file under `all_the_time/`.
 ///
 /// The shape mirrors the real tool: `total_*` fields derive from the per-iteration
-/// mean over a fixed iteration count. When the request carries a confidence
-/// interval the file additionally records the slope, span count and interval, so
-/// the adapter's dispersion path is exercised end to end.
+/// slope over a fixed iteration count, and every operation records a span count and
+/// slope. When the request carries a confidence interval the file additionally
+/// records the interval, so the adapter's dispersion path is exercised end to end.
 #[cfg_attr(coverage_nightly, coverage(off))]
 fn write_time_operation(target_root: &std::path::Path, operation: &TimeOperation) {
     const ITERATIONS: u64 = 4;
@@ -472,19 +460,14 @@ fn write_time_operation(target_root: &std::path::Path, operation: &TimeOperation
         "operation": operation.operation,
         "total_iterations": ITERATIONS,
         "total_processor_time_nanos": operation.mean_nanos.saturating_mul(ITERATIONS),
-        "mean_processor_time_nanos": operation.mean_nanos,
+        "span_count": if operation.interval.is_some() { SPANS } else { 1 },
+        "slope_processor_time_nanos": operation.mean_nanos,
     });
     if let Some((low, high)) = operation.interval {
         let fields = output
             .as_object_mut()
             .expect("the operation output is a JSON object");
-        fields.insert("span_count".to_owned(), serde_json::json!(SPANS));
-        insert_metric_dispersion(
-            fields,
-            "processor_time_nanos",
-            operation.mean_nanos,
-            (low, high),
-        );
+        insert_metric_interval(fields, "processor_time_nanos", (low, high));
     }
     let file = dir.join(format!("{}.json", safe_segment(&operation.operation)));
     std::fs::write(file, output.to_string()).expect("all_the_time file should be writable");

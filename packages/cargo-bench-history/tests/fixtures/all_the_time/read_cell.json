@@ -2,5 +2,6 @@
   "operation": "read_cell",
   "total_iterations": 4,
   "total_processor_time_nanos": 80000000,
-  "mean_processor_time_nanos": 20000000
+  "span_count": 1,
+  "slope_processor_time_nanos": 20000000.0
 }

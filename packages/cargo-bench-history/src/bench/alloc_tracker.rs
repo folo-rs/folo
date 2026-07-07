@@ -9,12 +9,14 @@
 //! machine key (see [`Engine::is_hardware_dependent`]). It is *not* deterministic,
 //! however: warmup and buffer-resize allocations are amortized over a
 //! Criterion-chosen iteration count, so the per-iteration figures jitter run to
-//! run. The adapter therefore prefers the warmup-robust slope. Multi-span output
-//! carries a confidence interval, so the adapter normally reads one; the interval
-//! fields are parsed as optional to tolerate single-span or legacy mean-only
-//! files, which then fall back to a single figure. The committed fixtures under
-//! `tests/fixtures/alloc_tracker/` are real `alloc_tracker` output and act as a
-//! schema-drift canary.
+//! run. The adapter therefore reads the warmup-robust per-iteration slope. Every
+//! metric carries a slope; multi-span output additionally carries a confidence
+//! interval, so the interval fields are parsed as optional (a single span has no
+//! dispersion). The committed fixtures under `tests/fixtures/alloc_tracker/` are
+//! representative samples of the current schema; the authoritative schema-drift
+//! guard is the `super::schema_roundtrip` test, which feeds real producer output
+//! through this parser so a field renamed or dropped on either side of the
+//! boundary fails the build.
 //!
 //! [`Engine::is_hardware_dependent`]: crate::model::Engine::is_hardware_dependent
 
@@ -44,41 +46,45 @@ impl Error for AllocTrackerParseError {
 
 /// Parses one `alloc_tracker` operation file into a [`BenchmarkResult`].
 ///
+/// Returns `Ok(None)` when the operation recorded no usable per-iteration
+/// measurement (a zero-iteration run the workload could not complete, which the
+/// producer writes with null slopes); such an operation has nothing to store.
+///
 /// # Errors
 ///
 /// Returns [`AllocTrackerParseError`] if the JSON is malformed or does not match
 /// the expected shape.
 pub(crate) fn parse_alloc_tracker_operation(
     json: &str,
-) -> Result<BenchmarkResult, AllocTrackerParseError> {
+) -> Result<Option<BenchmarkResult>, AllocTrackerParseError> {
     let output: OperationOutput = serde_json::from_str(json).map_err(AllocTrackerParseError)?;
     Ok(output_to_record(&output))
 }
 
-/// Maps a parsed operation to a [`BenchmarkResult`] (pure).
+/// Maps a parsed operation to a [`BenchmarkResult`], or `None` when it carries no
+/// usable measurement.
 ///
 /// `alloc_tracker`'s flat `target/alloc_tracker/` tree carries no package
 /// attribution, so the operation name alone identifies the series (mirroring the
 /// Criterion adapter).
 ///
-/// For each metric the through-origin slope is preferred as the per-iteration
-/// point estimate, matching the Criterion and `all_the_time` adapters; output
-/// that records no slope falls back to the mean. When the confidence interval is
-/// present it is recorded on the metric, so analysis can apply its interval-overlap
-/// gate to allocation figures the same way it does for wall time.
-fn output_to_record(output: &OperationOutput) -> BenchmarkResult {
-    let bytes_value = output
-        .slope_bytes_per_iteration
-        .unwrap_or_else(|| as_f64(output.mean_bytes_per_iteration));
+/// For each metric the through-origin slope is the per-iteration point estimate,
+/// matching the Criterion and `all_the_time` adapters. A zero-iteration operation
+/// the workload could not run has no per-iteration rate — the producer writes its
+/// slopes as null — so it yields `None` and is dropped rather than stored: a
+/// non-finite metric value cannot round-trip through stored history (see
+/// [`super::usable_slope`]). When the confidence interval is present it is recorded
+/// on the metric, so analysis can apply its interval-overlap gate to allocation
+/// figures the same way it does for wall time.
+fn output_to_record(output: &OperationOutput) -> Option<BenchmarkResult> {
+    let bytes_value = super::usable_slope(output.slope_bytes_per_iteration)?;
     let bytes = Metric::new(MetricKind::AllocatedBytes, bytes_value).with_dispersion(
         None,
         output.interval_low_bytes_per_iteration,
         output.interval_high_bytes_per_iteration,
     );
 
-    let allocations_value = output
-        .slope_allocations_per_iteration
-        .unwrap_or_else(|| as_f64(output.mean_allocations_per_iteration));
+    let allocations_value = super::usable_slope(output.slope_allocations_per_iteration)?;
     let allocations = Metric::new(MetricKind::AllocationCount, allocations_value).with_dispersion(
         None,
         output.interval_low_allocations_per_iteration,
@@ -86,27 +92,17 @@ fn output_to_record(output: &OperationOutput) -> BenchmarkResult {
     );
 
     let id = BenchmarkId::new(NonEmpty::new(output.operation.clone()));
-    BenchmarkResult::new(id, vec![bytes, allocations])
-}
-
-/// Casts an allocation statistic to `f64`, the model's storage type.
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "allocation counts and byte totals are well below 2^53; precision loss is irrelevant"
-)]
-fn as_f64(value: u64) -> f64 {
-    value as f64
+    Some(BenchmarkResult::new(id, vec![bytes, allocations]))
 }
 
 /// The subset of an `alloc_tracker` operation file the tool reads. The `total_*`
-/// fields are ignored in favor of the per-iteration slope (or mean), which is
-/// comparable across runs with differing iteration counts. The dispersion fields
-/// are optional so that output recording only a mean still parses.
+/// fields are ignored in favor of the per-iteration slope, which is comparable
+/// across runs with differing iteration counts. The slope and dispersion fields are
+/// optional so that a zero-iteration operation (null slope) and single-span output
+/// (slope but no interval) both parse.
 #[derive(Debug, Deserialize)]
 struct OperationOutput {
     operation: String,
-    mean_bytes_per_iteration: u64,
-    mean_allocations_per_iteration: u64,
     #[serde(default)]
     slope_bytes_per_iteration: Option<f64>,
     #[serde(default)]
@@ -140,7 +136,7 @@ mod tests {
 
     #[test]
     fn parses_identity_from_operation_name() {
-        let record = parse_alloc_tracker_operation(ALLOCATE_VEC_FIXTURE).unwrap();
+        let record = parse_record(ALLOCATE_VEC_FIXTURE);
         assert_eq!(
             record.id,
             BenchmarkId::new(NonEmpty::new("allocate_vec".to_owned()))
@@ -149,7 +145,7 @@ mod tests {
 
     #[test]
     fn alloc_tracker_identity_is_the_operation_name_only() {
-        let record = parse_alloc_tracker_operation(ALLOCATE_VEC_FIXTURE).unwrap();
+        let record = parse_record(ALLOCATE_VEC_FIXTURE);
         assert_eq!(
             record.id,
             BenchmarkId::new(NonEmpty::new("allocate_vec".to_owned()))
@@ -157,8 +153,8 @@ mod tests {
     }
 
     #[test]
-    fn maps_both_allocation_metrics_from_the_means() {
-        let record = parse_alloc_tracker_operation(ALLOCATE_VEC_FIXTURE).unwrap();
+    fn maps_both_allocation_metrics_from_the_slopes() {
+        let record = parse_record(ALLOCATE_VEC_FIXTURE);
         assert_eq!(record.metrics.len(), 2);
 
         let bytes = metric(&record, MetricKind::AllocatedBytes);
@@ -169,11 +165,11 @@ mod tests {
     }
 
     #[test]
-    fn minimal_output_carries_no_dispersion() {
-        // Output that records only means (no slope or interval) carries no
-        // dispersion, so each point estimate falls back to the mean and analysis
-        // relies on rank-testing across regimes rather than interval overlap.
-        let record = parse_alloc_tracker_operation(ALLOCATE_VEC_FIXTURE).unwrap();
+    fn single_span_output_carries_no_dispersion() {
+        // Single-span output records a slope but no interval, so each metric carries
+        // no dispersion and analysis relies on rank-testing across regimes rather
+        // than interval overlap.
+        let record = parse_record(ALLOCATE_VEC_FIXTURE);
         for metric in &record.metrics {
             assert_eq!(metric.std_dev, None);
             assert_eq!(metric.interval_low, None);
@@ -183,7 +179,7 @@ mod tests {
 
     #[test]
     fn records_dispersion_when_present() {
-        let record = parse_alloc_tracker_operation(ALLOCATE_VEC_DISPERSION_FIXTURE).unwrap();
+        let record = parse_record(ALLOCATE_VEC_DISPERSION_FIXTURE);
 
         let bytes = metric(&record, MetricKind::AllocatedBytes);
         // The slope is preferred as the point estimate, and the bytes metric
@@ -205,24 +201,46 @@ mod tests {
     }
 
     #[test]
-    fn prefers_the_slope_over_the_mean() {
-        // Slopes distinct from the means prove the slope is the chosen point
-        // estimate for each metric, matching the Criterion adapter's preference.
+    fn reads_the_slope_as_the_point_estimate() {
+        // The slope is the point estimate for each metric, matching the Criterion
+        // adapter.
         let json = concat!(
-            "{\"operation\":\"op\",\"mean_bytes_per_iteration\":200,",
-            "\"mean_allocations_per_iteration\":2,",
+            "{\"operation\":\"op\",",
             "\"slope_bytes_per_iteration\":201.5,",
             "\"slope_allocations_per_iteration\":3.25}"
         );
-        let record = parse_alloc_tracker_operation(json).unwrap();
+        let record = parse_record(json);
         assert_eq!(metric(&record, MetricKind::AllocatedBytes).value, 201.5);
         assert_eq!(metric(&record, MetricKind::AllocationCount).value, 3.25);
     }
 
     #[test]
+    fn null_slope_yields_no_record() {
+        // A zero-iteration operation the workload could not run leaves both slopes
+        // null (serialized from NaN). It has no usable measurement, so the adapter
+        // drops it rather than storing a non-finite value that could not round-trip
+        // through stored history.
+        let json = concat!(
+            "{\"operation\":\"op\",",
+            "\"slope_bytes_per_iteration\":null,",
+            "\"slope_allocations_per_iteration\":null}"
+        );
+        assert!(parse_alloc_tracker_operation(json).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_single_missing_slope_yields_no_record() {
+        // Even a partially-populated operation (one slope present, the other absent)
+        // has no complete allocation profile to store, so the whole operation is
+        // dropped rather than recorded with a fabricated figure.
+        let json = "{\"operation\":\"op\",\"slope_bytes_per_iteration\":201.5}";
+        assert!(parse_alloc_tracker_operation(json).unwrap().is_none());
+    }
+
+    #[test]
     fn preserves_the_original_operation_name() {
         let json = operation_json("group/case name", 4096, 7);
-        let record = parse_alloc_tracker_operation(&json).unwrap();
+        let record = parse_record(&json);
         assert_eq!(
             record.id,
             BenchmarkId::new(NonEmpty::new("group/case name".to_owned()))
@@ -239,6 +257,13 @@ mod tests {
         assert!(error.source().is_some());
     }
 
+    /// Parses a fixture that is expected to yield a stored record.
+    fn parse_record(json: &str) -> BenchmarkResult {
+        parse_alloc_tracker_operation(json)
+            .expect("the fixture is well-formed alloc_tracker output")
+            .expect("the operation has a usable measurement")
+    }
+
     fn metric(record: &BenchmarkResult, kind: MetricKind) -> &Metric {
         record
             .metrics
@@ -250,8 +275,8 @@ mod tests {
     fn operation_json(operation: &str, bytes: u64, count: u64) -> String {
         format!(
             "{{\"operation\":\"{operation}\",\"total_iterations\":4,\
-             \"total_bytes_allocated\":{},\"total_allocations_count\":{},\
-             \"mean_bytes_per_iteration\":{bytes},\"mean_allocations_per_iteration\":{count}}}",
+             \"total_bytes_allocated\":{},\"total_allocations_count\":{},\"span_count\":1,\
+             \"slope_bytes_per_iteration\":{bytes},\"slope_allocations_per_iteration\":{count}}}",
             bytes.saturating_mul(4),
             count.saturating_mul(4),
         )

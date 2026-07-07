@@ -15,7 +15,7 @@ use crate::bench::{
     injected_bench_env, parse_all_the_time_operation, parse_alloc_tracker_operation,
     parse_callgrind_summary, parse_criterion_case,
 };
-use crate::bench_output::{BenchOutputSource, FsBenchOutputSource, Harvest};
+use crate::bench_output::{BenchOutputSource, FsBenchOutputSource, Harvest, RawOperationFile};
 use crate::config::{CloudStorageConfig, Config, load_config};
 use crate::host::RustcInfo;
 use crate::machine::{HardwareProfile, resolve_machine_key};
@@ -441,7 +441,7 @@ where
         .output
         .collect(engine, run_start, deps.reporter)
         .await?;
-    let records = parse_harvest(&harvest)?;
+    let records = parse_harvest(&harvest, deps.reporter)?;
     let count = records.len();
 
     // An engine that produced no fresh output contributes nothing. Off Linux the
@@ -651,7 +651,15 @@ async fn invalidate_blessings<S: Storage>(
 
 /// Parses harvested engine output into result records, naming the offending
 /// source on a parse failure.
-fn parse_harvest(harvest: &Harvest) -> Result<Vec<BenchmarkResult>, RunError> {
+///
+/// The in-workspace engines can emit an operation with no usable per-iteration
+/// measurement (a zero-iteration run the workload could not complete); such an
+/// operation has nothing to store, so it is dropped with an explanatory note
+/// rather than carried into stored history as a non-finite value.
+fn parse_harvest(
+    harvest: &Harvest,
+    reporter: &dyn Reporter,
+) -> Result<Vec<BenchmarkResult>, RunError> {
     match harvest {
         Harvest::Callgrind(summaries) => {
             let mut records = Vec::with_capacity(summaries.len());
@@ -685,7 +693,7 @@ fn parse_harvest(harvest: &Harvest) -> Result<Vec<BenchmarkResult>, RunError> {
                         message: format!("{}: {error}", file.path.display()),
                     }
                 })?;
-                records.push(record);
+                push_or_skip(&mut records, record, file, reporter);
             }
             Ok(records)
         }
@@ -697,10 +705,29 @@ fn parse_harvest(harvest: &Harvest) -> Result<Vec<BenchmarkResult>, RunError> {
                         message: format!("{}: {error}", file.path.display()),
                     }
                 })?;
-                records.push(record);
+                push_or_skip(&mut records, record, file, reporter);
             }
             Ok(records)
         }
+    }
+}
+
+/// Records a parsed operation, or notes and drops it when the engine reported no
+/// usable per-iteration measurement (`None`).
+fn push_or_skip(
+    records: &mut Vec<BenchmarkResult>,
+    record: Option<BenchmarkResult>,
+    file: &RawOperationFile,
+    reporter: &dyn Reporter,
+) {
+    match record {
+        Some(record) => records.push(record),
+        None => reporter.note_with(|| {
+            format!(
+                "{}: no usable per-iteration measurement (zero-iteration operation); skipping",
+                file.path.display()
+            )
+        }),
     }
 }
 
@@ -789,6 +816,15 @@ mod tests {
         include_str!("../../tests/fixtures/alloc_tracker/allocate_vec.json");
     const ALL_THE_TIME_FIXTURE: &str =
         include_str!("../../tests/fixtures/all_the_time/read_cell.json");
+
+    /// A zero-iteration `alloc_tracker` operation the workload could not run: the
+    /// producer emits null slopes (a NaN per-iteration rate), which the adapter
+    /// drops as carrying no usable measurement.
+    const ZERO_ITERATION_ALLOC_TRACKER_FIXTURE: &str = concat!(
+        "{\"operation\":\"failed_op\",\"total_iterations\":0,",
+        "\"total_bytes_allocated\":0,\"total_allocations_count\":0,\"span_count\":1,",
+        "\"slope_bytes_per_iteration\":null,\"slope_allocations_per_iteration\":null}"
+    );
 
     /// The frozen wall-clock instant used by orchestration tests (2023-11-14Z).
     const FROZEN_UNIX: u64 = 1_700_000_000;
@@ -1160,6 +1196,24 @@ mod tests {
                     path: PathBuf::from("alloc_tracker/allocate_vec.json"),
                     content: ALLOC_TRACKER_FIXTURE.to_owned(),
                 }],
+                ..Self::default()
+            }
+        }
+
+        /// A measured operation alongside a zero-iteration one, to prove the
+        /// unmeasured operation is dropped while the measured one is still stored.
+        fn with_measured_and_zero_iteration_alloc_tracker_operations() -> Self {
+            Self {
+                alloc: vec![
+                    RawOperationFile {
+                        path: PathBuf::from("alloc_tracker/allocate_vec.json"),
+                        content: ALLOC_TRACKER_FIXTURE.to_owned(),
+                    },
+                    RawOperationFile {
+                        path: PathBuf::from("alloc_tracker/failed_op.json"),
+                        content: ZERO_ITERATION_ALLOC_TRACKER_FIXTURE.to_owned(),
+                    },
+                ],
                 ..Self::default()
             }
         }
@@ -1964,6 +2018,51 @@ mod tests {
                 crate::MetricKind::AllocatedBytes,
                 crate::MetricKind::AllocationCount
             ]
+        );
+    }
+
+    #[test]
+    fn zero_iteration_operation_is_dropped_while_measured_ones_are_stored() {
+        let storage = MemoryStorage::new();
+        let reporter = RecordingReporter::new();
+        let outcome = drive_at_with(
+            FROZEN_UNIX,
+            &CollectOptions::default(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            &FakeOutput::with_measured_and_zero_iteration_alloc_tracker_operations(),
+            &storage,
+            &reporter,
+        )
+        .unwrap();
+
+        // The zero-iteration operation has no usable measurement, so only the
+        // measured one is stored.
+        let RunOutcome::Completed { message } = outcome else {
+            panic!("expected completion");
+        };
+        assert!(message.contains("Stored 1"), "{message}");
+
+        let keys = storage.keys();
+        assert_eq!(keys.len(), 1, "{keys:?}");
+
+        // The stored run must round-trip: a dropped null slope keeps every stored
+        // metric value finite, whereas storing a NaN would serialize as JSON `null`
+        // and fail to deserialize back here.
+        let bytes = block_on(storage.get(&keys[0])).unwrap();
+        let set = Run::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
+        assert_eq!(set.results.len(), 1);
+        assert!(
+            set.results[0].metrics.iter().all(|m| m.value.is_finite()),
+            "every stored metric value must be finite: {:?}",
+            set.results[0].metrics
+        );
+
+        // The skip is reported so the omission is explained in verbose output.
+        assert!(
+            reporter.contains("no usable per-iteration measurement"),
+            "expected a skip note, got {:?}",
+            reporter.notes()
         );
     }
 

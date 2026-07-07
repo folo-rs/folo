@@ -3,8 +3,6 @@
   "total_iterations": 600000,
   "total_bytes_allocated": 120000000,
   "total_allocations_count": 1200000,
-  "mean_bytes_per_iteration": 200,
-  "mean_allocations_per_iteration": 2,
   "span_count": 6,
   "slope_bytes_per_iteration": 200.0,
   "interval_low_bytes_per_iteration": 199.3466786718254,
