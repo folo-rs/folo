@@ -66,9 +66,6 @@
 //! | encode_value |         120ns |
 //! ```
 //!
-//! A cell reads `NaN` for an operation whose spans covered zero iterations and
-//! `n/a` for one that recorded no spans at all.
-//!
 //! # Machine-readable output
 //!
 //! Dropping a [`Session`] also writes JSON files (one per operation) into the
