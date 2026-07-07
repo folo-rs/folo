@@ -180,10 +180,15 @@ function Get-MissingBinaryMatrix {
     # exactly how the plan (and its emptiness or non-emptiness) was derived, not just the total.
     Write-Verbose "Reconciling desired vs. uploaded binary archives. Crates: $($Crate.Name -join ', '). Target triples: $(($Target.Triple) -join ', ')."
 
+    # The loop variables must not differ from the collection parameters ($Crate, $Target) by
+    # case alone: PowerShell variable names are case-insensitive, so `foreach ($target in $Target)`
+    # would make `$target` and `$Target` the same variable and leave `$Target` holding only its
+    # last element after the loop — so every crate after the first would reconcile against a single
+    # leftover target (the last one) instead of the full set. Hence $crateInfo / $releaseTarget.
     $rows = [System.Collections.Generic.List[object]]::new()
-    foreach ($crate in $Crate) {
-        $tag = "$($crate.Name)-v$($crate.Version)"
-        Write-Verbose "Crate '$($crate.Name)' v$($crate.Version): expected release tag '$tag'."
+    foreach ($crateInfo in $Crate) {
+        $tag = "$($crateInfo.Name)-v$($crateInfo.Version)"
+        Write-Verbose "Crate '$($crateInfo.Name)' v$($crateInfo.Version): expected release tag '$tag'."
         $assets = Get-BinaryReleaseAsset -Tag $tag
         if ($null -eq $assets) {
             Write-Verbose "  No GitHub release '$tag' found yet; skipping this crate (nothing to reconcile until its release exists)."
@@ -193,19 +198,19 @@ function Get-MissingBinaryMatrix {
         $uploaded = if ($assets.Count -gt 0) { $assets -join ', ' } else { '(none)' }
         Write-Verbose "  Release '$tag' found; already-uploaded archives: $uploaded."
 
-        foreach ($target in $Target) {
-            $archive = "$($crate.Name)-v$($crate.Version)-$($target.Triple).zip"
+        foreach ($releaseTarget in $Target) {
+            $archive = "$($crateInfo.Name)-v$($crateInfo.Version)-$($releaseTarget.Triple).zip"
             if ($assets -contains $archive) {
-                Write-Verbose "  Target $($target.Triple): '$archive' already uploaded — skipping."
+                Write-Verbose "  Target $($releaseTarget.Triple): '$archive' already uploaded — skipping."
                 continue
             }
-            Write-Verbose "  Target $($target.Triple): '$archive' missing — queuing a build on runner '$($target.Os)'."
+            Write-Verbose "  Target $($releaseTarget.Triple): '$archive' missing — queuing a build on runner '$($releaseTarget.Os)'."
             $rows.Add([pscustomobject]@{
-                    name    = $crate.Name
-                    version = $crate.Version
+                    name    = $crateInfo.Name
+                    version = $crateInfo.Version
                     tag     = $tag
-                    triple  = $target.Triple
-                    os      = $target.Os
+                    triple  = $releaseTarget.Triple
+                    os      = $releaseTarget.Os
                 })
         }
     }

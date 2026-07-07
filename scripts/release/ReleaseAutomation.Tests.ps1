@@ -358,6 +358,23 @@ Describe 'Get-MissingBinaryMatrix (mocked gh release view)' {
         $rows.Count | Should -Be 1
     }
 
+    It 'reconciles a later crate against the full target set, not just the last target' {
+        # Regression: the per-crate target loop must see every target for every crate. A loop
+        # variable that case-collides with the $Target parameter would leave $Target holding only
+        # its last element after the first crate, so a later empty release would be reconciled
+        # against a single leftover target instead of all of them. Put the empty release LAST so a
+        # per-crate loop that lost its targets would emit one row (the last target) instead of two.
+        $crates = @(
+            [pscustomobject]@{ Name = 'have-all'; Version = '1.0.0' }
+            [pscustomobject]@{ Name = 'empty-release'; Version = '4.0.0' }
+        )
+        $rows = Get-MissingBinaryMatrix -Crate $crates -Target $script:TwoTargets
+        $emptyRows = @($rows | Where-Object { $_.name -eq 'empty-release' })
+        $emptyRows.Count | Should -Be $script:TwoTargets.Count
+        $emptyRows.triple | Should -Contain 'x86_64-unknown-linux-gnu'
+        $emptyRows.triple | Should -Contain 'aarch64-apple-darwin'
+    }
+
     Context 'verbose decision history (-Verbose)' {
         BeforeAll {
             function Get-VerboseMessage {
