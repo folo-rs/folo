@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration;
 
-use crate::statistics::nanos_to_duration;
+use crate::statistics::format_slope_nanos;
 use crate::{FinalizedOperation, FinalizedReport, OperationMetrics, OperationStatistics};
 
 /// Thread-safe processor time tracking report.
@@ -317,7 +317,7 @@ impl fmt::Display for ReportOperation {
         // The summary shows only the slope, so take the cheap slope-only path.
         match self.metrics.slope_nanos() {
             Some(slope_nanos) => {
-                write!(f, "{:?} per iteration", nanos_to_duration(slope_nanos))
+                write!(f, "{} per iteration", format_slope_nanos(slope_nanos))
             }
             None => write!(f, "no measurements"),
         }

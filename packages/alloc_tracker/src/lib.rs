@@ -27,17 +27,6 @@
 //!
 //! This package is not meant for use in production, serving only as a development tool.
 //!
-//! # Primary metric
-//!
-//! The headline figure for both bytes and allocation count is the per-iteration
-//! cost, reported as a **warmup-robust slope** rather than a plain mean. The first
-//! iterations pay one-off costs — lazily initialized caches, a buffer growing to
-//! its steady-state capacity — that a mean would fold into every iteration, making
-//! it drift between runs; the slope isolates the marginal per-iteration cost so the
-//! number stays stable. The JSON output pairs each slope with a 95% confidence
-//! interval; the stdout summary shows the slopes alone. The plain means are
-//! available through [`Operation::mean`] and the report accessors.
-//!
 //! # Features
 #![cfg_attr(
     feature = "panic_on_next_alloc",
@@ -48,12 +37,13 @@
     doc = "- `panic_on_next_alloc`: Enables the `panic_on_next_alloc` function for debugging"
 )]
 //!   unexpected allocations. This feature adds some overhead to allocations, so it is optional.
-//!  
+//!
 //! # Benchmarking
 //!
-//! The recommended pattern drives measurement from Criterion's `iter_custom`,
-//! feeding its chosen iteration count into [`iterations`](ProcessSpan::iterations)
-//! so each recorded span covers a whole sample rather than a single iteration:
+//! The typical pattern is to drive measurement from Criterion's [`iter_custom()`]
+//! function, feeding its chosen iteration count into
+//! [`iterations()`](ProcessSpan::iterations) so each recorded span covers a whole
+//! sample rather than a single iteration:
 //!
 //! ```no_run
 //! use std::hint::black_box;
@@ -65,18 +55,19 @@
 //! #[global_allocator]
 //! static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 //!
-//! fn main() {
+//! fn bench(c: &mut Criterion) {
 //!     let session = Session::new();
-//!     let operation = session.operation("my_operation");
 //!
-//!     let mut criterion = Criterion::default();
-//!     criterion.bench_function("my_operation", |b| {
+//!     let operation = session.operation("my_operation");
+//!     c.bench_function("my_operation", |b| {
 //!         b.iter_custom(|iters| {
 //!             let start = Instant::now();
 //!             let _span = operation.measure_process().iterations(iters);
+//!
 //!             for _ in 0..iters {
-//!                 black_box(vec![1, 2, 3, 4, 5]); // This allocates memory
+//!                 black_box(vec![1, 2, 3, 4, 5]);
 //!             }
+//!
 //!             start.elapsed()
 //!         });
 //!     });
@@ -86,34 +77,29 @@
 //! }
 //! ```
 //!
-//! # Overhead
-//!
-//! Capturing a single measurement by calling `measure_xyz()` incurs an overhead of
-//! approximately 50 nanoseconds on an arbitrary sample machine. While small, this can
-//! still be considerable for tiny benchmarks. You are recommended to batch your
-//! measurements over a whole Criterion sample (via `.iterations(iters)` from
-//! `iter_custom`) to amortize this overhead. Operating without batching, on individual
-//! iterations, is only viable for macrobenchmarks for which a single iteration is a
-//! large unit of work (e.g. an HTTP request).
+//! You **must** call [`iterations()`](ProcessSpan::iterations) on the span before
+//! it is dropped. Failure to do so will result in a panic.
 //!
 //! # Machine-readable output
 //!
 //! Dropping a [`Session`] writes machine-readable JSON files (one per operation)
 //! into the Cargo target directory at `target/alloc_tracker/<operation>.json`,
-//! with operation names sanitized to be filesystem-safe. Each file records, for
-//! both bytes and allocation count, the operation's total and per-iteration
-//! figures. A human-readable summary is also printed to stdout.
+//! with operation names sanitized to be filesystem-safe. A human-readable summary
+//! is also printed to stdout.
 //!
 //! These outputs are produced automatically, so a typical benchmark only needs
 //! to create a session and record work.
 //!
 //! # Measuring a variable amount of work
 //!
-//! When the number of iterations is only known after the measured work has run —
-//! for example a loop that drains a queue or runs until a budget is exhausted —
-//! set the count once the work is done and let the span record as it drops:
+//! You do not need to specify the iteration count up front, as long as it is
+//! provided before the span is dropped.
+//!
+//! This allows you to measure work whose extent is not known at the start.
 //!
 //! ```
+//! use std::hint::black_box;
+//!
 //! use alloc_tracker::{Allocator, Session};
 //!
 //! #[global_allocator]
@@ -125,26 +111,38 @@
 //!     let operation = session.operation("drain_queue");
 //!
 //!     let span = operation.measure_process();
+//!
 //!     let mut processed = 0_u64;
-//!     for item in 0..10 {
-//!         let _data = format!("String number {item}"); // This allocates memory
+//!
+//!     while let Some(item) = get_next_item() {
+//!         black_box(item.process());
 //!         processed += 1;
 //!     }
-//!     drop(span.iterations(processed));
 //!
-//!     // Statistics are emitted automatically when `session` is dropped.
+//!     span.iterations(processed);
 //! }
+//! # fn get_next_item() -> Option<Item> {
+//! #     use std::sync::atomic::{AtomicU32, Ordering};
+//! #     static REMAINING: AtomicU32 = AtomicU32::new(3);
+//! #     (REMAINING.fetch_sub(1, Ordering::Relaxed) > 0).then_some(Item)
+//! # }
+//! # struct Item;
+//! # impl Item { fn process(&self) -> Vec<u8> { vec![0_u8; 16] } }
 //! ```
 //!
 //! # Overhead
 //!
-//! In single-threaded scenarios, capturing a single measurement by calling
-//! `Operation::measure_xyz()` incurs an overhead of approximately 10-15 nanoseconds
-//! on an arbitrary sample machine. You are recommended to batch your measurements
-//! over a whole Criterion sample (via `.iterations(iters)` from `iter_custom`) to
-//! amortize this overhead.
+//! Capturing a single measurement by calling `measure_xyz()` incurs a small
+//! overhead (on the order of tens of nanoseconds on an arbitrary sample machine),
+//! and the tracking logic slightly perturbs allocator activity.
 //!
-//! Memory allocator activity is likewise slightly impacted by the tracking logic.
+//! It is crucial that you measure multiple iterations in the same sample to
+//! amortize this overhead. This is the purpose of the [`iter_custom()`] pattern
+//! described above.
+//!
+//! Operating without batching, by measuring individual iterations, is only viable
+//! for macrobenchmarks for which a single iteration is a large unit of work (e.g.
+//! an HTTP request).
 //!
 //! # Session management
 //!
@@ -191,6 +189,8 @@
 //!
 //! Miri replaces the global allocator with its own logic, so you cannot execute code that uses
 //! this package under Miri.
+//!
+//! [`iter_custom()`]: https://docs.rs/criterion/latest/criterion/struct.Bencher.html#method.iter_custom
 
 mod allocator;
 mod constants;

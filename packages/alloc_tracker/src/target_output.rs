@@ -286,6 +286,46 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
+    fn writes_null_slopes_for_zero_iteration_operation() {
+        let session = Session::new().no_stdout().no_file();
+        {
+            let operation = session.operation("failed");
+            // The workload could not run, so it records zero iterations.
+            let _span = operation.measure_thread().iterations(0);
+            register_fake_allocation(800, 8);
+        }
+        let directory = tempfile::tempdir().unwrap();
+
+        session
+            .to_report()
+            .finalize()
+            .write_to_directory(directory.path());
+
+        let value = read_json(&directory.path().join("failed.json"));
+        // A zero-iteration measurement has no per-iteration rate; both slopes are
+        // NaN, which serde_json renders as JSON null.
+        assert!(
+            value
+                .get("slope_bytes_per_iteration")
+                .expect("the bytes slope field is always present")
+                .is_null(),
+            "a zero-iteration bytes slope must serialize as null"
+        );
+        assert!(
+            value
+                .get("slope_allocations_per_iteration")
+                .expect("the allocations slope field is always present")
+                .is_null(),
+            "a zero-iteration allocations slope must serialize as null"
+        );
+        assert_eq!(
+            value.get("total_iterations").and_then(Value::as_u64),
+            Some(0)
+        );
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
     fn sanitizes_operation_name_in_file_name() {
         let session = session_with_recorded_work("group/case name");
         let directory = tempfile::tempdir().unwrap();

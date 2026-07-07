@@ -5,15 +5,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::pal::PlatformFacade;
-use crate::statistics::nanos_to_duration;
+use crate::statistics::format_slope_nanos;
 use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessSpan, ThreadSpan};
 
 /// Measures per-iteration processor time for a repeated operation.
 ///
-/// This utility is particularly useful for benchmarking scenarios where you want
-/// to understand the processor time footprint of repeated operations. The primary
-/// figure is the per-iteration processor time (see the crate-level "Primary
-/// metric" documentation); a plain [`mean`](Self::mean) is also available.
+/// This is useful in benchmarks where you want to understand the processor time
+/// cost of a repeated operation. It reports the per-iteration processor time; a
+/// plain [`mean`](Self::mean) is also available.
 ///
 /// Operations share data directly with the session - data is merged when spans are dropped.
 ///
@@ -28,21 +27,22 @@ use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessSpan, ThreadSpan};
 /// use all_the_time::Session;
 /// use criterion::Criterion;
 ///
-/// # fn main() {
-/// let session = Session::new();
-/// let operation = session.operation("processor_intensive_work");
-/// let mut criterion = Criterion::default();
-/// criterion.bench_function("processor_intensive_work", |b| {
-///     b.iter_custom(|iters| {
-///         let start = Instant::now();
-///         let _span = operation.measure_thread().iterations(iters);
-///         for _ in 0..iters {
-///             black_box(42_u64.wrapping_mul(2));
-///         }
-///         start.elapsed()
+/// fn bench(c: &mut Criterion) {
+///     let session = Session::new();
+///     let operation = session.operation("processor_intensive_work");
+///     c.bench_function("processor_intensive_work", |b| {
+///         b.iter_custom(|iters| {
+///             let start = Instant::now();
+///             let _span = operation.measure_thread().iterations(iters);
+///
+///             for _ in 0..iters {
+///                 black_box(42_u64.wrapping_mul(2));
+///             }
+///
+///             start.elapsed()
+///         });
 ///     });
-/// });
-/// # }
+/// }
 /// ```
 #[derive(Debug)]
 pub struct Operation {
@@ -93,21 +93,22 @@ impl Operation {
     /// use all_the_time::Session;
     /// use criterion::Criterion;
     ///
-    /// # fn main() {
-    /// let session = Session::new();
-    /// let operation = session.operation("thread_work");
-    /// let mut criterion = Criterion::default();
-    /// criterion.bench_function("thread_work", |b| {
-    ///     b.iter_custom(|iters| {
-    ///         let start = Instant::now();
-    ///         let _span = operation.measure_thread().iterations(iters);
-    ///         for _ in 0..iters {
-    ///             black_box(42_u64.wrapping_mul(2));
-    ///         }
-    ///         start.elapsed()
+    /// fn bench(c: &mut Criterion) {
+    ///     let session = Session::new();
+    ///     let operation = session.operation("thread_work");
+    ///     c.bench_function("thread_work", |b| {
+    ///         b.iter_custom(|iters| {
+    ///             let start = Instant::now();
+    ///             let _span = operation.measure_thread().iterations(iters);
+    ///
+    ///             for _ in 0..iters {
+    ///                 black_box(42_u64.wrapping_mul(2));
+    ///             }
+    ///
+    ///             start.elapsed()
+    ///         });
     ///     });
-    /// });
-    /// # }
+    /// }
     /// ```
     pub fn measure_thread(&self) -> ThreadSpan {
         ThreadSpan::new(self)
@@ -130,21 +131,22 @@ impl Operation {
     /// use all_the_time::Session;
     /// use criterion::Criterion;
     ///
-    /// # fn main() {
-    /// let session = Session::new();
-    /// let operation = session.operation("process_work");
-    /// let mut criterion = Criterion::default();
-    /// criterion.bench_function("process_work", |b| {
-    ///     b.iter_custom(|iters| {
-    ///         let start = Instant::now();
-    ///         let _span = operation.measure_process().iterations(iters);
-    ///         for _ in 0..iters {
-    ///             black_box(42_u64.wrapping_mul(2));
-    ///         }
-    ///         start.elapsed()
+    /// fn bench(c: &mut Criterion) {
+    ///     let session = Session::new();
+    ///     let operation = session.operation("process_work");
+    ///     c.bench_function("process_work", |b| {
+    ///         b.iter_custom(|iters| {
+    ///             let start = Instant::now();
+    ///             let _span = operation.measure_process().iterations(iters);
+    ///
+    ///             for _ in 0..iters {
+    ///                 black_box(42_u64.wrapping_mul(2));
+    ///             }
+    ///
+    ///             start.elapsed()
+    ///         });
     ///     });
-    /// });
-    /// # }
+    /// }
     /// ```
     pub fn measure_process(&self) -> ProcessSpan {
         ProcessSpan::new(self)
@@ -184,7 +186,7 @@ impl fmt::Display for Operation {
         // The summary shows only the slope, so take the cheap slope-only path.
         match self.metrics.lock().expect(ERR_POISONED_LOCK).slope_nanos() {
             Some(slope_nanos) => {
-                write!(f, "{:?} per iteration", nanos_to_duration(slope_nanos))
+                write!(f, "{} per iteration", format_slope_nanos(slope_nanos))
             }
             None => write!(f, "no measurements"),
         }

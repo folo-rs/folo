@@ -40,6 +40,18 @@ pub(crate) fn nanos_to_duration(nanos: f64) -> Duration {
     Duration::from_secs_f64(nanos.max(0.0) / 1_000_000_000.0)
 }
 
+/// Formats a per-iteration processor-time slope for human-readable output.
+///
+/// A `NaN` slope — produced when the operation's spans covered zero iterations —
+/// renders as `"NaN"` to mark the measurement as unusable; any other figure is
+/// rendered as a `Duration`.
+pub(crate) fn format_slope_nanos(slope_nanos: f64) -> String {
+    if slope_nanos.is_nan() {
+        return "NaN".to_owned();
+    }
+    format!("{:?}", nanos_to_duration(slope_nanos))
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -52,5 +64,13 @@ mod tests {
         // positive figure converts faithfully.
         assert_eq!(nanos_to_duration(-5.0), Duration::ZERO);
         assert_eq!(nanos_to_duration(1_000_000_000.0), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn format_slope_nanos_renders_nan_as_text() {
+        // A NaN slope (zero-iteration measurement) is marked "NaN" rather than
+        // silently rendered as a zero duration.
+        assert_eq!(format_slope_nanos(f64::NAN), "NaN");
+        assert_eq!(format_slope_nanos(1_000_000_000.0), "1s");
     }
 }

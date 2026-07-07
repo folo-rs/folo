@@ -8,12 +8,10 @@ use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessSpan, ThreadSpan};
 
 /// A measurement handle for tracking per-iteration memory allocation of a repeated operation.
 ///
-/// This utility is particularly useful for benchmarking scenarios where you want
-/// to understand the memory footprint and allocation behavior of repeated operations.
-/// It tracks both the number of bytes allocated and the count of allocations. The
-/// primary figures are the per-iteration bytes and allocation count (see the
-/// crate-level "Primary metric" documentation); plain [`mean`](Self::mean) values
-/// are also available.
+/// This is useful in benchmarks where you want to understand the memory footprint
+/// and allocation behavior of a repeated operation. It reports the per-iteration
+/// bytes allocated and allocation count; a plain [`mean`](Self::mean) is also
+/// available.
 ///
 /// Multiple operations with the same name can be created concurrently.
 ///
@@ -29,21 +27,22 @@ use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessSpan, ThreadSpan};
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 ///
-/// # fn main() {
-/// let session = Session::new();
-/// let string_allocations = session.operation("string_allocations");
-/// let mut criterion = Criterion::default();
-/// criterion.bench_function("string_allocations", |b| {
-///     b.iter_custom(|iters| {
-///         let start = Instant::now();
-///         let _span = string_allocations.measure_process().iterations(iters);
-///         for _ in 0..iters {
-///             black_box(String::from("Hello, world!"));
-///         }
-///         start.elapsed()
+/// fn bench(c: &mut Criterion) {
+///     let session = Session::new();
+///     let string_allocations = session.operation("string_allocations");
+///     c.bench_function("string_allocations", |b| {
+///         b.iter_custom(|iters| {
+///             let start = Instant::now();
+///             let _span = string_allocations.measure_process().iterations(iters);
+///
+///             for _ in 0..iters {
+///                 black_box(String::from("Hello, world!"));
+///             }
+///
+///             start.elapsed()
+///         });
 ///     });
-/// });
-/// # }
+/// }
 /// ```
 #[derive(Debug)]
 pub struct Operation {
@@ -84,21 +83,22 @@ impl Operation {
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
-    /// # fn main() {
-    /// let session = Session::new();
-    /// let operation = session.operation("thread_work");
-    /// let mut criterion = Criterion::default();
-    /// criterion.bench_function("thread_work", |b| {
-    ///     b.iter_custom(|iters| {
-    ///         let start = Instant::now();
-    ///         let _span = operation.measure_thread().iterations(iters);
-    ///         for _ in 0..iters {
-    ///             black_box(vec![1, 2, 3, 4, 5]);
-    ///         }
-    ///         start.elapsed()
+    /// fn bench(c: &mut Criterion) {
+    ///     let session = Session::new();
+    ///     let operation = session.operation("thread_work");
+    ///     c.bench_function("thread_work", |b| {
+    ///         b.iter_custom(|iters| {
+    ///             let start = Instant::now();
+    ///             let _span = operation.measure_thread().iterations(iters);
+    ///
+    ///             for _ in 0..iters {
+    ///                 black_box(vec![1, 2, 3, 4, 5]);
+    ///             }
+    ///
+    ///             start.elapsed()
+    ///         });
     ///     });
-    /// });
-    /// # }
+    /// }
     /// ```
     pub fn measure_thread(&self) -> ThreadSpan {
         ThreadSpan::new(self)
@@ -123,21 +123,22 @@ impl Operation {
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
-    /// # fn main() {
-    /// let session = Session::new();
-    /// let operation = session.operation("process_work");
-    /// let mut criterion = Criterion::default();
-    /// criterion.bench_function("process_work", |b| {
-    ///     b.iter_custom(|iters| {
-    ///         let start = Instant::now();
-    ///         let _span = operation.measure_process().iterations(iters);
-    ///         for _ in 0..iters {
-    ///             black_box(vec![1, 2, 3, 4, 5]);
-    ///         }
-    ///         start.elapsed()
+    /// fn bench(c: &mut Criterion) {
+    ///     let session = Session::new();
+    ///     let operation = session.operation("process_work");
+    ///     c.bench_function("process_work", |b| {
+    ///         b.iter_custom(|iters| {
+    ///             let start = Instant::now();
+    ///             let _span = operation.measure_process().iterations(iters);
+    ///
+    ///             for _ in 0..iters {
+    ///                 black_box(vec![1, 2, 3, 4, 5]);
+    ///             }
+    ///
+    ///             start.elapsed()
+    ///         });
     ///     });
-    /// });
-    /// # }
+    /// }
     /// ```
     pub fn measure_process(&self) -> ProcessSpan {
         ProcessSpan::new(self)

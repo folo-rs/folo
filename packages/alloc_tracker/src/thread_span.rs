@@ -15,8 +15,9 @@ use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
 /// Before the span is dropped the caller must state how many iterations the
 /// measured work covers by calling [`iterations`](Self::iterations). Dropping a
 /// span without an iteration count **panics**, because a measurement with no
-/// iteration count is a programming error. A panic or early return while the span
-/// is held records nothing.
+/// iteration count is a programming error. If the thread is already unwinding
+/// from a panic when the span drops, it records nothing and does not panic again,
+/// leaving the original panic to propagate.
 ///
 /// # Examples
 ///
@@ -33,21 +34,22 @@ use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 ///
-/// # fn main() {
-/// let session = Session::new();
-/// let operation = session.operation("allocate_buffer");
-/// let mut criterion = Criterion::default();
-/// criterion.bench_function("allocate_buffer", |b| {
-///     b.iter_custom(|iters| {
-///         let start = Instant::now();
-///         let _span = operation.measure_thread().iterations(iters);
-///         for _ in 0..iters {
-///             black_box(vec![1_u8; 64]);
-///         }
-///         start.elapsed()
+/// fn bench(c: &mut Criterion) {
+///     let session = Session::new();
+///     let operation = session.operation("allocate_buffer");
+///     c.bench_function("allocate_buffer", |b| {
+///         b.iter_custom(|iters| {
+///             let start = Instant::now();
+///             let _span = operation.measure_thread().iterations(iters);
+///
+///             for _ in 0..iters {
+///                 black_box(vec![1_u8; 64]);
+///             }
+///
+///             start.elapsed()
+///         });
 ///     });
-/// });
-/// # }
+/// }
 /// ```
 ///
 /// When the count is only known after the work has run, set it afterwards and let
@@ -74,7 +76,7 @@ use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
 /// # }
 /// ```
 #[derive(Debug)]
-#[must_use = "a span records its measurement when dropped, so it must be held for the measured work"]
+#[must_use = "a span must be held across the measured work and given a count with `.iterations(n)`; it records when dropped and panics if the count is missing"]
 pub struct ThreadSpan {
     metrics: Arc<Mutex<OperationMetrics>>,
     start_bytes: u64,
@@ -101,11 +103,10 @@ impl ThreadSpan {
     /// This must be called before the span is dropped. Pass the number of times the
     /// measured region repeats the work, or `1` for a single unit of work.
     ///
-    /// # Panics
-    ///
-    /// Panics if `iterations` is zero.
+    /// Passing `0` — for example when a benchmark could not execute its workload —
+    /// is permitted; the operation then reports a `NaN` per-iteration figure to
+    /// signal that no valid measurement was produced.
     pub fn iterations(mut self, iterations: u64) -> Self {
-        assert!(iterations != 0, "iterations cannot be zero");
         self.iterations = Some(iterations);
         self
     }
@@ -166,11 +167,15 @@ mod tests {
     static_assertions::assert_impl_all!(ThreadSpan: UnwindSafe, RefUnwindSafe);
 
     #[test]
-    #[should_panic]
-    fn iterations_panics_on_zero() {
+    fn iterations_zero_is_accepted() {
+        // A workload that could not run reports zero iterations; this records
+        // rather than panicking, so the harness survives a failed benchmark.
         let session = Session::new().no_stdout().no_file();
         let operation = session.operation("test");
-        let _span = operation.measure_thread().iterations(0);
+
+        drop(operation.measure_thread().iterations(0));
+
+        assert_eq!(operation.total_iterations(), 0);
     }
 
     #[test]

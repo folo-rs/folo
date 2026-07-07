@@ -5,9 +5,9 @@ enabling analysis of allocation patterns in benchmarks and performance tests.
 
 ## Basic usage
 
-The recommended pattern drives measurement from Criterion's `iter_custom`, feeding
-its chosen iteration count into `iterations` so each recorded span covers a whole
-sample rather than a single iteration:
+The typical pattern is to drive measurement from Criterion's `iter_custom` function,
+feeding its chosen iteration count into `iterations` so each recorded span covers a
+whole sample rather than a single iteration:
 
 ```rust
 use std::hint::black_box;
@@ -19,18 +19,19 @@ use criterion::Criterion;
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
-fn main() {
+fn bench(c: &mut Criterion) {
     let session = Session::new();
-    let operation = session.operation("my_operation");
 
-    let mut criterion = Criterion::default();
-    criterion.bench_function("my_operation", |b| {
+    let operation = session.operation("my_operation");
+    c.bench_function("my_operation", |b| {
         b.iter_custom(|iters| {
             let start = Instant::now();
             let _span = operation.measure_process().iterations(iters);
+
             for _ in 0..iters {
-                black_box(vec![1, 2, 3, 4, 5]); // This allocates memory
+                black_box(vec![1, 2, 3, 4, 5]);
             }
+
             start.elapsed()
         });
     });
@@ -41,8 +42,9 @@ fn main() {
 }
 ```
 
-When the iteration count is only known after the measured work has run, capture
-the measurement first and finalize it with `complete(n)` once the count is known.
+You do not need to specify the iteration count up front, as long as it is provided
+before the span is dropped. This allows you to measure work whose extent is not
+known at the start.
 
 ## See also
 

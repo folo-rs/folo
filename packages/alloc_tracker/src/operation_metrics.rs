@@ -194,6 +194,20 @@ mod tests {
     }
 
     #[test]
+    fn zero_iteration_span_yields_nan_slopes() {
+        // A span that covered zero iterations (e.g. a workload that failed to run)
+        // has no per-iteration rate, so both slopes report NaN rather than a
+        // misleading zero.
+        let mut metrics = OperationMetrics::default();
+        metrics.add_iterations(100, 2, 0);
+
+        assert!(metrics.bytes_slope().unwrap().is_nan());
+        assert!(metrics.allocations_slope().unwrap().is_nan());
+        assert_eq!(metrics.bytes_interval(), None);
+        assert_eq!(metrics.allocations_interval(), None);
+    }
+
+    #[test]
     fn add_iterations_zero_allocation() {
         let mut metrics = OperationMetrics::default();
         metrics.add_iterations(0, 0, 1000);

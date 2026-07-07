@@ -397,8 +397,13 @@ impl ReportOperation {
 ///
 /// Counts are conceptually integers but the warmup-robust slope is a real number
 /// (a fitted per-iteration rate), so this rounds to two decimals and trims any
-/// trailing zeros: `200.0` renders as `200` and `199.5` as `199.5`.
+/// trailing zeros: `200.0` renders as `200` and `199.5` as `199.5`. A slope of
+/// `NaN` — produced when the operation's spans covered zero iterations — renders
+/// as `"NaN"` to mark the measurement as unusable.
 pub(crate) fn format_count(value: f64) -> String {
+    if value.is_nan() {
+        return "NaN".to_owned();
+    }
     let rounded = (value.max(0.0) * 100.0).round() / 100.0;
     let mut rendered = format!("{rounded:.2}");
     if rendered.contains('.') {
@@ -673,6 +678,22 @@ mod tests {
             "got {display_output}"
         );
         assert!(display_output.contains("250"), "got {display_output}");
+    }
+
+    #[test]
+    fn report_operation_display_shows_nan_for_zero_iterations() {
+        // A span that covered zero iterations has no per-iteration rate, so the
+        // slopes are NaN and render as "NaN" rather than a misleading "0".
+        let operation = report_operation(250, 3, 0);
+        let display_output = operation.to_string();
+        assert!(
+            display_output.contains("NaN bytes/iter"),
+            "got {display_output}"
+        );
+        assert!(
+            display_output.contains("NaN allocations/iter"),
+            "got {display_output}"
+        );
     }
 
     #[test]

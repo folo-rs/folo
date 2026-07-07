@@ -10,7 +10,7 @@ use std::fmt;
 use std::time::Duration;
 
 use crate::OperationStatistics;
-use crate::statistics::nanos_to_duration;
+use crate::statistics::format_slope_nanos;
 
 /// A processor time report with every operation's statistics fully computed.
 ///
@@ -145,15 +145,14 @@ impl fmt::Display for FinalizedReport {
         // and one-off costs into the figure, while the slope recovers the marginal
         // per-iteration cost. The confidence interval is kept out of this summary
         // for readability; it remains in the JSON output and the `statistics()`
-        // API.
+        // API. A "NaN" cell marks an operation whose spans covered zero iterations
+        // (an unusable measurement); "n/a" marks one that recorded no spans at all.
         let cells: Vec<(&str, String)> = self
             .operations
             .iter()
             .map(|operation| {
                 let value = match operation.statistics {
-                    Some(statistics) => {
-                        format!("{:?}", nanos_to_duration(statistics.slope_nanos))
-                    }
+                    Some(statistics) => format_slope_nanos(statistics.slope_nanos),
                     None => "n/a".to_owned(),
                 };
                 (operation.name.as_str(), value)
