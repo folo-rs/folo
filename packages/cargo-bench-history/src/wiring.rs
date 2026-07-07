@@ -58,6 +58,15 @@ pub(crate) fn resolve_repo(workspace_dir: &Path, repo: Option<&Path>) -> PathBuf
 /// so the pure [`resolve_local_path`] resolver stays testable and Miri-safe. An
 /// unset variable yields `None`; a set-but-empty value yields `Some("")`, leaving
 /// the empty/non-empty distinction to the resolver.
+///
+/// Not mutation-tested: like the `entra_credential` env read in the storage
+/// layer it is a bare `std::env::var` read whose behaviour cannot be pinned
+/// without mutating the global process environment (which the suite avoids). All
+/// the meaningful logic lives in [`resolve_local_path`], which stays fully under
+/// mutation; the only coverage of the reader itself is a subprocess-spawning
+/// end-to-end test, and forcing the parallel mutation run to reach that slow test
+/// just to kill a no-signal IO edge is what times it out.
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn storage_env() -> Option<String> {
     std::env::var(STORAGE_ENV_VAR).ok()
 }
@@ -97,6 +106,11 @@ pub(crate) fn resolve_local_path(
 /// The cache-side counterpart of [`storage_env`]: the single environment read
 /// behind a bare `--cache`, kept at the IO edge so the pure [`resolve_cache_path`]
 /// resolver stays testable and Miri-safe.
+///
+/// Not mutation-tested, for the same reason as [`storage_env`]: it is a bare
+/// `std::env::var` read with no signal beyond the IO edge, and
+/// [`resolve_cache_path`] carries all the logic that stays under mutation.
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn cache_env() -> Option<String> {
     std::env::var(CACHE_ENV_VAR).ok()
 }
