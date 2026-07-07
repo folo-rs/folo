@@ -44,12 +44,18 @@ fn operation_can_be_moved_between_threads() {
         let _span = operation.measure_thread().iterations(1);
 
         // Simulate some work (without actual allocations in test)
-
-        operation.mean()
     });
 
-    let mean_bytes = handle.join().unwrap();
-    assert_eq!(mean_bytes, 0); // No actual allocations in test
+    handle.join().unwrap();
+
+    // Inspect the recorded measurement the way a user would: via a report.
+    let report = session.to_report();
+    let bytes_per_iteration = report
+        .operations()
+        .find(|&(name, _)| name == "test_op")
+        .and_then(|(_, op)| op.bytes())
+        .expect("operation with recorded spans has an estimable per-iteration slope");
+    assert!(bytes_per_iteration.abs() < f64::EPSILON); // No actual allocations in test
 }
 
 #[test]

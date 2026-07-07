@@ -33,7 +33,7 @@ fn all_the_time_report_api() {
     assert_eq!(op.total_iterations(), 10);
     // Note: processor time may be zero in test environments, so we just verify API access
     assert!(op.total_processor_time() >= Duration::ZERO);
-    assert!(op.mean() >= Duration::ZERO);
+    assert!(op.processor_time().is_some());
 
     println!("✓ all_the_time Report API works correctly");
 }

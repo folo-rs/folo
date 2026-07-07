@@ -31,7 +31,7 @@ fn alloc_tracker_report_api() {
     // Note: We cannot predict exact allocation amounts due to Vec overhead,
     // but we can verify the API structure
     assert!(op.total_bytes_allocated() > 0);
-    assert!(op.mean() > 0);
+    assert!(op.bytes().is_some_and(|b| b > 0.0));
 
     println!("✓ alloc_tracker Report API works correctly");
 }

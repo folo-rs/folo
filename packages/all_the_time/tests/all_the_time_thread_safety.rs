@@ -49,12 +49,19 @@ fn operation_can_be_moved_between_threads() {
             sum += i;
         }
         std::hint::black_box(sum);
-
-        operation.mean()
     });
 
-    let mean_time = handle.join().unwrap();
-    assert!(mean_time >= std::time::Duration::ZERO);
+    handle.join().unwrap();
+
+    // Inspect the recorded measurement the way a user would: via a report.
+    let report = session.to_report();
+    let processor_time = report
+        .operations()
+        .find(|&(name, _)| name == "test_op")
+        .and_then(|(_, op)| op.processor_time());
+    // A `Duration` is always non-negative; asserting `Some` confirms the report
+    // exposes an estimable per-iteration figure for the recorded span.
+    assert!(processor_time.is_some_and(|t| t >= std::time::Duration::ZERO));
 }
 
 #[test]

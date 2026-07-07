@@ -750,11 +750,12 @@ mod tests {
              to avoid inflating the iteration count. Expected {expected_total_tracked_iterations} iterations tracked, got {total_tracked_iterations}"
         );
 
-        // Since we didn't allocate, we expect 0 mean, which verifies our test setup is working
-        let mean_bytes = operation_stats.mean();
-        assert_eq!(
-            mean_bytes, 0,
-            "Expected 0 mean bytes since no allocations occurred, got {mean_bytes}"
+        // Since we didn't allocate, the per-iteration slope should be zero, which
+        // verifies our test setup is working.
+        let bytes_per_iteration = operation_stats.bytes();
+        assert!(
+            bytes_per_iteration.is_some_and(|b| b.abs() < f64::EPSILON),
+            "Expected a zero per-iteration byte slope since no allocations occurred, got {bytes_per_iteration:?}"
         );
     }
 }

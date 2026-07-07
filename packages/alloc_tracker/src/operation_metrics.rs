@@ -89,6 +89,7 @@ impl OperationMetrics {
     /// Mean bytes allocated per iteration, pooled across all spans.
     ///
     /// Returns zero when no iterations were recorded.
+    #[cfg(test)]
     pub(crate) fn mean_bytes(&self) -> u64 {
         self.total_bytes
             .checked_div(self.total_iterations)
@@ -98,6 +99,7 @@ impl OperationMetrics {
     /// Mean number of allocations per iteration, pooled across all spans.
     ///
     /// Returns zero when no iterations were recorded.
+    #[cfg(test)]
     pub(crate) fn mean_allocations(&self) -> u64 {
         self.total_count
             .checked_div(self.total_iterations)
@@ -191,6 +193,20 @@ mod tests {
         assert_eq!(metrics.total_iterations(), 0);
         assert_eq!(metrics.total_bytes_allocated(), 0);
         assert_eq!(metrics.total_allocations_count(), 0);
+    }
+
+    #[test]
+    fn zero_iteration_span_yields_nan_slopes() {
+        // A span that covered zero iterations (e.g. a workload that failed to run)
+        // has no per-iteration rate, so both slopes report NaN rather than a
+        // misleading zero.
+        let mut metrics = OperationMetrics::default();
+        metrics.add_iterations(100, 2, 0);
+
+        assert!(metrics.bytes_slope().unwrap().is_nan());
+        assert!(metrics.allocations_slope().unwrap().is_nan());
+        assert_eq!(metrics.bytes_interval(), None);
+        assert_eq!(metrics.allocations_interval(), None);
     }
 
     #[test]

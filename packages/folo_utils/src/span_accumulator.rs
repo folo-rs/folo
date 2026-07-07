@@ -127,14 +127,15 @@ impl SpanAccumulator {
     /// estimate.
     ///
     /// Returns `None` when no spans were folded in. When every span recorded zero
-    /// iterations the denominator vanishes and the slope is reported as zero.
+    /// iterations the denominator vanishes and the per-iteration rate is
+    /// undefined, so it is reported as `NaN`.
     #[must_use]
     pub fn slope(&self) -> Option<f64> {
         if self.span_count == 0 {
             return None;
         }
         if self.s_nn == 0.0 {
-            return Some(0.0);
+            return Some(f64::NAN);
         }
         Some(self.s_nt / self.s_nn)
     }
@@ -244,12 +245,22 @@ mod tests {
     }
 
     #[test]
-    fn zero_iteration_spans_have_a_zero_slope_and_no_interval() {
+    fn zero_iteration_spans_have_a_nan_slope_and_no_interval() {
         // With every span at zero iterations the weighted denominator Σ(nᵢ²) is
-        // zero, so the slope collapses to zero and no interval can be formed.
+        // zero, so the per-iteration rate is 0/0 = undefined (NaN) and no
+        // interval can be formed.
         let accumulator = accumulate(&[(0, 1000), (0, 2000)]);
-        assert_eq!(accumulator.slope(), Some(0.0));
+        assert!(accumulator.slope().unwrap().is_nan());
         assert_eq!(accumulator.interval(), None);
+    }
+
+    #[test]
+    fn zero_iteration_span_does_not_poison_a_finite_slope() {
+        // A zero-iteration span (e.g. a workload that failed to run) contributes
+        // nothing to either moment, so the slope is still recovered from the
+        // remaining nonzero spans rather than collapsing to NaN.
+        let accumulator = accumulate(&[(0, 1000), (2, 10), (2, 10)]);
+        assert_eq!(accumulator.slope(), Some(5.0));
     }
 
     #[test]

@@ -2,19 +2,19 @@
 //!
 //! Where `all_the_time_tracking_overhead` measures only the per-span record
 //! path, this benchmark covers every remaining lifecycle stage — session and
-//! operation setup, report snapshotting, merging, **finalization** (assembling
-//! the recorded spans into the complete report, the phase that regressed in
-//! issue #328), human rendering, and JSON output. Each stage is measured for all
-//! three cost dimensions at once:
+//! operation setup, report snapshotting, merging, human rendering (which
+//! resolves the recorded spans into per-iteration figures and sorts operations —
+//! the work that regressed in issue #328), and JSON output. Each stage is
+//! measured for all three cost dimensions at once:
 //!
 //! * **wall-clock time** — Criterion, the harness.
 //! * **memory allocations** — `alloc_tracker` (a dev-dependency; this crate and
 //!   `alloc_tracker` form an allowed dev-dependency-only cycle).
 //! * **processor time** — `all_the_time` itself, measuring its own lifecycle.
 //!
-//! The finalization stage is scaled by operation count so that any regression
-//! back to super-linear or retained-span work surfaces immediately instead of
-//! hiding behind a cheap "slope-only" summary path.
+//! The rendering stage is scaled by operation count so that any regression back
+//! to super-linear or retained-span work surfaces immediately instead of hiding
+//! behind a cheap "slope-only" summary path.
 
 #![allow(
     missing_docs,
@@ -35,8 +35,8 @@ static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 /// Number of spans folded into each operation of the report fixtures.
 ///
 /// Streaming statistics fold every span into O(1) accumulators, so this affects
-/// only the fixture's record cost, not the finalization cost — which is exactly
-/// the invariant the finalization benchmarks lock in.
+/// only the fixture's record cost, not the rendering cost — which is exactly the
+/// invariant the rendering benchmark locks in.
 const SPANS_PER_OP: usize = 8;
 
 fn entrypoint(c: &mut Criterion) {
@@ -48,7 +48,6 @@ fn entrypoint(c: &mut Criterion) {
     setup(c, &alloc, &time);
     snapshot(c, &alloc, &time);
     merge(c, &alloc, &time);
-    finalize(c, &alloc, &time);
     render(c, &alloc, &time);
     write(c, &alloc, &time);
 }
@@ -157,46 +156,29 @@ fn merge(c: &mut Criterion, alloc: &AllocSession, time: &Session) {
     group.finish();
 }
 
-fn finalize(c: &mut Criterion, alloc: &AllocSession, time: &Session) {
-    let mut group = c.benchmark_group("all_the_time_report_lifecycle/finalize");
+fn render(c: &mut Criterion, alloc: &AllocSession, time: &Session) {
+    let mut group = c.benchmark_group("all_the_time_report_lifecycle/render");
 
-    // Scaling finalize by operation count is the core regression guard: streaming
-    // makes finalize O(operations), so the 10x jump in operation count must show
-    // a roughly 10x (not super-linear) jump in cost.
+    // Scaling render by operation count is the core regression guard: rendering
+    // resolves per-iteration figures and sorts operations, which streaming makes
+    // O(operations), so the 10x jump in operation count must show a roughly 10x
+    // (not super-linear) jump in cost.
     for num_ops in [10_usize, 100] {
         let report = build_report(num_ops);
         let name = format!("ops_{num_ops}");
-        let alloc_op = alloc.operation(format!("all_the_time_report_lifecycle/finalize/{name}"));
-        let time_op = time.operation(format!("all_the_time_report_lifecycle/finalize/{name}"));
+        let alloc_op = alloc.operation(format!("all_the_time_report_lifecycle/render/{name}"));
+        let time_op = time.operation(format!("all_the_time_report_lifecycle/render/{name}"));
 
         group.bench_function(&name, |b| {
             b.iter_custom(|iters| {
                 measured(iters, &alloc_op, &time_op, || {
-                    black_box(report.finalize());
+                    let mut rendered = String::new();
+                    write!(rendered, "{report}").expect("writing to a String cannot fail");
+                    black_box(rendered);
                 })
             });
         });
     }
-
-    group.finish();
-}
-
-fn render(c: &mut Criterion, alloc: &AllocSession, time: &Session) {
-    let mut group = c.benchmark_group("all_the_time_report_lifecycle/render");
-    let alloc_op = alloc.operation("all_the_time_report_lifecycle/render/ops_100");
-    let time_op = time.operation("all_the_time_report_lifecycle/render/ops_100");
-
-    let finalized = build_report(100).finalize();
-
-    group.bench_function("ops_100", |b| {
-        b.iter_custom(|iters| {
-            measured(iters, &alloc_op, &time_op, || {
-                let mut rendered = String::new();
-                write!(rendered, "{finalized}").expect("writing to a String cannot fail");
-                black_box(rendered);
-            })
-        });
-    });
 
     group.finish();
 }
@@ -207,13 +189,13 @@ fn write(c: &mut Criterion, alloc: &AllocSession, time: &Session) {
     let time_op = time.operation("all_the_time_report_lifecycle/write/ops_25");
 
     // JSON output is I/O-bound, so keep the operation count modest.
-    let finalized = build_report(25).finalize();
+    let report = build_report(25);
     let directory = tempfile::tempdir().expect("creating a temp directory cannot fail in a bench");
 
     group.bench_function("ops_25", |b| {
         b.iter_custom(|iters| {
             measured(iters, &alloc_op, &time_op, || {
-                finalized.write_to_directory(directory.path());
+                report.write_to_directory(directory.path());
             })
         });
     });

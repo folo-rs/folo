@@ -2,21 +2,14 @@
 
 use std::fmt;
 use std::sync::{Arc, Mutex};
+#[cfg(test)]
 use std::time::Duration;
 
 use crate::pal::PlatformFacade;
-use crate::statistics::nanos_to_duration;
-use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessMeasurement, ThreadMeasurement};
+use crate::statistics::format_slope_nanos;
+use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessSpan, ThreadSpan};
 
-/// Measures per-iteration processor time for a repeated operation.
-///
-/// This utility is particularly useful for benchmarking scenarios where you want
-/// to understand the processor time footprint of repeated operations. The
-/// headline figure is the warmup-robust per-iteration slope (see the crate-level
-/// "Primary metric" documentation), with the pooled [`mean`](Self::mean) still
-/// available.
-///
-/// Operations share data directly with the session - data is merged when spans are dropped.
+/// Aggregates data from repeated measurements of a single operation.
 ///
 /// Multiple operations with the same name can be created concurrently.
 ///
@@ -29,21 +22,22 @@ use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessMeasurement, ThreadMeasu
 /// use all_the_time::Session;
 /// use criterion::Criterion;
 ///
-/// # fn main() {
-/// let session = Session::new();
-/// let operation = session.operation("processor_intensive_work");
-/// let mut criterion = Criterion::default();
-/// criterion.bench_function("processor_intensive_work", |b| {
-///     b.iter_custom(|iters| {
-///         let start = Instant::now();
-///         let _span = operation.measure_thread().iterations(iters);
-///         for _ in 0..iters {
-///             black_box(42_u64.wrapping_mul(2));
-///         }
-///         start.elapsed()
+/// fn bench(c: &mut Criterion) {
+///     let session = Session::new();
+///     let operation = session.operation("processor_intensive_work");
+///     c.bench_function("processor_intensive_work", |b| {
+///         b.iter_custom(|iters| {
+///             let start = Instant::now();
+///             let _span = operation.measure_thread().iterations(iters);
+///
+///             for _ in 0..iters {
+///                 black_box(42_u64.wrapping_mul(2));
+///             }
+///
+///             start.elapsed()
+///         });
 ///     });
-/// });
-/// # }
+/// }
 /// ```
 #[derive(Debug)]
 pub struct Operation {
@@ -52,7 +46,7 @@ pub struct Operation {
 }
 
 impl Operation {
-    /// Creates a new mean processor time calculator with the given name.
+    /// Creates a new operation with the given name.
     #[must_use]
     pub(crate) fn new(
         _name: String,
@@ -77,15 +71,16 @@ impl Operation {
         Arc::clone(&self.metrics)
     }
 
-    /// Begins measuring processor time consumed by the current thread only.
+    /// Starts a measurement of processor time consumed by the current thread.
     ///
     /// Use this for single-threaded operations or when you want to track
-    /// per-thread processor usage. The returned [`ThreadMeasurement`] records
-    /// nothing until an iteration count is supplied — with
-    /// [`iterations(n)`](ThreadMeasurement::iterations) when the count is known in
-    /// advance (the `iter_custom` benchmark pattern), or with
-    /// [`complete(n)`](ThreadMeasurement::complete) when it is only known
-    /// afterwards.
+    /// per-thread processor usage.
+    ///
+    /// You must call [`iterations(n)`](ThreadSpan::iterations) on the returned span
+    /// to define how many iterations the measured work covers. This is mandatory.
+    /// You may pass `0` to indicate that no work was performed (e.g. on failure).
+    ///
+    /// The returned span records its measurement when it is dropped.
     ///
     /// # Examples
     ///
@@ -96,35 +91,37 @@ impl Operation {
     /// use all_the_time::Session;
     /// use criterion::Criterion;
     ///
-    /// # fn main() {
-    /// let session = Session::new();
-    /// let operation = session.operation("thread_work");
-    /// let mut criterion = Criterion::default();
-    /// criterion.bench_function("thread_work", |b| {
-    ///     b.iter_custom(|iters| {
-    ///         let start = Instant::now();
-    ///         let _span = operation.measure_thread().iterations(iters);
-    ///         for _ in 0..iters {
-    ///             black_box(42_u64.wrapping_mul(2));
-    ///         }
-    ///         start.elapsed()
+    /// fn bench(c: &mut Criterion) {
+    ///     let session = Session::new();
+    ///     let operation = session.operation("thread_work");
+    ///     c.bench_function("thread_work", |b| {
+    ///         b.iter_custom(|iters| {
+    ///             let start = Instant::now();
+    ///             let _span = operation.measure_thread().iterations(iters);
+    ///
+    ///             for _ in 0..iters {
+    ///                 black_box(42_u64.wrapping_mul(2));
+    ///             }
+    ///
+    ///             start.elapsed()
+    ///         });
     ///     });
-    /// });
-    /// # }
+    /// }
     /// ```
-    pub fn measure_thread(&self) -> ThreadMeasurement {
-        ThreadMeasurement::new(self)
+    pub fn measure_thread(&self) -> ThreadSpan {
+        ThreadSpan::new(self)
     }
 
-    /// Begins measuring processor time consumed by the entire process (all
-    /// threads).
+    /// Starts a measurement of processor time consumed by all threads.
     ///
-    /// Use this to measure total processor time including multi-threaded work. The
-    /// returned [`ProcessMeasurement`] records nothing until an iteration count is
-    /// supplied — with [`iterations(n)`](ProcessMeasurement::iterations) when the
-    /// count is known in advance (the `iter_custom` benchmark pattern), or with
-    /// [`complete(n)`](ProcessMeasurement::complete) when it is only known
-    /// afterwards.
+    /// Use this for multithreaded operations or when you want to track
+    /// total processor usage across all threads.
+    ///
+    /// You must call [`iterations(n)`](ProcessSpan::iterations) on the returned span
+    /// to define how many iterations the measured work covers. This is mandatory.
+    /// You may pass `0` to indicate that no work was performed (e.g. on failure).
+    ///
+    /// The returned span records its measurement when it is dropped.
     ///
     /// # Examples
     ///
@@ -135,31 +132,33 @@ impl Operation {
     /// use all_the_time::Session;
     /// use criterion::Criterion;
     ///
-    /// # fn main() {
-    /// let session = Session::new();
-    /// let operation = session.operation("process_work");
-    /// let mut criterion = Criterion::default();
-    /// criterion.bench_function("process_work", |b| {
-    ///     b.iter_custom(|iters| {
-    ///         let start = Instant::now();
-    ///         let _span = operation.measure_process().iterations(iters);
-    ///         for _ in 0..iters {
-    ///             black_box(42_u64.wrapping_mul(2));
-    ///         }
-    ///         start.elapsed()
+    /// fn bench(c: &mut Criterion) {
+    ///     let session = Session::new();
+    ///     let operation = session.operation("process_work");
+    ///     c.bench_function("process_work", |b| {
+    ///         b.iter_custom(|iters| {
+    ///             let start = Instant::now();
+    ///             let _span = operation.measure_process().iterations(iters);
+    ///
+    ///             for _ in 0..iters {
+    ///                 black_box(42_u64.wrapping_mul(2));
+    ///             }
+    ///
+    ///             start.elapsed()
+    ///         });
     ///     });
-    /// });
-    /// # }
+    /// }
     /// ```
-    pub fn measure_process(&self) -> ProcessMeasurement {
-        ProcessMeasurement::new(self)
+    pub fn measure_process(&self) -> ProcessSpan {
+        ProcessSpan::new(self)
     }
 
     /// Calculates the mean processor time per span.
     ///
     /// Returns zero duration if no spans have been recorded.
     #[must_use]
-    pub fn mean(&self) -> Duration {
+    #[cfg(test)]
+    pub(crate) fn mean(&self) -> Duration {
         self.metrics.lock().expect(ERR_POISONED_LOCK).mean()
     }
 
@@ -189,7 +188,7 @@ impl fmt::Display for Operation {
         // The summary shows only the slope, so take the cheap slope-only path.
         match self.metrics.lock().expect(ERR_POISONED_LOCK).slope_nanos() {
             Some(slope_nanos) => {
-                write!(f, "{:?} per iteration", nanos_to_duration(slope_nanos))
+                write!(f, "{} per iteration", format_slope_nanos(slope_nanos))
             }
             None => write!(f, "no measurements"),
         }

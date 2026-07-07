@@ -11,6 +11,19 @@ use alloc_tracker::{Allocator, Session};
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
+/// Reads an operation's total bytes allocated the way a user inspects results:
+/// through the session report rather than the live `Operation` handle.
+fn report_total_bytes(session: &Session, operation_name: &str) -> u64 {
+    session
+        .to_report()
+        .operations()
+        .find(|&(name, _)| name == operation_name)
+        .map_or_else(
+            || panic!("operation {operation_name:?} should appear in the report"),
+            |(_, op)| op.total_bytes_allocated(),
+        )
+}
+
 #[test]
 #[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
 fn no_span_is_empty_session() {
@@ -46,26 +59,26 @@ fn single_thread_allocations() {
     let session = Session::new().no_stdout().no_file();
 
     // Test process span in single-threaded context
-    let process_total = {
+    {
         let process_op = session.operation("process_single_thread");
         for i in 1..=TEST_ITERATIONS {
             let _span = process_op.measure_process().iterations(1);
             let _data = vec![0_u8; i * BYTES_PER_ITERATION];
             black_box(&_data);
         }
-        process_op.total_bytes_allocated()
-    };
+    }
+    let process_total = report_total_bytes(&session, "process_single_thread");
 
     // Test thread span in single-threaded context
-    let thread_total = {
+    {
         let thread_op = session.operation("thread_single_thread");
         for i in 1..=TEST_ITERATIONS {
             let _span = thread_op.measure_thread().iterations(1);
             let _data = vec![0_u8; i * BYTES_PER_ITERATION];
             black_box(&_data);
         }
-        thread_op.total_bytes_allocated()
-    };
+    }
+    let thread_total = report_total_bytes(&session, "thread_single_thread");
 
     // Both should have allocated some memory
     assert!(process_total > 0);
@@ -115,24 +128,24 @@ fn multithreaded_allocations_show_span_differences() {
     };
 
     // Test process span with multithreaded work (should capture all threads)
-    let process_total = {
+    {
         let process_op = session.operation("process_multithreaded");
         for _ in 0..TEST_ITERATIONS {
             let _span = process_op.measure_process().iterations(1);
             spawn_workers();
         }
-        process_op.total_bytes_allocated()
-    };
+    }
+    let process_total = report_total_bytes(&session, "process_multithreaded");
 
     // Test thread span with multithreaded work (should only capture main thread)
-    let thread_total = {
+    {
         let thread_op = session.operation("thread_multithreaded");
         for _ in 0..TEST_ITERATIONS {
             let _span = thread_op.measure_thread().iterations(1);
             spawn_workers();
         }
-        thread_op.total_bytes_allocated()
-    };
+    }
+    let thread_total = report_total_bytes(&session, "thread_multithreaded");
 
     // Both should have allocated some memory
     assert!(process_total > 0);
@@ -180,7 +193,7 @@ fn mixed_span_types_in_multithreaded_context() {
         }
     }
 
-    let total = mixed_op.total_bytes_allocated();
+    let total = report_total_bytes(&session, "mixed_multithreaded");
     assert!(total > 0);
 }
 
@@ -217,7 +230,7 @@ fn report_is_empty_matches_session_is_empty() {
 
 #[test]
 #[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
-fn report_mean_with_known_allocations() {
+fn report_slope_with_known_allocations() {
     const NUM_ITERATIONS: u64 = 5;
 
     let session = Session::new().no_stdout().no_file();
@@ -226,9 +239,11 @@ fn report_mean_with_known_allocations() {
         let operation = session.operation("known_allocation");
         for _ in 0..NUM_ITERATIONS {
             let _span = operation.measure_thread().iterations(1);
-            // Allocate a single Box<u64> - predictable size allocation
-            let boxed_value = Box::new(42_u64);
-            black_box(boxed_value); // Ensure allocation is not optimized away, but Box is dropped
+            // Two distinct heap allocations per iteration - a predictable
+            // allocation count, independent of any allocator size overhead.
+            let first = Box::new(42_u64);
+            let second = Box::new(7_u64);
+            black_box((first, second)); // Ensure the allocations are not optimized away.
         }
     } // Operation is dropped here, merging data to session
 
@@ -243,24 +258,34 @@ fn report_mean_with_known_allocations() {
     let total_bytes = op.total_bytes_allocated();
     assert!(total_bytes > 0);
 
-    // With Box<u64>, we expect at least 8 bytes per allocation (size of u64)
-    // but allocators may add overhead, so we just verify basic sanity
-    assert!(total_bytes >= NUM_ITERATIONS * 8);
+    // Two `Box<u64>` values require at least 16 bytes per iteration, though
+    // allocators may add overhead, so we just verify basic sanity.
+    assert!(total_bytes >= NUM_ITERATIONS * 16);
 
-    // The mean should be greater than 0
-    let mean_bytes = op.mean();
-    assert!(mean_bytes > 0);
+    // The per-iteration byte figure (the warmup-robust slope) should be positive.
+    let bytes_per_iteration = op
+        .bytes()
+        .expect("operation with recorded spans has an estimable per-iteration slope");
+    assert!(bytes_per_iteration > 0.0);
 
-    // Basic sanity check: mean should be total / iterations (integer division is intentional)
+    // The spans are identical single-iteration allocations, so the slope
+    // collapses onto total / iterations.
     #[expect(
-        clippy::integer_division,
-        reason = "Integer division is intended for mean calculation"
+        clippy::cast_precision_loss,
+        reason = "byte counts in this test are far below f64's exact-integer range"
     )]
-    let expected_mean = total_bytes / NUM_ITERATIONS;
-    assert_eq!(mean_bytes, expected_mean);
+    let expected = total_bytes as f64 / NUM_ITERATIONS as f64;
+    assert!((bytes_per_iteration - expected).abs() < 1.0);
 
-    // Verify mean calculation makes sense - should be at least 8 bytes per allocation
-    assert!(mean_bytes >= 8);
+    // It should be at least the 16 bytes two `Box<u64>` values require.
+    assert!(bytes_per_iteration >= 16.0);
+
+    // Each iteration performs exactly two allocations, so the allocation-count
+    // slope should be two.
+    let allocations_per_iteration = op
+        .allocations()
+        .expect("operation with recorded spans has an estimable per-iteration slope");
+    assert!((allocations_per_iteration - 2.0).abs() < f64::EPSILON);
 }
 
 #[test]

@@ -4,16 +4,9 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use crate::report::format_count;
-use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessMeasurement, ThreadMeasurement};
+use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessSpan, ThreadSpan};
 
-/// A measurement handle for tracking per-iteration memory allocation of a repeated operation.
-///
-/// This utility is particularly useful for benchmarking scenarios where you want
-/// to understand the memory footprint and allocation behavior of repeated operations.
-/// It tracks both the number of bytes allocated and the count of allocations. The
-/// headline figures are warmup-robust per-iteration slopes (see the crate-level
-/// "Primary metric" documentation), with the pooled [`mean`](Self::mean) still
-/// available.
+/// Aggregates allocation data from repeated measurements of a single operation.
 ///
 /// Multiple operations with the same name can be created concurrently.
 ///
@@ -29,21 +22,22 @@ use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessMeasurement, ThreadMeasu
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 ///
-/// # fn main() {
-/// let session = Session::new();
-/// let string_allocations = session.operation("string_allocations");
-/// let mut criterion = Criterion::default();
-/// criterion.bench_function("string_allocations", |b| {
-///     b.iter_custom(|iters| {
-///         let start = Instant::now();
-///         let _span = string_allocations.measure_process().iterations(iters);
-///         for _ in 0..iters {
-///             black_box(String::from("Hello, world!"));
-///         }
-///         start.elapsed()
+/// fn bench(c: &mut Criterion) {
+///     let session = Session::new();
+///     let string_allocations = session.operation("string_allocations");
+///     c.bench_function("string_allocations", |b| {
+///         b.iter_custom(|iters| {
+///             let start = Instant::now();
+///             let _span = string_allocations.measure_process().iterations(iters);
+///
+///             for _ in 0..iters {
+///                 black_box(String::from("Hello, world!"));
+///             }
+///
+///             start.elapsed()
+///         });
 ///     });
-/// });
-/// # }
+/// }
 /// ```
 #[derive(Debug)]
 pub struct Operation {
@@ -67,12 +61,13 @@ impl Operation {
     /// Begins measuring allocations made by the current thread only.
     ///
     /// Use this for single-threaded operations or when you want to track
-    /// per-thread allocation usage. The returned [`ThreadMeasurement`] records
-    /// nothing until an iteration count is supplied — with
-    /// [`iterations(n)`](ThreadMeasurement::iterations) when the count is known in
-    /// advance (the `iter_custom` benchmark pattern), or with
-    /// [`complete(n)`](ThreadMeasurement::complete) when it is only known
-    /// afterwards.
+    /// per-thread allocation usage.
+    ///
+    /// You must call [`iterations(n)`](ThreadSpan::iterations) on the returned span
+    /// to define how many iterations the measured work covers. This is mandatory.
+    /// You may pass `0` to indicate that no work was performed (e.g. on failure).
+    ///
+    /// The returned span records its measurement when it is dropped.
     ///
     /// # Examples
     ///
@@ -86,34 +81,36 @@ impl Operation {
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
-    /// # fn main() {
-    /// let session = Session::new();
-    /// let operation = session.operation("thread_work");
-    /// let mut criterion = Criterion::default();
-    /// criterion.bench_function("thread_work", |b| {
-    ///     b.iter_custom(|iters| {
-    ///         let start = Instant::now();
-    ///         let _span = operation.measure_thread().iterations(iters);
-    ///         for _ in 0..iters {
-    ///             black_box(vec![1, 2, 3, 4, 5]);
-    ///         }
-    ///         start.elapsed()
+    /// fn bench(c: &mut Criterion) {
+    ///     let session = Session::new();
+    ///     let operation = session.operation("thread_work");
+    ///     c.bench_function("thread_work", |b| {
+    ///         b.iter_custom(|iters| {
+    ///             let start = Instant::now();
+    ///             let _span = operation.measure_thread().iterations(iters);
+    ///
+    ///             for _ in 0..iters {
+    ///                 black_box(vec![1, 2, 3, 4, 5]);
+    ///             }
+    ///
+    ///             start.elapsed()
+    ///         });
     ///     });
-    /// });
-    /// # }
+    /// }
     /// ```
-    pub fn measure_thread(&self) -> ThreadMeasurement {
-        ThreadMeasurement::new(self)
+    pub fn measure_thread(&self) -> ThreadSpan {
+        ThreadSpan::new(self)
     }
 
     /// Begins measuring allocations made by the entire process (all threads).
     ///
-    /// Use this to measure total allocations including multi-threaded work. The
-    /// returned [`ProcessMeasurement`] records nothing until an iteration count is
-    /// supplied — with [`iterations(n)`](ProcessMeasurement::iterations) when the
-    /// count is known in advance (the `iter_custom` benchmark pattern), or with
-    /// [`complete(n)`](ProcessMeasurement::complete) when it is only known
-    /// afterwards.
+    /// Use this to measure total allocations including multi-threaded work.
+    ///
+    /// You must call [`iterations(n)`](ProcessSpan::iterations) on the returned span
+    /// to define how many iterations the measured work covers. This is mandatory.
+    /// You may pass `0` to indicate that no work was performed (e.g. on failure).
+    ///
+    /// The returned span records its measurement when it is dropped.
     ///
     /// # Examples
     ///
@@ -127,33 +124,33 @@ impl Operation {
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
-    /// # fn main() {
-    /// let session = Session::new();
-    /// let operation = session.operation("process_work");
-    /// let mut criterion = Criterion::default();
-    /// criterion.bench_function("process_work", |b| {
-    ///     b.iter_custom(|iters| {
-    ///         let start = Instant::now();
-    ///         let _span = operation.measure_process().iterations(iters);
-    ///         for _ in 0..iters {
-    ///             black_box(vec![1, 2, 3, 4, 5]);
-    ///         }
-    ///         start.elapsed()
+    /// fn bench(c: &mut Criterion) {
+    ///     let session = Session::new();
+    ///     let operation = session.operation("process_work");
+    ///     c.bench_function("process_work", |b| {
+    ///         b.iter_custom(|iters| {
+    ///             let start = Instant::now();
+    ///             let _span = operation.measure_process().iterations(iters);
+    ///
+    ///             for _ in 0..iters {
+    ///                 black_box(vec![1, 2, 3, 4, 5]);
+    ///             }
+    ///
+    ///             start.elapsed()
+    ///         });
     ///     });
-    /// });
-    /// # }
+    /// }
     /// ```
-    pub fn measure_process(&self) -> ProcessMeasurement {
-        ProcessMeasurement::new(self)
+    pub fn measure_process(&self) -> ProcessSpan {
+        ProcessSpan::new(self)
     }
 
     /// Calculates the mean bytes allocated per iteration.
     ///
-    /// Returns 0 if no iterations have been recorded. This is the pooled mean
-    /// across all recorded spans; the warmup-robust slope and its dispersion are
-    /// available on [`ReportOperation`](crate::ReportOperation) via a report.
+    /// Returns 0 if no iterations have been recorded.
     #[must_use]
-    pub fn mean(&self) -> u64 {
+    #[cfg(test)]
+    pub(crate) fn mean(&self) -> u64 {
         let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
         data.mean_bytes()
     }
@@ -168,7 +165,8 @@ impl Operation {
 
     /// Returns the total bytes allocated across all iterations.
     #[must_use]
-    pub fn total_bytes_allocated(&self) -> u64 {
+    #[cfg(test)]
+    pub(crate) fn total_bytes_allocated(&self) -> u64 {
         let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
         data.total_bytes_allocated()
     }

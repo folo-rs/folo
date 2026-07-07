@@ -10,37 +10,15 @@
 //! - [`Session`] - Configures processor time tracking and provides access to tracking data
 //! - [`Report`] - Thread-safe processor time statistics that can be merged and processed independently
 //! - [`Operation`] - Measures per-iteration processor time for a repeated operation
-//! - [`ThreadMeasurement`] / [`ProcessMeasurement`] - In-progress measurements awaiting an iteration count
+//! - [`ThreadSpan`] / [`ProcessSpan`] - Active measurements that record when dropped
 //!
 //! This package is not meant for use in production, serving only as a development tool.
 //!
-//! # Primary metric
-//!
-//! Processor time is not deterministic: it jitters run to run with system load
-//! and scheduling. On top of that, Criterion chooses how many iterations to time
-//! and how many to discard as warm-up, so a raw pooled **mean** silently folds
-//! warm-up and one-off costs into the per-iteration figure and drifts as that
-//! sample mix changes between runs.
-//!
-//! The headline metric is therefore the **warmup-robust slope**: an
-//! iterations-weighted, through-origin fit of each span's total time against its
-//! iteration count, which recovers the marginal per-iteration cost even when the
-//! blend of warm-up and steady-state spans shifts. The slope is paired with a
-//! closed-form 95% confidence interval so its run-to-run uncertainty can be
-//! inspected: it collapses onto the point estimate when every span records the
-//! same per-iteration value, and is omitted entirely when a single span leaves it
-//! unestimable. The confidence interval is always computed as part of finalizing
-//! a report — there is no cheaper "slope-only" path that skips it — so the stdout
-//! summary simply displays the slope alone for readability while the JSON output
-//! records the slope together with that confidence interval. The pooled mean stays
-//! available through [`ReportOperation::mean`] for callers that still want it.
-//!
 //! # Benchmarking
 //!
-//! The recommended pattern drives measurement from Criterion's `iter_custom`,
-//! feeding its chosen iteration count into
-//! [`iterations`](ThreadMeasurement::iterations) so each recorded span covers a
-//! whole sample rather than a single iteration:
+//! The typical pattern is to drive measurement from Criterion's [`iter_custom()`] function,
+//! feeding its chosen iteration count into [`iterations()`](ThreadSpan::iterations)
+//! so each recorded span covers a whole sample rather than a single iteration:
 //!
 //! ```no_run
 //! use std::hint::black_box;
@@ -49,18 +27,19 @@
 //! use all_the_time::Session;
 //! use criterion::Criterion;
 //!
-//! fn main() {
+//! fn bench(c: &mut Criterion) {
 //!     let session = Session::new();
-//!     let operation = session.operation("my_operation");
 //!
-//!     let mut criterion = Criterion::default();
-//!     criterion.bench_function("my_operation", |b| {
+//!     let operation = session.operation("my_operation");
+//!     c.bench_function("my_operation", |b| {
 //!         b.iter_custom(|iters| {
 //!             let start = Instant::now();
 //!             let _span = operation.measure_thread().iterations(iters);
+//!
 //!             for _ in 0..iters {
 //!                 black_box(42_u64.wrapping_mul(2));
 //!             }
+//!
 //!             start.elapsed()
 //!         });
 //!     });
@@ -70,32 +49,42 @@
 //! }
 //! ```
 //!
+//! You **must** call [`iterations()`](ThreadSpan::iterations) on the span before
+//! it is dropped. Failure to do so will result in a panic.
+//!
+//! # Human-readable summary
+//!
+//! When a [`Session`] is dropped it prints a table of per-iteration figures to
+//! stdout, one row per operation:
+//!
+//! ```text
+//! Processor time statistics:
+//!
+//! | Operation    | Per iteration |
+//! |--------------|---------------|
+//! | decode_value |          84ns |
+//! | encode_value |         120ns |
+//! ```
+//!
 //! # Machine-readable output
 //!
-//! Dropping a [`Session`] writes machine-readable JSON files (one per operation)
-//! into the Cargo target directory at `target/all_the_time/<operation>.json`,
-//! with operation names sanitized to be filesystem-safe. A human-readable
-//! summary is also printed to stdout.
+//! Dropping a [`Session`] also writes JSON files (one per operation) into the
+//! Cargo target directory at `target/all_the_time/<operation>.json`, with
+//! operation names sanitized to be filesystem-safe.
 //!
-//! Each JSON file records the total and mean per-iteration processor time
-//! together with the warmup-robust slope point estimate and its 95% confidence
-//! interval (when estimable). The interval is a deterministic function of the
-//! measured spans, so identical measurements always yield identical bounds. The
-//! stdout summary displays the same slope (see "Primary metric") without the
-//! interval purely for readability — the interval is computed regardless of which
-//! output consumes it.
-//!
-//! These outputs are produced automatically, so a typical benchmark only needs
-//! to create a session and record work.
+//! Both outputs are produced automatically, so a typical benchmark only needs to
+//! create a session and record work.
 //!
 //! # Measuring a variable amount of work
 //!
-//! When the number of iterations is only known after the measured work has run —
-//! for example a loop that drains a queue or runs until a budget is exhausted —
-//! capture the measurement first and finalize it with
-//! [`complete`](ThreadMeasurement::complete) once the count is known:
+//! You do not need to specify the iteration count up front, as long as it is
+//! provided before the span is dropped.
+//!
+//! This allows you to measure work whose extent is not known at the start.
 //!
 //! ```
+//! use std::hint::black_box;
+//!
 //! use all_the_time::Session;
 //!
 //! fn main() {
@@ -103,29 +92,31 @@
 //! #   let session = session.no_stdout().no_file();
 //!     let operation = session.operation("drain_queue");
 //!
-//!     let measurement = operation.measure_thread();
+//!     let span = operation.measure_thread();
+//!
 //!     let mut processed = 0_u64;
-//!     for item in 0..10 {
-//!         std::hint::black_box(item * 2); // do work while draining
+//!
+//!     while let Some(item) = get_next_item() {
+//!         black_box(item.refresh());
 //!         processed += 1;
 //!     }
-//!     measurement.complete(processed);
 //!
-//!     // Statistics are emitted automatically when `session` is dropped.
+//!     drop(span.iterations(processed));
 //! }
+//! # fn get_next_item() -> Option<Item> { None }
+//! # struct Item;
+//! # impl Item { fn refresh(&self) {} }
 //! ```
 //!
-//! # Thread vs process processor time
+//! # Thread vs process measurement
 //!
-//! You can choose between tracking thread processor time or process processor
-//! time. Both begin with a `measure_*` call and finalize with an explicit
-//! iteration count (shown here with a single iteration for brevity; real
-//! benchmarks use the `iter_custom` pattern above):
+//! You can choose between tracking processor time spent by the current thread
+//! or by the entire process. The latter is useful for measuring multithreaded
+//! workloads.
 //!
 //! ```
 //! use all_the_time::Session;
 //!
-//! # fn main() {
 //! let session = Session::new();
 //! # let session = session.no_stdout().no_file();
 //!
@@ -133,26 +124,29 @@
 //! {
 //!     let op = session.operation("thread_work");
 //!     let _span = op.measure_thread().iterations(1);
-//!     // Work done here is measured for the current thread only
+//!     do_some_work();
 //! }
 //!
 //! // Track process processor time (all threads)
 //! {
 //!     let op = session.operation("process_work");
 //!     let _span = op.measure_process().iterations(1);
-//!     // Work done here is measured for the entire process
+//!     do_some_multithreaded_work();
 //! }
-//! # }
+//! # fn do_some_work() {}
+//! # fn do_some_multithreaded_work() {}
 //! ```
 //!
 //! # Overhead
 //!
 //! Capturing a single measurement by calling `measure_xyz()` incurs an overhead of
-//! approximately 500 nanoseconds on an arbitrary sample machine. You are recommended to batch
-//! your measurements over a whole Criterion sample (via `.iterations(iters)` from
-//! `iter_custom`) to amortize this overhead. Operating without batching, on individual
-//! iterations, is only viable for macrobenchmarks for which a single iteration is a
-//! large unit of work (e.g. an HTTP request).
+//! approximately 500 nanoseconds on an arbitrary sample machine.
+//!
+//! It is crucial that you measure multiple iterations in the same sample to amortize this
+//! overhead. This is the purpose of the [`iter_custom()`] pattern described above.
+//!
+//! Operating without batching, by measuring individual iterations, is only viable for
+//! macrobenchmarks for which a single iteration is a large unit of work (e.g. an HTTP request).
 //!
 //! # Session management
 //!
@@ -190,6 +184,9 @@
 //! println!("Total processor time: {total_time:?}");
 //! # }
 //! ```
+//!
+//!
+//! [`iter_custom()`]: https://docs.rs/criterion/latest/criterion/struct.Bencher.html#method.iter_custom
 
 #![doc(
     html_logo_url = "https://media.githubusercontent.com/media/folo-rs/folo/refs/heads/main/packages/all_the_time/icon.png"
@@ -199,7 +196,6 @@
 )]
 
 mod constants;
-mod finalized;
 mod operation;
 mod operation_metrics;
 mod pal;
@@ -211,7 +207,6 @@ mod target_output;
 mod thread_span;
 
 pub(crate) use constants::*;
-pub use finalized::*;
 pub use operation::*;
 pub(crate) use operation_metrics::*;
 pub use process_span::*;
