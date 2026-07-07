@@ -10,6 +10,8 @@ pub(crate) mod all_the_time;
 pub(crate) mod alloc_tracker;
 pub(crate) mod callgrind;
 pub(crate) mod criterion;
+#[cfg(test)]
+mod schema_roundtrip;
 
 pub(crate) use all_the_time::parse_all_the_time_operation;
 pub(crate) use alloc_tracker::parse_alloc_tracker_operation;

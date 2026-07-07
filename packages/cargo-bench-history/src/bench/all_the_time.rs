@@ -6,8 +6,11 @@
 //! per-iteration slope and its confidence interval estimated over the operation's
 //! measured spans. Processor time depends on the host hardware, so this engine
 //! partitions its history by a machine key (see [`Engine::is_hardware_dependent`]).
-//! The committed fixtures under `tests/fixtures/all_the_time/` are real
-//! `all_the_time` output and act as a schema-drift canary.
+//! The committed fixtures under `tests/fixtures/all_the_time/` are representative
+//! samples of the current schema; the authoritative schema-drift guard is the
+//! `super::schema_roundtrip` test, which feeds real producer output through this
+//! parser so a field renamed or dropped on either side of the boundary fails the
+//! build.
 //!
 //! [`Engine::is_hardware_dependent`]: crate::model::Engine::is_hardware_dependent
 
@@ -54,17 +57,16 @@ pub(crate) fn parse_all_the_time_operation(
 /// attribution, so the operation name alone identifies the series (mirroring the
 /// Criterion adapter).
 ///
-/// The through-origin slope is preferred as the per-iteration point estimate,
-/// matching the Criterion adapter; output that records no slope falls back to the
-/// mean. When the confidence interval is present it is recorded on the metric, so
-/// analysis can apply its interval-overlap gate to processor time the same way it
-/// does for Criterion wall time.
+/// The through-origin slope is the per-iteration point estimate, matching the
+/// Criterion adapter. A missing or null slope (which the producer writes for a
+/// zero-iteration operation that could not run) maps to `NaN`, signalling that no
+/// valid per-iteration figure was produced. When the confidence interval is present
+/// it is recorded on the metric, so analysis can apply its interval-overlap gate to
+/// processor time the same way it does for Criterion wall time.
 fn output_to_record(output: &OperationOutput) -> BenchmarkResult {
     let id = BenchmarkId::new(NonEmpty::new(output.operation.clone()));
 
-    let value = output
-        .slope_processor_time_nanos
-        .unwrap_or_else(|| as_f64(output.mean_processor_time_nanos));
+    let value = output.slope_processor_time_nanos.unwrap_or(f64::NAN);
 
     let metric = Metric::new(MetricKind::ProcessorTime, value).with_dispersion(
         None,
@@ -75,23 +77,14 @@ fn output_to_record(output: &OperationOutput) -> BenchmarkResult {
     BenchmarkResult::new(id, vec![metric])
 }
 
-/// Casts a nanosecond count to `f64`, the model's storage type.
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "per-iteration nanosecond means are well below 2^53; precision loss is irrelevant"
-)]
-fn as_f64(value: u64) -> f64 {
-    value as f64
-}
-
 /// The subset of an `all_the_time` operation file the tool reads. The `total_*`
-/// fields are ignored in favor of the per-iteration slope (or mean), which is
-/// comparable across runs with differing iteration counts. The dispersion fields
-/// are optional so that output recording only a mean still parses.
+/// fields are ignored in favor of the per-iteration slope, which is comparable
+/// across runs with differing iteration counts. The slope and dispersion fields are
+/// optional so that a zero-iteration operation (null slope) and single-span output
+/// (slope but no interval) both parse.
 #[derive(Debug, Deserialize)]
 struct OperationOutput {
     operation: String,
-    mean_processor_time_nanos: u64,
     #[serde(default)]
     slope_processor_time_nanos: Option<f64>,
     #[serde(default)]
@@ -136,7 +129,7 @@ mod tests {
     }
 
     #[test]
-    fn maps_processor_time_from_the_mean() {
+    fn maps_processor_time_from_the_slope() {
         let record = parse_all_the_time_operation(READ_CELL_FIXTURE).unwrap();
         assert_eq!(record.metrics.len(), 1);
 
@@ -146,10 +139,10 @@ mod tests {
     }
 
     #[test]
-    fn output_without_dispersion_carries_no_interval() {
-        // Output that records only a mean (no slope or interval) carries no
-        // dispersion, so the point estimate falls back to the mean and analysis
-        // relies on rank-testing across regimes rather than interval overlap.
+    fn single_span_output_carries_no_interval() {
+        // Single-span output records a slope but no interval, so the metric carries
+        // no dispersion and analysis relies on rank-testing across regimes rather
+        // than interval overlap.
         let record = parse_all_the_time_operation(READ_CELL_FIXTURE).unwrap();
         let metric = &record.metrics[0];
         assert_eq!(metric.std_dev, None);
@@ -161,9 +154,9 @@ mod tests {
     fn records_dispersion_when_present() {
         let record = parse_all_the_time_operation(READ_CELL_DISPERSION_FIXTURE).unwrap();
         let metric = &record.metrics[0];
-        // The slope is preferred as the point estimate and the spans' jitter is
-        // carried as an analytic confidence interval straddling it. The adapter no
-        // longer surfaces a standard deviation.
+        // The slope is the point estimate and the spans' jitter is carried as an
+        // analytic confidence interval straddling it. The adapter no longer surfaces
+        // a standard deviation.
         assert_eq!(metric.value, 20.0);
         assert_eq!(metric.std_dev, None);
         assert_eq!(metric.interval_low, Some(19.346_678_671_819_987));
@@ -171,17 +164,26 @@ mod tests {
     }
 
     #[test]
-    fn prefers_the_slope_over_the_mean() {
-        // A slope distinct from the mean proves the slope is the chosen point
-        // estimate, matching the Criterion adapter's preference.
+    fn reads_the_slope_as_the_point_estimate() {
+        // The slope is the chosen point estimate, matching the Criterion adapter.
         let json = concat!(
-            "{\"operation\":\"op\",\"mean_processor_time_nanos\":20,",
+            "{\"operation\":\"op\",",
             "\"slope_processor_time_nanos\":33.5,",
             "\"interval_low_processor_time_nanos\":30.0,",
             "\"interval_high_processor_time_nanos\":37.0}"
         );
         let record = parse_all_the_time_operation(json).unwrap();
         assert_eq!(record.metrics[0].value, 33.5);
+    }
+
+    #[test]
+    fn missing_slope_maps_to_nan() {
+        // A zero-iteration operation the workload could not run leaves the slope
+        // null (serialized from NaN), which the adapter surfaces as NaN rather than
+        // inventing a figure.
+        let json = "{\"operation\":\"op\",\"slope_processor_time_nanos\":null}";
+        let record = parse_all_the_time_operation(json).unwrap();
+        assert!(record.metrics[0].value.is_nan());
     }
 
     #[test]
@@ -204,11 +206,12 @@ mod tests {
         assert!(error.source().is_some());
     }
 
-    fn operation_json(operation: &str, mean_nanos: u64) -> String {
+    fn operation_json(operation: &str, nanos: u64) -> String {
         format!(
             "{{\"operation\":\"{operation}\",\"total_iterations\":4,\
-             \"total_processor_time_nanos\":{},\"mean_processor_time_nanos\":{mean_nanos}}}",
-            mean_nanos.saturating_mul(4),
+             \"total_processor_time_nanos\":{},\"span_count\":1,\
+             \"slope_processor_time_nanos\":{nanos}}}",
+            nanos.saturating_mul(4),
         )
     }
 }

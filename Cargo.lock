@@ -423,6 +423,8 @@ checksum = "8ae3f5d315924270530207e2a68396c3cc547f6dca3fbdca317cfb1a51edb593"
 name = "cargo-bench-history"
 version = "0.0.3"
 dependencies = [
+ "all_the_time",
+ "alloc_tracker",
  "anyspawn",
  "async-trait",
  "azure_core",

@@ -51,6 +51,8 @@ tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "r
 toml = { workspace = true, features = ["parse", "serde"] }
 
 [dev-dependencies]
+all_the_time = { path = "../all_the_time" }
+alloc_tracker = { path = "../alloc_tracker" }
 base64 = { workspace = true }
 cargo-bench-history-core = { path = "../cargo-bench-history-core", features = ["private-test-util"] }
 futures = { workspace = true, features = ["executor"] }
