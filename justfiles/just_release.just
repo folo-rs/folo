@@ -15,9 +15,9 @@ prepare-release: verify-semver-checks && check-never-published
 # Preflight for `just prepare-release`: proves that `cargo semver-checks` can actually run on
 # this machine before `release-plz update` starts trusting it. release-plz runs
 # cargo-semver-checks to decide whether a bumped version needs to be a *major* bump, but when the
-# tool fails to *run* — most commonly because the installed cargo-semver-checks is too old for the
+# tool fails to *run* - most commonly because the installed cargo-semver-checks is too old for the
 # current toolchain's rustdoc JSON format (e.g. "unsupported rustdoc format v57 ... supported
-# formats are v53, v55, v56") — release-plz silently swallows the error and treats it as "no
+# formats are v53, v55, v56") - release-plz silently swallows the error and treats it as "no
 # breaking changes". That turns a broken tool into an undetected breaking release. This canary
 # runs cargo-semver-checks on one small, fast-to-build package, comparing it against its own `HEAD`
 # so the two sides are byte-identical and the *only* way the check can fail is the tool itself
@@ -32,7 +32,7 @@ verify-semver-checks:
     $PSNativeCommandUseErrorActionPreference = $true
 
     # A tiny published crate that builds quickly, keeping this preflight cheap. Its own API is
-    # irrelevant here — it is only a vehicle for exercising the rustdoc build+parse path that
+    # irrelevant here - it is only a vehicle for exercising the rustdoc build+parse path that
     # release-plz relies on.
     $package = "folo_utils"
 

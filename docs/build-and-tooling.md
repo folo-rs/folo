@@ -11,17 +11,17 @@ We use the [`just`](https://github.com/casey/just) command runner for many commo
 commands. Look inside `*.just` files in `justfiles/` to see the list of available
 commands. Some relevant ones are:
 
-* `just build` — build the entire workspace.
-* `just package="cpulist many_cpus" build` — target specific packages with a command.
-* `just test` — test the entire workspace; this does **not** run doctests, use
+* `just build` - build the entire workspace.
+* `just package="cpulist many_cpus" build` - target specific packages with a command.
+* `just test` - test the entire workspace; this does **not** run doctests, use
   `just test-docs` for that.
-* `just docs` — build API documentation.
+* `just docs` - build API documentation.
 
 The `package` argument must be the first argument to any `just` command, if used.
 
 Avoid running `just bench` (wall-clock Criterion benchmarks) without explicit
 confirmation: they take a lot of time, and the numbers are also noisy and
-machine-dependent — running them on a shared machine produces results that should
+machine-dependent - running them on a shared machine produces results that should
 not be acted on. `just test` already runs a single iteration of every Criterion
 benchmark to validate that they still execute.
 
@@ -29,12 +29,12 @@ benchmark to validate that they still execute.
 under Valgrind's CPU simulator, so the instruction counts and simulated cache
 numbers are deterministic and unaffected by other processes on the machine. It is
 safe to run `just bench-cg` (or `just package=foo bench-cg`) any time without
-asking — including as a smoke test of a new Callgrind benchmark.
+asking - including as a smoke test of a new Callgrind benchmark.
 
 We generally prefer using Just commands over raw Cargo commands if there is a
 suitable Just command defined in one of the `*.just` files.
 
-Do **not** execute `just release` — this is a critical tool reserved for human
+Do **not** execute `just release` - this is a critical tool reserved for human
 use.
 
 Do **not** use VS Code tasks, relying instead on `just` and, if necessary, `cargo`
@@ -53,7 +53,7 @@ slowest step, so it runs last (after the cheaper checks have had a chance to fai
 fast); scope it with `package="foo bar"` to keep it tractable. To run just the
 mutation step on its own, use `just package="foo bar" mutants`.
 
-We operate under a **zero warnings allowed** requirement — fix all warnings that
+We operate under a **zero warnings allowed** requirement - fix all warnings that
 validation generates.
 
 ## Multiplatform codebase
@@ -76,8 +76,8 @@ environment. Prefer PowerShell 7 commands to Bash commands.
 
 ### Every PowerShell snippet starts with the standard preamble
 
-Every PowerShell snippet — each `[script]` block in a `.just` file, each `shell: pwsh`
-`run:` step in a workflow, and every standalone `.ps1`/`.psm1` under `scripts/` — must start
+Every PowerShell snippet - each `[script]` block in a `.just` file, each `shell: pwsh`
+`run:` step in a workflow, and every standalone `.ps1`/`.psm1` under `scripts/` - must start
 with the standard preamble:
 
 ```powershell
@@ -97,7 +97,7 @@ strict mode once at the top rather than per function.)
 `just validate-scripts` runs [PSScriptAnalyzer](https://github.com/PowerShell/PSScriptAnalyzer)
 over everything under `scripts/`, gating on Error/Warning findings. The rule set lives in
 `PSScriptAnalyzerSettings.psd1`, supplemented by repo-local custom rules in
-`scripts/analyzer/FoloAnalyzerRules.psm1` — which catch classes the built-in rules (and strict
+`scripts/analyzer/FoloAnalyzerRules.psm1` - which catch classes the built-in rules (and strict
 mode) miss, such as a `foreach` whose loop variable case-insensitively collides with the
 collection it enumerates. It runs as part of `just validate-local` and the CI `test-scripts` job.
 Silence a genuine false positive with a justified
@@ -106,8 +106,8 @@ is expected to be finding-free.
 
 PSScriptAnalyzer can only see `.ps1`/`.psm1` files, so **nontrivial** inline PowerShell is not
 linted where it sits. Keep inline snippets (justfile `[script]` blocks and workflow `pwsh` steps)
-thin: anything with real logic — branching, loops, parsing, error handling, non-trivial data
-manipulation — belongs in a module under `scripts/`, covered by a Pester suite
+thin: anything with real logic - branching, loops, parsing, error handling, non-trivial data
+manipulation - belongs in a module under `scripts/`, covered by a Pester suite
 (`just test-scripts`) and thus by the linter, with the recipe or workflow step reduced to a thin
 wrapper that imports the module and calls it. A snippet that is just the preamble plus a command
 or two may stay inline.

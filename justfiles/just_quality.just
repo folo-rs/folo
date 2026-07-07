@@ -18,7 +18,7 @@ coverage-measure:
     # cargo-bench-history integration test a redundant on-demand Cargo freshness check. The
     # engine builds into its own dedicated target directory (see `_mock-engine-path`), so
     # neither this pre-build nor any residual on-demand build relinks a binary out of the
-    # shared coverage tree while another test is spawning it — the transient "No such file or
+    # shared coverage tree while another test is spawning it - the transient "No such file or
     # directory" engine-spawn races previously seen on macOS (issue #332).
     $env:MOCK_BENCH_ENGINE = just _mock-engine-path | Select-Object -Last 1
 
@@ -87,7 +87,7 @@ validate-binstall:
 # Statically analyzes every PowerShell script and module under scripts/ with PSScriptAnalyzer
 # (installed and version-pinned by `just install-tools`). It runs the built-in rule set filtered by
 # the curated PSScriptAnalyzerSettings.psd1 PLUS the repo-local custom rules in
-# scripts/analyzer/FoloAnalyzerRules.psm1 — which catch classes the built-in rules miss, notably the
+# scripts/analyzer/FoloAnalyzerRules.psm1 - which catch classes the built-in rules miss, notably the
 # case-insensitive foreach variable-shadowing bug that once shipped a broken release. Any Error/
 # Warning finding fails the recipe; the ruleset is tuned so a clean tree has zero findings (a
 # genuine false positive is silenced with a justified SuppressMessageAttribute, not by relaxing the
@@ -163,7 +163,7 @@ validate-linux:
 
 # Full validation of primary factors, as you would do in a build pipeline before a release.
 # Includes package-scoped mutation testing as its final (and by far slowest) step, since
-# uncaught mutations are a very common cause of CI failures — we catch them before pushing.
+# uncaught mutations are a very common cause of CI failures - we catch them before pushing.
 # Performs validation on the current platform, whatever that may be.
 [group('quality')]
 validate-local:
@@ -195,7 +195,7 @@ validate-extra-linux:
     wsl -e bash -l -c "just package='{{ package }}' validate-extra-local"
 
 # Validation of extra factors that take potentially too long to run in regular validation.
-# Mutation testing is intentionally not here — it runs as part of `validate-local`.
+# Mutation testing is intentionally not here - it runs as part of `validate-local`.
 # Performs validation on the current platform, whatever that may be.
 [group('quality')]
 validate-extra-local:

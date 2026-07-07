@@ -9,7 +9,7 @@ name: Release
 # created with the default GITHUB_TOKEN does not trigger downstream `on: release` /
 # `on: push: tags` workflows, so driving the binary jobs from within this same run
 # (rather than a separate tag-triggered workflow) is what lets the ambient
-# GITHUB_TOKEN suffice — no PAT or GitHub App token needed.
+# GITHUB_TOKEN suffice - no PAT or GitHub App token needed.
 #
 # The non-trivial logic lives in PowerShell `just` recipes (justfiles/just_automation.just)
 # so it can be run and tested locally; the steps here are thin `just` calls.
@@ -79,11 +79,11 @@ jobs:
     # Runs after every successful publish (including no-op pushes), NOT gated on whether
     # anything was published this run. This is what makes retries self-healing: a plain
     # re-run or a bare workflow_dispatch reconciles the actual published state against the
-    # uploaded assets and rebuilds only what is missing — no manual crate list.
+    # uploaded assets and rebuilds only what is missing - no manual crate list.
     needs: publish
     if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    # Fast reconcile work plus up to 90 min for a cold-cache setup-environment — which itself
+    # Fast reconcile work plus up to 90 min for a cold-cache setup-environment - which itself
     # timed out the previous 30-minute cap on a cache miss.
     timeout-minutes: 120
 
@@ -108,7 +108,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # The recipe always emits its Write-Verbose decision history, so the step log records how
-        # the missing-archive plan was derived per crate and target — not just the final count.
+        # the missing-archive plan was derived per crate and target - not just the final count.
         run: just gh-plan-release-binaries
 
   build-binaries:
@@ -160,7 +160,7 @@ jobs:
   alert:
     # File a GitHub issue unique to this run whenever any job above fails, so every failed
     # release is tracked individually (not folded into a rolling issue). `failure()` fires
-    # only on a real failure — a skipped build-binaries (nothing to build) does not count.
+    # only on a real failure - a skipped build-binaries (nothing to build) does not count.
     needs: [publish, plan-binaries, build-binaries]
     if: failure() && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest

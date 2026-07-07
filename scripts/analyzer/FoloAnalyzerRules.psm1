@@ -6,7 +6,7 @@ Set-StrictMode -Version Latest
 # -CustomRulePath -IncludeDefaultRules, so these rules run alongside the built-in rules.
 #
 # This module exists because the built-in rule set (and Set-StrictMode) miss whole classes of
-# real bugs specific to how we write PowerShell — most notably the case-insensitive variable
+# real bugs specific to how we write PowerShell - most notably the case-insensitive variable
 # collision that shipped a broken release (a `foreach` whose loop variable name only differed in
 # case from the collection it enumerated, silently clobbering the collection to its last
 # element). Grow this module as we discover new footguns worth catching mechanically.
@@ -23,7 +23,7 @@ Set-StrictMode -Version Latest
     here as an Error.
 
     The parameter is typed as [ForEachStatementAst] so PSScriptAnalyzer invokes the rule once per
-    matching node — typing it as the broad [ScriptBlockAst] and recursing with FindAll would
+    matching node - typing it as the broad [ScriptBlockAst] and recursing with FindAll would
     report the same statement multiple times (once per enclosing scope).
 #>
 function Measure-ForeachVariableShadowsSource {
@@ -57,7 +57,7 @@ function Measure-ForeachVariableShadowsSource {
     if ($loopVariableName -and $sourceVariableName -and ($loopVariableName -ieq $sourceVariableName)) {
         [Microsoft.Windows.PowerShell.ScriptAnalyzer.Generic.DiagnosticRecord]@{
             Message  = "foreach loop variable '`$$loopVariableName' case-insensitively collides " +
-                "with the enumerated variable '`$$sourceVariableName' — they are the SAME " +
+                "with the enumerated variable '`$$sourceVariableName' - they are the SAME " +
                 "variable, so the collection is clobbered to its last element. Rename the loop " +
                 "variable (e.g. '`$item')."
             Extent   = $ForEachStatementAst.Extent

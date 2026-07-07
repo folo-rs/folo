@@ -177,15 +177,15 @@ function Get-MissingBinaryMatrix {
         [object[]] $Target = (Get-ReleaseTarget)
     )
 
-    # Verbose emits the full decision history — every crate, its expected tag, whether the
-    # release exists, and the per-target present/missing verdict — so a CI run's log explains
+    # Verbose emits the full decision history - every crate, its expected tag, whether the
+    # release exists, and the per-target present/missing verdict - so a CI run's log explains
     # exactly how the plan (and its emptiness or non-emptiness) was derived, not just the total.
     Write-Verbose "Reconciling desired vs. uploaded binary archives. Crates: $($Crate.Name -join ', '). Target triples: $(($Target.Triple) -join ', ')."
 
     # The loop variables must not differ from the collection parameters ($Crate, $Target) by
     # case alone: PowerShell variable names are case-insensitive, so `foreach ($target in $Target)`
     # would make `$target` and `$Target` the same variable and leave `$Target` holding only its
-    # last element after the loop — so every crate after the first would reconcile against a single
+    # last element after the loop - so every crate after the first would reconcile against a single
     # leftover target (the last one) instead of the full set. Hence $crateInfo / $releaseTarget.
     $rows = [System.Collections.Generic.List[object]]::new()
     foreach ($crateInfo in $Crate) {
@@ -203,10 +203,10 @@ function Get-MissingBinaryMatrix {
         foreach ($releaseTarget in $Target) {
             $archive = "$($crateInfo.Name)-v$($crateInfo.Version)-$($releaseTarget.Triple).zip"
             if ($assets -contains $archive) {
-                Write-Verbose "  Target $($releaseTarget.Triple): '$archive' already uploaded — skipping."
+                Write-Verbose "  Target $($releaseTarget.Triple): '$archive' already uploaded - skipping."
                 continue
             }
-            Write-Verbose "  Target $($releaseTarget.Triple): '$archive' missing — queuing a build on runner '$($releaseTarget.Os)'."
+            Write-Verbose "  Target $($releaseTarget.Triple): '$archive' missing - queuing a build on runner '$($releaseTarget.Os)'."
             $rows.Add([pscustomobject]@{
                     name    = $crateInfo.Name
                     version = $crateInfo.Version

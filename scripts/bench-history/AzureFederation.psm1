@@ -5,8 +5,8 @@
 #
 # The `collect` and `analyze` jobs both federate into Azure with the SAME two identifiers, which
 # live (non-secret) in constants.env. Two jobs re-exporting those under the standard AZURE_* names
-# is exactly the kind of copy-pasted inline snippet that drifts — and where the recent
-# case-collision footgun hid — so the parse-and-map logic lives here, behind small seams the Pester
+# is exactly the kind of copy-pasted inline snippet that drifts - and where the recent
+# case-collision footgun hid - so the parse-and-map logic lives here, behind small seams the Pester
 # suite (AzureFederation.Tests.ps1) exercises, and each job's workflow step is a thin import + call.
 #
 # constants.env is read directly (not via `just`'s dotenv) because these steps re-export under

@@ -27,7 +27,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup environment
-        # The delta job runs before — and gates — every package-scoped job, so it uses the same
+        # The delta job runs before - and gates - every package-scoped job, so it uses the same
         # setup-environment composite as they do rather than a hand-picked minimal toolchain. That
         # keeps a single install path (cargo-delta comes from `just install-tools` like every other
         # tool) and, on a cold cache, primes the shared `prerequisites` cache this job's dependents
@@ -77,8 +77,8 @@ jobs:
 
   # PowerShell test suite for the standalone scripts under scripts/ (the release-automation and
   # binstall-validation modules), plus PSScriptAnalyzer static analysis of those scripts and the
-  # binstall-metadata check on the real workspace. Runs unconditionally — independent of the
-  # `delta` package analysis — because the scripts are not Cargo packages, so a change touching
+  # binstall-metadata check on the real workspace. Runs unconditionally - independent of the
+  # `delta` package analysis - because the scripts are not Cargo packages, so a change touching
   # only scripts/ would otherwise be validated by nothing; the static-analysis and binstall checks
   # ride along here because they reuse the same environment and are seconds long.
   test-scripts:
@@ -100,8 +100,8 @@ jobs:
       - name: Validate binstall metadata
         run: just validate-binstall
 
-  # Validates the GitHub Actions workflow files with actionlint. Runs unconditionally — independent
-  # of the `delta` package analysis — because the workflow files are not Cargo packages, so a
+  # Validates the GitHub Actions workflow files with actionlint. Runs unconditionally - independent
+  # of the `delta` package analysis - because the workflow files are not Cargo packages, so a
   # change touching only .github/workflows/ would otherwise be validated by nothing. actionlint
   # is a fast static check, so running it on every PR is cheap.
   validate-workflows:
@@ -189,7 +189,7 @@ jobs:
       - name: Run clippy dev on ${{ matrix.platform }}
         run: just package="${{ needs.delta.outputs.packages }}" clippy dev
 
-  # The x86_64 test pass (ubuntu-latest and windows-latest — both x86_64). Runs the full
+  # The x86_64 test pass (ubuntu-latest and windows-latest - both x86_64). Runs the full
   # test suite (unit, integration and example tests) with coverage instrumentation, so the
   # coverage report is a side effect of the regular test run rather than a second,
   # separately re-executed pass. Also runs the benchmark targets once to verify they do not
@@ -667,12 +667,12 @@ jobs:
   # and BENCH_HISTORY_REQUIRE_AZURITE turns an unreachable emulator into a hard
   # failure, so a misconfigured emulator can never silently degrade into skipping
   # every test. This job also collects coverage so the azure.rs network paths
-  # reach Codecov — the multi-platform `test-x64` job runs without an emulator and
+  # reach Codecov - the multi-platform `test-x64` job runs without an emulator and
   # therefore cannot cover them; Codecov merges this azure-flagged upload with it.
   #
   # Runs on a single platform (Linux) by choice, not by limitation: the Azure Blob
   # backend is OS-agnostic network I/O (HTTP via the azure SDK), so exercising it on
-  # one platform fully covers it — also running it on Windows/macOS would only
+  # one platform fully covers it - also running it on Windows/macOS would only
   # duplicate the same coverage. Linux is picked because it is the cheapest/fastest
   # runner and because Azurite runs directly on the host there via npm (service
   # containers cannot reliably bind it to a reachable address). Package-gated: the
@@ -721,13 +721,13 @@ jobs:
   # Complements `test-azurite` by exercising the Microsoft Entra ID authentication
   # path that the emulator (account-key/SAS) never touches: a real Storage account
   # with shared-key access disabled, reached over HTTPS, authenticated through
-  # GitHub OIDC workload identity federation — no stored secret. Each test creates a
+  # GitHub OIDC workload identity federation - no stored secret. Each test creates a
   # fresh blob container and deletes it when it finishes (even on panic); the final
   # `if: always()` sweep is a backstop for a container a crashed run might leave.
   #
   # Gated two ways so it only runs when it can succeed:
   #   * package-gated to cargo-bench-history (same gate as test-azurite);
-  #   * same-repo only — a fork PR cannot mint an OIDC token for our tenant, so it
+  #   * same-repo only - a fork PR cannot mint an OIDC token for our tenant, so it
   #     would fail federation; the condition lets fork PRs skip cleanly instead.
   # The Azure identifiers it needs are committed (non-secret) in constants.env, the
   # same source `just test-azure` reads locally, so local and CI target the same
@@ -743,7 +743,7 @@ jobs:
   # round-trip end to end.
   #
   # The account, managed identity and federated credentials are scripted/Bicep'd in
-  # infra/azure-bench-history-test/ — see that directory's README to deploy or re-create.
+  # infra/azure-bench-history-test/ - see that directory's README to deploy or re-create.
   test-azure:
     needs: [delta]
     if: >-
@@ -755,7 +755,7 @@ jobs:
     # JWT proving "this run is repo folo-rs/folo on ref X"). `azure/login@v2` hands
     # that token to Azure, which matches it against the managed identity's federated
     # credentials (see infra/azure-bench-history-test/main.bicep) and issues an access
-    # token — so CI authenticates with no stored secret. The default GITHUB_TOKEN
+    # token - so CI authenticates with no stored secret. The default GITHUB_TOKEN
     # cannot request an OIDC token unless this permission is granted explicitly (and
     # fork PRs cannot get it at all, hence the same-repo gate above). `contents: read`
     # is the minimum the checkout needs.
@@ -801,8 +801,8 @@ jobs:
         run: ./infra/azure-bench-history-test/cleanup-containers.ps1 -MinAgeMinutes 180
 
   # Variant of test-azure that exercises cargo-bench-history's SELF-MINTING GitHub
-  # OIDC credential — the exact credential the prod collection (bench-history.yml)
-  # depends on — against the real test account. The unit tests in storage/github_oidc.rs
+  # OIDC credential - the exact credential the prod collection (bench-history.yml)
+  # depends on - against the real test account. The unit tests in storage/github_oidc.rs
   # stub the HTTP exchange, and test-azure above takes the local-az DeveloperToolsCredential
   # fallback, so without this job nothing would prove the self-minting path actually
   # round-trips real GitHub OIDC -> Entra -> Blob until the post-merge collection run.
@@ -879,19 +879,19 @@ jobs:
   # when cargo-bench-history is affected. The per-commit upload count is therefore
   # variable. codecov.yml sets `codecov.notify.manual_trigger: true`, so Codecov posts
   # NO coverage status or PR comment until this job runs the CLI `send-notifications`
-  # command — which it does only after every coverage-producing job has finished. That
+  # command - which it does only after every coverage-producing job has finished. That
   # way Codecov computes the status from the complete set of uploads instead of
   # reporting a misleadingly low figure off a partial set (see codecov.yml for the
   # full rationale and why this is preferred over a hardcoded `after_n_builds`).
   #
   # It depends on `test-x64` and `test-azurite` (the only coverage producers;
   # `test-azure` / `test-azure-gh` upload none). The `!cancelled()` status function lets
-  # it run even when `test-azurite` is skipped — without a status function a skipped
+  # it run even when `test-azurite` is skipped - without a status function a skipped
   # dependency would skip this job too. It releases notifications only when every expected
   # upload actually landed: `test-x64` must have succeeded, and `test-azurite` must have
   # either succeeded (its azure upload landed) or been skipped (cargo-bench-history not
   # affected, so no azure upload was expected). If `test-x64` failed, or `test-azurite`
-  # ran and failed, an expected upload is missing and the build is already red — so we do
+  # ran and failed, an expected upload is missing and the build is already red - so we do
   # NOT release a status off an incomplete set, which would post the very "coverage
   # decreased" result this gate exists to prevent. A `skip_all` run uploads no coverage at
   # all, so `test-x64` is skipped and this job does not run.

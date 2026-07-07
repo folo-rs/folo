@@ -16,14 +16,14 @@
 # ignore the key. `--skip-existing` makes a re-run on an unchanged commit a no-op append (each
 # already-stored object is skipped, not overwritten), so a re-triggered run of an
 # already-collected commit never bumps the cache-invalidation marker the `analyze` job's
-# read-through cache depends on — a re-run of the same commit is not "better" data, so there is
+# read-through cache depends on - a re-run of the same commit is not "better" data, so there is
 # nothing to replace.
 [group('automation')]
 gh-collect-bench-history:
     cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- collect --workspace --exclude benchmarks --machine-key github --skip-existing --verbose
 
 # Analyzes the collected history for regressions across ALL engines and target triples, but
-# only the `github` machine key — the fixed key `gh-collect-bench-history` stamps on the
+# only the `github` machine key - the fixed key `gh-collect-bench-history` stamps on the
 # GitHub runner pool's data. Restricting it here (rather than `--machine-key all`) keeps this
 # job surveying only GitHub-pool history and never mixes in a stray key some other machine may
 # have inserted into the shared store. It writes four artefacts INTO the given {{dir}}:
@@ -45,7 +45,7 @@ gh-collect-bench-history:
 # downloaded at most once across runs instead of in full every run. The bench-history.yml
 # `analyze` job persists that directory between runs via `actions/cache`; its `path:` and the
 # report/summary/notable filenames its steps read MUST match the names written here. The cloud
-# history is append-only (collection uses `--skip-existing`), so the cache only ever tops up —
+# history is append-only (collection uses `--skip-existing`), so the cache only ever tops up -
 # a stale mirror is wiped via the cloud-side marker only after a deliberate `--overwrite`/`prune`.
 [group('automation')]
 [script]
@@ -76,8 +76,8 @@ gh-analyze-bench-history dir:
 # scripts/bench-history/BenchHistoryIssue.psm1 (Pester-tested via `just test-scripts`), the one
 # way this workflow opens issues now that JasonEtco/create-an-issue is gone: `gh` reads the body
 # from any path (--body-file), so it can live in the runner temp dir, outside the repo checkout.
-# The title is the dedup key — a persisting condition updates one rolling issue instead of opening
-# a new one each run — so both the regression alert ('Benchmark regressions detected') and the
+# The title is the dedup key - a persisting condition updates one rolling issue instead of opening
+# a new one each run - so both the regression alert ('Benchmark regressions detected') and the
 # workflow-failure alert route through here with their own title/label. `label` is the
 # comma-separated label list applied on creation. Needs GH_TOKEN in the environment (the workflow
 # supplies it).
@@ -132,8 +132,8 @@ gh-compose-release-config output:
 
 # Publishes changed crates to crates.io via release-plz using the composed CI config, with
 # bounded retries (3 attempts, 15 minutes apart) to ride out crates.io rate limits and the
-# short-lived OIDC token. release-plz is idempotent — it re-checks the registry and skips
-# already-published versions — so a retry (or a whole re-run) safely resumes a partially
+# short-lived OIDC token. release-plz is idempotent - it re-checks the registry and skips
+# already-published versions - so a retry (or a whole re-run) safely resumes a partially
 # published release, and each attempt mints a fresh OIDC token. NOT for local use: it
 # performs real publishes. See docs/release-automation.md.
 [group('automation')]
@@ -150,7 +150,7 @@ gh-release config:
 # published binary crate's GitHub release, and emits the matrix of missing (crate, target)
 # pairs still to build as the `matrix` / `has_binaries` step outputs (also printed). This is
 # what makes retries self-healing: a re-run rebuilds only whatever is still missing, with no
-# hardcoded crate list. Safe to run locally — with no releases yet it reports an empty
+# hardcoded crate list. Safe to run locally - with no releases yet it reports an empty
 # matrix. See .github/workflows/release.yml and docs/release-automation.md.
 [group('automation')]
 [script]

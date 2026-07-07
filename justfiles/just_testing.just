@@ -182,7 +182,7 @@ bench-history-stress *ARGS:
 # against cloud storage.
 #
 # Requires `az login` (the harness and azcopy authenticate as your Entra user via
-# the Azure CLI) and the `azcopy` binary on PATH for the bulk upload — both are
+# the Azure CLI) and the `azcopy` binary on PATH for the bulk upload - both are
 # installed by `just install-tools`. The account defaults to
 # BENCH_HISTORY_TEST_AZURE_ACCOUNT from constants.env (shared with the test-azure job);
 # override it by passing a name as the first argument. Any further harness flags
@@ -223,7 +223,7 @@ bench-history-stress-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_TEST_AZURE_
 # trust that cert by disabling certificate validation. If an emulator is already listening on
 # 127.0.0.1:10000 this recipe reuses it (which must therefore also be an HTTPS
 # `--oauth basic` emulator); otherwise it starts one (in-memory, no persisted state)
-# and stops it again when the tests finish — even on failure. BENCH_HISTORY_REQUIRE_AZURITE
+# and stops it again when the tests finish - even on failure. BENCH_HISTORY_REQUIRE_AZURITE
 # is set so an unreachable emulator is a hard error rather than a silent skip, mirroring
 # the CI job. The `azure azurite` test filter selects the Azure-backend tests by the
 # naming convention (the `storage::azure` unit tests and the `*_in_azurite` integration
@@ -324,7 +324,7 @@ test-azurite:
 #
 # Requires `az login` (the tests authenticate as your Entra user via the Azure
 # CLI) and a deployed storage account that grants your user the `Storage Blob
-# Data Contributor` role — see infra/azure-bench-history-test/ to deploy one. The
+# Data Contributor` role - see infra/azure-bench-history-test/ to deploy one. The
 # account defaults to BENCH_HISTORY_TEST_AZURE_ACCOUNT from constants.env (shared with
 # CI); override it by passing a name: `just test-azure <account>`.
 #
@@ -358,7 +358,7 @@ test-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_TEST_AZURE_ACCOUNT', ''):
 #
 # Benches go through `cargo test --benches` (not nextest): this invokes each bench binary's
 # main() once with `--test`, which Criterion treats as "run each bench once" and Gungraun
-# treats as its normal one-shot Valgrind run — exactly the smoke check we want here.
+# treats as its normal one-shot Valgrind run - exactly the smoke check we want here.
 [group('testing')]
 [script]
 test-benches FILTER="":

@@ -330,7 +330,7 @@ Describe 'Get-MissingBinaryMatrix (mocked gh release view)' {
     }
 
     It 'rethrows a gh failure that is not a missing release' {
-        # An auth/network/API error must propagate, not be treated as "no release" — otherwise
+        # An auth/network/API error must propagate, not be treated as "no release" - otherwise
         # the workflow could build an empty matrix and look successful while binaries are missing.
         $crate = [pscustomobject]@{ Name = 'api-error'; Version = '5.0.0' }
         { Get-MissingBinaryMatrix -Crate $crate -Target $script:TwoTargets } | Should -Throw '*503*'

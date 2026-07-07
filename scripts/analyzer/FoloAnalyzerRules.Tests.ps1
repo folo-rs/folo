@@ -5,7 +5,7 @@ Set-StrictMode -Version Latest
 # Pester suite for the repo-local PSScriptAnalyzer custom rules in FoloAnalyzerRules.psm1. Each
 # case runs the real analyzer over a script snippet with only our custom rule enabled, so the
 # tests exercise the rule exactly as `just validate-scripts` invokes it. The headline guarantee is
-# that the foreach case-collision that shipped a broken release is now flagged as an Error — and
+# that the foreach case-collision that shipped a broken release is now flagged as an Error - and
 # that legitimately-distinct loop variables stay clean (no false positives).
 
 BeforeAll {

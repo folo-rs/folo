@@ -14,7 +14,7 @@ install-tools:
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
-    # This is the single source of truth for which tools — and which versions — get installed. CI
+    # This is the single source of truth for which tools - and which versions - get installed. CI
     # runs this same recipe on nearly every job via the setup-environment composite action, so
     # there is no separate CI install path to keep in sync. The only per-job variation is the
     # skip_azcopy / skip_azurite flags above, which trim two tools no ordinary CI job needs.
@@ -28,8 +28,8 @@ install-tools:
 
     # Every tool is pinned to an explicit version from constants.env (dotenv, configured in the
     # root justfile, exposes each `FOO_VERSION` as `$env:FOO_VERSION`). This is deliberate: a plain
-    # `cargo install <crate>` never upgrades an already-installed crate — it prints "already
-    # installed" and skips — so an unpinned tool would freeze at whatever version first landed. With
+    # `cargo install <crate>` never upgrades an already-installed crate - it prints "already
+    # installed" and skips - so an unpinned tool would freeze at whatever version first landed. With
     # a pin, `cargo install <crate>@<version>` replaces an installed version that differs from the
     # pin and is a fast no-op when it already matches, so bumping a tool is just editing its version
     # in constants.env. (cargo-mutants is installed further down because it is skipped on ARM.)
@@ -84,7 +84,7 @@ install-tools:
     }
 
     # azcopy drives the bulk upload in the cargo-bench-history Azure stress harness
-    # (`just bench-history-stress-azure`), which is on-demand only — no CI job needs it, so CI
+    # (`just bench-history-stress-azure`), which is on-demand only - no CI job needs it, so CI
     # sets skip_azcopy=true. It is not a cargo crate and has no installer, so a helper script
     # fetches the pinned official binary; see scripts/install-azcopy.ps1 (including its rationale
     # for the destination). No-op when azcopy is already present.
@@ -112,7 +112,7 @@ install-tools:
         Write-Host "Skipping Azurite install (skip_azurite=true)."
     } elseif (Get-Command npm -ErrorAction SilentlyContinue) {
         # A global npm install can fail for reasons unrelated to the rest of the toolchain
-        # — most commonly an npm global prefix pointing at a root-owned directory (e.g. the
+        # - most commonly an npm global prefix pointing at a root-owned directory (e.g. the
         # default /usr/local on a system Node), which yields EACCES without sudo. Since the
         # cargo tools above have already installed, treat such a failure as non-fatal: warn
         # and continue rather than aborting the whole recipe over an optional emulator.
@@ -121,7 +121,7 @@ install-tools:
         } catch {
             Write-Warning (
                 "Failed to install Azurite via 'npm install -g azurite@3.35.0': $_. " +
-                "Skipping it — the rest of the toolchain is unaffected and Azurite is only " +
+                "Skipping it - the rest of the toolchain is unaffected and Azurite is only " +
                 "needed for 'just test-azurite'. This is usually an npm global-prefix " +
                 "permission issue (a root-owned prefix like /usr/local yields EACCES); fix it " +
                 "with 'npm config set prefix ~/.npm-global' or use a user-owned Node (nvm), " +
