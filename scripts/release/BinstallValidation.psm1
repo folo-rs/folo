@@ -9,7 +9,7 @@
 # recipe) and covered by a Pester suite (BinstallValidation.Tests.ps1) so it can be exercised
 # locally against fixtures rather than only in CI.
 
-Set-StrictMode -Version 3.0
+Set-StrictMode -Version Latest
 
 # The exact binstall contract the release workflow publishes. Keep in lockstep with
 # .github/workflows/release.yml (`zip: all`, archive root) and docs/release-automation.md.
@@ -45,6 +45,8 @@ function Test-BinstallMetadata {
     # Validates a single `cargo metadata` package's `[package.metadata.binstall]` against the
     # release workflow's asset-naming contract. Returns the list of human-readable problems for
     # the package; an empty list means the package is compliant.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '',
+        Justification = '"Metadata" is a mass noun (the cargo term), not a plural of "metadatum".')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][object] $Package

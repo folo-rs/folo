@@ -39,8 +39,13 @@ jobs:
         id: compute
         shell: pwsh
         run: |
+          Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
+
+          # The cargo-delta pipeline lives in the Pester-tested Delta module, shared with the local
+          # `just delta` recipe so the two cannot drift. See scripts/build/Delta.psm1.
+          Import-Module ./scripts/build/Delta.psm1 -Force
 
           if ($env:GITHUB_EVENT_NAME -eq 'push') {
             Write-Host 'Push to main detected, running full workspace validation.'
@@ -52,63 +57,30 @@ jobs:
             exit 0
           }
 
-          $configPath = Join-Path (Get-Location) 'delta.toml'
-          $worktreeDir = Join-Path ([System.IO.Path]::GetTempPath()) ('delta-baseline-' + [guid]::NewGuid().ToString('n'))
-          $baselineJson = [System.IO.Path]::GetTempFileName()
+          # Full history is already checked out (fetch-depth: 0), so -SkipFetch avoids a redundant
+          # fetch; the module analyzes origin/main in a throwaway worktree and cleans up after
+          # itself (no artifacts land in the checkout to dirty the tree).
+          $affected = @(Invoke-CargoDelta -SkipFetch)
+          $output = Get-DeltaOutput -Affected $affected
 
-          try {
-            Write-Host 'Analyzing current branch...'
-            cargo delta -c $configPath analyze | Set-Content -Path 'current.json' -Encoding utf8
-
-            Write-Host 'Analyzing baseline (origin/main)...'
-            git worktree add $worktreeDir origin/main
-            Push-Location $worktreeDir
-            try {
-              cargo delta -c $configPath analyze | Set-Content -Path $baselineJson -Encoding utf8
-            } finally {
-              Pop-Location
-            }
-
-            Write-Host 'Computing delta...'
-            cargo delta -c $configPath run --baseline $baselineJson --current current.json |
-              Set-Content -Path 'delta.json' -Encoding utf8
-
-            Get-Content 'delta.json' -Raw | Write-Host
-
-            $delta = Get-Content 'delta.json' -Raw | ConvertFrom-Json
-            $affected = @()
-            if ($delta.Affected) { $affected = @($delta.Affected) }
-            $packages = $affected -join ' '
-            $packagesJson = if ($affected.Count -eq 0) {
-              '[]'
-            } else {
-              '[' + (($affected | ForEach-Object { ConvertTo-Json $_ -Compress }) -join ',') + ']'
-            }
-
-            if ($affected.Count -eq 0) {
-              Write-Host 'No packages affected by changes.'
-              $skipAll = 'true'
-            } else {
-              Write-Host "Affected packages: $packages"
-              $skipAll = 'false'
-            }
-
-            @(
-              "packages=$packages"
-              "packages_json=$packagesJson"
-              "skip_all=$skipAll"
-            ) | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
-          } finally {
-            git worktree remove $worktreeDir --force 2>$null
-            if (Test-Path $worktreeDir) { Remove-Item -Recurse -Force $worktreeDir -ErrorAction SilentlyContinue }
-            if (Test-Path $baselineJson) { Remove-Item -Force $baselineJson -ErrorAction SilentlyContinue }
+          if ($affected.Count -eq 0) {
+            Write-Host 'No packages affected by changes.'
+          } else {
+            Write-Host "Affected packages: $($output.Packages)"
           }
 
+          @(
+            "packages=$($output.Packages)"
+            "packages_json=$($output.PackagesJson)"
+            "skip_all=$($output.SkipAll)"
+          ) | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
+
   # PowerShell test suite for the standalone scripts under scripts/ (the release-automation and
-  # binstall-validation modules), plus the binstall-metadata check on the real workspace. Runs
-  # unconditionally — independent of the `delta` package analysis — because the scripts are not
-  # Cargo packages, so a change touching only scripts/ would otherwise be validated by nothing;
-  # the binstall check rides along here because it reuses the same environment and is seconds long.
+  # binstall-validation modules), plus PSScriptAnalyzer static analysis of those scripts and the
+  # binstall-metadata check on the real workspace. Runs unconditionally — independent of the
+  # `delta` package analysis — because the scripts are not Cargo packages, so a change touching
+  # only scripts/ would otherwise be validated by nothing; the static-analysis and binstall checks
+  # ride along here because they reuse the same environment and are seconds long.
   test-scripts:
     runs-on: ubuntu-latest
 
@@ -121,6 +93,9 @@ jobs:
 
       - name: Run script test suites
         run: just test-scripts
+
+      - name: Validate scripts (PSScriptAnalyzer)
+        run: just validate-scripts
 
       - name: Validate binstall metadata
         run: just validate-binstall

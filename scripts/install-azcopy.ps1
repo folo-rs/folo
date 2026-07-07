@@ -46,6 +46,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
+Set-StrictMode -Version Latest
 $VerbosePreference = 'Continue'
 
 # The pinned azcopy release. Keep $AzCopyVersion and the per-platform digests in

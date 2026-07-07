@@ -25,6 +25,7 @@ clean:
 [group('basics')]
 [script]
 docs:
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
@@ -34,6 +35,7 @@ docs:
 [group('basics')]
 [script]
 docs-default-features:
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
@@ -43,6 +45,7 @@ docs-default-features:
 [group('basics')]
 [script]
 docs-open:
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 

@@ -5,6 +5,7 @@ audit:
 [group('release')]
 [script]
 prepare-release: verify-semver-checks && check-never-published
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
@@ -26,6 +27,7 @@ prepare-release: verify-semver-checks && check-never-published
 [group('release')]
 [script]
 verify-semver-checks:
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
@@ -64,6 +66,7 @@ verify-semver-checks:
 [group('release')]
 [script]
 check-never-published:
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
     Import-Module ./scripts/release/ReleaseAutomation.psm1 -Force

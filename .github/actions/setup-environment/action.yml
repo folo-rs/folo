@@ -100,7 +100,9 @@ runs:
       id: rust-toolchain
       shell: pwsh
       run: |
+        Set-StrictMode -Version Latest
         $ErrorActionPreference = 'Stop'
+        $PSNativeCommandUseErrorActionPreference = $true
         $match = Select-String -Path 'rust-toolchain.toml' -Pattern '^\s*channel\s*=\s*"([^"]+)"' | Select-Object -First 1
         if (-not $match) { throw 'Could not read the pinned channel from rust-toolchain.toml' }
         $channel = $match.Matches[0].Groups[1].Value

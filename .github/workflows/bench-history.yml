@@ -84,34 +84,16 @@ jobs:
       - name: Configure Azure federation identity from constants.env
         shell: pwsh
         run: |
+          Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
 
-          # constants.env is a KEY=value file (with # comment lines). Read the two
-          # identifiers the tool federates with and re-export them under the standard
-          # AZURE_* names GitHub-injected steps and the tool read.
-          $values = @{}
-          foreach ($line in Get-Content constants.env) {
-            if ($line -match '^\s*([^#=]+)=(.*)$') {
-              $values[$Matches[1].Trim()] = $Matches[2].Trim()
-            }
-          }
-
-          # Fail fast if either identifier is missing or empty: an empty
-          # AZURE_CLIENT_ID / AZURE_TENANT_ID would otherwise silently break the tool's
-          # OIDC federation far later with an opaque error, whereas the previous bash
-          # step's `set -u` errored here.
-          function Get-RequiredConstant($name) {
-            $value = $values[$name]
-            if ([string]::IsNullOrWhiteSpace($value)) {
-              throw "constants.env is missing a non-empty '$name' (required for Azure federation)."
-            }
-            return $value
-          }
-          @(
-            "AZURE_CLIENT_ID=$(Get-RequiredConstant 'AZURE_PROD_CLIENT_ID')"
-            "AZURE_TENANT_ID=$(Get-RequiredConstant 'AZURE_TENANT_ID')"
-          ) | Add-Content -Path $env:GITHUB_ENV -Encoding utf8
+          # constants.env holds the two non-secret identifiers the collect/analyze jobs federate
+          # with; the module re-exports them under the standard AZURE_* names the tool reads, failing
+          # loudly if either is missing. Shared by both jobs so the two cannot drift. See
+          # scripts/bench-history/AzureFederation.psm1.
+          Import-Module ./scripts/bench-history/AzureFederation.psm1 -Force
+          Set-AzureFederationEnv -ConstantsPath constants.env -EnvFilePath $env:GITHUB_ENV | Out-Null
 
       # The deterministic engines (Callgrind, allocation/time counters) are
       # hardware-independent; the wall-clock engines are pinned to the fixed `github` machine
@@ -156,34 +138,14 @@ jobs:
       - name: Configure Azure federation identity from constants.env
         shell: pwsh
         run: |
+          Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
 
-          # constants.env is a KEY=value file (with # comment lines). Read the two
-          # identifiers the tool federates with and re-export them under the standard
-          # AZURE_* names the tool reads.
-          $values = @{}
-          foreach ($line in Get-Content constants.env) {
-            if ($line -match '^\s*([^#=]+)=(.*)$') {
-              $values[$Matches[1].Trim()] = $Matches[2].Trim()
-            }
-          }
-
-          # Fail fast if either identifier is missing or empty: an empty
-          # AZURE_CLIENT_ID / AZURE_TENANT_ID would otherwise silently break the tool's
-          # OIDC federation far later with an opaque error, whereas the previous bash
-          # step's `set -u` errored here.
-          function Get-RequiredConstant($name) {
-            $value = $values[$name]
-            if ([string]::IsNullOrWhiteSpace($value)) {
-              throw "constants.env is missing a non-empty '$name' (required for Azure federation)."
-            }
-            return $value
-          }
-          @(
-            "AZURE_CLIENT_ID=$(Get-RequiredConstant 'AZURE_PROD_CLIENT_ID')"
-            "AZURE_TENANT_ID=$(Get-RequiredConstant 'AZURE_TENANT_ID')"
-          ) | Add-Content -Path $env:GITHUB_ENV -Encoding utf8
+          # Same shared seam the collect job uses: re-export the two committed identifiers under the
+          # standard AZURE_* names the tool reads. See scripts/bench-history/AzureFederation.psm1.
+          Import-Module ./scripts/bench-history/AzureFederation.psm1 -Force
+          Set-AzureFederationEnv -ConstantsPath constants.env -EnvFilePath $env:GITHUB_ENV | Out-Null
 
       # All bench-history scratch — the read-through cache and every rendered report/summary/
       # notable/issue-body file — lives under the runner temp directory, OUTSIDE the repo
@@ -198,7 +160,9 @@ jobs:
         id: scratch
         shell: pwsh
         run: |
+          Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $dir = Join-Path $env:RUNNER_TEMP 'bench-history'
           New-Item -ItemType Directory -Path $dir -Force | Out-Null
           "dir=$dir" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
@@ -236,7 +200,9 @@ jobs:
         env:
           SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
         run: |
+          Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $value = (Get-Content (Join-Path $env:SCRATCH_DIR 'notable.txt') -Raw).Trim()
           "value=$value" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
 
@@ -272,7 +238,9 @@ jobs:
           REPORT_ARTIFACT_URL: ${{ steps.full_reports.outputs.artifact-url }}
           SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
         run: |
+          Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
 
           $summary = (Get-Content (Join-Path $env:SCRATCH_DIR 'summary.md') -Raw).TrimEnd()
           $fullReport = "**Full report:** the complete Markdown and JSON reports are attached to this workflow run. [Download the full report bundle]($env:REPORT_ARTIFACT_URL)."
@@ -348,15 +316,17 @@ jobs:
       # run, and auto-closed by the `resolve` job once the workflow is green again. The ci-failure
       # label is what `resolve` narrows its close search to. The module is imported directly (not
       # via `just`) because this lightweight notifier deliberately skips the build-environment
-      # setup — same raw-`gh`-in-pwsh weight as the sibling `resolve` job; only checkout + the
-      # preinstalled gh CLI are needed.
+      # setup — the same shape (checkout + preinstalled gh CLI + module import, no build-env setup)
+      # as the sibling `resolve` job's own close step.
       - name: Open or update failure issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         shell: pwsh
         run: |
+          Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           Import-Module ./scripts/bench-history/BenchHistoryIssue.psm1 -Force
 
           # Single-quoted here-string keeps the ``main`` inline-code backticks literal; only
@@ -397,18 +367,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
-    # Least privilege: this job only talks to the issues API (no checkout, no contents).
+    # Minimal for the work it does: issues:write to close the alert, contents:read for the checkout
+    # that puts the shared BenchHistoryIssue module on disk (the close logic lives there so it is
+    # unit-tested against a mocked gh, mirroring how the alert job files via the same module).
     permissions:
+      contents: read
       issues: write
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
       # The alert job files exactly one rolling issue carrying $FAILURE_ISSUE_TITLE and the
-      # ci-failure label; find any still-open instance and close it with an audit trail
-      # linking the green run. Uses the preinstalled gh CLI (GH_REPO lets it run without a
-      # checkout). Listing by `--label ci-failure` already excludes the advisory regression
-      # issue (label `regression`, closed by hand); the exact-title match mirrors the alert
-      # path's own dedup key so the two stay in lockstep. `--limit` defeats the 30-result
-      # default so a backlog of historical duplicates would all be closed.
+      # ci-failure label; find any still-open instance and close it with an audit trail linking the
+      # green run. Close-RollingIssue lists by `--label ci-failure` (which already excludes the
+      # advisory regression issue, label `regression`, closed by hand) and closes every exact-title
+      # match — the same dedup key the alert path files under, so the two stay in lockstep.
       - name: Close failure issue if open
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -416,17 +390,16 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         shell: pwsh
         run: |
+          Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
+          Import-Module ./scripts/bench-history/BenchHistoryIssue.psm1 -Force
 
-          $issues = gh issue list --state open --label ci-failure --limit 100 --json number,title |
-            ConvertFrom-Json
-          $matching = @($issues | Where-Object { $_.title -eq $env:FAILURE_ISSUE_TITLE })
-          if ($matching.Count -eq 0) {
+          $comment = "✅ The bench-history workflow is green again. Auto-closing this alert. Successful run: $env:RUN_URL"
+          $closed = @(Close-RollingIssue -Title $env:FAILURE_ISSUE_TITLE -Label 'ci-failure' -Comment $comment -Verbose)
+          if ($closed.Count -eq 0) {
             Write-Host 'No open failure issue to close.'
-            exit 0
-          }
-          foreach ($issue in $matching) {
-            Write-Host "Closing #$($issue.number)"
-            gh issue close $issue.number --reason completed --comment "✅ The bench-history workflow is green again. Auto-closing this alert. Successful run: $env:RUN_URL"
+          } else {
+            $noun = if ($closed.Count -eq 1) { 'issue' } else { 'issues' }
+            Write-Host "Closed failure $noun $($closed -join ', ')"
           }

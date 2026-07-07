@@ -50,6 +50,7 @@ gh-collect-bench-history:
 [group('automation')]
 [script]
 gh-analyze-bench-history dir:
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
@@ -66,7 +67,7 @@ gh-analyze-bench-history dir:
     cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- analyze @common --cache=$cacheDir --no-text --markdown $reportPath --json $jsonPath --markdown-summary $summaryPath
     Write-Verbose "Computing the notable flag from the JSON report." -Verbose
     $json = Get-Content -Path $jsonPath -Raw | ConvertFrom-Json
-    $notable = if ($json.notable) { 'true' } else { 'false' }
+    $notable = if (($json.PSObject.Properties.Name -contains 'notable') -and $json.notable) { 'true' } else { 'false' }
     Set-Content -Path $notablePath -Value $notable -Encoding utf8
     Write-Verbose "Analysis complete: notable=$notable (full report at $reportPath, condensed summary at $summaryPath)." -Verbose
 
@@ -83,6 +84,7 @@ gh-analyze-bench-history dir:
 [group('automation')]
 [script]
 gh-file-rolling-issue title label body_file:
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
     Import-Module ./scripts/bench-history/BenchHistoryIssue.psm1 -Force
@@ -112,6 +114,7 @@ gh-file-rolling-issue title label body_file:
 [group('automation')]
 [script]
 gh-compose-release-config output:
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
     Import-Module ./scripts/release/ReleaseAutomation.psm1 -Force
@@ -136,6 +139,7 @@ gh-compose-release-config output:
 [group('automation')]
 [script]
 gh-release config:
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
     Import-Module ./scripts/release/ReleaseAutomation.psm1 -Force
@@ -151,6 +155,7 @@ gh-release config:
 [group('automation')]
 [script]
 gh-plan-release-binaries:
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
     Import-Module ./scripts/release/ReleaseAutomation.psm1 -Force

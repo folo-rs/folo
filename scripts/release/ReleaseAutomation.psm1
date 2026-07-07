@@ -12,7 +12,7 @@
 # I/O) and isolate the ones that would touch crates.io / GitHub for real (`release-plz`, `gh`)
 # behind small seams the tests mock.
 
-Set-StrictMode -Version 3.0
+Set-StrictMode -Version Latest
 
 function Get-ReleaseTarget {
     # The single source of truth for the triple -> runner mapping. The workflow's build matrix
@@ -115,7 +115,7 @@ function New-ReleasePlzConfig {
     # BOM and uses LF line endings with a trailing newline, deterministically on every platform,
     # so the artifact does not vary with the runner OS. The caller writes this outside the
     # working tree so `cargo publish` never sees a dirty repo.
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)][string] $SourcePath,
         [Parameter(Mandatory)][string] $OutputPath,
@@ -125,7 +125,9 @@ function New-ReleasePlzConfig {
     $sourceLines = [System.IO.File]::ReadAllText($SourcePath) -split "`r?`n"
     $newLines = Add-GitReleaseEnableFlag -Line $sourceLines -CrateName $CrateName
     $content = ($newLines -join "`n").TrimEnd("`n") + "`n"
-    [System.IO.File]::WriteAllText($OutputPath, $content, [System.Text.UTF8Encoding]::new($false))
+    if ($PSCmdlet.ShouldProcess($OutputPath, 'write CI release-plz config')) {
+        [System.IO.File]::WriteAllText($OutputPath, $content, [System.Text.UTF8Encoding]::new($false))
+    }
 }
 
 function Get-BinaryReleaseAsset {
@@ -266,6 +268,8 @@ function Invoke-ReleasePublish {
     # versions), so a retry or a whole re-run safely resumes a partially-published release. NOT
     # for local use: it performs real publishes. The native-error preference is disabled locally
     # so a non-zero exit is handled here (turned into a retryable failure) rather than aborting.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'ConfigPath',
+        Justification = 'Consumed inside the -Action retry closure (release-plz --config), which the rule does not trace into.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string] $ConfigPath,
@@ -374,14 +378,14 @@ function Test-NeverPublishedCrate {
 function Set-GitHubOutput {
     # Emits a `name=value` step output for the workflow (and echoes it for the run log). No-ops
     # the file append when GITHUB_OUTPUT is unset, so the recipes are runnable locally.
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)][string] $Name,
         [Parameter(Mandatory)][string] $Value
     )
 
     Write-Host "$Name=$Value"
-    if ($env:GITHUB_OUTPUT) {
+    if ($env:GITHUB_OUTPUT -and $PSCmdlet.ShouldProcess($env:GITHUB_OUTPUT, "append output '$Name'")) {
         Add-Content -Path $env:GITHUB_OUTPUT -Value "$Name=$Value" -Encoding utf8
     }
 }

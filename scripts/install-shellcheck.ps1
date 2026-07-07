@@ -50,6 +50,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
+Set-StrictMode -Version Latest
 $VerbosePreference = 'Continue'
 
 # The pinned ShellCheck release. Keep $ShellcheckVersion and the per-platform digests in

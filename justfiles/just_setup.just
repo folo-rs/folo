@@ -10,6 +10,7 @@ skip_azurite := "false"
 [group('setup')]
 [script]
 install-tools:
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
@@ -138,6 +139,19 @@ install-tools:
         Write-Host "Pester 5+ already available; skipping install."
     } else {
         Install-Module Pester -MinimumVersion 5.0 -Scope CurrentUser -Force -SkipPublisherCheck
+    }
+
+    # PSScriptAnalyzer powers `just validate-scripts`, the PowerShell static-analysis gate for the
+    # standalone scripts under scripts/ (curated ruleset in PSScriptAnalyzerSettings.psd1 plus the
+    # repo-local custom rules in scripts/analyzer/). Unlike Pester it is pinned to an EXACT version
+    # (PSSCRIPTANALYZER_VERSION in constants.env): a newer analyzer can add or change rules, which
+    # would make which findings gate depend on whatever version a machine happens to have, so the
+    # pin keeps `validate-scripts` reproducible across local PCs and CI. Install the pinned version
+    # only when a matching one is not already present.
+    if (Get-Module -ListAvailable PSScriptAnalyzer | Where-Object { $_.Version -eq [version]$env:PSSCRIPTANALYZER_VERSION }) {
+        Write-Host "PSScriptAnalyzer $env:PSSCRIPTANALYZER_VERSION already available; skipping install."
+    } else {
+        Install-Module PSScriptAnalyzer -RequiredVersion $env:PSSCRIPTANALYZER_VERSION -Scope CurrentUser -Force -SkipPublisherCheck
     }
 
     # ShellCheck is what actionlint delegates to for linting embedded shell (`run:`) steps. GitHub's
