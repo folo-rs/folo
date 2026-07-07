@@ -4,16 +4,16 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use crate::report::format_count;
-use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessMeasurement, ThreadMeasurement};
+use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessSpan, ThreadSpan};
 
 /// A measurement handle for tracking per-iteration memory allocation of a repeated operation.
 ///
 /// This utility is particularly useful for benchmarking scenarios where you want
 /// to understand the memory footprint and allocation behavior of repeated operations.
 /// It tracks both the number of bytes allocated and the count of allocations. The
-/// headline figures are warmup-robust per-iteration slopes (see the crate-level
-/// "Primary metric" documentation), with the pooled [`mean`](Self::mean) still
-/// available.
+/// primary figures are the per-iteration bytes and allocation count (see the
+/// crate-level "Primary metric" documentation); plain [`mean`](Self::mean) values
+/// are also available.
 ///
 /// Multiple operations with the same name can be created concurrently.
 ///
@@ -67,12 +67,10 @@ impl Operation {
     /// Begins measuring allocations made by the current thread only.
     ///
     /// Use this for single-threaded operations or when you want to track
-    /// per-thread allocation usage. The returned [`ThreadMeasurement`] records
-    /// nothing until an iteration count is supplied — with
-    /// [`iterations(n)`](ThreadMeasurement::iterations) when the count is known in
-    /// advance (the `iter_custom` benchmark pattern), or with
-    /// [`complete(n)`](ThreadMeasurement::complete) when it is only known
-    /// afterwards.
+    /// per-thread allocation usage. Call
+    /// [`iterations(n)`](ThreadSpan::iterations) on the returned span to state how
+    /// many iterations the measured work covers; the span records its measurement
+    /// when it is dropped.
     ///
     /// # Examples
     ///
@@ -102,18 +100,16 @@ impl Operation {
     /// });
     /// # }
     /// ```
-    pub fn measure_thread(&self) -> ThreadMeasurement {
-        ThreadMeasurement::new(self)
+    pub fn measure_thread(&self) -> ThreadSpan {
+        ThreadSpan::new(self)
     }
 
     /// Begins measuring allocations made by the entire process (all threads).
     ///
-    /// Use this to measure total allocations including multi-threaded work. The
-    /// returned [`ProcessMeasurement`] records nothing until an iteration count is
-    /// supplied — with [`iterations(n)`](ProcessMeasurement::iterations) when the
-    /// count is known in advance (the `iter_custom` benchmark pattern), or with
-    /// [`complete(n)`](ProcessMeasurement::complete) when it is only known
-    /// afterwards.
+    /// Use this to measure total allocations including multi-threaded work. Call
+    /// [`iterations(n)`](ProcessSpan::iterations) on the returned span to state how
+    /// many iterations the measured work covers; the span records its measurement
+    /// when it is dropped.
     ///
     /// # Examples
     ///
@@ -143,15 +139,15 @@ impl Operation {
     /// });
     /// # }
     /// ```
-    pub fn measure_process(&self) -> ProcessMeasurement {
-        ProcessMeasurement::new(self)
+    pub fn measure_process(&self) -> ProcessSpan {
+        ProcessSpan::new(self)
     }
 
     /// Calculates the mean bytes allocated per iteration.
     ///
-    /// Returns 0 if no iterations have been recorded. This is the pooled mean
-    /// across all recorded spans; the warmup-robust slope and its dispersion are
-    /// available on [`ReportOperation`](crate::ReportOperation) via a report.
+    /// Returns 0 if no iterations have been recorded. This is the plain mean
+    /// across all recorded spans; the per-iteration slope is available on
+    /// [`ReportOperation`](crate::ReportOperation) via a report.
     #[must_use]
     pub fn mean(&self) -> u64 {
         let data = self.metrics.lock().expect(ERR_POISONED_LOCK);

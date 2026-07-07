@@ -172,12 +172,8 @@ impl Report {
 
     /// Fully computes this report into a [`FinalizedReport`].
     ///
-    /// Every operation's complete statistics — the warmup-robust slope *and* its
-    /// confidence interval — are resolved exactly once here. Both the stdout
-    /// summary and the machine-readable JSON output are rendered from the
-    /// returned value, so there is a single report that is always fully
-    /// calculated: the interval is computed even when an output only displays the
-    /// slope.
+    /// Both the stdout summary and the machine-readable JSON output are rendered
+    /// from the returned value.
     #[must_use]
     pub fn finalize(&self) -> FinalizedReport {
         let operations = self
@@ -278,11 +274,11 @@ impl ReportOperation {
         self.metrics.mean()
     }
 
-    /// Computes warmup-robust per-iteration statistics over the recorded spans.
+    /// Computes per-iteration statistics over the recorded spans.
     ///
     /// Returns `None` when no spans were recorded. The returned
-    /// [`OperationStatistics`] carries the same warmup-robust slope and confidence
-    /// interval that are written to the machine-readable JSON output.
+    /// [`OperationStatistics`] carries the same figures written to the
+    /// machine-readable JSON output.
     ///
     /// # Examples
     ///

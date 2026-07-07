@@ -29,27 +29,14 @@
 //!
 //! # Primary metric
 //!
-//! Allocation counts are not deterministic across benchmark runs. Even when the
-//! code under test allocates by a fixed rule, the first iterations pay one-off
-//! costs (lazily initialized caches, growing a buffer to its steady-state
-//! capacity) that later iterations do not, and Criterion decides how many
-//! iterations to run and how many to discard as warm-up. A raw pooled **mean**
-//! therefore folds those one-off allocations into the per-iteration figure and
-//! drifts as that sample mix changes between runs.
-//!
-//! The headline metric for both bytes and allocation count is instead the
-//! **warmup-robust slope**: an iterations-weighted, through-origin fit of each
-//! span's total against its iteration count, which recovers the marginal
-//! per-iteration cost even when the blend of warm-up and steady-state spans
-//! shifts. Each figure is paired with a closed-form 95% confidence interval so its
-//! run-to-run uncertainty can be inspected: it collapses onto the point estimate
-//! when every span records the same per-iteration value, and is omitted entirely
-//! when a single span leaves it unestimable. The confidence intervals are always
-//! computed as part of finalizing a report — there is no cheaper "slope-only" path
-//! that skips them — so the stdout summary simply displays the slopes alone for
-//! readability while the JSON output records the slopes together with their
-//! confidence intervals. The pooled means stay available through
-//! [`Operation::mean`] and the report accessors for callers that still want them.
+//! The headline figure for both bytes and allocation count is the per-iteration
+//! cost, reported as a **warmup-robust slope** rather than a plain mean. The first
+//! iterations pay one-off costs — lazily initialized caches, a buffer growing to
+//! its steady-state capacity — that a mean would fold into every iteration, making
+//! it drift between runs; the slope isolates the marginal per-iteration cost so the
+//! number stays stable. The JSON output pairs each slope with a 95% confidence
+//! interval; the stdout summary shows the slopes alone. The plain means are
+//! available through [`Operation::mean`] and the report accessors.
 //!
 //! # Features
 #![cfg_attr(
@@ -65,7 +52,7 @@
 //! # Benchmarking
 //!
 //! The recommended pattern drives measurement from Criterion's `iter_custom`,
-//! feeding its chosen iteration count into [`iterations`](ProcessMeasurement::iterations)
+//! feeding its chosen iteration count into [`iterations`](ProcessSpan::iterations)
 //! so each recorded span covers a whole sample rather than a single iteration:
 //!
 //! ```no_run
@@ -114,10 +101,8 @@
 //! Dropping a [`Session`] writes machine-readable JSON files (one per operation)
 //! into the Cargo target directory at `target/alloc_tracker/<operation>.json`,
 //! with operation names sanitized to be filesystem-safe. Each file records, for
-//! both bytes and allocation count, the warmup-robust slope point estimate, its
-//! 95% confidence interval (when estimable) and the pooled mean. A human-readable
-//! summary leading with the same slopes (see "Primary metric"), without the
-//! intervals, is also printed to stdout.
+//! both bytes and allocation count, the operation's total and per-iteration
+//! figures. A human-readable summary is also printed to stdout.
 //!
 //! These outputs are produced automatically, so a typical benchmark only needs
 //! to create a session and record work.
@@ -126,8 +111,7 @@
 //!
 //! When the number of iterations is only known after the measured work has run —
 //! for example a loop that drains a queue or runs until a budget is exhausted —
-//! capture the measurement first and finalize it with
-//! [`complete`](ProcessMeasurement::complete) once the count is known:
+//! set the count once the work is done and let the span record as it drops:
 //!
 //! ```
 //! use alloc_tracker::{Allocator, Session};
@@ -140,13 +124,13 @@
 //! #   let session = session.no_stdout().no_file();
 //!     let operation = session.operation("drain_queue");
 //!
-//!     let measurement = operation.measure_process();
+//!     let span = operation.measure_process();
 //!     let mut processed = 0_u64;
 //!     for item in 0..10 {
 //!         let _data = format!("String number {item}"); // This allocates memory
 //!         processed += 1;
 //!     }
-//!     measurement.complete(processed);
+//!     drop(span.iterations(processed));
 //!
 //!     // Statistics are emitted automatically when `session` is dropped.
 //! }

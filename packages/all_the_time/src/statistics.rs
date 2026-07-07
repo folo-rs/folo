@@ -10,15 +10,11 @@
 
 use std::time::Duration;
 
-/// Warmup-robust per-iteration processor-time statistics for one operation.
+/// Per-iteration processor-time statistics for one operation.
 ///
-/// Processor time is not deterministic — it jitters run to run with system load
-/// and scheduling, and a raw pooled mean silently folds warmup and one-off costs
-/// into the per-iteration figure — so the point estimate is a warmup-robust
-/// through-origin slope and the interval is a closed-form confidence interval of
-/// that slope. The interval is `None` when it cannot be estimated (fewer than two
-/// spans, or a non-finite fit); when every span recorded the same per-iteration
-/// value it collapses onto the point estimate. Exposed through
+/// [`slope_nanos`](Self::slope_nanos) is the per-iteration processor time and
+/// [`interval_nanos`](Self::interval_nanos) its 95% confidence bounds (`None`
+/// when there is not enough data to estimate them). Exposed through
 /// [`ReportOperation::statistics`](crate::ReportOperation::statistics) so callers
 /// can consume the same figures the JSON output records.
 #[derive(Clone, Copy, Debug)]
@@ -27,11 +23,11 @@ pub struct OperationStatistics {
     /// Number of spans recorded (distinct from the total iteration count).
     pub span_count: u64,
 
-    /// Through-origin OLS slope: the per-iteration processor time point estimate.
+    /// The per-iteration processor time, in nanoseconds.
     pub slope_nanos: f64,
 
-    /// Confidence interval `(low, high)` of the slope, or `None` when it cannot
-    /// be estimated.
+    /// Confidence interval `(low, high)` for [`slope_nanos`](Self::slope_nanos),
+    /// or `None` when it cannot be estimated.
     pub interval_nanos: Option<(f64, f64)>,
 }
 

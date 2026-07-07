@@ -94,29 +94,24 @@ pub struct ReportOperation {
 /// Per-iteration statistics for a single allocation metric.
 ///
 /// Every value is expressed in the metric's own per-iteration unit (bytes, or a
-/// count of allocations). Allocation figures are not deterministic — first-run
-/// allocations and buffer resizing jitter around the mean over a
-/// Criterion-chosen iteration count — so the point estimate is a warmup-robust
-/// through-origin slope and the interval is a closed-form confidence interval of
-/// that slope. The interval is absent when it cannot be estimated (fewer than two
-/// spans); when every span recorded the same per-iteration value it collapses
-/// onto the point estimate.
+/// count of allocations). [`slope`](Self::slope) is the per-iteration value and
+/// [`interval`](Self::interval) its 95% confidence bounds, or `None` when there
+/// is not enough data to estimate them.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct MetricStatistics {
-    /// Through-origin OLS slope: the per-iteration point estimate.
+    /// The per-iteration value.
     pub slope: f64,
 
-    /// The slope's confidence interval as `(low, high)`, or `None` when it cannot
-    /// be estimated.
+    /// Confidence interval `(low, high)` for [`slope`](Self::slope), or `None`
+    /// when it cannot be estimated.
     pub interval: Option<(f64, f64)>,
 }
 
 /// Statistics for one operation across both allocation metrics.
 ///
 /// Exposed through [`ReportOperation::statistics`] so callers can consume the
-/// same warmup-robust estimates that are written to the machine-readable JSON
-/// output.
+/// same figures that are written to the machine-readable JSON output.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct OperationStatistics {
@@ -219,12 +214,8 @@ impl Report {
 
     /// Fully computes this report into a [`FinalizedReport`].
     ///
-    /// Every operation's complete statistics — the warmup-robust per-metric
-    /// slopes *and* their confidence intervals — are resolved exactly once here.
     /// Both the stdout summary and the machine-readable JSON output are rendered
-    /// from the returned value, so there is a single report that is always fully
-    /// calculated: the intervals are computed even when an output only displays
-    /// the slopes.
+    /// from the returned value.
     #[must_use]
     pub fn finalize(&self) -> FinalizedReport {
         let operations = self
@@ -328,19 +319,19 @@ impl ReportOperation {
         self.metrics.total_iterations()
     }
 
-    /// Calculates the pooled mean bytes allocated per iteration.
+    /// Calculates the mean bytes allocated per iteration.
     #[must_use]
     pub fn mean_bytes(&self) -> u64 {
         self.metrics.mean_bytes()
     }
 
-    /// Calculates the pooled mean number of allocations per iteration.
+    /// Calculates the mean number of allocations per iteration.
     #[must_use]
     pub fn mean_allocations(&self) -> u64 {
         self.metrics.mean_allocations()
     }
 
-    /// Calculates the pooled mean bytes allocated per iteration.
+    /// Calculates the mean bytes allocated per iteration.
     ///
     /// This is an alias for [`mean_bytes`](Self::mean_bytes) to maintain backward compatibility.
     #[must_use]
@@ -348,12 +339,12 @@ impl ReportOperation {
         self.mean_bytes()
     }
 
-    /// Computes warmup-robust statistics over the recorded spans.
+    /// Computes per-iteration statistics over the recorded spans.
     ///
     /// Returns `None` when no spans were recorded. The returned
-    /// [`OperationStatistics`] carries the slope point estimate and its confidence
-    /// interval for both the byte and allocation-count metrics — the same
-    /// estimates written to the machine-readable JSON output.
+    /// [`OperationStatistics`] carries the per-iteration value and its confidence
+    /// interval for both the byte and allocation-count metrics — the same figures
+    /// written to the machine-readable JSON output.
     ///
     /// # Examples
     ///

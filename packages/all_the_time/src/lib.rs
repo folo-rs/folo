@@ -10,36 +10,25 @@
 //! - [`Session`] - Configures processor time tracking and provides access to tracking data
 //! - [`Report`] - Thread-safe processor time statistics that can be merged and processed independently
 //! - [`Operation`] - Measures per-iteration processor time for a repeated operation
-//! - [`ThreadMeasurement`] / [`ProcessMeasurement`] - In-progress measurements awaiting an iteration count
+//! - [`ThreadSpan`] / [`ProcessSpan`] - Active measurements that record when dropped
 //!
 //! This package is not meant for use in production, serving only as a development tool.
 //!
 //! # Primary metric
 //!
-//! Processor time is not deterministic: it jitters run to run with system load
-//! and scheduling. On top of that, Criterion chooses how many iterations to time
-//! and how many to discard as warm-up, so a raw pooled **mean** silently folds
-//! warm-up and one-off costs into the per-iteration figure and drifts as that
-//! sample mix changes between runs.
-//!
-//! The headline metric is therefore the **warmup-robust slope**: an
-//! iterations-weighted, through-origin fit of each span's total time against its
-//! iteration count, which recovers the marginal per-iteration cost even when the
-//! blend of warm-up and steady-state spans shifts. The slope is paired with a
-//! closed-form 95% confidence interval so its run-to-run uncertainty can be
-//! inspected: it collapses onto the point estimate when every span records the
-//! same per-iteration value, and is omitted entirely when a single span leaves it
-//! unestimable. The confidence interval is always computed as part of finalizing
-//! a report — there is no cheaper "slope-only" path that skips it — so the stdout
-//! summary simply displays the slope alone for readability while the JSON output
-//! records the slope together with that confidence interval. The pooled mean stays
-//! available through [`ReportOperation::mean`] for callers that still want it.
+//! The headline figure is the per-iteration processor time, reported as a
+//! **warmup-robust slope** rather than a plain mean. Early iterations pay one-off
+//! warm-up costs that a mean would fold into every iteration, making it drift
+//! between runs; the slope isolates the marginal per-iteration cost so the number
+//! stays stable. The JSON output pairs the slope with a 95% confidence interval;
+//! the stdout summary shows the slope alone. The plain mean is available
+//! through [`ReportOperation::mean`].
 //!
 //! # Benchmarking
 //!
 //! The recommended pattern drives measurement from Criterion's `iter_custom`,
 //! feeding its chosen iteration count into
-//! [`iterations`](ThreadMeasurement::iterations) so each recorded span covers a
+//! [`iterations`](ThreadSpan::iterations) so each recorded span covers a
 //! whole sample rather than a single iteration:
 //!
 //! ```no_run
@@ -74,16 +63,9 @@
 //!
 //! Dropping a [`Session`] writes machine-readable JSON files (one per operation)
 //! into the Cargo target directory at `target/all_the_time/<operation>.json`,
-//! with operation names sanitized to be filesystem-safe. A human-readable
-//! summary is also printed to stdout.
-//!
-//! Each JSON file records the total and mean per-iteration processor time
-//! together with the warmup-robust slope point estimate and its 95% confidence
-//! interval (when estimable). The interval is a deterministic function of the
-//! measured spans, so identical measurements always yield identical bounds. The
-//! stdout summary displays the same slope (see "Primary metric") without the
-//! interval purely for readability — the interval is computed regardless of which
-//! output consumes it.
+//! with operation names sanitized to be filesystem-safe. Each file records the
+//! operation's total and per-iteration processor time. A human-readable summary
+//! is also printed to stdout.
 //!
 //! These outputs are produced automatically, so a typical benchmark only needs
 //! to create a session and record work.
@@ -92,8 +74,7 @@
 //!
 //! When the number of iterations is only known after the measured work has run —
 //! for example a loop that drains a queue or runs until a budget is exhausted —
-//! capture the measurement first and finalize it with
-//! [`complete`](ThreadMeasurement::complete) once the count is known:
+//! set the count once the work is done and let the span record as it drops:
 //!
 //! ```
 //! use all_the_time::Session;
@@ -103,13 +84,13 @@
 //! #   let session = session.no_stdout().no_file();
 //!     let operation = session.operation("drain_queue");
 //!
-//!     let measurement = operation.measure_thread();
+//!     let span = operation.measure_thread();
 //!     let mut processed = 0_u64;
 //!     for item in 0..10 {
 //!         std::hint::black_box(item * 2); // do work while draining
 //!         processed += 1;
 //!     }
-//!     measurement.complete(processed);
+//!     drop(span.iterations(processed));
 //!
 //!     // Statistics are emitted automatically when `session` is dropped.
 //! }

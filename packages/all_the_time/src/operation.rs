@@ -6,15 +6,14 @@ use std::time::Duration;
 
 use crate::pal::PlatformFacade;
 use crate::statistics::nanos_to_duration;
-use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessMeasurement, ThreadMeasurement};
+use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessSpan, ThreadSpan};
 
 /// Measures per-iteration processor time for a repeated operation.
 ///
 /// This utility is particularly useful for benchmarking scenarios where you want
-/// to understand the processor time footprint of repeated operations. The
-/// headline figure is the warmup-robust per-iteration slope (see the crate-level
-/// "Primary metric" documentation), with the pooled [`mean`](Self::mean) still
-/// available.
+/// to understand the processor time footprint of repeated operations. The primary
+/// figure is the per-iteration processor time (see the crate-level "Primary
+/// metric" documentation); a plain [`mean`](Self::mean) is also available.
 ///
 /// Operations share data directly with the session - data is merged when spans are dropped.
 ///
@@ -80,12 +79,10 @@ impl Operation {
     /// Begins measuring processor time consumed by the current thread only.
     ///
     /// Use this for single-threaded operations or when you want to track
-    /// per-thread processor usage. The returned [`ThreadMeasurement`] records
-    /// nothing until an iteration count is supplied — with
-    /// [`iterations(n)`](ThreadMeasurement::iterations) when the count is known in
-    /// advance (the `iter_custom` benchmark pattern), or with
-    /// [`complete(n)`](ThreadMeasurement::complete) when it is only known
-    /// afterwards.
+    /// per-thread processor usage. Call
+    /// [`iterations(n)`](ThreadSpan::iterations) on the returned span to state how
+    /// many iterations the measured work covers; the span records its measurement
+    /// when it is dropped.
     ///
     /// # Examples
     ///
@@ -112,19 +109,17 @@ impl Operation {
     /// });
     /// # }
     /// ```
-    pub fn measure_thread(&self) -> ThreadMeasurement {
-        ThreadMeasurement::new(self)
+    pub fn measure_thread(&self) -> ThreadSpan {
+        ThreadSpan::new(self)
     }
 
     /// Begins measuring processor time consumed by the entire process (all
     /// threads).
     ///
-    /// Use this to measure total processor time including multi-threaded work. The
-    /// returned [`ProcessMeasurement`] records nothing until an iteration count is
-    /// supplied — with [`iterations(n)`](ProcessMeasurement::iterations) when the
-    /// count is known in advance (the `iter_custom` benchmark pattern), or with
-    /// [`complete(n)`](ProcessMeasurement::complete) when it is only known
-    /// afterwards.
+    /// Use this to measure total processor time including multi-threaded work. Call
+    /// [`iterations(n)`](ProcessSpan::iterations) on the returned span to state how
+    /// many iterations the measured work covers; the span records its measurement
+    /// when it is dropped.
     ///
     /// # Examples
     ///
@@ -151,8 +146,8 @@ impl Operation {
     /// });
     /// # }
     /// ```
-    pub fn measure_process(&self) -> ProcessMeasurement {
-        ProcessMeasurement::new(self)
+    pub fn measure_process(&self) -> ProcessSpan {
+        ProcessSpan::new(self)
     }
 
     /// Calculates the mean processor time per span.

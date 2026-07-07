@@ -3,13 +3,8 @@
 //! A [`Report`](crate::Report) is a mergeable snapshot of the streaming
 //! statistics; it is not yet resolved into the per-iteration figures that the
 //! outputs present. [`Report::finalize`](crate::Report::finalize) resolves it
-//! exactly once into a [`FinalizedReport`]: every operation's complete
-//! statistics — the warmup-robust slopes *and* their confidence intervals for
-//! both the byte and allocation-count metrics — are computed up front. Both the
-//! human-readable stdout summary and the machine-readable JSON files are then
-//! rendered from this one finalized value, so there is no cheap "slope-only"
-//! path that silently skips the interval computation and hides its cost from
-//! benchmarks.
+//! into a [`FinalizedReport`], from which both the human-readable stdout summary
+//! and the machine-readable JSON files are rendered.
 
 use std::fmt;
 
@@ -18,10 +13,9 @@ use crate::report::format_count;
 
 /// A memory allocation report with every operation's statistics fully computed.
 ///
-/// Produced by [`Report::finalize`](crate::Report::finalize). There is exactly
-/// one report and it is always fully calculated: the per-metric slopes and their
-/// confidence intervals are resolved for every operation up front, regardless of
-/// which outputs (if any) end up consuming them.
+/// Produced by [`Report::finalize`](crate::Report::finalize). Both the
+/// human-readable stdout summary and the machine-readable JSON files are rendered
+/// from this value.
 #[derive(Clone, Debug)]
 pub struct FinalizedReport {
     /// Operations sorted by name, so every output presents them in a stable order.
@@ -147,8 +141,7 @@ impl FinalizedOperation {
         self.mean_allocations
     }
 
-    /// The warmup-robust per-iteration statistics, or `None` when no spans were
-    /// recorded.
+    /// The per-iteration statistics, or `None` when no spans were recorded.
     #[must_use]
     pub fn statistics(&self) -> Option<OperationStatistics> {
         self.statistics
@@ -166,11 +159,10 @@ impl fmt::Display for FinalizedReport {
         writeln!(f, "Allocation statistics:")?;
         writeln!(f)?;
 
-        // Pre-render the warmup-robust per-iteration slope cells so the column
-        // widths and the printed rows are computed from the exact same strings.
-        // The confidence interval is computed as part of finalization and
-        // preserved in the JSON output and the `statistics()` API; it is kept out
-        // of this summary purely for readability, not to save computation.
+        // Pre-render the per-iteration slope cells so the column widths and the
+        // printed rows are computed from the exact same strings. The confidence
+        // interval is kept out of this summary for readability; it remains in the
+        // JSON output and the `statistics()` API.
         let rows: Vec<(&str, String, String)> = self
             .operations
             .iter()

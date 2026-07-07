@@ -1,4 +1,4 @@
-//! Process-wide processor-time measurement and span.
+//! Process-wide processor-time measurement span.
 
 use std::cell::Cell;
 use std::marker::PhantomData;
@@ -9,16 +9,18 @@ use std::time::Duration;
 use crate::pal::{Platform, PlatformFacade};
 use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
 
-/// An in-progress measurement of process-wide processor time, awaiting an
-/// explicit iteration count.
+/// A measurement of process-wide processor time over the span's lifetime.
 ///
 /// Returned by [`Operation::measure_process`](crate::Operation::measure_process).
-/// It captures the process's processor-time clock at creation but records nothing
-/// on its own — the caller must state how many iterations the measured work
-/// covers, either up front with [`iterations`](Self::iterations) (an RAII guard
-/// that records when its scope ends) or afterwards with [`complete`](Self::complete).
-/// Dropping the measurement without either **discards** it, so a panic or early
-/// return in the measured region records nothing.
+/// It captures the process's processor-time clock at creation and records the
+/// elapsed delta when it is dropped, so the measured work should live inside the
+/// span's scope.
+///
+/// Before the span is dropped the caller must state how many iterations the
+/// measured work covers by calling [`iterations`](Self::iterations). Dropping a
+/// span without an iteration count **panics**, because a measurement with no
+/// iteration count is a programming error. A panic or early return while the span
+/// is held records nothing.
 ///
 /// # Examples
 ///
@@ -49,11 +51,12 @@ use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
 /// # }
 /// ```
 #[derive(Debug)]
-#[must_use = "a measurement records nothing until `.iterations(n)` or `.complete(n)` is called"]
-pub struct ProcessMeasurement {
+#[must_use = "a span records its measurement when dropped, so it must be held for the measured work"]
+pub struct ProcessSpan {
     metrics: Arc<Mutex<OperationMetrics>>,
     platform: PlatformFacade,
     start_time: Duration,
+    iterations: Option<u64>,
     // Cell<()> is natively Send + !Sync, which opts the type out of Sync without requiring
     // an unsafe impl Send. Using PhantomData<*mut ()> + unsafe impl Send would be simpler
     // but triggers a rustc bug (rust-lang/rust#110338) in async generator Send inference.
@@ -63,9 +66,9 @@ pub struct ProcessMeasurement {
 
 // The Cell<()> marker is zero-sized with no actual mutable state, so there is nothing to
 // observe in an inconsistent state during unwind.
-impl RefUnwindSafe for ProcessMeasurement {}
+impl RefUnwindSafe for ProcessSpan {}
 
-impl ProcessMeasurement {
+impl ProcessSpan {
     pub(crate) fn new(operation: &Operation) -> Self {
         let platform = operation.platform().clone();
         let start_time = platform.process_time();
@@ -74,99 +77,45 @@ impl ProcessMeasurement {
             metrics: operation.metrics(),
             platform,
             start_time,
+            iterations: None,
             _not_sync: PhantomData,
         }
     }
 
-    /// Binds this measurement to an iteration count known in advance, returning an
-    /// RAII guard that records the process's processor-time delta when it is
-    /// dropped.
+    /// Sets how many iterations the measured work covers.
     ///
-    /// Keep the measured work inside the returned span's scope so the delta is
-    /// captured at the right moment. This is the terminal used in the
-    /// `iter_custom` benchmark pattern (see the type-level example).
+    /// This must be called before the span is dropped. Pass the number of times the
+    /// measured region repeats the work, or `1` for a single unit of work.
     ///
     /// # Panics
     ///
     /// Panics if `iterations` is zero.
-    pub fn iterations(self, iterations: u64) -> ProcessSpan {
+    pub fn iterations(mut self, iterations: u64) -> Self {
         assert!(iterations != 0, "iterations cannot be zero");
-        ProcessSpan {
-            metrics: Arc::clone(&self.metrics),
-            platform: self.platform.clone(),
-            start_time: self.start_time,
-            iterations,
-            _not_sync: PhantomData,
-        }
+        self.iterations = Some(iterations);
+        self
     }
+}
 
-    /// Records the process's processor-time delta now, attributing it to
-    /// `iterations` iterations.
-    ///
-    /// Use this when the iteration count is only known after the measured work has
-    /// run — for example a loop that runs until some budget is exhausted.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use all_the_time::Session;
-    ///
-    /// # fn main() {
-    /// let session = Session::new();
-    /// # let session = session.no_stdout().no_file();
-    /// let operation = session.operation("drain_queue");
-    ///
-    /// // The iteration count is only known once the work has finished.
-    /// let measurement = operation.measure_process();
-    /// let mut processed = 0_u64;
-    /// for item in 0..5 {
-    ///     std::hint::black_box(item * 2); // do work while draining
-    ///     processed += 1;
-    /// }
-    /// measurement.complete(processed);
-    /// # }
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics if `iterations` is zero.
-    pub fn complete(self, iterations: u64) {
-        assert!(iterations != 0, "iterations cannot be zero");
+impl Drop for ProcessSpan {
+    fn drop(&mut self) {
+        // A panic while the span is held records nothing; panicking again here would
+        // abort the process.
+        if std::thread::panicking() {
+            return;
+        }
+
+        let iterations = self.iterations.expect(
+            "the span was dropped without an iteration count; call `.iterations(1)` \
+             if the measured region is a single iteration",
+        );
         let total_nanos = measured_nanos(&self.platform, self.start_time);
         let mut data = self.metrics.lock().expect(ERR_POISONED_LOCK);
         data.add_span(iterations, total_nanos);
     }
 }
 
-/// An active process-wide processor-time measurement bound to a known iteration
-/// count.
-///
-/// Created by [`ProcessMeasurement::iterations`]. It records the process's
-/// processor-time delta when dropped, so the measured work should live inside the
-/// span's scope.
-#[derive(Debug)]
-#[must_use = "the measurement is recorded when the span is dropped, so it must be held for the measured work"]
-pub struct ProcessSpan {
-    metrics: Arc<Mutex<OperationMetrics>>,
-    platform: PlatformFacade,
-    start_time: Duration,
-    iterations: u64,
-    _not_sync: PhantomData<Cell<()>>,
-}
-
-// The Cell<()> marker is zero-sized with no actual mutable state, so there is nothing to
-// observe in an inconsistent state during unwind.
-impl RefUnwindSafe for ProcessSpan {}
-
-impl Drop for ProcessSpan {
-    fn drop(&mut self) {
-        let total_nanos = measured_nanos(&self.platform, self.start_time);
-        let mut data = self.metrics.lock().expect(ERR_POISONED_LOCK);
-        data.add_span(self.iterations, total_nanos);
-    }
-}
-
-/// Total process processor time consumed since a measurement's start clock.
+/// Total process processor time consumed since a span's start clock.
 fn measured_nanos(platform: &PlatformFacade, start_time: Duration) -> u64 {
     let current_time = platform.process_time();
     let total_duration = current_time.saturating_sub(start_time);
@@ -204,15 +153,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    fn complete_panics_on_zero() {
-        let session = create_test_session();
-        let operation = session.operation("test");
-        operation.measure_process().complete(0);
-    }
-
-    #[test]
-    fn records_span_via_iterations() {
+    fn records_span_via_iterations_guard() {
         let session = create_test_session_with_time(Duration::ZERO);
         let operation = session.operation("test");
 
@@ -225,29 +166,42 @@ mod tests {
     }
 
     #[test]
-    fn records_span_via_complete() {
+    fn records_span_via_post_hoc_iterations() {
         let session = create_test_session_with_time(Duration::ZERO);
         let operation = session.operation("test");
 
-        operation.measure_process().complete(7);
+        drop(operation.measure_process().iterations(7));
 
         assert_eq!(operation.total_iterations(), 7);
         assert_eq!(operation.total_processor_time(), Duration::ZERO);
     }
 
     #[test]
-    fn dropping_measurement_without_terminal_records_nothing() {
+    #[should_panic]
+    fn dropping_span_without_iterations_panics() {
         let session = create_test_session();
         let operation = session.operation("test");
 
         drop(operation.measure_process());
+    }
 
+    #[test]
+    fn panic_while_held_records_nothing() {
+        let session = create_test_session_with_time(Duration::ZERO);
+        let operation = session.operation("test");
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _span = operation.measure_process().iterations(1);
+            panic!("boom");
+        }));
+
+        assert!(result.is_err());
         assert_eq!(operation.total_iterations(), 0);
     }
 
     #[test]
     fn uses_process_time_from_pal() {
-        // Verify that ProcessMeasurement specifically calls process_time() from the PAL.
+        // Verify that a process span specifically calls process_time() from the PAL.
         let fake_platform = FakePlatform::new();
         fake_platform.set_process_time(Duration::from_millis(300));
         fake_platform.set_thread_time(Duration::from_millis(100)); // Different from process time
@@ -278,9 +232,7 @@ mod tests {
     }
 
     // Static assertions for thread safety.
-    // Both types are Send but !Sync due to PhantomData<Cell<()>>.
-    static_assertions::assert_impl_all!(super::ProcessMeasurement: Send, UnwindSafe, RefUnwindSafe);
-    static_assertions::assert_not_impl_any!(super::ProcessMeasurement: Sync);
+    // The span is Send but !Sync due to PhantomData<Cell<()>>.
     static_assertions::assert_impl_all!(super::ProcessSpan: Send, UnwindSafe, RefUnwindSafe);
     static_assertions::assert_not_impl_any!(super::ProcessSpan: Sync);
 }

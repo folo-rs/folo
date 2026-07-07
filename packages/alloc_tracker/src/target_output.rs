@@ -13,10 +13,10 @@ const OUTPUT_SUBDIRECTORY: &str = "alloc_tracker";
 
 /// Machine-readable allocation statistics for a single operation.
 ///
-/// Carries both the pooled per-iteration means and the warmup-robust per-iteration
-/// slope with its confidence interval for each metric, mirroring the shape
-/// `all_the_time` writes for processor time. Interval fields are omitted when the
-/// interval cannot be estimated.
+/// Carries the per-iteration means plus the per-iteration slope with its
+/// confidence interval for each metric, mirroring the shape `all_the_time`
+/// writes for processor time. Interval fields are omitted when the interval
+/// cannot be estimated.
 #[derive(Serialize)]
 struct OperationOutput<'a> {
     operation: &'a str,
