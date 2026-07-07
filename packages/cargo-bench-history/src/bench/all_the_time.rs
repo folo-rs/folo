@@ -40,41 +40,47 @@ impl Error for AllTheTimeParseError {
 
 /// Parses one `all_the_time` operation file into a [`BenchmarkResult`].
 ///
+/// Returns `Ok(None)` when the operation recorded no usable per-iteration
+/// measurement (a zero-iteration run the workload could not complete, which the
+/// producer writes with a null slope); such an operation has nothing to store.
+///
 /// # Errors
 ///
 /// Returns [`AllTheTimeParseError`] if the JSON is malformed or does not match
 /// the expected shape.
 pub(crate) fn parse_all_the_time_operation(
     json: &str,
-) -> Result<BenchmarkResult, AllTheTimeParseError> {
+) -> Result<Option<BenchmarkResult>, AllTheTimeParseError> {
     let output: OperationOutput = serde_json::from_str(json).map_err(AllTheTimeParseError)?;
     Ok(output_to_record(&output))
 }
 
-/// Maps a parsed operation to a [`BenchmarkResult`] (pure).
+/// Maps a parsed operation to a [`BenchmarkResult`], or `None` when it carries no
+/// usable measurement.
 ///
 /// `all_the_time`'s flat `target/all_the_time/` tree carries no package
 /// attribution, so the operation name alone identifies the series (mirroring the
 /// Criterion adapter).
 ///
 /// The through-origin slope is the per-iteration point estimate, matching the
-/// Criterion adapter. A missing or null slope (which the producer writes for a
-/// zero-iteration operation that could not run) maps to `NaN`, signalling that no
-/// valid per-iteration figure was produced. When the confidence interval is present
-/// it is recorded on the metric, so analysis can apply its interval-overlap gate to
-/// processor time the same way it does for Criterion wall time.
-fn output_to_record(output: &OperationOutput) -> BenchmarkResult {
+/// Criterion adapter. A zero-iteration operation the workload could not run has no
+/// per-iteration rate — the producer writes its slope as null — so it yields `None`
+/// and is dropped rather than stored: a non-finite metric value cannot round-trip
+/// through stored history (see [`super::usable_slope`]). When the confidence
+/// interval is present it is recorded on the metric, so analysis can apply its
+/// interval-overlap gate to processor time the same way it does for Criterion wall
+/// time.
+fn output_to_record(output: &OperationOutput) -> Option<BenchmarkResult> {
+    let value = super::usable_slope(output.slope_processor_time_nanos)?;
+
     let id = BenchmarkId::new(NonEmpty::new(output.operation.clone()));
-
-    let value = output.slope_processor_time_nanos.unwrap_or(f64::NAN);
-
     let metric = Metric::new(MetricKind::ProcessorTime, value).with_dispersion(
         None,
         output.interval_low_processor_time_nanos,
         output.interval_high_processor_time_nanos,
     );
 
-    BenchmarkResult::new(id, vec![metric])
+    Some(BenchmarkResult::new(id, vec![metric]))
 }
 
 /// The subset of an `all_the_time` operation file the tool reads. The `total_*`
@@ -112,7 +118,7 @@ mod tests {
 
     #[test]
     fn parses_identity_from_operation_name() {
-        let record = parse_all_the_time_operation(READ_CELL_FIXTURE).unwrap();
+        let record = parse_record(READ_CELL_FIXTURE);
         assert_eq!(
             record.id,
             BenchmarkId::new(NonEmpty::new("read_cell".to_owned()))
@@ -121,7 +127,7 @@ mod tests {
 
     #[test]
     fn all_the_time_identity_is_the_operation_name_only() {
-        let record = parse_all_the_time_operation(READ_CELL_FIXTURE).unwrap();
+        let record = parse_record(READ_CELL_FIXTURE);
         assert_eq!(
             record.id,
             BenchmarkId::new(NonEmpty::new("read_cell".to_owned()))
@@ -130,7 +136,7 @@ mod tests {
 
     #[test]
     fn maps_processor_time_from_the_slope() {
-        let record = parse_all_the_time_operation(READ_CELL_FIXTURE).unwrap();
+        let record = parse_record(READ_CELL_FIXTURE);
         assert_eq!(record.metrics.len(), 1);
 
         let metric = &record.metrics[0];
@@ -143,7 +149,7 @@ mod tests {
         // Single-span output records a slope but no interval, so the metric carries
         // no dispersion and analysis relies on rank-testing across regimes rather
         // than interval overlap.
-        let record = parse_all_the_time_operation(READ_CELL_FIXTURE).unwrap();
+        let record = parse_record(READ_CELL_FIXTURE);
         let metric = &record.metrics[0];
         assert_eq!(metric.std_dev, None);
         assert_eq!(metric.interval_low, None);
@@ -152,7 +158,7 @@ mod tests {
 
     #[test]
     fn records_dispersion_when_present() {
-        let record = parse_all_the_time_operation(READ_CELL_DISPERSION_FIXTURE).unwrap();
+        let record = parse_record(READ_CELL_DISPERSION_FIXTURE);
         let metric = &record.metrics[0];
         // The slope is the point estimate and the spans' jitter is carried as an
         // analytic confidence interval straddling it. The adapter no longer surfaces
@@ -172,24 +178,24 @@ mod tests {
             "\"interval_low_processor_time_nanos\":30.0,",
             "\"interval_high_processor_time_nanos\":37.0}"
         );
-        let record = parse_all_the_time_operation(json).unwrap();
+        let record = parse_record(json);
         assert_eq!(record.metrics[0].value, 33.5);
     }
 
     #[test]
-    fn missing_slope_maps_to_nan() {
-        // A zero-iteration operation the workload could not run leaves the slope
-        // null (serialized from NaN), which the adapter surfaces as NaN rather than
-        // inventing a figure.
+    fn null_slope_yields_no_record() {
+        // A zero-iteration operation the workload could not run leaves the slope null
+        // (serialized from NaN). It has no usable measurement, so the adapter drops
+        // it rather than storing a non-finite value that could not round-trip through
+        // stored history.
         let json = "{\"operation\":\"op\",\"slope_processor_time_nanos\":null}";
-        let record = parse_all_the_time_operation(json).unwrap();
-        assert!(record.metrics[0].value.is_nan());
+        assert!(parse_all_the_time_operation(json).unwrap().is_none());
     }
 
     #[test]
     fn preserves_the_original_operation_name() {
         let json = operation_json("group/case name", 1234);
-        let record = parse_all_the_time_operation(&json).unwrap();
+        let record = parse_record(&json);
         assert_eq!(
             record.id,
             BenchmarkId::new(NonEmpty::new("group/case name".to_owned()))
@@ -204,6 +210,13 @@ mod tests {
             "{error}"
         );
         assert!(error.source().is_some());
+    }
+
+    /// Parses a fixture that is expected to yield a stored record.
+    fn parse_record(json: &str) -> BenchmarkResult {
+        parse_all_the_time_operation(json)
+            .expect("the fixture is well-formed all_the_time output")
+            .expect("the operation has a usable measurement")
     }
 
     fn operation_json(operation: &str, nanos: u64) -> String {

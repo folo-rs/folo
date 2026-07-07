@@ -69,6 +69,19 @@ fn dedup_env(pairs: Vec<(String, String)>) -> Vec<(String, String)> {
     env
 }
 
+/// Returns the per-iteration slope only when it is a usable finite measurement.
+///
+/// The in-workspace engines (`alloc_tracker`, `all_the_time`) write a null slope
+/// for a zero-iteration operation the workload could not run. Such an operation has
+/// no comparable per-iteration figure, and a non-finite metric value cannot
+/// round-trip through stored history: `serde_json` renders `NaN`/infinity as JSON
+/// `null`, which then fails to deserialize back into the model's `f64`. Callers
+/// therefore drop the operation rather than store a value that would corrupt the
+/// run.
+fn usable_slope(slope: Option<f64>) -> Option<f64> {
+    slope.filter(|value| value.is_finite())
+}
+
 /// The environment variables to inject so an engine emits machine-readable output.
 ///
 /// Callgrind needs `GUNGRAUN_SAVE_SUMMARY=pretty-json` so Gungraun writes the
@@ -136,5 +149,17 @@ mod tests {
                 ("B".to_owned(), "2".to_owned()),
             ]
         );
+    }
+
+    #[test]
+    fn usable_slope_keeps_only_present_finite_values() {
+        // A present finite slope passes through; an absent one and any non-finite
+        // one are rejected, so no non-finite figure can reach stored history.
+        assert!(usable_slope(Some(1.5)).is_some());
+        assert!(usable_slope(Some(0.0)).is_some());
+        assert!(usable_slope(None).is_none());
+        assert!(usable_slope(Some(f64::NAN)).is_none());
+        assert!(usable_slope(Some(f64::INFINITY)).is_none());
+        assert!(usable_slope(Some(f64::NEG_INFINITY)).is_none());
     }
 }
