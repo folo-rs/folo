@@ -42,8 +42,13 @@ function Stop-AzuriteProcessTree {
     )
 
     if ($IsWindows) {
+        # Forward -WhatIf explicitly so the whole tree is classified, not just this node. Preference
+        # inheritance ($WhatIfPreference/$ConfirmPreference) already flows into the recursion, but
+        # making -WhatIf explicit keeps the intent unmistakable and independent of that subtlety.
         Get-CimInstance Win32_Process -Filter "ParentProcessId = $ProcessId" -ErrorAction SilentlyContinue |
-            ForEach-Object { Stop-AzuriteProcessTree -ProcessId $_.ProcessId }
+            ForEach-Object {
+                Stop-AzuriteProcessTree -ProcessId $_.ProcessId -WhatIf:$WhatIfPreference
+            }
     }
     if ($PSCmdlet.ShouldProcess("process $ProcessId", 'Stop-Process')) {
         Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue

@@ -3,7 +3,9 @@
 # Pester suite for Azurite.psm1. Test-AzuriteReachable is exercised against a real ephemeral
 # TcpListener (up) and a closed port (down); New-AzuriteCertificate is asked to produce a PFX which
 # is then loaded back and inspected; Get-AzuriteArgument is asserted flag-for-flag; and
-# Stop-AzuriteProcessTree is driven with -WhatIf so it classifies without killing anything.
+# Stop-AzuriteProcessTree is driven with -WhatIf (including a mocked child process on Windows) so it
+# classifies the whole tree without killing anything, and once without -WhatIf to confirm it stops
+# both the root and its descendant.
 
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot 'Azurite.psm1') -Force
@@ -78,5 +80,40 @@ Describe 'Get-AzuriteArgument' {
 Describe 'Stop-AzuriteProcessTree' {
     It 'does not throw for an unknown process id under -WhatIf' {
         { Stop-AzuriteProcessTree -ProcessId 2147483647 -WhatIf } | Should -Not -Throw
+    }
+
+    It 'never stops any process in the tree under -WhatIf' -Skip:(-not $IsWindows) {
+        # The child-enumeration recursion is Windows-only (Get-CimInstance is a CIM cmdlet that does
+        # not exist on Linux), so this runs only on Windows. Hand it one synthetic child and assert
+        # -WhatIf reaches all the way down the tree: no Stop-Process anywhere.
+        InModuleScope Azurite {
+            Mock Get-CimInstance {
+                if ($Filter -eq 'ParentProcessId = 4242') {
+                    [pscustomobject]@{ ProcessId = 9191 }
+                }
+            }
+            Mock Stop-Process { }
+
+            Stop-AzuriteProcessTree -ProcessId 4242 -WhatIf
+
+            Should -Invoke Stop-Process -Times 0 -Exactly
+            Should -Invoke Get-CimInstance -Times 2 -Exactly
+        }
+    }
+
+    It 'stops every process in the tree without -WhatIf' -Skip:(-not $IsWindows) {
+        InModuleScope Azurite {
+            Mock Get-CimInstance {
+                if ($Filter -eq 'ParentProcessId = 4242') {
+                    [pscustomobject]@{ ProcessId = 9191 }
+                }
+            }
+            Mock Stop-Process { }
+
+            Stop-AzuriteProcessTree -ProcessId 4242
+
+            Should -Invoke Stop-Process -Times 1 -Exactly -ParameterFilter { $Id -eq 4242 }
+            Should -Invoke Stop-Process -Times 1 -Exactly -ParameterFilter { $Id -eq 9191 }
+        }
     }
 }
