@@ -74,6 +74,7 @@ function New-AzuriteCertificate {
     if (-not $PSCmdlet.ShouldProcess($PfxPath, 'Create self-signed certificate')) { return }
 
     $rsa = [System.Security.Cryptography.RSA]::Create(2048)
+    $certificate = $null
     try {
         $request = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
             'CN=127.0.0.1',
@@ -92,6 +93,9 @@ function New-AzuriteCertificate {
             $Password)
         [System.IO.File]::WriteAllBytes($PfxPath, $pfxBytes)
     } finally {
+        # X509Certificate2 holds a native key handle, so dispose it (alongside the RSA key) rather
+        # than waiting on the finalizer; test-azurite may generate this repeatedly in one session.
+        if ($certificate) { $certificate.Dispose() }
         $rsa.Dispose()
     }
 }

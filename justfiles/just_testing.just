@@ -431,7 +431,8 @@ run-examples:
     # Pre-compile each package's examples up front so first-time compilation does not eat into the
     # per-example execution timeout (on slow CI runners a cold compile can exceed it). A package
     # whose examples fail to build is recorded and its examples skipped, so one broken package does
-    # not mask the others' results.
+    # not mask the others' results. Each affected example is recorded as its own failure so the
+    # summary's total, successful and failed counts stay consistent (total = successful + failed).
     $env:IS_TESTING = "1"
     $buildFailed = @{}
     foreach ($pkg in ($targets | ForEach-Object { $_.Package } | Sort-Object -Unique)) {
@@ -441,7 +442,9 @@ run-examples:
         } catch {
             Write-Host "Building examples for package '$pkg' failed" -ForegroundColor Red
             $buildFailed[$pkg] = $true
-            $failures += "${pkg}::* (build failed)"
+            foreach ($failedTarget in @($targets | Where-Object { $_.Package -eq $pkg })) {
+                $failures += "$($failedTarget.Package)::$($failedTarget.Example) (build failed)"
+            }
         }
     }
 
