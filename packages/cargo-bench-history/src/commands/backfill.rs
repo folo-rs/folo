@@ -35,10 +35,10 @@ use cbh_diag::{StderrReporter, count_noun};
 use cbh_engines::FsBenchOutputSource;
 use cbh_git::{GitHistory, SystemGitHistory, TokioBenchRunner, capture};
 use cbh_probe::SystemProbe;
+use cbh_storage::{Storage, build_storage, project_objects_prefix};
 use tick::Clock;
 
 use super::collect::{CollectDeps, CollectSummary, default_bench_command, run_engines};
-use crate::storage::{Storage, build_storage, project_objects_prefix};
 use crate::wiring::{
     resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
 };
@@ -568,11 +568,11 @@ mod tests {
     use std::future::{Future, ready};
 
     use cbh_git::FakeGitHistory;
+    use cbh_storage::MemoryStorage;
     use futures::executor::block_on;
 
     use super::*;
     use crate::StorageError;
-    use crate::storage::MemoryStorage;
 
     /// A canned per-commit result the fake [`CommitRunner`] returns.
     #[derive(Clone)]

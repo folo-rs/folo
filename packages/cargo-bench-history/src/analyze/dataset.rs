@@ -12,6 +12,7 @@ use cargo_bench_history_core::analyze::{
 use cbh_config::Config;
 use cbh_diag::{Reporter, ReporterExt, count_noun};
 use cbh_git::GitHistory;
+use cbh_storage::Storage;
 use jiff::Timestamp;
 
 use super::facets::{AutoFacets, resolve_facets};
@@ -25,7 +26,6 @@ use super::window::{
 };
 use crate::RunError;
 use crate::model::{BenchmarkIdPrefix, BlessingRecord, DiscriminantSet};
-use crate::storage::Storage;
 
 /// The data an analysis (or listing) draws on, plus the bookkeeping needed to
 /// explain an empty outcome and warn about ephemeral data.

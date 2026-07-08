@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use cargo_bench_history_core::codec;
 use tokio::io::AsyncWriteExt;
 
 use super::{Storage, StorageError, is_plain_segment};
@@ -25,7 +24,7 @@ static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// A [`Storage`] that persists objects as files under a root directory.
 #[derive(Clone, Debug)]
-pub(crate) struct LocalStorage {
+pub struct LocalStorage {
     root: PathBuf,
 }
 
@@ -79,7 +78,7 @@ impl Storage for LocalStorage {
             Ok(false) => {}
             Err(error) => return Err(StorageError::Io(error)),
         }
-        let compressed = codec::compress(bytes);
+        let compressed = cbh_codec::compress(bytes);
         write_atomic(&path, &compressed)
             .await
             .map_err(StorageError::Io)
@@ -94,7 +93,7 @@ impl Storage for LocalStorage {
         }
         // The atomic rename replaces any existing object in full, the deliberate
         // escape hatch from the write-once contract.
-        let compressed = codec::compress(bytes);
+        let compressed = cbh_codec::compress(bytes);
         write_atomic(&path, &compressed)
             .await
             .map_err(StorageError::Io)
@@ -103,7 +102,7 @@ impl Storage for LocalStorage {
     async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError> {
         let path = self.key_path(key)?;
         match tokio::fs::read(&path).await {
-            Ok(bytes) => codec::decompress(&bytes).map_err(StorageError::Io),
+            Ok(bytes) => cbh_codec::decompress(&bytes).map_err(StorageError::Io),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Err(StorageError::NotFound {
                 key: key.to_owned(),
             }),
@@ -277,7 +276,7 @@ mod tests {
             "stored bytes must be gzip"
         );
         assert_ne!(on_disk, plain, "the object is not stored verbatim");
-        assert_eq!(codec::decompress(&on_disk).unwrap(), plain);
+        assert_eq!(cbh_codec::decompress(&on_disk).unwrap(), plain);
     }
 
     #[tokio::test]

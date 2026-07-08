@@ -1,6 +1,6 @@
 use std::path::{Component, Path};
 
-use cargo_bench_history_core::model::{OBJECTS_SEGMENT, STORAGE_VERSION, sanitize_segment};
+use cbh_model::{OBJECTS_SEGMENT, STORAGE_VERSION, sanitize_segment};
 
 use super::StorageError;
 
@@ -51,7 +51,7 @@ const CACHE_EPOCH_SEGMENT: &str = "_cache-epoch";
 /// read-through cache compares its cloud value against the copy its mirror recorded
 /// under the *same key* to decide whether to reuse or wipe that project's mirrored
 /// objects. The `project` segment is sanitized identically to
-/// [`DiscriminantSet::partition_prefix`](cargo_bench_history_core::model::DiscriminantSet::partition_prefix)
+/// `DiscriminantSet::partition_prefix`
 /// so the marker lands in the same partition as that project's data.
 pub(crate) fn cache_epoch_key(project: &str) -> String {
     format!(
@@ -67,7 +67,8 @@ pub(crate) fn cache_epoch_key(project: &str) -> String {
 /// under this prefix so they enumerate only benchmark objects, never a per-project
 /// metadata sibling such as the [`cache_epoch_key`] marker. The read-through cache
 /// also wipes exactly this subtree when invalidating one project's mirror.
-pub(crate) fn project_objects_prefix(project: &str) -> String {
+#[must_use]
+pub fn project_objects_prefix(project: &str) -> String {
     format!(
         "{STORAGE_VERSION}/{project}/{OBJECTS_SEGMENT}/",
         project = sanitize_segment(project)

@@ -17,6 +17,7 @@ use cbh_engines::{
 };
 use cbh_git::{BenchRunner, TokioBenchRunner};
 use cbh_probe::{EnvironmentProbe, HardwareProfile, RustcInfo, SystemProbe, resolve_machine_key};
+use cbh_storage::{Storage, StorageError, StorageFacade, build_storage};
 use jiff::Timestamp;
 use tick::Clock;
 
@@ -24,7 +25,6 @@ use crate::model::{
     BenchmarkResult, DiscriminantSet, Engine, EnvironmentInfo, GitInfo, Run, RunContext,
     ToolchainInfo, detect_environment,
 };
-use crate::storage::{Storage, StorageError, StorageFacade, build_storage};
 use crate::wiring::{
     STORAGE_ENV_VAR, resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo,
     storage_env,
@@ -794,11 +794,11 @@ mod tests {
     use cbh_diag::RecordingReporter;
     use cbh_engines::{Harvest, RawCriterionCase, RawOperationFile, RawSummary};
     use cbh_git::{EngineStatus, parse_git_info};
+    use cbh_storage::MemoryStorage;
     use futures::executor::block_on;
 
     use super::*;
     use crate::model::{BenchmarkIdPrefix, BlessingRecord};
-    use crate::storage::MemoryStorage;
 
     const SINGLE_FIXTURE: &str =
         include_str!("../../tests/fixtures/callgrind/single_unparametrized.summary.json");

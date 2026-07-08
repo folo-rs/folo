@@ -13,18 +13,20 @@ use super::{Storage, StorageError, validate_key};
 /// gzip on its hot path; the codec itself is exercised by its own unit tests and
 /// by the real backends.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct MemoryStorage {
+pub struct MemoryStorage {
     objects: std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<String, Vec<u8>>>>,
 }
 
 impl MemoryStorage {
     /// Creates an empty in-memory store.
-    pub(crate) fn new() -> Self {
+    #[must_use]
+    pub fn new() -> Self {
         Self::default()
     }
 
     /// Returns the stored keys in sorted order.
-    pub(crate) fn keys(&self) -> Vec<String> {
+    #[must_use]
+    pub fn keys(&self) -> Vec<String> {
         self.objects.lock().unwrap().keys().cloned().collect()
     }
 }
@@ -87,6 +89,7 @@ impl Storage for MemoryStorage {
     }
 }
 
+#[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use futures::executor::block_on;

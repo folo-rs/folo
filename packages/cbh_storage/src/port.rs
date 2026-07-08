@@ -8,7 +8,7 @@ use super::StorageError;
 /// The model — flat string keys, write-once objects, and list-by-prefix — is the
 /// lowest common denominator of a filesystem and a blob container, so every
 /// backend implements this trait with no special-casing by callers.
-pub(crate) trait Storage: fmt::Debug + Send + Sync {
+pub trait Storage: fmt::Debug + Send + Sync {
     /// Writes `bytes` at `key`, creating any intermediate structure as needed.
     ///
     /// Storage is write-once: an existing object is never overwritten.

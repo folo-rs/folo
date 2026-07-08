@@ -24,24 +24,13 @@ pkg-fmt = "zip"
 
 [dependencies]
 anyspawn = { workspace = true, features = ["tokio"] }
-async-trait = { workspace = true }
-azure_core = { workspace = true }
-# The `default` feature on these two crates is load-bearing, not gratuitous: it
-# transitively enables `azure_core/default`, which selects the reqwest + rustls
-# HTTP transport. Without it the SDK still compiles, but `new_http_client()`
-# panics at runtime the moment any blob request is made (there is no transport),
-# and neither `cargo check` nor the emulator-less test runs catch that. This is
-# the same "defaults pick a backend" situation that keeps `clap` on its
-# defaults. The workspace declarations keep `default-features = false`, so the
-# defaults are scoped to this package alone.
-azure_identity = { workspace = true, features = ["default"] }
-azure_storage_blob = { workspace = true, features = ["default"] }
 cargo-bench-history-core = { workspace = true }
 cbh_config = { workspace = true }
 cbh_diag = { workspace = true }
 cbh_engines = { workspace = true }
 cbh_git = { workspace = true }
 cbh_probe = { workspace = true }
+cbh_storage = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 futures = { workspace = true }
 jiff = { workspace = true, features = ["serde"] }
@@ -53,10 +42,25 @@ tick = { workspace = true, features = ["tokio"] }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt-multi-thread"] }
 
 [dev-dependencies]
+async-trait = { workspace = true }
+azure_core = { workspace = true }
+# The `default` feature on these two crates is load-bearing, not gratuitous: it
+# transitively enables `azure_core/default`, which selects the reqwest + rustls
+# HTTP transport. Without it the SDK still compiles, but `new_http_client()`
+# panics at runtime the moment any blob request is made (there is no transport),
+# and neither `cargo check` nor the emulator-less test runs catch that. This is
+# the same "defaults pick a backend" situation that keeps `clap` on its
+# defaults. The workspace declarations keep `default-features = false`, so the
+# defaults are scoped to this package alone. The Azure SDK is only a
+# dev-dependency now (the `cbh_azure` end-to-end test builds a backend directly
+# via `azure_backend_from_parts`); production storage lives in `cbh_storage`.
+azure_identity = { workspace = true, features = ["default"] }
+azure_storage_blob = { workspace = true, features = ["default"] }
 base64 = { workspace = true }
 cargo-bench-history-core = { path = "../cargo-bench-history-core", features = ["private-test-util"] }
 cbh_diag = { path = "../cbh_diag", features = ["private-test-util"] }
 cbh_git = { path = "../cbh_git", features = ["private-test-util"] }
+cbh_storage = { path = "../cbh_storage", features = ["private-test-util"] }
 futures = { workspace = true, features = ["executor"] }
 mock_bench_engine = { path = "../mock_bench_engine" }
 mutants = { workspace = true }

@@ -44,8 +44,10 @@ use super::{Storage, StorageError, cache_epoch_key, project_objects_prefix};
 const GENESIS_EPOCH: &[u8] = b"genesis";
 
 /// A read-through cache over an inner [`Storage`], mirroring fetched objects into a
-/// local backing store under their exact cloud keys and invalidating a project's
-/// mirrored objects when that project's cloud-side marker changes. The mirror
+/// local backing store under their exact cloud keys.
+///
+/// A project's mirrored objects are invalidated when that project's cloud-side marker
+/// changes. The mirror
 /// faithfully images the cloud namespace, so it can hold several projects at once;
 /// invalidation is scoped to one project's objects subtree at a time. See the
 /// [module docs](self) for the invalidation contract.
@@ -55,7 +57,7 @@ const GENESIS_EPOCH: &[u8] = b"genesis";
 /// clones the storage into each spawned task — accumulates one mirror and one
 /// hit/miss tally across every worker.
 #[derive(Clone, Debug)]
-pub(crate) struct CachingStorage<Inner, Cache> {
+pub struct CachingStorage<Inner, Cache> {
     /// The wrapped backend (the cloud history in production). Writes, listings, and
     /// cache misses go here; it also owns the cloud-side invalidation marker.
     inner: Inner,
@@ -246,7 +248,7 @@ mod tests {
     use futures::executor::block_on;
 
     use super::*;
-    use crate::storage::MemoryStorage;
+    use crate::MemoryStorage;
 
     /// Builds a decorator over two in-memory fakes (cloud + mirror) so the
     /// read-through logic is exercised reactor-free and under Miri.

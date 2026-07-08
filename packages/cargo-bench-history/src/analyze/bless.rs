@@ -22,6 +22,7 @@ use std::path::Path;
 use cbh_config::{Config, load_config};
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
+use cbh_storage::{Storage, build_storage};
 use jiff::Timestamp;
 use tick::Clock;
 
@@ -30,7 +31,6 @@ use super::{
     resolve_base_ref, resolve_facets, resolve_now,
 };
 use crate::model::BlessingRecord;
-use crate::storage::{Storage, build_storage};
 use crate::wiring::{
     resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
 };
@@ -321,6 +321,7 @@ mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
     use cbh_diag::RecordingReporter;
     use cbh_git::FakeGitHistory;
+    use cbh_storage::MemoryStorage;
     use futures::executor::block_on;
     use nonempty::nonempty;
 
@@ -329,7 +330,6 @@ mod tests {
         BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo, GitInfo, Metric,
         MetricKind, Run, RunContext, ToolchainInfo,
     };
-    use crate::storage::MemoryStorage;
 
     fn config() -> Config {
         Config::default()

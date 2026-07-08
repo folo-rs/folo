@@ -435,6 +435,7 @@ dependencies = [
  "cbh_engines",
  "cbh_git",
  "cbh_probe",
+ "cbh_storage",
  "clap",
  "futures",
  "jiff",
@@ -630,6 +631,30 @@ name = "cbh_stats"
 version = "0.0.3"
 dependencies = [
  "mutants",
+]
+
+[[package]]
+name = "cbh_storage"
+version = "0.0.3"
+dependencies = [
+ "async-trait",
+ "azure_core",
+ "azure_identity",
+ "azure_storage_blob",
+ "base64",
+ "cbh_codec",
+ "cbh_config",
+ "cbh_diag",
+ "cbh_model",
+ "futures",
+ "jiff",
+ "mutants",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

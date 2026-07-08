@@ -287,11 +287,11 @@ mod config_writer;
 mod dispatch;
 mod outcome;
 mod output;
-mod storage;
 mod wiring;
 
 pub(crate) use cargo_bench_history_core::model;
 pub use cbh_config::{ConfigError, default_template};
+pub use cbh_storage::{StorageError, StorageOverride, azure_backend_from_parts};
 pub use cli::{Cli, EarlyExit};
 pub use command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
@@ -305,4 +305,3 @@ pub use model::{
 };
 pub(crate) use outcome::finish_with_flush;
 pub use outcome::{RunError, RunOutcome};
-pub use storage::{StorageError, StorageOverride, azure_backend_from_parts};

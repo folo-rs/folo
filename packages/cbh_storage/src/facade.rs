@@ -13,17 +13,30 @@ use azure_core::credentials::TokenCredential;
 use azure_core::http::HttpClient;
 use cbh_config::{CloudStorageConfig, Config};
 use cbh_diag::{Reporter, ReporterExt};
+use cbh_model::sanitize_segment;
 
 use super::azure::AzureBlobStorage;
 use super::caching::CachingStorage;
 use super::local::LocalStorage;
 use super::{Storage, StorageError};
-use crate::model::sanitize_segment;
-use crate::wiring::rebase;
+
+/// Joins a relative `path` onto `base`, leaving an absolute `path` unchanged.
+///
+/// A relative storage or cache path is taken relative to `base` (the process
+/// working directory in production), so it resolves the same regardless of the
+/// process current directory — letting each test point a backend at its own
+/// workspace without a global `chdir`.
+fn rebase(base: &Path, path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        path
+    } else {
+        base.join(path)
+    }
+}
 
 /// A [`Storage`] backend selected at configuration time.
 #[derive(Clone, Debug)]
-pub(crate) enum StorageFacade {
+pub enum StorageFacade {
     /// A local filesystem backend.
     Local(LocalStorage),
     /// An Azure Blob Storage backend.
@@ -124,7 +137,7 @@ impl StorageFacade {
     /// # Errors
     ///
     /// Propagates any [`StorageError`] from the underlying synchronization.
-    pub(crate) async fn synchronize_cache(
+    pub async fn synchronize_cache(
         &self,
         project: &str,
         reporter: &dyn Reporter,
@@ -146,7 +159,7 @@ impl StorageFacade {
     /// # Errors
     ///
     /// Propagates any [`StorageError`] from writing the marker.
-    pub(crate) async fn flush_pending_invalidation(
+    pub async fn flush_pending_invalidation(
         &self,
         project: &str,
         reporter: &dyn Reporter,
@@ -166,7 +179,7 @@ impl StorageFacade {
     /// Notes the read-through cache hit/miss tally at the end of a load, so a slow
     /// load can be diagnosed as a cold or invalidated mirror. A no-op unless a
     /// cache is in use.
-    pub(crate) fn report_cache_tally(&self, reporter: &dyn Reporter) {
+    pub fn report_cache_tally(&self, reporter: &dyn Reporter) {
         if let Self::CachedAzure(storage) = self {
             storage.report_tally(reporter);
         }
@@ -175,16 +188,16 @@ impl StorageFacade {
 
 /// Builds the storage backend a command should use.
 ///
-/// `local` is the resolved `--local` path (from
-/// [`resolve_local_path`](crate::wiring::resolve_local_path)). When present it
+/// `local` is the resolved `--local` path (from the caller's `--local` path
+/// resolution). When present it
 /// selects local filesystem storage and **overrides** any configured cloud
 /// backend; a relative path is taken relative to `base` (the process working
 /// directory in production), so it resolves the same regardless of the process
 /// current directory. When `local` is `None`, the single cloud backend configured
 /// in `config` is used; if none is configured, that is an error.
 ///
-/// `cache` is the resolved `--cache` directory (from
-/// [`resolve_cache_path`](crate::wiring::resolve_cache_path)). It is meaningful
+/// `cache` is the resolved `--cache` directory (from the caller's
+/// `--cache` path resolution). It is meaningful
 /// **only with the cloud backend**: when set against an Azure backend the backend
 /// is wrapped in a [`CachingStorage`] whose mirror roots at
 /// `<cache>/<account>/<container>` and faithfully images that one backend's cloud
@@ -204,7 +217,7 @@ impl StorageFacade {
 /// Returns [`StorageError::Config`] if no storage is selected (no `--local` and no
 /// configured cloud backend), or if the selected cloud backend cannot be built —
 /// for example an Azure backend with a non-HTTPS endpoint.
-pub(crate) fn build_storage(
+pub fn build_storage(
     local: Option<&Path>,
     config: &Config,
     base: &Path,
@@ -272,7 +285,7 @@ pub(crate) fn build_storage(
 /// # Errors
 ///
 /// Propagates any [`build_storage`] error when no override is supplied.
-pub(crate) fn resolve_storage(
+pub fn resolve_storage(
     storage_override: Option<StorageFacade>,
     local: Option<&Path>,
     config: &Config,
@@ -313,25 +326,34 @@ pub(crate) fn resolve_storage(
     }
 }
 
-/// A pre-built storage backend injected through
-/// [`Overrides::storage_override`](crate::Overrides) so end-to-end tests can drive
+/// A pre-built storage backend injected through the command `Overrides` seam so
+/// end-to-end tests can drive
 /// commands against a backend that [`build_storage`] could not itself produce.
 ///
 /// The wrapped [`StorageFacade`] is deliberately opaque: the type is public (so a
-/// test in another crate can hold one) but carries no accessors, so the only thing
-/// a caller can do with it is hand it back to a command. Test-support code (the
-/// fake token credential, the certificate-trusting transport) stays in the tests;
-/// only the assembled backend crosses the boundary.
+/// test in another crate can hold one) but its field is private and the only
+/// accessor ([`into_facade`](Self::into_facade)) is meant for the command layer, so
+/// the only thing a test caller can do with one is hand it back to a command.
+/// Test-support code (the fake token credential, the certificate-trusting transport)
+/// stays in the tests; only the assembled backend crosses the boundary.
 #[doc(hidden)]
 #[derive(Clone, Debug)]
 pub struct StorageOverride(pub(crate) StorageFacade);
+
+impl StorageOverride {
+    /// Unwraps the pre-built backend for the command layer to install.
+    #[must_use]
+    pub fn into_facade(self) -> StorageFacade {
+        self.0
+    }
+}
 
 /// Builds an Azure [`StorageOverride`] from already-constructed parts.
 ///
 /// This is the command-level test seam: an end-to-end test supplies a token
 /// credential and an HTTP client (for Azurite, a locally-faked Entra token and a
-/// certificate-trusting transport) and receives a backend it can inject via
-/// [`Overrides::storage_override`](crate::Overrides), bypassing the
+/// certificate-trusting transport) and receives a backend it can inject via the
+/// command `Overrides` seam, bypassing the
 /// config-to-[`build_storage`] path that could not produce such a backend.
 ///
 /// # Errors

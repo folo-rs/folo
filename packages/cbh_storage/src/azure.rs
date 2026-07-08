@@ -30,7 +30,6 @@ use azure_storage_blob::models::{
 use azure_storage_blob::{
     BlobClient, BlobClientOptions, BlobContainerClient, BlobContainerClientOptions,
 };
-use cargo_bench_history_core::codec;
 use cbh_diag::{Reporter, ReporterExt};
 use futures::TryStreamExt as _;
 use jiff::Timestamp;
@@ -48,7 +47,7 @@ const GZIP_CONTENT_ENCODING: &str = "gzip";
 
 /// A [`Storage`] that persists objects as blobs in an Azure Blob container.
 #[derive(Clone)]
-pub(crate) struct AzureBlobStorage {
+pub struct AzureBlobStorage {
     /// The container endpoint URL. It carries no secret: authentication is a
     /// per-request Entra token, not a signed query.
     container_endpoint: Url,
@@ -276,7 +275,7 @@ impl AzureBlobStorage {
             )
         });
         let client = self.blob_client(&key)?;
-        let compressed = codec::compress(token.as_bytes());
+        let compressed = cbh_codec::compress(token.as_bytes());
         self.upload_with_retry(&client, &compressed, &key, false)
             .await
     }
@@ -287,7 +286,7 @@ impl Storage for AzureBlobStorage {
     async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
         validate_key(key)?;
         let client = self.blob_client(key)?;
-        let compressed = codec::compress(bytes);
+        let compressed = cbh_codec::compress(bytes);
         self.upload_with_retry(&client, &compressed, key, true)
             .await
     }
@@ -296,7 +295,7 @@ impl Storage for AzureBlobStorage {
     async fn put_overwrite(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
         validate_key(key)?;
         let client = self.blob_client(key)?;
-        let compressed = codec::compress(bytes);
+        let compressed = cbh_codec::compress(bytes);
         // Probe with a write-once upload first. Creating a brand-new key leaves
         // per-key immutability intact and no cache mirrors it yet, so it must not
         // invalidate anything (a read-through mirror discovers new keys via its
@@ -329,7 +328,7 @@ impl Storage for AzureBlobStorage {
                     .collect()
                     .await
                     .map_err(|error| azure_io(&error))?;
-                codec::decompress(&bytes).map_err(StorageError::Io)
+                cbh_codec::decompress(&bytes).map_err(StorageError::Io)
             }
             Err(error) if matches!(classify(&error), Fault::NotFound | Fault::ContainerMissing) => {
                 Err(StorageError::NotFound {
@@ -885,10 +884,7 @@ mod tests {
             Arc::new(UnusedHttpClient),
         )
         .unwrap();
-        assert!(matches!(
-            injected.0,
-            crate::storage::StorageFacade::Azure(_)
-        ));
+        assert!(matches!(injected.0, crate::StorageFacade::Azure(_)));
     }
 
     #[test]

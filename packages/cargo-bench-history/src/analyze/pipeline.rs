@@ -18,6 +18,7 @@ use cbh_config::{Config, load_config};
 use cbh_diag::{Reporter, ReporterExt, StderrReporter};
 use cbh_git::{GitHistory, SystemGitHistory};
 use cbh_probe::{EnvironmentProbe, SystemProbe, resolve_machine_key};
+use cbh_storage::{Storage, StorageFacade, resolve_storage};
 use jiff::Timestamp;
 use tick::Clock;
 
@@ -29,7 +30,6 @@ use crate::model::DiscriminantSet;
 use crate::output::{
     OutputSelection, OutputWriter, TokioOutputWriter, emit, emit_markdown_summary,
 };
-use crate::storage::{Storage, StorageFacade, resolve_storage};
 use crate::wiring::{
     cache_env, resolve_cache_path, resolve_config_path, resolve_local_path, resolve_project_id,
     resolve_repo, storage_env,
@@ -304,6 +304,7 @@ mod tests {
     use cbh_config::{Config, parse_config};
     use cbh_diag::RecordingReporter;
     use cbh_git::FakeGitHistory;
+    use cbh_storage::{MemoryStorage, Storage};
     use futures::executor::block_on;
     use jiff::Timestamp;
     use nonempty::nonempty;
@@ -314,7 +315,6 @@ mod tests {
         Metric, MetricKind, Run, RunContext, ToolchainInfo, sanitize_segment,
     };
     use crate::output::MemoryOutputWriter;
-    use crate::storage::{MemoryStorage, Storage};
 
     fn ts(seconds: i64) -> Timestamp {
         Timestamp::from_second(seconds).unwrap()

@@ -25,6 +25,7 @@ use anyspawn::Spawner;
 use cbh_config::{Config, load_config};
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
+use cbh_storage::{Storage, StorageFacade, resolve_storage};
 use jiff::Timestamp;
 use serde::Serialize;
 use tick::Clock;
@@ -35,7 +36,6 @@ use super::{
 };
 use crate::model::{BenchmarkIdPrefix, DiscriminantSet, MetricKind};
 use crate::output::{OutputSelection, OutputWriter, TokioOutputWriter, emit};
-use crate::storage::{Storage, StorageFacade, resolve_storage};
 use crate::wiring::{
     cache_env, resolve_cache_path, resolve_config_path, resolve_local_path, resolve_project_id,
     resolve_repo, storage_env,
@@ -496,6 +496,7 @@ mod tests {
     use cbh_config::Config;
     use cbh_diag::RecordingReporter;
     use cbh_git::FakeGitHistory;
+    use cbh_storage::{MemoryStorage, Storage};
     use futures::executor::block_on;
     use jiff::Timestamp;
     use nonempty::nonempty;
@@ -506,7 +507,6 @@ mod tests {
         RunContext, ToolchainInfo,
     };
     use crate::output::MemoryOutputWriter;
-    use crate::storage::{MemoryStorage, Storage};
 
     fn config() -> Config {
         Config::default()
