@@ -37,7 +37,7 @@ use jiff::Timestamp;
 use super::{
     PendingInvalidation, Storage, StorageError, cache_epoch_key, github_oidc, validate_key,
 };
-use crate::report::{Reporter, ReporterExt};
+use cbh_diag::{Reporter, ReporterExt};
 
 /// The HTTP content coding declared on every uploaded blob. The storage layer
 /// always stores gzip, so this header is unconditionally truthful and lets a

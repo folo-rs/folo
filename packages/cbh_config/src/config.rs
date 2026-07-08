@@ -39,7 +39,7 @@ const DEFAULT_TEMPLATE: &str = "\
 
 /// The parsed configuration file.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
-pub(crate) struct Config {
+pub struct Config {
     /// Project identity (defaults applied during resolution, not here).
     #[serde(default)]
     pub project: ProjectConfig,
@@ -53,7 +53,7 @@ pub(crate) struct Config {
 
 /// Project identity section.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
-pub(crate) struct ProjectConfig {
+pub struct ProjectConfig {
     /// Explicit project id; when absent the workspace directory name is used.
     pub id: Option<String>,
     /// The repository's default (integration) branch, used by `analyze` as the
@@ -70,7 +70,7 @@ pub(crate) struct ProjectConfig {
 /// at run time via `--local`, never carried in this shared file.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) enum CloudStorageConfig {
+pub enum CloudStorageConfig {
     /// Store result sets in an Azure Blob Storage container.
     Azure(AzureStorageConfig),
 }
@@ -83,7 +83,7 @@ pub(crate) enum CloudStorageConfig {
 /// error rather than being silently ignored.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct AzureStorageConfig {
+pub struct AzureStorageConfig {
     /// The storage account name (e.g. `devstoreaccount1` for Azurite).
     pub account: String,
     /// The blob container that holds the result-set objects.
@@ -102,7 +102,7 @@ pub(crate) struct AzureStorageConfig {
 ///
 /// Returns [`ConfigError::Parse`] if the text is not valid TOML or does not match
 /// the configuration schema.
-pub(crate) fn parse_config(text: &str) -> Result<Config, ConfigError> {
+pub fn parse_config(text: &str) -> Result<Config, ConfigError> {
     toml::from_str(text).map_err(|error| ConfigError::Parse(error.to_string()))
 }
 
@@ -120,7 +120,7 @@ pub(crate) fn parse_config(text: &str) -> Result<Config, ConfigError> {
 /// Returns [`ConfigError::Read`] if the file cannot be read (an explicit `--config`
 /// that does not exist, or any non-"not found" I/O error), or [`ConfigError::Parse`]
 /// if its contents are not a valid configuration.
-pub(crate) async fn load_config(path: &Path, explicit: bool) -> Result<Config, ConfigError> {
+pub async fn load_config(path: &Path, explicit: bool) -> Result<Config, ConfigError> {
     let text = match tokio::fs::read_to_string(path).await {
         Ok(text) => text,
         Err(error) if error.kind() == io::ErrorKind::NotFound && !explicit => {

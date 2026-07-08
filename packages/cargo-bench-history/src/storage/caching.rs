@@ -33,8 +33,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::{Storage, StorageError, cache_epoch_key, project_objects_prefix};
-use crate::report::{Reporter, ReporterExt};
-use crate::text::count_noun;
+use cbh_diag::{Reporter, ReporterExt};
+use cbh_diag::count_noun;
 
 /// The epoch a project that has never recorded a mutation reports.
 ///
@@ -245,7 +245,7 @@ mod tests {
     use futures::executor::block_on;
 
     use super::*;
-    use crate::report::RecordingReporter;
+    use cbh_diag::RecordingReporter;
     use crate::storage::MemoryStorage;
 
     /// Builds a decorator over two in-memory fakes (cloud + mirror) so the

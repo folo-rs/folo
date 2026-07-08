@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::command::{CacheSelection, LocalStorageSelection};
-use crate::config::Config;
+use cbh_config::Config;
 use crate::storage::StorageError;
 
 /// The environment variable that supplies the local-storage path for a bare
@@ -162,7 +162,7 @@ pub(crate) fn resolve_project_id(config: &Config, workspace_dir: &Path) -> Strin
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-    use crate::config::parse_config;
+    use cbh_config::parse_config;
 
     fn config_with(extra: &str) -> Config {
         let text = format!("[storage.azure]\naccount = \"a\"\ncontainer = \"c\"\n\n{extra}");

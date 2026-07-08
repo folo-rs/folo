@@ -432,6 +432,8 @@ dependencies = [
  "azure_storage_blob",
  "base64",
  "cargo-bench-history-core",
+ "cbh_config",
+ "cbh_diag",
  "clap",
  "futures",
  "jiff",
@@ -449,7 +451,6 @@ dependencies = [
  "testing",
  "tick",
  "tokio",
- "toml",
 ]
 
 [[package]]
@@ -541,6 +542,23 @@ name = "cbh_codec"
 version = "0.0.3"
 dependencies = [
  "flate2",
+]
+
+[[package]]
+name = "cbh_config"
+version = "0.0.3"
+dependencies = [
+ "serde",
+ "tempfile",
+ "tokio",
+ "toml",
+]
+
+[[package]]
+name = "cbh_diag"
+version = "0.0.3"
+dependencies = [
+ "mutants",
 ]
 
 [[package]]

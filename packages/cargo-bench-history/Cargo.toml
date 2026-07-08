@@ -37,6 +37,8 @@ azure_core = { workspace = true }
 azure_identity = { workspace = true, features = ["default"] }
 azure_storage_blob = { workspace = true, features = ["default"] }
 cargo-bench-history-core = { workspace = true }
+cbh_config = { workspace = true }
+cbh_diag = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 futures = { workspace = true }
 jiff = { workspace = true, features = ["serde"] }
@@ -48,13 +50,13 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 tick = { workspace = true, features = ["tokio"] }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt-multi-thread"] }
-toml = { workspace = true, features = ["parse", "serde"] }
 
 [dev-dependencies]
 all_the_time = { path = "../all_the_time" }
 alloc_tracker = { path = "../alloc_tracker" }
 base64 = { workspace = true }
 cargo-bench-history-core = { path = "../cargo-bench-history-core", features = ["private-test-util"] }
+cbh_diag = { path = "../cbh_diag", features = ["private-test-util"] }
 futures = { workspace = true, features = ["executor"] }
 mock_bench_engine = { path = "../mock_bench_engine" }
 mutants = { workspace = true }

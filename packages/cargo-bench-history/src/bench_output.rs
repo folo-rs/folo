@@ -17,8 +17,8 @@ use crate::bench::{
     CRITERION_ESTIMATES_FILE, CRITERION_NEW_DIR, GUNGRAUN_DIR, SUMMARY_FILE,
 };
 use crate::model::Engine;
-use crate::report::{Reporter, ReporterExt};
-use crate::text::count_noun;
+use cbh_diag::{Reporter, ReporterExt};
+use cbh_diag::count_noun;
 
 /// Tolerance subtracted from the run-start boundary before comparing file
 /// modification times, absorbing coarse filesystem mtime granularity so a summary
@@ -398,7 +398,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::report::RecordingReporter;
+    use cbh_diag::RecordingReporter;
 
     /// Collects through the source with a recording reporter, returning both the
     /// harvest and the reporter so a test can assert on either. Most tests ignore

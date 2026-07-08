@@ -16,7 +16,7 @@ use crate::bench::{
     parse_callgrind_summary, parse_criterion_case,
 };
 use crate::bench_output::{BenchOutputSource, FsBenchOutputSource, Harvest, RawOperationFile};
-use crate::config::{CloudStorageConfig, Config, load_config};
+use cbh_config::{CloudStorageConfig, Config, load_config};
 use crate::host::RustcInfo;
 use crate::machine::{HardwareProfile, resolve_machine_key};
 use crate::model::{
@@ -25,9 +25,9 @@ use crate::model::{
 };
 use crate::probe::{EnvironmentProbe, SystemProbe};
 use crate::process::{BenchRunner, TokioBenchRunner};
-use crate::report::{Reporter, ReporterExt, StderrReporter};
+use cbh_diag::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, StorageError, StorageFacade, build_storage};
-use crate::text::count_noun;
+use cbh_diag::count_noun;
 use crate::wiring::{
     STORAGE_ENV_VAR, resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo,
     storage_env,
@@ -797,11 +797,11 @@ mod tests {
 
     use super::*;
     use crate::bench_output::{Harvest, RawCriterionCase, RawOperationFile, RawSummary};
-    use crate::config::parse_config;
+    use cbh_config::parse_config;
     use crate::git::parse_git_info;
     use crate::model::{BenchmarkIdPrefix, BlessingRecord};
     use crate::process::EngineStatus;
-    use crate::report::RecordingReporter;
+    use cbh_diag::RecordingReporter;
     use crate::storage::MemoryStorage;
 
     const SINGLE_FIXTURE: &str =

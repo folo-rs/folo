@@ -9,10 +9,10 @@ use jiff::Timestamp;
 
 use super::selection::Selection;
 use crate::RunError;
-use crate::config::Config;
+use cbh_config::Config;
 use crate::git_history::GitHistory;
-use crate::report::{Reporter, ReporterExt};
-use crate::text::count_noun;
+use cbh_diag::{Reporter, ReporterExt};
+use cbh_diag::count_noun;
 
 /// How the base-branch dirty-tip exception is gated.
 ///

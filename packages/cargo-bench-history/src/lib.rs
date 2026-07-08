@@ -285,7 +285,6 @@ mod bench_output;
 mod cli;
 mod command;
 mod commands;
-mod config;
 mod config_writer;
 mod dispatch;
 mod git;
@@ -296,9 +295,7 @@ mod outcome;
 mod output;
 mod probe;
 mod process;
-mod report;
 mod storage;
-mod text;
 mod wiring;
 
 pub(crate) use cargo_bench_history_core::model;
@@ -308,7 +305,7 @@ pub use command::{
     ExamineOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection, PruneOptions,
     UnblessOptions,
 };
-pub use config::{ConfigError, default_template};
+pub use cbh_config::{ConfigError, default_template};
 pub use dispatch::{Overrides, run, run_with_overrides};
 pub use model::{
     BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo, EnvironmentProvider, GitInfo,

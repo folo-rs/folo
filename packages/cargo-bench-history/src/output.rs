@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use cargo_bench_history_core::analyze::ReportFormat;
 
 use crate::RunError;
-use crate::report::{Reporter, ReporterExt};
+use cbh_diag::{Reporter, ReporterExt};
 use crate::wiring::rebase;
 
 /// Which report formats a single analysis pass should emit.
@@ -233,7 +233,7 @@ async fn write_report<W: OutputWriter>(
         format!(
             "wrote the {label} report to {} ({})",
             path.display(),
-            crate::text::count_noun(contents.len(), "byte")
+            cbh_diag::count_noun(contents.len(), "byte")
         )
     });
     Ok(())
@@ -299,7 +299,7 @@ mod tests {
 
     use super::fake::FailingOutputWriter;
     use super::*;
-    use crate::report::RecordingReporter;
+    use cbh_diag::RecordingReporter;
 
     /// A render stub that names the format it was asked for, so a test can tell
     /// which format backs each written file and the returned text.

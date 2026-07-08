@@ -30,13 +30,13 @@ use super::{
     AutoFacets, ReportFormat, Selection, Series, SeriesFilter, detect_auto_facets,
     dirty_base_exception_warning, empty_history_hint, format_value, resolve_now, select_dataset,
 };
-use crate::config::{Config, load_config};
+use cbh_config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
 use crate::model::{BenchmarkIdPrefix, DiscriminantSet, MetricKind};
 use crate::output::{OutputSelection, OutputWriter, TokioOutputWriter, emit};
-use crate::report::{Reporter, ReporterExt, StderrReporter};
+use cbh_diag::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, StorageFacade, resolve_storage};
-use crate::text::count_noun;
+use cbh_diag::count_noun;
 use crate::wiring::{
     cache_env, resolve_cache_path, resolve_config_path, resolve_local_path, resolve_project_id,
     resolve_repo, storage_env,
@@ -499,14 +499,14 @@ mod tests {
     use nonempty::nonempty;
 
     use super::*;
-    use crate::config::Config;
+    use cbh_config::Config;
     use crate::git_history::FakeGitHistory;
     use crate::model::{
         BenchmarkId, BenchmarkResult, EnvironmentInfo, GitInfo, Metric, MetricKind, Run,
         RunContext, ToolchainInfo,
     };
     use crate::output::MemoryOutputWriter;
-    use crate::report::RecordingReporter;
+    use cbh_diag::RecordingReporter;
     use crate::storage::{MemoryStorage, Storage};
 
     fn config() -> Config {

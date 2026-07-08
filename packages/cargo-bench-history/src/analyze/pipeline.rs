@@ -21,7 +21,7 @@ use super::dataset::{empty_history_hint, select_dataset};
 use super::facets::AutoFacets;
 use super::history::dirty_base_exception_warning;
 use super::selection::Selection;
-use crate::config::{Config, load_config};
+use cbh_config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
 use crate::machine::resolve_machine_key;
 use crate::model::DiscriminantSet;
@@ -29,7 +29,7 @@ use crate::output::{
     OutputSelection, OutputWriter, TokioOutputWriter, emit, emit_markdown_summary,
 };
 use crate::probe::{EnvironmentProbe, SystemProbe};
-use crate::report::{Reporter, ReporterExt, StderrReporter};
+use cbh_diag::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, StorageFacade, resolve_storage};
 use crate::wiring::{
     cache_env, resolve_cache_path, resolve_config_path, resolve_local_path, resolve_project_id,
@@ -307,14 +307,14 @@ mod tests {
     use nonempty::nonempty;
 
     use super::*;
-    use crate::config::{Config, parse_config};
+    use cbh_config::{Config, parse_config};
     use crate::git_history::FakeGitHistory;
     use crate::model::{
         BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, BlessingRecord, EnvironmentInfo, GitInfo,
         Metric, MetricKind, Run, RunContext, ToolchainInfo, sanitize_segment,
     };
     use crate::output::MemoryOutputWriter;
-    use crate::report::RecordingReporter;
+    use cbh_diag::RecordingReporter;
     use crate::storage::{MemoryStorage, Storage};
 
     fn ts(seconds: i64) -> Timestamp {

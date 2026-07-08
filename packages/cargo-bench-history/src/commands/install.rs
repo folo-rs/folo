@@ -3,9 +3,9 @@
 
 use std::path::Path;
 
-use crate::config::default_template;
+use cbh_config::default_template;
 use crate::config_writer::{ConfigWriter, TokioConfigWriter};
-use crate::report::{Reporter, ReporterExt, StderrReporter};
+use cbh_diag::{Reporter, ReporterExt, StderrReporter};
 use crate::wiring::resolve_config_path;
 use crate::{InstallOptions, RunError, RunOutcome};
 
@@ -79,7 +79,7 @@ mod tests {
 
     use super::*;
     use crate::config_writer::MemoryConfigWriter;
-    use crate::report::RecordingReporter;
+    use cbh_diag::RecordingReporter;
     use crate::wiring::default_config_path;
 
     /// Tests pass an empty base so `resolve_config_path` leaves the relative

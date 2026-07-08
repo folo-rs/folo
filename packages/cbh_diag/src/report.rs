@@ -3,7 +3,7 @@
 //! harvest that stores nothing) can be diagnosed.
 //!
 //! Notes are progress/diagnostic output and are distinct from a command's final
-//! summary, which is returned as a [`RunOutcome`](crate::RunOutcome) and printed
+//! summary, which is returned as a `RunOutcome` and printed
 //! to standard output. The real adapter writes notes to standard error so they
 //! never contaminate machine-readable stdout; tests record them in memory.
 //!
@@ -60,7 +60,7 @@ use sealed::Sink;
     reason = "Sink is sealed within this module on purpose so its unconditional \
               emit primitives stay off the crate-facing reporter surface"
 )]
-pub(crate) trait Reporter: Sink {}
+pub trait Reporter: Sink {}
 
 impl<T: Sink + ?Sized> Reporter for T {}
 
@@ -71,7 +71,7 @@ impl<T: Sink + ?Sized> Reporter for T {}
 /// trait stays dyn-compatible: a method taking a generic closure cannot be
 /// dispatched through `&dyn Reporter`. A blanket impl makes the helpers available
 /// on every reporter regardless.
-pub(crate) trait ReporterExt {
+pub trait ReporterExt {
     /// Records a diagnostic note whose formatting runs only when notes are
     /// consumed.
     ///
@@ -128,13 +128,14 @@ impl<R: Reporter + ?Sized> ReporterExt for R {
 /// no further guard — hence this is the one place an unconditional
 /// [`note`](Self::note) is exposed. It cannot be constructed elsewhere, so a bare
 /// note can never escape its `--verbose` guard.
-pub(crate) struct Notes<'a, R: ?Sized> {
+#[derive(Debug)]
+pub struct Notes<'a, R: ?Sized> {
     reporter: &'a R,
 }
 
 impl<R: Reporter + ?Sized> Notes<'_, R> {
     /// Records a single diagnostic note.
-    pub(crate) fn note(&self, message: &str) {
+    pub fn note(&self, message: &str) {
         self.reporter.emit_note(message);
     }
 }
@@ -142,7 +143,7 @@ impl<R: Reporter + ?Sized> Notes<'_, R> {
 /// A [`Reporter`] that writes notes to standard error when verbose mode is on,
 /// and discards them otherwise.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct StderrReporter {
+pub struct StderrReporter {
     /// Whether per-object diagnostic notes are emitted.
     verbose: bool,
     /// Whether per-stage timing notes are emitted. Independent of `verbose` so a
@@ -155,7 +156,8 @@ impl StderrReporter {
     ///
     /// Stage timings follow `verbose` too, so a plain `--verbose` run gets the
     /// per-stage breakdown alongside the per-object detail.
-    pub(crate) fn new(verbose: bool) -> Self {
+    #[must_use]
+    pub fn new(verbose: bool) -> Self {
         Self {
             verbose,
             timing_enabled: verbose,
@@ -165,7 +167,8 @@ impl StderrReporter {
     /// Creates a reporter with independent control over the per-object note stream
     /// (`verbose`) and the per-stage timing stream (`timing`), so a caller can ask
     /// for the timing breakdown without the per-object flood.
-    pub(crate) fn with_timing(verbose: bool, timing: bool) -> Self {
+    #[must_use]
+    pub fn with_timing(verbose: bool, timing: bool) -> Self {
         Self {
             verbose,
             timing_enabled: timing,
@@ -218,10 +221,11 @@ fn format_elapsed(elapsed: Duration) -> String {
     }
 }
 
-#[cfg(test)]
-pub(crate) use test_support::RecordingReporter;
+#[cfg(feature = "private-test-util")]
+#[cfg_attr(docsrs, doc(cfg(feature = "private-test-util")))]
+pub use test_support::RecordingReporter;
 
-#[cfg(test)]
+#[cfg(feature = "private-test-util")]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod test_support {
     use std::cell::RefCell;
@@ -232,29 +236,30 @@ mod test_support {
     /// A [`Reporter`](super::Reporter) that records every note in memory so tests
     /// can assert on the diagnostic trail.
     #[derive(Debug, Default)]
-    pub(crate) struct RecordingReporter {
+    pub struct RecordingReporter {
         notes: RefCell<Vec<String>>,
         timings: RefCell<Vec<String>>,
     }
 
     impl RecordingReporter {
         /// Creates an empty recording reporter.
-        pub(crate) fn new() -> Self {
+        #[must_use]
+        pub fn new() -> Self {
             Self::default()
         }
 
         /// Returns a snapshot of the notes recorded so far.
-        pub(crate) fn notes(&self) -> Vec<String> {
+        pub fn notes(&self) -> Vec<String> {
             self.notes.borrow().clone()
         }
 
         /// Whether any recorded note contains `needle`.
-        pub(crate) fn contains(&self, needle: &str) -> bool {
+        pub fn contains(&self, needle: &str) -> bool {
             self.notes.borrow().iter().any(|note| note.contains(needle))
         }
 
         /// Whether a stage timing whose label contains `needle` was recorded.
-        pub(crate) fn timed(&self, needle: &str) -> bool {
+        pub fn timed(&self, needle: &str) -> bool {
             self.timings
                 .borrow()
                 .iter()

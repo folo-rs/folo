@@ -16,9 +16,9 @@ use futures::{StreamExt as _, TryStreamExt as _};
 use super::facets::describe_facets;
 use crate::RunError;
 use crate::model::{BenchmarkIdPrefix, DiscriminantSet, STORAGE_VERSION, sanitize_segment};
-use crate::report::{Reporter, ReporterExt};
+use cbh_diag::{Reporter, ReporterExt};
 use crate::storage::{Storage, project_objects_prefix};
-use crate::text::count_noun;
+use cbh_diag::count_noun;
 
 /// One commit's run tally within a discriminant set, the granularity the report
 /// summaries and the `list runs` breakdown need.

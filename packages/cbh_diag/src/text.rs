@@ -6,7 +6,8 @@
 /// The tool spells out the grammatically correct form (`1 run`, `2 runs`) rather
 /// than the evasive `run(s)` shorthand. Only regular `-s` plurals are supported;
 /// an irregular noun (`index`/`indices`) would need its own handling.
-pub(crate) fn count_noun(count: usize, noun: &str) -> String {
+#[must_use]
+pub fn count_noun(count: usize, noun: &str) -> String {
     if count == 1 {
         format!("1 {noun}")
     } else {

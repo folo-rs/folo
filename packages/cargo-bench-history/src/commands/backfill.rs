@@ -34,13 +34,13 @@ use tick::Clock;
 
 use super::collect::{CollectDeps, CollectSummary, default_bench_command, run_engines};
 use crate::bench_output::FsBenchOutputSource;
-use crate::config::load_config;
+use cbh_config::load_config;
 use crate::git_history::{GitHistory, SystemGitHistory};
 use crate::probe::SystemProbe;
 use crate::process::{TokioBenchRunner, capture};
-use crate::report::StderrReporter;
+use cbh_diag::StderrReporter;
 use crate::storage::{Storage, build_storage, project_objects_prefix};
-use crate::text::count_noun;
+use cbh_diag::count_noun;
 use crate::wiring::{
     resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
 };

@@ -26,12 +26,12 @@ use super::{
     AutoFacets, Selection, StorageKey, detect_auto_facets, facet_filtered_candidates,
     resolve_base_ref, resolve_facets, resolve_now,
 };
-use crate::config::{Config, load_config};
+use cbh_config::{Config, load_config};
 use crate::git_history::{GitHistory, SystemGitHistory};
 use crate::model::BlessingRecord;
-use crate::report::{Reporter, ReporterExt, StderrReporter};
+use cbh_diag::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, build_storage};
-use crate::text::count_noun;
+use cbh_diag::count_noun;
 use crate::wiring::{
     resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
 };
@@ -329,7 +329,7 @@ mod tests {
         BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo, GitInfo, Metric,
         MetricKind, Run, RunContext, ToolchainInfo,
     };
-    use crate::report::RecordingReporter;
+    use cbh_diag::RecordingReporter;
     use crate::storage::MemoryStorage;
 
     fn config() -> Config {
