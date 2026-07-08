@@ -4,10 +4,9 @@
 
 use std::path::{Path, PathBuf};
 
+use cbh_command::{CacheSelection, LocalStorageSelection};
 use cbh_config::Config;
 use cbh_storage::StorageError;
-
-use crate::command::{CacheSelection, LocalStorageSelection};
 
 /// The environment variable that supplies the local-storage path for a bare
 /// `--local` (given with no value): `CARGO_BENCH_HISTORY_STORAGE`.

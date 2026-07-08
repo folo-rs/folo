@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use crate::model::BenchmarkIdPrefix;
+use cbh_model::BenchmarkIdPrefix;
 
 /// How a command selects local filesystem storage, from the `--local` flag.
 ///
@@ -198,7 +198,8 @@ impl AnalyzeOptions {
     /// error. `verbose` implies them; the `timing` flag enables them on its own,
     /// so a programmatic caller (the stress harness) can observe the per-stage
     /// load breakdown without the per-object note flood.
-    pub(crate) fn stage_timings_enabled(&self) -> bool {
+    #[must_use]
+    pub fn stage_timings_enabled(&self) -> bool {
         self.verbose || self.timing
     }
 }
@@ -316,7 +317,7 @@ pub struct ExamineOptions {
     pub machine_key: Vec<String>,
     /// The exact qualified benchmark id whose series is examined (required).
     pub benchmark: String,
-    /// The metric name (a [`MetricKind`](crate::model::MetricKind) `as_str` value)
+    /// The metric name (a `MetricKind` `as_str` value)
     /// whose series is examined (required).
     pub metric: String,
     /// Suppress the default text report on standard output (`--no-text`).

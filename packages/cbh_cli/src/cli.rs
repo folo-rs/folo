@@ -1,5 +1,5 @@
 //! Argument parsing: the `clap` subcommand surface and its translation into the
-//! typed [`Command`](crate::Command) model.
+//! typed [`Command`](cbh_command::Command) model.
 //!
 //! The wide option surface is organized into named help groups (Environment,
 //! Output, Discriminant selection, Commit selection, Data filtering, Benchmark
@@ -9,14 +9,13 @@
 
 use std::path::PathBuf;
 
-use clap::{ArgGroup, Args, Parser, Subcommand as ClapSubcommand, ValueEnum};
-
-use crate::model::BenchmarkIdPrefix;
-use crate::{
+use cbh_command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
     ExamineOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection, PruneOptions,
     UnblessOptions,
 };
+use cbh_model::BenchmarkIdPrefix;
+use clap::{ArgGroup, Args, Parser, Subcommand as ClapSubcommand, ValueEnum};
 
 const HEADING_ENV: &str = "Environment and execution";
 const HEADING_OUTPUT: &str = "Output";

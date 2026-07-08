@@ -25,13 +25,14 @@ pkg-fmt = "zip"
 [dependencies]
 anyspawn = { workspace = true, features = ["tokio"] }
 cargo-bench-history-core = { workspace = true }
+cbh_cli = { workspace = true }
+cbh_command = { workspace = true }
 cbh_config = { workspace = true }
 cbh_diag = { workspace = true }
 cbh_engines = { workspace = true }
 cbh_git = { workspace = true }
 cbh_probe = { workspace = true }
 cbh_storage = { workspace = true }
-clap = { workspace = true, features = ["derive"] }
 futures = { workspace = true }
 jiff = { workspace = true, features = ["serde"] }
 mimalloc = { workspace = true }
