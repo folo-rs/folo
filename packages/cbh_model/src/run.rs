@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
-use crate::model::{BenchmarkId, Metric, RunContext};
+use crate::{BenchmarkId, Metric, RunContext};
 
 /// Schema version of the stored [`Run`] JSON.
 ///
@@ -68,7 +68,7 @@ impl Run {
 /// Its on-disk form is a plain JSON array, identical to a `Vec<Metric>`, so the
 /// change is wire-compatible and needs no [`SCHEMA_VERSION`] bump.
 ///
-/// [`MetricKind`]: crate::model::MetricKind
+/// [`MetricKind`]: crate::MetricKind
 pub type MetricList = SmallVec<[Metric; 2]>;
 
 /// A single benchmark case: a stable identity plus its measured metrics.
@@ -97,7 +97,7 @@ mod tests {
     use nonempty::nonempty;
 
     use super::*;
-    use crate::model::{EnvironmentInfo, GitInfo, MetricKind, ToolchainInfo};
+    use crate::{EnvironmentInfo, GitInfo, MetricKind, ToolchainInfo};
 
     fn sample_context() -> RunContext {
         let epoch = "2024-01-01T00:00:00Z".parse().unwrap();

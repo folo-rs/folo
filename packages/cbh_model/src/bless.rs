@@ -14,7 +14,7 @@
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::model::{BenchmarkId, BenchmarkIdPrefix};
+use crate::{BenchmarkId, BenchmarkIdPrefix};
 
 /// Schema version of the stored [`BlessingRecord`] JSON.
 ///

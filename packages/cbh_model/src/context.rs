@@ -1,4 +1,4 @@
-//! The run context: the metadata that situates a [`Run`](crate::model::Run) in
+//! The run context: the metadata that situates a [`Run`](crate::Run) in
 //! history (git) and in its execution environment (automation provider,
 //! toolchain, host).
 //!

@@ -459,6 +459,7 @@ dependencies = [
  "alloc_tracker",
  "anyspawn",
  "cbh_codec",
+ "cbh_model",
  "cbh_stats",
  "colored",
  "criterion",
@@ -532,6 +533,17 @@ name = "cbh_codec"
 version = "0.0.3"
 dependencies = [
  "flate2",
+]
+
+[[package]]
+name = "cbh_model"
+version = "0.0.3"
+dependencies = [
+ "jiff",
+ "nonempty",
+ "serde",
+ "serde_json",
+ "smallvec",
 ]
 
 [[package]]

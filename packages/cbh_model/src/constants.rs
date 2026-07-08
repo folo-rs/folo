@@ -4,7 +4,7 @@
 //!
 //! The cache event-kind strings are the raw values Gungraun emits. The shell's
 //! Callgrind adapter matches against them to translate each event into the
-//! corresponding [`MetricKind`](crate::model::MetricKind); the per-kind comparison
+//! corresponding [`MetricKind`](crate::MetricKind); the per-kind comparison
 //! polarity then lives on the kind itself (only L1 hits are higher-is-better — an
 //! access served by L1 is the cheap outcome, while last-level and RAM hits are the
 //! expensive miss-escalation tiers).
@@ -13,7 +13,7 @@
 ///
 /// It is the first segment of a partition prefix
 /// (`{STORAGE_VERSION}/{project}/{OBJECTS_SEGMENT}/{engine}/{triple}/{machine}`)
-/// and the value that [`parse_key`](crate::analyze::parse_key) requires before it
+/// and the value that `parse_key` (in the analysis layer) requires before it
 /// accepts a key, so the writer and reader share a single source of truth for the
 /// layout version.
 pub const STORAGE_VERSION: &str = "v1";
