@@ -3,7 +3,7 @@
 //!
 //! `examine` is a drill-down sibling of `list runs`: both are read-only previews
 //! over `analyze`'s exact data-set selection (see
-//! [`AnalyzeOptions`](crate::AnalyzeOptions) and [`ExamineOptions`]) resolved via
+//! `AnalyzeOptions` and `ExamineOptions`) resolved via
 //! the shared [`select_dataset`](super::select_dataset) path, so a selection
 //! parameter added to `analyze` applies here unchanged. Where `list` counts the
 //! selected runs, `examine` names one `(benchmark, metric)` series and prints its
@@ -22,12 +22,15 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyspawn::Spawner;
+use cbh_command::ExamineOptions;
 use cbh_config::{Config, load_config};
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
+use cbh_model::{BenchmarkIdPrefix, DiscriminantSet, MetricKind};
 use cbh_run::{
-    OutputSelection, OutputWriter, TokioOutputWriter, cache_env, emit, resolve_cache_path,
-    resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
+    OutputSelection, OutputWriter, RunError, RunOutcome, TokioOutputWriter, cache_env, emit,
+    resolve_cache_path, resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo,
+    storage_env,
 };
 use cbh_storage::{Storage, StorageFacade, resolve_storage};
 use jiff::Timestamp;
@@ -38,8 +41,6 @@ use super::{
     AutoFacets, ReportFormat, Selection, Series, SeriesFilter, detect_auto_facets,
     dirty_base_exception_warning, empty_history_hint, format_value, resolve_now, select_dataset,
 };
-use crate::model::{BenchmarkIdPrefix, DiscriminantSet, MetricKind};
-use crate::{ExamineOptions, RunError, RunOutcome};
 
 /// How many leading characters of a commit title the text and Markdown tables
 /// keep. The truncation is a readability convenience of those renderings; the JSON
@@ -50,9 +51,9 @@ const TITLE_LIMIT: usize = 50;
 /// history, and orchestrate.
 ///
 /// `clock_override` injects the [`tick::Clock`] the shared selection anchors its
-/// "now" to (see [`execute`](super::execute)); production passes `None` for the
+/// "now" to (see [`analyze`](super::analyze)); production passes `None` for the
 /// runtime wall clock.
-pub(crate) async fn execute(
+pub async fn execute(
     options: &ExamineOptions,
     workspace_dir: &Path,
     clock_override: Option<Clock>,
@@ -495,6 +496,10 @@ mod tests {
     use cbh_config::Config;
     use cbh_diag::RecordingReporter;
     use cbh_git::FakeGitHistory;
+    use cbh_model::{
+        BenchmarkId, BenchmarkResult, EnvironmentInfo, GitInfo, Metric, MetricKind, Run,
+        RunContext, ToolchainInfo,
+    };
     use cbh_run::MemoryOutputWriter;
     use cbh_storage::{MemoryStorage, Storage};
     use futures::executor::block_on;
@@ -502,10 +507,6 @@ mod tests {
     use nonempty::nonempty;
 
     use super::*;
-    use crate::model::{
-        BenchmarkId, BenchmarkResult, EnvironmentInfo, GitInfo, Metric, MetricKind, Run,
-        RunContext, ToolchainInfo,
-    };
 
     fn config() -> Config {
         Config::default()
@@ -530,7 +531,7 @@ mod tests {
     /// An inline spawner that runs the load tasks on the calling thread, so the
     /// tests need no Tokio runtime under `block_on` or Miri.
     fn spawner() -> Spawner {
-        cargo_bench_history_core::testing::synchronous_spawner()
+        cbh_analysis::testing::synchronous_spawner()
     }
 
     /// A run with one benchmark carrying a single instruction-count metric of the

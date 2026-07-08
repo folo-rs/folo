@@ -47,6 +47,14 @@ name = "cbh_analysis"
 version_group = "cargo-bench-history"
 
 [[package]]
+name = "cbh_analyze"
+
+# One of the `cargo-bench-history` implementation crates (see docs/impl-crate-split.md):
+# doc-hidden, "do not depend on directly", released in lockstep with the CLI so the
+# published set can never drift. The workspace Cargo.toml pins it with `=`.
+version_group = "cargo-bench-history"
+
+[[package]]
 name = "cbh_cli"
 
 # One of the `cargo-bench-history` implementation crates (see docs/impl-crate-split.md):

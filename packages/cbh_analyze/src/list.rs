@@ -2,7 +2,7 @@
 //! consume, without running the analysis.
 //!
 //! `list` accepts exactly the same data-set-selection options as `analyze` (see
-//! [`AnalyzeOptions`](crate::AnalyzeOptions) and [`ListOptions`]) and resolves the
+//! `AnalyzeOptions` and `ListOptions`) and resolves the
 //! identical selected runs via the shared [`select_dataset`](super::select_dataset)
 //! path, so a `list` invocation is a faithful dry run of the corresponding
 //! `analyze`. Instead of detecting changes, it groups the selected runs by
@@ -16,12 +16,15 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyspawn::Spawner;
+use cbh_command::{ListOptions, ListSubject};
 use cbh_config::{Config, load_config};
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
+use cbh_model::{BlessingRecord, DiscriminantSet};
 use cbh_run::{
-    OutputSelection, OutputWriter, TokioOutputWriter, cache_env, emit, resolve_cache_path,
-    resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
+    OutputSelection, OutputWriter, RunError, RunOutcome, TokioOutputWriter, cache_env, emit,
+    resolve_cache_path, resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo,
+    storage_env,
 };
 use cbh_storage::{Storage, StorageFacade, resolve_storage};
 use jiff::Timestamp;
@@ -33,16 +36,14 @@ use super::{
     detect_auto_facets, dirty_base_exception_warning, empty_history_hint,
     facet_filtered_candidates, resolve_facets, resolve_now, select_dataset,
 };
-use crate::model::{BlessingRecord, DiscriminantSet};
-use crate::{ListOptions, ListSubject, RunError, RunOutcome};
 
 /// The real `list`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
 ///
 /// `clock_override` injects the [`tick::Clock`] the shared selection anchors its
-/// "now" to (see [`execute`](super::execute)); production passes `None` for the
+/// "now" to (see [`analyze`](super::analyze)); production passes `None` for the
 /// runtime wall clock.
-pub(crate) async fn execute(
+pub async fn execute(
     options: &ListOptions,
     workspace_dir: &Path,
     clock_override: Option<Clock>,
@@ -874,6 +875,10 @@ mod tests {
     use cbh_config::Config;
     use cbh_diag::RecordingReporter;
     use cbh_git::FakeGitHistory;
+    use cbh_model::{
+        BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo, GitInfo, Metric,
+        MetricKind, Run, RunContext, ToolchainInfo,
+    };
     use cbh_run::MemoryOutputWriter;
     use cbh_storage::{MemoryStorage, Storage};
     use futures::executor::block_on;
@@ -881,10 +886,6 @@ mod tests {
     use nonempty::nonempty;
 
     use super::*;
-    use crate::model::{
-        BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo, GitInfo, Metric,
-        MetricKind, Run, RunContext, ToolchainInfo,
-    };
 
     fn config() -> Config {
         Config::default()
@@ -905,7 +906,7 @@ mod tests {
     /// An inline spawner that runs the load tasks on the calling thread, so the
     /// list tests need no Tokio runtime under `block_on` or Miri.
     fn spawner() -> Spawner {
-        cargo_bench_history_core::testing::synchronous_spawner()
+        cbh_analysis::testing::synchronous_spawner()
     }
 
     /// A result set with one record carrying two metrics, so its partition

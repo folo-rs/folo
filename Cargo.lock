@@ -423,13 +423,13 @@ checksum = "8ae3f5d315924270530207e2a68396c3cc547f6dca3fbdca317cfb1a51edb593"
 name = "cargo-bench-history"
 version = "0.0.3"
 dependencies = [
- "anyspawn",
  "async-trait",
  "azure_core",
  "azure_identity",
  "azure_storage_blob",
  "base64",
  "cargo-bench-history-core",
+ "cbh_analyze",
  "cbh_cli",
  "cbh_command",
  "cbh_config",
@@ -446,7 +446,6 @@ dependencies = [
  "mutants",
  "nonempty",
  "reqwest",
- "serde",
  "serde_json",
  "serial_test",
  "tempfile",
@@ -537,6 +536,30 @@ dependencies = [
  "serde_json",
  "smallvec",
  "thread_aware",
+]
+
+[[package]]
+name = "cbh_analyze"
+version = "0.0.3"
+dependencies = [
+ "anyspawn",
+ "cbh_analysis",
+ "cbh_command",
+ "cbh_config",
+ "cbh_diag",
+ "cbh_git",
+ "cbh_model",
+ "cbh_probe",
+ "cbh_render",
+ "cbh_run",
+ "cbh_storage",
+ "futures",
+ "jiff",
+ "mutants",
+ "nonempty",
+ "serde",
+ "serde_json",
+ "tick",
 ]
 
 [[package]]

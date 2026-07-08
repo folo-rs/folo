@@ -23,8 +23,8 @@ bin-dir = "{ bin }{ binary-ext }"
 pkg-fmt = "zip"
 
 [dependencies]
-anyspawn = { workspace = true, features = ["tokio"] }
 cargo-bench-history-core = { workspace = true }
+cbh_analyze = { workspace = true }
 cbh_cli = { workspace = true }
 cbh_command = { workspace = true }
 cbh_config = { workspace = true }
@@ -38,7 +38,6 @@ futures = { workspace = true }
 jiff = { workspace = true, features = ["serde"] }
 mimalloc = { workspace = true }
 nonempty = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tick = { workspace = true, features = ["tokio"] }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt-multi-thread"] }

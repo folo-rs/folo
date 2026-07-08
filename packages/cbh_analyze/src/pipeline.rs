@@ -10,18 +10,20 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyspawn::Spawner;
-use cargo_bench_history_core::analyze::{
-    AnalysisConfig, AnalysisContext, DEFAULT_SUMMARY_LIMIT, ReportInput, Series, SeriesFilter,
-    SetSummary, apply_blessings, find_changes_spawned, render, render_markdown_summary,
+use cbh_analysis::{
+    AnalysisConfig, AnalysisContext, Series, SeriesFilter, apply_blessings, find_changes_spawned,
 };
+use cbh_command::AnalyzeOptions;
 use cbh_config::{Config, load_config};
 use cbh_diag::{Reporter, ReporterExt, StderrReporter};
 use cbh_git::{GitHistory, SystemGitHistory};
+use cbh_model::DiscriminantSet;
 use cbh_probe::{EnvironmentProbe, SystemProbe, resolve_machine_key};
+use cbh_render::{DEFAULT_SUMMARY_LIMIT, ReportInput, SetSummary, render, render_markdown_summary};
 use cbh_run::{
-    OutputSelection, OutputWriter, TokioOutputWriter, cache_env, emit, emit_markdown_summary,
-    resolve_cache_path, resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo,
-    storage_env,
+    OutputSelection, OutputWriter, RunError, RunOutcome, TokioOutputWriter, cache_env, emit,
+    emit_markdown_summary, resolve_cache_path, resolve_config_path, resolve_local_path,
+    resolve_project_id, resolve_repo, storage_env,
 };
 use cbh_storage::{Storage, StorageFacade, resolve_storage};
 use jiff::Timestamp;
@@ -31,8 +33,6 @@ use super::dataset::{empty_history_hint, select_dataset};
 use super::facets::AutoFacets;
 use super::history::dirty_base_exception_warning;
 use super::selection::Selection;
-use crate::model::DiscriminantSet;
-use crate::{AnalyzeOptions, RunError, RunOutcome};
 
 /// The real `analyze`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
@@ -43,7 +43,7 @@ use crate::{AnalyzeOptions, RunError, RunOutcome};
 /// single anchor drives both the history-mode default `--since` look-back and the
 /// resolution of any relative `--since`/`--until` duration, so the whole window is
 /// deterministic under a frozen clock.
-pub(crate) async fn execute(
+pub async fn execute(
     options: &AnalyzeOptions,
     workspace_dir: &Path,
     clock_override: Option<Clock>,
@@ -302,6 +302,10 @@ mod tests {
     use cbh_config::{Config, parse_config};
     use cbh_diag::RecordingReporter;
     use cbh_git::FakeGitHistory;
+    use cbh_model::{
+        BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, BlessingRecord, EnvironmentInfo, GitInfo,
+        Metric, MetricKind, Run, RunContext, ToolchainInfo, sanitize_segment,
+    };
     use cbh_run::MemoryOutputWriter;
     use cbh_storage::{MemoryStorage, Storage};
     use futures::executor::block_on;
@@ -309,10 +313,6 @@ mod tests {
     use nonempty::nonempty;
 
     use super::*;
-    use crate::model::{
-        BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, BlessingRecord, EnvironmentInfo, GitInfo,
-        Metric, MetricKind, Run, RunContext, ToolchainInfo, sanitize_segment,
-    };
 
     fn ts(seconds: i64) -> Timestamp {
         Timestamp::from_second(seconds).unwrap()
@@ -544,7 +544,7 @@ mod tests {
     /// An inline spawner that runs the detection's blocking tasks on the calling
     /// thread, so `analyze_with` needs no Tokio runtime under `block_on` or Miri.
     fn spawner() -> Spawner {
-        cargo_bench_history_core::testing::synchronous_spawner()
+        cbh_analysis::testing::synchronous_spawner()
     }
 
     /// A throwaway in-memory output writer for tests that assert on the returned

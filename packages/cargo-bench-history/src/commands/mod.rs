@@ -6,11 +6,6 @@ mod collect;
 mod install;
 
 pub(crate) use backfill::execute as backfill;
+pub(crate) use cbh_analyze::{analyze, bless, examine, list, prune, unbless};
 pub(crate) use collect::execute as collect;
 pub(crate) use install::execute as install;
-
-pub(crate) use crate::analyze::bless::{bless, unbless};
-pub(crate) use crate::analyze::examine::execute as examine;
-pub(crate) use crate::analyze::execute as analyze;
-pub(crate) use crate::analyze::list::execute as list;
-pub(crate) use crate::analyze::prune::execute as prune;

@@ -2,12 +2,12 @@
 //! / `--machine-key` selectors and the auto-detected `AutoFacets` into the
 //! `FacetFilter`s the object listing applies, and describing them for the verbose trail.
 
-use cargo_bench_history_core::analyze::{DiscriminantSetQuery, FacetFilter};
+use cbh_analysis::{DiscriminantSetQuery, FacetFilter};
+use cbh_model::Engine;
+use cbh_run::RunError;
 use nonempty::NonEmpty;
 
 use super::selection::Selection;
-use crate::RunError;
-use crate::model::Engine;
 
 /// The current machine's auto-detected facet values, used as the default when a
 /// query facet is omitted (see the *Discriminant set & query facets* section of
@@ -110,7 +110,7 @@ fn parse_engine(name: Option<&str>) -> Result<Option<Engine>, RunError> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use cargo_bench_history_core::analyze::{DiscriminantSetQuery, FacetFilter};
+    use cbh_analysis::{DiscriminantSetQuery, FacetFilter};
     use nonempty::nonempty;
 
     use super::*;

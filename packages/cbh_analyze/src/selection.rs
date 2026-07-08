@@ -1,7 +1,7 @@
 //! The data-set `Selection` the analyze/list/prune/examine/bless query commands
 //! share, built from each command's options.
 
-use crate::{
+use cbh_command::{
     AnalyzeOptions, BlessOptions, ExamineOptions, ListOptions, PruneOptions, UnblessOptions,
 };
 

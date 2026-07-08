@@ -7,17 +7,17 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyspawn::Spawner;
-use cargo_bench_history_core::analyze::{
+use cbh_analysis::{
     DiscriminantSetQuery, RunPoints, SeriesBuilder, StorageKey, balanced_chunk_sizes, parse_key,
     worker_count,
 };
 use cbh_diag::{Reporter, ReporterExt, count_noun};
+use cbh_model::{BenchmarkIdPrefix, DiscriminantSet, STORAGE_VERSION, sanitize_segment};
+use cbh_run::RunError;
 use cbh_storage::{Storage, project_objects_prefix};
 use futures::{StreamExt as _, TryStreamExt as _};
 
 use super::facets::describe_facets;
-use crate::RunError;
-use crate::model::{BenchmarkIdPrefix, DiscriminantSet, STORAGE_VERSION, sanitize_segment};
 
 /// One commit's run tally within a discriminant set, the granularity the report
 /// summaries and the `list runs` breakdown need.
@@ -413,8 +413,9 @@ fn ordinal_of(rank: usize) -> u32 {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use cbh_model::DiscriminantSet;
+
     use super::*;
-    use crate::model::DiscriminantSet;
 
     #[test]
     fn run_index_counts_runs_and_reports_emptiness() {

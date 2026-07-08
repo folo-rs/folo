@@ -21,12 +21,15 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
+use cbh_command::PruneOptions;
 use cbh_config::{Config, load_config};
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
+use cbh_model::DiscriminantSet;
 use cbh_run::{
-    OutputSelection, OutputWriter, TokioOutputWriter, cache_env, emit, resolve_cache_path,
-    resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
+    OutputSelection, OutputWriter, RunError, RunOutcome, TokioOutputWriter, cache_env, emit,
+    finish_with_flush, resolve_cache_path, resolve_config_path, resolve_local_path,
+    resolve_project_id, resolve_repo, storage_env,
 };
 use cbh_storage::{Storage, StorageFacade, resolve_storage};
 use jiff::Timestamp;
@@ -38,8 +41,6 @@ use super::{
     detect_auto_facets, facet_filtered_candidates, parse_since, parse_until, resolve_base_name,
     resolve_facets, resolve_history, resolve_now, window_excludes,
 };
-use crate::model::DiscriminantSet;
-use crate::{PruneOptions, RunError, RunOutcome, finish_with_flush};
 
 /// Which objects a prune pass deletes.
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -86,7 +87,7 @@ impl Scope {
 /// `clock_override` injects the [`tick::Clock`] that anchors a relative
 /// `--since`/`--until` bound (see [`resolve_now`](super::resolve_now)); production
 /// passes `None` for the runtime wall clock.
-pub(crate) async fn execute(
+pub async fn execute(
     options: &PruneOptions,
     workspace_dir: &Path,
     clock_override: Option<Clock>,
@@ -698,6 +699,10 @@ mod tests {
     use cbh_config::Config;
     use cbh_diag::RecordingReporter;
     use cbh_git::FakeGitHistory;
+    use cbh_model::{
+        BenchmarkId, BenchmarkResult, EnvironmentInfo, GitInfo, Metric, MetricKind, Run,
+        RunContext, ToolchainInfo,
+    };
     use cbh_run::MemoryOutputWriter;
     use cbh_storage::{MemoryStorage, Storage};
     use futures::executor::block_on;
@@ -705,10 +710,6 @@ mod tests {
     use nonempty::nonempty;
 
     use super::*;
-    use crate::model::{
-        BenchmarkId, BenchmarkResult, EnvironmentInfo, GitInfo, Metric, MetricKind, Run,
-        RunContext, ToolchainInfo,
-    };
 
     fn config() -> Config {
         Config::default()

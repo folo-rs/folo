@@ -2,7 +2,7 @@
 //! benchmark's level on the base branch, so history analysis stops re-flagging an
 //! intentional change.
 //!
-//! `bless` writes an append-only [`BlessingRecord`](crate::model::BlessingRecord)
+//! `bless` writes an append-only `BlessingRecord`
 //! sidecar into every facet-selected discriminant set that has a stored result at
 //! the context commit (`HEAD` by default, or `--context <ref>`). It is
 //! base-branch-only with no escape hatch: a context commit that is not on the base
@@ -19,11 +19,14 @@
 
 use std::path::Path;
 
+use cbh_command::{BlessOptions, UnblessOptions};
 use cbh_config::{Config, load_config};
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
+use cbh_model::BlessingRecord;
 use cbh_run::{
-    resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
+    RunError, RunOutcome, finish_with_flush, resolve_config_path, resolve_local_path,
+    resolve_project_id, resolve_repo, storage_env,
 };
 use cbh_storage::{Storage, build_storage};
 use jiff::Timestamp;
@@ -33,8 +36,6 @@ use super::{
     AutoFacets, Selection, StorageKey, detect_auto_facets, facet_filtered_candidates,
     resolve_base_ref, resolve_facets, resolve_now,
 };
-use crate::model::BlessingRecord;
-use crate::{BlessOptions, RunError, RunOutcome, UnblessOptions, finish_with_flush};
 
 /// The real `bless`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
@@ -43,7 +44,7 @@ use crate::{BlessOptions, RunError, RunOutcome, UnblessOptions, finish_with_flus
 /// time: `None` reads the runtime wall clock (`Clock::new_tokio`) in production,
 /// while tests inject a frozen clock (`Clock::new_frozen_at`) so the recorded time
 /// is deterministic.
-pub(crate) async fn bless(
+pub async fn bless(
     options: &BlessOptions,
     workspace_dir: &Path,
     clock_override: Option<Clock>,
@@ -87,7 +88,7 @@ pub(crate) async fn bless(
 
 /// The real `unbless`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
-pub(crate) async fn unbless(
+pub async fn unbless(
     options: &UnblessOptions,
     workspace_dir: &Path,
 ) -> Result<RunOutcome, RunError> {
@@ -321,15 +322,15 @@ mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
     use cbh_diag::RecordingReporter;
     use cbh_git::FakeGitHistory;
+    use cbh_model::{
+        BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo, GitInfo, Metric,
+        MetricKind, Run, RunContext, ToolchainInfo,
+    };
     use cbh_storage::MemoryStorage;
     use futures::executor::block_on;
     use nonempty::nonempty;
 
     use super::*;
-    use crate::model::{
-        BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo, GitInfo, Metric,
-        MetricKind, Run, RunContext, ToolchainInfo,
-    };
 
     fn config() -> Config {
         Config::default()

@@ -278,7 +278,6 @@
 //! account name baked into the committed `.cargo/bench_history.toml` and the per-push
 //! consumer at <https://github.com/folo-rs/folo/blob/main/.github/workflows/bench-history.yml>.
 
-mod analyze;
 mod commands;
 mod config_writer;
 mod dispatch;

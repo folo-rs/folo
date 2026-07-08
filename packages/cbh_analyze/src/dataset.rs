@@ -6,12 +6,12 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyspawn::Spawner;
-use cargo_bench_history_core::analyze::{
-    AnalysisMode, BlessingPlacement, Series, SeriesFilter, StorageKey,
-};
+use cbh_analysis::{AnalysisMode, BlessingPlacement, Series, SeriesFilter, StorageKey};
 use cbh_config::Config;
 use cbh_diag::{Reporter, ReporterExt, count_noun};
 use cbh_git::GitHistory;
+use cbh_model::{BenchmarkIdPrefix, BlessingRecord, DiscriminantSet};
+use cbh_run::RunError;
 use cbh_storage::Storage;
 use jiff::Timestamp;
 
@@ -24,8 +24,6 @@ use super::selection::Selection;
 use super::window::{
     WindowEdge, auto_mode, parse_until, resolve_since, since_cutoff_reason, window_excludes,
 };
-use crate::RunError;
-use crate::model::{BenchmarkIdPrefix, BlessingRecord, DiscriminantSet};
 
 /// The data an analysis (or listing) draws on, plus the bookkeeping needed to
 /// explain an empty outcome and warn about ephemeral data.
