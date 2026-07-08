@@ -27,7 +27,10 @@ cbh_analysis = { version = "=0.0.3", path = "packages/cbh_analysis", default-fea
 cbh_codec = { version = "=0.0.3", path = "packages/cbh_codec", default-features = false }
 cbh_config = { version = "=0.0.3", path = "packages/cbh_config", default-features = false }
 cbh_diag = { version = "=0.0.3", path = "packages/cbh_diag", default-features = false }
+cbh_engines = { version = "=0.0.3", path = "packages/cbh_engines", default-features = false }
+cbh_git = { version = "=0.0.3", path = "packages/cbh_git", default-features = false }
 cbh_model = { version = "=0.0.3", path = "packages/cbh_model", default-features = false }
+cbh_probe = { version = "=0.0.3", path = "packages/cbh_probe", default-features = false }
 cbh_render = { version = "=0.0.3", path = "packages/cbh_render", default-features = false }
 cbh_stats = { version = "=0.0.3", path = "packages/cbh_stats", default-features = false }
 clap = { version = "4.6.1", default-features = false, features = ["default"] }

@@ -18,19 +18,18 @@
 //! through this parser so a field renamed or dropped on either side of the
 //! boundary fails the build.
 //!
-//! [`Engine::is_hardware_dependent`]: crate::model::Engine::is_hardware_dependent
+//! [`Engine::is_hardware_dependent`]: cbh_model::Engine::is_hardware_dependent
 
 use std::error::Error;
 use std::fmt;
 
+use cbh_model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
 use nonempty::NonEmpty;
 use serde::Deserialize;
 
-use crate::model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
-
 /// An error encountered while parsing an `alloc_tracker` operation file.
 #[derive(Debug)]
-pub(crate) struct AllocTrackerParseError(serde_json::Error);
+pub struct AllocTrackerParseError(serde_json::Error);
 
 impl fmt::Display for AllocTrackerParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -54,7 +53,7 @@ impl Error for AllocTrackerParseError {
 ///
 /// Returns [`AllocTrackerParseError`] if the JSON is malformed or does not match
 /// the expected shape.
-pub(crate) fn parse_alloc_tracker_operation(
+pub fn parse_alloc_tracker_operation(
     json: &str,
 ) -> Result<Option<BenchmarkResult>, AllocTrackerParseError> {
     let output: OperationOutput = serde_json::from_str(json).map_err(AllocTrackerParseError)?;

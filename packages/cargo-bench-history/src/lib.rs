@@ -280,32 +280,24 @@
 //! consumer at <https://github.com/folo-rs/folo/blob/main/.github/workflows/bench-history.yml>.
 
 mod analyze;
-mod bench;
-mod bench_output;
 mod cli;
 mod command;
 mod commands;
 mod config_writer;
 mod dispatch;
-mod git;
-mod git_history;
-mod host;
-mod machine;
 mod outcome;
 mod output;
-mod probe;
-mod process;
 mod storage;
 mod wiring;
 
 pub(crate) use cargo_bench_history_core::model;
+pub use cbh_config::{ConfigError, default_template};
 pub use cli::{Cli, EarlyExit};
 pub use command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
     ExamineOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection, PruneOptions,
     UnblessOptions,
 };
-pub use cbh_config::{ConfigError, default_template};
 pub use dispatch::{Overrides, run, run_with_overrides};
 pub use model::{
     BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo, EnvironmentProvider, GitInfo,

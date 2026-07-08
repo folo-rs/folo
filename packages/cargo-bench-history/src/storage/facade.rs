@@ -11,14 +11,14 @@ use std::sync::Arc;
 
 use azure_core::credentials::TokenCredential;
 use azure_core::http::HttpClient;
+use cbh_config::{CloudStorageConfig, Config};
+use cbh_diag::{Reporter, ReporterExt};
 
 use super::azure::AzureBlobStorage;
 use super::caching::CachingStorage;
 use super::local::LocalStorage;
 use super::{Storage, StorageError};
-use cbh_config::{CloudStorageConfig, Config};
 use crate::model::sanitize_segment;
-use cbh_diag::{Reporter, ReporterExt};
 use crate::wiring::rebase;
 
 /// A [`Storage`] backend selected at configuration time.
@@ -353,11 +353,11 @@ pub fn azure_backend_from_parts(
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use cbh_config::parse_config;
+    use cbh_diag::RecordingReporter;
     use tempfile::tempdir;
 
     use super::*;
-    use cbh_config::parse_config;
-    use cbh_diag::RecordingReporter;
 
     fn config_with_storage(storage: &str) -> Config {
         parse_config(storage).unwrap()

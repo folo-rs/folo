@@ -15,8 +15,7 @@ use colored::{Color, Colorize};
 use rasciigraph::{Config, plot_colored, plot_many_colored};
 use serde::Serialize;
 
-use crate::analyze::short_commit;
-use crate::analyze::{Direction, Finding, FindingMethod, SeriesValue};
+use crate::analyze::{Direction, Finding, FindingMethod, SeriesValue, short_commit};
 use crate::model::{BenchmarkId, DiscriminantSet};
 
 /// Height, in rows, of a history-mode finding chart.

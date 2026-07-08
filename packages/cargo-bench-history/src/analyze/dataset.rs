@@ -9,6 +9,9 @@ use anyspawn::Spawner;
 use cargo_bench_history_core::analyze::{
     AnalysisMode, BlessingPlacement, Series, SeriesFilter, StorageKey,
 };
+use cbh_config::Config;
+use cbh_diag::{Reporter, ReporterExt, count_noun};
+use cbh_git::GitHistory;
 use jiff::Timestamp;
 
 use super::facets::{AutoFacets, resolve_facets};
@@ -21,12 +24,8 @@ use super::window::{
     WindowEdge, auto_mode, parse_until, resolve_since, since_cutoff_reason, window_excludes,
 };
 use crate::RunError;
-use cbh_config::Config;
-use crate::git_history::GitHistory;
 use crate::model::{BenchmarkIdPrefix, BlessingRecord, DiscriminantSet};
-use cbh_diag::{Reporter, ReporterExt};
 use crate::storage::Storage;
-use cbh_diag::count_noun;
 
 /// The data an analysis (or listing) draws on, plus the bookkeeping needed to
 /// explain an empty outcome and warn about ephemeral data.

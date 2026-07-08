@@ -14,6 +14,10 @@ use cargo_bench_history_core::analyze::{
     AnalysisConfig, AnalysisContext, DEFAULT_SUMMARY_LIMIT, ReportInput, Series, SeriesFilter,
     SetSummary, apply_blessings, find_changes_spawned, render, render_markdown_summary,
 };
+use cbh_config::{Config, load_config};
+use cbh_diag::{Reporter, ReporterExt, StderrReporter};
+use cbh_git::{GitHistory, SystemGitHistory};
+use cbh_probe::{EnvironmentProbe, SystemProbe, resolve_machine_key};
 use jiff::Timestamp;
 use tick::Clock;
 
@@ -21,15 +25,10 @@ use super::dataset::{empty_history_hint, select_dataset};
 use super::facets::AutoFacets;
 use super::history::dirty_base_exception_warning;
 use super::selection::Selection;
-use cbh_config::{Config, load_config};
-use crate::git_history::{GitHistory, SystemGitHistory};
-use crate::machine::resolve_machine_key;
 use crate::model::DiscriminantSet;
 use crate::output::{
     OutputSelection, OutputWriter, TokioOutputWriter, emit, emit_markdown_summary,
 };
-use crate::probe::{EnvironmentProbe, SystemProbe};
-use cbh_diag::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, StorageFacade, resolve_storage};
 use crate::wiring::{
     cache_env, resolve_cache_path, resolve_config_path, resolve_local_path, resolve_project_id,
@@ -302,19 +301,19 @@ mod tests {
 
     use std::path::{Path, PathBuf};
 
+    use cbh_config::{Config, parse_config};
+    use cbh_diag::RecordingReporter;
+    use cbh_git::FakeGitHistory;
     use futures::executor::block_on;
     use jiff::Timestamp;
     use nonempty::nonempty;
 
     use super::*;
-    use cbh_config::{Config, parse_config};
-    use crate::git_history::FakeGitHistory;
     use crate::model::{
         BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, BlessingRecord, EnvironmentInfo, GitInfo,
         Metric, MetricKind, Run, RunContext, ToolchainInfo, sanitize_segment,
     };
     use crate::output::MemoryOutputWriter;
-    use cbh_diag::RecordingReporter;
     use crate::storage::{MemoryStorage, Storage};
 
     fn ts(seconds: i64) -> Timestamp {

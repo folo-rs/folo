@@ -10,19 +10,18 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use nonempty::NonEmpty;
-use serde::Deserialize;
-
-use crate::model::{
+use cbh_model::{
     BenchmarkId, BenchmarkResult, L1_HITS_EVENT, LL_HITS_EVENT, Metric, MetricKind, RAM_HITS_EVENT,
 };
+use nonempty::NonEmpty;
+use serde::Deserialize;
 
 /// The Gungraun summary schema version this parser understands.
 const SUPPORTED_VERSION: &str = "6";
 
 /// An error encountered while parsing a Callgrind `summary.json`.
 #[derive(Debug)]
-pub(crate) enum CallgrindParseError {
+pub enum CallgrindParseError {
     /// The text was not valid JSON or did not match the expected shape.
     Json(serde_json::Error),
     /// The summary declared a schema version the tool does not support.
@@ -57,7 +56,7 @@ impl Error for CallgrindParseError {
 ///
 /// Returns [`CallgrindParseError`] if the JSON is malformed or declares an
 /// unsupported schema version.
-pub(crate) fn parse_callgrind_summary(json: &str) -> Result<BenchmarkResult, CallgrindParseError> {
+pub fn parse_callgrind_summary(json: &str) -> Result<BenchmarkResult, CallgrindParseError> {
     let summary = parse_summary(json)?;
     Ok(summary_to_record(&summary))
 }

@@ -11,14 +11,13 @@ use cargo_bench_history_core::analyze::{
     DiscriminantSetQuery, RunPoints, SeriesBuilder, StorageKey, balanced_chunk_sizes, parse_key,
     worker_count,
 };
+use cbh_diag::{Reporter, ReporterExt, count_noun};
 use futures::{StreamExt as _, TryStreamExt as _};
 
 use super::facets::describe_facets;
 use crate::RunError;
 use crate::model::{BenchmarkIdPrefix, DiscriminantSet, STORAGE_VERSION, sanitize_segment};
-use cbh_diag::{Reporter, ReporterExt};
 use crate::storage::{Storage, project_objects_prefix};
-use cbh_diag::count_noun;
 
 /// One commit's run tally within a discriminant set, the granularity the report
 /// summaries and the `list runs` breakdown need.

@@ -26,9 +26,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use cargo_bench_history_core::analyze::ReportFormat;
+use cbh_diag::{Reporter, ReporterExt};
 
 use crate::RunError;
-use cbh_diag::{Reporter, ReporterExt};
 use crate::wiring::rebase;
 
 /// Which report formats a single analysis pass should emit.
@@ -295,11 +295,11 @@ mod fake {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use cbh_diag::RecordingReporter;
     use futures::executor::block_on;
 
     use super::fake::FailingOutputWriter;
     use super::*;
-    use cbh_diag::RecordingReporter;
 
     /// A render stub that names the format it was asked for, so a test can tell
     /// which format backs each written file and the returned text.

@@ -30,14 +30,14 @@ use crate::process::capture;
 /// `examine` can label each data point with what its commit changed. It is empty
 /// when `git` reported no subject; commands other than `examine` ignore it.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct FirstParentCommit {
+pub struct FirstParentCommit {
     /// The commit's full ID.
-    pub(crate) commit_id: String,
+    pub commit_id: String,
     /// The commit's committer timestamp (`git`'s `%cI`), or `None` when absent or
     /// unparseable.
-    pub(crate) committer_time: Option<Timestamp>,
+    pub committer_time: Option<Timestamp>,
     /// The commit's subject line (`git`'s `%s`), or empty when absent.
-    pub(crate) subject: String,
+    pub subject: String,
 }
 
 /// Read-only access to a repository's commit topology.
@@ -45,7 +45,7 @@ pub(crate) struct FirstParentCommit {
 /// All methods report a missing ref (or a path that is not a repository) as an
 /// absent value (`Ok(None)` / an empty list), reserving `Err` for an unexpected
 /// failure to invoke `git`.
-pub(crate) trait GitHistory {
+pub trait GitHistory {
     /// Resolves a ref (branch, tag, `HEAD`, or commit ID) to its full commit ID.
     ///
     /// Returns `Ok(None)` when the ref does not resolve — an absent branch, or a
@@ -98,14 +98,15 @@ pub(crate) trait GitHistory {
 
 /// The real [`GitHistory`], shelling out to `git` in a fixed repository directory.
 #[derive(Clone, Debug)]
-pub(crate) struct SystemGitHistory {
+pub struct SystemGitHistory {
     /// The repository working directory all `git` invocations run against.
     repo: PathBuf,
 }
 
 impl SystemGitHistory {
     /// Creates a history bound to the repository rooted at `repo`.
-    pub(crate) fn new(repo: impl Into<PathBuf>) -> Self {
+    #[must_use]
+    pub fn new(repo: impl Into<PathBuf>) -> Self {
         Self { repo: repo.into() }
     }
 
@@ -271,10 +272,10 @@ fn branch_from_symbolic_ref(stdout: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-#[cfg(test)]
-pub(crate) use fake::FakeGitHistory;
+#[cfg(feature = "private-test-util")]
+pub use fake::FakeGitHistory;
 
-#[cfg(test)]
+#[cfg(feature = "private-test-util")]
 mod fake {
     use std::collections::HashMap;
     use std::future::{Future, ready};
@@ -297,7 +298,7 @@ mod fake {
     /// whose real merge-base sits off the first-parent chain. Cover such merge
     /// topologies with the real-git integration tests, not this fake.
     #[derive(Clone, Debug, Default)]
-    pub(crate) struct FakeGitHistory {
+    pub struct FakeGitHistory {
         /// Ref name (branch/tag/`HEAD`) -> the commit ID it points at.
         refs: HashMap<String, String>,
         /// Commit ID -> its first parent (`None` for a root commit).
@@ -314,7 +315,8 @@ mod fake {
 
     impl FakeGitHistory {
         /// Creates an empty history (no commits, no refs).
-        pub(crate) fn new() -> Self {
+        #[must_use]
+        pub fn new() -> Self {
             Self {
                 refs: HashMap::new(),
                 parents: HashMap::new(),
@@ -326,7 +328,7 @@ mod fake {
         }
 
         /// Records a commit `commit_id` with the given first `parent` (`None` = root).
-        pub(crate) fn commit(&mut self, commit_id: &str, parent: Option<&str>) -> &mut Self {
+        pub fn commit(&mut self, commit_id: &str, parent: Option<&str>) -> &mut Self {
             self.parents
                 .insert(commit_id.to_owned(), parent.map(ToOwned::to_owned));
             self
@@ -334,7 +336,7 @@ mod fake {
 
         /// Records a commit `commit_id` (first `parent`, `None` = root) carrying a
         /// committer timestamp, so the topology window can be exercised.
-        pub(crate) fn commit_at(
+        pub fn commit_at(
             &mut self,
             commit_id: &str,
             parent: Option<&str>,
@@ -348,33 +350,33 @@ mod fake {
         /// Records the subject line of a commit, so `examine`'s point labeling can
         /// be exercised. The commit itself must be recorded separately (via
         /// [`commit`](Self::commit) or [`commit_at`](Self::commit_at)).
-        pub(crate) fn subject(&mut self, commit_id: &str, subject: &str) -> &mut Self {
+        pub fn subject(&mut self, commit_id: &str, subject: &str) -> &mut Self {
             self.subjects
                 .insert(commit_id.to_owned(), subject.to_owned());
             self
         }
 
         /// Points a named ref at a commit.
-        pub(crate) fn branch(&mut self, name: &str, commit_id: &str) -> &mut Self {
+        pub fn branch(&mut self, name: &str, commit_id: &str) -> &mut Self {
             self.refs.insert(name.to_owned(), commit_id.to_owned());
             self
         }
 
         /// Points `HEAD` at the commit a ref or commit ID resolves to.
-        pub(crate) fn head(&mut self, reference: &str) -> &mut Self {
+        pub fn head(&mut self, reference: &str) -> &mut Self {
             let commit_id = self.resolve_sync(reference).unwrap();
             self.refs.insert("HEAD".to_owned(), commit_id);
             self
         }
 
         /// Sets the advertised default branch.
-        pub(crate) fn mark_default(&mut self, name: &str) -> &mut Self {
+        pub fn mark_default(&mut self, name: &str) -> &mut Self {
             self.default_branch = Some(name.to_owned());
             self
         }
 
         /// Marks the working tree as having uncommitted changes.
-        pub(crate) fn mark_dirty(&mut self) -> &mut Self {
+        pub fn mark_dirty(&mut self) -> &mut Self {
             self.dirty = true;
             self
         }

@@ -17,10 +17,10 @@
 //! They touch the filesystem and, for `all_the_time`, the processor clock, so they
 //! are `#[cfg_attr(miri, ignore)]`.
 
+use cbh_model::{BenchmarkResult, Metric, MetricKind};
 use tempfile::tempdir;
 
 use super::{parse_all_the_time_operation, parse_alloc_tracker_operation};
-use crate::model::{BenchmarkResult, Metric, MetricKind};
 
 fn metric(record: &BenchmarkResult, kind: MetricKind) -> &Metric {
     record

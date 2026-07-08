@@ -11,7 +11,7 @@ use std::process::{ExitStatus, Stdio};
 
 /// Launches the benchmark command (`cargo bench`) with injected environment
 /// variables.
-pub(crate) trait BenchRunner {
+pub trait BenchRunner {
     /// Runs `argv` directly (no shell) with `env` applied, letting the child
     /// inherit stdio so benchmark progress streams to the terminal. `argv[0]` is
     /// the program and the remainder are its arguments, each passed verbatim.
@@ -28,11 +28,11 @@ pub(crate) trait BenchRunner {
 
 /// The exit outcome of an engine command, in a portable shape fakes can build.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct EngineStatus {
+pub struct EngineStatus {
     /// Whether the process reported success.
-    pub(crate) success: bool,
+    pub success: bool,
     /// The process exit code, if one was reported.
-    pub(crate) code: Option<i32>,
+    pub code: Option<i32>,
 }
 
 impl EngineStatus {
@@ -47,11 +47,11 @@ impl EngineStatus {
 
 /// The captured result of a helper command.
 #[derive(Clone, Debug)]
-pub(crate) struct CommandOutput {
+pub struct CommandOutput {
     /// The process exit status.
-    pub(crate) status: ExitStatus,
+    pub status: ExitStatus,
     /// Captured standard output, lossily decoded as UTF-8.
-    pub(crate) stdout: String,
+    pub stdout: String,
 }
 
 /// The real [`BenchRunner`], backed by `tokio::process`.
@@ -60,14 +60,15 @@ pub(crate) struct CommandOutput {
 /// `in_dir` runs it in a specific directory (a checked-out worktree) without
 /// mutating the process current directory.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct TokioBenchRunner {
+pub struct TokioBenchRunner {
     /// Working directory for the engine command; the process CWD when absent.
     dir: Option<PathBuf>,
 }
 
 impl TokioBenchRunner {
     /// Runs the engine command in `dir` instead of the process CWD.
-    pub(crate) fn in_dir(dir: impl Into<PathBuf>) -> Self {
+    #[must_use]
+    pub fn in_dir(dir: impl Into<PathBuf>) -> Self {
         Self {
             dir: Some(dir.into()),
         }
@@ -99,7 +100,7 @@ impl BenchRunner for TokioBenchRunner {
 /// # Errors
 ///
 /// Returns an error if the process cannot be spawned or awaited.
-pub(crate) async fn capture(program: &str, args: &[&str]) -> io::Result<CommandOutput> {
+pub async fn capture(program: &str, args: &[&str]) -> io::Result<CommandOutput> {
     let output = tokio::process::Command::new(program)
         .args(args)
         .stdin(Stdio::null())

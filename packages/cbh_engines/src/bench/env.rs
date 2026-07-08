@@ -1,4 +1,4 @@
-use crate::model::Engine;
+use cbh_model::Engine;
 
 /// The environment variables to inject so every supported engine emits
 /// machine-readable output during the single `cargo bench` invocation.
@@ -7,7 +7,8 @@ use crate::model::Engine;
 /// `GUNGRAUN_SAVE_SUMMARY=pretty-json` so Gungraun writes the `summary.json`
 /// files the tool harvests; Criterion writes `estimates.json` unconditionally, so
 /// it contributes nothing. Duplicate names are de-duplicated, keeping the first.
-pub(crate) fn injected_bench_env() -> Vec<(String, String)> {
+#[must_use]
+pub fn injected_bench_env() -> Vec<(String, String)> {
     dedup_env(Engine::ALL.into_iter().flat_map(injected_env).collect())
 }
 

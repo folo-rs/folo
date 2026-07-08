@@ -1,14 +1,15 @@
 //! Pure parsing of `git` command output into [`GitInfo`], so the git probe's
 //! logic is unit-testable without a real repository.
 
-use crate::model::GitInfo;
+use cbh_model::GitInfo;
 
 /// Builds the recorded git facts from raw git command outputs (pure).
 ///
 /// * `commit` — output of `git rev-parse HEAD`.
 /// * `branch` — output of `git rev-parse --abbrev-ref HEAD`.
 /// * `status` — output of `git status --porcelain` (non-empty ⇒ dirty).
-pub(crate) fn parse_git_info(commit: &str, branch: &str, status: &str) -> GitInfo {
+#[must_use]
+pub fn parse_git_info(commit: &str, branch: &str, status: &str) -> GitInfo {
     GitInfo {
         commit: non_empty(commit),
         branch: non_empty(branch).filter(|branch| branch != "HEAD"),

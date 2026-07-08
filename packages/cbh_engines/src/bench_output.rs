@@ -10,15 +10,14 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use cbh_diag::{Reporter, ReporterExt, count_noun};
+use cbh_model::Engine;
 use jiff::Timestamp;
 
 use crate::bench::{
     ALL_THE_TIME_DIR, ALLOC_TRACKER_DIR, CRITERION_BENCHMARK_FILE, CRITERION_DIR,
     CRITERION_ESTIMATES_FILE, CRITERION_NEW_DIR, GUNGRAUN_DIR, SUMMARY_FILE,
 };
-use crate::model::Engine;
-use cbh_diag::{Reporter, ReporterExt};
-use cbh_diag::count_noun;
 
 /// Tolerance subtracted from the run-start boundary before comparing file
 /// modification times, absorbing coarse filesystem mtime granularity so a summary
@@ -27,39 +26,40 @@ const MTIME_SLACK: Duration = Duration::from_secs(2);
 
 /// One harvested Callgrind summary file: its path and raw contents.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct RawSummary {
+pub struct RawSummary {
     /// Filesystem path the summary was read from.
-    pub(crate) path: PathBuf,
+    pub path: PathBuf,
     /// Raw file contents (engine-specific JSON).
-    pub(crate) content: String,
+    pub content: String,
 }
 
 /// One harvested Criterion result case: the `new/` directory and the raw contents
 /// of the `benchmark.json` and `estimates.json` files it pairs.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct RawCriterionCase {
+pub struct RawCriterionCase {
     /// The `new/` directory the case was read from.
-    pub(crate) dir: PathBuf,
+    pub dir: PathBuf,
     /// Raw contents of `benchmark.json` (the case identity).
-    pub(crate) benchmark: String,
+    pub benchmark: String,
     /// Raw contents of `estimates.json` (the statistical estimates).
-    pub(crate) estimates: String,
+    pub estimates: String,
 }
 
-/// One harvested flat per-operation file: its path and raw contents. Used by the
-/// `alloc_tracker` and `all_the_time` engines, which each write one JSON file per
-/// operation directly under their engine directory.
+/// One harvested flat per-operation file: its path and raw contents.
+///
+/// Used by the `alloc_tracker` and `all_the_time` engines, which each write one JSON
+/// file per operation directly under their engine directory.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct RawOperationFile {
+pub struct RawOperationFile {
     /// Filesystem path the file was read from.
-    pub(crate) path: PathBuf,
+    pub path: PathBuf,
     /// Raw file contents (engine-specific JSON).
-    pub(crate) content: String,
+    pub content: String,
 }
 
 /// The output harvested for a run, in the shape each engine produces.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum Harvest {
+pub enum Harvest {
     /// Callgrind (Gungraun) summary files.
     Callgrind(Vec<RawSummary>),
     /// Criterion benchmark/estimates pairs.
@@ -71,7 +71,7 @@ pub(crate) enum Harvest {
 }
 
 /// Collects the output an engine produced during a run.
-pub(crate) trait BenchOutputSource {
+pub trait BenchOutputSource {
     /// Returns every output `engine` wrote at or after `since`.
     ///
     /// `reporter` receives a diagnostic note for each directory scanned and each
@@ -91,13 +91,14 @@ pub(crate) trait BenchOutputSource {
 
 /// The real [`BenchOutputSource`], walking the cargo target tree.
 #[derive(Clone, Debug)]
-pub(crate) struct FsBenchOutputSource {
+pub struct FsBenchOutputSource {
     target_root: PathBuf,
 }
 
 impl FsBenchOutputSource {
     /// Creates a source rooted at the cargo target directory `target_root`.
-    pub(crate) fn new(target_root: impl Into<PathBuf>) -> Self {
+    #[must_use]
+    pub fn new(target_root: impl Into<PathBuf>) -> Self {
         Self {
             target_root: target_root.into(),
         }
@@ -395,10 +396,10 @@ fn note_missing_dir(reporter: &dyn Reporter, engine: &str, dir: &Path, root: &Pa
 mod tests {
     use std::time::Duration;
 
+    use cbh_diag::RecordingReporter;
     use tempfile::tempdir;
 
     use super::*;
-    use cbh_diag::RecordingReporter;
 
     /// Collects through the source with a recording reporter, returning both the
     /// harvest and the reporter so a test can assert on either. Most tests ignore

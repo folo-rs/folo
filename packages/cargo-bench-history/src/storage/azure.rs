@@ -31,13 +31,13 @@ use azure_storage_blob::{
     BlobClient, BlobClientOptions, BlobContainerClient, BlobContainerClientOptions,
 };
 use cargo_bench_history_core::codec;
+use cbh_diag::{Reporter, ReporterExt};
 use futures::TryStreamExt as _;
 use jiff::Timestamp;
 
 use super::{
     PendingInvalidation, Storage, StorageError, cache_epoch_key, github_oidc, validate_key,
 };
-use cbh_diag::{Reporter, ReporterExt};
 
 /// The HTTP content coding declared on every uploaded blob. The storage layer
 /// always stores gzip, so this header is unconditionally truthful and lets a

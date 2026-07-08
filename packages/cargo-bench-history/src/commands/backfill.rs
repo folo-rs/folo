@@ -30,17 +30,15 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use cbh_config::load_config;
+use cbh_diag::{StderrReporter, count_noun};
+use cbh_engines::FsBenchOutputSource;
+use cbh_git::{GitHistory, SystemGitHistory, TokioBenchRunner, capture};
+use cbh_probe::SystemProbe;
 use tick::Clock;
 
 use super::collect::{CollectDeps, CollectSummary, default_bench_command, run_engines};
-use crate::bench_output::FsBenchOutputSource;
-use cbh_config::load_config;
-use crate::git_history::{GitHistory, SystemGitHistory};
-use crate::probe::SystemProbe;
-use crate::process::{TokioBenchRunner, capture};
-use cbh_diag::StderrReporter;
 use crate::storage::{Storage, build_storage, project_objects_prefix};
-use cbh_diag::count_noun;
 use crate::wiring::{
     resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
 };
@@ -569,11 +567,11 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::future::{Future, ready};
 
+    use cbh_git::FakeGitHistory;
     use futures::executor::block_on;
 
     use super::*;
     use crate::StorageError;
-    use crate::git_history::FakeGitHistory;
     use crate::storage::MemoryStorage;
 
     /// A canned per-commit result the fake [`CommitRunner`] returns.

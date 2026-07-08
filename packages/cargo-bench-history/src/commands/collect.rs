@@ -8,26 +8,23 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use cbh_config::{CloudStorageConfig, Config, load_config};
+use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
+use cbh_engines::{
+    BenchOutputSource, FsBenchOutputSource, Harvest, RawOperationFile, injected_bench_env,
+    parse_all_the_time_operation, parse_alloc_tracker_operation, parse_callgrind_summary,
+    parse_criterion_case,
+};
+use cbh_git::{BenchRunner, TokioBenchRunner};
+use cbh_probe::{EnvironmentProbe, HardwareProfile, RustcInfo, SystemProbe, resolve_machine_key};
 use jiff::Timestamp;
 use tick::Clock;
 
-use crate::bench::{
-    injected_bench_env, parse_all_the_time_operation, parse_alloc_tracker_operation,
-    parse_callgrind_summary, parse_criterion_case,
-};
-use crate::bench_output::{BenchOutputSource, FsBenchOutputSource, Harvest, RawOperationFile};
-use cbh_config::{CloudStorageConfig, Config, load_config};
-use crate::host::RustcInfo;
-use crate::machine::{HardwareProfile, resolve_machine_key};
 use crate::model::{
     BenchmarkResult, DiscriminantSet, Engine, EnvironmentInfo, GitInfo, Run, RunContext,
     ToolchainInfo, detect_environment,
 };
-use crate::probe::{EnvironmentProbe, SystemProbe};
-use crate::process::{BenchRunner, TokioBenchRunner};
-use cbh_diag::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, StorageError, StorageFacade, build_storage};
-use cbh_diag::count_noun;
 use crate::wiring::{
     STORAGE_ENV_VAR, resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo,
     storage_env,
@@ -793,15 +790,14 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    use cbh_config::parse_config;
+    use cbh_diag::RecordingReporter;
+    use cbh_engines::{Harvest, RawCriterionCase, RawOperationFile, RawSummary};
+    use cbh_git::{EngineStatus, parse_git_info};
     use futures::executor::block_on;
 
     use super::*;
-    use crate::bench_output::{Harvest, RawCriterionCase, RawOperationFile, RawSummary};
-    use cbh_config::parse_config;
-    use crate::git::parse_git_info;
     use crate::model::{BenchmarkIdPrefix, BlessingRecord};
-    use crate::process::EngineStatus;
-    use cbh_diag::RecordingReporter;
     use crate::storage::MemoryStorage;
 
     const SINGLE_FIXTURE: &str =

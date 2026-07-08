@@ -19,6 +19,9 @@
 
 use std::path::Path;
 
+use cbh_config::{Config, load_config};
+use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
+use cbh_git::{GitHistory, SystemGitHistory};
 use jiff::Timestamp;
 use tick::Clock;
 
@@ -26,12 +29,8 @@ use super::{
     AutoFacets, Selection, StorageKey, detect_auto_facets, facet_filtered_candidates,
     resolve_base_ref, resolve_facets, resolve_now,
 };
-use cbh_config::{Config, load_config};
-use crate::git_history::{GitHistory, SystemGitHistory};
 use crate::model::BlessingRecord;
-use cbh_diag::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, build_storage};
-use cbh_diag::count_noun;
 use crate::wiring::{
     resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
 };
@@ -320,16 +319,16 @@ fn short_commit_id(commit_id: &str) -> &str {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
+    use cbh_diag::RecordingReporter;
+    use cbh_git::FakeGitHistory;
     use futures::executor::block_on;
     use nonempty::nonempty;
 
     use super::*;
-    use crate::git_history::FakeGitHistory;
     use crate::model::{
         BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo, GitInfo, Metric,
         MetricKind, Run, RunContext, ToolchainInfo,
     };
-    use cbh_diag::RecordingReporter;
     use crate::storage::MemoryStorage;
 
     fn config() -> Config {

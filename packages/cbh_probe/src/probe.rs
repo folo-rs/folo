@@ -7,14 +7,14 @@ use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::git::parse_git_info;
+use cbh_git::{capture, parse_git_info};
+use cbh_model::GitInfo;
+
 use crate::host::{RustcInfo, parse_rustc_verbose};
 use crate::machine::{HardwareProfile, system_profile};
-use crate::model::GitInfo;
-use crate::process::capture;
 
 /// Discovers the git and toolchain context of a run.
-pub(crate) trait EnvironmentProbe {
+pub trait EnvironmentProbe {
     /// Captures the git facts of the working directory.
     ///
     /// # Errors
@@ -42,14 +42,15 @@ pub(crate) trait EnvironmentProbe {
 /// targets a specific repository directory (via `git -C <dir>`) so a run can
 /// probe a checked-out worktree without mutating the process current directory.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct SystemProbe {
+pub struct SystemProbe {
     /// Repository directory passed to `git -C`; the process CWD when absent.
     repo: Option<PathBuf>,
 }
 
 impl SystemProbe {
     /// Probes `git` in `repo` (via `git -C <repo>`) instead of the process CWD.
-    pub(crate) fn in_dir(repo: impl Into<PathBuf>) -> Self {
+    #[must_use]
+    pub fn in_dir(repo: impl Into<PathBuf>) -> Self {
         Self {
             repo: Some(repo.into()),
         }

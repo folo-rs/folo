@@ -11,14 +11,13 @@
 use std::error::Error;
 use std::fmt;
 
+use cbh_model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
 use nonempty::NonEmpty;
 use serde::Deserialize;
 
-use crate::model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
-
 /// An error encountered while parsing a Criterion result case.
 #[derive(Debug)]
-pub(crate) enum CriterionParseError {
+pub enum CriterionParseError {
     /// The `benchmark.json` was not valid JSON or did not match the expected shape.
     Benchmark(serde_json::Error),
     /// The `estimates.json` was not valid JSON or did not match the expected shape.
@@ -52,7 +51,7 @@ impl Error for CriterionParseError {
 /// # Errors
 ///
 /// Returns [`CriterionParseError`] if either document is malformed.
-pub(crate) fn parse_criterion_case(
+pub fn parse_criterion_case(
     benchmark_json: &str,
     estimates_json: &str,
 ) -> Result<BenchmarkResult, CriterionParseError> {

@@ -6,18 +6,19 @@
 //! and bytes) and `all_the_time` (processor time). None is exact — every metric
 //! carries run-to-run noise.
 
-pub(crate) mod all_the_time;
-pub(crate) mod alloc_tracker;
-pub(crate) mod callgrind;
-pub(crate) mod criterion;
+mod all_the_time;
+mod alloc_tracker;
+mod callgrind;
+mod criterion;
 mod env;
 mod paths;
 #[cfg(test)]
 mod schema_roundtrip;
 
-pub(crate) use all_the_time::parse_all_the_time_operation;
-pub(crate) use alloc_tracker::parse_alloc_tracker_operation;
-pub(crate) use callgrind::parse_callgrind_summary;
-pub(crate) use criterion::parse_criterion_case;
-pub(crate) use env::{injected_bench_env, usable_slope};
+pub use all_the_time::{AllTheTimeParseError, parse_all_the_time_operation};
+pub use alloc_tracker::{AllocTrackerParseError, parse_alloc_tracker_operation};
+pub use callgrind::{CallgrindParseError, parse_callgrind_summary};
+pub use criterion::{CriterionParseError, parse_criterion_case};
+pub use env::injected_bench_env;
+pub(crate) use env::usable_slope;
 pub(crate) use paths::*;

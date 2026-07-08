@@ -5,14 +5,13 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use cargo_bench_history_core::analyze::select_commits;
+use cbh_config::Config;
+use cbh_diag::{Reporter, ReporterExt, count_noun};
+use cbh_git::GitHistory;
 use jiff::Timestamp;
 
 use super::selection::Selection;
 use crate::RunError;
-use cbh_config::Config;
-use crate::git_history::GitHistory;
-use cbh_diag::{Reporter, ReporterExt};
-use cbh_diag::count_noun;
 
 /// How the base-branch dirty-tip exception is gated.
 ///

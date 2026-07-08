@@ -10,9 +10,8 @@
 //! *name* is deliberately not a factor, since pool machines have distinct names
 //! but equivalent hardware.
 
+use cbh_model::sanitize_segment;
 use sha2::{Digest, Sha256};
-
-use crate::model::sanitize_segment;
 
 /// Version tag of the fingerprint factor set, prefixed onto the canonical string.
 ///
@@ -29,13 +28,13 @@ const FINGERPRINT_HEX_LEN: usize = 16;
 /// Hardware facts that identify a machine for partitioning hardware-dependent
 /// benchmark results.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct HardwareProfile {
+pub struct HardwareProfile {
     /// Maximum number of logical processors the system reports.
-    pub(crate) processors: usize,
+    pub processors: usize,
     /// Maximum number of NUMA memory regions the system reports.
-    pub(crate) memory_regions: usize,
+    pub memory_regions: usize,
     /// Best-effort CPU brand string (`None` when it cannot be determined).
-    pub(crate) cpu_brand: Option<String>,
+    pub cpu_brand: Option<String>,
 }
 
 /// Renders a profile to its canonical, hashable string (pure).
@@ -83,7 +82,8 @@ pub(crate) fn fingerprint(profile: &HardwareProfile) -> String {
 
 /// Resolves the machine key for a partition: an explicit override (sanitized to a
 /// single path segment) wins; otherwise the hardware [`fingerprint`] is used.
-pub(crate) fn resolve_machine_key(override_key: Option<&str>, profile: &HardwareProfile) -> String {
+#[must_use]
+pub fn resolve_machine_key(override_key: Option<&str>, profile: &HardwareProfile) -> String {
     match override_key {
         Some(key) => sanitize_segment(key),
         None => fingerprint(profile),

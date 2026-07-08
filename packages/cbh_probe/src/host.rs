@@ -3,11 +3,11 @@
 
 /// The toolchain facts extracted from `rustc -vV` output.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct RustcInfo {
+pub struct RustcInfo {
     /// The release version (e.g. `1.91.0`), if found.
-    pub(crate) version: Option<String>,
+    pub version: Option<String>,
     /// The host target triple (e.g. `x86_64-unknown-linux-gnu`), if found.
-    pub(crate) host: Option<String>,
+    pub host: Option<String>,
 }
 
 /// Parses `rustc -vV` output (pure).

@@ -22,6 +22,9 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyspawn::Spawner;
+use cbh_config::{Config, load_config};
+use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
+use cbh_git::{GitHistory, SystemGitHistory};
 use jiff::Timestamp;
 use serde::Serialize;
 use tick::Clock;
@@ -30,13 +33,9 @@ use super::{
     AutoFacets, ReportFormat, Selection, Series, SeriesFilter, detect_auto_facets,
     dirty_base_exception_warning, empty_history_hint, format_value, resolve_now, select_dataset,
 };
-use cbh_config::{Config, load_config};
-use crate::git_history::{GitHistory, SystemGitHistory};
 use crate::model::{BenchmarkIdPrefix, DiscriminantSet, MetricKind};
 use crate::output::{OutputSelection, OutputWriter, TokioOutputWriter, emit};
-use cbh_diag::{Reporter, ReporterExt, StderrReporter};
 use crate::storage::{Storage, StorageFacade, resolve_storage};
-use cbh_diag::count_noun;
 use crate::wiring::{
     cache_env, resolve_cache_path, resolve_config_path, resolve_local_path, resolve_project_id,
     resolve_repo, storage_env,
@@ -494,19 +493,19 @@ mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
     use std::path::{Path, PathBuf};
 
+    use cbh_config::Config;
+    use cbh_diag::RecordingReporter;
+    use cbh_git::FakeGitHistory;
     use futures::executor::block_on;
     use jiff::Timestamp;
     use nonempty::nonempty;
 
     use super::*;
-    use cbh_config::Config;
-    use crate::git_history::FakeGitHistory;
     use crate::model::{
         BenchmarkId, BenchmarkResult, EnvironmentInfo, GitInfo, Metric, MetricKind, Run,
         RunContext, ToolchainInfo,
     };
     use crate::output::MemoryOutputWriter;
-    use cbh_diag::RecordingReporter;
     use crate::storage::{MemoryStorage, Storage};
 
     fn config() -> Config {
