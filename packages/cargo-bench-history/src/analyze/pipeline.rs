@@ -1541,13 +1541,14 @@ mod tests {
     }
 
     #[test]
-    fn analyze_without_a_resolvable_base_branch_loads_the_whole_history() {
+    fn analyze_without_a_resolvable_base_branch_is_an_error() {
         let storage = MemoryStorage::new();
         seed_linear_step(&storage);
         // HEAD resolves, but there is no advertised default branch and no --base /
-        // config default, so resolve_base_ref yields None and there is no
-        // merge-base to split the timeline on. The analysis still loads the
-        // history rather than erroring.
+        // config default, so the base branch cannot be determined and there is no
+        // merge-base to split the timeline on. Rather than silently analyze the
+        // incomplete topology as a base-branch (history) view, this is an error
+        // that tells the user how to supply the missing history.
         let mut git = FakeGitHistory::new();
         git.commit("c0", None)
             .commit("c1", Some("c0"))
@@ -1557,12 +1558,69 @@ mod tests {
             .commit("c5", Some("c4"))
             .branch("master", "c5")
             .head("master"); // No `.mark_default(...)`.
-        let (report, _, _) = analyze_json(&git, &storage, "folo", &options());
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-        assert_eq!(
-            parsed["runs"], 6,
-            "the full history loads without a merge-base: {report}"
+        let error = block_on(analyze_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &options(),
+            &auto(),
+            now_anchor(),
+            &RecordingReporter::new(),
+            false,
+            &writer(),
+            &spawner(),
+        ))
+        .unwrap_err();
+        assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
+        let message = error.to_string();
+        assert!(
+            message.contains("could not determine the base branch"),
+            "{message}"
         );
+        assert!(message.contains("--base"), "{message}");
+    }
+
+    #[test]
+    fn analyze_without_a_common_ancestor_is_an_error() {
+        let storage = MemoryStorage::new();
+        seed_linear_step(&storage);
+        // The base branch resolves, but it shares no history with the target — the
+        // shallow-clone case, where the fetched depth stops short of the branch
+        // point. `git merge-base` finds no common ancestor, so the timeline cannot
+        // be split; this errors and points at the shallow-clone fix rather than
+        // guessing a base-branch view.
+        let mut git = FakeGitHistory::new();
+        git.commit("c0", None)
+            .commit("c1", Some("c0"))
+            .commit("c2", Some("c1"))
+            .commit("c3", Some("c2"))
+            .commit("c4", Some("c3"))
+            .commit("c5", Some("c4"))
+            // A disjoint base history with no common ancestor with the target.
+            .commit("m0", None)
+            .branch("master", "m0")
+            .branch("feature", "c5")
+            .head("feature")
+            .mark_default("master");
+        let error = block_on(analyze_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &options(),
+            &auto(),
+            now_anchor(),
+            &RecordingReporter::new(),
+            false,
+            &writer(),
+            &spawner(),
+        ))
+        .unwrap_err();
+        assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
+        let message = error.to_string();
+        assert!(message.contains("no common ancestor"), "{message}");
+        assert!(message.contains("--unshallow"), "{message}");
     }
 
     #[test]
