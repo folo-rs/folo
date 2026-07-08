@@ -15,7 +15,7 @@ use colored::{Color, Colorize};
 use rasciigraph::{Config, plot_colored, plot_many_colored};
 use serde::Serialize;
 
-use crate::analyze::findings::short_commit;
+use crate::analyze::short_commit;
 use crate::analyze::{Direction, Finding, FindingMethod, SeriesValue};
 use crate::model::{BenchmarkId, DiscriminantSet};
 

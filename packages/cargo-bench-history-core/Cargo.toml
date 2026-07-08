@@ -17,29 +17,18 @@ rust-version.workspace = true
 # place of the production Tokio spawner, so neither needs a Tokio runtime. Never
 # forwarded by the shell crate, so end-user builds never see it. See
 # docs/impl-crate-split.md for the `test-util` vs `private-test-util` distinction.
-private-test-util = ["dep:thread_aware"]
+private-test-util = ["cbh_analysis/private-test-util"]
 
 [dependencies]
-anyspawn = { workspace = true }
+cbh_analysis = { workspace = true }
 cbh_codec = { workspace = true }
 cbh_model = { workspace = true }
-cbh_stats = { workspace = true }
-colored = { workspace = true }
-foldhash = { workspace = true }
-hashbrown = { workspace = true, features = ["default-hasher", "inline-more"] }
-jiff = { workspace = true, features = ["serde"] }
-nonempty = { workspace = true, features = ["serialize"] }
-rasciigraph = { workspace = true, features = ["color"] }
-serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
-smallvec = { workspace = true, features = ["serde"] }
-thread_aware = { workspace = true, optional = true, features = ["derive"] }
+cbh_render = { workspace = true }
 
 [dev-dependencies]
 alloc_tracker = { path = "../alloc_tracker" }
 criterion = { workspace = true }
-futures = { workspace = true, features = ["executor"] }
-mutants = { workspace = true }
+nonempty = { workspace = true }
 
 # Gungraun drives Valgrind-based Callgrind benchmarks; Linux-only.
 [target.'cfg(target_os = "linux")'.dev-dependencies]

@@ -457,24 +457,13 @@ name = "cargo-bench-history-core"
 version = "0.0.3"
 dependencies = [
  "alloc_tracker",
- "anyspawn",
+ "cbh_analysis",
  "cbh_codec",
  "cbh_model",
- "cbh_stats",
- "colored",
+ "cbh_render",
  "criterion",
- "foldhash",
- "futures",
  "gungraun",
- "hashbrown 0.17.1",
- "jiff",
- "mutants",
  "nonempty",
- "rasciigraph",
- "serde",
- "serde_json",
- "smallvec",
- "thread_aware",
 ]
 
 [[package]]
@@ -529,6 +518,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
+name = "cbh_analysis"
+version = "0.0.3"
+dependencies = [
+ "anyspawn",
+ "cbh_model",
+ "cbh_stats",
+ "foldhash",
+ "futures",
+ "hashbrown 0.17.1",
+ "jiff",
+ "mutants",
+ "nonempty",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "thread_aware",
+]
+
+[[package]]
 name = "cbh_codec"
 version = "0.0.3"
 dependencies = [
@@ -544,6 +552,20 @@ dependencies = [
  "serde",
  "serde_json",
  "smallvec",
+]
+
+[[package]]
+name = "cbh_render"
+version = "0.0.3"
+dependencies = [
+ "cbh_analysis",
+ "cbh_model",
+ "colored",
+ "mutants",
+ "nonempty",
+ "rasciigraph",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

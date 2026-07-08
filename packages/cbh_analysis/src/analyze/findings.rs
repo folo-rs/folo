@@ -887,7 +887,8 @@ fn stamp_history(finding: &mut Finding, series: &Series) {
 }
 
 /// Abbreviates a commit ID for display (first 12 hex digits).
-pub(crate) fn short_commit(commit: &str) -> String {
+#[must_use]
+pub fn short_commit(commit: &str) -> String {
     commit.get(..12).unwrap_or(commit).to_owned()
 }
 

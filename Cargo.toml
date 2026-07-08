@@ -23,8 +23,10 @@ azure_storage_blob = { version = "1.0.0", default-features = false }
 base64 = { version = "0.22.1", default-features = false, features = ["std"] }
 cargo-bench-history-core = { version = "=0.0.3", path = "packages/cargo-bench-history-core", default-features = false }
 cargo-freeze-deps = { version = "0.1.3", path = "packages/cargo-freeze-deps", default-features = false }
+cbh_analysis = { version = "=0.0.3", path = "packages/cbh_analysis", default-features = false }
 cbh_codec = { version = "=0.0.3", path = "packages/cbh_codec", default-features = false }
 cbh_model = { version = "=0.0.3", path = "packages/cbh_model", default-features = false }
+cbh_render = { version = "=0.0.3", path = "packages/cbh_render", default-features = false }
 cbh_stats = { version = "=0.0.3", path = "packages/cbh_stats", default-features = false }
 clap = { version = "4.6.1", default-features = false, features = ["default"] }
 colored = { version = "2.2.0", default-features = false }

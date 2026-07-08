@@ -1,13 +1,5 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![expect(
-    clippy::exhaustive_enums,
-    clippy::exhaustive_structs,
-    reason = "this crate's `pub` items form a handoff boundary to the \
-              cargo-bench-history shell crate (and that crate's tests), used only \
-              inside this workspace rather than as a stable public API. Exhaustive \
-              construction and matching by those in-workspace consumers is intended"
-)]
 
 //! Pure internals of [`cargo-bench-history`]: the stored data model, the
 //! comparability/partitioning rules, and the analysis math and rendering.
@@ -21,6 +13,9 @@
 //! The split exists so the large, I/O-free half of the tool can be exercised by a
 //! fast in-process unit-test suite that is cheap to mutation-test, instead of
 //! re-paying the shell's git-subprocess-heavy integration suite for every mutant.
+//! The internals are themselves split across the `cbh_model`, `cbh_stats`,
+//! `cbh_codec`, `cbh_analysis`, and `cbh_render` implementation crates; this crate
+//! re-exports them under the three namespaces its consumers expect.
 //!
 //! The public surface is three namespaces: [`model`] (the data model and
 //! comparability rules), [`analyze`] (the analysis math and rendering), and
@@ -38,4 +33,4 @@ pub use cbh_model as model;
 
 #[cfg(feature = "private-test-util")]
 #[cfg_attr(docsrs, doc(cfg(feature = "private-test-util")))]
-pub mod testing;
+pub use cbh_analysis::testing;
