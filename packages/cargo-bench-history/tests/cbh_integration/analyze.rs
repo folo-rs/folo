@@ -1379,21 +1379,6 @@ async fn analyze_history_mode_suppresses_improvements_by_default() {
     );
 }
 
-/// An unrecognized `--mode` is a clear up-front error, not a silent fallback.
-#[tokio::test]
-#[cfg_attr(miri, ignore)]
-async fn analyze_rejects_an_unknown_mode() {
-    let workspace = Workspace::repo(&storage_only_config());
-    let error = workspace
-        .drive(&["analyze", "--mode", "weekly"])
-        .await
-        .unwrap_err();
-    assert!(
-        error.to_string().contains("unknown analysis mode"),
-        "the error should name the problem: {error}"
-    );
-}
-
 /// A `--target-triple` filter restricts analysis to the matching set: the same
 /// commits host a regressing Linux series and a flat Windows series, and each
 /// triple selection sees only its own.

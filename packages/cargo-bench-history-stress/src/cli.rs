@@ -106,7 +106,7 @@ pub(crate) enum ModeArg {
 }
 
 impl ModeArg {
-    /// The `--mode` keyword the analyze command expects.
+    /// The lowercase label for this analysis mode, used in logs and the report.
     pub(crate) fn keyword(self) -> &'static str {
         match self {
             Self::History => "history",

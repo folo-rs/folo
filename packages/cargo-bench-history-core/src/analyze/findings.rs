@@ -118,9 +118,9 @@ impl Default for AnalysisConfig {
 /// The mode is auto-detected by the caller from git topology and the admitted data
 /// set (a base branch whose tip is its own merge-base with no dirty run admitted on
 /// that tip is [`History`](AnalysisMode::History); commits — or an admitted dirty run
-/// — on top of the base make it [`Branch`](AnalysisMode::Branch)) and may be
-/// overridden with `--mode`. The working tree affects the choice only indirectly,
-/// through the exception that admits a base-tip dirty run while the tree is dirty.
+/// — on top of the base make it [`Branch`](AnalysisMode::Branch)). The working tree
+/// affects the choice only indirectly, through the exception that admits a base-tip
+/// dirty run while the tree is dirty.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AnalysisMode {
@@ -138,17 +138,6 @@ impl AnalysisMode {
         match self {
             Self::History => "history",
             Self::Branch => "branch",
-        }
-    }
-
-    /// Parses an explicit `--mode` name, if recognized (`auto` is resolved by the
-    /// caller and is not a mode of its own).
-    #[must_use]
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "history" => Some(Self::History),
-            "branch" => Some(Self::Branch),
-            _ => None,
         }
     }
 }
@@ -2422,14 +2411,9 @@ mod tests {
     }
 
     #[test]
-    fn analysis_mode_names_round_trip() {
-        for mode in [AnalysisMode::History, AnalysisMode::Branch] {
-            assert_eq!(AnalysisMode::from_name(mode.as_str()), Some(mode));
-        }
+    fn analysis_mode_wire_names() {
         assert_eq!(AnalysisMode::History.as_str(), "history");
         assert_eq!(AnalysisMode::Branch.as_str(), "branch");
-        assert_eq!(AnalysisMode::from_name("auto"), None);
-        assert_eq!(AnalysisMode::from_name("nonsense"), None);
     }
 
     #[test]

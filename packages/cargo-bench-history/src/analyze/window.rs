@@ -1,6 +1,6 @@
-//! `--since` / `--until` window and `--mode` resolution: parsing the edges,
-//! deciding the history-mode default look-back, and testing each committer time
-//! against the resolved window.
+//! `--since` / `--until` window resolution: parsing the edges, deciding the
+//! history-mode default look-back, and testing each committer time against the
+//! resolved window.
 
 use cargo_bench_history_core::analyze::AnalysisMode;
 use jiff::civil::Date;
@@ -68,23 +68,6 @@ fn default_history_since(now: Timestamp) -> Result<Timestamp, RunError> {
         .map_err(|error| RunError::Analyze {
             message: format!("default --since window is out of the representable range: {error}"),
         })
-}
-
-/// Parses the `--mode` option into an explicit [`AnalysisMode`] override.
-///
-/// `auto` (the default when omitted) resolves to `None` so the mode is detected
-/// from topology; `history` and `branch` force that mode.
-pub(crate) fn parse_mode(value: Option<&str>) -> Result<Option<AnalysisMode>, RunError> {
-    match value {
-        None | Some("auto") => Ok(None),
-        Some(name) => AnalysisMode::from_name(name)
-            .map(Some)
-            .ok_or_else(|| RunError::Analyze {
-                message: format!(
-                    "unknown analysis mode {name:?}; expected auto, history, or branch"
-                ),
-            }),
-    }
 }
 
 /// Parses the `--since` option into an absolute lower-bound instant, if set.
@@ -247,25 +230,6 @@ mod tests {
         assert_eq!(
             since_cutoff_reason(false, AnalysisMode::Branch),
             "no default look-back window outside history mode"
-        );
-    }
-
-    #[test]
-    fn parse_mode_resolves_auto_to_none_and_rejects_unknown() {
-        assert_eq!(parse_mode(None).unwrap(), None);
-        assert_eq!(parse_mode(Some("auto")).unwrap(), None);
-        assert_eq!(
-            parse_mode(Some("history")).unwrap(),
-            Some(AnalysisMode::History)
-        );
-        assert_eq!(
-            parse_mode(Some("branch")).unwrap(),
-            Some(AnalysisMode::Branch)
-        );
-        let error = parse_mode(Some("weekly")).unwrap_err();
-        assert!(
-            error.to_string().contains("unknown analysis mode"),
-            "{error}"
         );
     }
 

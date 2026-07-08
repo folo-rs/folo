@@ -539,7 +539,7 @@ pointing at the unmatched benchmark id or metric name.
 blessings. It shows every selected point exactly as the chart would plot it (a commit
 carrying both a clean run and dirty snapshots contributes a row each, ordered
 clean-before-dirty and flagged, so a value's provenance is unambiguous), which is why the
-analysis-only flags (mode, improvements, inactive findings) are not part of its surface. The
+analysis-only flags (improvements, inactive findings) are not part of its surface. The
 three output renderings compose from one pass as everywhere else: the per-commit table on
 stdout by default, the same table in Markdown, and a machine-readable JSON form that carries,
 per discriminant set, the ordered points with full-precision values and each commit's full
@@ -642,10 +642,10 @@ judgement rather than an automatic tier.
 ### 8.5 Analysis modes
 
 The same stored history answers two very different questions, so `analyze` runs in one of
-two **modes**, auto-detected from git topology and the recorded runs it admits, or forced
-explicitly. Working-tree state feeds in only through the base-tip dirty exception (below),
-which admits a base-tip dirty run — and, by admitting it, selects branch mode — only while
-the tree is currently dirty.
+two **modes**, auto-detected from git topology and the recorded runs it admits. There is no
+flag to force a mode; the topology alone decides. Working-tree state feeds in only through
+the base-tip dirty exception (below), which admits a base-tip dirty run — and, by admitting
+it, selects branch mode — only while the tree is currently dirty.
 
 * **history** — the base-branch view: auto-selected when the analyzed tip *is* the
   merge-base with the base and no dirty run is recorded on top of it. It applies the
@@ -672,8 +672,8 @@ or two branch points, which is why the techniques differ by mode:
 | Resolved (inactive) findings reported | opt-in | — |
 
 Modes apply to `analyze` only; `list`, `prune`, and `examine` reuse the same data-set
-*selection* but never analyze, so the mode and improvement/inactive flags are analyze-only
-and not part of the selection lockstep.
+*selection* but never analyze, so the mode selection and improvement/inactive flags are
+analyze-only and not part of the selection lockstep.
 
 ### 8.6 Re-baselining: blessings and resolved spikes
 

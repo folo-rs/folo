@@ -449,13 +449,6 @@ struct AnalyzeCommand {
     #[arg(long, help_heading = HEADING_FILTER)]
     no_dirty: bool,
 
-    /// Analysis mode: auto, history, or branch (default: auto). `auto` infers
-    /// history mode (long-range base-branch trends) from a clean base-branch
-    /// checkout, and branch mode (this branch's latest state vs the base)
-    /// otherwise.
-    #[arg(long, value_name = "MODE", help_heading = HEADING_ANALYSIS)]
-    mode: Option<String>,
-
     /// In history mode, also report sustained improvements (by default only
     /// regressions are reported, since improvement over time is expected). Branch
     /// mode always reports all findings, so this flag has no effect there.
@@ -497,7 +490,6 @@ impl AnalyzeCommand {
             markdown: self.output.markdown,
             json: self.output.json,
             markdown_summary: self.markdown_summary,
-            mode: self.mode,
             include_improvements: self.include_improvements,
             include_inactive: self.include_inactive,
             verbose: self.env.verbose,
@@ -1384,12 +1376,11 @@ mod tests {
 
     #[test]
     fn analyze_collects_switches() {
-        let command = parse(&["analyze", "--include-improvements", "--mode", "history"]);
+        let command = parse(&["analyze", "--include-improvements"]);
         let Command::Analyze(options) = command else {
             panic!("expected analyze command");
         };
         assert!(options.include_improvements);
-        assert_eq!(options.mode.as_deref(), Some("history"));
     }
 
     #[test]

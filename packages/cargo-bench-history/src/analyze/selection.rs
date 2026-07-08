@@ -1,12 +1,8 @@
 //! The data-set `Selection` the analyze/list/prune/examine/bless query commands
 //! share, built from each command's options.
 
-use cargo_bench_history_core::analyze::AnalysisMode;
-
-use super::window::parse_mode;
 use crate::{
-    AnalyzeOptions, BlessOptions, ExamineOptions, ListOptions, PruneOptions, RunError,
-    UnblessOptions,
+    AnalyzeOptions, BlessOptions, ExamineOptions, ListOptions, PruneOptions, UnblessOptions,
 };
 
 /// The data-set selection parameters shared by the query commands: which stored
@@ -29,13 +25,11 @@ pub(crate) struct Selection<'a> {
     pub(crate) engine: &'a [String],
     pub(crate) target_triple: &'a [String],
     pub(crate) machine_key: &'a [String],
-    /// Explicit `--mode` override; `None` lets the mode auto-detect from topology.
-    pub(crate) mode_override: Option<AnalysisMode>,
 }
 
 impl<'a> Selection<'a> {
-    pub(crate) fn from_analyze(options: &'a AnalyzeOptions) -> Result<Self, RunError> {
-        Ok(Self {
+    pub(crate) fn from_analyze(options: &'a AnalyzeOptions) -> Self {
+        Self {
             context: options.context.as_deref(),
             base: options.base.as_deref(),
             no_dirty: options.no_dirty,
@@ -44,8 +38,7 @@ impl<'a> Selection<'a> {
             engine: &options.engine,
             target_triple: &options.target_triple,
             machine_key: &options.machine_key,
-            mode_override: parse_mode(options.mode.as_deref())?,
-        })
+        }
     }
 
     pub(crate) fn from_list(options: &'a ListOptions) -> Self {
@@ -58,7 +51,6 @@ impl<'a> Selection<'a> {
             engine: &options.engine,
             target_triple: &options.target_triple,
             machine_key: &options.machine_key,
-            mode_override: None,
         }
     }
 
@@ -72,7 +64,6 @@ impl<'a> Selection<'a> {
             engine: &options.engine,
             target_triple: &options.target_triple,
             machine_key: &options.machine_key,
-            mode_override: None,
         }
     }
 
@@ -90,7 +81,6 @@ impl<'a> Selection<'a> {
             engine: &options.engine,
             target_triple: &options.target_triple,
             machine_key: &options.machine_key,
-            mode_override: None,
         }
     }
 
@@ -107,7 +97,6 @@ impl<'a> Selection<'a> {
             engine: &options.engine,
             target_triple: &options.target_triple,
             machine_key: &options.machine_key,
-            mode_override: None,
         }
     }
 
@@ -122,7 +111,6 @@ impl<'a> Selection<'a> {
             engine: &options.engine,
             target_triple: &options.target_triple,
             machine_key: &options.machine_key,
-            mode_override: None,
         }
     }
 }

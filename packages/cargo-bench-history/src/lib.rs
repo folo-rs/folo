@@ -193,8 +193,8 @@
 //!
 //! # Analyze modes
 //!
-//! `analyze` runs in one of three modes, chosen automatically (`--mode auto`, the
-//! default) or forced with `--mode`:
+//! `analyze` runs in one of two modes, chosen automatically from the git topology
+//! (there is no flag to force a mode):
 //!
 //! * **history** — long-range trend watch over the base branch (selected when you
 //!   analyze a clean checkout of the base branch). It detects sustained
@@ -206,8 +206,6 @@
 //!   a dirty base checkout). It judges the branch by its **latest** state versus the
 //!   base, reporting both regressions and improvements; the finding's `flipped_at`
 //!   names the commit a regime began at.
-//! * **tip** — a fast guard that compares only the latest commit against the
-//!   recently established level, reporting regressions only.
 //!
 //! # Configuration
 //!

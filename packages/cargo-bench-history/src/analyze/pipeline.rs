@@ -182,7 +182,7 @@ where
         options.json.as_deref(),
         options.markdown_summary.as_deref(),
     )?;
-    let selection = Selection::from_analyze(options)?;
+    let selection = Selection::from_analyze(options);
     let filter = SeriesFilter {
         prefixes: &options.prefixes,
     };

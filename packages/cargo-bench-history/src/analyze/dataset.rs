@@ -57,7 +57,7 @@ pub(crate) struct SelectedDataSet {
     /// Whether the working tree carried uncommitted changes when the analysis ran;
     /// the report annotates the tip `+ uncommitted changes` when set.
     pub(crate) tip_dirty: bool,
-    /// The resolved analysis mode (auto-detected from topology, or overridden).
+    /// The resolved analysis mode, auto-detected from the git topology.
     pub(crate) mode: AnalysisMode,
     /// First-parent topological index of the merge-base, used by branch mode to
     /// split base-side history from the branch's own commits.
@@ -163,36 +163,23 @@ where
                 .unwrap_or(false)
     });
 
-    // The mode steers the analysis and the default `--since`. An explicit `--mode`
-    // overrides the auto-detection.
-    let mode =
-        match selection.mode_override {
-            Some(mode) => {
-                reporter.note_with(|| {
-                    format!(
-                        "analysis mode: {} (set explicitly via --mode, overriding auto-detection)",
-                        mode.as_str()
-                    )
-                });
-                mode
-            }
-            None => {
-                let mode = auto_mode(tip_is_merge_base, dirty_tip_run_present);
-                reporter.note_with(|| format!(
-                "analysis mode: {} (auto-detected because the target tip {} its own merge-base \
-                 with the base branch and {} admitted on top of it; a base-tip dirty run is \
-                 admitted only while the working tree is currently dirty)",
-                mode.as_str(),
-                if tip_is_merge_base { "is" } else { "is not" },
-                if dirty_tip_run_present {
-                    "a dirty run is"
-                } else {
-                    "no dirty run is"
-                },
-            ));
-                mode
-            }
-        };
+    // The mode steers the analysis and the default `--since`; it is auto-detected
+    // from the git topology and the recorded data.
+    let mode = auto_mode(tip_is_merge_base, dirty_tip_run_present);
+    reporter.note_with(|| {
+        format!(
+            "analysis mode: {} (auto-detected because the target tip {} its own merge-base \
+             with the base branch and {} admitted on top of it; a base-tip dirty run is \
+             admitted only while the working tree is currently dirty)",
+            mode.as_str(),
+            if tip_is_merge_base { "is" } else { "is not" },
+            if dirty_tip_run_present {
+                "a dirty run is"
+            } else {
+                "no dirty run is"
+            },
+        )
+    });
     let since = resolve_since(selection.since, mode, now)?;
     reporter.note_with(|| {
         format!(
